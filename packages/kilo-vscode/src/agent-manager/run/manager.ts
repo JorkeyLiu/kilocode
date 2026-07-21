@@ -1,7 +1,7 @@
 export type RunState = "idle" | "running" | "stopping"
 
 export interface RunStatus {
-  worktreeId: string
+  worktreeId: string // legacy field name; used as the run-slot key
   state: RunState
   exitCode?: number
   signal?: string

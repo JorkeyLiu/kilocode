@@ -1,6 +1,7 @@
 import type { Session, SessionStatus } from "@kilocode/sdk/v2/client"
 import type { KiloConnectionService } from "../services/cli-backend"
-import { forkSession } from "../agent-manager/fork-session"
+import { getErrorMessage } from "../kilo-provider-utils"
+import { TelemetryProxy, TelemetryEventName } from "../services/telemetry"
 
 export interface ForkContext {
   connection: KiloConnectionService
@@ -28,23 +29,25 @@ export async function handleForkSession(ctx: ForkContext, sessionId: string, mes
     return
   }
 
-  await forkSession(
-    {
-      getClient: () => ctx.connection.getClient(),
-      state: undefined,
-      directory: ctx.directory(sessionId),
-      postError: (message) => ctx.post({ type: "error", message }),
-      registerWorktreeSession: () => {},
-      pushState: () => {},
-      notifyForked: (session) => {
-        ctx.register(session)
-        ctx.forked(session, sessionId)
-      },
-      registerSession: () => {},
-      log: (...args) => console.log("[Kilo New] KiloProvider:", ...args),
-    },
-    sessionId,
-    undefined,
-    messageId,
-  )
+  const client = ctx.connection.getClient()
+  const directory = ctx.directory(sessionId)
+  let forked: Session
+  try {
+    const input = { sessionID: sessionId, directory, ...(messageId ? { messageID: messageId } : {}) }
+    const { data } = await client.session.fork(input, { throwOnError: true })
+    forked = data
+  } catch (error) {
+    const err = getErrorMessage(error)
+    ctx.post({ type: "error", message: `Failed to fork session: ${err}` })
+    TelemetryProxy.capture(TelemetryEventName.AGENT_MANAGER_SESSION_ERROR, {
+      source: "kilo-provider",
+      error: err,
+      context: "forkSession",
+      sessionId,
+    })
+    return
+  }
+
+  ctx.register(forked)
+  ctx.forked(forked, sessionId)
 }

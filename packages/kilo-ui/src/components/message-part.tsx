@@ -1196,6 +1196,33 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
           <Match when={part.state.status === "error" && part.state.error}>
             {(error) => {
               const cleaned = error().replace("Error: ", "")
+              // Abort-related errors on the "task" tool should not replace
+              // the TaskToolExpanded component — child session navigation
+              // and the "Open in Tab" button must remain accessible.
+              const isAbortedTask =
+                part.tool === "task" &&
+                (cleaned === "Tool execution aborted" || meta().interrupted === true)
+              if (isAbortedTask) {
+                return (
+                  <Dynamic
+                    component={render()}
+                    input={input()}
+                    tool={part.tool}
+                    partID={part.id}
+                    callID={part.callID}
+                    metadata={meta()}
+                    partMetadata={top()}
+                    // @ts-expect-error
+                    output={part.state.output}
+                    status={part.state.status}
+                    hideDetails={props.hideDetails}
+                    defaultOpen={props.defaultOpen}
+                    forceOpen={props.forceOpen}
+                    animate
+                    reveal={props.animate}
+                  />
+                )
+              }
               if (isDismissedQuestionError()) {
                 return (
                   <Dynamic

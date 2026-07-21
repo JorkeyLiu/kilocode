@@ -147,8 +147,6 @@ describe("Agent Manager i18n split", () => {
     const required = [
       "agentManager.local",
       "agentManager.session.new",
-      "agentManager.apply.error",
-      "agentManager.import.failed",
     ]
 
     for (const [locale, dict] of Object.entries(locales)) {

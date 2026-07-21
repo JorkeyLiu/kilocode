@@ -41,7 +41,7 @@ export interface TerminalManagerDeps {
 interface Entry {
   terminalId: string
   ptyID: string
-  worktreeId: string | null
+  worktreeId: string | null // legacy field name; round-tripped to webview
   cwd: string
   title: string
 }
@@ -65,11 +65,11 @@ export class TerminalManager {
    *
    * Returns the attach info the webview needs: our synthetic terminal ID,
    * the title, and the signed WebSocket URL pointing at the PTY's connect
-   * endpoint. The worktreeId is round-tripped so the webview can route the
-   * tab back into the correct sidebar context.
+   * endpoint. The worktreeId is round-tripped (legacy field name) so the
+   * webview can route the tab back into the correct sidebar context.
    */
   async create(params: {
-    worktreeId: string | null
+    worktreeId: string | null // legacy field name
     cwd: string
     title: string
   }): Promise<{ terminalId: string; worktreeId: string | null; title: string; wsUrl: string }> {

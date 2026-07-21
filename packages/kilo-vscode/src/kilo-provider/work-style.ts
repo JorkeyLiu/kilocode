@@ -40,7 +40,6 @@ async function hasAnySession(connection: KiloConnectionService, directory: strin
   const client = await connection.getClientAsync(directory)
   const { data } = await client.experimental.session.list(
     {
-      roots: true,
       limit: 1,
       archived: true,
     },

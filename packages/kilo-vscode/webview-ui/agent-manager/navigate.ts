@@ -1,37 +1,17 @@
 /**
  * Pure navigation logic for the agent manager sidebar.
  *
- * The sidebar has a fixed "local" item at index -1, followed by
- * session items at indices 0..N-1 (sorted newest-first).
+ * All session tabs live in one LOCAL context.
  *
  * Returns the action to take: select a session by ID, go to local, or do nothing.
  */
 
-/** Sentinel value for the local repo selection. */
+/** Sentinel value for the single LOCAL session tab context. */
 export const LOCAL = "local" as const
 
 type NavResult = { action: "select"; id: string } | { action: typeof LOCAL } | { action: "none" }
 
 type SessionLike = { id: string; parentID?: string | null; createdAt: string }
-
-export function isKnownRootSession(session: Pick<SessionLike, "parentID">): boolean {
-  return session.parentID === null
-}
-
-export function canOpenRootSession(id: string, sessions: Pick<SessionLike, "id" | "parentID">[]): boolean {
-  const session = sessions.find((item) => item.id === id)
-  return !!session && isKnownRootSession(session)
-}
-
-export function filterUnassignedSessions<T extends SessionLike>(
-  sessions: T[],
-  worktree: Set<string>,
-  local: Set<string>,
-): T[] {
-  return [...sessions]
-    .filter((s) => isKnownRootSession(s) && !worktree.has(s.id) && !local.has(s.id))
-    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-}
 
 export function resolveNavigation(direction: "up" | "down", current: string | undefined, ids: string[]): NavResult {
   // Determine current position: -1 = local, 0..N-1 = session index
@@ -74,7 +54,7 @@ export function validateLocalSession(persisted: string | undefined, ids: string[
  *
  * @param itemId  - The item being hovered
  * @param activeId - The currently selected/active item (or undefined for LOCAL)
- * @param flatIds - The full ordered sidebar list (LOCAL first, then worktrees, then sessions)
+ * @param flatIds - The full ordered sidebar list (LOCAL first, then sessions)
  * @param prev    - Display string for "go up" (e.g. "⌘↑" or keybinding)
  * @param next    - Display string for "go down" (e.g. "⌘↓" or keybinding)
  */
@@ -97,7 +77,7 @@ export function adjacentHint(
 
 export function remoteSessions(
   local: string[],
-  managed: { id: string; worktreeId: string | null }[],
+  managed: { id: string; worktreeId: string | null }[], // worktreeId is a legacy field name from the extension message contract
   pending: (id: string) => boolean,
 ): string[] {
   return [
@@ -106,19 +86,6 @@ export function remoteSessions(
       ...managed.filter((session) => session.worktreeId).map((session) => session.id),
     ]),
   ]
-}
-
-/**
- * After removing a worktree, pick the nearest remaining sidebar neighbor.
- * Order: the worktree just below → the one above → LOCAL.
- */
-export function nextSelectionAfterDelete(deletedId: string, worktreeIds: string[]): typeof LOCAL | string {
-  const idx = worktreeIds.indexOf(deletedId)
-  if (idx === -1) return LOCAL
-  const remaining = worktreeIds.filter((id) => id !== deletedId)
-  if (remaining.length === 0) return LOCAL
-  // Prefer the item that was below (same index in the shortened list), else the one above
-  return remaining[Math.min(idx, remaining.length - 1)]!
 }
 
 /**

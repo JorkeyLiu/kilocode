@@ -83,7 +83,7 @@ export default [
     rules: { complexity: ["error", 30] },
   },
   {
-    files: ["src/agent-manager/WorktreeManager.ts", "webview-ui/src/components/chat/QuestionDock.tsx"],
+    files: ["webview-ui/src/components/chat/QuestionDock.tsx"],
     rules: { complexity: ["error", 28] },
   },
   {
@@ -92,10 +92,6 @@ export default [
       "src/services/autocomplete/continuedev/core/autocomplete/postprocessing/index.ts",
     ],
     rules: { complexity: ["error", 27] },
-  },
-  {
-    files: ["src/agent-manager/WorktreeStateManager.ts"],
-    rules: { complexity: ["error", 24] },
   },
   {
     files: ["webview-ui/src/utils/errorUtils.ts"],

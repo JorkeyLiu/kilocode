@@ -1,6 +1,6 @@
 export interface NewTaskDraft {
   id: string
-  worktreeId: string
+  contextId: string
 }
 
 export function createNewTaskDrafts(timeout = 30_000) {
@@ -9,10 +9,10 @@ export function createNewTaskDrafts(timeout = 30_000) {
   const timers = new Map<string, ReturnType<typeof setTimeout>>()
 
   const remove = (task: NewTaskDraft, discard = false) => {
-    const ids = tasks.get(task.worktreeId) ?? []
+    const ids = tasks.get(task.contextId) ?? []
     const next = ids.filter((id) => id !== task.id)
-    if (next.length === 0) tasks.delete(task.worktreeId)
-    else tasks.set(task.worktreeId, next)
+    if (next.length === 0) tasks.delete(task.contextId)
+    else tasks.set(task.contextId, next)
     const timer = timers.get(task.id)
     if (timer) clearTimeout(timer)
     timers.delete(task.id)
@@ -20,9 +20,9 @@ export function createNewTaskDrafts(timeout = 30_000) {
     window.dispatchEvent(new CustomEvent("agentManagerDiscardDraft", { detail: { id: task.id } }))
   }
 
-  const create = (worktreeId: string) => {
-    const task = { id: `task:${++seq}`, worktreeId }
-    tasks.set(worktreeId, [...(tasks.get(worktreeId) ?? []), task.id])
+  const create = (contextId: string) => {
+    const task = { id: `task:${++seq}`, contextId }
+    tasks.set(contextId, [...(tasks.get(contextId) ?? []), task.id])
     timers.set(
       task.id,
       setTimeout(() => remove(task, true), timeout),
@@ -30,10 +30,10 @@ export function createNewTaskDrafts(timeout = 30_000) {
     return task
   }
 
-  const take = (worktreeId: string) => {
-    const id = tasks.get(worktreeId)?.[0]
+  const take = (contextId: string) => {
+    const id = tasks.get(contextId)?.[0]
     if (!id) return undefined
-    const task = { id, worktreeId }
+    const task = { id, contextId }
     remove(task)
     return task
   }
@@ -49,12 +49,12 @@ export function createNewTaskDrafts(timeout = 30_000) {
     tasks.clear()
   }
 
-  const apply = (worktreeId: string, sessionId: string) => {
-    const task = take(worktreeId)
+  const apply = (contextId: string, sessionId: string) => {
+    const task = take(contextId)
     if (!task) return
     window.dispatchEvent(
       new CustomEvent("agentManagerApplyDraft", {
-        detail: { id: task.id, sessionId, boxId: `agent-manager:${worktreeId}` },
+        detail: { id: task.id, sessionId, boxId: `agent-manager:${contextId}` },
       }),
     )
   }

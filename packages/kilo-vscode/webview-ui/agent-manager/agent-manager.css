@@ -223,6 +223,10 @@ button.am-section-toggle:hover .am-section-label {
 
 .am-section-chevron {
   flex-shrink: 0;
+  /* ≥24×24 hit area via transparent padding; negative margin preserves layout */
+  padding: 4px 6px;
+  margin: -4px -6px;
+  border-radius: 2px;
 }
 
 .am-section-actions {
@@ -233,270 +237,31 @@ button.am-section-toggle:hover .am-section-label {
 
 /* Worktree list */
 
-.am-worktree-list {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow-y: auto;
-  overflow-x: hidden;
-  max-height: 50vh;
-}
-
-.am-section-grow .am-worktree-list {
-  max-height: none;
-  flex: 1;
-}
-
 /* Worktree item — larger card style */
 
-.am-worktree-list [data-slot="hover-card-trigger"] {
-  min-width: 0;
-}
-
-.am-worktree-item {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  padding: 6px 10px;
-  min-height: 36px;
-  box-sizing: border-box;
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-  font-size: var(--font-size-base);
-  color: var(--text-base);
-  min-width: 0;
-  width: 100%;
-  transition: background 200ms ease;
-}
-
 /* Left icon column — shrink-0, vertically centered with first row */
-.am-wt-icon {
-  flex-shrink: 0;
-  display: flex;
-  align-items: center;
-  height: 20px;
-}
 
 /* Right content column — flex-1 with two rows */
-.am-wt-content {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
 
 /* Row 1: label + stats/hover-actions */
-.am-wt-row1 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
 
 /* Grid overlay cell: stats visible by default, hover actions stacked on top */
-.am-wt-actions-cell {
-  position: relative;
-  flex-shrink: 0;
-  display: grid;
-  align-items: center;
-  margin-left: auto;
-}
-.am-wt-actions-cell > * {
-  grid-column: 1;
-  grid-row: 1;
-}
 
 /* Hover actions (shortcut badge + close button) — hidden by default, shown on hover */
-.am-wt-hover-actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 2px;
-  opacity: 0;
-  visibility: hidden;
-}
-.am-worktree-item:hover .am-wt-hover-actions {
-  opacity: 1;
-  visibility: visible;
-}
 /* Stats fade out on hover (replaced by hover actions in same grid cell) */
-.am-worktree-item:hover .am-wt-actions-cell > .am-worktree-stats,
-.am-worktree-item:hover .am-wt-actions-cell > .am-worktree-stats-skeleton {
-  opacity: 0;
-  visibility: hidden;
-}
 
 /* Row 2: always present for consistent height; PR badge right-aligned */
-.am-wt-row2 {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 14px;
-}
-
-.am-worktree-subtitle {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--kilo-font-size-10);
-  color: var(--text-weaker);
-  line-height: 1.2;
-  min-width: 0;
-}
-
-.am-worktree-item-active .am-worktree-subtitle {
-  color: color-mix(in srgb, var(--text-on-interactive-base) 70%, transparent);
-}
-
-.am-worktree-item:hover {
-  background: var(--surface-inset-base-hover);
-}
-
-.am-worktree-item:active {
-  opacity: 0.8;
-}
-
-.am-worktree-item-active {
-  background: var(--surface-interactive-base);
-  color: var(--text-on-interactive-base);
-}
-
-.am-worktree-item-active [data-component="icon"] {
-  color: var(--text-on-interactive-base);
-}
-
-.am-worktree-branch {
-  flex: 1;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 500;
-  min-width: 0;
-}
-
-.am-worktree-rename-input {
-  flex: 1;
-  min-width: 0;
-  height: 22px;
-  padding: 0 4px;
-  border: 1px solid var(--border-focus, #007fd4);
-  border-radius: 3px;
-  background: var(--surface-base);
-  color: var(--text-base);
-  font-size: inherit;
-  font-weight: 500;
-  font-family: inherit;
-  outline: none;
-}
 
 /* Shortcut badge — hover-reveal index badge (⌘1, ⌘2, etc.) */
-
-.am-shortcut-badge {
-  font-size: var(--kilo-font-size-10);
-  font-variant-numeric: tabular-nums;
-  color: var(--text-weaker);
-  pointer-events: none;
-  white-space: nowrap;
-}
-
-.am-local-item .am-shortcut-badge {
-  right: 8px;
-}
-
-.am-local-item:hover .am-shortcut-badge {
-  opacity: 1;
-}
 
 .am-local-item:hover .am-local-branch {
   mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
   -webkit-mask-image: linear-gradient(to right, black calc(100% - 40px), transparent 100%);
 }
 
-.am-worktree-item-active .am-shortcut-badge {
-  color: color-mix(in srgb, var(--text-on-interactive-base) 60%, transparent);
-}
-
-.am-worktree-item-active:hover .am-shortcut-badge {
-  opacity: 0.8;
-}
-
-.am-local-item-active .am-shortcut-badge {
-  color: var(--text-weak);
-}
-
-.am-worktree-item:has(.am-worktree-rename-input) .am-wt-row2 {
-  display: none;
-}
-
-.am-worktree-close {
-  flex-shrink: 0;
-}
 /* Compact close button inside worktree items */
-.am-worktree-close [data-component="icon-button"] {
-  width: 18px;
-  height: 18px;
-  padding: 2px;
-}
-.am-worktree-close [data-component="icon"] {
-  width: 14px;
-  height: 14px;
-}
-
-.am-worktree-item:has(.am-worktree-rename-input) .am-wt-hover-actions {
-  opacity: 0;
-  visibility: hidden;
-}
 
 /* Inline delete confirmation */
-
-.am-worktree-item.am-worktree-pending-delete,
-.am-worktree-item.am-worktree-pending-delete.am-worktree-item-active {
-  background: color-mix(in srgb, var(--surface-critical-strong) 18%, transparent);
-}
-
-.am-worktree-item.am-worktree-pending-delete:hover,
-.am-worktree-item.am-worktree-pending-delete.am-worktree-item-active:hover {
-  background: color-mix(in srgb, var(--surface-critical-strong) 25%, transparent);
-}
-
-.am-worktree-pending-delete .am-worktree-branch,
-.am-worktree-pending-delete .am-worktree-subtitle {
-  opacity: 0.5;
-  transition: opacity 200ms ease;
-}
-
-.am-worktree-pending-delete .am-worktree-stats,
-.am-worktree-pending-delete .am-worktree-stats-skeleton {
-  display: none;
-}
-
-.am-worktree-pending-delete .am-wt-row2 {
-  visibility: hidden;
-}
-
-.am-worktree-pending-delete .am-wt-hover-actions {
-  opacity: 0 !important;
-  visibility: hidden !important;
-}
-
-.am-worktree-delete-hint {
-  position: absolute;
-  right: 0;
-  font-size: var(--font-size-small);
-  color: var(--text-on-brand-base);
-  background: var(--surface-critical-strong);
-  white-space: nowrap;
-  padding: 1px 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  animation: am-hint-slide-in 200ms ease;
-}
-
-.am-worktree-delete-hint:hover {
-  opacity: 0.9;
-}
 
 @keyframes am-hint-slide-in {
   from {
@@ -509,78 +274,7 @@ button.am-section-toggle:hover .am-section-label {
   }
 }
 
-.am-worktree-stale-badge {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 14px;
-  height: 14px;
-  margin-right: 2px;
-  color: var(--text-warning, #f59e0b);
-  flex-shrink: 0;
-}
-
-.am-worktree-item-active .am-worktree-stale-badge {
-  color: color-mix(in oklab, var(--text-warning, #f59e0b) 90%, var(--text-base));
-}
-
-.am-worktree-stale-badge [data-component="icon"] {
-  color: currentColor;
-}
-
-.am-tooltip-wrap {
-  max-width: 240px;
-  white-space: normal;
-}
-
-.am-worktree-spinner {
-  width: 16px;
-  height: 16px;
-}
-
 /* Per-worktree git stats (diff lines + commits missing from origin) */
-
-.am-worktree-stats {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex-shrink: 0;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--kilo-font-size-10);
-  line-height: 1;
-  font-variant-numeric: tabular-nums;
-}
-
-.am-worktree-stats-row {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.am-worktree-stats-skeleton {
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-}
-
-.am-worktree-stats-skeleton-row {
-  width: 48px;
-  height: 8px;
-  border-radius: 3px;
-  background: var(--text-base);
-  animation: am-skeleton-pulse 1.5s ease-in-out infinite;
-}
-
-.am-pr-badge-skeleton {
-  width: 52px;
-  height: 14px;
-  border-radius: 6px;
-  background: var(--text-base);
-  animation: am-skeleton-pulse 1.5s ease-in-out infinite;
-  animation-delay: 0.3s;
-  opacity: 0;
-  margin-left: auto;
-}
 
 .am-run-badge {
   --am-run-accent: var(--text-muted);
@@ -677,319 +371,13 @@ button.am-section-toggle:hover .am-section-label {
   color: #f87171;
 }
 
-/* PR pill badge — second row inside am-wt-row2.
-   Uses --pr-accent custom property (set inline) to derive all colors. */
-.am-pr-badge {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 2px 7px 2px 4px;
-  border-radius: 6px;
-  border: none;
-  background: color-mix(in srgb, var(--pr-accent) 12%, transparent);
-  color: var(--pr-accent);
-  cursor: pointer;
-  font-size: var(--kilo-font-size-11);
-  font-weight: 500;
-  font-variant-numeric: tabular-nums;
-  transition: background 150ms ease;
-  margin-left: auto;
-}
-.am-pr-badge:hover {
-  background: color-mix(in srgb, var(--pr-accent) 25%, transparent);
-}
-.am-pr-badge [data-component="icon"] {
-  width: 12px;
-  height: 12px;
-  color: var(--pr-accent);
-}
-.am-pr-badge-number {
-  line-height: 1;
-  color: var(--text-muted);
-}
-.am-pr-badge:hover .am-pr-badge-number {
-  color: var(--pr-accent);
-}
-/* Status icon overlaid on the badge — colored by CI/review result, independent
-   of the badge's PR-state accent color. */
-.am-pr-badge-status[data-status="failure"] {
-  color: #ef4444;
-}
-.am-pr-badge-status[data-status="changes"] {
-  color: #fbbf24;
-}
-.am-pr-badge-status[data-status="approved"] {
-  color: #34d399;
-}
-
-/* Checks still running — pulse the whole amber badge. */
-.am-pr-badge[data-pending] {
-  animation: am-pr-pulse 1.5s ease-in-out infinite;
-}
-@keyframes am-pr-pulse {
-  0%,
-  100% {
-    opacity: 0.9;
-  }
-  50% {
-    opacity: 0.4;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .am-pr-badge[data-pending] {
-    animation: none;
-    opacity: 0.9;
-  }
-}
-
-.am-worktree-item-active .am-pr-badge {
-  background: color-mix(in srgb, var(--pr-accent) 18%, transparent);
-}
-.am-worktree-item-active .am-pr-badge:hover {
-  background: color-mix(in srgb, var(--pr-accent) 30%, transparent);
-}
-
-/* Clickable link icon in hover card to open PR on GitHub */
-.am-pr-link {
-  display: inline-flex;
-  align-items: center;
-  margin-right: 3px;
-  cursor: pointer;
-  opacity: 0.5;
-  transition: opacity 100ms ease;
-}
-.am-pr-link:hover {
-  opacity: 1;
-}
-.am-pr-link [data-component="icon"] {
-  width: 11px;
-  height: 11px;
-}
-
-.am-worktree-item-active .am-stat-files {
-  color: rgba(255, 255, 255, 0.7);
-}
-
-.am-worktree-item-active .am-stat-additions {
-  color: #6ee7b7;
-}
-
-.am-worktree-item-active .am-stat-deletions {
-  color: #fca5a5;
-}
-
-.am-worktree-commits {
-  color: #34d399;
-}
-
-.am-worktree-behind {
-  color: #f87171;
-}
-
-.am-worktree-item-active .am-worktree-commits {
-  color: #6ee7b7;
-}
-
-.am-worktree-item-active .am-worktree-behind {
-  color: #fca5a5;
-}
-
-.am-local-item-active .am-worktree-behind {
-  color: #fca5a5;
-}
-
-.am-local-item:hover .am-worktree-stats,
-.am-local-item:hover .am-worktree-stats-skeleton {
-  opacity: 0;
-}
-
 /* User-defined sections — collapsible, color-coded groups */
-
-.am-section-group {
-  margin-top: 2px;
-  border-left: 2px solid var(--section-color, var(--vscode-panel-border));
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-  transition: border-color 120ms;
-}
-
-.am-section-group-drop {
-  background: color-mix(in srgb, var(--section-color) 10%, transparent);
-  border-color: var(--section-color);
-  border-style: solid;
-}
-
-.am-section-group-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 5px 10px 5px 6px;
-  cursor: pointer;
-  user-select: none;
-  border-radius: var(--radius-sm);
-  font-size: var(--kilo-font-size-11);
-  font-weight: 500;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  color: var(--text-weak);
-}
-
-.am-section-group-header:hover {
-  background: var(--surface-interactive-hover, var(--vscode-list-hoverBackground));
-}
-
-.am-section-group-left {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.am-section-group-chevron {
-  flex-shrink: 0;
-  opacity: 0.7;
-  transition: transform 120ms ease;
-}
-
-.am-section-group-chevron-collapsed {
-  transform: rotate(-90deg);
-}
-
-.am-section-group-name {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.am-section-group-count {
-  flex-shrink: 0;
-  font-size: var(--kilo-font-size-10);
-  color: var(--text-weaker);
-  min-width: 14px;
-  text-align: center;
-}
-
-.am-section-group-body {
-  padding-left: 4px;
-}
-
-.am-section-group-rename {
-  background: var(--input-base, var(--vscode-input-background, #3c3c3c));
-  color: var(--vscode-input-foreground);
-  border: 1px solid var(--border-focus, var(--vscode-focusBorder, #007fd4));
-  border-radius: var(--radius-sm);
-  padding: 1px 4px;
-  font-size: var(--kilo-font-size-11);
-  font-weight: 500;
-  letter-spacing: 0.3px;
-  text-transform: uppercase;
-  outline: none;
-  width: 100%;
-  min-width: 0;
-}
 
 /* Color picker grid in section context menu */
 
-.am-color-grid {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 2px;
-  padding: 4px 8px;
-}
-
-.am-color-grid-item {
-  padding: 3px !important;
-  border-radius: 4px !important;
-  min-height: unset !important;
-}
-
-.am-color-swatch {
-  display: block;
-  width: 16px;
-  height: 16px;
-  border-radius: 50%;
-  flex-shrink: 0;
-  border: 1.5px solid transparent;
-}
-
-.am-color-swatch-active {
-  border-color: var(--vscode-foreground);
-  box-shadow: 0 0 0 1px var(--vscode-editor-background);
-}
-
-.am-color-swatch-default {
-  background: var(--vscode-panel-border);
-  position: relative;
-}
-
-.am-color-swatch-default::after {
-  content: "";
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 70%;
-  height: 1.5px;
-  background: var(--text-weaker);
-  transform: translate(-50%, -50%) rotate(-45deg);
-}
-
-.am-color-swatch-sm {
-  width: 10px;
-  height: 10px;
-}
-
-.am-icon-flip {
-  transform: rotate(180deg);
-}
-
 /* Context menu danger item (delete section) */
 
-.am-ctx-menu-danger {
-  color: var(--text-error, var(--vscode-errorForeground, #f44));
-}
-
 /* Grouped worktrees — visual grouping with header and left accent */
-
-.am-wt-group-header {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 10px 2px;
-  margin-top: 6px;
-  color: var(--text-weaker);
-}
-
-.am-wt-group-header [data-component="icon"] {
-  color: var(--border-focus, #007fd4);
-  opacity: 0.7;
-}
-
-.am-wt-group-label {
-  font-size: var(--kilo-font-size-11);
-  font-weight: 500;
-  letter-spacing: 0.2px;
-  color: color-mix(in srgb, var(--border-focus, #007fd4) 80%, var(--text-weak));
-}
-
-.am-wt-grouped {
-  margin-left: 8px;
-  padding-left: 10px;
-  border-left: 2px solid color-mix(in srgb, var(--border-focus, #007fd4) 35%, transparent);
-  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
-}
-
-.am-wt-group-end {
-  margin-bottom: 6px;
-}
-
-.am-wt-grouped:hover {
-  border-left-color: color-mix(in srgb, var(--border-focus, #007fd4) 60%, transparent);
-}
-
-.am-wt-grouped.am-worktree-item-active {
-  border-left-color: var(--border-focus, #007fd4);
-}
 
 /* Session list */
 
@@ -1011,6 +399,7 @@ button.am-section-toggle:hover .am-section-label {
   justify-content: space-between;
   gap: 8px;
   padding: 6px 10px;
+  padding-left: calc(10px + var(--am-session-indent, 0px));
   border-radius: var(--radius-sm);
   cursor: pointer;
   background: none;
@@ -1020,6 +409,57 @@ button.am-section-toggle:hover .am-section-label {
   color: var(--text-base);
   font-family: inherit;
   font-size: var(--font-size-base);
+}
+
+/* Child session sequence number */
+.am-session-child-seq {
+  flex-shrink: 0;
+  font-size: var(--kilo-font-size-11);
+  color: var(--text-weak, var(--vscode-descriptionForeground));
+  opacity: 0.7;
+  margin-right: 4px;
+}
+
+/* Expand/collapse toggle for parent sessions.
+   Visual column stays ~14px (12px content + 2px effective gap) but
+   the interactive hit area is ≥24×24 via transparent padding + negative
+   margin compensation so layout contribution is unchanged. */
+.am-session-expand-toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 12px;
+  height: 16px;
+  padding: 4px 6px;
+  margin: -4px -4px -4px -6px;
+  border: none;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  border-radius: 2px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.am-session-expand-toggle:hover {
+  opacity: 1;
+}
+
+.am-session-expand-toggle [data-slot="icon-svg"] {
+  width: 12px;
+  height: 12px;
+}
+
+/* Date group header (scoped — does not collide with section group header) */
+.am-session-date-header {
+  padding: 4px 10px 2px;
+  font-size: var(--kilo-font-size-11);
+  font-weight: 600;
+  color: var(--text-weak, var(--vscode-descriptionForeground));
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  opacity: 0.7;
 }
 
 .am-item:hover {
@@ -1056,51 +496,11 @@ button.am-section-toggle:hover .am-section-label {
   opacity: 0.7;
 }
 
-/* Promote button on session rows */
-
-.am-item-promote {
-  position: absolute;
-  right: 4px;
-  flex-shrink: 0;
-  opacity: 0;
-}
-
 .am-item:hover .am-item-time {
   opacity: 0;
 }
 
-.am-item:hover .am-item-promote {
-  opacity: 1;
-}
-
 /* Create worktree button (empty state) */
-
-.am-worktree-create {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  width: 100%;
-  padding: 8px;
-  border: 1px dashed var(--border-weak-base);
-  border-radius: var(--radius-sm);
-  background: none;
-  color: var(--text-weak);
-  font-size: var(--kilo-font-size-12);
-  cursor: pointer;
-  transition:
-    background-color 120ms,
-    color 120ms;
-}
-
-.am-worktree-create:hover {
-  background: var(--surface-inset-base-hover);
-  color: var(--text-base);
-}
-
-.am-worktree-create:active {
-  opacity: 0.8;
-}
 
 /* Detail pane */
 
@@ -1385,40 +785,7 @@ button.am-section-toggle:hover .am-section-label {
 
 /* Drag-and-drop sortable worktree wrapper */
 
-.am-wt-sortable {
-  touch-action: none;
-  cursor: grab;
-}
-
-body.am-wt-dragging-active,
-body.am-wt-dragging-active * {
-  cursor: grabbing !important;
-}
-
-.am-wt-sortable > [data-slot="hover-card-trigger"] {
-  width: 100%;
-}
-
-.am-wt-dragging {
-  opacity: 0.25;
-}
-
 /* Drag overlay worktree (follows the cursor) */
-
-.am-wt-overlay {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 8px;
-  background: var(--surface-base);
-  border: 1px solid var(--border-weak-base);
-  border-radius: var(--radius-sm);
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  pointer-events: none;
-  color: var(--text-base);
-  font-size: var(--font-size-small);
-  white-space: nowrap;
-}
 
 .am-tab-add {
   flex-shrink: 0;
@@ -1642,22 +1009,6 @@ body.am-wt-dragging-active * {
   flex: 1;
   min-height: 0;
   position: relative;
-}
-
-.am-readonly-banner {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 12px;
-  padding: 14px 16px;
-  flex-shrink: 0;
-  border-top: 1px solid var(--border-weak-base);
-  background: var(--surface-inset-base);
-}
-
-.am-readonly-text {
-  font-size: var(--font-size-base);
-  color: var(--text-weak);
 }
 
 /* Diff Panel */
@@ -2623,31 +1974,6 @@ body.am-wt-dragging-active * {
   padding: 6px 10px;
 }
 
-.am-worktree-menu-gap {
-  display: inline-flex;
-  width: 16px;
-  height: 16px;
-  flex-shrink: 0;
-}
-
-.am-worktree-menu-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-width: 0;
-}
-
-.am-worktree-menu-branch {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  min-width: 0;
-}
-
-.am-worktree-menu-branch strong {
-  font-weight: 600;
-}
-
 /* New Versioned Session Dialog */
 
 .am-nv-dialog {
@@ -3163,142 +2489,6 @@ body.am-wt-dragging-active * {
 
 /* HoverCard popover for worktree items */
 
-.am-worktree-hover-card[data-expanded] {
-  animation-duration: 80ms;
-}
-
-.am-worktree-hover-card[data-closed] {
-  animation-duration: 60ms;
-}
-
-.am-hover-card {
-  padding: 10px 12px;
-  min-width: 160px;
-  max-width: 240px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  overflow: hidden;
-}
-
-.am-hover-card-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-}
-
-.am-hover-card-label {
-  font-size: var(--kilo-font-size-11);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  color: var(--text-weaker);
-  line-height: 1.4;
-}
-
-.am-hover-card-branch {
-  font-size: var(--kilo-font-size-13);
-  font-weight: 600;
-  color: var(--text-strong);
-  line-height: 1.4;
-  word-break: break-all;
-}
-
-.am-hover-card-meta {
-  font-size: var(--kilo-font-size-12);
-  color: var(--text-weaker);
-  line-height: 1.4;
-}
-
-.am-hover-card-keybind {
-  flex-shrink: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  height: 20px;
-  padding: 0 6px;
-  border-radius: 3px;
-  background: var(--surface-inset-base);
-  border: 1px solid var(--border-weak-base);
-  font-family: var(--font-family-sans);
-  font-size: var(--kilo-font-size-11);
-  font-weight: 500;
-  line-height: 1;
-  color: var(--text-weak);
-  white-space: nowrap;
-}
-
-.am-hover-card-divider {
-  height: 1px;
-  background: var(--border-weak-base);
-  margin: 6px 0;
-}
-
-.am-hover-card-row {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.am-hover-card-row-label {
-  font-size: var(--kilo-font-size-12);
-  color: var(--text-weaker);
-}
-
-.am-hover-card-row-value {
-  font-size: var(--kilo-font-size-12);
-  font-weight: 500;
-  color: var(--text-base);
-}
-
-.am-hover-card-diff-stats {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-family: var(--font-mono, monospace);
-  font-variant-numeric: tabular-nums;
-}
-
-.am-hover-card-row-stale {
-  align-items: center;
-}
-
-.am-hover-card-stale-pill {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-warning, #f59e0b);
-  font-weight: 600;
-}
-
-.am-hover-card-note {
-  margin-top: 4px;
-  font-size: var(--kilo-font-size-12);
-  line-height: 1.35;
-  color: var(--text-weak);
-  text-align: left;
-}
-
-.am-hover-card-actions {
-  margin-top: 8px;
-  display: flex;
-  justify-content: flex-start;
-}
-
-.am-hover-card-hint {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: var(--text-weaker);
-  font-size: var(--kilo-font-size-11);
-}
-
-.am-hover-card-hint [data-component="icon"] {
-  opacity: 0.8;
-}
-
 /* Keyboard shortcuts dialog */
 
 .am-shortcuts {
@@ -3405,35 +2595,6 @@ body.am-wt-dragging-active * {
   animation: am-fade-in 0.2s ease;
 }
 
-/* Worktree skeleton — matches .am-worktree-item layout */
-.am-skeleton-wt {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 10px 10px;
-}
-
-.am-skeleton-wt-icon {
-  width: 16px;
-  height: 16px;
-  border-radius: 3px;
-  background: var(--text-base);
-  animation: am-skeleton-pulse 1.5s ease-in-out infinite;
-  flex-shrink: 0;
-}
-
-.am-skeleton-wt-text {
-  height: 13px;
-  border-radius: 3px;
-  background: var(--text-base);
-  animation: am-skeleton-pulse 1.5s ease-in-out infinite;
-}
-
-.am-skeleton-wt:nth-child(2) .am-skeleton-wt-icon,
-.am-skeleton-wt:nth-child(2) .am-skeleton-wt-text {
-  animation-delay: 0.15s;
-}
-
 /* Session skeleton — matches .am-item layout */
 .am-skeleton-session {
   display: flex;
@@ -3528,52 +2689,6 @@ body.am-wt-dragging-active * {
 }
 
 /* PR URL input row */
-
-.am-pr-row {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.am-pr-input-wrapper {
-  flex: 1;
-  position: relative;
-}
-
-.am-pr-input-wrapper [data-component="icon"] {
-  position: absolute;
-  left: 10px;
-  top: 50%;
-  transform: translateY(-50%);
-  color: var(--text-weaker);
-  pointer-events: none;
-}
-
-.am-pr-input {
-  width: 100%;
-  height: 32px;
-  padding: 0 12px 0 32px;
-  border: 1px solid var(--border-weak-base);
-  border-radius: var(--radius-sm);
-  background: var(--vscode-input-background, var(--surface-inset-base));
-  color: var(--vscode-input-foreground, var(--text-base));
-  font-size: var(--font-size-base);
-  font-family: inherit;
-  outline: none;
-  box-sizing: border-box;
-}
-
-.am-pr-input:focus {
-  border-color: var(--border-focus, #007fd4);
-}
-
-.am-pr-input::placeholder {
-  color: var(--vscode-input-placeholderForeground, var(--text-weaker));
-}
-
-.am-pr-input:disabled {
-  opacity: 0.5;
-}
 
 /* Branch/worktree selector — popover trigger must be full-width */
 
@@ -3782,113 +2897,6 @@ body.am-wt-dragging-active * {
 .am-apply-spinner {
   width: 12px;
   height: 12px;
-}
-
-.am-apply-dialog {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  padding: 0 20px 20px 20px;
-  box-sizing: border-box;
-}
-
-.am-apply-dialog-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.am-apply-dialog-summary {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--kilo-font-size-12);
-  color: var(--text-weak);
-  font-variant-numeric: tabular-nums;
-}
-
-.am-apply-dialog-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.am-apply-dialog-tree {
-  flex: 1;
-  min-height: 0;
-  border: 1px solid var(--border-weak-base);
-  border-radius: var(--radius-sm);
-  overflow: hidden;
-}
-
-.am-apply-dialog-tree .am-file-tree {
-  height: 100%;
-}
-
-.am-apply-conflicts {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  padding: 8px;
-  border: 1px solid color-mix(in oklab, var(--border-weak-base) 55%, var(--syntax-diff-delete, #da3319));
-  border-radius: var(--radius-sm);
-  background: color-mix(in oklab, var(--surface-inset-base) 90%, var(--syntax-diff-delete, #da3319));
-}
-
-.am-apply-conflicts-title {
-  font-size: var(--kilo-font-size-11);
-  font-weight: 600;
-  color: var(--text-base);
-}
-
-.am-apply-conflict {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 10px;
-  min-width: 0;
-}
-
-.am-apply-conflict-file {
-  display: block;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: var(--kilo-font-size-11);
-  color: var(--text-base);
-}
-
-.am-apply-conflict-reason {
-  flex: 1;
-  min-width: 0;
-  text-align: right;
-  line-height: 1.3;
-  white-space: normal;
-  word-break: break-word;
-  font-size: var(--kilo-font-size-10);
-  color: var(--text-weaker);
-}
-
-.am-apply-alert {
-  font-size: var(--kilo-font-size-11);
-  color: var(--syntax-diff-delete, #da3319);
-  line-height: 1.35;
-}
-
-.am-apply-dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 8px;
-  border-top: 1px solid var(--border-weak-base);
-  padding-top: 10px;
-  flex-shrink: 0;
 }
 
 /* Review tab in tab bar */
@@ -4295,20 +3303,6 @@ body.am-wt-dragging-active * {
 
 /* ============ Default base branch picker dialog ============ */
 
-.am-default-base-branch {
-  min-width: 360px;
-}
-
-.am-default-base-branch .am-dropdown-list {
-  max-height: 320px;
-}
-
-.am-branch-hint {
-  margin-left: auto;
-  color: var(--text-weaker);
-  font-size: var(--kilo-font-size-11);
-}
-
 /* ============================================
    High Contrast Theme Support
    --vscode-contrastBorder is only defined in HC themes,
@@ -4324,20 +3318,13 @@ body.vscode-high-contrast-light {
 
   /* Sidebar items */
   .am-local-item,
-  .am-worktree-item,
   .am-item {
     border: 1px solid var(--vscode-contrastBorder, transparent);
   }
 
   .am-local-item-active,
-  .am-worktree-item-active,
   .am-item-active {
     border-color: var(--vscode-contrastBorder, transparent);
-  }
-
-  /* Create worktree button */
-  .am-worktree-create {
-    border-color: var(--vscode-contrastBorder, var(--border-weak-base));
   }
 
   /* Tab bar */
@@ -4359,18 +3346,14 @@ body.vscode-high-contrast-light {
   }
 
   /* Inputs and textareas */
-  .am-worktree-rename-input,
   .am-nv-name-input,
   .am-advanced-input,
-  .am-pr-input,
   .am-annotation-textarea {
     border-color: var(--vscode-contrastBorder, var(--border-base));
   }
 
-  .am-worktree-rename-input:focus,
   .am-nv-name-input:focus,
   .am-advanced-input:focus,
-  .am-pr-input:focus,
   .am-annotation-textarea:focus {
     border-color: var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
   }
@@ -4443,11 +3426,6 @@ body.vscode-high-contrast-light {
     border: 1px solid var(--vscode-contrastBorder, transparent);
   }
 
-  /* Read-only banner */
-  .am-readonly-banner {
-    border-top-color: var(--vscode-contrastBorder, var(--border-weak-base));
-  }
-
   /* Shortcuts list */
   .am-shortcuts-list {
     border-color: var(--vscode-contrastBorder, var(--border-weak-base));
@@ -4464,16 +3442,6 @@ body.vscode-high-contrast-light {
 
   .am-branch-item:hover {
     border-color: var(--vscode-contrastBorder, transparent);
-  }
-
-  /* Apply dialog tree */
-  .am-apply-dialog-tree {
-    border-color: var(--vscode-contrastBorder, var(--border-weak-base));
-  }
-
-  /* Hover card keybind */
-  .am-hover-card-keybind {
-    border-color: var(--vscode-contrastBorder, var(--border-weak-base));
   }
 
   /* File tree items */
@@ -4507,16 +3475,15 @@ body.vscode-high-contrast-light {
 
   /* Focus states */
   .am-local-item:focus-visible,
-  .am-worktree-item:focus-visible,
   .am-item:focus-visible,
   .am-tab:focus-visible,
-  .am-worktree-create:focus-visible,
   .am-nv-pill:focus-visible,
   .am-tab-switcher-pill:focus-visible,
   .am-diff-toggle-btn:focus-visible,
   .am-branch-item:focus-visible,
   .am-file-tree-dir:focus-visible,
-  .am-file-tree-file:focus-visible {
+  .am-file-tree-file:focus-visible,
+  .am-session-expand-toggle:focus-visible {
     outline: 1px solid var(--vscode-contrastActiveBorder, var(--vscode-focusBorder));
     outline-offset: -1px;
   }

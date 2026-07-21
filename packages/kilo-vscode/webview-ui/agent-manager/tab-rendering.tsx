@@ -75,6 +75,9 @@ export interface TabRenderDeps {
   isBusy: (id: string) => boolean
   tabLookup: () => Map<string, SessionInfo>
   adjacentHint: (id: string, activeId: string, ids: string[], prev: string, next: string) => string
+  // Context and registry (for atomic close-others)
+  ctx: () => string
+  tabMgrCloseOthers: (ctx: string, target: string) => void
   // Handlers
   activateTerminal: (id: string) => void
   deactivateTerminal: () => void
@@ -86,6 +89,9 @@ export interface TabRenderDeps {
   selectSessionTab: (id: string, pending: boolean) => void
   sessionMiddleClick: (id: string, e: MouseEvent) => void
   sessionClose: (id: string) => void
+  /** Lightweight close: sends the backend close message without
+   *  updating the tab registry or switching the active session. */
+  sessionCloseMessage: (id: string) => void
   sessionFork: (id: string) => void
   onTabKey: (id: string, event: KeyboardEvent) => void
   reviewLabel: string
@@ -201,18 +207,38 @@ function renderSessionTab(s: SessionInfo, deps: TabRenderDeps): JSX.Element {
 }
 
 function closeOthers(target: string, deps: TabRenderDeps) {
+  // Collect the non-session removals (terminal and review) that still need
+  // individual cleanup, and the session IDs that need individual close
+  // messages sent to the backend.
+  const removedSessions: string[] = []
+  const removedTerminals: string[] = []
+  let closeReview = false
   for (const id of deps.tabIds()) {
     if (id === target) continue
     if (isTerminalTabId(id)) {
-      deps.closeTerminal(id)
+      removedTerminals.push(id)
       continue
     }
     if (id === deps.REVIEW_TAB_ID) {
-      deps.closeReview()
+      closeReview = true
       continue
     }
-    deps.sessionClose(id)
+    removedSessions.push(id)
   }
+  // Atomically update the tab registry: keep only the target.
+  deps.tabMgrCloseOthers(deps.ctx(), target)
+  // Send individual close messages for each removed session so the backend
+  // cleans up, and handle pending draft cleanup. These are lightweight
+  // messages — they do NOT mutate the tab registry (already updated above).
+  for (const id of removedSessions) {
+    deps.sessionCloseMessage(id)
+  }
+  // Preserve terminal and review close behavior.
+  for (const id of removedTerminals) {
+    deps.closeTerminal(id)
+  }
+  if (closeReview) deps.closeReview()
+  // Activate the surviving target.
   if (isTerminalTabId(target)) {
     deps.activateTerminal(target)
     return
@@ -240,7 +266,7 @@ export interface NewTabButtonDeps {
  * Render the tab bar's "new" affordance: a split button with the plus
  * icon (primary action: new agent session) and a chevron that opens a
  * dropdown menu for picking between "New Session" and "New Terminal".
- * Mirrors the worktree split-button at the top of the sidebar. Falls
+ * Mirrors the split-button at the top of the sidebar. Falls
  * back to nothing when no sidebar context is selected (tab bar isn't
  * visible anyway).
  */

@@ -9,7 +9,6 @@ import { DiffVirtualProvider } from "./DiffVirtualProvider"
 import { SettingsEditorProvider } from "./SettingsEditorProvider"
 import { MarketplacePanelProvider } from "./MarketplacePanelProvider"
 import { MarketplaceNotifier } from "./services/marketplace/notifier"
-import { SubAgentViewerProvider } from "./SubAgentViewerProvider"
 import { EXTENSION_DISPLAY_NAME } from "./constants"
 import { KiloConnectionService } from "./services/cli-backend"
 import { registerAutocompleteProvider } from "./services/autocomplete"
@@ -152,14 +151,6 @@ export function activate(context: vscode.ExtensionContext) {
   agentManager = agentManagerProvider
   context.subscriptions.push(agentManagerProvider)
 
-  // Wire "Continue in Worktree" from sidebar → Agent Manager
-  provider.setContinueInWorktreeHandler((sessionId, progress) =>
-    agentManagerProvider.continueFromSidebar(sessionId, progress),
-  )
-  provider.setCreateWorktreeHandler((baseBranch, branchName) =>
-    agentManagerProvider.createFromSidebar(baseBranch, branchName),
-  )
-
   // Register toggle auto-approve shortcut (Ctrl+Alt+A / Cmd+Alt+A)
   const defaultDir = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
   const autoApprove = registerToggleAutoApprove(
@@ -227,12 +218,6 @@ export function activate(context: vscode.ExtensionContext) {
         })
         tabProvider.setRemoteService(remoteService)
         tabProvider.setAutoApproveController(autoApprove)
-        tabProvider.setContinueInWorktreeHandler((sessionId, progress) =>
-          agentManagerProvider.continueFromSidebar(sessionId, progress),
-        )
-        tabProvider.setCreateWorktreeHandler((baseBranch, branchName) =>
-          agentManagerProvider.createFromSidebar(baseBranch, branchName),
-        )
         tabProvider.setDiffVirtualProvider(diffVirtualProvider)
         tabProvider.resolveWebviewPanel(panel)
         tabPanels.set(panel, tabProvider)
@@ -279,10 +264,6 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(marketplaceNotifier)
   marketplaceNotifier.start()
 
-  // Create sub-agent viewer provider (read-only editor panel for sub-agent sessions)
-  const subAgentViewerProvider = new SubAgentViewerProvider(context.extensionUri, connectionService, context)
-  context.subscriptions.push(subAgentViewerProvider)
-
   // Register serializers so standalone panels restore on restart
   const settingsViews = ["settingsPanel", "profilePanel"] as const
   for (const suffix of settingsViews) {
@@ -309,17 +290,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewPanelSerializer(DiffViewerProvider.viewType, {
       deserializeWebviewPanel(panel: vscode.WebviewPanel) {
         diffViewerProvider.deserializePanel(panel)
-        return Promise.resolve()
-      },
-    }),
-  )
-
-  context.subscriptions.push(
-    vscode.window.registerWebviewPanelSerializer("kilo-code.new.SubAgentViewerPanel", {
-      deserializeWebviewPanel(panel: vscode.WebviewPanel) {
-        // Sub-agent viewer requires a session ID that can't be recovered
-        // after restart, so dispose the stale panel cleanly.
-        panel.dispose()
         return Promise.resolve()
       },
     }),
@@ -453,9 +423,6 @@ export function activate(context: vscode.ExtensionContext) {
         diffViewerProvider.openFromCommand(arg)
       },
     ),
-    vscode.commands.registerCommand("kilo-code.new.openSubAgentViewer", (sessionID: string, title?: string) => {
-      subAgentViewerProvider.openPanel(sessionID, title)
-    }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.previousSession", () => {
       agentManagerProvider.postMessage({ type: "action", action: "sessionPrevious" })
     }),
@@ -495,21 +462,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("kilo-code.new.agentManager.closeTab", () => {
       agentManagerProvider.postMessage({ type: "action", action: "closeTab" })
     }),
-    vscode.commands.registerCommand("kilo-code.new.agentManager.newWorktree", () => {
-      agentManagerProvider.postMessage({ type: "action", action: "newWorktree" })
-    }),
-    vscode.commands.registerCommand("kilo-code.new.agentManager.openWorktree", () => {
-      agentManagerProvider.postMessage({ type: "action", action: "openWorktree" })
-    }),
-    vscode.commands.registerCommand("kilo-code.new.agentManager.openPR", () => {
-      agentManagerProvider.postMessage({ type: "action", action: "openPR" })
-    }),
-    vscode.commands.registerCommand("kilo-code.new.agentManager.closeWorktree", () => {
-      agentManagerProvider.postMessage({ type: "action", action: "closeWorktree" })
-    }),
-    vscode.commands.registerCommand("kilo-code.new.agentManager.advancedWorktree", () =>
-      agentManagerProvider.openAdvancedWorktree(),
-    ),
     ...Array.from({ length: 9 }, (_, i) =>
       vscode.commands.registerCommand(`kilo-code.new.agentManager.jumpTo${i + 1}`, () => {
         agentManagerProvider.postMessage({ type: "action", action: `jumpTo${i + 1}` })
@@ -623,12 +575,6 @@ async function openKiloInNewTab(
   })
   tabProvider.setRemoteService(remoteService)
   tabProvider.setAutoApproveController(autoApprove)
-  tabProvider.setContinueInWorktreeHandler((sessionId, progress) =>
-    agentManagerProvider.continueFromSidebar(sessionId, progress),
-  )
-  tabProvider.setCreateWorktreeHandler((baseBranch, branchName) =>
-    agentManagerProvider.createFromSidebar(baseBranch, branchName),
-  )
   tabProvider.setDiffVirtualProvider(diffVirtualProvider)
   tabProvider.resolveWebviewPanel(panel)
   tabPanels.set(panel, tabProvider)

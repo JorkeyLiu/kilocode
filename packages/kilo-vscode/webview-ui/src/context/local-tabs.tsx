@@ -206,7 +206,16 @@ export const LocalTabsProvider: ParentComponent = (props) => {
         const before = active()
         const listed = message.sessions.map((item) => item.id)
         for (const id of listed) fresh.delete(id)
-        const next = reconcileTabs(current(), [...listed, ...(message.preserveSessionIds ?? []), ...fresh], pending)
+        // Preserve the active tab across reconciliation — the sessionsLoaded
+        // response may not list all sessions (directory-scoped, paginated,
+        // child sessions).  Genuinely deleted sessions are cleaned up by the
+        // explicit sessionDeleted signal.
+        const activeId = before && !isPendingTab(before) ? [before] : []
+        const next = reconcileTabs(
+          current(),
+          [...listed, ...(message.preserveSessionIds ?? []), ...activeId, ...fresh],
+          pending,
+        )
         apply(next)
         if (before !== next.active) focus(next.active)
         return

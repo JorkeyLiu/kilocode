@@ -1,13 +1,11 @@
 import * as fs from "fs"
 import * as path from "path"
-import { remoteRef, type Worktree } from "./WorktreeStateManager"
 import type { GitOps } from "./GitOps"
 import type { Semaphore } from "./semaphore"
 import { normalizePath } from "./git-import"
-import type { WorktreeDiffEntry } from "./types"
 
 export interface WorktreeStats {
-  worktreeId: string
+  worktreeId: string // legacy field name
   files: number
   additions: number
   deletions: number
@@ -25,7 +23,7 @@ export interface LocalStats {
 }
 
 export interface WorktreePresence {
-  worktreeId: string
+  worktreeId: string // legacy field name
   missing: boolean
   /** Current branch from `git worktree list`, if available. */
   branch?: string
@@ -37,14 +35,15 @@ export interface WorktreePresenceResult {
 }
 
 interface GitStatsPollerOptions {
-  getWorktrees: () => Worktree[]
+  /** @deprecated Always returns empty array; worktree stats polling is dead code. */
+  getWorktrees: () => { id: string; path: string; branch: string; remote?: string }[]
   getWorkspaceRoot: () => string | undefined
   /**
    * Compute diff summaries locally (in the extension host) rather than over
    * HTTP to `kilo serve`. Keeps git spawning out of the Bun process, which
    * leaks native memory on Windows (oven-sh/bun#18265).
    */
-  localDiff: (dir: string, base: string) => Promise<WorktreeDiffEntry[]>
+  localDiff: (dir: string, base: string) => Promise<{ additions: number; deletions: number }[]>
   git: GitOps
   onStats: (stats: WorktreeStats[]) => void
   onLocalStats: (stats: LocalStats) => void
@@ -195,7 +194,7 @@ export class GitStatsPoller {
       await Promise.all(
         active.map(async (wt) => {
           try {
-            const base = remoteRef(wt)
+            const base = wt.remote ? `${wt.remote}/${wt.branch}` : wt.branch
             const [diffs, ab] = await Promise.all([
               this.options.localDiff(wt.path, base),
               this.git.aheadBehind(wt.path, base),
@@ -231,7 +230,7 @@ export class GitStatsPoller {
       .join("|")
   }
 
-  private async probeWorktreePresence(worktrees: Worktree[]): Promise<WorktreePresenceResult> {
+  private async probeWorktreePresence(worktrees: { id: string; path: string; branch: string; remote?: string }[]): Promise<WorktreePresenceResult> {
     const root = this.options.getWorkspaceRoot()
     if (!root) {
       return { worktrees: [], degraded: true }

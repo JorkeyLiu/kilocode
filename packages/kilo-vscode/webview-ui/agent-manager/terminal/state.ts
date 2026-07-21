@@ -30,14 +30,14 @@ export interface TerminalTabState {
 
 /** Terminal row enriched with the sidebar context it belongs to. Used by
  *  the render layer so every xterm instance stays mounted across
- *  worktree switches and we only toggle visibility, not lifecycle. */
+ *  context switches and we only toggle visibility, not lifecycle. */
 export interface TerminalTabStateWithContext extends TerminalTabState {
   contextKey: string
 }
 
 export interface TerminalStateControls {
   /** Record received from `terminal.created`. */
-  add(worktreeId: string | null, term: TerminalTabState): void
+  add(contextId: string | null, term: TerminalTabState): void
   /** Drop a terminal from its context (location resolved automatically). */
   remove(terminalId: string): string | undefined
   /** Resolve the context key a terminal lives in, if any. */
@@ -94,7 +94,8 @@ export function createTerminalState(selection: Accessor<string | null>): Termina
   const currentKey = createMemo((): string | undefined => {
     const sel = selection()
     if (sel === null) return undefined
-    return sel === LOCAL ? LOCAL : sel
+    // Always return LOCAL — single context for all terminals.
+    return LOCAL
   })
 
   const current = createMemo((): TerminalTabStateWithContext[] => {
@@ -123,12 +124,13 @@ export function createTerminalState(selection: Accessor<string | null>): Termina
 
   const forSelection = (sel: string | null): TerminalTabStateWithContext[] => {
     if (sel === null) return []
-    const key = sel === LOCAL ? LOCAL : sel
-    return terminalsByContext()[key] ?? []
+    // All terminals live in LOCAL context.
+    return terminalsByContext()[LOCAL] ?? []
   }
 
-  const add = (worktreeId: string | null, term: TerminalTabState) => {
-    const key = worktreeId === null ? LOCAL : worktreeId
+  // All terminals route to LOCAL context.
+  const add = (contextId: string | null, term: TerminalTabState) => {
+    const key = LOCAL
     setTerminalsByContext((prev) => {
       const list = prev[key] ?? []
       if (list.some((t) => t.id === term.id)) return prev
@@ -253,7 +255,7 @@ export function createTerminalHandlers(deps: TerminalHandlerDeps) {
   const requestNew = () => {
     const sel = deps.getSelection()
     if (sel === null) return
-    deps.postMessage({ type: "agentManager.terminal.create", worktreeId: sel === deps.LOCAL ? null : sel })
+    deps.postMessage({ type: "agentManager.terminal.create", worktreeId: sel === deps.LOCAL ? null : sel }) // worktreeId is a legacy field name in the message contract
   }
 
   const closeTerminal = (terminalId: string) => {
@@ -309,15 +311,14 @@ export function createTerminalHandlers(deps: TerminalHandlerDeps) {
 export interface TerminalMessageHandlerDeps {
   state: TerminalStateControls
   activate: (id: string) => void
-  saveTabMemory: () => void
   setSelection: (sel: string | typeof LOCAL) => void
   showError: (message: string) => void
   /**
-   * Called with the context key ("local" or worktree id) and the new
-   * terminal id once a `terminal.created` message lands. The main
-   * component uses this hook to append the id to its per-context tab
-   * order so the terminal renders at the end of the tab bar rather
-   * than wherever `tabIds()`'s base composition happens to put it.
+   * Called with the context key ("local") and the new terminal id once
+   * a `terminal.created` message lands. The main component uses this
+   * hook to append the id to its per-context tab order so the terminal
+   * renders at the end of the tab bar rather than wherever `tabIds()`'s
+   * base composition happens to put it.
    */
   onCreated?: (contextKey: string, terminalId: string) => void
 }
@@ -331,16 +332,16 @@ export interface TerminalMessageHandlerDeps {
 export function createTerminalMessageHandler(deps: TerminalMessageHandlerDeps) {
   return (msg: ExtensionMessage): boolean => {
     if (msg.type === "agentManager.terminal.created") {
-      const contextKey = msg.worktreeId === null ? LOCAL : msg.worktreeId
+      // Always store in LOCAL context and set selection to LOCAL.
+      // worktreeId is a legacy field name in the message contract.
       deps.state.add(msg.worktreeId, {
         id: msg.terminalId,
         title: msg.title,
         wsUrl: msg.wsUrl,
         font: msg.font,
       })
-      deps.onCreated?.(contextKey, msg.terminalId)
-      deps.saveTabMemory()
-      deps.setSelection(contextKey)
+      deps.onCreated?.(LOCAL, msg.terminalId)
+      deps.setSelection(LOCAL)
       deps.activate(msg.terminalId)
       return true
     }

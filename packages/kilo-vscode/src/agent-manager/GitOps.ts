@@ -87,7 +87,7 @@ export function nonInteractiveEnv(): NodeJS.ProcessEnv {
  * an inherited one from the parent process. Use this to decide whether it's
  * safe to pass `allowUnsafeSshCommand: true` to simple-git.
  */
-export function isKiloOwnedSshCommand(env: NodeJS.ProcessEnv): boolean {
+function isKiloOwnedSshCommand(env: NodeJS.ProcessEnv): boolean {
   return env.GIT_SSH_COMMAND === KILO_NON_INTERACTIVE_SSH_COMMAND
 }
 

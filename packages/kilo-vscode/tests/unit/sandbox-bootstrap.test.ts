@@ -1,6 +1,4 @@
 import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
-import { join } from "node:path"
 import { createKiloClient } from "@kilocode/sdk/v2/client"
 import { ensureSandbox } from "../../src/agent-manager/sandbox-bootstrap"
 
@@ -86,66 +84,5 @@ describe("ensureSandbox", () => {
       "Sandbox status resolved a different directory",
     )
     expect(ctx.calls).toEqual(["GET /session/session-1/sandbox"])
-  })
-})
-
-describe("Agent Manager sandbox startup", () => {
-  const provider = readFileSync(join(__dirname, "..", "..", "src", "agent-manager", "AgentManagerProvider.ts"), "utf8")
-  const dialog = readFileSync(
-    join(__dirname, "..", "..", "webview-ui", "agent-manager", "NewWorktreeDialog.tsx"),
-    "utf8",
-  )
-
-  test("reconciles before exposing or prompting the session", () => {
-    const start = provider.indexOf("private async onCreateMultiVersion")
-    const end = provider.indexOf("\n  private ", start + 1)
-    const body = provider.slice(start, end)
-    const ensure = body.indexOf("await ensureSandbox")
-    const discard = body.indexOf("await this.discardWorktree", ensure)
-    const skip = body.indexOf("continue", discard)
-    const register = body.indexOf("this.registerWorktreeSession", ensure)
-    const ready = body.indexOf("this.notifyWorktreeReady", register)
-    const created = body.indexOf("created.push", ready)
-    const prompt = body.indexOf('type: "agentManager.sendInitialMessage"', created)
-
-    expect(ensure).toBeGreaterThan(-1)
-    expect(discard).toBeGreaterThan(ensure)
-    expect(skip).toBeGreaterThan(discard)
-    expect(register).toBeGreaterThan(skip)
-    expect(ready).toBeGreaterThan(register)
-    expect(created).toBeGreaterThan(ready)
-    expect(prompt).toBeGreaterThan(created)
-  })
-
-  test("deletes the fresh branch when sandbox setup rolls back", () => {
-    expect(provider).toContain("private async discardWorktree(id: string, dir: string, branch: string")
-    expect(provider).toContain("removeWorktree(dir, branch)")
-    expect(provider).toContain("wt.result.path, wt.result.branch, session.id")
-  })
-
-  test("uses the persisted sandbox default for UI and only sends explicit overrides", () => {
-    expect(dialog).toContain(
-      "const sandboxVisible = () => features().sandboxControls && globalConfig().sandbox?.enabled === true",
-    )
-    expect(dialog).toContain('vscode.postMessage({ type: "requestSandboxDefault", requestID: sandboxRequestID })')
-    expect(dialog).toContain(
-      'vscode.postMessage({ type: "setSandboxDefault", enabled: next, requestID: sandboxRequestID })',
-    )
-    expect(dialog).toContain("sandbox: sandboxVisible() ? sandboxOverride() : undefined")
-    expect(dialog).toContain("<Show when={sandboxVisible()}>")
-    expect(dialog).not.toContain("visible as isSandboxVisible")
-  })
-
-  test("places the sandbox toggle with prompt actions instead of model selectors", () => {
-    const selectors = dialog.indexOf('<div class="prompt-input-hint-selectors">')
-    const actions = dialog.indexOf('<div class="prompt-input-hint-actions">', selectors)
-    const sandbox = dialog.indexOf("<SandboxButtonBase", actions)
-    const speech = dialog.indexOf("<SpeechToTextButton", actions)
-
-    expect(selectors).toBeGreaterThan(-1)
-    expect(actions).toBeGreaterThan(selectors)
-    expect(dialog.slice(selectors, actions)).not.toContain("<SandboxButtonBase")
-    expect(sandbox).toBeGreaterThan(actions)
-    expect(speech).toBeGreaterThan(sandbox)
   })
 })

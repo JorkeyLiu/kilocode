@@ -6,6 +6,84 @@
   min-height: 0;
 }
 
+/* Session List — Fixed-column alignment */
+
+/*
+ * Layout contract (inside [data-slot="list-item"]):
+ *   hierarchy indent (padding-left) | disclosure | seq | title … | description
+ *
+ * Disclosure and sequence are fixed-width flex columns. Every row renders
+ * both — a real interactive element or an inert placeholder — so the title
+ * first character aligns regardless of row type.
+ *
+ * Hierarchy indent is a separate concern (padding-left on the list-item)
+ * and must NOT be mixed with toggle or slot widths.
+ */
+
+:root {
+  --session-disclosure-w: 12px;
+  --session-disclosure-gap: 2px;
+  --session-seq-w: 22px;
+}
+
+/* Hierarchy indent: depth-based padding on the list-item itself */
+.session-list .session-row[data-depth] [data-slot="list-item"] {
+  padding-left: var(--session-depth-indent, 0px);
+}
+
+/* Disclosure column (real button or placeholder) */
+.session-list [data-slot="session-disclosure"] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: var(--session-disclosure-w);
+  height: 16px;
+  margin-right: var(--session-disclosure-gap);
+  border: none;
+  background: transparent;
+  color: inherit;
+  padding: 0;
+}
+
+/* Real disclosure toggle: interactive */
+.session-list button[data-slot="session-disclosure"] {
+  cursor: pointer;
+  border-radius: 2px;
+  opacity: 0.6;
+  transition: opacity 0.15s;
+}
+
+.session-list button[data-slot="session-disclosure"]:hover {
+  opacity: 1;
+}
+
+.session-list button[data-slot="session-disclosure"] [data-slot="icon-svg"] {
+  width: 12px;
+  height: 12px;
+}
+
+/* Placeholder disclosure: non-interactive, invisible to a11y */
+.session-list span[data-slot="session-disclosure"][data-placeholder="true"] {
+  pointer-events: none;
+}
+
+/* Sequence column */
+.session-list [data-slot="session-seq"] {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  width: var(--session-seq-w);
+  font-size: var(--kilo-font-size-11);
+  color: var(--text-weak, var(--vscode-descriptionForeground));
+  opacity: 0.7;
+}
+
+/* Placeholder sequence: invisible but reserves width */
+.session-list span[data-slot="session-seq"][data-placeholder="true"] {
+  pointer-events: none;
+}
+
 /* Session List Items */
 .session-list [data-slot="list-item-title"],
 .cloud-session-list [data-slot="list-item-title"] {

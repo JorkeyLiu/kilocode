@@ -4,26 +4,16 @@ const { AgentManagerProvider } = await import("../../src/agent-manager/AgentMana
 
 type Manager = {
   connectionService: { getClient: () => unknown }
-  panel: {
-    sessions: {
-      getSessionDirectories: () => ReadonlyMap<string, string>
-      clearSessionDirectory: (id: string) => void
-      abortSessions: (ids: readonly string[]) => Promise<void>
-    }
-  }
+  managedSessions: Map<string, unknown>
   panelSessions: Set<string>
-  getStateManager: () => unknown
   getRoot: () => string
   pushState: () => void
   log: (...args: unknown[]) => void
-  onCloseSession: (sessionId: string) => Promise<null>
+  onCloseSession: (sessionId: string) => Promise<void>
 }
 
-function createManager(options?: { dir?: string; panelDir?: string; state?: boolean }) {
+function createManager() {
   const stopped: unknown[] = []
-  const aborted: string[][] = []
-  const cleared: string[] = []
-  const removed: string[] = []
   const events: string[] = []
   const client = {
     backgroundProcess: {
@@ -34,62 +24,53 @@ function createManager(options?: { dir?: string; panelDir?: string; state?: bool
       }),
     },
   }
-  const state = {
-    directoryFor: mock((sessionId: string) => (sessionId === "s1" ? options?.dir : undefined)),
-    removeSession: mock((sessionId: string) => {
-      removed.push(sessionId)
-      events.push("remove")
-    }),
-  }
   const manager = Object.create(AgentManagerProvider.prototype) as Manager
   manager.connectionService = { getClient: () => client }
-  manager.panel = {
-    sessions: {
-      getSessionDirectories: () => new Map(options?.panelDir ? [["s1", options.panelDir]] : []),
-      clearSessionDirectory: (id) => cleared.push(id),
-      abortSessions: async (ids) => {
-        aborted.push([...ids])
-        events.push("abort")
-      },
-    },
-  }
+  manager.managedSessions = new Map([["s1", { id: "s1" }]])
   manager.panelSessions = new Set(["s1"])
-  manager.getStateManager = () => (options?.state === false ? undefined : state)
   manager.getRoot = () => "/repo"
   manager.pushState = mock(() => undefined)
   manager.log = mock(() => undefined)
 
-  return { manager, stopped, aborted, cleared, removed, events }
+  return { manager, stopped, events }
 }
 
 describe("AgentManagerProvider closeSession", () => {
-  it("aborts the agent before stopping processes and removing its tab", async () => {
-    const { manager, stopped, aborted, cleared, removed, events } = createManager({ dir: "/repo/worktree" })
+  it("stops background processes and removes from managed state", async () => {
+    const { manager, stopped, events } = createManager()
 
     await manager.onCloseSession("s1")
 
-    expect(aborted).toEqual([["s1"]])
-    expect(stopped).toEqual([{ sessionID: "s1", directory: "/repo/worktree" }])
-    expect(events).toEqual(["abort", "processes", "remove"])
-    expect(removed).toEqual(["s1"])
-    expect(cleared).toEqual(["s1"])
+    expect(stopped).toEqual([{ sessionID: "s1", directory: "/repo" }])
+    expect(events).toEqual(["processes"])
+    expect(manager.managedSessions.has("s1")).toBe(false)
     expect(manager.panelSessions.has("s1")).toBe(false)
+    expect(manager.pushState).toHaveBeenCalled()
   })
 
-  it("falls back to session provider directory mappings", async () => {
-    const { manager, stopped } = createManager({ panelDir: "/repo/panel-worktree" })
+  it("handles stopSessionProcesses failure gracefully", async () => {
+    const events: string[] = []
+    const client = {
+      backgroundProcess: {
+        stopSession: mock(async () => {
+          events.push("processes")
+          throw new Error("backend not ready")
+        }),
+      },
+    }
+    const manager = Object.create(AgentManagerProvider.prototype) as Manager
+    manager.connectionService = { getClient: () => client }
+    manager.managedSessions = new Map([["s1", { id: "s1" }]])
+    manager.panelSessions = new Set(["s1"])
+    manager.getRoot = () => "/repo"
+    manager.pushState = mock(() => undefined)
+    manager.log = mock(() => undefined)
 
     await manager.onCloseSession("s1")
 
-    expect(stopped).toEqual([{ sessionID: "s1", directory: "/repo/panel-worktree" }])
-  })
-
-  it("still aborts when Agent Manager has no workspace state", async () => {
-    const { manager, aborted, removed } = createManager({ state: false })
-
-    await manager.onCloseSession("s1")
-
-    expect(aborted).toEqual([["s1"]])
-    expect(removed).toEqual([])
+    // Should still clean up even when stop fails
+    expect(manager.managedSessions.has("s1")).toBe(false)
+    expect(manager.panelSessions.has("s1")).toBe(false)
+    expect(manager.pushState).toHaveBeenCalled()
   })
 })

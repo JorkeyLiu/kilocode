@@ -102,34 +102,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
     onCleanup(() => document.removeEventListener("keydown", handler))
   })
 
-  // Listen for "Continue in Worktree" progress messages
+  // Listen for repo info messages
   {
-    const labels: Record<string, string> = {
-      capturing: language.t("sidebar.session.progress.capturing"),
-      creating: language.t("sidebar.session.progress.creating"),
-      setup: language.t("sidebar.session.progress.setup"),
-      transferring: language.t("sidebar.session.progress.transferring"),
-      forking: language.t("sidebar.session.progress.forking"),
-    }
     const cleanup = vscode.onMessage((msg) => {
       if (msg.type === "agentManager.repoInfo") {
         setRepoBranch(msg.branch)
         return
       }
-      if (msg.type !== "continueInWorktreeProgress") return
-      const m = msg as { status: string; error?: string }
-      if (m.status === "done") {
-        setTransferring(false)
-        setTransferDetail("")
-        return
-      }
-      if (m.status === "error") {
-        setTransferring(false)
-        setTransferDetail("")
-        showToast({ title: m.error ?? language.t("sidebar.session.progress.failed") })
-        return
-      }
-      setTransferDetail(labels[m.status] ?? language.t("session.status.working"))
     })
     onCleanup(cleanup)
   }
@@ -158,12 +137,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const openChanges = () => vscode.postMessage({ type: "openChanges" })
 
   const moveToWorktree = () => {
-    if (transferring()) return
-    const sid = id()
-    if (!sid) return
-    setTransferring(true)
-    setTransferDetail(language.t("sidebar.session.progress.capturing"))
-    vscode.postMessage({ type: "continueInWorktree", sessionId: sid })
+    // continueInWorktree message type was removed — feature is dead
   }
 
   const worktreeTooltip = language.t("sidebar.session.newWorktree.tooltip")

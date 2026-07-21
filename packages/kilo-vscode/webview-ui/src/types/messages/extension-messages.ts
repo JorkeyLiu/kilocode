@@ -23,10 +23,7 @@ import type { BrowserSettings, Config, FeatureFlags, IndexingStatus, KiloEmbeddi
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
 import type { KilocodeNotification, ProfileData } from "./profile"
 import type {
-  AgentManagerApplyWorktreeDiffConflict,
-  AgentManagerApplyWorktreeDiffStatus,
   BranchInfo,
-  ContinueInWorktreeStatus,
   ExternalWorktreeInfo,
   LocalGitStats,
   ManagedSessionState,
@@ -37,7 +34,6 @@ import type {
   TerminalFont,
   WorktreeErrorCode,
   WorktreeFileDiff,
-  WorktreeGitStats,
   WorktreeState,
 } from "./agent-manager"
 import type {
@@ -329,7 +325,7 @@ export interface DeviceAuthCancelledMessage {
 
 export interface NavigateMessage {
   type: "navigate"
-  view: "newTask" | "marketplace" | "history" | "profile" | "settings" | "subAgentViewer"
+  view: "newTask" | "marketplace" | "history" | "profile" | "settings"
   tab?: string
 }
 
@@ -816,14 +812,6 @@ export interface AgentManagerWorktreeDiffLoadingMessage {
   loading: boolean
 }
 
-export interface AgentManagerApplyWorktreeDiffResultMessage {
-  type: "agentManager.applyWorktreeDiffResult"
-  worktreeId: string
-  status: AgentManagerApplyWorktreeDiffStatus
-  message: string
-  conflicts?: AgentManagerApplyWorktreeDiffConflict[]
-}
-
 // Agent Manager: Revert single file result (extension → webview)
 export interface AgentManagerRevertWorktreeFileResultMessage {
   type: "agentManager.revertWorktreeFileResult"
@@ -831,12 +819,6 @@ export interface AgentManagerRevertWorktreeFileResultMessage {
   file: string
   status: "success" | "error"
   message: string
-}
-
-// Agent Manager: Worktree git stats push (extension → webview)
-export interface AgentManagerWorktreeStatsMessage {
-  type: "agentManager.worktreeStats"
-  stats: WorktreeGitStats[]
 }
 
 // Agent Manager: Local workspace git stats push (extension → webview)
@@ -851,14 +833,6 @@ export interface AgentManagerPRStatusMessage {
   worktreeId: string
   pr: PRStatus | null
   error?: "gh_missing" | "gh_auth" | "fetch_failed"
-}
-
-// Sidebar: Live worktree diff stats (extension → webview)
-export interface WorktreeStatsLoadedMessage {
-  type: "worktreeStatsLoaded"
-  files: number
-  additions: number
-  deletions: number
 }
 
 // Set the model for a session (extension → webview, used during multi-version creation)
@@ -894,12 +868,6 @@ export interface EnhancePromptErrorMessage {
   type: "enhancePromptError"
   error: string
   requestId: string
-}
-
-// Sub-agent viewer: open a child session in read-only mode (extension → webview)
-export interface ViewSubAgentSessionMessage {
-  type: "viewSubAgentSession"
-  sessionID: string
 }
 
 export interface DiffViewerDiffsMessage {
@@ -1059,14 +1027,6 @@ export interface McpStatusLoadedMessage {
   status: Record<string, McpStatusEntry>
 }
 
-// Continue in Worktree: progress updates (extension → webview)
-export interface ContinueInWorktreeProgressMessage {
-  type: "continueInWorktreeProgress"
-  status: ContinueInWorktreeStatus
-  detail?: string
-  error?: string
-}
-
 export interface RemoteStatusMessage {
   type: "remoteStatus"
   enabled: boolean
@@ -1190,9 +1150,7 @@ export type ExtensionMessage =
   | AgentManagerWorktreeDiffMessage
   | AgentManagerWorktreeDiffFileMessage
   | AgentManagerWorktreeDiffLoadingMessage
-  | AgentManagerApplyWorktreeDiffResultMessage
   | AgentManagerRevertWorktreeFileResultMessage
-  | AgentManagerWorktreeStatsMessage
   | AgentManagerLocalStatsMessage
   | AgentManagerPRStatusMessage
   | AgentManagerTerminalCreatedMessage
@@ -1208,7 +1166,6 @@ export type ExtensionMessage =
   // legacy-migration end
   | EnhancePromptResultMessage
   | EnhancePromptErrorMessage
-  | ViewSubAgentSessionMessage
   | DiffViewerDiffsMessage
   | DiffViewerLoadingMessage
   | DiffViewerRevertFileResultMessage
@@ -1233,8 +1190,6 @@ export type ExtensionMessage =
   | FavoritesLoadedMessage
   | ModelSelectionsLoadedMessage
   | LanguageChangedMessage
-  | ContinueInWorktreeProgressMessage
-  | WorktreeStatsLoadedMessage
   | McpStatusLoadedMessage
   | ClearPendingPromptsMessage
   | ExtensionDataReadyMessage

@@ -44,8 +44,8 @@ import { ImageModelsProvider } from "./context/image-models"
 import type { Message as SDKMessage, Part as SDKPart } from "@kilocode/sdk/v2"
 import "./styles/chat.css"
 
-type ViewType = "newTask" | "history" | "profile" | "settings" | "subAgentViewer"
-const VALID_VIEWS = new Set<string>(["newTask", "history", "profile", "settings", "subAgentViewer"])
+type ViewType = "newTask" | "history" | "profile" | "settings"
+const VALID_VIEWS = new Set<string>(["newTask", "history", "profile", "settings"])
 
 /**
  * Bridge our session store to the DataProvider's expected Data shape.
@@ -297,6 +297,12 @@ const AppContent: Component = () => {
     if (message.type === "selectKiloModel") setCurrentView("newTask")
   }
 
+  const openSession = (id: string) => {
+    if (tabs) tabs.open(id)
+    else session.selectSession(id)
+    setCurrentView("newTask")
+  }
+
   onMount(() => {
     const handler = (event: MessageEvent) => {
       const message = event.data
@@ -317,10 +323,9 @@ const AppContent: Component = () => {
       }
       handleKiloModel(message)
       handleForked(message)
-      if (message?.type === "viewSubAgentSession" && message.sessionID) {
-        console.log("[Kilo New] App: 🔍 viewSubAgentSession:", message.sessionID)
-        session.setCurrentSessionID(message.sessionID)
-        setCurrentView("subAgentViewer")
+      if (message?.type === "viewChildSession" && message.sessionID) {
+        console.log("[Kilo New] App: 🔍 viewChildSession:", message.sessionID)
+        openSession(message.sessionID)
       }
       // legacy-migration: state-driven migration wizard
       if (message?.type === "migrationState") {
@@ -333,18 +338,12 @@ const AppContent: Component = () => {
     onCleanup(() => window.removeEventListener("message", handler))
   })
 
-  const handleSelectSession = (id: string) => {
-    if (tabs) tabs.open(id)
-    if (!tabs) session.selectSession(id)
-    setCurrentView("newTask")
-  }
-
   const handleForkMessage = (sessionId: string, messageId: string) => {
     vscode.postMessage({ type: "forkSession", sessionId, messageId })
   }
 
   const emptyState = () => (
-    <SidebarEmptyState onSelectSession={handleSelectSession} onShowHistory={() => setCurrentView("history")} />
+    <SidebarEmptyState onSelectSession={openSession} onShowHistory={() => setCurrentView("history")} />
   )
 
   return (
@@ -365,7 +364,7 @@ const AppContent: Component = () => {
           >
             <Match when={currentView() === "newTask"}>
               <ChatView
-                onSelectSession={handleSelectSession}
+                onSelectSession={openSession}
                 onShowHistory={() => setCurrentView("history")}
                 onForkMessage={session.status() === "idle" ? handleForkMessage : undefined}
                 continueInWorktree
@@ -374,7 +373,7 @@ const AppContent: Component = () => {
               />
             </Match>
             <Match when={currentView() === "history"}>
-              <HistoryView onSelectSession={handleSelectSession} onBack={() => setCurrentView("newTask")} />
+              <HistoryView onSelectSession={openSession} onBack={() => setCurrentView("newTask")} />
             </Match>
             <Match when={currentView() === "profile"}>
               <ProfileView
@@ -392,9 +391,6 @@ const AppContent: Component = () => {
                   setMigrationNeeded(true)
                 }}
               />
-            </Match>
-            <Match when={currentView() === "subAgentViewer"}>
-              <ChatView readonly />
             </Match>
           </Switch>
         }

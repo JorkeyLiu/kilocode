@@ -20,24 +20,26 @@ type LoadedSession = { id: string; parentID?: string | null }
 
 export function trackedSessionInventory(managed: TrackedSession[], loaded: LoadedSession[]): LocalTabInventory {
   const lookup = new Map(loaded.map((item) => [item.id, item]))
-  const root = (id: string) => {
-    const info = lookup.get(id)
-    return !info || info.parentID === null
-  }
   const unresolved = new Set(loaded.filter((item) => item.parentID === undefined).map((item) => item.id))
-  const rejected = new Set(
-    managed
-      .filter((item) => {
-        const info = lookup.get(item.id)
-        return info?.parentID !== undefined && info.parentID !== null
-      })
-      .map((item) => item.id),
-  )
+  // Agent Manager durable inventory is root-only: child sessions inherit their
+  // root's ownership and must not become independent tracked owners.
+  // - root (parentID === null or absent from loaded): goes to local/external
+  // - unresolved (parentID undefined): goes to unresolved (evicted, not forgotten)
+  // - child (parentID is a string): goes to rejected (evicted + forgotten)
+  const isChild = (id: string) => {
+    const info = lookup.get(id)
+    return info !== undefined && info.parentID !== null && info.parentID !== undefined
+  }
+  const isRoot = (id: string) => {
+    const info = lookup.get(id)
+    if (!info) return true // not in loaded — treat as root (backward compat)
+    return info.parentID === null
+  }
   return {
-    local: managed.filter((item) => !item.worktreeId && root(item.id)).map((item) => item.id),
-    external: new Set(managed.filter((item) => item.worktreeId && root(item.id)).map((item) => item.id)),
+    local: managed.filter((item) => !item.worktreeId && isRoot(item.id)).map((item) => item.id),
+    external: new Set(managed.filter((item) => item.worktreeId && isRoot(item.id)).map((item) => item.id)),
     unresolved,
-    rejected,
+    rejected: new Set(managed.filter((item) => isChild(item.id)).map((item) => item.id)),
   }
 }
 

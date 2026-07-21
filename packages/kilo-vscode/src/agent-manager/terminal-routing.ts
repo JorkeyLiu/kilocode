@@ -1,13 +1,13 @@
 /**
  * Routes inbound terminal messages from the webview to a
  * `TerminalManager`, extracted from `AgentManagerProvider` so the
- * provider stays focused on session/worktree orchestration and the
+ * provider stays focused on session orchestration and the
  * max-lines cap on `AgentManagerProvider.ts` stays intact.
  *
  * Owns:
  *   - the `TerminalManager` lifecycle (create / close / resize / dispose)
  *   - the per-context "Terminal N" ordinal counter
- *   - cwd resolution (worktree path → workspace root fallback)
+ *   - cwd resolution (workspace root)
  *   - WebSocket URL construction with loopback `auth_token` auth
  *
  * Vscode-free: all VS Code access is funnelled through the `deps`
@@ -28,10 +28,8 @@ export interface TerminalRoutingDeps {
   getClient(): KiloClient
   /** Loopback URL + basic-auth password for the running `kilo serve`. */
   getServerConfig(): ServerConfig | undefined
-  /** Workspace root — used as cwd fallback when no worktree is selected (LOCAL). */
+  /** Workspace root — used as cwd for all terminals. */
   getRoot(): string | undefined
-  /** Resolve a worktree id to its on-disk path, or undefined if unknown. */
-  getWorktreePath(worktreeId: string): string | undefined
   /** Output channel log — prefixed by the caller. */
   log(...args: unknown[]): void
   /** Send a message back to the webview. */
@@ -90,7 +88,7 @@ export class TerminalRouter {
     return this.manager.dispose()
   }
 
-  private async handleCreate(worktreeId: string | null): Promise<void> {
+  private async handleCreate(worktreeId: string | null): Promise<void> { // worktreeId is a legacy field name from the message contract
     const cwd = this.resolveCwd(worktreeId)
     if (!cwd) {
       this.deps.post({
@@ -118,15 +116,11 @@ export class TerminalRouter {
   }
 
   /**
-   * Resolve the cwd for a terminal in the given context.
-   *
-   * LOCAL (null) falls back to the workspace root; a worktree id
-   * resolves to its on-disk path. Returns undefined when no folder is
-   * open — the caller surfaces this as a user-facing error.
+   * Resolve the cwd for a terminal.
+   * Always returns the workspace root (local-only mode).
    */
-  private resolveCwd(worktreeId: string | null): string | undefined {
-    if (worktreeId === null) return this.deps.getRoot()
-    return this.deps.getWorktreePath(worktreeId) ?? this.deps.getRoot()
+  private resolveCwd(_worktreeId: string | null): string | undefined {
+    return this.deps.getRoot()
   }
 
   /** Per-context counter so default titles are "Terminal 1", "Terminal 2"…

@@ -155,23 +155,6 @@ export interface WorktreeFileDiff {
   image?: DiffImage
 }
 
-export type AgentManagerApplyWorktreeDiffStatus = "checking" | "applying" | "success" | "conflict" | "error"
-
-export interface AgentManagerApplyWorktreeDiffConflict {
-  file?: string
-  reason: string
-}
-
-// Per-worktree git stats: diff additions/deletions and ahead/behind counts
-export interface WorktreeGitStats {
-  worktreeId: string
-  files: number
-  additions: number
-  deletions: number
-  ahead: number
-  behind: number
-}
-
 // Per-local-workspace git stats: branch name, diff additions/deletions, ahead/behind counts
 export interface LocalGitStats {
   branch: string
@@ -196,12 +179,3 @@ export interface ModelAllocation {
   modelID: string
   count: number
 }
-
-export type ContinueInWorktreeStatus =
-  | "capturing"
-  | "creating"
-  | "setup"
-  | "transferring"
-  | "forking"
-  | "done"
-  | "error"

@@ -130,6 +130,26 @@ describe("local session tabs", () => {
     })
   })
 
+  it("preserves an active child tab when the loaded list omits it", () => {
+    // Simulates: user opens a child session, then sessionsLoaded fires with a
+    // directory-scoped list that omits the child.  The handler includes the
+    // active tab in the loaded set before calling reconcileTabs, so the child
+    // must not be evicted.
+    const before = { ids: ["s1", "child-1"], active: "child-1" }
+    // reconcileTabs receives "child-1" in the loaded set (added by the handler)
+    const next = reconcileTabs(before, ["s1", "child-1"], makePending())
+    expect(next.ids).toEqual(["s1", "child-1"])
+    expect(next.active).toBe("child-1")
+  })
+
+  it("still evicts a non-active missing session from reconciliation", () => {
+    const before = { ids: ["s1", "s2", "gone"], active: "s1" }
+    // "gone" is not in loaded and not active — should be evicted
+    const next = reconcileTabs(before, ["s1", "s2"], makePending())
+    expect(next.ids).toEqual(["s1", "s2"])
+    expect(next.active).toBe("s1")
+  })
+
   it("promotes the targeted pending tab without changing a different active draft", () => {
     expect(replacePendingTab(state(["pending-1", "pending-2"], "pending-2"), "pending-1", "s1")).toEqual({
       ids: ["s1", "pending-2"],
@@ -247,6 +267,33 @@ describe("tracked tab reconcile", () => {
       ids: ["local"],
       forget: ["child"],
     })
+  })
+
+  it("puts child sessions into rejected, not local or external", () => {
+    const data = trackedSessionInventory(
+      [
+        { id: "root-local", worktreeId: null },
+        { id: "root-wt", worktreeId: "wt-1" },
+        { id: "child-a", worktreeId: null },
+        { id: "child-b", worktreeId: "wt-1" },
+      ],
+      [
+        { id: "root-local", parentID: null },
+        { id: "root-wt", parentID: null },
+        { id: "child-a", parentID: "root-local" },
+        { id: "child-b", parentID: "root-wt" },
+      ],
+    )
+    expect(data.local).toEqual(["root-local"])
+    expect([...data.external!]).toEqual(["root-wt"])
+    expect([...data.rejected!]).toEqual(["child-a", "child-b"])
+    expect([...data.unresolved!]).toEqual([])
+  })
+
+  it("treats loaded sessions without parentID as unresolved, not root", () => {
+    const data = trackedSessionInventory([{ id: "sparse", worktreeId: null }], [{ id: "sparse" }])
+    expect(data.local).toEqual([])
+    expect([...data.unresolved!]).toEqual(["sparse"])
   })
 
   it("preserves durable local sessions before loaded sessions include them", () => {

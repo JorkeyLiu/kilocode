@@ -9,7 +9,7 @@ type VisibleBridge = {
   postMessage(message: { type: "agentManager.visibleSession"; sessionID: string | null }): void
 }
 
-type Managed = { id: string; worktreeId: string | null }
+type Managed = { id: string; worktreeId: string | null } // worktreeId is a legacy field name from the extension message contract
 
 export function visible(id: string | undefined, blocked: boolean): string | null {
   if (blocked || !id?.startsWith("ses")) return null

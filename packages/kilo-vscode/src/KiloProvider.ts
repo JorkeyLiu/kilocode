@@ -59,7 +59,6 @@ import { normalizeEnhancePromptErrorMessage } from "./enhance-prompt-error"
 import { retry } from "./services/cli-backend/retry"
 import { normalize, type SSEPayload, type SyncPayload, type WirePayload } from "./services/cli-backend/sdk-sse-adapter"
 import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
-import { handleSidebarWorktreeMessage } from "./kilo-provider/sidebar-worktree"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
 import { renameSession } from "./kilo-provider/rename-session"
 import { handleFileSearch } from "./kilo-provider/file-search"
@@ -410,12 +409,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   private cachedGitRepo = false
 
   private onBeforeMessage: ((msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>) | null = null
-
-  private continueInWorktreeHandler:
-    | ((sessionId: string, progress: (status: string, detail?: string, error?: string) => void) => Promise<void>)
-    | null = null
-
-  private createWorktreeHandler: ((baseBranch?: string, branchName?: string) => Promise<void>) | null = null
 
   private diffVirtualProvider: import("./DiffVirtualProvider").DiffVirtualProvider | undefined
   private remoteService: RemoteStatusService | null = null
@@ -885,16 +878,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.flushPendingKiloModel()
   }
 
-  public setContinueInWorktreeHandler(
-    handler: (sessionId: string, progress: (status: string, detail?: string, error?: string) => void) => Promise<void>,
-  ): void {
-    this.continueInWorktreeHandler = handler
-  }
-
-  public setCreateWorktreeHandler(handler: (baseBranch?: string, branchName?: string) => Promise<void>): void {
-    this.createWorktreeHandler = handler
-  }
-
   public attachToWebview(
     webview: vscode.Webview,
     options?: { onBeforeMessage?: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null> },
@@ -947,22 +930,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         })
       )
         return
-      if (
-        await handleSidebarWorktreeMessage(message, {
-          post: (msg) => this.postMessage(msg),
-          openAgentManager: () => vscode.commands.executeCommand("kilo-code.new.agentManagerOpen"),
-          openAdvancedWorktree: () => vscode.commands.executeCommand("kilo-code.new.agentManager.advancedWorktree"),
-          openChanges: (sessionId?: string, turnId?: string) =>
-            vscode.commands.executeCommand("kilo-code.new.showChanges", { sessionId, turnId }),
-          currentSessionId: this.currentSession?.id,
-          createWorktree: async (baseBranch, branchName) => {
-            await this.createWorktreeHandler?.(baseBranch, branchName)
-          },
-          continueInWorktree: this.continueInWorktreeHandler ?? undefined,
-        })
-      ) {
-        return
-      }
       if (await this.handleModelSelectorExpandedMessage(message)) return
       this.visibleTaskStreams.handle(message)
       if (await this.handleMemoryMessage(message)) return
@@ -1113,9 +1080,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
           break
         case "reload":
           this.handleReload().catch((e) => console.error("[Kilo New] KiloProvider: Reload failed:", e))
-          break
-        case "openSubAgentViewer":
-          vscode.commands.executeCommand("kilo-code.new.openSubAgentViewer", message.sessionID, message.title)
           break
         case "saveImage":
           return saveImage(this.getWorkspaceDirectory(this.currentSession?.id), message)
@@ -1989,8 +1953,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       pendingSessionRefresh: this.pendingSessionRefresh,
       connectionState: this.connectionState,
       listSessions: client
-        ? (dir: string) =>
-            client.session.list({ directory: dir, roots: true }, { throwOnError: true }).then(({ data }) => data)
+        ? (dir: string) => client.session.list({ directory: dir }, { throwOnError: true }).then(({ data }) => data)
         : null,
       sessionDirectories: this.sessionDirectories,
       worktreeDirectories: this.opts.worktreeDirectories,
@@ -4383,7 +4346,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       pending: this.pendingFollowup,
       dir: session.directory,
       now: Date.now(),
-      parentID: session.parentID,
     })
   }
 

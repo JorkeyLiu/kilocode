@@ -837,12 +837,6 @@ export interface OpenPRMessage {
   worktreeId: string
 }
 
-export interface ApplyWorktreeDiffMessage {
-  type: "agentManager.applyWorktreeDiff"
-  worktreeId: string
-  selectedFiles?: string[]
-}
-
 // Agent Manager: Revert a single file in a worktree (webview → extension)
 export interface RevertWorktreeFileMessage {
   type: "agentManager.revertWorktreeFile"
@@ -941,13 +935,6 @@ export interface RetryConnectionRequest {
 
 export interface ReloadRequest {
   type: "reload"
-}
-
-// Open a sub-agent session in a read-only editor panel
-export interface OpenSubAgentViewerRequest {
-  type: "openSubAgentViewer"
-  sessionID: string
-  title?: string
 }
 
 // Preview an image attachment in VS Code's built-in image viewer
@@ -1132,12 +1119,6 @@ export interface ClearModelSelectionRequest {
 
 export interface RequestModelSelectionsMessage {
   type: "requestModelSelections"
-}
-
-// Continue in Worktree: transfer sidebar session + git state to an isolated worktree
-export interface ContinueInWorktreeRequest {
-  type: "continueInWorktree"
-  sessionId: string
 }
 
 // Section CRUD messages (webview → extension)
@@ -1350,7 +1331,6 @@ export type WebviewMessage =
   | ClearLegacyDataMessage
   | FinalizeLegacyMigrationMessage
   // legacy-migration end
-  | ApplyWorktreeDiffMessage
   | RevertWorktreeFileMessage
   | EnhancePromptRequest
   | OpenChangesRequest
@@ -1366,7 +1346,6 @@ export type WebviewMessage =
   | DiffVirtualSetMarkdownRenderRequest
   | RetryConnectionRequest
   | ReloadRequest
-  | OpenSubAgentViewerRequest
   | PreviewImageRequest
   | SaveImageRequest
   | SetDefaultBaseBranchRequest
@@ -1403,7 +1382,6 @@ export type WebviewMessage =
   | ToggleRemoteMessage
   | SetRemoteEnabledMessage
   | RequestRemoteStatusMessage
-  | ContinueInWorktreeRequest
   | RequestMemoryMessage
   | MemoryShowMessage
   | MemoryOperationMessage

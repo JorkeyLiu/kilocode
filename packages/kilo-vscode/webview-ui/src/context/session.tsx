@@ -1222,10 +1222,6 @@ export const SessionProvider: ParentComponent = (props) => {
         console.error("[Kilo New] Cloud session import failed:", message.error)
         break
       }
-
-      case "worktreeStatsLoaded":
-        setWorktreeStats({ files: message.files, additions: message.additions, deletions: message.deletions })
-        break
     }
   }
 

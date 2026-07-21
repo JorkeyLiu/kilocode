@@ -67,7 +67,7 @@ export function renderTerminalTab(deps: TerminalTabRenderDeps): JSX.Element {
  * the subtree: xterm's internal `requestAnimationFrame` render loop
  * stops, the canvas goes stale, and no amount of `term.refresh()` can
  * reliably restart the loop fast enough on reattachment — that's the
- * "press Enter to see content" bug users hit when switching worktrees.
+ * "press Enter to see content" bug users hit when switching contexts.
  *
  * ## Design
  *

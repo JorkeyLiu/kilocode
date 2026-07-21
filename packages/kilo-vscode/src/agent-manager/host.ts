@@ -98,6 +98,7 @@ export interface Host {
    */
   openPanel(opts: {
     onBeforeMessage: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>
+    /** @deprecated Legacy parameter; worktree directories are no longer created. Kept for KiloProvider compatibility. */
     worktreeDirectories?: () => string[]
   }): PanelContext
 

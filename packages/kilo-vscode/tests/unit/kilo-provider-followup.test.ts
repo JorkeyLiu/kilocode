@@ -80,7 +80,7 @@ function connection() {
 }
 
 describe("KiloProvider follow-up sessions", () => {
-  it("ignores subagents before adopting pending follow-up sessions", async () => {
+  it("adopts pending follow-up sessions for single-session views", async () => {
     const service = connection()
     const provider = new KiloProvider({} as never, service as never)
     const internal = provider as unknown as Internals
@@ -112,15 +112,6 @@ describe("KiloProvider follow-up sessions", () => {
     internal.handleLoadMessages = async (sessionID: string) => {
       loaded.push(sessionID)
     }
-
-    service.emit(created({ id: "ses-child", directory: "/repo", parentID: "ses-parent" }))
-    await Promise.resolve()
-
-    expect(internal.currentSession).toBeNull()
-    expect(internal.trackedSessionIds.has("ses-child")).toBe(false)
-    expect(internal.pendingFollowup).not.toBeNull()
-    expect(loaded).toEqual([])
-    expect(sent).toEqual([])
 
     service.emit(created({ id: "ses-followup", directory: "/repo" }))
     await Promise.resolve()

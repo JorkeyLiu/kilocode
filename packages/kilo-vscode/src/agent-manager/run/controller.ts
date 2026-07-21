@@ -3,10 +3,9 @@ import * as path from "node:path"
 import { getShellEnvironment } from "../shell-env"
 import { RunScriptManager, type RunHandle, type RunStatus } from "./manager"
 import { RunScriptService } from "./service"
-import type { WorktreeStateManager } from "../WorktreeStateManager"
 
 export interface RunTaskConfig {
-  worktreeId: string
+  worktreeId: string // legacy field name; used as the run-slot key
   branch: string
   command: string
   args: string[]
@@ -22,7 +21,6 @@ type StartTask = (config: RunTaskConfig, done: (exit: TaskExit) => void) => Prom
 
 interface Options {
   root: () => string | undefined
-  state: () => WorktreeStateManager | undefined
   open: (path: string) => Promise<void>
   start: StartTask
   post: (status: RunStatus) => void
@@ -71,16 +69,7 @@ export class RunController {
     const service = this.getService()
     if (!root || !service) return
 
-    // Resolve cwd and branch: "local" runs from repo root, worktrees from their path
-    const local = worktreeId === "local"
-    const state = this.opts.state()
-    const worktree = local ? undefined : state?.getWorktree(worktreeId)
-    if (!local && !worktree) {
-      this.opts.error("Worktree not found")
-      return
-    }
-
-    const cwd = local ? root : worktree!.path
+    const cwd = root
     if (!cwd || !path.isAbsolute(cwd)) {
       this.opts.error("Invalid working directory")
       return
@@ -101,10 +90,10 @@ export class RunController {
       return
     }
 
-    const branch = local ? "local" : worktree!.branch
+    const branch = "local"
     const env = {
       ...(await (this.opts.env ?? getShellEnvironment)()),
-      WORKTREE_PATH: cwd,
+      WORKSPACE_PATH: cwd,
       REPO_PATH: root,
     }
 

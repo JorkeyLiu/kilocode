@@ -81,11 +81,10 @@ describe("SessionTerminalManager structure", () => {
     expect(text).toContain("terminals.clear()")
   })
 
-  it("showTerminal resolves CWD from worktree with repo fallback", () => {
+  it("showTerminal resolves CWD from repo root (local-only)", () => {
     const text = body("showTerminal")
-    // The fallback chain must be worktreePath ?? repoPath, not the reverse.
-    // Getting this wrong would run agents in the wrong directory.
-    expect(text).toContain("worktreePath ?? repoPath")
+    // Local-only: always uses repo root, no worktree path resolution
+    expect(text).toContain("this.host.repoPath()")
   })
 
   /**

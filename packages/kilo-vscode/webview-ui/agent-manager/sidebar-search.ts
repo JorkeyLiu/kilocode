@@ -30,19 +30,20 @@ export type SidebarSearchItem =
       count: number
     })
   | (SearchItem & {
-      kind: "worktree"
+      kind: "worktree" // legacy kind — worktrees are no longer created; kept for type completeness
       group: "contexts"
-      worktreeId: string
+      worktreeId: string // legacy field name
       count: number
     })
   | (SearchItem & {
       kind: "session"
       group: "sessions"
       sessionId: string
-      location: "local" | "worktree"
-      worktreeId?: string
+      location: "local" | "worktree" // "worktree" is a legacy location value
+      worktreeId?: string // legacy field name
     })
 
+/** Legacy interface — worktrees are no longer created but the type is kept for search completeness. */
 export interface SidebarSearchWorktree {
   worktree: WorktreeState
   label: string
@@ -50,7 +51,7 @@ export interface SidebarSearchWorktree {
 }
 
 interface SidebarSearchInput {
-  worktrees: SidebarSearchWorktree[]
+  worktrees: SidebarSearchWorktree[] // always empty; kept for type completeness
   sections: SectionState[]
   local: SessionInfo[]
   localLabel: string
@@ -161,7 +162,7 @@ export function buildSidebarSearch(input: SidebarSearchInput): SidebarSearchItem
 }
 
 interface SidebarSearchDeps {
-  worktrees: Accessor<WorktreeState[]>
+  worktrees: Accessor<WorktreeState[]> // always returns []; kept for type completeness
   sections: Accessor<SectionState[]>
   local: Accessor<SessionInfo[]>
   localBranch: Accessor<string | undefined>

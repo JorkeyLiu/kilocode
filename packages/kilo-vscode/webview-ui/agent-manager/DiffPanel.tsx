@@ -133,7 +133,7 @@ export const DiffPanel: Component<DiffPanelProps> = (props) => {
     keys: speechKeys,
   })
   let nextId = 0
-  // Initialize each worktree with every file expanded, then preserve manual
+  // Initialize with every file expanded, then preserve manual
   // collapse state while adding and removing files from live summaries.
   let initializedKey: string | undefined
   let known = new Set<string>()

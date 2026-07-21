@@ -15,8 +15,3 @@ export function colorCss(label: string | null): string | undefined {
   if (!label) return undefined
   return SECTION_COLORS.find((c) => c.label === label)?.css
 }
-
-/** Pick a random color label for new sections. */
-export function randomColor(): string {
-  return SECTION_COLORS[Math.floor(Math.random() * SECTION_COLORS.length)]!.label
-}

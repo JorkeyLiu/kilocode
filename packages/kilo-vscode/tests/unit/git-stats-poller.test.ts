@@ -5,7 +5,14 @@ import * as path from "path"
 import { GitStatsPoller, type WorktreePresenceResult } from "../../src/agent-manager/GitStatsPoller"
 import { GitOps } from "../../src/agent-manager/GitOps"
 import { Semaphore } from "../../src/agent-manager/semaphore"
-import type { Worktree } from "../../src/agent-manager/WorktreeStateManager"
+interface Worktree {
+  id: string
+  branch: string
+  path: string
+  parentBranch: string
+  remote?: string
+  createdAt: string
+}
 import type { WorktreeDiffEntry } from "../../src/agent-manager/types"
 
 function sleep(ms: number): Promise<void> {

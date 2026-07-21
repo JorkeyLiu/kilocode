@@ -79,7 +79,6 @@ describe("Agent Manager terminal font", () => {
       const handler = createTerminalMessageHandler({
         state,
         activate: (id) => activated.push(id),
-        saveTabMemory: () => undefined,
         setSelection: () => undefined,
         showError: () => undefined,
       })

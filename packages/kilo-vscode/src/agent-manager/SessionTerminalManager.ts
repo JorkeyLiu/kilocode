@@ -1,5 +1,3 @@
-import type { WorktreeStateManager } from "./WorktreeStateManager"
-
 // ---------------------------------------------------------------------------
 // TerminalHost — narrow interface for the VS Code capabilities this module
 // needs.  Implemented by AgentManagerProvider using the real vscode API.
@@ -82,27 +80,21 @@ export class SessionTerminalManager {
 
   /**
    * Show (or create) a terminal for the given session.
-   * Resolves CWD from the worktree state, falling back to repo root.
+   * Resolves CWD from repo root (local-only mode).
    */
-  showTerminal(sessionId: string, state: WorktreeStateManager | undefined): void {
+  showTerminal(sessionId: string): void {
     // If terminal already exists, just focus it
     if (this.showExisting(sessionId, false)) return
 
-    const repoPath = this.host.repoPath()
-    const worktreePath = state?.directoryFor(sessionId)
-    const cwd = worktreePath ?? repoPath
+    const cwd = this.host.repoPath()
 
     if (!cwd) {
       this.log(`showTerminal: no cwd resolved for session ${sessionId}`)
-      this.host.showWarning("Open a folder that contains a git repository to use worktrees")
+      this.host.showWarning("Open a folder to use the terminal")
       return
     }
 
-    const session = state?.getSession(sessionId)
-    const worktree = session?.worktreeId ? state?.getWorktree(session.worktreeId) : undefined
-    const name = worktree ? `Agent: ${worktree.branch}` : "Agent: local"
-
-    this.showOrCreate(sessionId, cwd, name)
+    this.showOrCreate(sessionId, cwd, "Agent: local")
   }
 
   /**
