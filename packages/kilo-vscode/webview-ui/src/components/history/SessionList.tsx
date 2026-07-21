@@ -275,14 +275,13 @@ const SessionList: Component<SessionListProps> = (props) => {
                 <Icon name={expanded().has(item.session.id) ? "chevron-down" : "chevron-right"} />
               </button>
             </Show>
-            {/* Sequence slot: real number for child rows, empty placeholder for roots */}
-            <Show
-              when={item.depth > 0}
-              fallback={<span data-slot="session-seq" data-placeholder="true" aria-hidden="true" />}
-            >
-              <span data-slot="session-seq">#{item.seq}</span>
-            </Show>
-            <span data-slot="list-item-title">{name(item.session)}</span>
+            {/* Seq + title share the title column; seq is fixed-width so digits never shift the name */}
+            <span data-slot="list-item-title">
+              <Show when={item.depth > 0}>
+                <span data-slot="session-seq">#{item.seq}</span>
+              </Show>
+              <span data-slot="list-item-title-text">{name(item.session)}</span>
+            </span>
             <span data-slot="list-item-description">{formatRelativeDate(item.session.updatedAt)}</span>
             <Show when={session.currentSessionID() === item.session.id}>
               <span class="sr-only">{language.t("session.current")}</span>

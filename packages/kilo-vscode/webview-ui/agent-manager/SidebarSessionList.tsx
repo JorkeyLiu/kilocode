@@ -147,7 +147,11 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
                   style={depthStyle}
                   onClick={() => props.onSelectSession(s.id)}
                 >
-                  <Show when={item.hasChildren}>
+                  {/* Disclosure column: real toggle or inert placeholder for title alignment */}
+                  <Show
+                    when={item.hasChildren}
+                    fallback={<span class="am-session-expand-toggle" data-placeholder="true" aria-hidden="true" />}
+                  >
                     <button
                       class="am-session-expand-toggle"
                       type="button"
@@ -161,10 +165,13 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
                       <Icon name={expanded().has(s.id) ? "chevron-down" : "chevron-right"} size="small" />
                     </button>
                   </Show>
-                  <Show when={item.depth > 0}>
-                    <span class="am-session-child-seq">#{item.seq}</span>
-                  </Show>
-                  <span class="am-item-title">{s.title || props.untitledLabel}</span>
+                  {/* Seq + title share the title column; seq is fixed-width so digits never shift the name */}
+                  <span class="am-item-title">
+                    <Show when={item.depth > 0}>
+                      <span class="am-session-child-seq">#{item.seq}</span>
+                    </Show>
+                    <span class="am-item-title-text">{s.title || props.untitledLabel}</span>
+                  </span>
                   <span class="am-item-time">{formatRelativeDate(s.updatedAt)}</span>
                 </button>
               )

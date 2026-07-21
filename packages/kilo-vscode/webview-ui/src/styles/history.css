@@ -12,9 +12,9 @@
  * Layout contract (inside [data-slot="list-item"]):
  *   hierarchy indent (padding-left) | disclosure | seq | title … | description
  *
- * Disclosure and sequence are fixed-width flex columns. Every row renders
- * both — a real interactive element or an inert placeholder — so the title
- * first character aligns regardless of row type.
+ * Grid with fixed column widths ensures every row aligns identically,
+ * regardless of whether disclosure is a real button or placeholder,
+ * and regardless of sequence number digit count.
  *
  * Hierarchy indent is a separate concern (padding-left on the list-item)
  * and must NOT be mixed with toggle or slot widths.
@@ -22,8 +22,18 @@
 
 :root {
   --session-disclosure-w: 12px;
-  --session-disclosure-gap: 2px;
-  --session-seq-w: 22px;
+  --session-disclosure-gap: 6px;
+}
+
+/* Grid layout for list-item internals: disclosure | title | description
+   Sequence number is rendered inside the title column as a prefix so that
+   the disclosure icon stays tight against the title text. */
+.session-list [data-slot="list-item"][data-slot="list-item"] {
+  display: grid;
+  grid-template-columns: var(--session-disclosure-w) 1fr auto;
+  align-items: center;
+  column-gap: var(--session-disclosure-gap);
+  width: 100%;
 }
 
 /* Hierarchy indent: depth-based padding on the list-item itself */
@@ -36,10 +46,8 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
   width: var(--session-disclosure-w);
   height: 16px;
-  margin-right: var(--session-disclosure-gap);
   border: none;
   background: transparent;
   color: inherit;
@@ -68,37 +76,37 @@
   pointer-events: none;
 }
 
-/* Sequence column */
+/* Sequence — fixed-width inline prefix inside title column.
+   min-width + text-align:right keeps the gap to the title constant
+   regardless of digit count (#1 vs #12 vs #123). */
 .session-list [data-slot="session-seq"] {
-  display: inline-flex;
-  align-items: center;
-  flex-shrink: 0;
-  width: var(--session-seq-w);
+  display: inline-block;
+  min-width: 22px;
+  text-align: right;
   font-size: var(--kilo-font-size-11);
   color: var(--text-weak, var(--vscode-descriptionForeground));
   opacity: 0.7;
 }
 
-/* Placeholder sequence: invisible but reserves width */
-.session-list span[data-slot="session-seq"][data-placeholder="true"] {
-  pointer-events: none;
-}
-
-/* Session List Items */
+/* Title column — flex row so seq and title text share space */
 .session-list [data-slot="list-item-title"],
 .cloud-session-list [data-slot="list-item-title"] {
-  flex: 1;
-  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  text-align: left;
+}
+
+.session-list [data-slot="list-item-title-text"],
+.cloud-session-list [data-slot="list-item-title-text"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  text-align: left;
 }
 
 .session-list [data-slot="list-item-description"],
 .cloud-session-list [data-slot="list-item-description"] {
-  flex-shrink: 0;
-  margin-left: 8px;
   font-size: var(--kilo-font-size-12);
   color: var(--text-weak, var(--vscode-descriptionForeground));
   white-space: nowrap;

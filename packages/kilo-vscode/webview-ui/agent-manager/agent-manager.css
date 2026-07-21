@@ -394,10 +394,10 @@ button.am-section-toggle:hover .am-section-label {
 
 .am-item {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
   align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+  column-gap: 6px;
   padding: 6px 10px;
   padding-left: calc(10px + var(--am-session-indent, 0px));
   border-radius: var(--radius-sm);
@@ -411,24 +411,26 @@ button.am-section-toggle:hover .am-section-label {
   font-size: var(--font-size-base);
 }
 
-/* Child session sequence number */
+/* Child session sequence number — fixed-width inline prefix.
+   min-width + text-align:right keeps the gap to the title constant
+   regardless of digit count (#1 vs #12 vs #123). */
 .am-session-child-seq {
-  flex-shrink: 0;
+  display: inline-block;
+  min-width: 22px;
+  text-align: right;
   font-size: var(--kilo-font-size-11);
   color: var(--text-weak, var(--vscode-descriptionForeground));
   opacity: 0.7;
-  margin-right: 4px;
 }
 
 /* Expand/collapse toggle for parent sessions.
-   Visual column stays ~14px (12px content + 2px effective gap) but
-   the interactive hit area is ≥24×24 via transparent padding + negative
-   margin compensation so layout contribution is unchanged. */
+   Grid column is fixed at 12px (matching History). Hit area is
+   expanded via transparent padding + negative margin without
+   affecting column width. */
 .am-session-expand-toggle {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  flex-shrink: 0;
   width: 12px;
   height: 16px;
   padding: 4px 6px;
@@ -444,6 +446,11 @@ button.am-section-toggle:hover .am-section-label {
 
 .am-session-expand-toggle:hover {
   opacity: 1;
+}
+
+/* Placeholder disclosure: non-interactive, reserves column width */
+.am-session-expand-toggle[data-placeholder="true"] {
+  pointer-events: none;
 }
 
 .am-session-expand-toggle [data-slot="icon-svg"] {
@@ -475,20 +482,26 @@ button.am-section-toggle:hover .am-section-label {
   color: var(--text-on-interactive-base);
 }
 
+/* Title column — flex row so seq and title text share space */
 .am-item-title {
-  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  overflow: hidden;
+  font-weight: 500;
+}
+
+/* Title text — ellipsis truncated */
+.am-item-title-text {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 500;
-  min-width: 0;
 }
 
 .am-item-time {
   font-size: var(--font-size-small);
   white-space: nowrap;
   color: var(--text-weaker);
-  flex-shrink: 0;
 }
 
 .am-item-active .am-item-time {
