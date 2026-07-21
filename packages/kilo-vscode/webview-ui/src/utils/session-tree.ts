@@ -87,7 +87,7 @@ export function buildDisplayList<T extends SessionLike>(sessions: T[], expanded:
     const leaf = (nodeKids?.length ?? 0) === 0
     items.push({ session: node, depth, seq, hasChildren: !leaf })
     if (!leaf && expanded.has(node.id)) {
-      for (let i = 0; i < nodeKids!.length; i++) {
+      for (let i = nodeKids!.length - 1; i >= 0; i--) {
         flatten(nodeKids![i], depth + 1, i + 1)
       }
     }

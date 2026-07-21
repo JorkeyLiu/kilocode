@@ -59,7 +59,7 @@ describe("session row layout contract — buildDisplayList", () => {
     expect(item.seq).toBeUndefined()
   })
 
-  it("produces child leaf rows with sequential seq numbers when parent is expanded", () => {
+  it("produces child leaf rows with sequential seq numbers when parent is expanded (newest first)", () => {
     const sessions = [
       session("p"),
       session("c1", { parentID: "p", createdAt: "2026-01-01T00:00:00Z" }),
@@ -70,11 +70,13 @@ describe("session row layout contract — buildDisplayList", () => {
     // Parent
     expect(items[0].depth).toBe(0)
     expect(items[0].hasChildren).toBe(true)
-    // Children
+    // Children — newest (c2) first, oldest (c1) last
+    expect(items[1].session.id).toBe("c2")
     expect(items[1].depth).toBe(1)
-    expect(items[1].seq).toBe(1)
+    expect(items[1].seq).toBe(2)
+    expect(items[2].session.id).toBe("c1")
     expect(items[2].depth).toBe(1)
-    expect(items[2].seq).toBe(2)
+    expect(items[2].seq).toBe(1)
   })
 
   it("produces nested parent rows (child that has its own children)", () => {
