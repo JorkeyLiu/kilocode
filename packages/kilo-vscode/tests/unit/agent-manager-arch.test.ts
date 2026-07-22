@@ -137,11 +137,31 @@ describe("Agent Manager CSS/TSX Consistency", () => {
     // cleaned up in Phase 4C alongside i18n keys and message contracts.
     // Filter out known worktree-related CSS class prefixes for Phase 4A.
     const worktreePrefixes = [
-      "am-worktree-", "am-wt-", "am-apply-", "am-nv-", "am-import-", "am-advanced-",
-      "am-confirm", "am-setup-", "am-hover-card", "am-pr-", "am-local-", "am-section-",
-      "am-run-badge", "am-default-base-branch", "am-tab-switcher", "am-compare-",
-      "am-shortcut-badge", "am-tooltip-wrap", "am-color-", "am-icon-flip", "am-ctx-menu-",
-      "am-prompt-input", "am-mm-", "am-skeleton-wt", "am-selector-",
+      "am-worktree-",
+      "am-wt-",
+      "am-apply-",
+      "am-nv-",
+      "am-import-",
+      "am-advanced-",
+      "am-confirm",
+      "am-setup-",
+      "am-hover-card",
+      "am-pr-",
+      "am-local-",
+      "am-section-",
+      "am-run-badge",
+      "am-default-base-branch",
+      "am-tab-switcher",
+      "am-compare-",
+      "am-shortcut-badge",
+      "am-tooltip-wrap",
+      "am-color-",
+      "am-icon-flip",
+      "am-ctx-menu-",
+      "am-prompt-input",
+      "am-mm-",
+      "am-skeleton-wt",
+      "am-selector-",
     ]
     const phase4aDeferred = unused.filter((c) => worktreePrefixes.some((p) => c!.startsWith(p)))
     const unexpected = unused.filter((c) => !worktreePrefixes.some((p) => c!.startsWith(p)))
@@ -174,11 +194,7 @@ describe("Agent Manager Provider Messages", () => {
   it("state-mutating messages wait for state initialization", () => {
     const body = getMethodBody("shouldWaitForState")
     // Phase 4B: trimmed to only message types that still have handlers
-    const messages = [
-      "agentManager.setTabOrder",
-      "agentManager.persistSession",
-      "agentManager.forgetSession",
-    ]
+    const messages = ["agentManager.setTabOrder", "agentManager.persistSession", "agentManager.forgetSession"]
 
     for (const message of messages) {
       expect(body, `${message} should wait for loaded state`).toContain(message)

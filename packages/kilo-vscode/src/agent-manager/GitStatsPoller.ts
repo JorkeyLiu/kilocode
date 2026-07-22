@@ -230,7 +230,9 @@ export class GitStatsPoller {
       .join("|")
   }
 
-  private async probeWorktreePresence(worktrees: { id: string; path: string; branch: string; remote?: string }[]): Promise<WorktreePresenceResult> {
+  private async probeWorktreePresence(
+    worktrees: { id: string; path: string; branch: string; remote?: string }[],
+  ): Promise<WorktreePresenceResult> {
     const root = this.options.getWorkspaceRoot()
     if (!root) {
       return { worktrees: [], degraded: true }

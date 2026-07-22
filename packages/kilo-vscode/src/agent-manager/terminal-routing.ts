@@ -88,7 +88,8 @@ export class TerminalRouter {
     return this.manager.dispose()
   }
 
-  private async handleCreate(worktreeId: string | null): Promise<void> { // worktreeId is a legacy field name from the message contract
+  private async handleCreate(worktreeId: string | null): Promise<void> {
+    // worktreeId is a legacy field name from the message contract
     const cwd = this.resolveCwd(worktreeId)
     if (!cwd) {
       this.deps.post({

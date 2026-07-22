@@ -144,10 +144,7 @@ describe("Agent Manager i18n split", () => {
   })
 
   it("contains required core keys in every locale", () => {
-    const required = [
-      "agentManager.local",
-      "agentManager.session.new",
-    ]
+    const required = ["agentManager.local", "agentManager.session.new"]
 
     for (const [locale, dict] of Object.entries(locales)) {
       for (const key of required) {

@@ -26,13 +26,7 @@ import type {
   SessionCreatedMessage,
 } from "../src/types/messages"
 import { IndexingProvider } from "../src/context/indexing"
-import {
-  DragDropProvider,
-  DragDropSensors,
-  DragOverlay,
-  SortableProvider,
-  closestCenter,
-} from "@thisbeyond/solid-dnd"
+import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
 import type { DragEvent } from "@thisbeyond/solid-dnd"
 import { ThemeProvider } from "@kilocode/kilo-ui/theme"
 import { DialogProvider, useDialog } from "@kilocode/kilo-ui/context/dialog"
@@ -76,11 +70,7 @@ import { LanguageBridge } from "../src/context/language-bridge"
 import { useLanguage } from "../src/context/language"
 import { formatRelativeDate } from "../src/utils/date"
 import { createTabFocus } from "../src/utils/tab-navigation"
-import {
-  adjacentHint,
-  focusChatSearch,
-  LOCAL,
-} from "./navigate"
+import { adjacentHint, focusChatSearch, LOCAL } from "./navigate"
 import {
   addPendingTab as addLocalPendingTab,
   nextTabAfterClose,
@@ -480,10 +470,7 @@ const AgentManagerContent: Component = () => {
     return session.currentSessionID() ?? activePendingId()
   })
   const visibleSession = createMemo(() =>
-    visible(
-      session.currentSessionID(),
-      !!terms.activeId() || reviewActive() || history() || contextEmpty(),
-    ),
+    visible(session.currentSessionID(), !!terms.activeId() || reviewActive() || history() || contextEmpty()),
   )
   reportVisibleSession(vscode, visibleSession)
 
@@ -641,7 +628,7 @@ const AgentManagerContent: Component = () => {
       const pending = created.draftID && localSessionIDs().includes(created.draftID) ? created.draftID : undefined
       if (!pending && localSessionIDs().includes(created.session.id)) return
       const active = activePendingId()
-      const focus = !pending || (pending === active)
+      const focus = !pending || pending === active
       placeLocal(created.session.id, pending, active)
       vscode.postMessage({
         type: "agentManager.persistSession",
@@ -751,9 +738,7 @@ const AgentManagerContent: Component = () => {
           if (imported.reviewDiffStyle) setReviewDiffStyle(imported.reviewDiffStyle)
           setLegacyImportDone(true)
         }
-        setRunStatuses((prev) =>
-          Object.fromEntries(Object.entries(prev).filter(([id]) => id === LOCAL)),
-        )
+        setRunStatuses((prev) => Object.fromEntries(Object.entries(prev).filter(([id]) => id === LOCAL)))
       }
 
       // Set per-session model selection (used by sendInitialMessage path).
@@ -1542,15 +1527,15 @@ const AgentManagerContent: Component = () => {
                   )
                 })()}
                 <Tooltip value={t("command.review.toggle")} placement="bottom">
-                    <IconButton
-                      icon="expand"
-                      size="small"
-                      variant="ghost"
-                      label={t("command.review.toggle")}
-                      class={reviewActive() ? "am-tab-diff-btn-active" : ""}
-                      onClick={metrics.click("fullscreen_review", "tab_toolbar", toggleReviewTab)}
-                    />
-                  </Tooltip>
+                  <IconButton
+                    icon="expand"
+                    size="small"
+                    variant="ghost"
+                    label={t("command.review.toggle")}
+                    class={reviewActive() ? "am-tab-diff-btn-active" : ""}
+                    onClick={metrics.click("fullscreen_review", "tab_toolbar", toggleReviewTab)}
+                  />
+                </Tooltip>
                 {/* Legacy VS Code integrated terminal shortcut. Coexists
                     with the xterm terminal tabs (accessed via the `+`
                     split-button or Cmd+Shift+T): Cmd+/ still opens the
