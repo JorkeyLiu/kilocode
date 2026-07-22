@@ -128,9 +128,7 @@ export function renderTab(id: string, deps: TabRenderDeps): JSX.Element {
     })
   }
   if (id === deps.REVIEW_TAB_ID) return renderReviewTab(deps)
-  const s = deps.tabLookup().get(id)
-  if (!s) return null
-  return renderSessionTab(s, deps)
+  return <Show when={deps.tabLookup().get(id)}>{(s) => renderSessionTab(s, deps)}</Show>
 }
 
 function renderReviewTab(deps: TabRenderDeps): JSX.Element {
@@ -168,15 +166,15 @@ function renderReviewTab(deps: TabRenderDeps): JSX.Element {
   )
 }
 
-function renderSessionTab(s: SessionInfo, deps: TabRenderDeps): JSX.Element {
-  const pending = deps.isPending(s.id)
+function renderSessionTab(s: () => SessionInfo | undefined, deps: TabRenderDeps): JSX.Element {
+  const pending = deps.isPending(s()!.id)
   const active = () =>
     !deps.terms.activeId() &&
-    (pending ? s.id === deps.activePendingId() && !deps.currentSessionID() : s.id === deps.currentSessionID())
+    (pending ? s()!.id === deps.activePendingId() && !deps.currentSessionID() : s()!.id === deps.currentSessionID())
   const keybind = () => {
     if (active()) return ""
     return deps.adjacentHint(
-      s.id,
+      s()!.id,
       deps.visibleTabId() ?? "",
       deps.tabIds(),
       deps.kb().previousTab ?? "",
@@ -185,23 +183,23 @@ function renderSessionTab(s: SessionInfo, deps: TabRenderDeps): JSX.Element {
   }
   return (
     <SortableTab
-      tab={s}
+      tab={s()!}
       active={active() && !deps.reviewActive()}
-      busy={deps.isBusy(s.id)}
+      busy={deps.isBusy(s()!.id)}
       role="tab"
-      selected={deps.visibleTabId() === s.id}
-      tabIndex={deps.visibleTabId() === s.id ? 0 : -1}
-      onKeyDown={(event) => deps.onTabKey(s.id, event)}
+      selected={deps.visibleTabId() === s()!.id}
+      tabIndex={deps.visibleTabId() === s()!.id ? 0 : -1}
+      onKeyDown={(event) => deps.onTabKey(s()!.id, event)}
       keybind={keybind()}
       closeKeybind={deps.kb().closeTab ?? ""}
       onSelect={() => {
         deps.deactivateTerminal()
-        deps.selectSessionTab(s.id, pending)
+        deps.selectSessionTab(s()!.id, pending)
       }}
-      onMiddleClick={(e: MouseEvent) => deps.sessionMiddleClick(s.id, e)}
-      onClose={() => deps.sessionClose(s.id)}
-      onCloseOthers={() => closeOthers(s.id, deps)}
-      onFork={pending ? undefined : () => deps.sessionFork(s.id)}
+      onMiddleClick={(e: MouseEvent) => deps.sessionMiddleClick(s()!.id, e)}
+      onClose={() => deps.sessionClose(s()!.id)}
+      onCloseOthers={() => closeOthers(s()!.id, deps)}
+      onFork={pending ? undefined : () => deps.sessionFork(s()!.id)}
     />
   )
 }

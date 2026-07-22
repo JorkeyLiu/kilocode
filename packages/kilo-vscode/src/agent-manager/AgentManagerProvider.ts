@@ -415,9 +415,7 @@ export class AgentManagerProvider implements Disposable {
       ?.then(() => {
         this.pushState()
         if (this.cachedLocalStats) this.postToWebview(this.cachedLocalStats)
-        if (this.managedSessions.size > 0) {
-          this.panel?.sessions.refreshSessions()
-        }
+        this.panel?.sessions.refreshSessions()
       })
       .catch((err) => {
         this.log("initializeState failed, pushing partial state:", err)
@@ -488,7 +486,9 @@ export class AgentManagerProvider implements Disposable {
                   directory: root,
                   platform: PLATFORM,
                   metadata,
-                  ...(source?.sandboxInheritanceToken ? { sandboxInheritanceToken: source.sandboxInheritanceToken } : {}),
+                  ...(source?.sandboxInheritanceToken
+                    ? { sandboxInheritanceToken: source.sandboxInheritanceToken }
+                    : {}),
                 },
                 { throwOnError: true },
               ),
@@ -587,7 +587,11 @@ export class AgentManagerProvider implements Disposable {
     if (!root) return
     try {
       const result = await this.gitOps.listBranches(root)
-      this.postToWebview({ type: "agentManager.repoInfo", branch: result.defaultBranch, defaultBranch: result.defaultBranch })
+      this.postToWebview({
+        type: "agentManager.repoInfo",
+        branch: result.defaultBranch,
+        defaultBranch: result.defaultBranch,
+      })
     } catch (error) {
       this.log(`Failed to get current branch: ${error}`)
     }
