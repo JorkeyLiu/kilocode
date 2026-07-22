@@ -1114,13 +1114,23 @@ export const layer = Layer.effect(
           }
           const end = Date.now()
           const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
+          // kilocode_change start - write task_id into output on interrupt so the parent LLM can resume
+          const interruptedMetadata: Record<string, any> = { ...metadata, interrupted: true }
+          if (part.tool === "task" && typeof metadata.sessionId === "string") {
+            interruptedMetadata.output = [
+              `<task id="${metadata.sessionId}" state="interrupted">`,
+              `<task_error>Task interrupted. Resume with task_id="${metadata.sessionId}" and a prompt describing how to continue.</task_error>`,
+              `</task>`,
+            ].join("\n")
+          }
+          // kilocode_change end
           yield* session.updatePart({
             ...part,
             state: {
               ...part.state,
               status: "error",
               error: "Tool execution aborted",
-              metadata: { ...metadata, interrupted: true },
+              metadata: interruptedMetadata,
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
           })
