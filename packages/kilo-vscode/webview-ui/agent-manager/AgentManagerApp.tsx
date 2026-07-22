@@ -191,7 +191,7 @@ const AgentManagerContent: Component = () => {
     }
   }
   const handleViewChildSession = (id: string) => {
-    openSession(id, openDeps)
+    handleOpenSession(id)
   }
   const handleSearchAction = () => {
     if (!sidebarCollapsed()) sidebarSearchMenu?.open()
@@ -250,6 +250,7 @@ const AgentManagerContent: Component = () => {
   const PENDING_PREFIX = "pending:"
   const closedDrafts = new Set<string>()
   const [activePendingId, setActivePendingId] = createSignal<string | undefined>()
+  const [isBottomPage, setIsBottomPage] = createSignal(false)
 
   // Per-sidebar-context terminal state. `terms.activeId` holds the id
   // of the focused terminal tab, if any — takes precedence over
@@ -382,8 +383,20 @@ const AgentManagerContent: Component = () => {
   const ensureLocal = (id: string) => {
     if (!localSessionIDs().includes(id)) {
       setLocalSessionIDs((prev) => [...prev, id])
+      tabOrderSync.append(LOCAL, id)
     }
-    tabOrderSync.append(LOCAL, id)
+  }
+  const coverBottomPage = () => {
+    if (!isBottomPage()) return
+    const ids = tabMgr.ids(LOCAL)
+    if (ids.length !== 1) { setIsBottomPage(false); return }
+    const pendingId = ids[0]
+    setLocalSessionIDs((prev) => prev.filter((x) => x !== pendingId))
+    tabMgr.remove(LOCAL, pendingId)
+    setTabOrder((prev) => ({ ...prev, [LOCAL]: (prev[LOCAL] ?? []).filter((x) => x !== pendingId) }))
+    deletePendingDraft(pendingId)
+    setActivePendingId(undefined)
+    setIsBottomPage(false)
   }
   const openDeps: OpenSessionDeps = {
     tabMgr,
@@ -395,6 +408,10 @@ const AgentManagerContent: Component = () => {
     setSelection: () => {},
     isPending,
     ensureLocal,
+  }
+  const handleOpenSession = (id: string) => {
+    coverBottomPage()
+    return openSession(id, openDeps)
   }
 
   const localSet = createMemo(() => new Set(localSessionIDs()))
@@ -518,7 +535,7 @@ const AgentManagerContent: Component = () => {
       return
     }
     if (item.kind === "session") {
-      openSession(item.sessionId, openDeps)
+      handleOpenSession(item.sessionId)
     }
   }
 
@@ -548,7 +565,7 @@ const AgentManagerContent: Component = () => {
       search: handleSearchAction,
       showTerminal: handleShowTerminalAction,
       toggleDiff: handleToggleDiffAction,
-      newTab: addPendingTab,
+      newTab: () => { coverBottomPage(); addPendingTab(); setIsBottomPage(false) },
       closeTab: closeActiveTab,
       showShortcuts: handleShowKeyboardShortcuts,
       focusInput: () => window.dispatchEvent(new Event("focusPrompt")),
@@ -630,6 +647,7 @@ const AgentManagerContent: Component = () => {
       const active = activePendingId()
       const focus = !pending || pending === active
       placeLocal(created.session.id, pending, active)
+      setIsBottomPage(false)
       vscode.postMessage({
         type: "agentManager.persistSession",
         sessionId: created.session.id,
@@ -671,7 +689,8 @@ const AgentManagerContent: Component = () => {
       if (msg.type === "agentManager.sessionAdded") {
         // Session stays in LOCAL tab context.
         const ev = msg as { type: string; sessionId: string; worktreeId: string } // worktreeId is legacy
-        appendToTabOrder(LOCAL, ev.sessionId)
+        coverBottomPage()
+        if (!localSessionIDs().includes(ev.sessionId)) appendToTabOrder(LOCAL, ev.sessionId)
         tabMgr.open(LOCAL, ev.sessionId)
         drafts.apply(ev.worktreeId, ev.sessionId)
         session.selectSession(ev.sessionId)
@@ -832,6 +851,7 @@ const AgentManagerContent: Component = () => {
     // Open a pending "New Session" tab if there are no persisted local sessions
     if (localSessionIDs().length === 0) {
       addPendingTab()
+      setIsBottomPage(true)
     }
     tabMgr.seed(LOCAL, localSessionIDs(), initialUI.activeTabId)
     // Phase 3B: restore active tab from local UI state
@@ -1005,7 +1025,9 @@ const AgentManagerContent: Component = () => {
 
   const handleAddSession = () => {
     expandSidebar()
+    coverBottomPage()
     addPendingTab()
+    setIsBottomPage(false)
   }
   // Phase 3A: fork always happens in LOCAL context.
   const handleForkSession = (sessionId: string, messageId?: string) => {
@@ -1045,6 +1067,10 @@ const AgentManagerContent: Component = () => {
     }
     vscode.postMessage({ type: "agentManager.closeSession", sessionId })
     tabFocus.restore()
+    if (tabMgr.ids(LOCAL).length === 0 && terms.current().length === 0) {
+      addPendingTab()
+      setIsBottomPage(true)
+    }
   }
 
   /** Lightweight close: sends backend close message without registry mutation. */
@@ -1224,7 +1250,9 @@ const AgentManagerContent: Component = () => {
 
   // Cmd+T: add a new tab
   const handleNewTabForCurrentSelection = () => {
+    coverBottomPage()
     addPendingTab()
+    setIsBottomPage(false)
   }
 
   return (
@@ -1316,7 +1344,7 @@ const AgentManagerContent: Component = () => {
                 sessionsLoaded={sessionsLoaded()}
                 currentSelection={session.currentSessionID() ?? null}
                 onSelectSession={(id) => {
-                  openSession(id, openDeps)
+                  handleOpenSession(id)
                 }}
                 untitledLabel={t("agentManager.session.untitled")}
                 t={t}
@@ -1331,7 +1359,7 @@ const AgentManagerContent: Component = () => {
             and has tabs; otherwise a minimal version still renders so the
             sidebar toggle button stays at a fixed position. */}
         <Show
-          when={selection() !== null && !contextEmpty()}
+          when={selection() !== null && !contextEmpty() && !isBottomPage()}
           fallback={
             <div class="am-tab-bar am-tab-bar-empty">
               <div class="am-tab-leading">
@@ -1589,7 +1617,7 @@ const AgentManagerContent: Component = () => {
         <Show when={history()}>
           <HistoryView
             onSelectSession={(id) => {
-              if (!openSession(id, openDeps)) return
+              if (!handleOpenSession(id)) return
             }}
             onBack={() => setHistory(false)}
           />
@@ -1608,7 +1636,7 @@ const AgentManagerContent: Component = () => {
                 <div class="am-chat-wrapper">
                   <ChatView
                     onSelectSession={(id) => {
-                      openSession(id, openDeps)
+                      handleOpenSession(id)
                     }}
                     onShowHistory={() => setHistory(true)}
                     onForkMessage={handleForkSession}
