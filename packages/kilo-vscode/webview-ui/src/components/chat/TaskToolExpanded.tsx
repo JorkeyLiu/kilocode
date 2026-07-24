@@ -186,6 +186,14 @@ const TaskToolRenderer: Component<ToolProps> = (props) => {
                 )
               }}
             </Index>
+            <Show when={props.error}>
+              {(error) => (
+                <div data-slot="task-tool-item" data-state="error">
+                  <Icon name="circle-ban-sign" size="small" />
+                  <span data-slot="task-tool-title">{error()}</span>
+                </div>
+              )}
+            </Show>
           </div>
         </div>
       </BasicTool>
@@ -201,5 +209,6 @@ export function registerExpandedTaskTool() {
   ToolRegistry.register({
     name: "task",
     render: TaskToolRenderer,
+    renderOnError: true,
   })
 }

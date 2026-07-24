@@ -165,6 +165,14 @@
     }
   }
 
+  [data-slot="task-tool-item"][data-state="error"] {
+    color: var(--text-on-critical-base);
+
+    [data-slot="icon-svg"] {
+      color: var(--icon-critical-base);
+    }
+  }
+
   [data-slot="task-tool-title"] {
     font-family: var(--font-family-sans);
     font-size: var(--font-size-small);

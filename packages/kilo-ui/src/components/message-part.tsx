@@ -1031,6 +1031,9 @@ export interface ToolProps {
   locked?: boolean
   animate?: boolean
   reveal?: boolean
+  /** Error message when the tool call failed. Only passed to renderers that
+   * opt into `renderOnError`; those renderers decide how to display it. */
+  error?: string
 }
 
 export type ToolComponent = Component<ToolProps>
@@ -1040,10 +1043,11 @@ const state: Record<
   {
     name: string
     render?: ToolComponent
+    renderOnError?: boolean
   }
 > = {}
 
-export function registerTool(input: { name: string; render?: ToolComponent }) {
+export function registerTool(input: { name: string; render?: ToolComponent; renderOnError?: boolean }) {
   state[input.name] = input
   return input
 }
@@ -1052,9 +1056,14 @@ export function getTool(name: string) {
   return state[name]?.render
 }
 
+export function hasRenderOnError(name: string) {
+  return state[name]?.renderOnError === true
+}
+
 export const ToolRegistry = {
   register: registerTool,
   render: getTool,
+  hasRenderOnError,
 }
 
 function ToolFileAccordion(props: { path: string; actions?: JSX.Element; children: JSX.Element }) {
@@ -1216,8 +1225,7 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
               // the TaskToolExpanded component — child session navigation
               // and the "Open in Tab" button must remain accessible.
               const isAbortedTask =
-                part.tool === "task" &&
-                (cleaned === "Tool execution aborted" || meta().interrupted === true)
+                part.tool === "task" && (cleaned === "Tool execution aborted" || meta().interrupted === true)
               if (isAbortedTask) {
                 return (
                   <Dynamic
@@ -1272,6 +1280,28 @@ PART_MAPPING["tool"] = function ToolPartDisplay(props) {
                     <Icon name="arrow-right" size="small" />
                     <span data-slot="tool-hint-message">{cleaned}</span>
                   </div>
+                )
+              }
+              if (ToolRegistry.hasRenderOnError(part.tool)) {
+                return (
+                  <Dynamic
+                    component={render()}
+                    input={input()}
+                    tool={part.tool}
+                    partID={part.id}
+                    callID={part.callID}
+                    metadata={meta()}
+                    partMetadata={top()}
+                    // @ts-expect-error
+                    output={part.state.output}
+                    status={part.state.status}
+                    error={cleaned}
+                    hideDetails={props.hideDetails}
+                    defaultOpen={props.defaultOpen}
+                    forceOpen={props.forceOpen}
+                    animate
+                    reveal={props.animate}
+                  />
                 )
               }
               const [title, ...rest] = cleaned.split(": ")
