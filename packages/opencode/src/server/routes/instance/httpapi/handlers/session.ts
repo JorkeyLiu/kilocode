@@ -3,6 +3,7 @@ import { KiloSessionHttpApi } from "@/kilocode/server/httpapi/session-fork" // k
 import { BlockedError as AgentRequirementError } from "@/kilocode/agent-requirements" // kilocode_change
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
+import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue" // kilocode_change
 import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -421,6 +422,18 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     })
 
     // kilocode_change start
+    const cancelQueued = Effect.fn("SessionHttpApi.cancelQueued")(function* (ctx: {
+      params: { sessionID: SessionID; messageID: MessageID }
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      // Only not-yet-started queued slots are cancellable; the running slot is
+      // never interrupted. Delete the persisted message only when we actually
+      // cancelled its queued slot.
+      const removed = yield* KiloSessionPromptQueue.cancelOne(ctx.params.sessionID, ctx.params.messageID)
+      if (removed) yield* session.removeMessage(ctx.params)
+      return removed
+    })
+
     const viewed = Effect.fn("SessionHttpApi.viewed")(function* (ctx: { payload: typeof ViewedPayload.Type }) {
       yield* viewers.update(ctx.payload)
       return true
@@ -455,6 +468,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("deleteMessage", deleteMessage)
       .handle("deletePart", deletePart)
       .handle("updatePart", updatePart)
+      .handle("cancelQueued", cancelQueued) // kilocode_change
       .handle("viewed", viewed) // kilocode_change
   }),
 )

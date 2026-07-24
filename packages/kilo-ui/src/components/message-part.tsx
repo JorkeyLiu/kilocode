@@ -745,6 +745,7 @@ export function UserMessageDisplay(props: {
   header?: JSX.Element
   onFork?: () => void
   onRevert?: () => void
+  onCancel?: () => void
 }) {
   const data = useData()
   const dialog = useDialog()
@@ -887,6 +888,21 @@ export function UserMessageDisplay(props: {
                     </span>
                   </Show>
                 </span>
+              </Show>
+              <Show when={props.queued === true && props.onCancel}>
+                <Tooltip value={i18n.t("ui.message.cancelQueued")} placement="right" gutter={4}>
+                  <IconButton
+                    icon="close"
+                    size="normal"
+                    variant="ghost"
+                    onMouseDown={(e) => e.preventDefault()}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      props.onCancel?.()
+                    }}
+                    aria-label={i18n.t("ui.message.cancelQueued")}
+                  />
+                </Tooltip>
               </Show>
               <Show when={props.onFork}>
                 <Tooltip value={i18n.t("ui.message.forkMessage")} placement="right" gutter={4}>

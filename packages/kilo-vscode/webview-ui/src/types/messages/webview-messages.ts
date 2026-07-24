@@ -54,6 +54,12 @@ export interface UnrevertSessionRequest {
   sessionID: string
 }
 
+export interface CancelQueuedRequest {
+  type: "cancelQueued"
+  sessionID: string
+  messageID: string
+}
+
 export interface PermissionResponseRequest {
   type: "permissionResponse"
   permissionId: string
@@ -1193,6 +1199,7 @@ export type WebviewMessage =
   | AbortRequest
   | RevertSessionRequest
   | UnrevertSessionRequest
+  | CancelQueuedRequest
   | PermissionResponseRequest
   | CreateSessionRequest
   | ClearSessionRequest

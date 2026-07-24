@@ -993,6 +993,9 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         case "unrevertSession":
           this.checkpoint(message.sessionID, () => this.handleUnrevertSession(message.sessionID))
           break
+        case "cancelQueued":
+          await this.handleCancelQueued(message.sessionID, message.messageID)
+          break
         case "permissionResponse":
           await handlePermissionResponse(
             this.permissionCtx,
@@ -3462,6 +3465,22 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.refreshes.set(sessionID, (this.refreshes.get(sessionID) ?? 0) + 1)
     if (this.currentSession?.id === sessionID) this.setCurrentSession(data)
     this.postMessage({ type: "sessionUpdated", session: sessionToWebview(data) })
+  }
+
+  /**
+   * Cancel a single queued (not-yet-started) message. The backend removes the
+   * message on success and emits `message.removed`, which the webview handles to
+   * drop the row and update the queued shimmer/counter. Failures surface as a
+   * native notification.
+   */
+  private async handleCancelQueued(sessionID: string, messageID: string): Promise<void> {
+    if (!this.client) return
+    const dir = this.getWorkspaceDirectory(sessionID)
+    const { error } = await this.client.session.cancelQueued({ sessionID, messageID, directory: dir })
+    if (error) {
+      console.error("[Kilo New] KiloProvider: Failed to cancel queued message:", error)
+      void vscode.window.showErrorMessage(getErrorMessage(error) || "Failed to cancel queued message")
+    }
   }
 
   /**

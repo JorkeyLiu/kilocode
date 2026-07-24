@@ -116,6 +116,7 @@ export const SessionPaths = {
   deletePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   updatePart: `${root}/:sessionID/message/:messageID/part/:partID`,
   viewed: `${root}/viewed`, // kilocode_change
+  cancelQueued: `${root}/:sessionID/queue/:messageID`, // kilocode_change
 } as const
 
 export const SessionApi = HttpApi.make("session")
@@ -457,6 +458,19 @@ export const SessionApi = HttpApi.make("session")
           }),
         ),
         // kilocode_change start
+        HttpApiEndpoint.delete("cancelQueued", SessionPaths.cancelQueued, {
+          params: { sessionID: SessionID, messageID: MessageID },
+          query: WorkspaceRoutingQuery,
+          success: described(Schema.Boolean, "Whether a queued message was cancelled"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.cancelQueued",
+            summary: "Cancel queued message",
+            description:
+              "Cancel a queued message that has not started processing and remove it from the session. Does not interrupt the message currently being processed.",
+          }),
+        ),
         HttpApiEndpoint.post("viewed", SessionPaths.viewed, {
           query: WorkspaceRoutingQuery,
           payload: ViewedPayload,

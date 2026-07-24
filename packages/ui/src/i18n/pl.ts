@@ -158,6 +158,7 @@ export const dict = {
   "ui.message.copyMessage": "Kopiuj wiadomość",
   "ui.message.forkMessage": "Rozwidlij do nowej sesji",
   "ui.message.revertMessage": "Zresetuj do tego punktu",
+  "ui.message.cancelQueued": "Anuluj wiadomość w kolejce",
   "ui.message.copyResponse": "Kopiuj odpowiedź",
   "ui.message.copied": "Skopiowano!",
   "ui.message.revert": "Revert to here",

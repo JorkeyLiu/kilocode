@@ -162,6 +162,7 @@ export const dict = {
   "ui.message.copyMessage": "复制消息",
   "ui.message.forkMessage": "分叉到新会话",
   "ui.message.revertMessage": "重置到此点",
+  "ui.message.cancelQueued": "取消排队的消息",
   "ui.message.copyResponse": "复制回复",
   "ui.message.copied": "已复制！",
   "ui.message.revert": "Revert to here",

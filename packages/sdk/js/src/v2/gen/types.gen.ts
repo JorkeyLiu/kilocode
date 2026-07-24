@@ -9943,6 +9943,41 @@ export type PartUpdateResponses = {
 
 export type PartUpdateResponse = PartUpdateResponses[keyof PartUpdateResponses]
 
+export type SessionCancelQueuedData = {
+  body?: never
+  path: {
+    sessionID: string
+    messageID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/session/{sessionID}/queue/{messageID}"
+}
+
+export type SessionCancelQueuedErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionCancelQueuedError = SessionCancelQueuedErrors[keyof SessionCancelQueuedErrors]
+
+export type SessionCancelQueuedResponses = {
+  /**
+   * Whether a queued message was cancelled
+   */
+  200: boolean
+}
+
+export type SessionCancelQueuedResponse = SessionCancelQueuedResponses[keyof SessionCancelQueuedResponses]
+
 export type SessionViewedData = {
   body?: {
     viewer: {

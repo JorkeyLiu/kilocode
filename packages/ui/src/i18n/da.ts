@@ -158,6 +158,7 @@ export const dict = {
   "ui.message.copyMessage": "Kopier besked",
   "ui.message.forkMessage": "Forgren til ny session",
   "ui.message.revertMessage": "Nulstil til dette punkt",
+  "ui.message.cancelQueued": "Annuller besked i kø",
   "ui.message.copyResponse": "Kopier svar",
   "ui.message.copied": "Kopieret!",
   "ui.message.revert": "Revert to here",

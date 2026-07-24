@@ -259,6 +259,7 @@ interface SessionContextValue {
   // Actions
   revertSession: (messageID: string, partID?: string) => void
   unrevertSession: () => void
+  cancelQueued: (sessionID: string, messageID: string) => void
   sendMessage: (
     text: string,
     providerID?: string,
@@ -2798,6 +2799,14 @@ export const SessionProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "unrevertSession", sessionID: id })
   }
 
+  // Cancel a single not-yet-started queued message. The backend removes the
+  // message on success and emits message.removed, which drops it from state and
+  // updates the queued shimmer/counter. Only the queued slot is affected; the
+  // running turn is never interrupted.
+  function cancelQueued(sessionID: string, messageID: string) {
+    vscode.postMessage({ type: "cancelQueued", sessionID, messageID })
+  }
+
   function syncSession(sessionID: string) {
     vscode.postMessage({ type: "syncSession", sessionID, parentSessionID: currentSessionID() })
   }
@@ -2990,6 +2999,7 @@ export const SessionProvider: ParentComponent = (props) => {
     worktreeStats,
     revertSession,
     unrevertSession,
+    cancelQueued,
     sendMessage,
     sendCommand,
     abort,

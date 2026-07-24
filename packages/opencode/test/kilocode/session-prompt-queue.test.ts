@@ -643,6 +643,154 @@ describe("session prompt queue", () => {
     expect(result).toBe("work executed")
   })
 
+  test("cancelOne on an unknown message is a no-op", async () => {
+    const sessionID = SessionID.make("session_cancel_one_unknown")
+
+    const cancelled = await Effect.runPromise(
+      KiloSessionPromptQueue.cancelOne(sessionID, MessageID.make("msg_missing")),
+    )
+
+    expect(cancelled).toBe(false)
+    expect(KiloSessionPromptQueue._hasInternalState(sessionID)).toBe(false)
+  })
+
+  test("cancelOne flags a waiting slot but never the running one", async () => {
+    const sessionID = SessionID.make("session_cancel_one")
+    const gate = Promise.withResolvers<void>()
+    const started = Promise.withResolvers<void>()
+    const firstTarget = MessageID.make("msg_running")
+    const secondTarget = MessageID.make("msg_waiting")
+
+    const first = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        firstTarget,
+        Effect.promise(async () => {
+          started.resolve()
+          await gate.promise
+          return "first work"
+        }),
+        Effect.succeed("first cancelled"),
+      ),
+    )
+
+    // Wait until the first slot is actually running before enqueuing the second.
+    await started.promise
+
+    const second = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        secondTarget,
+        Effect.succeed("second work"),
+        Effect.succeed("second cancelled"),
+      ),
+    )
+
+    // The running slot has left the pending registry — it is not cancellable.
+    expect(await Effect.runPromise(KiloSessionPromptQueue.cancelOne(sessionID, firstTarget))).toBe(false)
+    // The waiting slot is cancellable and will run its cancelled effect instead.
+    expect(await Effect.runPromise(KiloSessionPromptQueue.cancelOne(sessionID, secondTarget))).toBe(true)
+
+    gate.resolve()
+
+    expect(await first).toBe("first work")
+    expect(await second).toBe("second cancelled")
+    expect(KiloSessionPromptQueue._hasInternalState(sessionID)).toBe(false)
+  })
+
+  test("cancelOne on the queued follow-up clears hasFollowup for the running slot", async () => {
+    // Regression: cancelOne flagged the waiting slot but latest was never
+    // reconciled, so hasFollowup kept returning true and the running multi-step
+    // turn broke prematurely even though the follow-up was cancelled.
+    const sessionID = SessionID.make("session_cancel_one_followup")
+    const gate = Promise.withResolvers<void>()
+    const started = Promise.withResolvers<void>()
+    const running = MessageID.make("msg_fu_running")
+    const queued = MessageID.make("msg_fu_queued")
+
+    const first = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        running,
+        Effect.promise(async () => {
+          started.resolve()
+          await gate.promise
+          return "first work"
+        }),
+        Effect.succeed("first cancelled"),
+      ),
+    )
+
+    await started.promise
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(false)
+
+    const second = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        queued,
+        Effect.succeed("second work"),
+        Effect.succeed("second cancelled"),
+      ),
+    )
+
+    // The queued follow-up flips hasFollowup for the running slot.
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(true)
+
+    // Cancelling it must clear the signal so the running turn keeps stepping.
+    expect(await Effect.runPromise(KiloSessionPromptQueue.cancelOne(sessionID, queued))).toBe(true)
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(false)
+
+    gate.resolve()
+    expect(await first).toBe("first work")
+    expect(await second).toBe("second cancelled")
+    expect(KiloSessionPromptQueue._hasInternalState(sessionID)).toBe(false)
+  })
+
+  test("cancelOne on the newest of two queued follow-ups keeps hasFollowup true", async () => {
+    // Only the cancelled slot stops counting: an older still-live follow-up
+    // must keep signalling so the running turn yields to it.
+    const sessionID = SessionID.make("session_cancel_one_newest")
+    const gate = Promise.withResolvers<void>()
+    const started = Promise.withResolvers<void>()
+    const running = MessageID.make("msg_two_running")
+    const older = MessageID.make("msg_two_older")
+    const newest = MessageID.make("msg_two_newest")
+
+    const first = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        running,
+        Effect.promise(async () => {
+          started.resolve()
+          await gate.promise
+          return "first work"
+        }),
+        Effect.succeed("first cancelled"),
+      ),
+    )
+    await started.promise
+
+    const second = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(sessionID, older, Effect.succeed("second work"), Effect.succeed("second cancelled")),
+    )
+    const third = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(sessionID, newest, Effect.succeed("third work"), Effect.succeed("third cancelled")),
+    )
+
+    expect(await Effect.runPromise(KiloSessionPromptQueue.cancelOne(sessionID, newest))).toBe(true)
+    // The older follow-up is still live, so the signal must remain.
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(true)
+
+    expect(await Effect.runPromise(KiloSessionPromptQueue.cancelOne(sessionID, older))).toBe(true)
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(false)
+
+    gate.resolve()
+    expect(await first).toBe("first work")
+    expect(await second).toBe("second cancelled")
+    expect(await third).toBe("third cancelled")
+    expect(KiloSessionPromptQueue._hasInternalState(sessionID)).toBe(false)
+  })
+
   test("cancel drops queued prompts and resets internal state", async () => {
     const ready = Promise.withResolvers<void>()
     const calls: number[] = []

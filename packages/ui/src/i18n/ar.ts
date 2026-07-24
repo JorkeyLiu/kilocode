@@ -159,6 +159,7 @@ export const dict = {
   "ui.message.copyMessage": "نسخ الرسالة",
   "ui.message.forkMessage": "تشعب إلى جلسة جديدة",
   "ui.message.revertMessage": "إعادة التعيين إلى هذه النقطة",
+  "ui.message.cancelQueued": "إلغاء الرسالة في قائمة الانتظار",
   "ui.message.copyResponse": "نسخ الرد",
   "ui.message.copied": "تم النسخ!",
   "ui.message.revert": "Revert to here",
