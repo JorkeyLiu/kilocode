@@ -10,8 +10,14 @@
 
 import { For, Show, createMemo, createEffect, createSignal, type Component } from "solid-js"
 import { Icon } from "@kilocode/kilo-ui/icon"
+import { IconButton } from "@kilocode/kilo-ui/icon-button"
+import { Dialog } from "@kilocode/kilo-ui/dialog"
+import { Button } from "@kilocode/kilo-ui/button"
+import { useDialog } from "@kilocode/kilo-ui/context/dialog"
 import { useSession } from "../src/context/session"
+import { useLanguage } from "../src/context/language"
 import { formatRelativeDate } from "../src/utils/date"
+import { SessionRenameEditor } from "../src/components/shared/SessionRenameEditor"
 import {
   buildDisplayList,
   buildByID,
@@ -35,8 +41,55 @@ const DEPTH_PX = 12
 
 export const SidebarSessionList: Component<SidebarSessionListProps> = (props) => {
   const session = useSession()
+  const lang = useLanguage()
+  const dialog = useDialog()
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
   const [defaultExpanded, setDefaultExpanded] = createSignal(false)
+  const [renaming, setRenaming] = createSignal<string | null>(null)
+
+  function name(s: SessionInfo) {
+    return s.title || props.untitledLabel
+  }
+
+  function saveRename(title: string) {
+    const id = renaming()
+    if (!id) return
+    const existing = props.sessions.find((s) => s.id === id)
+    if (!existing || title !== (existing.title || "")) session.renameSession(id, title)
+    setRenaming(null)
+  }
+
+  function confirmDelete(s: SessionInfo, restore?: HTMLElement) {
+    dialog.show(
+      () => (
+        <Dialog title={lang.t("session.delete.title")} fit>
+          <div class="dialog-confirm-body">
+            <span>{lang.t("session.delete.confirm", { name: name(s) })}</span>
+            <div class="dialog-confirm-actions">
+              <Button variant="ghost" size="large" onClick={() => dialog.close()}>
+                {lang.t("common.cancel")}
+              </Button>
+              <Button
+                variant="primary"
+                size="large"
+                onClick={() => {
+                  session.deleteSession(s.id)
+                  dialog.close()
+                }}
+              >
+                {lang.t("session.delete.button")}
+              </Button>
+            </div>
+          </div>
+        </Dialog>
+      ),
+      () => {
+        queueMicrotask(() => {
+          if (restore?.isConnected) restore.focus()
+        })
+      },
+    )
+  }
 
   function toggle(pid: string) {
     setExpanded((prev) => {
@@ -139,13 +192,25 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
               const s = item.session
               const isActive = () => s.id === session.currentSessionID()
               const depthStyle = { "--am-session-indent": `${item.depth * DEPTH_PX}px` }
+              const isRenaming = () => renaming() === s.id
               return (
-                <button
+                <div
                   class={`am-item ${isActive() ? "am-item-active" : ""}`}
                   data-sidebar-id={s.id}
                   data-depth={item.depth}
                   style={depthStyle}
-                  onClick={() => props.onSelectSession(s.id)}
+                  tabindex="0"
+                  onClick={() => {
+                    if (isRenaming()) return
+                    props.onSelectSession(s.id)
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.target !== e.currentTarget || isRenaming()) return
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault()
+                      props.onSelectSession(s.id)
+                    }
+                  }}
                 >
                   {/* Disclosure column: real toggle or inert placeholder for title alignment */}
                   <Show
@@ -165,15 +230,54 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
                       <Icon name={expanded().has(s.id) ? "chevron-down" : "chevron-right"} size="small" />
                     </button>
                   </Show>
-                  {/* Seq + title share the title column; seq is fixed-width so digits never shift the name */}
-                  <span class="am-item-title">
-                    <Show when={item.depth > 0}>
-                      <span class="am-session-child-seq">#{item.seq}</span>
-                    </Show>
-                    <span class="am-item-title-text">{s.title || props.untitledLabel}</span>
-                  </span>
-                  <span class="am-item-time">{formatRelativeDate(s.updatedAt)}</span>
-                </button>
+                  <Show
+                    when={isRenaming()}
+                    fallback={
+                      <>
+                        {/* Seq + title share the title column; seq is fixed-width so digits never shift the name */}
+                        <span class="am-item-title">
+                          <Show when={item.depth > 0}>
+                            <span class="am-session-child-seq">#{item.seq}</span>
+                          </Show>
+                          <span class="am-item-title-text">{name(s)}</span>
+                        </span>
+                        <span class="am-item-time">{formatRelativeDate(s.updatedAt)}</span>
+                        <span class="am-item-actions">
+                          <IconButton
+                            icon="edit"
+                            size="small"
+                            variant="ghost"
+                            aria-label={`${lang.t("common.rename")}: ${name(s)}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              setRenaming(s.id)
+                            }}
+                          />
+                          <IconButton
+                            icon="trash"
+                            size="small"
+                            variant="ghost"
+                            aria-label={`${lang.t("session.delete.title")}: ${name(s)}`}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              confirmDelete(s, e.currentTarget)
+                            }}
+                          />
+                        </span>
+                      </>
+                    }
+                  >
+                    <span class="am-item-rename" onClick={(e) => e.stopPropagation()}>
+                      <SessionRenameEditor
+                        title={s.title || ""}
+                        fill
+                        stop
+                        onSave={saveRename}
+                        onCancel={() => setRenaming(null)}
+                      />
+                    </span>
+                  </Show>
+                </div>
               )
             }}
           </For>

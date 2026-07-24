@@ -509,8 +509,42 @@ button.am-section-toggle:hover .am-section-label {
   opacity: 0.7;
 }
 
-.am-item:hover .am-item-time {
+.am-item:hover .am-item-time,
+.am-item:focus-within .am-item-time {
   opacity: 0;
+}
+
+/* Trailing action buttons (rename/delete) — hidden until hover/focus,
+   overlay the time area so the three-column grid layout is preserved. */
+.am-item-actions {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s;
+}
+
+.am-item:hover .am-item-actions,
+.am-item:focus-within .am-item-actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.am-item:hover .am-item-actions [data-slot="icon-svg"],
+.am-item:focus-within .am-item-actions [data-slot="icon-svg"] {
+  color: var(--text-on-interactive-base);
+}
+
+/* Inline rename editor fills the title + time columns */
+.am-item-rename {
+  grid-column: 2 / -1;
+  display: flex;
+  min-width: 0;
 }
 
 /* Create worktree button (empty state) */
