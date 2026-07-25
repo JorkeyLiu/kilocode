@@ -248,6 +248,14 @@ export const dict = {
 
   "provider.disconnect.toast.disconnected.title": "{{provider}}が切断されました",
   "provider.disconnect.toast.disconnected.description": "{{provider}}のモデルは利用できなくなりました。",
+
+  "provider.delete.toast.deleted.title": "{{provider}} を削除しました",
+  "provider.delete.toast.deleted.description": "{{provider}} の設定と認証情報が削除されました。",
+  "provider.delete.confirm.title": "{{provider}} を削除",
+  "provider.delete.confirm.body": "カスタムプロバイダーの設定と保存されたすべての認証情報が完全に削除されます。",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "無料",
   "model.tag.dataCollected": "データがトレーニングに使用される場合があります",
   "model.tag.latest": "最新",

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "bun:test"
 
 import {
-  disabledProviderOptions,
+  connectedNonDisabledIds,
   providersWithKiloFallback,
   visibleConnectedIds,
 } from "../../webview-ui/src/components/settings/provider-visibility"
@@ -26,39 +26,6 @@ describe("visibleConnectedIds", () => {
   })
 })
 
-describe("disabledProviderOptions", () => {
-  it("includes Kilo and excludes already disabled providers", () => {
-    const options = disabledProviderOptions(
-      {
-        kilo: { id: "kilo", name: "Kilo Gateway", env: [], models: {} },
-        openai: { id: "openai", name: "OpenAI", env: [], models: {} },
-        anthropic: { id: "anthropic", name: "Anthropic", env: [], models: {} },
-      },
-      ["openai"],
-    )
-
-    expect(options).toEqual([
-      { value: "anthropic", label: "Anthropic" },
-      { value: "kilo", label: "Kilo Gateway" },
-    ])
-  })
-
-  it("sorts options by provider name", () => {
-    const options = disabledProviderOptions(
-      {
-        zed: { id: "zed", name: "Zed", env: [], models: {} },
-        alpha: { id: "alpha", name: "Alpha", env: [], models: {} },
-      },
-      [],
-    )
-
-    expect(options).toEqual([
-      { value: "alpha", label: "Alpha" },
-      { value: "zed", label: "Zed" },
-    ])
-  })
-})
-
 describe("providersWithKiloFallback", () => {
   it("adds Kilo when backend providers omit it", () => {
     const providers = providersWithKiloFallback({
@@ -75,5 +42,37 @@ describe("providersWithKiloFallback", () => {
     })
 
     expect(providers.kilo?.name).toBe("Custom Kilo Name")
+  })
+})
+
+describe("connectedNonDisabledIds", () => {
+  it("excludes Kilo provider from connected list", () => {
+    const ids = connectedNonDisabledIds(["kilo", "anthropic"], { kilo: "oauth", anthropic: "api" }, new Set())
+
+    expect(ids).toEqual(["anthropic"])
+  })
+
+  it("excludes disabled providers from connected list", () => {
+    const ids = connectedNonDisabledIds(["anthropic", "openai"], {}, new Set(["anthropic"]))
+
+    expect(ids).toEqual(["openai"])
+  })
+
+  it("excludes both Kilo and disabled providers", () => {
+    const ids = connectedNonDisabledIds(["kilo", "anthropic", "openai", "groq"], { kilo: "oauth" }, new Set(["openai"]))
+
+    expect(ids).toEqual(["anthropic", "groq"])
+  })
+
+  it("returns empty when all connected providers are disabled or Kilo", () => {
+    const ids = connectedNonDisabledIds(["kilo", "anthropic"], { kilo: "oauth" }, new Set(["anthropic"]))
+
+    expect(ids).toEqual([])
+  })
+
+  it("returns all non-Kilo connected when nothing is disabled", () => {
+    const ids = connectedNonDisabledIds(["anthropic", "openai"], {}, new Set())
+
+    expect(ids).toEqual(["anthropic", "openai"])
   })
 })

@@ -252,6 +252,15 @@ export const dict = {
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} frakoblet",
   "provider.disconnect.toast.disconnected.description": "Modeller fra {{provider}} er ikke lenger tilgjengelige.",
+
+  "provider.delete.toast.deleted.title": "{{provider}} slettet",
+  "provider.delete.toast.deleted.description": "Konfigurasjon og påloggingsinformasjon for {{provider}} er fjernet.",
+  "provider.delete.confirm.title": "Slett {{provider}}",
+  "provider.delete.confirm.body":
+    "Dette vil permanent fjerne den tilpassede leverandørkonfigurasjonen og all lagret påloggingsinformasjon.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "Gratis",
   "model.tag.dataCollected": "Data kan brukes til trening",
   "model.tag.latest": "Nyeste",

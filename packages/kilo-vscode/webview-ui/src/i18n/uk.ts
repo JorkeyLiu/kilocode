@@ -250,6 +250,14 @@ export const dict = {
   "provider.disconnect.toast.disconnected.title": "{{provider}} відключено",
   "provider.disconnect.toast.disconnected.description": "Моделі {{provider}} більше недоступні.",
 
+  "provider.delete.toast.deleted.title": "{{provider}} видалено",
+  "provider.delete.toast.deleted.description": "Конфігурацію та облікові дані {{provider}} видалено.",
+  "provider.delete.confirm.title": "Видалити {{provider}}",
+  "provider.delete.confirm.body":
+    "Це назавжди видалить конфігурацію користувацького провайдера та всі збережені облікові дані.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "Безкоштовно",
   "model.tag.dataCollected": "Дані можуть використовуватися для навчання",
   "model.tag.latest": "Остання",

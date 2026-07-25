@@ -6,12 +6,17 @@ export function visibleConnectedIds(connected: string[], authStates: Record<stri
   return connected.filter((id) => id !== KILO_PROVIDER_ID || authStates[KILO_PROVIDER_ID] !== undefined)
 }
 
-export function disabledProviderOptions(providers: Record<string, Provider>, disabled: string[]) {
-  const current = new Set(disabled)
-  return Object.values(providers)
-    .filter((item) => !current.has(item.id))
-    .map((item) => ({ value: item.id, label: item.name }))
-    .sort((a, b) => a.label.localeCompare(b.label))
+/**
+ * Filter visible connected provider IDs to exclude Kilo and disabled providers.
+ * This prevents a connected-but-disabled provider from appearing in both the
+ * Connected and Disabled sections.
+ */
+export function connectedNonDisabledIds(
+  connected: string[],
+  authStates: Record<string, ProviderAuthState>,
+  disabledIds: Set<string>,
+) {
+  return visibleConnectedIds(connected, authStates).filter((id) => id !== KILO_PROVIDER_ID && !disabledIds.has(id))
 }
 
 export function providersWithKiloFallback(providers: Record<string, Provider>): Record<string, Provider> {

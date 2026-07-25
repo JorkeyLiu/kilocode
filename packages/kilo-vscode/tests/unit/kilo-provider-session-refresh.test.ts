@@ -200,7 +200,12 @@ describe("KiloProvider pending session refresh", () => {
     expect(calls).toHaveLength(1)
     expect(calls[0]!.limit).toBe(SESSION_LOAD_MORE_LIMIT)
     expect(calls[0]!.cursor).toBe(20)
-    const msg = ctx.sent[0] as { append: boolean; nextCursor: number | null; hasMore: boolean; sessions: { id: string }[] }
+    const msg = ctx.sent[0] as {
+      append: boolean
+      nextCursor: number | null
+      hasMore: boolean
+      sessions: { id: string }[]
+    }
     expect(msg.append).toBe(true)
     expect(msg.nextCursor).toBe(40)
     expect(msg.hasMore).toBe(true)

@@ -249,6 +249,14 @@ export const dict = {
   "provider.disconnect.toast.disconnected.title": "{{provider}} bağlantısı kesildi",
   "provider.disconnect.toast.disconnected.description": "{{provider}} modelleri artık kullanılabilir değil.",
 
+  "provider.delete.toast.deleted.title": "{{provider}} silindi",
+  "provider.delete.toast.deleted.description": "{{provider}} yapılandırması ve kimlik bilgileri kaldırıldı.",
+  "provider.delete.confirm.title": "{{provider}} silinsin mi?",
+  "provider.delete.confirm.body":
+    "Bu işlem, özel sağlayıcı yapılandırmasını ve kayıtlı tüm kimlik bilgilerini kalıcı olarak kaldıracaktır.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "Ücretsiz",
   "model.tag.dataCollected": "Veriler eğitim için kullanılabilir",
   "model.tag.latest": "En yeni",

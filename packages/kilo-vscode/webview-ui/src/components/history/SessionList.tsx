@@ -77,9 +77,7 @@ const SessionList: Component<SessionListProps> = (props) => {
         // findByAttr avoids CSS-injection through the session ID value.
         const row = findByAttr(container, "data-key", pid)
         if (row) {
-          const disclosure = row.querySelector(
-            'button[data-slot="session-disclosure"]',
-          ) as HTMLElement | null
+          const disclosure = row.querySelector('button[data-slot="session-disclosure"]') as HTMLElement | null
           disclosure?.focus({ preventScroll: true })
         }
       })

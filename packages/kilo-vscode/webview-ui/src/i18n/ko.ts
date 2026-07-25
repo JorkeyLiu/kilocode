@@ -252,6 +252,14 @@ export const dict = {
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} 연결 해제됨",
   "provider.disconnect.toast.disconnected.description": "{{provider}} 모델을 더 이상 사용할 수 없습니다.",
+
+  "provider.delete.toast.deleted.title": "{{provider}} 삭제됨",
+  "provider.delete.toast.deleted.description": "{{provider}} 구성 및 인증 정보가 제거되었습니다.",
+  "provider.delete.confirm.title": "{{provider}} 삭제",
+  "provider.delete.confirm.body": "사용자 지정 제공자 구성과 저장된 모든 인증 정보가 영구적으로 제거됩니다.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "무료",
   "model.tag.dataCollected": "데이터가 학습에 사용될 수 있습니다",
   "model.tag.latest": "최신",

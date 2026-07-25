@@ -246,6 +246,14 @@ export const dict = {
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} 已断开连接",
   "provider.disconnect.toast.disconnected.description": "{{provider}} 模型已不再可用。",
+
+  "provider.delete.toast.deleted.title": "{{provider}} 已删除",
+  "provider.delete.toast.deleted.description": "{{provider}} 的配置和凭据已被移除。",
+  "provider.delete.confirm.title": "删除 {{provider}}",
+  "provider.delete.confirm.body": "此操作将永久移除自定义提供商配置及所有存储的凭据。",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "免费",
   "model.tag.dataCollected": "数据可能会用于训练",
   "model.tag.latest": "最新",

@@ -250,6 +250,14 @@ export const dict = {
   "provider.disconnect.toast.disconnected.title": "{{provider}} odspojen",
   "provider.disconnect.toast.disconnected.description": "{{provider}} modeli više nisu dostupni.",
 
+  "provider.delete.toast.deleted.title": "{{provider}} obrisan",
+  "provider.delete.toast.deleted.description": "Konfiguracija i vjerodajnice za {{provider}} su uklonjene.",
+  "provider.delete.confirm.title": "Obriši {{provider}}",
+  "provider.delete.confirm.body":
+    "Ovo će trajno ukloniti konfiguraciju prilagođenog provajdera i sve pohranjene vjerodajnice.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "Besplatno",
   "model.tag.dataCollected": "Podaci se mogu koristiti za obuku",
   "model.tag.latest": "Najnovije",

@@ -1068,6 +1068,12 @@ export interface SaveCustomProviderMessage {
   apiKeyChanged?: boolean
 }
 
+export interface DeleteCustomProviderMessage {
+  type: "deleteCustomProvider"
+  requestId: string
+  providerID: string
+}
+
 export interface FetchCustomProviderModelsMessage {
   type: "fetchCustomProviderModels"
   requestId: string
@@ -1378,6 +1384,7 @@ export type WebviewMessage =
   | DisconnectProviderMessage
   | AnacondaDesktopWebviewMessage
   | SaveCustomProviderMessage
+  | DeleteCustomProviderMessage
   | FetchCustomProviderModelsMessage
   | PersistRecentsRequest
   | RequestRecentsMessage

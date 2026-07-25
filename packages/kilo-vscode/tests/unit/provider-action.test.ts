@@ -140,4 +140,31 @@ describe("createProviderAction", () => {
     expect(seen).toEqual([])
     action.dispose()
   })
+
+  it("routes providerDeleted messages", () => {
+    const transport = createTransport()
+    const action = createProviderAction(transport)
+    const seen: string[] = []
+
+    action.send(
+      {
+        type: "deleteCustomProvider",
+        providerID: "myprovider",
+      },
+      {
+        onDeleted: (message) => seen.push(`deleted:${message.providerID}`),
+      },
+    )
+
+    const sent = transport.sent[0]
+    const requestId = "requestId" in (sent ?? {}) ? sent.requestId : ""
+    transport.receive({
+      type: "providerDeleted",
+      requestId,
+      providerID: "myprovider",
+    })
+
+    expect(seen).toEqual(["deleted:myprovider"])
+    action.dispose()
+  })
 })

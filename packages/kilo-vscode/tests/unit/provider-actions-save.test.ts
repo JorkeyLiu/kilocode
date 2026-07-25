@@ -2,6 +2,7 @@ import { describe, expect, it } from "bun:test"
 import {
   connectProvider,
   disconnectProvider,
+  deleteCustomProvider,
   fetchProviderData,
   resolveStoredKey,
   saveCustomProvider,
@@ -110,7 +111,7 @@ function createSavedProvider() {
 }
 
 describe("disconnectProvider", () => {
-  it("keeps configured provider enabled after disconnecting oauth override", async () => {
+  it("removes auth credentials only without touching disabled_providers", async () => {
     const existing = {
       disabled_providers: ["openai", "groq"],
       provider: {
@@ -124,7 +125,8 @@ describe("disconnectProvider", () => {
     await disconnectProvider(ctx, "req", "openai", null, setCachedConfig)
 
     expect(calls.remove).toEqual([{ providerID: "openai" }])
-    expect(calls.config).toEqual([{ config: { disabled_providers: ["groq"] } }])
+    // disconnectProvider should NOT mutate disabled_providers
+    expect(calls.config).toHaveLength(0)
     expect(calls.refresh).toBe(1)
   })
 })
@@ -312,7 +314,7 @@ describe("saveCustomProvider", () => {
 })
 
 describe("disconnectProvider", () => {
-  it("adds configured providers to disabled_providers without deleting their config", async () => {
+  it("removes auth credentials only without touching disabled_providers or config", async () => {
     const existing = {
       disabled_providers: ["openai"],
       provider: {
@@ -323,16 +325,17 @@ describe("disconnectProvider", () => {
 
     await disconnectProvider(ctx, "req", "myprovider", null, setCachedConfig)
 
-    expect(calls.config).toHaveLength(1)
-    expect(calls.config[0].config).toEqual({ disabled_providers: ["openai", "myprovider"] })
+    // Should only remove auth — no config mutations
     expect(calls.remove).toEqual([{ providerID: "myprovider" }])
+    expect(calls.config).toHaveLength(0)
+    expect(calls.project).toHaveLength(0)
     expect(calls.refresh).toBe(1)
     expect(calls.posts).toContainEqual({ type: "providerDisconnected", requestId: "req", providerID: "myprovider" })
   })
 
-  it("does not duplicate configured providers already disabled", async () => {
+  it("does not add providers to disabled_providers on disconnect", async () => {
     const existing = {
-      disabled_providers: ["myprovider"],
+      disabled_providers: [],
       provider: {
         myprovider: createProvider(),
       },
@@ -342,12 +345,12 @@ describe("disconnectProvider", () => {
     await disconnectProvider(ctx, "req", "myprovider", null, setCachedConfig)
 
     expect(calls.config).toHaveLength(0)
-    expect(calls.refresh).toBe(1)
+    expect(calls.remove).toEqual([{ providerID: "myprovider" }])
   })
 
-  it("deletes saved custom provider config when disconnecting", async () => {
+  it("does not delete custom provider config on disconnect", async () => {
     const existing = {
-      disabled_providers: ["myprovider", "openai"],
+      disabled_providers: ["myprovider"],
       provider: {
         myprovider: createSavedProvider(),
       },
@@ -356,17 +359,36 @@ describe("disconnectProvider", () => {
 
     await disconnectProvider(ctx, "req", "myprovider", null, setCachedConfig)
 
+    expect(calls.remove).toEqual([{ providerID: "myprovider" }])
+    expect(calls.config).toHaveLength(0)
+    expect(calls.project).toHaveLength(0)
+  })
+})
+
+describe("deleteCustomProvider", () => {
+  it("removes auth and config for a custom provider", async () => {
+    const existing = {
+      disabled_providers: ["myprovider", "openai"],
+      provider: {
+        myprovider: createSavedProvider(),
+      },
+    }
+    const { ctx, calls, setCachedConfig } = createCtx(existing)
+
+    await deleteCustomProvider(ctx, "req", "myprovider", null, setCachedConfig)
+
+    expect(calls.remove).toEqual([{ providerID: "myprovider" }])
     expect(calls.config).toHaveLength(1)
     expect(calls.config[0].config).toEqual({
       provider: { myprovider: null },
       disabled_providers: ["openai"],
     })
     expect(calls.project).toEqual([{ config: { provider: { myprovider: null } }, directory: "/tmp" }])
-    expect(calls.remove).toEqual([{ providerID: "myprovider" }])
     expect(calls.refresh).toBe(1)
+    expect(calls.posts).toContainEqual({ type: "providerDeleted", requestId: "req", providerID: "myprovider" })
   })
 
-  it("deletes project custom provider config when it is not in global config", async () => {
+  it("deletes project custom provider config when not in global config", async () => {
     const merged = {
       provider: {
         myprovider: createSavedProvider(),
@@ -374,45 +396,80 @@ describe("disconnectProvider", () => {
     }
     const { ctx, calls, setCachedConfig } = createCtx({ disabled_providers: [] }, merged)
 
-    await disconnectProvider(ctx, "req", "myprovider", null, setCachedConfig)
+    await deleteCustomProvider(ctx, "req", "myprovider", null, setCachedConfig)
 
     expect(calls.config).toHaveLength(0)
     expect(calls.project).toEqual([{ config: { provider: { myprovider: null } }, directory: "/tmp" }])
     expect(calls.remove).toEqual([{ providerID: "myprovider" }])
-    expect(calls.refresh).toBe(1)
   })
 
-  it("deletes both global and project custom provider config when project overrides global", async () => {
-    const global = {
+  it("cleans stale disabled ID from global config when deleting project-only custom provider", async () => {
+    const global = { disabled_providers: ["myprovider", "openai"], provider: {} }
+    const merged = {
       disabled_providers: ["myprovider", "openai"],
       provider: {
         myprovider: createSavedProvider(),
       },
     }
+    const { ctx, calls, setCachedConfig } = createCtx(global, merged)
+
+    await deleteCustomProvider(ctx, "req", "myprovider", null, setCachedConfig)
+
+    // Global config should have disabled_providers cleaned without provider key
+    expect(calls.config).toHaveLength(1)
+    expect(calls.config[0].config).toEqual({ disabled_providers: ["openai"] })
+    // Project config should null out the provider
+    expect(calls.project).toEqual([{ config: { provider: { myprovider: null } }, directory: "/tmp" }])
+    expect(calls.remove).toEqual([{ providerID: "myprovider" }])
+    expect(calls.posts).toContainEqual({ type: "providerDeleted", requestId: "req", providerID: "myprovider" })
+  })
+
+  it("skips global save when project-only custom provider is not in disabled_providers", async () => {
+    const global = { disabled_providers: ["openai"], provider: {} }
     const merged = {
-      ...global,
+      disabled_providers: ["openai"],
       provider: {
-        myprovider: {
-          ...createSavedProvider(),
-          name: "Project Provider",
-        },
+        myprovider: createSavedProvider(),
       },
     }
     const { ctx, calls, setCachedConfig } = createCtx(global, merged)
 
-    await disconnectProvider(ctx, "req", "myprovider", null, setCachedConfig)
+    await deleteCustomProvider(ctx, "req", "myprovider", null, setCachedConfig)
 
-    expect(calls.config).toEqual([
-      {
-        config: {
-          provider: { myprovider: null },
-          disabled_providers: ["openai"],
-        },
-      },
-    ])
+    // No global config save needed — provider not in global disabled list
+    expect(calls.config).toHaveLength(0)
     expect(calls.project).toEqual([{ config: { provider: { myprovider: null } }, directory: "/tmp" }])
     expect(calls.remove).toEqual([{ providerID: "myprovider" }])
-    expect(calls.refresh).toBe(1)
+  })
+
+  it("errors when the provider is not a custom provider", async () => {
+    const existing = {
+      disabled_providers: [],
+      provider: {
+        myprovider: createProvider(),
+      },
+    }
+    const { ctx, calls, setCachedConfig } = createCtx(existing)
+
+    await deleteCustomProvider(ctx, "req", "myprovider", null, setCachedConfig)
+
+    expect(calls.remove).toHaveLength(0)
+    expect(calls.config).toHaveLength(0)
+    expect(calls.posts).toContainEqual(expect.objectContaining({ type: "providerActionError", action: "delete" }))
+  })
+
+  it("cleans up disabled_providers when deleting", async () => {
+    const existing = {
+      disabled_providers: ["myprovider", "other"],
+      provider: {
+        myprovider: createSavedProvider(),
+      },
+    }
+    const { ctx, calls, setCachedConfig } = createCtx(existing)
+
+    await deleteCustomProvider(ctx, "req", "myprovider", null, setCachedConfig)
+
+    expect(calls.config[0].config.disabled_providers).toEqual(["other"])
   })
 })
 

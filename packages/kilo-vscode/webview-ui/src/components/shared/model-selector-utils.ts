@@ -8,6 +8,100 @@ import {
 
 export { KILO_GATEWAY_ID, PROVIDER_ORDER }
 
+// ---------------------------------------------------------------------------
+// Row / group key helpers — single source of truth for key formatting
+// ---------------------------------------------------------------------------
+
+export const FAVORITES_KEY = "favorites"
+
+export function modelKey(providerID: string, modelID: string) {
+  return `${providerID}/${modelID}`
+}
+
+export function rowKey(kind: "model" | "favorite", providerID: string, modelID: string) {
+  return `${kind}:${providerID}/${modelID}`
+}
+
+// ---------------------------------------------------------------------------
+// Model grouping types and builder
+// ---------------------------------------------------------------------------
+
+interface ModelGroupRow {
+  key: string
+  kind: "favorite" | "model"
+  model: EnrichedModel
+}
+
+interface ModelGroupData {
+  key: string
+  label: string
+  rows: ModelGroupRow[]
+}
+
+/**
+ * Build model groups for the model selector popover.
+ *
+ * Favorites is the only special top-level group. All other models — including
+ * Kilo Auto models and recommended models — are grouped under their provider.
+ * Within each provider group auto models sort first, then recommended (by
+ * recommendedIndex), then alphabetical.
+ */
+export function buildModelGroups(
+  models: EnrichedModel[],
+  favorites: EnrichedModel[],
+  favoritesLabel: string,
+): ModelGroupData[] {
+  const map = new Map<string, EnrichedModel[]>()
+
+  for (const m of models) {
+    const list = map.get(m.providerID) ?? []
+    list.push(m)
+    map.set(m.providerID, list)
+  }
+
+  const result: ModelGroupData[] = []
+
+  if (favorites.length > 0) {
+    result.push({
+      key: FAVORITES_KEY,
+      label: favoritesLabel,
+      rows: favorites.map((m) => ({
+        key: rowKey("favorite", m.providerID, m.id),
+        kind: "favorite" as const,
+        model: m,
+      })),
+    })
+  }
+
+  const rest: ModelGroupData[] = [...map.entries()]
+    .sort(([a], [b]) => providerSortKey(a) - providerSortKey(b))
+    .map(([id, list]) => {
+      list.sort((a, b) => {
+        // Auto models first within provider group
+        const aAuto = isAuto(a) ? 0 : 1
+        const bAuto = isAuto(b) ? 0 : 1
+        if (aAuto !== bAuto) return aAuto - bAuto
+        // Then by recommended index (undefined → Infinity)
+        const aRec = a.recommendedIndex ?? Infinity
+        const bRec = b.recommendedIndex ?? Infinity
+        if (aRec !== bRec) return aRec - bRec
+        // Then alphabetical
+        return a.name.localeCompare(b.name)
+      })
+      return {
+        key: id,
+        label: list[0]?.providerName ?? id,
+        rows: list.map((m) => ({
+          key: rowKey("model", m.providerID, m.id),
+          kind: "model" as const,
+          model: m,
+        })),
+      }
+    })
+
+  return [...result, ...rest]
+}
+
 export const KILO_AUTO_SMALL_IDS = new Set(["kilo-auto/small", "auto-small"])
 export const KILO_AUTO_EFFICIENT_ID = "kilo-auto/efficient"
 const AUTO_FALLBACK = "Routes requests automatically."

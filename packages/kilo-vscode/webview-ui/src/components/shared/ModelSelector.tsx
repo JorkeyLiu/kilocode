@@ -36,7 +36,6 @@ import { isEnterKeyCommitNotIme } from "../../utils/ime-enter"
 import {
   KILO_GATEWAY_ID,
   isSmall,
-  providerSortKey,
   isFree,
   isDataCollectedModel,
   hasByok,
@@ -45,6 +44,9 @@ import {
   autoSummary,
   buildTriggerLabel,
   sanitizeName,
+  buildModelGroups,
+  modelKey,
+  rowKey,
 } from "./model-selector-utils"
 import { ModelPreview } from "./ModelPreview"
 import { searchMatch } from "../../utils/search-match"
@@ -54,17 +56,6 @@ import { searchMatch } from "../../utils/search-match"
 // ---------------------------------------------------------------------------
 
 const CLEAR_KEY = "clear"
-const FAVORITES_KEY = "favorites"
-const AUTO_KEY = "auto"
-const RECOMMENDED_KEY = "recommended"
-
-function modelKey(providerID: string, modelID: string) {
-  return `${providerID}/${modelID}`
-}
-
-function rowKey(kind: "model" | "favorite", providerID: string, modelID: string) {
-  return `${kind}:${providerID}/${modelID}`
-}
 
 function groupKey(key: string) {
   return `group:${key}`
@@ -267,85 +258,7 @@ export const ModelSelectorBase: Component<ModelSelectorBaseProps> = (props) => {
   })
 
   const groups = createMemo<ModelGroup[]>(() => {
-    const autos: EnrichedModel[] = []
-    const recommended: EnrichedModel[] = []
-    const map = new Map<string, EnrichedModel[]>()
-
-    for (const m of filtered()) {
-      if (isAuto(m)) {
-        autos.push(m)
-        continue
-      }
-      if (m.recommendedIndex !== undefined) {
-        recommended.push(m)
-        continue
-      }
-      const list = map.get(m.providerID) ?? []
-      list.push(m)
-      map.set(m.providerID, list)
-    }
-
-    autos.sort(
-      (a, b) => (a.recommendedIndex ?? Infinity) - (b.recommendedIndex ?? Infinity) || a.name.localeCompare(b.name),
-    )
-    recommended.sort((a, b) => (a.recommendedIndex ?? Infinity) - (b.recommendedIndex ?? Infinity))
-
-    const result: ModelGroup[] = []
-
-    const favorites = favoriteModels()
-
-    if (favorites.length > 0) {
-      result.push({
-        key: FAVORITES_KEY,
-        label: language.t("model.group.favorites"),
-        rows: favorites.map((m) => ({
-          key: rowKey("favorite", m.providerID, m.id),
-          kind: "favorite",
-          model: m,
-        })),
-      })
-    }
-
-    if (autos.length > 0) {
-      result.push({
-        key: AUTO_KEY,
-        label: language.t("model.group.auto"),
-        rows: autos.map((m) => ({
-          key: rowKey("model", m.providerID, m.id),
-          kind: "model",
-          model: m,
-        })),
-      })
-    }
-
-    if (recommended.length > 0) {
-      result.push({
-        key: RECOMMENDED_KEY,
-        label: language.t("model.group.recommended"),
-        rows: recommended.map((m) => ({
-          key: rowKey("model", m.providerID, m.id),
-          kind: "model",
-          model: m,
-        })),
-      })
-    }
-
-    const rest: ModelGroup[] = [...map.entries()]
-      .sort(([a], [b]) => providerSortKey(a) - providerSortKey(b))
-      .map(([id, list]) => {
-        list.sort((a, b) => a.name.localeCompare(b.name))
-        return {
-          key: id,
-          label: list[0]?.providerName ?? id,
-          rows: list.map((m) => ({
-            key: rowKey("model", m.providerID, m.id),
-            kind: "model",
-            model: m,
-          })),
-        }
-      })
-
-    return [...result, ...rest]
+    return buildModelGroups(filtered(), favoriteModels(), language.t("model.group.favorites"))
   })
 
   // Collapse state is honored even during search so users can skip past

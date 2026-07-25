@@ -150,6 +150,7 @@ import {
   authorizeProviderOAuth as authorizeOAuthAction,
   completeProviderOAuth as completeOAuthAction,
   disconnectProvider as disconnectProviderAction,
+  deleteCustomProvider as deleteCustomProviderAction,
   saveCustomProvider as saveCustomProviderAction,
   resolveStoredKey,
 } from "./provider-actions"
@@ -1097,6 +1098,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         case "authorizeProviderOAuth":
         case "completeProviderOAuth":
         case "disconnectProvider":
+        case "deleteCustomProvider":
         case "saveCustomProvider":
           await this.handleProviderAction(message)
           break
@@ -2226,9 +2228,11 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       const action =
         msg.type === "disconnectProvider"
           ? "disconnect"
-          : msg.type === "authorizeProviderOAuth"
-            ? "authorize"
-            : "connect"
+          : msg.type === "deleteCustomProvider"
+            ? "delete"
+            : msg.type === "authorizeProviderOAuth"
+              ? "authorize"
+              : "connect"
       this.postMessage({
         type: "providerActionError",
         requestId: rid,
@@ -2261,6 +2265,8 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     if (msg.type === "authorizeProviderOAuth") return authorizeOAuthAction(ctx, rid, pid, method)
     if (msg.type === "completeProviderOAuth") return completeOAuthAction(ctx, rid, pid, method, code)
     if (msg.type === "disconnectProvider") return disconnectProviderAction(ctx, rid, pid, this.cachedConfigMessage, set)
+    if (msg.type === "deleteCustomProvider")
+      return deleteCustomProviderAction(ctx, rid, pid, this.cachedConfigMessage, set)
     if (msg.type === "saveCustomProvider" && config)
       return saveCustomProviderAction(ctx, rid, pid, config, key, keyChanged, this.cachedConfigMessage, set)
   }

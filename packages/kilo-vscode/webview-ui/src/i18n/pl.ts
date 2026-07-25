@@ -249,6 +249,15 @@ export const dict = {
 
   "provider.disconnect.toast.disconnected.title": "Rozłączono {{provider}}",
   "provider.disconnect.toast.disconnected.description": "Modele {{provider}} nie są już dostępne.",
+
+  "provider.delete.toast.deleted.title": "{{provider}} usunięto",
+  "provider.delete.toast.deleted.description": "Konfiguracja i poświadczenia {{provider}} zostały usunięte.",
+  "provider.delete.confirm.title": "Usuń {{provider}}",
+  "provider.delete.confirm.body":
+    "To trwale usunie konfigurację niestandardowego dostawcy i wszystkie zapisane poświadczenia.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "Darmowy",
   "model.tag.dataCollected": "Dane mogą być wykorzystywane do trenowania",
   "model.tag.latest": "Najnowszy",

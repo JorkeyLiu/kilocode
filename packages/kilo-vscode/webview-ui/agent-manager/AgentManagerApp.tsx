@@ -392,7 +392,10 @@ const AgentManagerContent: Component = () => {
   const coverBottomPage = () => {
     if (!isBottomPage()) return
     const ids = tabMgr.ids(LOCAL)
-    if (ids.length !== 1) { setIsBottomPage(false); return }
+    if (ids.length !== 1) {
+      setIsBottomPage(false)
+      return
+    }
     const pendingId = ids[0]
     setLocalSessionIDs((prev) => prev.filter((x) => x !== pendingId))
     tabMgr.remove(LOCAL, pendingId)
@@ -568,7 +571,11 @@ const AgentManagerContent: Component = () => {
       search: handleSearchAction,
       showTerminal: handleShowTerminalAction,
       toggleDiff: handleToggleDiffAction,
-      newTab: () => { coverBottomPage(); addPendingTab(); setIsBottomPage(false) },
+      newTab: () => {
+        coverBottomPage()
+        addPendingTab()
+        setIsBottomPage(false)
+      },
       closeTab: closeActiveTab,
       showShortcuts: handleShowKeyboardShortcuts,
       focusInput: () => window.dispatchEvent(new Event("focusPrompt")),

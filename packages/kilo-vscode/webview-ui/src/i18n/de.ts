@@ -256,6 +256,15 @@ export const dict = {
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} getrennt",
   "provider.disconnect.toast.disconnected.description": "Die {{provider}}-Modelle sind nicht mehr verfügbar.",
+
+  "provider.delete.toast.deleted.title": "{{provider}} gelöscht",
+  "provider.delete.toast.deleted.description": "Die Konfiguration und Anmeldedaten von {{provider}} wurden entfernt.",
+  "provider.delete.confirm.title": "{{provider}} löschen",
+  "provider.delete.confirm.body":
+    "Dies entfernt die benutzerdefinierte Provider-Konfiguration und alle gespeicherten Anmeldedaten dauerhaft.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "Kostenlos",
   "model.tag.dataCollected": "Daten können für das Training verwendet werden",
   "model.tag.latest": "Neueste",

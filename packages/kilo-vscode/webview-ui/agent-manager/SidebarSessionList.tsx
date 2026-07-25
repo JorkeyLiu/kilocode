@@ -26,7 +26,12 @@ import {
   DATE_GROUP_KEYS,
   type DisplayItem,
 } from "../src/utils/session-tree"
-import { captureScrollAnchor, restoreScrollAnchor, createScrollAnchorTracker, type ScrollAnchorTracker } from "../src/utils/scroll-anchor"
+import {
+  captureScrollAnchor,
+  restoreScrollAnchor,
+  createScrollAnchorTracker,
+  type ScrollAnchorTracker,
+} from "../src/utils/scroll-anchor"
 import type { SessionInfo } from "../src/types/messages"
 
 interface SidebarSessionListProps {

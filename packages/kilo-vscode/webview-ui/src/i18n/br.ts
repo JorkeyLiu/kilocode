@@ -249,6 +249,15 @@ export const dict = {
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} desconectado",
   "provider.disconnect.toast.disconnected.description": "Os modelos de {{provider}} não estão mais disponíveis.",
+
+  "provider.delete.toast.deleted.title": "{{provider}} excluído",
+  "provider.delete.toast.deleted.description": "A configuração e as credenciais de {{provider}} foram removidas.",
+  "provider.delete.confirm.title": "Excluir {{provider}}",
+  "provider.delete.confirm.body":
+    "Isso removerá permanentemente a configuração do provedor personalizado e todas as credenciais armazenadas.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "Grátis",
   "model.tag.dataCollected": "Os dados podem ser usados para treinamento",
   "model.tag.latest": "Mais recente",

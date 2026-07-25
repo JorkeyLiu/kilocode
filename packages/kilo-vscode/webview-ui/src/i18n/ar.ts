@@ -247,6 +247,14 @@ export const dict = {
 
   "provider.disconnect.toast.disconnected.title": "تم فصل {{provider}}",
   "provider.disconnect.toast.disconnected.description": "لم تعد نماذج {{provider}} متاحة.",
+
+  "provider.delete.toast.deleted.title": "تم حذف {{provider}}",
+  "provider.delete.toast.deleted.description": "تمت إزالة تكوين {{provider}} وبيانات الاعتماد.",
+  "provider.delete.confirm.title": "حذف {{provider}}",
+  "provider.delete.confirm.body": "سيؤدي هذا إلى الإزالة الدائمة لتكوين مزود مخصص وجميع بيانات الاعتماد المخزنة.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "مجاني",
   "model.tag.dataCollected": "قد تُستخدم البيانات للتدريب",
   "model.tag.latest": "الأحدث",

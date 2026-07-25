@@ -33,10 +33,7 @@ function mockElement(
   } as unknown as HTMLElement
 }
 
-function mockContainer(
-  rect: { top: number; bottom: number; height: number },
-  children: HTMLElement[],
-): HTMLElement {
+function mockContainer(rect: { top: number; bottom: number; height: number }, children: HTMLElement[]): HTMLElement {
   let scrollTop = 0
   return {
     getBoundingClientRect: () => ({ ...rect, left: 0, right: 100, width: 100, x: 0, y: rect.top }),
@@ -99,9 +96,7 @@ describe("findByAttr (generic)", () => {
   })
 
   it("does not match elements with a different attribute", () => {
-    const items = [
-      mockElement("x", { top: 0, bottom: 40, height: 40 }, "data-sidebar-id"),
-    ]
+    const items = [mockElement("x", { top: 0, bottom: 40, height: 40 }, "data-sidebar-id")]
     const container = mockContainer({ top: 0, bottom: 300, height: 300 }, items)
     expect(findByAttr(container, "data-key", "x")).toBeNull()
   })
@@ -273,10 +268,7 @@ describe("history disclosure scroll anchor lifecycle", () => {
 // ---------------------------------------------------------------------------
 
 /** Mock container that also tracks addEventListener/removeEventListener calls. */
-function mockTrackedContainer(
-  rect: { top: number; bottom: number; height: number },
-  initialChildren: HTMLElement[],
-) {
+function mockTrackedContainer(rect: { top: number; bottom: number; height: number }, initialChildren: HTMLElement[]) {
   let scrollTop = 0
   let children = initialChildren
   const listeners: Record<string, Function[]> = {}
@@ -519,10 +511,7 @@ describe("createScrollAnchorTracker", () => {
     expect(anchor!.offset).toBe(20)
 
     // External load-more appends items at bottom (doesn't affect "b" position)
-    const extendedItems = [
-      ...items,
-      mockElement("d", { top: 200, bottom: 240, height: 40 }),
-    ]
+    const extendedItems = [...items, mockElement("d", { top: 200, bottom: 240, height: 40 })]
     container.setChildren(extendedItems)
 
     tracker.restore()

@@ -249,6 +249,16 @@ export const dict = {
 
   "provider.disconnect.toast.disconnected.title": "{{provider}} frakoblet",
   "provider.disconnect.toast.disconnected.description": "Modeller fra {{provider}} er ikke længere tilgængelige.",
+
+  "provider.delete.toast.deleted.title": "{{provider}} slettet",
+  "provider.delete.toast.deleted.description":
+    "Konfiguration og legitimationsoplysninger for {{provider}} er blevet fjernet.",
+  "provider.delete.confirm.title": "Slet {{provider}}",
+  "provider.delete.confirm.body":
+    "Dette vil permanent fjerne den brugerdefinerede leverandørkonfiguration og alle gemte legitimationsoplysninger.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "Gratis",
   "model.tag.dataCollected": "Data kan bruges til træning",
   "model.tag.latest": "Nyeste",

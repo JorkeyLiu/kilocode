@@ -1006,11 +1006,17 @@ export interface ProviderDisconnectedMessage {
   providerID: string
 }
 
+export interface ProviderDeletedMessage {
+  type: "providerDeleted"
+  requestId: string
+  providerID: string
+}
+
 export interface ProviderActionErrorMessage {
   type: "providerActionError"
   requestId: string
   providerID: string
-  action: "authorize" | "connect" | "disconnect"
+  action: "authorize" | "connect" | "disconnect" | "delete"
   message: string
 }
 
@@ -1188,6 +1194,7 @@ export type ExtensionMessage =
   | ProviderOAuthReadyMessage
   | ProviderConnectedMessage
   | ProviderDisconnectedMessage
+  | ProviderDeletedMessage
   | ProviderActionErrorMessage
   | AnacondaDesktopExtensionMessage
   | CustomProviderModelsFetchedMessage

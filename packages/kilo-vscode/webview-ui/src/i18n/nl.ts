@@ -251,6 +251,14 @@ export const dict = {
   "provider.disconnect.toast.disconnected.title": "{{provider}} ontkoppeld",
   "provider.disconnect.toast.disconnected.description": "{{provider}} modellen zijn niet langer beschikbaar.",
 
+  "provider.delete.toast.deleted.title": "{{provider}} verwijderd",
+  "provider.delete.toast.deleted.description": "Configuratie en opslaggegevens van {{provider}} zijn verwijderd.",
+  "provider.delete.confirm.title": "{{provider}} verwijderen",
+  "provider.delete.confirm.body":
+    "Dit verwijdert de aangepaste providerconfiguratie en alle opgeslagen inloggegevens permanent.",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "Gratis",
   "model.tag.dataCollected": "Gegevens kunnen worden gebruikt voor training",
   "model.tag.latest": "Nieuwste",

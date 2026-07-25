@@ -200,7 +200,7 @@ function postError(
   ctx: ActionContext,
   requestId: string,
   providerID: string,
-  action: "connect" | "disconnect" | "authorize",
+  action: "connect" | "disconnect" | "authorize" | "delete",
   message: string,
 ) {
   ctx.postMessage({ type: "providerActionError", requestId, providerID, action, message })
@@ -210,7 +210,7 @@ function validateID(
   ctx: ActionContext,
   requestId: string,
   providerID: string,
-  action: "connect" | "disconnect" | "authorize",
+  action: "connect" | "disconnect" | "authorize" | "delete",
 ): string | null {
   const result = validateProviderIDShared(providerID)
   if ("value" in result) return result.value
@@ -265,6 +265,7 @@ async function removeAuth(ctx: ActionContext, id: string, configured: boolean) {
 async function removeCustom(ctx: ActionContext, id: string, global: Config, merged: Config) {
   const cfg = global.provider?.[id]
   const effective = merged.provider?.[id]
+  const hasDisabled = (global.disabled_providers ?? []).includes(id)
   const tasks = []
   if (customProvider(cfg)) {
     tasks.push(
@@ -273,23 +274,19 @@ async function removeCustom(ctx: ActionContext, id: string, global: Config, merg
         disabled_providers: disabledWithout(global.disabled_providers, id),
       }),
     )
+  } else if (hasDisabled) {
+    // Project-only custom provider — clean stale disabled ID from global config
+    // without touching the global provider key.
+    tasks.push(
+      saveGlobal(ctx, {
+        disabled_providers: disabledWithout(global.disabled_providers, id),
+      }),
+    )
   }
   if (customProvider(effective)) {
     tasks.push(saveProject(ctx, { provider: { [id]: null } }))
   }
   await Promise.all(tasks)
-}
-
-async function disableConfigured(ctx: ActionContext, id: string, config: Config) {
-  const disabled = config.disabled_providers ?? []
-  if (disabled.includes(id)) return
-  await saveGlobal(ctx, { disabled_providers: [...disabled, id] })
-}
-
-async function enableConfigured(ctx: ActionContext, id: string, config: Config) {
-  const disabled = disabledWithout(config.disabled_providers, id)
-  if (disabled.length === (config.disabled_providers ?? []).length) return
-  await saveGlobal(ctx, { disabled_providers: disabled })
 }
 
 export async function connectProvider(
@@ -384,41 +381,56 @@ export async function disconnectProvider(
     const cfg = config.global.provider?.[id]
     const effective = config.merged.provider?.[id]
     const configured = !!cfg || !!effective
-    const custom = customProvider(cfg) || customProvider(effective)
-    const { response } = await fetchProviderData(ctx.client, ctx.workspaceDir)
-    const active = response.all.find((item) => item.id === id)
-    const oauth = active?.source === "custom" && configured && !custom
 
-    // Config-sourced providers may not have auth store entries because
-    // credentials can come from config or env, so auth removal is non-fatal.
+    // Remove stored auth credentials only — do NOT mutate disabled_providers
+    // or delete provider config. That is the job of deleteCustomProvider or
+    // the enable/disable Switch.
     await removeAuth(ctx, id, configured)
 
     if (id === "kilo") {
       ctx.postMessage({ type: "profileData", data: null })
     }
 
-    if (custom) {
-      await removeCustom(ctx, id, config.global, config.merged)
-    }
-
-    // Config-sourced built-in providers stay "connected" after auth.remove
-    // because the server rebuilds state from config. Add to disabled_providers
-    // so the server excludes them while preserving config for re-enable.
-    if (configured && !oauth && !custom) {
-      await disableConfigured(ctx, id, config.global)
-    }
-
-    if (oauth) {
-      await enableConfigured(ctx, id, config.global)
-    }
-
-    if (configured) await refreshConfig(ctx, setCachedConfig)
-
     await ctx.disposeGlobal(`provider disconnect (${id})`)
     await ctx.fetchAndSendProviders()
     ctx.postMessage({ type: "providerDisconnected", requestId, providerID: id })
   } catch (error) {
     postError(ctx, requestId, providerID, "disconnect", ctx.getErrorMessage(error) || "Failed to disconnect provider")
+  }
+}
+
+export async function deleteCustomProvider(
+  ctx: ActionContext,
+  requestId: string,
+  providerID: string,
+  cachedConfigMessage: unknown,
+  setCachedConfig: SetCachedConfig,
+) {
+  const id = validateID(ctx, requestId, providerID, "delete")
+  if (!id) return
+  try {
+    const config = await configs(ctx)
+    const cfg = config.global.provider?.[id]
+    const effective = config.merged.provider?.[id]
+    const custom = customProvider(cfg) || customProvider(effective)
+
+    if (!custom) {
+      postError(ctx, requestId, providerID, "delete", "Provider is not a custom provider")
+      return
+    }
+
+    // Remove auth credentials
+    await removeAuth(ctx, id, true)
+
+    // Delete custom provider config from global and project scopes
+    await removeCustom(ctx, id, config.global, config.merged)
+
+    await refreshConfig(ctx, setCachedConfig)
+    await ctx.disposeGlobal(`provider delete (${id})`)
+    await ctx.fetchAndSendProviders()
+    ctx.postMessage({ type: "providerDeleted", requestId, providerID: id })
+  } catch (error) {
+    postError(ctx, requestId, providerID, "delete", ctx.getErrorMessage(error) || "Failed to delete custom provider")
   }
 }
 

@@ -248,6 +248,14 @@ export const dict = {
   "provider.disconnect.toast.disconnected.title": "{{provider}} ที่ยกเลิกการเชื่อมต่อแล้ว",
   "provider.disconnect.toast.disconnected.description": "โมเดล {{provider}} ไม่พร้อมใช้งานอีกต่อไป",
 
+  "provider.delete.toast.deleted.title": "ลบ {{provider}} แล้ว",
+  "provider.delete.toast.deleted.description": "การกำหนดค่าและข้อมูลรับรองของ {{provider}} ถูกลบแล้ว",
+  "provider.delete.confirm.title": "ลบ {{provider}}",
+  "provider.delete.confirm.body":
+    "การดำเนินการนี้จะลบการกำหนดค่าผู้ให้บริการที่กำหนดเองและข้อมูลรับรองที่จัดเก็บทั้งหมดอย่างถาวร",
+
+  "settings.providers.switch.label": "{{provider}}",
+
   "model.tag.free": "ฟรี",
   "model.tag.dataCollected": "ข้อมูลอาจถูกนำไปใช้ในการฝึก",
   "model.tag.latest": "ล่าสุด",

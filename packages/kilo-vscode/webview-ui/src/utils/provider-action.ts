@@ -2,10 +2,12 @@ import type {
   AuthorizeProviderOAuthMessage,
   CompleteProviderOAuthMessage,
   ConnectProviderMessage,
+  DeleteCustomProviderMessage,
   DisconnectProviderMessage,
   ExtensionMessage,
   ProviderActionErrorMessage,
   ProviderConnectedMessage,
+  ProviderDeletedMessage,
   ProviderDisconnectedMessage,
   ProviderOAuthReadyMessage,
   SaveCustomProviderMessage,
@@ -17,6 +19,7 @@ type ProviderRequest =
   | AuthorizeProviderOAuthMessage
   | CompleteProviderOAuthMessage
   | DisconnectProviderMessage
+  | DeleteCustomProviderMessage
   | SaveCustomProviderMessage
 
 type ProviderRequestInput =
@@ -24,6 +27,7 @@ type ProviderRequestInput =
   | Omit<AuthorizeProviderOAuthMessage, "requestId">
   | Omit<CompleteProviderOAuthMessage, "requestId">
   | Omit<DisconnectProviderMessage, "requestId">
+  | Omit<DeleteCustomProviderMessage, "requestId">
   | Omit<SaveCustomProviderMessage, "requestId">
 
 type Transport = {
@@ -35,6 +39,7 @@ type Handlers = {
   onOAuthReady?: (message: ProviderOAuthReadyMessage) => void
   onConnected?: (message: ProviderConnectedMessage) => void
   onDisconnected?: (message: ProviderDisconnectedMessage) => void
+  onDeleted?: (message: ProviderDeletedMessage) => void
   onError?: (message: ProviderActionErrorMessage) => void
 }
 
@@ -59,6 +64,11 @@ export function createProviderAction(vscode: Transport) {
 
     if (message.type === "providerDisconnected") {
       item.onDisconnected?.(message)
+      return
+    }
+
+    if (message.type === "providerDeleted") {
+      item.onDeleted?.(message)
       return
     }
 
