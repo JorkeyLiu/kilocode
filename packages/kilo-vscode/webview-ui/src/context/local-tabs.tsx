@@ -203,9 +203,13 @@ export const LocalTabsProvider: ParentComponent = (props) => {
         return
       }
       if (message.type === "sessionsLoaded") {
-        const before = active()
         const listed = message.sessions.map((item) => item.id)
         for (const id of listed) fresh.delete(id)
+        // Append pages carry only the next (older) page, not the full set, so
+        // the page-1 sessions backing open tabs are absent. Reconciling here
+        // would close them, so only clear fresh markers and skip reconcile.
+        if (message.append) return
+        const before = active()
         // Preserve the active tab across reconciliation — the sessionsLoaded
         // response may not list all sessions (directory-scoped, paginated,
         // child sessions).  Genuinely deleted sessions are cleaned up by the

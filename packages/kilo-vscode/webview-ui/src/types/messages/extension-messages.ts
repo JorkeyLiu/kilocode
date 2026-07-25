@@ -214,6 +214,12 @@ export interface SessionsLoadedMessage {
   type: "sessionsLoaded"
   sessions: SessionInfo[]
   preserveSessionIds?: string[]
+  /** True when sessions are a load-more page to append; false/absent for a full refresh. */
+  append?: boolean
+  /** Cursor for the next page, or null when there are no more sessions. */
+  nextCursor?: number | null
+  /** True when another page can be requested via loadSessions cursor. */
+  hasMore?: boolean
 }
 
 export interface CloudSessionsLoadedMessage {

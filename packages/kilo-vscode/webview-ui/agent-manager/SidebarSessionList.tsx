@@ -283,6 +283,13 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
           </For>
         </>
       ))}
+      <Show when={session.sessionsHasMore()}>
+        <div class="cloud-session-load-more">
+          <button class="cloud-session-load-more-btn" onClick={() => session.loadMoreSessions()}>
+            {lang.t("common.loadMore") ?? "Load more"}
+          </button>
+        </div>
+      </Show>
     </Show>
   )
 }

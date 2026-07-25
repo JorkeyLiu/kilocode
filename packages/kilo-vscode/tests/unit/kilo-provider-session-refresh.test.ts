@@ -1,5 +1,11 @@
 import { describe, it, expect } from "bun:test"
-import { loadSessions, flushPendingSessionRefresh, type SessionRefreshContext } from "../../src/kilo-provider-utils"
+import {
+  loadSessions,
+  flushPendingSessionRefresh,
+  SESSION_INITIAL_LIMIT,
+  SESSION_LOAD_MORE_LIMIT,
+  type SessionRefreshContext,
+} from "../../src/kilo-provider-utils"
 
 // vscode mock is provided by the shared preload (tests/setup/vscode-mock.ts)
 const { KiloProvider } = await import("../../src/KiloProvider")
@@ -11,7 +17,7 @@ type ProviderInternals = {
   pendingSessionRefresh: boolean
   webview: { postMessage: (message: unknown) => Promise<unknown> } | null
   initializeConnection: () => Promise<void>
-  handleLoadSessions: () => Promise<void>
+  handleLoadSessions: (cursor?: number) => Promise<void>
 }
 
 function createContext(overrides?: Partial<SessionRefreshContext>): SessionRefreshContext & { sent: unknown[] } {
@@ -20,32 +26,51 @@ function createContext(overrides?: Partial<SessionRefreshContext>): SessionRefre
     pendingSessionRefresh: false,
     connectionState: "connecting",
     listSessions: null,
-    sessionDirectories: new Map(),
-    workspaceDirectory: "/repo",
+    loadedCount: 0,
+    cursor: null,
     postMessage: (msg: unknown) => sent.push(msg),
     sent,
     ...overrides,
   }
 }
 
-function createListSessions() {
-  const calls: string[] = []
-  const fn = async (dir: string) => {
-    calls.push(dir)
-    return []
+type ListInput = { limit: number; cursor?: number }
+
+/**
+ * Build a `listSessions` stub matching the new cursor-based contract and record
+ * every call's input so tests can assert the requested limit/cursor. The single
+ * endpoint returns the same page regardless of input — the util is responsible
+ * for paging bookkeeping, not the fixture.
+ */
+function recordingList(sessions: unknown[], cursor: number | null = null) {
+  const calls: ListInput[] = []
+  const fn = async (input: ListInput) => {
+    calls.push(input)
+    return { sessions: sessions as never, cursor }
   }
   return { calls, fn }
+}
+
+function session(id: string, projectID: string, directory: string, time: number) {
+  return { id, projectID, title: id, directory, time: { created: time, updated: time } }
 }
 
 function createClient() {
   const calls: string[] = []
   return {
     calls,
-    session: {
-      list: async (params: { directory: string }) => {
-        calls.push(params.directory)
-        return { data: [] }
+    experimental: {
+      session: {
+        // Single worktree-aware endpoint. Records the directory it was called
+        // with so tests can prove there is no per-directory fan-out.
+        list: async (params: { directory: string }) => {
+          calls.push(params.directory)
+          return { data: [], response: { headers: { get: () => null } } }
+        },
       },
+    },
+    session: {
+      list: async () => ({ data: [] }),
     },
     provider: {
       list: async () => ({ data: { all: [], connected: {}, default: {} } }),
@@ -100,164 +125,127 @@ function createConnection(client: ReturnType<typeof createClient>) {
 }
 
 describe("KiloProvider pending session refresh", () => {
-  it("keeps worktree sessions with legacy project ids", async () => {
-    const sent: unknown[] = []
-    const ctx = createContext({
-      connectionState: "connected",
-      sessionDirectories: new Map([["ses_worktree", "/worktree"]]),
-      listSessions: async (dir) => {
-        if (dir === "/repo") {
-          return [
-            {
-              id: "ses_root",
-              projectID: "project-new",
-              title: "root",
-              directory: "/repo",
-              time: { created: 1, updated: 1 },
-            },
-          ] as never
-        }
-        return [
-          {
-            id: "ses_worktree",
-            projectID: "project-old",
-            title: "worktree",
-            directory: "/worktree",
-            time: { created: 2, updated: 2 },
-          },
-        ] as never
-      },
-      postMessage: (msg) => sent.push(msg),
-    })
+  it("posts every session from the single endpoint and resolves the project from the first", async () => {
+    // Was: merged per-directory fan-out results (root + worktree listings) and
+    // asserted worktree sessions survived. Now the worktree-aware endpoint
+    // returns the merged list in one call, so we assert that single call plus
+    // ordering and project resolution.
+    const { calls, fn } = recordingList([
+      session("ses_root", "project-new", "/repo", 1),
+      session("ses_worktree", "project-old", "/worktree", 2),
+    ])
+    const ctx = createContext({ connectionState: "connected", listSessions: fn })
 
     const project = await loadSessions(ctx)
 
     expect(project).toBe("project-new")
-    expect(sent).toHaveLength(1)
-    expect((sent[0] as { sessions: { id: string }[] }).sessions.map((s) => s.id)).toEqual(["ses_root", "ses_worktree"])
+    expect(calls).toHaveLength(1) // one endpoint call — no per-directory fan-out
+    expect(calls[0]!.cursor).toBeUndefined()
+    expect(calls[0]!.limit).toBe(SESSION_INITIAL_LIMIT)
+    expect(ctx.sent).toHaveLength(1)
+    const msg = ctx.sent[0] as { type: string; append: boolean; sessions: { id: string }[] }
+    expect(msg.type).toBe("sessionsLoaded")
+    expect(msg.append).toBe(false)
+    expect(msg.sessions.map((s) => s.id)).toEqual(["ses_root", "ses_worktree"])
+    expect(ctx.loadedCount).toBe(2)
   })
 
-  it("does not use legacy worktree sessions as canonical project", async () => {
-    const sent: unknown[] = []
-    const ctx = createContext({
-      connectionState: "connected",
-      sessionDirectories: new Map([["ses_worktree", "/worktree"]]),
-      listSessions: async (dir) => {
-        if (dir === "/repo") return [] as never
-        return [
-          {
-            id: "ses_worktree",
-            projectID: "project-old",
-            title: "worktree",
-            directory: "/worktree",
-            time: { created: 2, updated: 2 },
-          },
-        ] as never
-      },
-      postMessage: (msg) => sent.push(msg),
-    })
+  it("resolves an undefined project and reports no more pages when the list is empty", async () => {
+    // Was: proved a lone legacy worktree session was not adopted as the
+    // canonical project. That reconciliation moved server-side; the util now
+    // resolves the project from the first returned session, so an empty page
+    // yields an undefined project and hasMore=false.
+    const { fn } = recordingList([])
+    const ctx = createContext({ connectionState: "connected", listSessions: fn })
 
     const project = await loadSessions(ctx)
 
     expect(project).toBeUndefined()
-    expect(sent).toHaveLength(1)
-    expect((sent[0] as { sessions: { id: string }[] }).sessions.map((s) => s.id)).toEqual(["ses_worktree"])
+    expect(ctx.sent).toHaveLength(1)
+    const msg = ctx.sent[0] as { sessions: unknown[]; hasMore: boolean; nextCursor: number | null }
+    expect(msg.sessions).toEqual([])
+    expect(msg.hasMore).toBe(false)
+    expect(msg.nextCursor).toBeNull()
   })
 
-  it("preserves session ids when worktree directory listing fails", async () => {
-    const sent: unknown[] = []
-    const ctx = createContext({
-      connectionState: "connected",
-      sessionDirectories: new Map([
-        ["ses_wt1", "/worktree1"],
-        ["ses_wt2", "/worktree2"],
-      ]),
-      listSessions: async (dir) => {
-        if (dir === "/repo") {
-          return [
-            {
-              id: "ses_root",
-              projectID: "project",
-              title: "root",
-              directory: "/repo",
-              time: { created: 1, updated: 1 },
-            },
-          ] as never
-        }
-        if (dir === "/worktree1") throw new Error("backend not ready")
-        return [
-          {
-            id: "ses_wt2",
-            projectID: "project",
-            title: "wt2",
-            directory: "/worktree2",
-            time: { created: 2, updated: 2 },
-          },
-        ] as never
-      },
-      postMessage: (msg) => sent.push(msg),
-    })
+  it("refresh re-fetches everything loaded so far via max(pageLimit, loadedCount) with append=false", async () => {
+    // Replaces the preserveSessionIds fan-out failure case. A refresh (no
+    // cursor) must request at least everything already shown so nothing drops
+    // out of the list, and must reset paging state from the fresh page.
+    const { calls, fn } = recordingList([session("ses_root", "project", "/repo", 1)], null)
+    const ctx = createContext({ connectionState: "connected", listSessions: fn, loadedCount: 50, cursor: 99 })
 
     await loadSessions(ctx)
 
-    expect(sent).toHaveLength(1)
-    const msg = sent[0] as { sessions: { id: string }[]; preserveSessionIds?: string[] }
-    expect(msg.sessions.map((s) => s.id)).toEqual(["ses_root", "ses_wt2"])
-    expect(msg.preserveSessionIds).toEqual(["ses_wt1"])
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.limit).toBe(500) // max(SESSION_INITIAL_LIMIT, loadedCount) — initial limit wins
+    expect(calls[0]!.cursor).toBeUndefined()
+    const msg = ctx.sent[0] as { append: boolean; nextCursor: number | null; hasMore: boolean }
+    expect(msg.append).toBe(false)
+    expect(msg.nextCursor).toBeNull()
+    expect(msg.hasMore).toBe(false)
+    expect(ctx.loadedCount).toBe(1) // reset to the fresh page length
+    expect(ctx.cursor).toBeNull()
   })
 
-  it("omits preserveSessionIds when all directories succeed", async () => {
-    const sent: unknown[] = []
-    const ctx = createContext({
+  it("load-more appends the next page, forwards the cursor, and reports hasMore", async () => {
+    // Replaces the "omits preserveSessionIds when all directories succeed" case.
+    // The new analogue is the paging append path: a cursor request uses
+    // SESSION_LOAD_MORE_LIMIT, appends, and surfaces the next cursor.
+    const { calls, fn } = recordingList([session("ses_page2", "project", "/repo", 3)], 40)
+    const ctx = createContext({ connectionState: "connected", listSessions: fn, loadedCount: 20, cursor: 20 })
+
+    await loadSessions(ctx, 20)
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.limit).toBe(SESSION_LOAD_MORE_LIMIT)
+    expect(calls[0]!.cursor).toBe(20)
+    const msg = ctx.sent[0] as { append: boolean; nextCursor: number | null; hasMore: boolean; sessions: { id: string }[] }
+    expect(msg.append).toBe(true)
+    expect(msg.nextCursor).toBe(40)
+    expect(msg.hasMore).toBe(true)
+    expect(msg.sessions.map((s) => s.id)).toEqual(["ses_page2"])
+    expect(ctx.loadedCount).toBe(21) // previous 20 + this page's 1
+    expect(ctx.cursor).toBe(40)
+  })
+
+  it("never emits preserveSessionIds on the sessionsLoaded message", async () => {
+    // The preserveSessionIds contract was removed with the fan-out; guard that
+    // it does not reappear on either a refresh or a load-more.
+    const refresh = createContext({
       connectionState: "connected",
-      sessionDirectories: new Map([["ses_wt", "/worktree"]]),
-      listSessions: async (dir) => {
-        if (dir === "/repo") {
-          return [
-            {
-              id: "ses_root",
-              projectID: "project",
-              title: "root",
-              directory: "/repo",
-              time: { created: 1, updated: 1 },
-            },
-          ] as never
-        }
-        return [
-          {
-            id: "ses_wt",
-            projectID: "project",
-            title: "wt",
-            directory: "/worktree",
-            time: { created: 2, updated: 2 },
-          },
-        ] as never
-      },
-      postMessage: (msg) => sent.push(msg),
+      listSessions: recordingList([session("ses_root", "project", "/repo", 1)]).fn,
     })
+    await loadSessions(refresh)
+    const more = createContext({
+      connectionState: "connected",
+      loadedCount: 20,
+      cursor: 20,
+      listSessions: recordingList([session("ses_page2", "project", "/repo", 2)], 40).fn,
+    })
+    await loadSessions(more, 20)
 
-    await loadSessions(ctx)
-
-    expect(sent).toHaveLength(1)
-    const msg = sent[0] as { sessions: { id: string }[]; preserveSessionIds?: string[] }
-    expect(msg.sessions.map((s) => s.id)).toEqual(["ses_root", "ses_wt"])
-    expect(msg.preserveSessionIds).toBeUndefined()
+    for (const ctx of [refresh, more]) {
+      expect(ctx.sent).toHaveLength(1)
+      expect(ctx.sent[0] as object).not.toHaveProperty("preserveSessionIds")
+    }
   })
 
   it("flushes deferred refresh via flushPendingSessionRefresh", async () => {
-    const { calls, fn } = createListSessions()
+    const { calls, fn } = recordingList([])
     const ctx = createContext()
-    ctx.sessionDirectories.set("ses_1", "/worktree")
 
     await loadSessions(ctx)
     expect(ctx.pendingSessionRefresh).toBe(true)
+    expect(calls).toHaveLength(0)
 
     ctx.listSessions = fn
     ctx.connectionState = "connected"
 
     await flushPendingSessionRefresh(ctx)
 
-    expect(calls).toEqual(["/repo", "/worktree"])
+    expect(calls).toHaveLength(1) // single cursor-less refresh call
+    expect(calls[0]!.cursor).toBeUndefined()
     expect(ctx.pendingSessionRefresh).toBe(false)
   })
 
@@ -267,6 +255,7 @@ describe("KiloProvider pending session refresh", () => {
     const provider = new KiloProvider({} as never, connection as never)
     const internal = provider as unknown as ProviderInternals
 
+    // A worktree directory override must NOT trigger a per-directory list call.
     provider.setSessionDirectory("ses_1", "/worktree")
 
     await internal.handleLoadSessions()
@@ -274,7 +263,7 @@ describe("KiloProvider pending session refresh", () => {
 
     await internal.initializeConnection()
 
-    expect(client.calls).toEqual(["/repo", "/worktree"])
+    expect(client.calls).toEqual(["/repo"]) // one call, workspace root only
     expect(internal.pendingSessionRefresh).toBe(false)
   })
 

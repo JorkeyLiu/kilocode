@@ -292,6 +292,13 @@ const SessionList: Component<SessionListProps> = (props) => {
       <div data-slot="session-list-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {notice()}
       </div>
+      <Show when={session.sessionsHasMore()}>
+        <div class="cloud-session-load-more">
+          <button class="cloud-session-load-more-btn" onClick={() => session.loadMoreSessions()}>
+            {language.t("common.loadMore") ?? "Load more"}
+          </button>
+        </div>
+      </Show>
     </div>
   )
 }

@@ -223,6 +223,11 @@ export function filterVisibleAgents(agents: Agent[]): { visible: Agent[]; defaul
   return { visible, defaultAgent }
 }
 
+/** Page size for the initial session load / full refresh. */
+export const SESSION_INITIAL_LIMIT = 500
+/** Page size for incremental load-more pages. */
+export const SESSION_LOAD_MORE_LIMIT = 300
+
 /**
  * Shared interface for the subset of KiloProvider state needed by session-refresh helpers.
  * Extracted here so the logic can be tested without importing KiloProvider (and vscode).
@@ -230,19 +235,26 @@ export function filterVisibleAgents(agents: Agent[]): { visible: Agent[]; defaul
 export interface SessionRefreshContext {
   pendingSessionRefresh: boolean
   connectionState: "connecting" | "connected" | "disconnected" | "error"
-  listSessions: ((dir: string) => Promise<Session[]>) | null
-  sessionDirectories: Map<string, string>
-  worktreeDirectories?: () => string[]
-  workspaceDirectory: string
+  listSessions:
+    | ((input: { limit: number; cursor?: number }) => Promise<{ sessions: Session[]; cursor: number | null }>)
+    | null
+  /** Number of sessions currently loaded in the webview list. Updated by loadSessions. */
+  loadedCount: number
+  /** Next-page cursor from the last load, or null when exhausted. Updated by loadSessions. */
+  cursor: number | null
+  /** Workspace root directory; used to pin the canonical projectID to the root session. */
+  root?: string
   postMessage(message: unknown): void
 }
 
 /**
- * Load sessions from the workspace and all registered worktree directories.
+ * Load one page of sessions via the experimental worktree-aware list endpoint.
+ * Without a cursor this is a full refresh (page 1) that re-fetches everything
+ * loaded so far; with a cursor it appends the next page.
  * Sets pendingSessionRefresh when the HTTP client isn't ready yet.
  * Returns the resolved projectID (if any) so the caller can update its own state.
  */
-export async function loadSessions(ctx: SessionRefreshContext): Promise<string | undefined> {
+export async function loadSessions(ctx: SessionRefreshContext, cursor?: number): Promise<string | undefined> {
   const list = ctx.listSessions
   if (!list) {
     ctx.pendingSessionRefresh = true
@@ -254,44 +266,27 @@ export async function loadSessions(ctx: SessionRefreshContext): Promise<string |
 
   ctx.pendingSessionRefresh = false
 
-  const sessions = await list(ctx.workspaceDirectory)
-  const projectID = sessions[0]?.projectID
-  const worktreeDirs = new Set([...(ctx.worktreeDirectories?.() ?? []), ...ctx.sessionDirectories.values()])
-  const failed = new Set<string>()
-  const extra = await Promise.all(
-    [...worktreeDirs].map((dir) =>
-      list(dir).catch((err: unknown) => {
-        console.error(`[Kilo] Failed to list sessions for ${dir}:`, err)
-        failed.add(dir)
-        return [] as Session[]
-      }),
-    ),
-  )
-  const seen = new Set(sessions.map((s) => s.id))
-  for (const batch of extra) {
-    for (const s of batch) {
-      if (seen.has(s.id)) continue
-      sessions.push(s)
-      seen.add(s.id)
-    }
-  }
-
-  // Sessions whose worktree directories failed to list — the webview must
-  // not delete these during reconciliation since the absence is transient.
-  const preserve: string[] = []
-  if (failed.size) {
-    for (const [sid, dir] of ctx.sessionDirectories) {
-      if (failed.has(dir)) preserve.push(sid)
-    }
-  }
+  const append = cursor !== undefined
+  const limit = append ? SESSION_LOAD_MORE_LIMIT : Math.max(SESSION_INITIAL_LIMIT, ctx.loadedCount)
+  const page = await list({ limit, cursor })
+  ctx.cursor = page.cursor
+  ctx.loadedCount = append ? ctx.loadedCount + page.sessions.length : page.sessions.length
 
   ctx.postMessage({
     type: "sessionsLoaded",
-    sessions: sessions.map((s) => sessionToWebview(s)),
-    ...(preserve.length ? { preserveSessionIds: preserve } : {}),
+    sessions: page.sessions.map((s) => sessionToWebview(s)),
+    append,
+    nextCursor: page.cursor,
+    hasMore: page.cursor !== null,
   })
 
-  return projectID
+  // Pin the canonical projectID to the workspace-root session. With
+  // worktrees:true, sessions[0] is the most-recently-updated session across the
+  // whole worktree family, so its projectID may belong to a worktree rather than
+  // the root — KiloProvider filters SSE events by this ID, so a worktree ID would
+  // drop root-project events. Fall back to sessions[0] only when no root match.
+  const root = ctx.root ? page.sessions.find((s) => sameDirectory(s.directory, ctx.root!))?.projectID : undefined
+  return root ?? page.sessions[0]?.projectID
 }
 
 /**

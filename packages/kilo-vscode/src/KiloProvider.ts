@@ -357,6 +357,8 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   private loadMessagesAbort: AbortController | null = null // Current load request cancellation.
   private lastReconciledAt = new Map<string, number>() // Per-session focus-mode reconcile timestamp.
   private pendingSessionRefresh = false // Refresh requested before the client is ready.
+  private sessionCursor: number | null = null // Next-page cursor for session list pagination.
+  private sessionCount = 0 // Sessions loaded so far; sizes the re-fetch on full refresh.
   private readonly streams = new SessionStreamScheduler((msg) => this.postMessage(msg))
   private readonly visibleTaskStreams = new VisibleTaskStreams((id, visible) => this.streams.setVisible(id, visible))
   private readonly confirmations = new MessageConfirmation()
@@ -1030,7 +1032,9 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
           )
           break
         case "loadSessions":
-          this.handleLoadSessions().catch((e) => console.error("[Kilo New] handleLoadSessions failed:", e))
+          this.handleLoadSessions(message.cursor).catch((e) =>
+            console.error("[Kilo New] handleLoadSessions failed:", e),
+          )
           break
         case "requestSessionModelUsage":
           void this.fetchAndSendSessionModelUsage(message.sessionID, message.requestID)
@@ -1952,15 +1956,23 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
    */
   private get sessionRefreshContext(): SessionRefreshContext {
     const client = this.client
+    const directory = this.getWorkspaceDirectory()
     return {
       pendingSessionRefresh: this.pendingSessionRefresh,
       connectionState: this.connectionState,
       listSessions: client
-        ? (dir: string) => client.session.list({ directory: dir }, { throwOnError: true }).then(({ data }) => data)
+        ? async (input: { limit: number; cursor?: number }) => {
+            const result = await client.experimental.session.list(
+              { directory, worktrees: true, limit: input.limit, cursor: input.cursor },
+              { throwOnError: true },
+            )
+            const next = result.response.headers.get("x-next-cursor")
+            return { sessions: result.data, cursor: next ? Number(next) : null }
+          }
         : null,
-      sessionDirectories: this.sessionDirectories,
-      worktreeDirectories: this.opts.worktreeDirectories,
-      workspaceDirectory: this.getWorkspaceDirectory(),
+      loadedCount: this.sessionCount,
+      cursor: this.sessionCursor,
+      root: directory,
       postMessage: (msg: unknown) => this.postMessage(msg),
     }
   }
@@ -1978,16 +1990,17 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to flush session refresh:", error)
     }
-    this.pendingSessionRefresh = ctx.pendingSessionRefresh
+    this.syncSessionPaging(ctx)
   }
 
   /**
-   * Handle loading all sessions.
+   * Handle loading sessions. Without a cursor this is a full refresh;
+   * with a cursor it appends the next page ("load more").
    */
-  private async handleLoadSessions(): Promise<void> {
+  private async handleLoadSessions(cursor?: number): Promise<void> {
     const ctx = this.sessionRefreshContext
     try {
-      const resolved = await loadSessionsUtil(ctx)
+      const resolved = await loadSessionsUtil(ctx, cursor)
       if (resolved) this.projectID = resolved
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to load sessions:", error)
@@ -1996,7 +2009,14 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         message: getErrorMessage(error) || "Failed to load sessions",
       })
     }
+    this.syncSessionPaging(ctx)
+  }
+
+  /** Copy pagination state mutated by the session-refresh helpers back onto this instance. */
+  private syncSessionPaging(ctx: SessionRefreshContext): void {
     this.pendingSessionRefresh = ctx.pendingSessionRefresh
+    this.sessionCursor = ctx.cursor
+    this.sessionCount = ctx.loadedCount
   }
 
   private async handleTerminalContext(requestId: string): Promise<void> {

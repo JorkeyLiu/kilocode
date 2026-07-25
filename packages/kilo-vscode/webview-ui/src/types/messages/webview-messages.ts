@@ -87,6 +87,8 @@ export interface LoadMessagesRequest {
 
 export interface LoadSessionsRequest {
   type: "loadSessions"
+  /** Next-page cursor for load-more; omit for a full refresh (page 1). */
+  cursor?: number
 }
 
 export interface RequestSessionModelUsageMessage {
