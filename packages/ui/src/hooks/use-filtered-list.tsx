@@ -16,6 +16,20 @@ export interface FilteredListProps<T> {
   noInitialSelection?: boolean
 }
 
+// kilocode_change start — pure decision function for active-preservation effect
+/**
+ * Decide whether the current active item should be preserved when grouped items change.
+ *
+ * Used by useFilteredList's effect to separate the decision logic from the
+ * reactive side-effect (reset vs. preserve), enabling direct unit testing.
+ */
+export function shouldPreserveActive(filterChanged: boolean, currentActive: string | null, flatKeys: string[]): boolean {
+  if (filterChanged) return false
+  if (currentActive && flatKeys.includes(currentActive)) return true
+  return false
+}
+// kilocode_change end
+
 export function useFilteredList<T>(props: FilteredListProps<T>) {
   const [store, setStore] = createStore<{ filter: string }>({ filter: "" })
 
@@ -104,11 +118,24 @@ export function useFilteredList<T>(props: FilteredListProps<T>) {
     }
   }
 
+  // kilocode_change start — preserve active when items change without filter change
+  let prevFilter = store.filter
+
   createEffect(
     on(grouped, () => {
+      const currentFilter = store.filter
+      const filterChanged = currentFilter !== prevFilter
+      prevFilter = currentFilter
+
+      const currentActive = list.active()
+      const flatKeys = flat().map(props.key)
+
+      if (shouldPreserveActive(filterChanged, currentActive, flatKeys)) return
+      // Active no longer exists (e.g. collapsed child), fall back to first
       reset()
     }),
   )
+  // kilocode_change end
 
   const onInput = (value: string) => {
     setStore("filter", value)

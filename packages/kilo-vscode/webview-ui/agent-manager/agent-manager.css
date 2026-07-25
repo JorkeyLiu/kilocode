@@ -388,6 +388,11 @@ button.am-section-toggle:hover .am-section-label {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  /* Disable native overflow-anchor so JS-owned scroll preservation is the
+     sole correction mechanism.  Without this, the browser auto-pins a
+     bottom-scrolled container to the new bottom when items are appended,
+     which defeats container-owned anchor restoration. */
+  overflow-anchor: none;
 }
 
 /* Session items */

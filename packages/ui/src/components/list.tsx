@@ -47,6 +47,8 @@ export interface ListProps<T> extends FilteredListProps<T> {
   divider?: boolean
   add?: ListAddProps
   groupHeader?: (group: { category: string; items: T[] }) => JSX.Element
+  // kilocode_change — optional end-of-scroll content (outside keyboard navigation)
+  footer?: JSX.Element
 }
 
 export interface ListRef {
@@ -130,33 +132,47 @@ export function List<T>(props: ListProps<T> & { ref?: (ref: ListRef) => void }) 
     ),
   )
 
+  // kilocode_change start — only scroll to current when the key actually changes,
+  // not on every object-identity change for the same session
+  let lastCurrentKey = ""
+
   createEffect(() => {
     const scroll = scrollRef()
     if (!scroll) return
     if (!props.current) return
     const key = props.key(props.current)
+    if (key === lastCurrentKey) return
+    lastCurrentKey = key
     requestAnimationFrame(() => {
       const element = findByKey(scroll, key)
       if (!element) return
       scrollIntoView(scroll, element, "center")
     })
   })
+  // kilocode_change end
+
+  // kilocode_change start — only scroll when active actually changes,
+  // not when flat() recomputes (e.g. items update / disclosure toggle)
+  let lastActiveScrollKey = ""
 
   createEffect(() => {
     const all = flat()
     if (store.mouseActive || all.length === 0) return
     const scroll = scrollRef()
     if (!scroll) return
-    if (active() === props.key(all[0])) {
+    const key = active()
+    if (!key) return
+    if (key === lastActiveScrollKey) return
+    lastActiveScrollKey = key
+    if (key === props.key(all[0])) {
       scroll.scrollTo(0, 0)
       return
     }
-    const key = active()
-    if (!key) return
     const element = findByKey(scroll, key)
     if (!element) return
     scrollIntoView(scroll, element, "center")
   })
+  // kilocode_change end
 
   createEffect(() => {
     const all = flat()
@@ -388,6 +404,8 @@ export function List<T>(props: ListProps<T> & { ref?: (ref: ListRef) => void }) 
             </div>
           </Show>
         </Show>
+        {/* kilocode_change — footer content rendered inside scroll, outside item navigation */}
+        {props.footer && <div data-slot="list-footer">{props.footer}</div>}
       </div>
     </div>
   )

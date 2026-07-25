@@ -166,6 +166,15 @@ const CloudSessionList: Component<CloudSessionListProps> = (props) => {
           const rank = Object.fromEntries(DATE_GROUP_KEYS.map((k, i) => [language.t(k), i]))
           return (rank[a.category] ?? 99) - (rank[b.category] ?? 99)
         }}
+        footer={
+          <Show when={nextCursor() && !loading()}>
+            <div class="cloud-session-load-more">
+              <button class="cloud-session-load-more-btn" onClick={loadMore}>
+                {language.t("common.loadMore") ?? "Load more"}
+              </button>
+            </div>
+          </Show>
+        }
       >
         {(s) => (
           <>
@@ -177,13 +186,6 @@ const CloudSessionList: Component<CloudSessionListProps> = (props) => {
       <div data-slot="session-list-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {notice()}
       </div>
-      <Show when={nextCursor() && !loading()}>
-        <div class="cloud-session-load-more">
-          <button class="cloud-session-load-more-btn" onClick={loadMore}>
-            {language.t("common.loadMore") ?? "Load more"}
-          </button>
-        </div>
-      </Show>
     </div>
   )
 }

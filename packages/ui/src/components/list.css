@@ -141,6 +141,11 @@
       display: none;
     }
 
+    /* kilocode_change — footer spacing inside scroll area */
+    [data-slot="list-footer"] {
+      flex-shrink: 0;
+    }
+
     [data-slot="list-empty-state"] {
       display: flex;
       padding: 32px 48px;
@@ -183,6 +188,9 @@
       &:last-child {
         padding-bottom: 12px;
       }
+
+      /* kilocode_change — when a footer follows, the last group no longer
+         needs :last-child padding; the footer wrapper provides bottom spacing */
 
       [data-slot="list-header"] {
         display: flex;

@@ -8,7 +8,7 @@
  * - Latest root's child group expanded by default
  */
 
-import { For, Show, createMemo, createEffect, createSignal, type Component } from "solid-js"
+import { For, Show, createMemo, createEffect, createSignal, on, onMount, onCleanup, type Component } from "solid-js"
 import { Icon } from "@kilocode/kilo-ui/icon"
 import { IconButton } from "@kilocode/kilo-ui/icon-button"
 import { Dialog } from "@kilocode/kilo-ui/dialog"
@@ -26,9 +26,12 @@ import {
   DATE_GROUP_KEYS,
   type DisplayItem,
 } from "../src/utils/session-tree"
+import { captureScrollAnchor, restoreScrollAnchor, createScrollAnchorTracker, type ScrollAnchorTracker } from "../src/utils/scroll-anchor"
 import type { SessionInfo } from "../src/types/messages"
 
 interface SidebarSessionListProps {
+  /** Getter for the .am-list scroll container owned by the parent. */
+  listContainer: () => HTMLElement | undefined
   sessions: SessionInfo[]
   sessionsLoaded: boolean
   currentSelection: string | null
@@ -46,6 +49,12 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
   const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
   const [defaultExpanded, setDefaultExpanded] = createSignal(false)
   const [renaming, setRenaming] = createSignal<string | null>(null)
+  // Container-owned scroll anchor tracker — always has a pre-update anchor
+  // available regardless of which component triggered the sessions update.
+  const tracker: ScrollAnchorTracker = createScrollAnchorTracker(props.listContainer)
+
+  onMount(() => tracker.start())
+  onCleanup(() => tracker.stop())
 
   function name(s: SessionInfo) {
     return s.title || props.untitledLabel
@@ -92,12 +101,19 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
   }
 
   function toggle(pid: string) {
+    const container = props.listContainer()
+    const anchor = container ? captureScrollAnchor(container) : null
+
     setExpanded((prev) => {
       const next = new Set(prev)
       if (next.has(pid)) next.delete(pid)
       else next.add(pid)
       return next
     })
+
+    if (container && anchor) {
+      requestAnimationFrame(() => restoreScrollAnchor(container, anchor))
+    }
   }
 
   const display = createMemo(() => buildDisplayList(props.sessions, expanded()))
@@ -146,6 +162,21 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
       }
     }
   })
+
+  // Restore scroll anchor after sessions change from any source.
+  // The tracker's anchor was captured from the last scroll event, which is
+  // guaranteed to be pre-update (scroll events are macrotasks that always
+  // precede reactive microtask updates).
+  // { defer: true } skips the initial run (no prior anchor yet)
+  createEffect(
+    on(
+      () => props.sessions.length,
+      () => {
+        requestAnimationFrame(() => tracker.restore())
+      },
+      { defer: true },
+    ),
+  )
 
   const DATE_GROUP_RANK = Object.fromEntries(DATE_GROUP_KEYS.map((k, i) => [props.t(k), i]))
   function groupKey(item: DisplayItem<SessionInfo>): string {
@@ -285,7 +316,14 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
       ))}
       <Show when={session.sessionsHasMore()}>
         <div class="cloud-session-load-more">
-          <button class="cloud-session-load-more-btn" onClick={() => session.loadMoreSessions()}>
+          <button
+            class="cloud-session-load-more-btn"
+            onClick={() => {
+              // No pre-capture needed — the container-owned tracker already
+              // maintains the latest visible anchor from scroll events.
+              session.loadMoreSessions()
+            }}
+          >
             {lang.t("common.loadMore") ?? "Load more"}
           </button>
         </div>

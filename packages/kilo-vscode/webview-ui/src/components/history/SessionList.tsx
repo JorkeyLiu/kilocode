@@ -22,6 +22,7 @@ import { useDialog } from "@kilocode/kilo-ui/context/dialog"
 import { useSession } from "../../context/session"
 import { useLanguage } from "../../context/language"
 import { formatRelativeDate } from "../../utils/date"
+import { captureScrollAnchor, restoreScrollAnchor, findByAttr } from "../../utils/scroll-anchor"
 import { DATE_GROUP_KEYS, buildByID, ancestorIDs, buildDisplayList, resolveGroupKey } from "../../utils/session-tree"
 import type { SessionInfo } from "../../types/messages"
 import { SessionRenameEditor } from "../shared/SessionRenameEditor"
@@ -50,14 +51,39 @@ const SessionList: Component<SessionListProps> = (props) => {
 
   // --- Tree hierarchy helpers ---
 
-  /** Toggle a parent's expanded state. */
-  function toggle(pid: string) {
+  /** Toggle a parent's expanded state.
+   *  Captures scroll anchor from the List's [data-slot="list-scroll"] viewport
+   *  before the state change and restores it after the reactive DOM replacement,
+   *  matching the working SidebarSessionList pattern.  Also refocuses the
+   *  disclosure button for the same session without causing a scroll jump. */
+  function toggle(pid: string, trigger?: HTMLElement) {
+    // Locate the List component's scrollable viewport.
+    const container = trigger?.closest('[data-slot="list-scroll"]') as HTMLElement | undefined
+    // Capture before state change; data-key is the List component's item identifier.
+    const anchor = container ? captureScrollAnchor(container, "data-key") : null
+
     setExpanded((prev) => {
       const next = new Set(prev)
       if (next.has(pid)) next.delete(pid)
       else next.add(pid)
       return next
     })
+
+    // Restore after the reactive DOM replacement has been flushed.
+    if (container && anchor) {
+      requestAnimationFrame(() => {
+        restoreScrollAnchor(container, anchor, "data-key")
+        // Refocus the disclosure button for the toggled session.
+        // findByAttr avoids CSS-injection through the session ID value.
+        const row = findByAttr(container, "data-key", pid)
+        if (row) {
+          const disclosure = row.querySelector(
+            'button[data-slot="session-disclosure"]',
+          ) as HTMLElement | null
+          disclosure?.focus({ preventScroll: true })
+        }
+      })
+    }
   }
 
   /** Auto-expand ancestors of the currently selected session.
@@ -254,6 +280,15 @@ const SessionList: Component<SessionListProps> = (props) => {
           return (rank[a.category] ?? 99) - (rank[b.category] ?? 99)
         }}
         itemWrapper={wrapItem}
+        footer={
+          <Show when={session.sessionsHasMore()}>
+            <div class="cloud-session-load-more">
+              <button class="cloud-session-load-more-btn" onClick={() => session.loadMoreSessions()}>
+                {language.t("common.loadMore") ?? "Load more"}
+              </button>
+            </div>
+          </Show>
+        }
       >
         {(item) => (
           <>
@@ -268,7 +303,7 @@ const SessionList: Component<SessionListProps> = (props) => {
                 onClick={(e) => {
                   e.stopPropagation()
                   e.preventDefault()
-                  toggle(item.session.id)
+                  toggle(item.session.id, e.currentTarget as HTMLElement)
                 }}
                 aria-label={expanded().has(item.session.id) ? "Collapse children" : "Expand children"}
               >
@@ -292,13 +327,6 @@ const SessionList: Component<SessionListProps> = (props) => {
       <div data-slot="session-list-status" class="sr-only" role="status" aria-live="polite" aria-atomic="true">
         {notice()}
       </div>
-      <Show when={session.sessionsHasMore()}>
-        <div class="cloud-session-load-more">
-          <button class="cloud-session-load-more-btn" onClick={() => session.loadMoreSessions()}>
-            {language.t("common.loadMore") ?? "Load more"}
-          </button>
-        </div>
-      </Show>
     </div>
   )
 }

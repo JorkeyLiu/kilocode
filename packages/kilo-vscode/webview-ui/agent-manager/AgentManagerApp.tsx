@@ -251,6 +251,9 @@ const AgentManagerContent: Component = () => {
   const closedDrafts = new Set<string>()
   const [activePendingId, setActivePendingId] = createSignal<string | undefined>()
   const [isBottomPage, setIsBottomPage] = createSignal(false)
+  // Stable ref for the .am-list scroll container, passed to SidebarSessionList
+  // so it can own scroll-preservation without querying the DOM.
+  let listEl: HTMLDivElement | undefined
 
   // Per-sidebar-context terminal state. `terms.activeId` holds the id
   // of the focused terminal tab, if any — takes precedence over
@@ -1317,7 +1320,7 @@ const AgentManagerContent: Component = () => {
               </TooltipKeybind>
             </div>
           </div>
-          <div class="am-list">
+          <div class="am-list" ref={listEl}>
             <Show
               when={sessionsLoaded()}
               fallback={
@@ -1340,6 +1343,7 @@ const AgentManagerContent: Component = () => {
                 </div>
               </Show>
               <SidebarSessionList
+                listContainer={() => listEl}
                 sessions={session.sessions()}
                 sessionsLoaded={sessionsLoaded()}
                 currentSelection={session.currentSessionID() ?? null}
