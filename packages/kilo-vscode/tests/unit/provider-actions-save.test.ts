@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test"
 import {
+  authorizeCredentialRead,
   connectProvider,
   completeProviderOAuth,
   disconnectProvider,
@@ -736,5 +737,183 @@ describe("resolveStoredKey", () => {
     expect(resolveStoredKey(storedKeys, "other", "https://example.com/v1")).toBeUndefined()
     expect(resolveStoredKey(storedKeys, undefined, "https://example.com/v1")).toBeUndefined()
     expect(resolveStoredKey(storedKeys, "", "https://example.com/v1")).toBeUndefined()
+  })
+})
+
+describe("fetchProviderData — credential read authorization predicates", () => {
+  it("marks source='api' providers with non-empty key as api auth", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "openai",
+                name: "OpenAI",
+                source: "api",
+                key: "sk-test-key",
+                env: [],
+                models: {},
+              },
+            ],
+            connected: ["openai"],
+            default: {},
+          },
+        }),
+        auth: async () => ({ data: {} }),
+      },
+      kilo: {
+        authStatus: async () => ({ data: { authenticated: false } }),
+      },
+    } as unknown as Parameters<typeof fetchProviderData>[0]
+
+    const result = await fetchProviderData(client, "/tmp")
+    expect(result.authStates).toEqual({ openai: "api" })
+    // Key is stripped from the response sent to webview
+    const item = result.response.all[0] as Record<string, unknown>
+    expect("key" in item).toBe(false)
+  })
+
+  it("marks source='env' providers with non-empty key as api auth (source filtering is handler-level)", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "envprovider",
+                name: "Env Provider",
+                source: "env",
+                key: "env-key-value",
+                env: ["ENV_KEY"],
+                models: {},
+              },
+            ],
+            connected: [],
+            default: {},
+          },
+        }),
+        auth: async () => ({ data: {} }),
+      },
+      kilo: {
+        authStatus: async () => ({ data: { authenticated: false } }),
+      },
+    } as unknown as Parameters<typeof fetchProviderData>[0]
+
+    const result = await fetchProviderData(client, "/tmp")
+    // fetchProviderData marks any provider with non-empty key as api auth;
+    // source filtering (source === "api") is done in handleGetProviderCredential
+    expect(result.authStates).toEqual({ envprovider: "api" })
+  })
+
+  it("rejects kilo provider from authStates", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "kilo",
+                name: "Kilo Gateway",
+                source: "config",
+                key: "configured",
+                env: [],
+                models: {},
+              },
+            ],
+            connected: ["kilo"],
+            default: { kilo: "kilo-auto/frontier" },
+          },
+        }),
+        auth: async () => ({ data: {} }),
+      },
+      kilo: {
+        authStatus: async () => ({ data: { authenticated: false } }),
+      },
+    } as unknown as Parameters<typeof fetchProviderData>[0]
+
+    const result = await fetchProviderData(client, "/tmp")
+    // kilo is always deleted from authStates unless kiloAuth sets it
+    expect(result.authStates).toEqual({})
+  })
+
+  it("rejects providers with empty key from authStates", async () => {
+    const client = {
+      provider: {
+        list: async () => ({
+          data: {
+            all: [
+              {
+                id: "empty-key",
+                name: "Empty Key",
+                source: "api",
+                key: "",
+                env: [],
+                models: {},
+              },
+            ],
+            connected: [],
+            default: {},
+          },
+        }),
+        auth: async () => ({ data: {} }),
+      },
+      kilo: {
+        authStatus: async () => ({ data: { authenticated: false } }),
+      },
+    } as unknown as Parameters<typeof fetchProviderData>[0]
+
+    const result = await fetchProviderData(client, "/tmp")
+    expect(result.authStates).toEqual({})
+  })
+})
+
+describe("authorizeCredentialRead", () => {
+  const apiProvider = { id: "openai", source: "api", key: "sk-test-123" }
+  const envProvider = { id: "envprovider", source: "env", key: "env-key" }
+  const kiloProvider = { id: "kilo", source: "config", key: "configured" }
+
+  it("authorizes source='api' provider with non-empty key", () => {
+    const result = authorizeCredentialRead("openai", [apiProvider as any])
+    expect(result).toEqual({ authorized: true, key: "sk-test-123" })
+  })
+
+  it("rejects empty providerID", () => {
+    const result = authorizeCredentialRead("", [apiProvider as any])
+    expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
+  })
+
+  it("rejects kilo provider", () => {
+    const result = authorizeCredentialRead("kilo", [kiloProvider as any])
+    expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
+  })
+
+  it("rejects provider not found in list", () => {
+    const result = authorizeCredentialRead("openai", [])
+    expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
+  })
+
+  it("rejects source !== 'api'", () => {
+    const result = authorizeCredentialRead("envprovider", [envProvider as any])
+    expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
+  })
+
+  it("rejects empty key", () => {
+    const result = authorizeCredentialRead("empty", [{ id: "empty", source: "api", key: "" }] as any)
+    expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
+  })
+
+  it("rejects non-string key", () => {
+    const result = authorizeCredentialRead("bad", [{ id: "bad", source: "api", key: 123 }] as any)
+    expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
+  })
+
+  it("error result never includes the key value", () => {
+    const result = authorizeCredentialRead("kilo", [kiloProvider as any])
+    expect(result.authorized).toBe(false)
+    if (!result.authorized) {
+      expect(result.error).not.toContain("configured")
+      expect(result).not.toHaveProperty("key")
+    }
   })
 })

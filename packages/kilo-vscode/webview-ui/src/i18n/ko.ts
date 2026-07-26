@@ -255,7 +255,16 @@ export const dict = {
   "provider.apiKey.remove.confirm.body":
     "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
   "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
-  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
+  "provider.apiKey.remove.toast.description":
+    "The stored API key has been removed. Provider configuration is preserved.",
+
+  // Credential reveal/manage
+  "provider.apiKey.manage.loading": "저장된 API 키 불러오는 중...",
+  "provider.apiKey.manage.error": "API 키를 불러올 수 없음",
+  "provider.apiKey.manage.description": "{{provider}}의 저장된 API 키가 아래에 표시됩니다. 업데이트하거나 제거하세요.",
+  "provider.connect.apiKey.show": "API 키 표시",
+  "provider.connect.apiKey.hide": "API 키 숨기기",
+
   "provider.delete.toast.deleted.title": "{{provider}} 삭제됨",
   "provider.delete.toast.deleted.description": "{{provider}} 구성 및 인증 정보가 제거되었습니다.",
   "provider.delete.confirm.title": "{{provider}} 삭제",

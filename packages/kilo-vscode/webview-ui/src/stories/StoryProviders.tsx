@@ -111,7 +111,7 @@ const MockProviderProvider: ParentComponent<{
     findModel: (sel: any) => _findModel(MOCK_MODELS, sel),
     authMethods: () => props.authMethods ?? {},
     authStates: () =>
-      props.authStates ?? (props.kiloAuth ? { kilo: "oauth" } : {}) as Record<string, ProviderAuthState>,
+      props.authStates ?? ((props.kiloAuth ? { kilo: "oauth" } : {}) as Record<string, ProviderAuthState>),
     isModelValid: () => true,
   }
   return <ProviderContext.Provider value={value}>{props.children}</ProviderContext.Provider>
@@ -440,7 +440,12 @@ export const StoryProviders: ParentComponent<StoryProvidersProps> = (props) => {
             onProjectConfigChange={props.onProjectConfigChange}
           >
             <DisplayProvider>
-              <MockProviderProvider kiloAuth={props.kiloAuth} connected={props.connected} authStates={props.authStates} authMethods={props.authMethods}>
+              <MockProviderProvider
+                kiloAuth={props.kiloAuth}
+                connected={props.connected}
+                authStates={props.authStates}
+                authMethods={props.authMethods}
+              >
                 <DialogProvider>
                   <LanguageContext.Provider
                     value={{

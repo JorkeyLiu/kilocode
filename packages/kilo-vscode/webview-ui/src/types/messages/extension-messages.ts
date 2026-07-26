@@ -1020,6 +1020,20 @@ export interface ProviderActionErrorMessage {
   message: string
 }
 
+export interface ProviderCredentialLoadedMessage {
+  type: "providerCredentialLoaded"
+  requestID: string
+  providerID: string
+  apiKey: string
+}
+
+export interface ProviderCredentialErrorMessage {
+  type: "providerCredentialError"
+  requestID: string
+  providerID: string
+  error: string
+}
+
 export interface CustomProviderModelsFetchedMessage {
   type: "customProviderModelsFetched"
   requestId: string
@@ -1196,6 +1210,8 @@ export type ExtensionMessage =
   | ProviderDisconnectedMessage
   | ProviderDeletedMessage
   | ProviderActionErrorMessage
+  | ProviderCredentialLoadedMessage
+  | ProviderCredentialErrorMessage
   | AnacondaDesktopExtensionMessage
   | CustomProviderModelsFetchedMessage
   | RecentsLoadedMessage

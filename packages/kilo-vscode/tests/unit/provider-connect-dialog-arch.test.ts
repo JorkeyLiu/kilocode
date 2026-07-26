@@ -75,18 +75,14 @@ describe("ProviderConnectDialog — remove path is inline (LOCK-072/073)", () =>
 describe("ProvidersTab — Account uses server.goToProfile (LOCK-075)", () => {
   it("Account button calls server.goToProfile", () => {
     // Find the account button onClick handler
-    const match = TAB_SRC.match(
-      /primary\(\) === "account"[\s\S]*?onClick=\{[\s\S]*?\}[\s\S]*?>/,
-    )
+    const match = TAB_SRC.match(/primary\(\) === "account"[\s\S]*?onClick=\{[\s\S]*?\}[\s\S]*?>/)
     expect(match).not.toBeNull()
     expect(match![0]).toContain("server.goToProfile()")
   })
 
   it("Account button does NOT use vscode.postMessage directly", () => {
     // The entire account match block
-    const match = TAB_SRC.match(
-      /<Match when=\{primary\(\) === "account"\}>([\s\S]*?)<\/Match>/,
-    )
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "account"\}>([\s\S]*?)<\/Match>/)
     expect(match).not.toBeNull()
     expect(match![1]).not.toContain("vscode.postMessage")
   })
@@ -123,6 +119,31 @@ describe("Action row CSS (LOCK-076)", () => {
   })
 })
 
+describe("Credential reveal CSS (LOCK-009)", () => {
+  it("tooltip trigger wrapper is centered as the flex child", () => {
+    expect(DIALOG_CSS).toContain('[data-component="tooltip-trigger"]')
+    expect(DIALOG_CSS).toContain("align-items: center")
+    // align-self: center positions the trigger itself as a centered flex item
+    // inside the input-row; align-items alone only centers children inside it
+    expect(DIALOG_CSS).toContain("align-self: center")
+    expect(DIALOG_CSS).not.toContain("position: absolute")
+  })
+
+  it("eye toggle inherits color styling but does not use align-self", () => {
+    expect(DIALOG_CSS).toContain(".provider-apikey-eye-toggle")
+    // align-self: center was removed — centering targets the tooltip trigger wrapper instead
+    const eyeSection = DIALOG_CSS.match(/\.provider-apikey-eye-toggle\s*\{[^}]*\}/)?.[0] ?? ""
+    expect(eyeSection).not.toContain("align-self")
+  })
+
+  it("input row does not use padding-right for space reservation", () => {
+    const inputRowSection = DIALOG_CSS.match(/\.provider-apikey-input-row[^{]*\{[^}]*\}/g) ?? []
+    for (const section of inputRowSection) {
+      expect(section).not.toContain("padding-right")
+    }
+  })
+})
+
 describe("Close icon target CSS (LOCK-077)", () => {
   it("final-slot has min-width and min-height >= 24px", () => {
     expect(DIALOG_CSS).not.toContain("min-width: 24px")
@@ -144,6 +165,106 @@ describe("No native autofocus (LOCK-082)", () => {
 
   it("ProviderConnectDialog source has no native autofocus attribute on input", () => {
     expect(DIALOG_SRC).not.toMatch(/<input[^>]*\bautofocus\b/)
+  })
+})
+
+describe("Credential reveal — manage mode (LOCK-003/004/005/006/007)", () => {
+  it("sends getProviderCredential on mount in manage mode", () => {
+    expect(DIALOG_SRC).toContain("getProviderCredential")
+    expect(DIALOG_SRC).toContain("requestCredential()")
+  })
+
+  it("has credential loading state", () => {
+    expect(DIALOG_SRC).toContain("credentialLoading")
+    expect(DIALOG_SRC).toContain("provider.apiKey.manage.loading")
+  })
+
+  it("has credential error state with generic message", () => {
+    expect(DIALOG_SRC).toContain("credentialError")
+    expect(DIALOG_SRC).toContain("provider.apiKey.manage.error")
+  })
+
+  it("default input type is password", () => {
+    // In manage mode the field defaults to password, toggled by showKey
+    expect(DIALOG_SRC).toContain('type={state.showKey ? "text" : "password"}')
+  })
+
+  it("has eye toggle button with aria-label", () => {
+    expect(DIALOG_SRC).toContain("provider-apikey-eye-toggle")
+    expect(DIALOG_SRC).toContain("aria-label")
+    expect(DIALOG_SRC).toContain("provider.connect.apiKey.show")
+    expect(DIALOG_SRC).toContain("provider.connect.apiKey.hide")
+  })
+
+  it("has tooltip for eye toggle", () => {
+    expect(DIALOG_SRC).toContain("provider.connect.apiKey.show")
+    expect(DIALOG_SRC).toContain("provider.connect.apiKey.hide")
+  })
+
+  it("Update button is disabled when credential is loading", () => {
+    expect(DIALOG_SRC).toContain("state.credentialLoading")
+  })
+
+  it("Update button is disabled when value is unchanged", () => {
+    expect(DIALOG_SRC).toContain("unchanged()")
+  })
+
+  it("empty edited value shows required validation", () => {
+    expect(DIALOG_SRC).toContain("emptyEdited()")
+  })
+
+  it("clears plaintext signal and pending request on cleanup", () => {
+    expect(DIALOG_SRC).toContain("pendingCredentialID = undefined")
+    expect(DIALOG_SRC).toContain("setOriginalKey(null)")
+  })
+
+  it("resets credential state on dialog reset", () => {
+    const resetMatch = DIALOG_SRC.match(/function reset\(\)\s*\{([\s\S]*?)\n  \}/)
+    expect(resetMatch).not.toBeNull()
+    const body = resetMatch![1]
+    expect(body).toContain("pendingCredentialID = undefined")
+    expect(body).toContain("setOriginalKey(null)")
+    expect(body).toContain("credentialLoading: undefined")
+    expect(body).toContain("credentialError: undefined")
+    expect(body).toContain("showKey: undefined")
+  })
+
+  it("does not echo key in failure/error UI", () => {
+    // The credential error handler shows a generic i18n message, not the actual key.
+    // Verify the error callback stores the generic message string, not the apiKey value.
+    const onErrorMatch = DIALOG_SRC.match(/onCredentialError[\s\S]*?credentialError:[^}]*/)
+    expect(onErrorMatch).not.toBeNull()
+    // Should use the i18n error message, not the actual key
+    expect(onErrorMatch![0]).toContain("provider.apiKey.manage.error")
+  })
+
+  it("has provider-apikey-input-row for flex-based eye toggle layout", () => {
+    expect(DIALOG_SRC).toContain("provider-apikey-input-row")
+  })
+
+  it("uses Kobalte TextField primitive for manage mode (local composition)", () => {
+    expect(DIALOG_SRC).toContain("TextFieldRoot")
+    expect(DIALOG_SRC).toContain('data-component="input"')
+    expect(DIALOG_SRC).toContain('data-variant="normal"')
+  })
+
+  it("eye toggle is inside input-wrapper as flex sibling", () => {
+    // The eye toggle should be inside data-slot="input-wrapper", not as a sibling of TextField
+    const inputWrapperMatch = DIALOG_SRC.match(/data-slot="input-wrapper"[\s\S]*?provider-apikey-eye-toggle/)
+    expect(inputWrapperMatch).not.toBeNull()
+  })
+
+  it("uses direct callback assignment instead of side-effect createMemo for value seeding", () => {
+    // setApiKeyValue callback ref should exist
+    expect(DIALOG_SRC).toContain("setApiKeyValue")
+    // onCredentialLoaded should call setApiKeyValue directly
+    expect(DIALOG_SRC).toMatch(/setOriginalKey\(message\.apiKey\)[\s\S]*?setApiKeyValue\?\.\(message\.apiKey\)/)
+    // No unconsumed createMemo that only calls setValue as a side-effect
+    const apiViewMatch = DIALOG_SRC.match(/const ApiView[\s\S]*?const OAuthCodeView/)
+    expect(apiViewMatch).not.toBeNull()
+    // Should NOT have a createMemo that only calls setValue
+    const sideEffectMemo = apiViewMatch![0]?.match(/createMemo\(\(\)\s*=>\s*\{[\s\S]*?setValue/)
+    expect(sideEffectMemo).toBeNull()
   })
 })
 

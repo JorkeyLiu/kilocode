@@ -124,19 +124,17 @@ export function buildAddList(allProviders: Record<string, Provider>, configuredI
  * Visible when:
  *  - authStates[id] === "api"  (the provider uses an API key credential)
  *  - source is NOT "env"       (env keys come from the shell, not the user)
+ *  - source is NOT "config"    (config keys cannot be safely revealed via provider.list)
  *
  * Kilo OAuth rows never show an API Key button. If a hypothetical Kilo auth
  * api occurs, the button is shown but Kilo fallback is not treated as custom.
  */
-export function showInlineApiKey(
-  item: Provider,
-  authStates: Record<string, ProviderAuthState>,
-): boolean {
+export function showInlineApiKey(item: Provider, authStates: Record<string, ProviderAuthState>): boolean {
   const id = item.id
   const src = providerSource(item)
   const auth = authStates[id]
   if (auth !== "api") return false
-  if (src === "env") return false
+  if (src === "env" || src === "config") return false
   return true
 }
 
@@ -147,9 +145,13 @@ export function showInlineApiKey(
  * Priority: Kilo Account → custom Edit → API Key → ChatGPT → Anaconda → placeholder.
  * Exactly one result — the caller renders exactly one Grid child.
  */
-export function resolvePrimarySlot(
-  opts: { isKilo: boolean; isCustom: boolean; hasApiKey: boolean; hasChatGPT: boolean; isAnaconda: boolean },
-): PrimarySlot {
+export function resolvePrimarySlot(opts: {
+  isKilo: boolean
+  isCustom: boolean
+  hasApiKey: boolean
+  hasChatGPT: boolean
+  isAnaconda: boolean
+}): PrimarySlot {
   if (opts.isKilo) return "account"
   if (opts.isCustom) return "edit"
   if (opts.hasApiKey) return "apiKey"
@@ -157,5 +159,3 @@ export function resolvePrimarySlot(
   if (opts.isAnaconda) return "anaconda"
   return "placeholder"
 }
-
-

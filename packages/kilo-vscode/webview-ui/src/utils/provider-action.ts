@@ -5,8 +5,11 @@ import type {
   DeleteCustomProviderMessage,
   DisconnectProviderMessage,
   ExtensionMessage,
+  GetProviderCredentialMessage,
   ProviderActionErrorMessage,
   ProviderConnectedMessage,
+  ProviderCredentialErrorMessage,
+  ProviderCredentialLoadedMessage,
   ProviderDeletedMessage,
   ProviderDisconnectedMessage,
   ProviderOAuthReadyMessage,
@@ -21,6 +24,7 @@ type ProviderRequest =
   | DisconnectProviderMessage
   | DeleteCustomProviderMessage
   | SaveCustomProviderMessage
+  | GetProviderCredentialMessage
 
 type ProviderRequestInput =
   | Omit<ConnectProviderMessage, "requestId">
@@ -29,6 +33,7 @@ type ProviderRequestInput =
   | Omit<DisconnectProviderMessage, "requestId">
   | Omit<DeleteCustomProviderMessage, "requestId">
   | Omit<SaveCustomProviderMessage, "requestId">
+  | (Omit<GetProviderCredentialMessage, "requestID"> & { requestID?: string })
 
 type Transport = {
   postMessage: (message: WebviewMessage) => void
@@ -41,16 +46,22 @@ type Handlers = {
   onDisconnected?: (message: ProviderDisconnectedMessage) => void
   onDeleted?: (message: ProviderDeletedMessage) => void
   onError?: (message: ProviderActionErrorMessage) => void
+  onCredentialLoaded?: (message: ProviderCredentialLoadedMessage) => void
+  onCredentialError?: (message: ProviderCredentialErrorMessage) => void
 }
 
 export function createProviderAction(vscode: Transport) {
   const pending = new Map<string, Handlers>()
   const unsubscribe = vscode.onMessage((message) => {
-    if (!("requestId" in message)) return
+    const raw = message as unknown as Record<string, unknown>
+    const rid =
+      (typeof raw.requestId === "string" ? raw.requestId : "") ||
+      (typeof raw.requestID === "string" ? raw.requestID : "")
+    if (!rid) return
 
-    const item = pending.get(message.requestId)
+    const item = pending.get(rid)
     if (!item) return
-    pending.delete(message.requestId)
+    pending.delete(rid)
 
     if (message.type === "providerOAuthReady") {
       item.onOAuthReady?.(message)
@@ -74,14 +85,27 @@ export function createProviderAction(vscode: Transport) {
 
     if (message.type === "providerActionError") {
       item.onError?.(message)
+      return
+    }
+
+    if (message.type === "providerCredentialLoaded") {
+      item.onCredentialLoaded?.(message)
+      return
+    }
+
+    if (message.type === "providerCredentialError") {
+      item.onCredentialError?.(message)
     }
   })
 
   function send(message: ProviderRequestInput, handlers: Handlers = {}) {
-    const requestId = crypto.randomUUID()
-    pending.set(requestId, handlers)
-    vscode.postMessage({ ...message, requestId } as ProviderRequest)
-    return requestId
+    const id = crypto.randomUUID()
+    pending.set(id, handlers)
+    // Credential messages use requestID (uppercase); other provider messages use requestId.
+    const useUpper = message.type === "getProviderCredential"
+    const payload = useUpper ? { ...message, requestID: id } : { ...message, requestId: id }
+    vscode.postMessage(payload as ProviderRequest)
+    return id
   }
 
   function clear(requestId?: string) {

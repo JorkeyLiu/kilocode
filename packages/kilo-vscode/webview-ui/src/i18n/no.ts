@@ -255,7 +255,17 @@ export const dict = {
   "provider.apiKey.remove.confirm.body":
     "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
   "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
-  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
+  "provider.apiKey.remove.toast.description":
+    "The stored API key has been removed. Provider configuration is preserved.",
+
+  // Credential reveal/manage
+  "provider.apiKey.manage.loading": "Laster lagret API-nøkkel...",
+  "provider.apiKey.manage.error": "Kan ikke laste API-nøkkel",
+  "provider.apiKey.manage.description":
+    "Din lagrede API-nøkkel for {{provider}} vises nedenfor. Oppdater eller fjern den.",
+  "provider.connect.apiKey.show": "Vis API-nøkkel",
+  "provider.connect.apiKey.hide": "Skjul API-nøkkel",
+
   "provider.delete.toast.deleted.title": "{{provider}} slettet",
   "provider.delete.toast.deleted.description": "Konfigurasjon og påloggingsinformasjon for {{provider}} er fjernet.",
   "provider.delete.confirm.title": "Slett {{provider}}",

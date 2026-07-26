@@ -141,6 +141,7 @@ import { parseReview, reviewMetadata, type ReviewMessageData } from "./shared/re
 import { KiloProviderMemory } from "./kilo-provider/memory"
 
 import {
+  authorizeCredentialRead,
   buildActionContext,
   computeDefaultSelection,
   fetchProviderData,
@@ -1116,6 +1117,11 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
             refresh: () => this.fetchAndSendProviders(),
             error: getErrorMessage,
           })
+          break
+        case "getProviderCredential":
+          this.handleGetProviderCredential(message).catch((e) =>
+            console.error("[Kilo New] getProviderCredential failed:", e),
+          )
           break
         case "fetchCustomProviderModels":
           this.handleFetchCustomProviderModels(message).catch((e) =>
@@ -2272,6 +2278,33 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       return deleteCustomProviderAction(ctx, rid, pid, this.cachedConfigMessage, set)
     if (msg.type === "saveCustomProvider" && config)
       return saveCustomProviderAction(ctx, rid, pid, config, key, keyChanged, this.cachedConfigMessage, set)
+  }
+
+  private async handleGetProviderCredential(msg: Record<string, unknown>): Promise<void> {
+    const rid = typeof msg.requestID === "string" ? msg.requestID : ""
+    const pid = typeof msg.providerID === "string" ? msg.providerID : ""
+    if (!rid || !pid) return
+    const errReply = (error: string) => {
+      this.postMessage({ type: "providerCredentialError", requestID: rid, providerID: pid, error })
+    }
+    if (!this.client) return errReply("Unable to load API key")
+    try {
+      const { data: response } = await this.client.provider.list(
+        { directory: this.getWorkspaceDirectory() },
+        { throwOnError: true },
+      )
+      const auth = authorizeCredentialRead(pid, response.all as Array<Record<string, unknown>>)
+      if (!auth.authorized) return errReply(auth.error)
+      // LOCK-004: one-shot response — never cache key in storedProviderKeys or providersLoaded
+      this.postMessage({
+        type: "providerCredentialLoaded",
+        requestID: rid,
+        providerID: pid,
+        apiKey: auth.key,
+      })
+    } catch {
+      return errReply("Unable to load API key")
+    }
   }
 
   private async handleFetchCustomProviderModels(msg: Record<string, unknown>): Promise<void> {

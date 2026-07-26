@@ -517,3 +517,37 @@ export async function saveCustomProvider(
     postError(ctx, requestId, providerID, "connect", ctx.getErrorMessage(error) || "Failed to save custom provider")
   }
 }
+
+// ---------------------------------------------------------------------------
+// LOCK-003/004: Credential read authorization — pure, testable seam
+// ---------------------------------------------------------------------------
+
+/** Result of a credential read authorization check. */
+export type CredentialAuthResult = { authorized: false; error: string } | { authorized: true; key: string }
+
+/**
+ * Authorize a credential read against a fresh provider list response.
+ *
+ * LOCK-003 constraints enforced:
+ * - `providerID` must be non-empty and not "kilo"
+ * - Target provider must exist in the fresh list
+ * - `source` must be "api"
+ * - `key` must be a non-empty string
+ *
+ * On failure the returned error is a generic message; the key is never
+ * included in the error path.
+ */
+export function authorizeCredentialRead(
+  providerID: string,
+  providerList: Array<Record<string, unknown>>,
+): CredentialAuthResult {
+  if (!providerID) return { authorized: false, error: "Unable to load API key" }
+  if (providerID === "kilo") return { authorized: false, error: "Unable to load API key" }
+
+  const target = providerList.find((item) => item.id === providerID)
+  if (!target) return { authorized: false, error: "Unable to load API key" }
+  if (target.source !== "api") return { authorized: false, error: "Unable to load API key" }
+  if (typeof target.key !== "string" || !target.key) return { authorized: false, error: "Unable to load API key" }
+
+  return { authorized: true, key: target.key }
+}

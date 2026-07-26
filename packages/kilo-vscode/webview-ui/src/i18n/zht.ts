@@ -249,7 +249,16 @@ export const dict = {
   "provider.apiKey.remove.confirm.body":
     "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
   "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
-  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
+  "provider.apiKey.remove.toast.description":
+    "The stored API key has been removed. Provider configuration is preserved.",
+
+  // Credential reveal/manage
+  "provider.apiKey.manage.loading": "正在載入已儲存的 API 金鑰...",
+  "provider.apiKey.manage.error": "無法載入 API 金鑰",
+  "provider.apiKey.manage.description": "您為 {{provider}} 儲存的 API 金鑰如下所示。請更新或移除。",
+  "provider.connect.apiKey.show": "顯示 API 金鑰",
+  "provider.connect.apiKey.hide": "隱藏 API 金鑰",
+
   "provider.delete.toast.deleted.title": "{{provider}} 已刪除",
   "provider.delete.toast.deleted.description": "{{provider}} 的設定和憑證已被移除。",
   "provider.delete.confirm.title": "刪除 {{provider}}",

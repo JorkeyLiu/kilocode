@@ -167,4 +167,92 @@ describe("createProviderAction", () => {
     expect(seen).toEqual(["deleted:myprovider"])
     action.dispose()
   })
+
+  it("routes providerCredentialLoaded messages by requestID", () => {
+    const transport = createTransport()
+    const action = createProviderAction(transport)
+    const seen: string[] = []
+
+    action.send(
+      {
+        type: "getProviderCredential",
+        providerID: "openai",
+      },
+      {
+        onCredentialLoaded: (message) => seen.push(`loaded:${message.providerID}:${message.apiKey.length}`),
+      },
+    )
+
+    const sent = transport.sent[0]
+    expect(sent?.type).toBe("getProviderCredential")
+    // Credential messages use requestID (uppercase)
+    const rid = "requestID" in (sent ?? {}) ? sent.requestID : ""
+    expect(rid).toBeString()
+
+    transport.receive({
+      type: "providerCredentialLoaded",
+      requestID: rid as string,
+      providerID: "openai",
+      apiKey: "sk-test-key-123",
+    })
+
+    expect(seen).toEqual(["loaded:openai:15"])
+    action.dispose()
+  })
+
+  it("routes providerCredentialError messages by requestID", () => {
+    const transport = createTransport()
+    const action = createProviderAction(transport)
+    const seen: string[] = []
+
+    action.send(
+      {
+        type: "getProviderCredential",
+        providerID: "openai",
+      },
+      {
+        onCredentialError: (message) => seen.push(`error:${message.error}`),
+      },
+    )
+
+    const sent = transport.sent[0]
+    const rid = "requestID" in (sent ?? {}) ? sent.requestID : ""
+
+    transport.receive({
+      type: "providerCredentialError",
+      requestID: rid as string,
+      providerID: "openai",
+      error: "Unable to load API key",
+    })
+
+    expect(seen).toEqual(["error:Unable to load API key"])
+    action.dispose()
+  })
+
+  it("drops stale credential responses after clear", () => {
+    const transport = createTransport()
+    const action = createProviderAction(transport)
+    const seen: string[] = []
+
+    const rid = action.send(
+      {
+        type: "getProviderCredential",
+        providerID: "openai",
+      },
+      {
+        onCredentialLoaded: (message) => seen.push(`loaded:${message.apiKey}`),
+      },
+    )
+
+    action.clear(rid)
+    transport.receive({
+      type: "providerCredentialLoaded",
+      requestID: rid,
+      providerID: "openai",
+      apiKey: "sk-stale",
+    })
+
+    expect(seen).toEqual([])
+    action.dispose()
+  })
 })

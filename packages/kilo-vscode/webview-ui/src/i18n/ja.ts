@@ -251,7 +251,17 @@ export const dict = {
   "provider.apiKey.remove.confirm.body":
     "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
   "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
-  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
+  "provider.apiKey.remove.toast.description":
+    "The stored API key has been removed. Provider configuration is preserved.",
+
+  // Credential reveal/manage
+  "provider.apiKey.manage.loading": "保存されたAPIキーを読み込み中...",
+  "provider.apiKey.manage.error": "APIキーを読み込めません",
+  "provider.apiKey.manage.description":
+    "{{provider}} の保存済みAPIキーが以下に表示されています。更新または削除してください。",
+  "provider.connect.apiKey.show": "APIキーを表示",
+  "provider.connect.apiKey.hide": "APIキーを非表示",
+
   "provider.delete.toast.deleted.title": "{{provider}} を削除しました",
   "provider.delete.toast.deleted.description": "{{provider}} の設定と認証情報が削除されました。",
   "provider.delete.confirm.title": "{{provider}} を削除",

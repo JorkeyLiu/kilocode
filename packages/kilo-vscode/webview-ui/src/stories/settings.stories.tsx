@@ -3,9 +3,10 @@
  * Stories for Settings and ProvidersTab components.
  */
 
-import { onMount, createSignal } from "solid-js"
+import { onMount, onCleanup, createSignal } from "solid-js"
 import type { Meta, StoryObj } from "storybook-solidjs-vite"
 import { StoryProviders, mockSessionValue } from "./StoryProviders"
+import { useDialog } from "@kilocode/kilo-ui/context/dialog"
 import { SessionContext } from "../context/session"
 import { KiloEmbeddingModelsContext } from "../context/kilo-embedding-models"
 import Settings from "../components/settings/Settings"
@@ -20,6 +21,7 @@ import type { AgentConfig, CommandConfig, Config } from "../types/messages"
 import IndexingTab from "../components/settings/IndexingTab"
 import { SidebarEmptyState } from "../components/chat/SidebarEmptyState"
 import { WorkStyleContext, type WorkStyleContextValue } from "../context/work-style"
+import { getVSCodeAPI } from "../context/vscode"
 
 const meta: Meta = {
   title: "Settings",
@@ -699,20 +701,55 @@ export const IndexingKiloCatalogLoading: Story = {
   },
 }
 
-/** LOCK-078: ProviderConnectDialog in manageApiKey mode at 512px viewport. */
+/** LOCK-078/LOCK-010: ProviderConnectDialog in manageApiKey mode with deterministic credential response. */
 export const ProviderConnectManageApiKey: Story = {
-  name: "ProviderConnectDialog — manage API key",
-  render: () => (
-    <StoryProviders
-      connected={["openai"]}
-      authStates={{ openai: "api" }}
-      authMethods={{
-        openai: [{ type: "api", label: "API Key" }],
-      }}
-    >
-      <div style={{ width: "512px", height: "600px", display: "flex", "align-items": "flex-start", "justify-content": "center", padding: "24px" }}>
-        <ProviderConnectDialog providerID="openai" manageApiKey />
-      </div>
-    </StoryProviders>
-  ),
+  name: "ProviderConnectDialog — manage API key (loaded)",
+  render: () => {
+    // LOCK-010: Override the mock vscode API's postMessage to intercept
+    // getProviderCredential and dispatch providerCredentialLoaded via window.postMessage.
+    const api = getVSCodeAPI()
+    const origPost = (api as any).postMessage?.bind(api) as ((msg: any) => void) | undefined
+    if (origPost) {
+      ;(api as any).postMessage = (msg: any) => {
+        origPost(msg)
+        if (msg?.type === "getProviderCredential" && typeof msg.requestID === "string") {
+          queueMicrotask(() => {
+            window.postMessage(
+              {
+                type: "providerCredentialLoaded",
+                requestID: msg.requestID,
+                providerID: msg.providerID,
+                apiKey: "test-api-key-placeholder",
+              },
+              "*",
+            )
+          })
+        }
+      }
+      // Restore original postMessage on cleanup
+      onCleanup(() => {
+        ;(api as any).postMessage = origPost
+      })
+    }
+    return (
+      <StoryProviders
+        connected={["openai"]}
+        authStates={{ openai: "api" }}
+        authMethods={{
+          openai: [{ type: "api", label: "API Key" }],
+        }}
+      >
+        <ProviderConnectManageApiKeyInner />
+      </StoryProviders>
+    )
+  },
+}
+
+/** Inner component with access to useDialog — shows ProviderConnectDialog via dialog.show(). */
+function ProviderConnectManageApiKeyInner() {
+  const dialog = useDialog()
+  onMount(() => {
+    dialog.show(() => <ProviderConnectDialog providerID="openai" manageApiKey />)
+  })
+  return <div style={{ width: "512px", height: "600px" }} />
 }

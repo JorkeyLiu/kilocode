@@ -252,7 +252,17 @@ export const dict = {
   "provider.apiKey.remove.confirm.body":
     "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
   "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
-  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
+  "provider.apiKey.remove.toast.description":
+    "The stored API key has been removed. Provider configuration is preserved.",
+
+  // Credential reveal/manage
+  "provider.apiKey.manage.loading": "Učitavanje spremljenog API ključa...",
+  "provider.apiKey.manage.error": "Nije moguće učitati API ključ",
+  "provider.apiKey.manage.description":
+    "Vaš spremljeni API ključ za {{provider}} prikazan je u nastavku. Ažurirajte ili uklonite ga.",
+  "provider.connect.apiKey.show": "Prikaži API ključ",
+  "provider.connect.apiKey.hide": "Sakrij API ključ",
+
   "provider.delete.toast.deleted.title": "{{provider}} obrisan",
   "provider.delete.toast.deleted.description": "Konfiguracija i vjerodajnice za {{provider}} su uklonjene.",
   "provider.delete.confirm.title": "Obriši {{provider}}",

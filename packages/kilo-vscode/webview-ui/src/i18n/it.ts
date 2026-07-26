@@ -205,7 +205,17 @@ export const dict = {
   "provider.apiKey.remove.confirm.body":
     "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
   "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
-  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
+  "provider.apiKey.remove.toast.description":
+    "The stored API key has been removed. Provider configuration is preserved.",
+
+  // Credential reveal/manage
+  "provider.apiKey.manage.loading": "Caricamento della chiave API salvata...",
+  "provider.apiKey.manage.error": "Impossibile caricare la chiave API",
+  "provider.apiKey.manage.description":
+    "La chiave API salvata per {{provider}} è mostrata di seguito. Aggiornala o rimuovila.",
+  "provider.connect.apiKey.show": "Mostra chiave API",
+  "provider.connect.apiKey.hide": "Nascondi chiave API",
+
   "provider.delete.toast.deleted.title": "{{provider}} eliminato",
   "provider.delete.toast.deleted.description": "La configurazione e le credenziali di {{provider}} sono state rimosse.",
   "provider.delete.confirm.title": "Elimina {{provider}}",

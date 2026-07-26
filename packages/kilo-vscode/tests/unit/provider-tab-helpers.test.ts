@@ -223,8 +223,8 @@ describe("showInlineApiKey", () => {
     expect(showInlineApiKey(anthropic, { anthropic: "oauth" })).toBe(false)
   })
 
-  it("returns true for config source with api auth", () => {
-    expect(showInlineApiKey(configProvider, { azure: "api" })).toBe(true)
+  it("returns false for config source with api auth (LOCK-003)", () => {
+    expect(showInlineApiKey(configProvider, { azure: "api" })).toBe(false)
   })
 
   it("returns true for Kilo with api auth (LOCK-032)", () => {
@@ -275,26 +275,38 @@ describe("buildConfiguredList neutral ordering", () => {
 
 describe("resolvePrimarySlot", () => {
   it("returns account when isKilo is true regardless of other flags", () => {
-    expect(resolvePrimarySlot({ isKilo: true, isCustom: true, hasApiKey: true, hasChatGPT: true, isAnaconda: true })).toBe("account")
+    expect(
+      resolvePrimarySlot({ isKilo: true, isCustom: true, hasApiKey: true, hasChatGPT: true, isAnaconda: true }),
+    ).toBe("account")
   })
 
   it("returns edit when isCustom is true (non-Kilo)", () => {
-    expect(resolvePrimarySlot({ isKilo: false, isCustom: true, hasApiKey: true, hasChatGPT: true, isAnaconda: true })).toBe("edit")
+    expect(
+      resolvePrimarySlot({ isKilo: false, isCustom: true, hasApiKey: true, hasChatGPT: true, isAnaconda: true }),
+    ).toBe("edit")
   })
 
   it("returns apiKey when hasApiKey is true (no custom)", () => {
-    expect(resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: true, hasChatGPT: true, isAnaconda: true })).toBe("apiKey")
+    expect(
+      resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: true, hasChatGPT: true, isAnaconda: true }),
+    ).toBe("apiKey")
   })
 
   it("returns chatgpt when hasChatGPT is true (no custom, no apiKey)", () => {
-    expect(resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: false, hasChatGPT: true, isAnaconda: true })).toBe("chatgpt")
+    expect(
+      resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: false, hasChatGPT: true, isAnaconda: true }),
+    ).toBe("chatgpt")
   })
 
   it("returns anaconda when isAnaconda is true (only flag set)", () => {
-    expect(resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: false, hasChatGPT: false, isAnaconda: true })).toBe("anaconda")
+    expect(
+      resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: false, hasChatGPT: false, isAnaconda: true }),
+    ).toBe("anaconda")
   })
 
   it("returns placeholder when no flags are set", () => {
-    expect(resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: false, hasChatGPT: false, isAnaconda: false })).toBe("placeholder")
+    expect(
+      resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: false, hasChatGPT: false, isAnaconda: false }),
+    ).toBe("placeholder")
   })
 })
