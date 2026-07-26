@@ -1,10 +1,44 @@
 import { describe, expect, it } from "bun:test"
 import {
+  agentPatch,
   selectedAgentNumberOverrideValue,
   selectedAgentTextOverrideValue,
   selectedDefaultAgentValue,
   shouldClearDefaultAgentWhenAgentBecomesUnavailable,
 } from "../../webview-ui/src/components/settings/agent-behaviour-patches"
+
+describe("agentPatch", () => {
+  it("wraps a config fragment under the named agent — no extra keys", () => {
+    const patch = agentPatch("code", { prompt: "override" })
+    expect(patch).toEqual({ agent: { code: { prompt: "override" } } })
+    expect(Object.keys(patch)).toEqual(["agent"])
+    expect(Object.keys(patch.agent!)).toEqual(["code"])
+  })
+
+  it("preserves null delete sentinels", () => {
+    const patch = agentPatch("plan", { variant: null })
+    expect(patch).toEqual({ agent: { plan: { variant: null } } })
+  })
+
+  it("preserves false booleans", () => {
+    const patch = agentPatch("code", { hidden: false })
+    expect(patch).toEqual({ agent: { code: { hidden: false } } })
+  })
+
+  it("preserves nested permission objects", () => {
+    const patch = agentPatch("code", { permission: { file_read: "allow", file_write: "deny" } })
+    expect(patch).toEqual({
+      agent: { code: { permission: { file_read: "allow", file_write: "deny" } } },
+    })
+  })
+
+  it("never spreads full agent map — only the named agent entry", () => {
+    const patch = agentPatch("code", { prompt: "new" })
+    // The only top-level key is 'agent', and it contains exactly one entry
+    expect(Object.keys(patch)).toEqual(["agent"])
+    expect(Object.keys(patch.agent!)).toHaveLength(1)
+  })
+})
 
 describe("selectedAgentTextOverrideValue", () => {
   it("maps an empty text field value to a null delete sentinel", () => {

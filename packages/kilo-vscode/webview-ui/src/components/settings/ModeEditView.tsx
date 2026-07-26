@@ -14,6 +14,7 @@ import { parseModelString } from "../../../../src/shared/provider-model"
 import SettingsRow from "./SettingsRow"
 import { buildExport } from "./mode-io"
 import { modelPatch } from "./mode-model"
+import { agentPatch } from "./agent-behaviour-patches"
 import PermissionEditor from "./PermissionEditor"
 import { ModelSelectorBase } from "../shared/ModelSelector"
 import { ThinkingSelectorBase } from "../shared/ThinkingSelector"
@@ -47,14 +48,7 @@ const ModeEditView: Component<Props> = (props) => {
   const showVariant = () => variants().length > 0 || !!cfg().variant
 
   const update = (partial: Partial<AgentConfig>) => {
-    const existing = config().agent ?? {}
-    const current = existing[props.name] ?? {}
-    updateConfig({
-      agent: {
-        ...existing,
-        [props.name]: { ...current, ...partial },
-      },
-    })
+    updateConfig(agentPatch(props.name, partial))
   }
 
   const selectModel = (providerID: string, modelID: string) => {
@@ -72,7 +66,7 @@ const ModeEditView: Component<Props> = (props) => {
   }
 
   const updatePermission = (patch: PermissionConfig) => {
-    updateConfig({ agent: { [props.name]: { permission: patch } } })
+    updateConfig(agentPatch(props.name, { permission: patch }))
   }
 
   const exportMode = () => {

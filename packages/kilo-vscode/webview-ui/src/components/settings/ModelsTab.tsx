@@ -8,6 +8,7 @@ import { useLanguage } from "../../context/language"
 import { useProvider } from "../../context/provider"
 import { useSession } from "../../context/session"
 import { parseModelString } from "../../../../src/shared/provider-model"
+import { agentPatch } from "./agent-behaviour-patches"
 import { ModelSelectorBase } from "../shared/ModelSelector"
 import { ThinkingSelectorBase } from "../shared/ThinkingSelector"
 import SettingsRow from "./SettingsRow"
@@ -81,10 +82,10 @@ const ModelsTab: Component = () => {
   function handleModeModelSelect(agentName: string) {
     return (providerID: string, modelID: string) => {
       if (!providerID || !modelID) {
-        updateConfig({ agent: { [agentName]: { model: null } } })
+        updateConfig(agentPatch(agentName, { model: null }))
         return
       }
-      updateConfig({ agent: { [agentName]: { model: `${providerID}/${modelID}` } } })
+      updateConfig(agentPatch(agentName, { model: `${providerID}/${modelID}` }))
     }
   }
 

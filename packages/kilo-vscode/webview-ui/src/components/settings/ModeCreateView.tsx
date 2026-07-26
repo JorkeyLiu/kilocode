@@ -8,6 +8,7 @@ import { useConfig } from "../../context/config"
 import { useLanguage } from "../../context/language"
 import type { AgentConfig } from "../../types/messages"
 import SettingsRow from "./SettingsRow"
+import { agentPatch } from "./agent-behaviour-patches"
 
 interface Props {
   /** Names already taken (used for uniqueness validation). */
@@ -50,15 +51,13 @@ const ModeCreateView: Component<Props> = (props) => {
       setError(msg)
       return
     }
-    const existing = config().agent ?? {}
-    const partial: Partial<AgentConfig> = {
-      mode: "primary",
-      description: description().trim() || undefined,
-      prompt: prompt().trim() || undefined,
-    }
-    updateConfig({
-      agent: { ...existing, [slug]: { ...(existing[slug] ?? {}), ...partial } },
-    })
+    updateConfig(
+      agentPatch(slug, {
+        mode: "primary",
+        description: description().trim() || undefined,
+        prompt: prompt().trim() || undefined,
+      }),
+    )
     reset()
     props.onBack()
   }

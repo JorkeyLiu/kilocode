@@ -17,7 +17,7 @@ import ModeEditView from "./ModeEditView"
 import ModeCreateView from "./ModeCreateView"
 import McpEditView from "./McpEditView"
 import WorkflowsTab from "./agent-behaviour/WorkflowsTab"
-import { selectedDefaultAgentValue } from "./agent-behaviour-patches"
+import { selectedDefaultAgentValue, agentPatch } from "./agent-behaviour-patches"
 import { parseImport, MAX_IMPORT_SIZE } from "./mode-io"
 import type { ImportError } from "./mode-io"
 
@@ -262,8 +262,7 @@ const AgentBehaviourTab: Component = () => {
         setImportError(language.t(errorKey(result.error)))
         return
       }
-      const existing = config().agent ?? {}
-      updateConfig({ agent: { ...existing, [result.name]: result.config } })
+      updateConfig(agentPatch(result.name, result.config))
       setImportError("")
     }
     reader.readAsText(file)
