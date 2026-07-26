@@ -196,6 +196,7 @@ export const dict = {
   "dialog.provider.viewAll": "แสดงผู้ให้บริการเพิ่มเติม",
 
   "provider.connect.title": "เชื่อมต่อ {{provider}}",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "เข้าสู่ระบบด้วย Claude Pro/Max",
   "provider.connect.selectMethod": "เลือกวิธีการเข้าสู่ระบบสำหรับ {{provider}}",
   "provider.connect.method.apiKey": "คีย์ API",
@@ -245,16 +246,18 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} ที่เชื่อมต่อแล้ว",
   "provider.connect.toast.connected.description": "โมเดล {{provider}} พร้อมใช้งานแล้ว",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} ที่ยกเลิกการเชื่อมต่อแล้ว",
-  "provider.disconnect.toast.disconnected.description": "โมเดล {{provider}} ไม่พร้อมใช้งานอีกต่อไป",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "ลบ {{provider}} แล้ว",
   "provider.delete.toast.deleted.description": "การกำหนดค่าและข้อมูลรับรองของ {{provider}} ถูกลบแล้ว",
   "provider.delete.confirm.title": "ลบ {{provider}}",
   "provider.delete.confirm.body":
     "การดำเนินการนี้จะลบการกำหนดค่าผู้ให้บริการที่กำหนดเองและข้อมูลรับรองที่จัดเก็บทั้งหมดอย่างถาวร",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "ฟรี",
   "model.tag.dataCollected": "ข้อมูลอาจถูกนำไปใช้ในการฝึก",
@@ -307,7 +310,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "ยกเลิก",
   "common.connect": "เชื่อมต่อ",
-  "common.disconnect": "ยกเลิกการเชื่อมต่อ",
   "common.submit": "ส่ง",
   "common.save": "บันทึก",
   "common.saving": "กำลังบันทึก...",
@@ -942,14 +944,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "พร้อมท์",
 
   "settings.providers.title": "ผู้ให้บริการ",
-  "settings.providers.description": "การตั้งค่าผู้ให้บริการจะสามารถกำหนดค่าได้ที่นี่",
-  "settings.providers.betaNotice":
-    "ปัจจุบันสามารถตั้งค่าได้เฉพาะผู้ให้บริการ Kilo Gateway ในหน้าการตั้งค่าเท่านั้น การรองรับการตั้งค่าผู้ให้บริการรายอื่นจะพร้อมใช้งานในเร็วๆ นี้ในช่วงเบต้า ในระหว่างนี้คุณสามารถตั้งค่าผู้ให้บริการผ่าน CLI หรือไฟล์คอนฟิกได้ เรามุ่งมั่นที่จะรักษาให้ Kilo เปิดกว้างและไม่มีการผูกมัด",
-  "settings.providers.section.connected": "ผู้ให้บริการที่เชื่อมต่อ",
-  "settings.providers.connected.empty": "ไม่มีผู้ให้บริการที่เชื่อมต่อ",
-  "settings.providers.section.popular": "ผู้ให้บริการยอดนิยม",
-  "settings.providers.search.placeholder": "ค้นหาผู้ให้บริการ",
-  "settings.providers.select.placeholder": "เลือกผู้ให้บริการ...",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "สภาพแวดล้อม",
   "settings.providers.tag.config": "กำหนดค่า",
@@ -957,7 +954,12 @@ export const dict = {
   "settings.providers.tag.custom": "กำหนดเอง",
   "settings.providers.tag.other": "อื่น ๆ",
   "settings.providers.tag.customProvider": "ผู้ให้บริการที่กำหนดเอง",
-  "settings.providers.connected.environmentDescription": "เชื่อมต่อจากตัวแปรสภาพแวดล้อมของคุณ",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "ลงชื่อเข้าใช้ด้วย ChatGPT",
   "settings.providers.custom.description": "เพิ่มผู้ให้บริการแบบกำหนดเองด้วย URL พื้นฐาน",
   "settings.providers.subagentModel.title": "โมเดลตัวแทนย่อย",
@@ -966,7 +968,6 @@ export const dict = {
   "settings.models.hidePromptTraining.title": "ซ่อนโมเดลที่ใช้พรอมต์ในการฝึก",
   "settings.models.hidePromptTraining.description": "ซ่อนโมเดล Kilo Gateway ที่ผู้ให้บริการอาจใช้พรอมต์ของคุณในการฝึก",
   "settings.providers.modeModels": "โมเดลต่อโหมด",
-  "settings.providers.custom.note": "เพิ่มผู้ให้บริการแบบกำหนดเองด้วย Base URL",
   "settings.providers.modeModels.description":
     "แทนที่โมเดลเริ่มต้นสำหรับโหมดที่กำหนด หากไม่ได้ตั้งค่า จะใช้โมเดลเริ่มต้นทั่วไป",
   "provider.custom.title": "ผู้ให้บริการที่กำหนดเอง",
@@ -1704,11 +1705,6 @@ export const dict = {
   "settings.providers.smallModel.title": "โมเดลขนาดเล็ก",
   "settings.providers.smallModel.description":
     "โมเดลน้ำหนักเบาสำหรับสร้างชื่อ สร้างข้อความคอมมิต ปรับปรุงพรอมต์ และงานด่วนอื่นๆ",
-  "settings.providers.disabled": "ผู้ให้บริการที่ปิดใช้งาน",
-  "settings.providers.disabled.description": "ผู้ให้บริการที่จะซ่อนจากรายการ",
-  "settings.providers.disabled.enable": "เปิดใช้งาน",
-  "settings.providers.enabled": "ผู้ให้บริการที่เปิดใช้งาน (รายการที่อนุญาต)",
-  "settings.providers.enabled.description": "หากตั้งค่า เฉพาะผู้ให้บริการเหล่านี้เท่านั้นที่จะพร้อมใช้งาน",
   "settings.providers.notSet": "ไม่ได้ตั้งค่า (ใช้ค่าเริ่มต้นของเซิร์ฟเวอร์)",
   "dialog.model.notSet": "ไม่ได้ตั้งค่า",
   "profile.personalAccount": "บัญชีส่วนตัว",

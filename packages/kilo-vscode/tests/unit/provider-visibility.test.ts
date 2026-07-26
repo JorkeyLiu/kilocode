@@ -1,7 +1,6 @@
 import { describe, expect, it } from "bun:test"
 
 import {
-  connectedNonDisabledIds,
   providersWithKiloFallback,
   visibleConnectedIds,
 } from "../../webview-ui/src/components/settings/provider-visibility"
@@ -42,37 +41,5 @@ describe("providersWithKiloFallback", () => {
     })
 
     expect(providers.kilo?.name).toBe("Custom Kilo Name")
-  })
-})
-
-describe("connectedNonDisabledIds", () => {
-  it("excludes Kilo provider from connected list", () => {
-    const ids = connectedNonDisabledIds(["kilo", "anthropic"], { kilo: "oauth", anthropic: "api" }, new Set())
-
-    expect(ids).toEqual(["anthropic"])
-  })
-
-  it("excludes disabled providers from connected list", () => {
-    const ids = connectedNonDisabledIds(["anthropic", "openai"], {}, new Set(["anthropic"]))
-
-    expect(ids).toEqual(["openai"])
-  })
-
-  it("excludes both Kilo and disabled providers", () => {
-    const ids = connectedNonDisabledIds(["kilo", "anthropic", "openai", "groq"], { kilo: "oauth" }, new Set(["openai"]))
-
-    expect(ids).toEqual(["anthropic", "groq"])
-  })
-
-  it("returns empty when all connected providers are disabled or Kilo", () => {
-    const ids = connectedNonDisabledIds(["kilo", "anthropic"], { kilo: "oauth" }, new Set(["anthropic"]))
-
-    expect(ids).toEqual([])
-  })
-
-  it("returns all non-Kilo connected when nothing is disabled", () => {
-    const ids = connectedNonDisabledIds(["anthropic", "openai"], {}, new Set())
-
-    expect(ids).toEqual(["anthropic", "openai"])
   })
 })

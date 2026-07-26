@@ -197,6 +197,7 @@ export const dict = {
   "dialog.provider.viewAll": "Prikaži više provajdera",
 
   "provider.connect.title": "Poveži {{provider}}",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Prijavi se putem Claude Pro/Max",
   "provider.connect.selectMethod": "Odaberi način prijave za {{provider}}.",
   "provider.connect.method.apiKey": "API ključ",
@@ -247,16 +248,18 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} povezan",
   "provider.connect.toast.connected.description": "{{provider}} modeli su sada dostupni za korištenje.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} odspojen",
-  "provider.disconnect.toast.disconnected.description": "{{provider}} modeli više nisu dostupni.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} obrisan",
   "provider.delete.toast.deleted.description": "Konfiguracija i vjerodajnice za {{provider}} su uklonjene.",
   "provider.delete.confirm.title": "Obriši {{provider}}",
   "provider.delete.confirm.body":
     "Ovo će trajno ukloniti konfiguraciju prilagođenog provajdera i sve pohranjene vjerodajnice.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "Besplatno",
   "model.tag.dataCollected": "Podaci se mogu koristiti za obuku",
@@ -309,7 +312,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "Otkaži",
   "common.connect": "Poveži",
-  "common.disconnect": "Prekini vezu",
   "common.submit": "Pošalji",
   "common.save": "Sačuvaj",
   "common.saving": "Čuvanje...",
@@ -957,14 +959,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Upit",
 
   "settings.providers.title": "Provajderi",
-  "settings.providers.description": "Postavke provajdera će se ovdje moći podešavati.",
-  "settings.providers.betaNotice":
-    "Trenutno se samo Kilo Gateway provajder može konfigurisati u interfejsu za postavke. Podrška za konfigurisanje drugih provajdera stiže uskoro tokom beta perioda. U međuvremenu, provajdere možete konfigurisati koristeći CLI ili konfiguracijsku datoteku. Posvećeni smo tome da Kilo ostane otvoren, bez vezivanja.",
-  "settings.providers.section.connected": "Povezani provajderi",
-  "settings.providers.connected.empty": "Nema povezanih provajdera",
-  "settings.providers.section.popular": "Popularni provajderi",
-  "settings.providers.search.placeholder": "Pretraži provajdere",
-  "settings.providers.select.placeholder": "Odaberi provajdera...",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Okruženje",
   "settings.providers.tag.config": "Konfiguracija",
@@ -972,7 +969,12 @@ export const dict = {
   "settings.providers.tag.custom": "Prilagođeno",
   "settings.providers.tag.other": "Ostalo",
   "settings.providers.tag.customProvider": "Prilagođeni provajder",
-  "settings.providers.connected.environmentDescription": "Povezano iz vaših varijabli okruženja",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "Prijavi se putem ChatGPT",
   "settings.providers.custom.description": "Dodaj prilagođeni provajder putem osnovnog URL-a.",
   "settings.providers.subagentModel.title": "Model podagenta",
@@ -982,7 +984,6 @@ export const dict = {
   "settings.models.hidePromptTraining.description":
     "Sakrij Kilo Gateway modele čiji pružaoci mogu koristiti vaše promptove za treniranje.",
   "settings.providers.modeModels": "Model po režimu",
-  "settings.providers.custom.note": "Dodajte prilagođenog provajdera putem osnovnog URL-a.",
   "settings.providers.modeModels.description":
     "Zamijenite podrazumijevani model za određene režime. Ako nije postavljeno, koristi se globalni podrazumijevani model.",
   "provider.custom.title": "Prilagođeni provajder",
@@ -1738,11 +1739,6 @@ export const dict = {
   "settings.providers.smallModel.title": "Mali model",
   "settings.providers.smallModel.description":
     "Lagani model za generiranje naslova, commit poruka, poboljšanje promptova i druge brze zadatke",
-  "settings.providers.disabled": "Onemogućeni pružatelji",
-  "settings.providers.disabled.description": "Pružatelji za skrivanje s popisa",
-  "settings.providers.disabled.enable": "Omogući",
-  "settings.providers.enabled": "Omogućeni pružatelji (bijela lista)",
-  "settings.providers.enabled.description": "Ako je postavljeno, samo ovi pružatelji će biti dostupni",
   "settings.providers.notSet": "Nije postavljeno (koristi zadano servera)",
   "dialog.model.notSet": "Nije postavljeno",
   "profile.personalAccount": "Osobni račun",

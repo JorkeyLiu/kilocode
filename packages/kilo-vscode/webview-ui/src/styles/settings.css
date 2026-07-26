@@ -139,3 +139,75 @@
     text-align: right;
   }
 }
+
+/* Provider row grid layout (LOCK-029 / LOCK-030) */
+
+/* Container query context for responsive provider rows */
+.settings-provider-list {
+  container-type: inline-size;
+}
+
+.settings-provider-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 16px;
+  min-height: 56px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border-weak-base);
+}
+
+.settings-provider-row-identity {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* Controls grid: primary slot + switch + final slot — fixed-width columns (LOCK-029) */
+.settings-provider-row-controls {
+  display: grid;
+  grid-template-columns: minmax(88px, 112px) 28px 28px;
+  column-gap: 12px;
+  align-items: center;
+}
+
+/* Credential slot: invisible placeholder keeps Switch position stable (LOCK-029) */
+.settings-provider-row-credential-slot {
+  min-width: 88px;
+  max-width: 112px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Final slot: invisible placeholder keeps Switch position stable (LOCK-029) */
+.settings-provider-row-final-slot {
+  width: 28px;
+  height: 28px;
+}
+
+/* LOCK-077: increase close icon clickable target to ≥24px within the 28px final-slot */
+.settings-provider-row-final-slot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.settings-provider-row-final-slot button {
+  min-width: 24px;
+  min-height: 24px;
+}
+
+/* ≤500px: identity on first row, controls right-aligned on second row (LOCK-030) */
+@container (max-width: 500px) {
+  .settings-provider-row {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-provider-row-controls {
+    justify-self: end;
+    grid-template-columns: minmax(72px, 1fr) 28px 28px;
+  }
+}

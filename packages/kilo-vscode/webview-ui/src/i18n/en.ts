@@ -196,6 +196,7 @@ export const dict = {
   "dialog.provider.viewAll": "Show more providers",
 
   "provider.connect.title": "Connect {{provider}}",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Login with Claude Pro/Max",
   "provider.connect.selectMethod": "Select login method for {{provider}}.",
   "provider.connect.method.apiKey": "API key",
@@ -246,8 +247,11 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} connected",
   "provider.connect.toast.connected.description": "{{provider}} models are now available to use.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} disconnected",
-  "provider.disconnect.toast.disconnected.description": "{{provider}} models are no longer available.",
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
 
   "provider.delete.toast.deleted.title": "{{provider}} deleted",
   "provider.delete.toast.deleted.description": "{{provider}} configuration and credentials have been removed.",
@@ -255,7 +259,7 @@ export const dict = {
   "provider.delete.confirm.body":
     "This will permanently remove the custom provider configuration and all stored credentials.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "Free",
   "model.tag.dataCollected": "Data may be used for training",
@@ -308,7 +312,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "Cancel",
   "common.connect": "Connect",
-  "common.disconnect": "Disconnect",
   "common.submit": "Submit",
   "common.save": "Save",
   "common.saving": "Saving...",
@@ -883,12 +886,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Prompt",
 
   "settings.providers.title": "Providers",
-  "settings.providers.description": "Provider settings will be configurable here.",
-  "settings.providers.betaNotice":
-    "Currently only the Kilo Gateway provider can be configured in the settings interface. Support for configuring other providers is coming soon during the beta period. In the interim you can configure providers using the CLI or config file. We're committed to keeping Kilo open, no lock-in.",
-  "settings.providers.section.connected": "Connected providers",
-  "settings.providers.connected.empty": "No connected providers",
-  "settings.providers.section.popular": "Popular providers",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Environment",
   "settings.providers.tag.config": "Config",
@@ -896,8 +896,13 @@ export const dict = {
   "settings.providers.tag.custom": "Custom",
   "settings.providers.tag.customProvider": "Custom provider",
   "settings.providers.tag.other": "Other",
-  "settings.providers.connected.environmentDescription": "Connected from your environment variables",
   "settings.providers.action.signInChatGPT": "Sign in with ChatGPT",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.custom.description": "Add a custom provider by base URL.",
 
   "provider.custom.title": "Custom provider",
@@ -1717,15 +1722,7 @@ export const dict = {
   "settings.providers.modeModels": "Model per Mode",
   "settings.providers.modeModels.description":
     "Override the default model for specific modes. If not set, the global default model is used.",
-  "settings.providers.disabled": "Disabled Providers",
-  "settings.providers.disabled.description": "Providers to hide from the provider list",
-  "settings.providers.disabled.enable": "Enable",
-  "settings.providers.enabled": "Enabled Providers (Allowlist)",
-  "settings.providers.enabled.description": "If set, only these providers will be available (exclusive allowlist)",
   "settings.providers.notSet": "Not set (use server default)",
-  "settings.providers.custom.note": "Add a custom provider by base URL.",
-  "settings.providers.search.placeholder": "Search providers",
-  "settings.providers.select.placeholder": "Select provider...",
 
   "dialog.model.notSet": "Not set",
 

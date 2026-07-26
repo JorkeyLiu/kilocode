@@ -198,6 +198,7 @@ export const dict = {
   "dialog.provider.viewAll": "Voir plus de fournisseurs",
 
   "provider.connect.title": "Connecter {{provider}}",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Connexion avec Claude Pro/Max",
   "provider.connect.selectMethod": "Sélectionnez la méthode de connexion pour {{provider}}.",
   "provider.connect.method.apiKey": "Clé API",
@@ -249,9 +250,11 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} connecté",
   "provider.connect.toast.connected.description": "Les modèles {{provider}} sont maintenant disponibles.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} déconnecté",
-  "provider.disconnect.toast.disconnected.description": "Les modèles {{provider}} ne sont plus disponibles.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} supprimé",
   "provider.delete.toast.deleted.description":
     "La configuration et les identifiants de {{provider}} ont été supprimés.",
@@ -259,7 +262,7 @@ export const dict = {
   "provider.delete.confirm.body":
     "Cela supprimera définitivement la configuration du fournisseur personnalisé et tous les identifiants enregistrés.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "Gratuit",
   "model.tag.dataCollected": "Les données peuvent être utilisées pour l’entraînement",
@@ -312,7 +315,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "Annuler",
   "common.connect": "Connecter",
-  "common.disconnect": "Déconnecter",
   "common.submit": "Soumettre",
   "common.save": "Enregistrer",
   "common.saving": "Enregistrement...",
@@ -968,14 +970,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Invite",
 
   "settings.providers.title": "Fournisseurs",
-  "settings.providers.description": "Les paramètres des fournisseurs seront configurables ici.",
-  "settings.providers.betaNotice":
-    "Actuellement, seul le fournisseur Kilo Gateway peut être configuré dans l'interface des paramètres. La prise en charge de la configuration d'autres fournisseurs sera bientôt disponible pendant la période bêta. En attendant, vous pouvez configurer les fournisseurs à l'aide de la CLI ou du fichier de configuration. Nous nous engageons à maintenir Kilo ouvert, sans enfermement propriétaire.",
-  "settings.providers.section.connected": "Fournisseurs connectés",
-  "settings.providers.connected.empty": "Aucun fournisseur connecté",
-  "settings.providers.section.popular": "Fournisseurs populaires",
-  "settings.providers.search.placeholder": "Rechercher des fournisseurs",
-  "settings.providers.select.placeholder": "Sélectionner un fournisseur...",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Environnement",
   "settings.providers.tag.config": "Configuration",
@@ -983,7 +980,12 @@ export const dict = {
   "settings.providers.tag.custom": "Personnalisé",
   "settings.providers.tag.other": "Autre",
   "settings.providers.tag.customProvider": "Fournisseur personnalisé",
-  "settings.providers.connected.environmentDescription": "Connecté depuis vos variables d'environnement",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "Se connecter avec ChatGPT",
   "settings.providers.custom.description": "Ajoutez un fournisseur personnalisé par URL de base.",
   "settings.providers.subagentModel.title": "Modèle de sous-agent",
@@ -993,7 +995,6 @@ export const dict = {
   "settings.models.hidePromptTraining.description":
     "Masquez les modèles Kilo Gateway dont les fournisseurs peuvent utiliser vos prompts à des fins d'entraînement.",
   "settings.providers.modeModels": "Modèle par mode",
-  "settings.providers.custom.note": "Ajoutez un fournisseur personnalisé par URL de base.",
   "settings.providers.modeModels.description":
     "Remplacez le modèle par défaut pour des modes spécifiques. Si non défini, le modèle par défaut global est utilisé.",
   "provider.custom.title": "Fournisseur personnalisé",
@@ -1777,11 +1778,6 @@ export const dict = {
   "settings.providers.smallModel.title": "Petit modèle",
   "settings.providers.smallModel.description":
     "Modèle léger pour la génération de titres, de messages de commit, l'amélioration de prompts et d'autres tâches rapides",
-  "settings.providers.disabled": "Fournisseurs désactivés",
-  "settings.providers.disabled.description": "Fournisseurs à masquer de la liste",
-  "settings.providers.disabled.enable": "Activer",
-  "settings.providers.enabled": "Fournisseurs activés (liste blanche)",
-  "settings.providers.enabled.description": "Si défini, seuls ces fournisseurs seront disponibles",
   "settings.providers.notSet": "Non défini (utiliser la valeur par défaut du serveur)",
   "dialog.model.notSet": "Non défini",
   "profile.personalAccount": "Compte personnel",

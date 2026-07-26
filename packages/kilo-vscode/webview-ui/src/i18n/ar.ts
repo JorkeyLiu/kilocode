@@ -196,6 +196,7 @@ export const dict = {
   "dialog.provider.viewAll": "عرض المزيد من الموفرين",
 
   "provider.connect.title": "اتصال {{provider}}",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "تسجيل الدخول باستخدام Claude Pro/Max",
   "provider.connect.selectMethod": "حدد طريقة تسجيل الدخول لـ {{provider}}.",
   "provider.connect.method.apiKey": "مفتاح API",
@@ -245,15 +246,17 @@ export const dict = {
   "provider.connect.toast.connected.title": "تم توصيل {{provider}}",
   "provider.connect.toast.connected.description": "نماذج {{provider}} متاحة الآن للاستخدام.",
 
-  "provider.disconnect.toast.disconnected.title": "تم فصل {{provider}}",
-  "provider.disconnect.toast.disconnected.description": "لم تعد نماذج {{provider}} متاحة.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "تم حذف {{provider}}",
   "provider.delete.toast.deleted.description": "تمت إزالة تكوين {{provider}} وبيانات الاعتماد.",
   "provider.delete.confirm.title": "حذف {{provider}}",
   "provider.delete.confirm.body": "سيؤدي هذا إلى الإزالة الدائمة لتكوين مزود مخصص وجميع بيانات الاعتماد المخزنة.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "مجاني",
   "model.tag.dataCollected": "قد تُستخدم البيانات للتدريب",
@@ -306,7 +309,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "إلغاء",
   "common.connect": "اتصال",
-  "common.disconnect": "قطع الاتصال",
   "common.submit": "إرسال",
   "common.save": "حفظ",
   "common.saving": "جارٍ الحفظ...",
@@ -899,14 +901,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "موجه",
 
   "settings.providers.title": "الموفرون",
-  "settings.providers.description": "ستكون إعدادات الموفر قابلة للتكوين هنا.",
-  "settings.providers.betaNotice":
-    "حالياً، يمكن إعداد مزود Kilo Gateway فقط في واجهة الإعدادات. سيتوفر دعم إعداد المزودين الآخرين قريباً خلال الفترة التجريبية. في غضون ذلك، يمكنك إعداد المزودين باستخدام CLI أو ملف التكوين. نحن ملتزمون بإبقاء Kilo مفتوحاً، دون تقييد.",
-  "settings.providers.section.connected": "الموفرون المتصلون",
-  "settings.providers.connected.empty": "لا يوجد موفرون متصلون",
-  "settings.providers.section.popular": "الموفرون الشائعون",
-  "settings.providers.search.placeholder": "البحث عن موفرين",
-  "settings.providers.select.placeholder": "اختر موفرًا...",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "البيئة",
   "settings.providers.tag.config": "التكوين",
@@ -914,7 +911,12 @@ export const dict = {
   "settings.providers.tag.custom": "مخصص",
   "settings.providers.tag.other": "أخرى",
   "settings.providers.tag.customProvider": "مزود مخصص",
-  "settings.providers.connected.environmentDescription": "متصل من متغيرات البيئة الخاصة بك",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "تسجيل الدخول باستخدام ChatGPT",
   "settings.providers.custom.description": "أضف مزودًا مخصصًا عبر عنوان URL الأساسي.",
   "settings.providers.subagentModel.title": "نموذج الوكيل الفرعي",
@@ -924,7 +926,6 @@ export const dict = {
   "settings.models.hidePromptTraining.description":
     "إخفاء نماذج Kilo Gateway التي قد يستخدم مزودوها مطالباتك لأغراض التدريب.",
   "settings.providers.modeModels": "نموذج لكل وضع",
-  "settings.providers.custom.note": "أضف مزودًا مخصصًا عبر عنوان URL الأساسي.",
   "settings.providers.modeModels.description":
     "تجاوز النموذج الافتراضي لأوضاع محددة. إذا لم يتم التعيين، يتم استخدام النموذج الافتراضي العام.",
   "provider.custom.title": "مزود مخصص",
@@ -1697,11 +1698,6 @@ export const dict = {
   "settings.providers.smallModel.title": "نموذج صغير",
   "settings.providers.smallModel.description":
     "نموذج خفيف لتوليد العناوين ورسائل الـ commit وتحسين المطالبات والمهام السريعة الأخرى",
-  "settings.providers.disabled": "مزودون معطلون",
-  "settings.providers.disabled.description": "مزودون لإخفائهم من القائمة",
-  "settings.providers.disabled.enable": "تمكين",
-  "settings.providers.enabled": "مزودون مفعلون (قائمة بيضاء)",
-  "settings.providers.enabled.description": "إذا تم التعيين، فقط هؤلاء المزودون سيكونون متاحين",
   "settings.providers.notSet": "غير محدد (استخدام الافتراضي)",
   "dialog.model.notSet": "غير محدد",
   "profile.personalAccount": "حساب شخصي",

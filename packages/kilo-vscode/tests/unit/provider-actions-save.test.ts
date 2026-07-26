@@ -1,6 +1,7 @@
 import { describe, expect, it } from "bun:test"
 import {
   connectProvider,
+  completeProviderOAuth,
   disconnectProvider,
   deleteCustomProvider,
   fetchProviderData,
@@ -54,6 +55,9 @@ function createCtx(existing: ExistingGlobal = { disabled_providers: [] }, merged
           },
         }),
         auth: async () => ({ data: {} }),
+        oauth: {
+          callback: async () => ({ data: true }),
+        },
       },
       kilo: {
         authStatus: async () => ({ data: { authenticated: false } }),
@@ -176,6 +180,121 @@ describe("connectProvider", () => {
         },
       },
     ])
+  })
+
+  it("removes provider from disabled_providers on successful connect", async () => {
+    const existing = { disabled_providers: ["azure", "openai"], provider: {} }
+    const { ctx, calls } = createCtx(existing)
+
+    await connectProvider(ctx, "req", "azure", "sk-test")
+
+    expect(calls.set).toHaveLength(1)
+    // clearStaleDisabled should save with azure removed
+    expect(calls.config).toHaveLength(1)
+    expect(calls.config[0].config.disabled_providers).toEqual(["openai"])
+    expect(calls.refresh).toBe(1)
+  })
+
+  it("does not mutate disabled_providers when provider is not disabled", async () => {
+    const existing = { disabled_providers: ["openai"], provider: {} }
+    const { ctx, calls } = createCtx(existing)
+
+    await connectProvider(ctx, "req", "azure", "sk-test")
+
+    // No config update needed — azure not in disabled_providers
+    expect(calls.config).toHaveLength(0)
+    expect(calls.refresh).toBe(1)
+  })
+
+  it("does not clear stale disabled ID when auth.set fails", async () => {
+    const existing = { disabled_providers: ["azure", "openai"], provider: {} }
+    const { ctx: base, calls } = createCtx(existing)
+
+    // Override auth.set to throw while keeping postMessage from the same calls object
+    const failCtx = {
+      ...base,
+      client: {
+        ...base.client,
+        auth: {
+          set: async () => {
+            throw new Error("auth failure")
+          },
+          remove: async (input: { providerID: string }) => {
+            calls.remove.push(input)
+            return { data: true }
+          },
+        },
+      },
+    } as unknown as Parameters<typeof connectProvider>[0]
+
+    await connectProvider(failCtx, "req", "azure", "sk-test")
+
+    // auth.set failed — disabled_providers must not be mutated
+    expect(calls.config).toHaveLength(0)
+    expect(calls.refresh).toBe(0)
+    expect(calls.posts).toContainEqual(expect.objectContaining({ type: "providerActionError", providerID: "azure" }))
+  })
+})
+
+describe("completeProviderOAuth", () => {
+  it("removes provider from disabled_providers on successful OAuth completion", async () => {
+    const existing = { disabled_providers: ["openai", "groq"], provider: {} }
+    const { ctx, calls } = createCtx(existing)
+
+    await completeProviderOAuth(ctx, "req", "openai", 0)
+
+    // clearStaleDisabled should save with openai removed
+    expect(calls.config).toHaveLength(1)
+    expect(calls.config[0].config.disabled_providers).toEqual(["groq"])
+    expect(calls.refresh).toBe(1)
+    expect(calls.posts).toContainEqual({ type: "providerConnected", requestId: "req", providerID: "openai" })
+  })
+
+  it("does not mutate disabled_providers when provider is not disabled", async () => {
+    const existing = { disabled_providers: ["groq"], provider: {} }
+    const { ctx, calls } = createCtx(existing)
+
+    await completeProviderOAuth(ctx, "req", "openai", 0)
+
+    // No config update needed — openai not in disabled_providers
+    expect(calls.config).toHaveLength(0)
+    expect(calls.refresh).toBe(1)
+  })
+
+  it("does not touch unrelated disabled IDs", async () => {
+    const existing = { disabled_providers: ["openai", "anthropic", "groq"], provider: {} }
+    const { ctx, calls } = createCtx(existing)
+
+    await completeProviderOAuth(ctx, "req", "openai", 0)
+
+    expect(calls.config[0].config.disabled_providers).toEqual(["anthropic", "groq"])
+  })
+
+  it("does not clear stale disabled ID when OAuth callback fails", async () => {
+    const existing = { disabled_providers: ["openai", "groq"], provider: {} }
+    const { ctx: base, calls } = createCtx(existing)
+
+    const failCtx = {
+      ...base,
+      client: {
+        ...base.client,
+        provider: {
+          ...base.client.provider,
+          oauth: {
+            callback: async () => {
+              throw new Error("oauth failure")
+            },
+          },
+        },
+      },
+    } as unknown as Parameters<typeof completeProviderOAuth>[0]
+
+    await completeProviderOAuth(failCtx, "req", "openai", 0)
+
+    // OAuth callback failed — disabled_providers must not be mutated
+    expect(calls.config).toHaveLength(0)
+    expect(calls.refresh).toBe(0)
+    expect(calls.posts).toContainEqual(expect.objectContaining({ type: "providerActionError", providerID: "openai" }))
   })
 })
 

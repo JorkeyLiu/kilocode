@@ -22,6 +22,8 @@ import AnacondaDesktopDialog from "./AnacondaDesktopDialog"
 interface ProviderConnectDialogProps {
   providerID: string
   oauthOnly?: boolean
+  /** When true, skip method selection and go directly to the API form (LOCK-035). */
+  manageApiKey?: boolean
 }
 
 interface ViewState {
@@ -31,6 +33,8 @@ interface ViewState {
   error?: string
   field?: string
   failed?: string
+  /** LOCK-072: inline confirmation view within the same dialog instance */
+  confirmingRemove?: boolean
 }
 
 type Prompt = NonNullable<ProviderAuthMethod["prompts"]>[number]
@@ -133,6 +137,17 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
   onCleanup(action.dispose)
 
   onMount(() => {
+    // LOCK-035: manageApiKey forces the API method deterministically
+    if (props.manageApiKey) {
+      const apiIndex = methods().findIndex((m) => m.type === "api")
+      if (apiIndex >= 0) {
+        selectMethod(apiIndex)
+        return
+      }
+      // No API method available — close silently
+      dialog.close()
+      return
+    }
     if (methods().length !== 1) return
     selectMethod(0)
   })
@@ -150,11 +165,12 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       error: undefined,
       field: undefined,
       failed: undefined,
+      confirmingRemove: undefined,
     })
   }
 
   function back() {
-    if (methods().length === 1) {
+    if (props.manageApiKey || methods().length === 1) {
       dialog.close()
       return
     }
@@ -180,6 +196,38 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       description: language.t("provider.connect.toast.connected.description", { provider: name() }),
     })
     dialog.close()
+  }
+
+  /** LOCK-072/073: Switch to inline confirmation view (no nested dialog.show). */
+  function removeApiKey() {
+    setState({ ...state, confirmingRemove: true, error: undefined, field: undefined })
+  }
+
+  /** LOCK-073: Cancel confirmation returns to API management form. */
+  function cancelRemove() {
+    setState({ ...state, confirmingRemove: false, error: undefined })
+  }
+
+  /** LOCK-073: Execute the disconnect after confirmation. On failure, keep confirm view visible with error. */
+  function executeRemove() {
+    action.send(
+      { type: "disconnectProvider", providerID: props.providerID },
+      {
+        onDisconnected: () => {
+          showToast({
+            variant: "success",
+            icon: "circle-check",
+            title: language.t("provider.apiKey.remove.toast.title", { provider: name() }),
+            description: language.t("provider.apiKey.remove.toast.description", { provider: name() }),
+          })
+          dialog.close()
+        },
+        onError: (message) => {
+          // LOCK-073: surface error, remain in confirm view so user can retry
+          setState({ ...state, confirmingRemove: true, error: message.message, field: undefined })
+        },
+      },
+    )
   }
 
   function selectMethod(index: number) {
@@ -263,7 +311,10 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     )
   }
 
-  const title = () => language.t("provider.connect.title", { provider: name() })
+  const title = () =>
+    props.manageApiKey
+      ? language.t("provider.connect.title.manageApiKey", { provider: name() })
+      : language.t("provider.connect.title", { provider: name() })
 
   const MethodSelection: Component = () => {
     return (
@@ -342,7 +393,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
       >
         <div class="provider-connect-body">{apiKeyDescription()}</div>
         <TextField
-          autofocus
           type="password"
           label={apiKeyLabel()}
           placeholder={
@@ -409,26 +459,32 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
             {state.error}
           </div>
         </Show>
+        <div class="provider-connect-byok">
+          {language.t("provider.connect.kiloGateway.byok.prefix")}
+          <a
+            href="https://blog.kilo.ai/p/kilo-gateway-now-supports-byok-20-providers"
+            onClick={(e) => {
+              e.preventDefault()
+              openExternal("https://blog.kilo.ai/p/kilo-gateway-now-supports-byok-20-providers")
+            }}
+            class="provider-connect-byok-link"
+          >
+            {language.t("provider.connect.kiloGateway.byok.link")}
+          </a>
+          {language.t("provider.connect.kiloGateway.byok.suffix")}
+        </div>
         <div class="dialog-confirm-actions provider-connect-actions">
-          <div class="provider-connect-byok">
-            {language.t("provider.connect.kiloGateway.byok.prefix")}
-            <a
-              href="https://blog.kilo.ai/p/kilo-gateway-now-supports-byok-20-providers"
-              onClick={(e) => {
-                e.preventDefault()
-                openExternal("https://blog.kilo.ai/p/kilo-gateway-now-supports-byok-20-providers")
-              }}
-              class="provider-connect-byok-link"
-            >
-              {language.t("provider.connect.kiloGateway.byok.link")}
-            </a>
-            {language.t("provider.connect.kiloGateway.byok.suffix")}
-          </div>
+          <Show when={props.manageApiKey}>
+            <Button variant="ghost" size="large" type="button" onClick={removeApiKey}>
+              {language.t("settings.providers.action.remove")}
+            </Button>
+            <span class="provider-connect-spacer" />
+          </Show>
           <Button variant="ghost" size="large" type="button" onClick={back}>
-            {language.t("common.goBack")}
+            {language.t(props.manageApiKey ? "common.cancel" : "common.goBack")}
           </Button>
           <Button variant="primary" size="large" type="submit" disabled={state.phase === "connecting"}>
-            {language.t("common.submit")}
+            {language.t(props.manageApiKey ? "settings.providers.action.update" : "common.submit")}
           </Button>
         </div>
       </form>
@@ -474,7 +530,6 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
           {language.t("provider.connect.oauth.code.visit.suffix", { provider: name() })}
         </div>
         <TextField
-          autofocus
           type="text"
           label={language.t("provider.connect.oauth.code.label", { method: method()?.label ?? "" })}
           placeholder={language.t("provider.connect.oauth.code.placeholder")}
@@ -547,11 +602,38 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     )
   }
 
+  /** LOCK-072/073: Inline confirmation view — rendered within the same Dialog instance. */
+  const RemoveConfirmView: Component = () => {
+    return (
+      <div class="dialog-confirm-body" style={{ display: "flex", "flex-direction": "column", gap: "16px" }}>
+        <div class="provider-connect-body">
+          {language.t("provider.apiKey.remove.confirm.body", { provider: name() })}
+        </div>
+        <Show when={state.error}>
+          <div style={{ color: "var(--vscode-errorForeground)", "font-size": "var(--kilo-font-size-13)" }}>
+            {state.error}
+          </div>
+        </Show>
+        <div class="dialog-confirm-actions">
+          <Button variant="ghost" size="large" onClick={cancelRemove}>
+            {language.t("common.cancel")}
+          </Button>
+          <Button variant="primary" size="large" onClick={executeRemove} disabled={state.phase === "connecting"}>
+            {language.t("settings.providers.action.remove")}
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <Dialog title={title()} fit>
       <Switch>
         <Match when={state.methodIndex === undefined}>
           <MethodSelection />
+        </Match>
+        <Match when={state.confirmingRemove}>
+          <RemoveConfirmView />
         </Match>
         <Match when={state.phase === "authorizing"}>
           <div class="dialog-confirm-body">

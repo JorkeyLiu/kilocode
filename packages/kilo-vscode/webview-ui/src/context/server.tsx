@@ -19,6 +19,7 @@ interface ServerContextValue {
   deviceAuth: Accessor<DeviceAuthState>
   startLogin: () => void
   goToLogin: () => void
+  goToProfile: () => void
   vscodeLanguage: Accessor<string | undefined>
   languageOverride: Accessor<string | undefined>
   workspaceDirectory: Accessor<string>
@@ -168,6 +169,10 @@ export const ServerProvider: ParentComponent = (props) => {
     startLogin()
   }
 
+  const goToProfile = () => {
+    vscode.postMessage({ type: "openProfilePanel" })
+  }
+
   const value: ServerContextValue = {
     connectionState,
     serverInfo,
@@ -179,6 +184,7 @@ export const ServerProvider: ParentComponent = (props) => {
     deviceAuth,
     startLogin,
     goToLogin,
+    goToProfile,
     vscodeLanguage,
     languageOverride,
     workspaceDirectory,

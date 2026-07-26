@@ -204,6 +204,7 @@ export const dict = {
   "dialog.provider.viewAll": "Mehr Anbieter anzeigen",
 
   "provider.connect.title": "{{provider}} verbinden",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Mit Claude Pro/Max anmelden",
   "provider.connect.selectMethod": "Anmeldemethode für {{provider}} auswählen.",
   "provider.connect.method.apiKey": "API-Schlüssel",
@@ -254,16 +255,18 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} verbunden",
   "provider.connect.toast.connected.description": "{{provider}} Modelle sind jetzt verfügbar.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} getrennt",
-  "provider.disconnect.toast.disconnected.description": "Die {{provider}}-Modelle sind nicht mehr verfügbar.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} gelöscht",
   "provider.delete.toast.deleted.description": "Die Konfiguration und Anmeldedaten von {{provider}} wurden entfernt.",
   "provider.delete.confirm.title": "{{provider}} löschen",
   "provider.delete.confirm.body":
     "Dies entfernt die benutzerdefinierte Provider-Konfiguration und alle gespeicherten Anmeldedaten dauerhaft.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "Kostenlos",
   "model.tag.dataCollected": "Daten können für das Training verwendet werden",
@@ -316,7 +319,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "Abbrechen",
   "common.connect": "Verbinden",
-  "common.disconnect": "Trennen",
   "common.submit": "Absenden",
   "common.save": "Speichern",
   "common.saving": "Speichert...",
@@ -969,14 +971,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Prompt",
 
   "settings.providers.title": "Anbieter",
-  "settings.providers.description": "Anbietereinstellungen können hier konfiguriert werden.",
-  "settings.providers.betaNotice":
-    "Derzeit kann in den Einstellungen nur der Kilo Gateway-Anbieter konfiguriert werden. Die Unterstützung für die Konfiguration weiterer Anbieter folgt in Kürze während der Beta-Phase. In der Zwischenzeit können Sie Anbieter über die CLI oder die Konfigurationsdatei konfigurieren. Wir setzen uns dafür ein, Kilo offen zu halten, ohne Lock-in.",
-  "settings.providers.section.connected": "Verbundene Anbieter",
-  "settings.providers.connected.empty": "Keine verbundenen Anbieter",
-  "settings.providers.section.popular": "Beliebte Anbieter",
-  "settings.providers.search.placeholder": "Anbieter durchsuchen",
-  "settings.providers.select.placeholder": "Anbieter auswählen...",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Umgebung",
   "settings.providers.tag.config": "Konfiguration",
@@ -984,7 +981,12 @@ export const dict = {
   "settings.providers.tag.custom": "Benutzerdefiniert",
   "settings.providers.tag.other": "Andere",
   "settings.providers.tag.customProvider": "Benutzerdefinierter Anbieter",
-  "settings.providers.connected.environmentDescription": "Verbunden über Ihre Umgebungsvariablen",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "Mit ChatGPT anmelden",
   "settings.providers.custom.description": "Fügen Sie einen benutzerdefinierten Anbieter über die Basis-URL hinzu.",
   "settings.providers.subagentModel.title": "Subagenten-Modell",
@@ -994,7 +996,6 @@ export const dict = {
   "settings.models.hidePromptTraining.description":
     "Blendet Kilo-Gateway-Modelle aus, deren Anbieter Ihre Prompts möglicherweise zum Training verwenden.",
   "settings.providers.modeModels": "Modell pro Modus",
-  "settings.providers.custom.note": "Fügen Sie einen benutzerdefinierten Anbieter per Basis-URL hinzu.",
   "settings.providers.modeModels.description":
     "Überschreiben Sie das Standardmodell für bestimmte Modi. Wenn nicht festgelegt, wird das globale Standardmodell verwendet.",
   "provider.custom.title": "Benutzerdefinierter Anbieter",
@@ -1766,11 +1767,6 @@ export const dict = {
   "settings.providers.smallModel.title": "Kleines Modell",
   "settings.providers.smallModel.description":
     "Leichtgewichtiges Modell für Titelgenerierung, Commit-Nachrichten, Prompt-Verbesserung und andere schnelle Aufgaben",
-  "settings.providers.disabled": "Deaktivierte Anbieter",
-  "settings.providers.disabled.description": "Anbieter aus der Anbieterliste ausblenden",
-  "settings.providers.disabled.enable": "Aktivieren",
-  "settings.providers.enabled": "Aktivierte Anbieter (Whitelist)",
-  "settings.providers.enabled.description": "Wenn gesetzt, sind nur diese Anbieter verfügbar (exklusive Whitelist)",
   "settings.providers.notSet": "Nicht festgelegt (Server-Standard verwenden)",
   "dialog.model.notSet": "Nicht festgelegt",
   "profile.personalAccount": "Persönliches Konto",

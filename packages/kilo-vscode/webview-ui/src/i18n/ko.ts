@@ -201,6 +201,7 @@ export const dict = {
   "dialog.provider.viewAll": "더 많은 공급자 보기",
 
   "provider.connect.title": "{{provider}} 연결",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Claude Pro/Max로 로그인",
   "provider.connect.selectMethod": "{{provider}} 로그인 방법 선택",
   "provider.connect.method.apiKey": "API 키",
@@ -250,15 +251,17 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} 연결됨",
   "provider.connect.toast.connected.description": "이제 {{provider}} 모델을 사용할 수 있습니다.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} 연결 해제됨",
-  "provider.disconnect.toast.disconnected.description": "{{provider}} 모델을 더 이상 사용할 수 없습니다.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} 삭제됨",
   "provider.delete.toast.deleted.description": "{{provider}} 구성 및 인증 정보가 제거되었습니다.",
   "provider.delete.confirm.title": "{{provider}} 삭제",
   "provider.delete.confirm.body": "사용자 지정 제공자 구성과 저장된 모든 인증 정보가 영구적으로 제거됩니다.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "무료",
   "model.tag.dataCollected": "데이터가 학습에 사용될 수 있습니다",
@@ -310,7 +313,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "취소",
   "common.connect": "연결",
-  "common.disconnect": "연결 해제",
   "common.submit": "제출",
   "common.save": "저장",
   "common.saving": "저장 중...",
@@ -906,14 +908,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "프롬프트",
 
   "settings.providers.title": "공급자",
-  "settings.providers.description": "공급자 설정은 여기서 구성할 수 있습니다.",
-  "settings.providers.betaNotice":
-    "현재 설정 인터페이스에서는 Kilo Gateway 제공자만 설정할 수 있습니다. 다른 제공자 설정에 대한 지원은 베타 기간 동안 곧 제공될 예정입니다. 그동안에는 CLI 또는 설정 파일을 사용하여 제공자를 설정할 수 있습니다. 우리는 종속(lock-in) 없이 Kilo를 개방적으로 유지하기 위해 최선을 다하고 있습니다.",
-  "settings.providers.section.connected": "연결된 공급자",
-  "settings.providers.connected.empty": "연결된 공급자 없음",
-  "settings.providers.section.popular": "인기 공급자",
-  "settings.providers.search.placeholder": "공급자 검색",
-  "settings.providers.select.placeholder": "공급자 선택...",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "환경",
   "settings.providers.tag.config": "구성",
@@ -921,7 +918,12 @@ export const dict = {
   "settings.providers.tag.custom": "사용자 지정",
   "settings.providers.tag.other": "기타",
   "settings.providers.tag.customProvider": "사용자 정의 공급자",
-  "settings.providers.connected.environmentDescription": "환경 변수에서 연결됨",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "ChatGPT로 로그인",
   "settings.providers.custom.description": "기본 URL로 사용자 정의 공급자를 추가합니다.",
   "settings.providers.subagentModel.title": "하위 에이전트 모델",
@@ -931,7 +933,6 @@ export const dict = {
   "settings.models.hidePromptTraining.description":
     "제공업체가 사용자의 프롬프트를 학습에 사용할 수 있는 Kilo Gateway 모델을 숨깁니다.",
   "settings.providers.modeModels": "모드별 모델",
-  "settings.providers.custom.note": "Base URL로 사용자 정의 공급자를 추가합니다.",
   "settings.providers.modeModels.description":
     "특정 모드의 기본 모델을 재정의합니다. 설정하지 않으면 전역 기본 모델이 사용됩니다.",
   "provider.custom.title": "사용자 정의 공급자",
@@ -1706,11 +1707,6 @@ export const dict = {
   "settings.providers.smallModel.title": "소형 모델",
   "settings.providers.smallModel.description":
     "제목 생성, 커밋 메시지 생성, 프롬프트 개선 및 기타 빠른 작업을 위한 경량 모델",
-  "settings.providers.disabled": "비활성화된 공급자",
-  "settings.providers.disabled.description": "공급자 목록에서 숨길 공급자",
-  "settings.providers.disabled.enable": "활성화",
-  "settings.providers.enabled": "활성화된 공급자 (허용 목록)",
-  "settings.providers.enabled.description": "설정된 경우 이 공급자만 사용 가능 (배타적 허용 목록)",
   "settings.providers.notSet": "설정되지 않음 (서버 기본값 사용)",
   "dialog.model.notSet": "설정되지 않음",
   "profile.personalAccount": "개인 계정",

@@ -198,6 +198,7 @@ export const dict = {
   "dialog.provider.viewAll": "Meer providers tonen",
 
   "provider.connect.title": "Verbind {{provider}}",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Inloggen met Claude Pro/Max",
   "provider.connect.selectMethod": "Selecteer inlogmethode voor {{provider}}.",
   "provider.connect.method.apiKey": "API-sleutel",
@@ -248,16 +249,18 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} verbonden",
   "provider.connect.toast.connected.description": "{{provider}} modellen zijn nu beschikbaar voor gebruik.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} ontkoppeld",
-  "provider.disconnect.toast.disconnected.description": "{{provider}} modellen zijn niet langer beschikbaar.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} verwijderd",
   "provider.delete.toast.deleted.description": "Configuratie en opslaggegevens van {{provider}} zijn verwijderd.",
   "provider.delete.confirm.title": "{{provider}} verwijderen",
   "provider.delete.confirm.body":
     "Dit verwijdert de aangepaste providerconfiguratie en alle opgeslagen inloggegevens permanent.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "Gratis",
   "model.tag.dataCollected": "Gegevens kunnen worden gebruikt voor training",
@@ -310,7 +313,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "Annuleren",
   "common.connect": "Verbinden",
-  "common.disconnect": "Ontkoppelen",
   "common.submit": "Verzenden",
   "common.save": "Opslaan",
   "common.saving": "Bezig met opslaan...",
@@ -920,12 +922,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Prompt",
 
   "settings.providers.title": "Providers",
-  "settings.providers.description": "Provider-instellingen zullen hier configureerbaar zijn.",
-  "settings.providers.betaNotice":
-    "Momenteel kan alleen de Kilo Gateway-provider worden geconfigureerd in de instellingeninterface. Ondersteuning voor het configureren van andere providers komt binnenkort tijdens de bèta-periode. In de tussentijd kun je providers configureren met behulp van de CLI of het configuratiebestand. We zijn toegewijd om Kilo open te houden, geen lock-in.",
-  "settings.providers.section.connected": "Gekoppelde providers",
-  "settings.providers.connected.empty": "Geen gekoppelde providers",
-  "settings.providers.section.popular": "Populaire providers",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Omgeving",
   "settings.providers.tag.config": "Config",
@@ -933,7 +932,12 @@ export const dict = {
   "settings.providers.tag.custom": "Aangepast",
   "settings.providers.tag.customProvider": "Aangepaste provider",
   "settings.providers.tag.other": "Overige",
-  "settings.providers.connected.environmentDescription": "Gekoppeld via je omgevingsvariabelen",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "Inloggen met ChatGPT",
   "settings.providers.custom.description": "Voeg een aangepaste provider toe via basis-URL.",
 
@@ -1716,16 +1720,7 @@ export const dict = {
   "settings.providers.modeModels": "Model per Modus",
   "settings.providers.modeModels.description":
     "Overschrijf het standaard model voor specifieke modi. Indien niet ingesteld, wordt het globale standaard model gebruikt.",
-  "settings.providers.disabled": "Uitgeschakelde Providers",
-  "settings.providers.disabled.description": "Providers om te verbergen in de providerlijst",
-  "settings.providers.disabled.enable": "Inschakelen",
-  "settings.providers.enabled": "Ingeschakelde Providers (Allowlist)",
-  "settings.providers.enabled.description":
-    "Indien ingesteld, zijn alleen deze providers beschikbaar (exclusieve allowlist)",
   "settings.providers.notSet": "Niet ingesteld (gebruik server standaard)",
-  "settings.providers.custom.note": "Voeg een aangepaste provider toe via base URL.",
-  "settings.providers.search.placeholder": "Zoek providers",
-  "settings.providers.select.placeholder": "Selecteer provider...",
 
   "dialog.model.notSet": "Niet ingesteld",
 

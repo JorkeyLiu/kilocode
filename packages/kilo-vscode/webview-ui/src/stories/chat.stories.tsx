@@ -1182,6 +1182,7 @@ const mockServer = {
   deviceAuth: () => ({ status: "idle" as const }),
   startLogin: () => {},
   goToLogin: () => {},
+  goToProfile: () => {},
   vscodeLanguage: () => "en",
   languageOverride: () => undefined,
   workspaceDirectory: () => "/project",

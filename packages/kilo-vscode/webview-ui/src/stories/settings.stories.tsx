@@ -10,6 +10,7 @@ import { SessionContext } from "../context/session"
 import { KiloEmbeddingModelsContext } from "../context/kilo-embedding-models"
 import Settings from "../components/settings/Settings"
 import ProvidersTab from "../components/settings/ProvidersTab"
+import ProviderConnectDialog from "../components/settings/ProviderConnectDialog"
 import ModelsTab from "../components/settings/ModelsTab"
 import AgentBehaviourTab from "../components/settings/AgentBehaviourTab"
 import AutoApproveTab from "../components/settings/AutoApproveTab"
@@ -106,26 +107,73 @@ export const ProvidersConfigure: Story = {
   ),
 }
 
-/** Opens the Disabled Providers collapsible on mount so the expanded list has coverage. */
-function OpenDisabledProviders() {
-  let ref: HTMLDivElement | undefined
-  onMount(() => {
-    requestAnimationFrame(() => {
-      ref?.querySelector<HTMLButtonElement>('[data-slot="collapsible-trigger"]')?.click()
-    })
-  })
-  return (
-    <div ref={ref} style={{ "max-height": "700px", overflow: "auto" }}>
-      <ProvidersTab />
-    </div>
-  )
+export const ProvidersDisabledExpanded: Story = {
+  name: "ProvidersTab — disabled providers in configured list",
+  render: () => (
+    <StoryProviders
+      connected={["anthropic", "openai"]}
+      authStates={{ anthropic: "api", openai: "api" }}
+      config={{ disabled_providers: ["openai"] } as any}
+    >
+      <div style={{ "max-height": "700px", overflow: "auto" }}>
+        <ProvidersTab />
+      </div>
+    </StoryProviders>
+  ),
 }
 
-export const ProvidersDisabledExpanded: Story = {
-  name: "ProvidersTab — disabled providers expanded",
+const CONFIGURED_PROVIDERS_CONFIG = {
+  disabled_providers: ["openai"],
+  provider: {
+    openai: {},
+    azure: { name: "GPT-Load" },
+    custom1: { name: "My Custom", npm: "@ai-sdk/openai-compatible", baseURL: "https://example.com" },
+  },
+} as any
+
+const CONFIGURED_AUTH_STATES = { anthropic: "api" as const, openai: "api" as const, custom1: "api" as const }
+
+export const ProvidersConfigured1280: Story = {
+  name: "ProvidersTab — configured actions 1280px",
   render: () => (
-    <StoryProviders config={{ disabled_providers: ["openai", "anthropic"] } as any}>
-      <OpenDisabledProviders />
+    <StoryProviders
+      connected={["anthropic", "openai", "custom1"]}
+      authStates={{ ...CONFIGURED_AUTH_STATES, kilo: "oauth" as const }}
+      config={CONFIGURED_PROVIDERS_CONFIG}
+    >
+      <div style={{ width: "1280px", "max-height": "700px", overflow: "auto" }}>
+        <ProvidersTab />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const ProvidersConfigured420: Story = {
+  name: "ProvidersTab — configured actions 420px",
+  render: () => (
+    <StoryProviders
+      connected={["anthropic", "openai", "custom1"]}
+      authStates={{ ...CONFIGURED_AUTH_STATES, kilo: "oauth" as const }}
+      config={CONFIGURED_PROVIDERS_CONFIG}
+    >
+      <div style={{ width: "420px", "max-height": "700px", overflow: "auto" }}>
+        <ProvidersTab />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const ProvidersConfigured200: Story = {
+  name: "ProvidersTab — configured actions 200px",
+  render: () => (
+    <StoryProviders
+      connected={["anthropic", "openai", "custom1"]}
+      authStates={{ ...CONFIGURED_AUTH_STATES, kilo: "oauth" as const }}
+      config={CONFIGURED_PROVIDERS_CONFIG}
+    >
+      <div style={{ width: "200px", "max-height": "700px", overflow: "auto" }}>
+        <ProvidersTab />
+      </div>
     </StoryProviders>
   ),
 }
@@ -649,4 +697,22 @@ export const IndexingKiloCatalogLoading: Story = {
       </>
     )
   },
+}
+
+/** LOCK-078: ProviderConnectDialog in manageApiKey mode at 512px viewport. */
+export const ProviderConnectManageApiKey: Story = {
+  name: "ProviderConnectDialog — manage API key",
+  render: () => (
+    <StoryProviders
+      connected={["openai"]}
+      authStates={{ openai: "api" }}
+      authMethods={{
+        openai: [{ type: "api", label: "API Key" }],
+      }}
+    >
+      <div style={{ width: "512px", height: "600px", display: "flex", "align-items": "flex-start", "justify-content": "center", padding: "24px" }}>
+        <ProviderConnectDialog providerID="openai" manageApiKey />
+      </div>
+    </StoryProviders>
+  ),
 }

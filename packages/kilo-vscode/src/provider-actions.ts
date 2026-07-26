@@ -253,6 +253,18 @@ async function saveProject(ctx: ActionContext, config: Config) {
   await ctx.client.config.update({ config, directory: ctx.workspaceDir }, { throwOnError: true })
 }
 
+/**
+ * LOCK-007: Remove a successfully-connected provider ID from global
+ * disabled_providers. Only runs after confirmed success — never on
+ * configuration start or failed completion. Preserves unrelated IDs.
+ */
+async function clearStaleDisabled(ctx: ActionContext, id: string) {
+  const { data: global } = await ctx.client.global.config.get({ throwOnError: true })
+  const disabled = global?.disabled_providers ?? []
+  if (!disabled.includes(id)) return
+  await saveGlobal(ctx, { disabled_providers: disabledWithout(disabled, id) })
+}
+
 async function removeAuth(ctx: ActionContext, id: string, configured: boolean) {
   try {
     await ctx.client.auth.remove({ providerID: id }, { throwOnError: true })
@@ -302,6 +314,8 @@ export async function connectProvider(
     const meta = cleanMetadata(metadata)
     const auth = meta ? { type: "api" as const, key: apiKey, metadata: meta } : { type: "api" as const, key: apiKey }
     await ctx.client.auth.set({ providerID: id, auth }, { throwOnError: true })
+    // LOCK-007: Clear stale disabled ID on successful API-key connect
+    await clearStaleDisabled(ctx, id)
     await ctx.disposeGlobal(`provider connect (${id})`)
     await ctx.fetchAndSendProviders()
     ctx.postMessage({ type: "providerConnected", requestId, providerID: id })
@@ -353,6 +367,8 @@ export async function completeProviderOAuth(
       { providerID: id, method, code, directory: ctx.workspaceDir },
       { throwOnError: true },
     )
+    // LOCK-007: Clear stale disabled ID on successful OAuth completion
+    await clearStaleDisabled(ctx, id)
     await ctx.disposeGlobal(`provider oauth (${id})`)
     await ctx.fetchAndSendProviders()
     ctx.postMessage({ type: "providerConnected", requestId, providerID: id })

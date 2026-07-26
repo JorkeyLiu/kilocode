@@ -1,14 +1,15 @@
 import { Button } from "@kilocode/kilo-ui/button"
 import { Card } from "@kilocode/kilo-ui/card"
-import { Collapsible } from "@kilocode/kilo-ui/collapsible"
 import { useDialog } from "@kilocode/kilo-ui/context/dialog"
 import { Dialog } from "@kilocode/kilo-ui/dialog"
 import { Icon } from "@kilocode/kilo-ui/icon"
+import { IconButton } from "@kilocode/kilo-ui/icon-button"
 import { ProviderIcon } from "@kilocode/kilo-ui/provider-icon"
 import { Switch } from "@kilocode/kilo-ui/switch"
 import { Tag } from "@kilocode/kilo-ui/tag"
 import { showToast } from "@kilocode/kilo-ui/toast"
-import { Component, For, Show, createMemo, onCleanup } from "solid-js"
+import { Tooltip } from "@kilocode/kilo-ui/tooltip"
+import { Component, For, Match, Show, Switch as SolidSwitch, createMemo, onCleanup } from "solid-js"
 import { useConfig } from "../../context/config"
 import { useLanguage } from "../../context/language"
 import { useProvider } from "../../context/provider"
@@ -18,12 +19,20 @@ import type { Provider } from "../../types/messages"
 import CustomProviderDialog from "./CustomProviderDialog"
 import ProviderConnectDialog from "./ProviderConnectDialog"
 import ProviderSelectDialog from "./ProviderSelectDialog"
-import { isPopularProvider, providerIcon, providerNoteKey, sortProviders } from "./provider-catalog"
-import { connectedNonDisabledIds, providersWithKiloFallback } from "./provider-visibility"
+import { providerIcon, providerNoteKey } from "./provider-catalog"
+import { providersWithKiloFallback } from "./provider-visibility"
 import { isCustomProviderPackage, KILO_PROVIDER_ID } from "../../../../src/shared/provider-model"
 import { createProviderAction } from "../../utils/provider-action"
-
-type ProviderSource = "env" | "api" | "config" | "custom"
+import {
+  buildConfiguredList,
+  buildAddList,
+  allConfiguredIds,
+  providerSource,
+  showInlineApiKey,
+  isKiloProvider,
+  isCustomConfigured,
+  resolvePrimarySlot,
+} from "./provider-tab-helpers"
 
 const ProvidersTab: Component = () => {
   const dialog = useDialog()
@@ -36,50 +45,30 @@ const ProvidersTab: Component = () => {
 
   onCleanup(action.dispose)
 
-  const kiloLoggedIn = createMemo(() => !!provider.authStates()[KILO_PROVIDER_ID])
-
   // disabledProviders and disabledIds must be declared before any memo that
   // reads them to avoid a temporal-dead-zone ReferenceError when Solid
-  // eagerly evaluates createMemo during initialisation.
+  // eagerly evaluates createMemo during initialisation. (LOCK-009)
   const disabledProviders = createMemo(() => config().disabled_providers ?? [])
   const disabledIds = createMemo(() => new Set(disabledProviders()))
   const allProviders = createMemo(() => providersWithKiloFallback(provider.providers()))
 
-  const connectedProviders = createMemo(() => {
-    const ids = connectedNonDisabledIds(provider.connected(), provider.authStates(), disabledIds())
-    const all = provider.providers()
-    return ids.map((id) => all[id]).filter((item): item is Provider => !!item)
-  })
+  // Configured IDs: connected + disabled + config entries + auth states
+  const configuredIds = createMemo(() =>
+    allConfiguredIds(provider.connected(), disabledIds(), config().provider, provider.authStates()),
+  )
 
-  const popularProviders = createMemo(() => {
-    const connected = new Set(provider.connected())
-    const disabled = disabledIds()
-    const all = Object.values(provider.providers())
-    return sortProviders(
-      all.filter(
-        (item) =>
-          item.id !== KILO_PROVIDER_ID && isPopularProvider(item) && !connected.has(item.id) && !disabled.has(item.id),
-      ),
-    )
-  })
+  const configured = createMemo(() =>
+    buildConfiguredList(allProviders(), provider.connected(), disabledIds(), config().provider, provider.authStates()),
+  )
 
-  const disabledProviderList = createMemo(() => {
-    const all = allProviders()
-    return disabledProviders()
-      .map((id) => all[id])
-      .filter((item): item is Provider => !!item)
-  })
+  const addList = createMemo(() => buildAddList(allProviders(), configuredIds()))
 
-  function source(item: Provider): ProviderSource | undefined {
-    if (!("source" in item)) return
-    const value = (item as Provider & { source?: string }).source
-    if (value === "env" || value === "api" || value === "config" || value === "custom") return value
-    return
-  }
+  // ── Actions ──────────────────────────────────────────────────────────────
 
   function sourceTag(item: Provider) {
+    if (item.id === KILO_PROVIDER_ID) return language.t("settings.providers.tag.gateway")
     if (item.id === "anaconda-desktop") return language.t("settings.providers.tag.local")
-    const current = source(item)
+    const current = providerSource(item)
     if (current === "env") return language.t("settings.providers.tag.environment")
     if (current === "api") return language.t("provider.connect.method.apiKey")
     if (current === "config") {
@@ -92,38 +81,10 @@ const ProvidersTab: Component = () => {
     return language.t("settings.providers.tag.other")
   }
 
-  function canDisconnect(item: Provider) {
-    return source(item) !== "env"
-  }
-
-  function isCustom(item: Provider) {
-    const cfg = config().provider?.[item.id]
-    return isCustomProviderPackage(cfg?.npm)
-  }
-
   function editProvider(item: Provider) {
     const cfg = config().provider?.[item.id]
     if (!cfg) return
     dialog.show(() => <CustomProviderDialog existing={{ providerID: item.id, name: item.name, config: cfg }} />)
-  }
-
-  function disconnect(providerID: string, name: string) {
-    action.send(
-      { type: "disconnectProvider", providerID },
-      {
-        onDisconnected: () => {
-          showToast({
-            variant: "success",
-            icon: "circle-check",
-            title: language.t("provider.disconnect.toast.disconnected.title", { provider: name }),
-            description: language.t("provider.disconnect.toast.disconnected.description", { provider: name }),
-          })
-        },
-        onError: (message) => {
-          showToast({ title: language.t("common.requestFailed"), description: message.message })
-        },
-      },
-    )
   }
 
   function deleteCustom(providerID: string, name: string) {
@@ -190,57 +151,62 @@ const ProvidersTab: Component = () => {
 
   function chatgpt(item: Provider) {
     if (item.id !== "openai") return false
-    if (source(item) === "custom") return false
+    if (providerSource(item) === "custom") return false
     return (provider.authMethods()[item.id] ?? []).some((method) => method.type === "oauth")
   }
 
+  /** Open the API Key management dialog (LOCK-035). */
+  function manageApiKey(item: Provider) {
+    dialog.show(() => <ProviderConnectDialog providerID={item.id} manageApiKey />)
+  }
+
+  // ── Control policy predicates (LOCK-045) ──────────────────────────────────
+
+  function showAccountButton(item: Provider): boolean {
+    return isKiloProvider(item)
+  }
+
+  function showEditButton(item: Provider): boolean {
+    return isCustomConfigured(item, config().provider)
+  }
+
+  function showTrashButton(item: Provider): boolean {
+    return isCustomConfigured(item, config().provider)
+  }
+
+  // ── Row styles ───────────────────────────────────────────────────────────
+
+  const rowStyle = {
+    display: "flex",
+    "flex-wrap": "wrap",
+    "align-items": "center",
+    "justify-content": "space-between",
+    gap: "16px",
+    "min-height": "56px",
+    padding: "12px 0",
+    "border-bottom": "1px solid var(--border-weak-base)",
+  } as const
+
+  const nameStyle = {
+    "font-size": "var(--kilo-font-size-14)",
+    "font-weight": "500",
+    color: "var(--vscode-foreground)",
+    overflow: "hidden",
+    "text-overflow": "ellipsis",
+    "white-space": "nowrap",
+  } as const
+
+  // ── Render ───────────────────────────────────────────────────────────────
+
   return (
     <div>
-      {/* Kilo Gateway — always visible with Switch */}
-      <Card>
-        <div
-          style={{
-            display: "flex",
-            "align-items": "center",
-            gap: "12px",
-            "min-height": "56px",
-            padding: "12px 0",
-          }}
-        >
-          <Switch
-            checked={!disabledIds().has(KILO_PROVIDER_ID)}
-            onChange={() => toggleProvider(KILO_PROVIDER_ID)}
-            aria-label={language.t("settings.providers.switch.label", { provider: "Kilo Gateway" })}
-          />
-          <ProviderIcon id={providerIcon(KILO_PROVIDER_ID)} width={20} height={20} />
-          <span
-            style={{
-              "font-size": "var(--kilo-font-size-14)",
-              "font-weight": "500",
-              color: "var(--vscode-foreground)",
-            }}
-          >
-            Kilo Gateway
-          </span>
-          <Show when={!disabledIds().has(KILO_PROVIDER_ID) && kiloLoggedIn()}>
-            <Tag>{language.t("settings.providers.tag.gateway")}</Tag>
-          </Show>
-          <Show when={!disabledIds().has(KILO_PROVIDER_ID) && !kiloLoggedIn()}>
-            <div style={{ flex: 1 }} />
-            <Button size="small" variant="secondary" onClick={() => server.goToLogin()}>
-              {language.t("common.signIn")}
-            </Button>
-          </Show>
-        </div>
-      </Card>
-
-      {/* Connected providers (excluding Kilo) */}
+      {/* Configured providers */}
       <h4 style={{ "margin-top": "16px", "margin-bottom": "8px" }}>
-        {language.t("settings.providers.section.connected")}
+        {language.t("settings.providers.section.configured")}
       </h4>
-      <Card>
+      <Card class="settings-provider-list">
         <Show
-          when={connectedProviders().length > 0}
+          when={configured().length > 0}
           fallback={
             <div
               style={{
@@ -249,127 +215,132 @@ const ProvidersTab: Component = () => {
                 color: "var(--text-weak-base, var(--vscode-descriptionForeground))",
               }}
             >
-              {language.t("settings.providers.connected.empty")}
+              {language.t("settings.providers.configured.empty")}
             </div>
           }
         >
-          <For each={connectedProviders()}>
-            {(item) => (
-              <div
-                style={{
-                  display: "flex",
-                  "flex-wrap": "wrap",
-                  "align-items": "center",
-                  "justify-content": "space-between",
-                  gap: "16px",
-                  "min-height": "56px",
-                  padding: "12px 0",
-                  "border-bottom": "1px solid var(--border-weak-base)",
-                }}
-              >
-                <div style={{ display: "flex", "align-items": "center", gap: "12px", "min-width": 0 }}>
-                  <Switch
-                    checked={!disabledIds().has(item.id)}
-                    onChange={() => toggleProvider(item.id)}
-                    aria-label={language.t("settings.providers.switch.label", { provider: item.name })}
-                  />
-                  <ProviderIcon id={providerIcon(item)} width={20} height={20} />
-                  <span
-                    style={{
-                      "font-size": "var(--kilo-font-size-14)",
-                      "font-weight": "500",
-                      color: "var(--vscode-foreground)",
-                      overflow: "hidden",
-                      "text-overflow": "ellipsis",
-                      "white-space": "nowrap",
-                    }}
-                  >
-                    {item.name}
-                  </span>
-                  <Tag>{sourceTag(item)}</Tag>
-                </div>
-                <div style={{ display: "flex", "align-items": "center", gap: "4px" }}>
-                  <Show when={!canDisconnect(item)}>
-                    <span
-                      style={{
-                        "font-size": "var(--kilo-font-size-14)",
-                        color: "var(--text-base, var(--vscode-descriptionForeground))",
-                        "padding-right": "12px",
-                      }}
-                    >
-                      {language.t("settings.providers.connected.environmentDescription")}
-                    </span>
-                  </Show>
-                  <Show when={chatgpt(item)}>
-                    <Button size="large" variant="ghost" onClick={() => connectChatGPT(item)}>
-                      {language.t("settings.providers.action.signInChatGPT")}
-                    </Button>
-                  </Show>
-                  <Show when={item.id === "anaconda-desktop"}>
-                    <Button size="large" variant="ghost" onClick={() => connectProvider(item)}>
-                      {language.t("provider.anaconda.action.manage")}
-                    </Button>
-                  </Show>
-                  <Show when={canDisconnect(item)}>
-                    <Show when={isCustom(item)}>
-                      <Button size="large" variant="ghost" onClick={() => editProvider(item)}>
-                        {language.t("provider.custom.edit.title")}
-                      </Button>
-                    </Show>
-                    <Button size="large" variant="ghost" onClick={() => disconnect(item.id, item.name)}>
-                      {language.t("common.disconnect")}
-                    </Button>
-                    <Show when={isCustom(item)}>
-                      <Button size="large" variant="ghost" onClick={() => deleteCustom(item.id, item.name)}>
-                        {language.t("common.delete")}
-                      </Button>
-                    </Show>
-                  </Show>
-                </div>
-              </div>
-            )}
-          </For>
-        </Show>
-      </Card>
+          <For each={configured()}>
+            {(item) => {
+              const primary = () =>
+                resolvePrimarySlot({
+                  isKilo: showAccountButton(item),
+                  isCustom: showEditButton(item),
+                  hasApiKey: showInlineApiKey(item, provider.authStates()),
+                  hasChatGPT: chatgpt(item),
+                  isAnaconda: item.id === "anaconda-desktop",
+                })
+              return (
+                <div class="settings-provider-row">
+                  {/* Identity: icon + name + tag */}
+                  <div class="settings-provider-row-identity">
+                    <ProviderIcon id={providerIcon(item)} width={20} height={20} />
+                    <span style={nameStyle}>{item.name}</span>
+                    <Tag>{sourceTag(item)}</Tag>
+                  </div>
 
-      {/* Popular providers */}
-      <h4 style={{ "margin-top": "24px", "margin-bottom": "8px" }}>
-        {language.t("settings.providers.section.popular")}
-      </h4>
-      <Card>
-        <For each={popularProviders()}>
-          {(item) => {
-            const noteKey = providerNoteKey(item)
-            return (
-              <div
-                style={{
-                  display: "flex",
-                  "flex-wrap": "wrap",
-                  "align-items": "center",
-                  "justify-content": "space-between",
-                  gap: "16px",
-                  "min-height": "56px",
-                  padding: "12px 0",
-                  "border-bottom": "1px solid var(--border-weak-base)",
-                }}
-              >
-                <div style={{ display: "flex", "flex-direction": "column", "min-width": 0 }}>
-                  <div style={{ display: "flex", "align-items": "center", gap: "12px" }}>
+                  {/* Controls: [primary slot] [switch] [final slot] (LOCK-052/053) */}
+                  <div class="settings-provider-row-controls">
+                    {/* Primary slot: exactly one child per row */}
+                    <SolidSwitch>
+                      <Match when={primary() === "account"}>
+                        <Button
+                          size="large"
+                          variant="ghost"
+                          onClick={() => server.goToProfile()}
+                          class="settings-provider-row-credential-slot"
+                        >
+                          {language.t("settings.providers.action.account")}
+                        </Button>
+                      </Match>
+                      <Match when={primary() === "edit"}>
+                        <Button
+                          size="large"
+                          variant="ghost"
+                          onClick={() => editProvider(item)}
+                          class="settings-provider-row-credential-slot"
+                        >
+                          {language.t("common.edit")}
+                        </Button>
+                      </Match>
+                      <Match when={primary() === "apiKey"}>
+                        <Button
+                          size="large"
+                          variant="ghost"
+                          onClick={() => manageApiKey(item)}
+                          class="settings-provider-row-credential-slot"
+                        >
+                          {language.t("settings.providers.action.apiKey")}
+                        </Button>
+                      </Match>
+                      <Match when={primary() === "chatgpt"}>
+                        <Button
+                          size="large"
+                          variant="ghost"
+                          onClick={() => connectChatGPT(item)}
+                          class="settings-provider-row-credential-slot"
+                        >
+                          {language.t("settings.providers.action.signInChatGPT")}
+                        </Button>
+                      </Match>
+                      <Match when={primary() === "anaconda"}>
+                        <Button
+                          size="large"
+                          variant="ghost"
+                          onClick={() => connectProvider(item)}
+                          class="settings-provider-row-credential-slot"
+                        >
+                          {language.t("provider.anaconda.action.manage")}
+                        </Button>
+                      </Match>
+                      <Match when={primary() === "placeholder"}>
+                        <div class="settings-provider-row-credential-slot" aria-hidden="true" />
+                      </Match>
+                    </SolidSwitch>
+
                     <Switch
                       checked={!disabledIds().has(item.id)}
                       onChange={() => toggleProvider(item.id)}
                       aria-label={language.t("settings.providers.switch.label", { provider: item.name })}
                     />
-                    <ProviderIcon id={providerIcon(item)} width={20} height={20} />
-                    <span
-                      style={{
-                        "font-size": "var(--kilo-font-size-14)",
-                        "font-weight": "500",
-                        color: "var(--vscode-foreground)",
-                      }}
+
+                    {/* Final slot: custom trash icon | empty (LOCK-045) */}
+                    <Show
+                      when={showTrashButton(item)}
+                      fallback={<div class="settings-provider-row-final-slot" aria-hidden="true" />}
                     >
-                      {item.name}
-                    </span>
+                      {/* LOCK-077: wrapper provides ≥24px clickable target in the 28px slot */}
+                      <div class="settings-provider-row-final-slot">
+                        <Tooltip value={language.t("settings.providers.action.deleteProvider")}>
+                          <IconButton
+                            icon="close"
+                            size="small"
+                            variant="ghost"
+                            aria-label={language.t("settings.providers.action.deleteProvider")}
+                            onClick={() => deleteCustom(item.id, item.name)}
+                          />
+                        </Tooltip>
+                      </div>
+                    </Show>
+                  </div>
+                </div>
+              )
+            }}
+          </For>
+        </Show>
+      </Card>
+
+      {/* Add providers */}
+      <h4 style={{ "margin-top": "24px", "margin-bottom": "8px" }}>{language.t("settings.providers.section.add")}</h4>
+      <Card>
+        <For each={addList()}>
+          {(item) => {
+            const noteKey = providerNoteKey(item)
+            return (
+              <div style={rowStyle}>
+                <div style={{ display: "flex", "flex-direction": "column", "min-width": 0 }}>
+                  <div style={{ display: "flex", "align-items": "center", gap: "12px" }}>
+                    <ProviderIcon id={providerIcon(item)} width={20} height={20} />
+                    <span style={nameStyle}>{item.name}</span>
                   </div>
                   <Show when={noteKey}>
                     {(key) => (
@@ -377,7 +348,7 @@ const ProvidersTab: Component = () => {
                         style={{
                           "font-size": "var(--kilo-font-size-12)",
                           color: "var(--text-weak-base, var(--vscode-descriptionForeground))",
-                          "padding-left": "56px",
+                          "padding-left": "32px",
                         }}
                       >
                         {language.t(key())}
@@ -386,7 +357,9 @@ const ProvidersTab: Component = () => {
                   </Show>
                 </div>
                 <Button size="large" variant="secondary" icon="plus-small" onClick={() => connectProvider(item)}>
-                  {language.t("common.connect")}
+                  {item.id === KILO_PROVIDER_ID
+                    ? language.t("common.signIn")
+                    : language.t("settings.providers.action.configure")}
                 </Button>
               </div>
             )
@@ -409,15 +382,7 @@ const ProvidersTab: Component = () => {
           <div style={{ display: "flex", "flex-direction": "column", "min-width": 0 }}>
             <div style={{ display: "flex", "flex-wrap": "wrap", "align-items": "center", gap: "12px" }}>
               <ProviderIcon id="synthetic" width={20} height={20} />
-              <span
-                style={{
-                  "font-size": "var(--kilo-font-size-14)",
-                  "font-weight": "500",
-                  color: "var(--vscode-foreground)",
-                }}
-              >
-                {language.t("provider.custom.title")}
-              </span>
+              <span style={nameStyle}>{language.t("provider.custom.title")}</span>
               <Tag>{language.t("settings.providers.tag.custom")}</Tag>
             </div>
             <span
@@ -436,7 +401,7 @@ const ProvidersTab: Component = () => {
             icon="plus-small"
             onClick={() => dialog.show(() => <CustomProviderDialog />)}
           >
-            {language.t("common.connect")}
+            {language.t("settings.providers.action.configure")}
           </Button>
         </div>
 
@@ -474,69 +439,6 @@ const ProvidersTab: Component = () => {
           <Icon name="chevron-right" size="small" />
         </button>
       </Card>
-
-      {/* Disabled providers — collapsed by default */}
-      <Show when={disabledProviderList().length > 0}>
-        <div style={{ "margin-top": "24px" }}>
-          <Collapsible variant="ghost">
-            <Collapsible.Trigger>
-              <span
-                style={{
-                  "font-size": "var(--kilo-font-size-12)",
-                  "font-weight": "500",
-                  color: "var(--text-weak-base, var(--vscode-descriptionForeground))",
-                }}
-              >
-                {language.t("settings.providers.disabled")}
-              </span>
-              <Collapsible.Arrow />
-            </Collapsible.Trigger>
-            <Collapsible.Content>
-              <Card style={{ "margin-top": "8px" }}>
-                <For each={disabledProviderList()}>
-                  {(item, index) => (
-                    <div
-                      style={{
-                        display: "flex",
-                        "flex-wrap": "wrap",
-                        "align-items": "center",
-                        "justify-content": "space-between",
-                        gap: "16px",
-                        "min-height": "56px",
-                        padding: "12px 0",
-                        "border-bottom":
-                          index() < disabledProviderList().length - 1 ? "1px solid var(--border-weak-base)" : "none",
-                      }}
-                    >
-                      <div style={{ display: "flex", "align-items": "center", gap: "12px", "min-width": 0 }}>
-                        <Switch
-                          checked={false}
-                          onChange={() => toggleProvider(item.id)}
-                          aria-label={language.t("settings.providers.switch.label", { provider: item.name })}
-                        />
-                        <ProviderIcon id={providerIcon(item)} width={20} height={20} />
-                        <span
-                          style={{
-                            "font-size": "var(--kilo-font-size-14)",
-                            "font-weight": "500",
-                            color: "var(--vscode-foreground)",
-                            overflow: "hidden",
-                            "text-overflow": "ellipsis",
-                            "white-space": "nowrap",
-                          }}
-                        >
-                          {item.name}
-                        </span>
-                        <Tag>{language.t("settings.providers.disabled")}</Tag>
-                      </div>
-                    </div>
-                  )}
-                </For>
-              </Card>
-            </Collapsible.Content>
-          </Collapsible>
-        </div>
-      </Show>
     </div>
   )
 }

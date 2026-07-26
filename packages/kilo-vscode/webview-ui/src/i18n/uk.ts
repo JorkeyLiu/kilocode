@@ -197,6 +197,7 @@ export const dict = {
   "dialog.provider.viewAll": "Показати більше провайдерів",
 
   "provider.connect.title": "Підключити {{provider}}",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Увійти через Claude Pro/Max",
   "provider.connect.selectMethod": "Оберіть метод входу для {{provider}}.",
   "provider.connect.method.apiKey": "API-ключ",
@@ -247,16 +248,18 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} підключено",
   "provider.connect.toast.connected.description": "Моделі {{provider}} тепер доступні.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} відключено",
-  "provider.disconnect.toast.disconnected.description": "Моделі {{provider}} більше недоступні.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} видалено",
   "provider.delete.toast.deleted.description": "Конфігурацію та облікові дані {{provider}} видалено.",
   "provider.delete.confirm.title": "Видалити {{provider}}",
   "provider.delete.confirm.body":
     "Це назавжди видалить конфігурацію користувацького провайдера та всі збережені облікові дані.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "Безкоштовно",
   "model.tag.dataCollected": "Дані можуть використовуватися для навчання",
@@ -309,7 +312,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "Скасувати",
   "common.connect": "Підключити",
-  "common.disconnect": "Відключити",
   "common.submit": "Надіслати",
   "common.save": "Зберегти",
   "common.saving": "Збереження...",
@@ -916,12 +918,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Запит",
 
   "settings.providers.title": "Провайдери",
-  "settings.providers.description": "Тут можна буде налаштовувати параметри провайдерів.",
-  "settings.providers.betaNotice":
-    "Наразі в інтерфейсі налаштувань можна налаштувати лише провайдера Kilo Gateway. Підтримка інших провайдерів з'явиться в бета-версії найближчим часом. Тим часом ви можете налаштовувати провайдерів через CLI або файл конфігурації. Kilo залишається відкритим — без прив'язки.",
-  "settings.providers.section.connected": "Підключені провайдери",
-  "settings.providers.connected.empty": "Підключених провайдерів немає",
-  "settings.providers.section.popular": "Популярні провайдери",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Середовище",
   "settings.providers.tag.config": "Конфігурація",
@@ -929,7 +928,12 @@ export const dict = {
   "settings.providers.tag.custom": "Власний",
   "settings.providers.tag.customProvider": "Власний провайдер",
   "settings.providers.tag.other": "Інші",
-  "settings.providers.connected.environmentDescription": "Підключено зі змінних середовища",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "Увійти через ChatGPT",
   "settings.providers.custom.description": "Додати власного провайдера через базовий URL.",
 
@@ -1700,15 +1704,7 @@ export const dict = {
   "settings.providers.modeModels": "Модель для кожного режиму",
   "settings.providers.modeModels.description":
     "Перевизначити стандартну модель для певних режимів. Якщо не встановлено, використовується загальна стандартна модель.",
-  "settings.providers.disabled": "Вимкнені провайдери",
-  "settings.providers.disabled.description": "Провайдери, що будуть приховані у списку провайдерів",
-  "settings.providers.disabled.enable": "Увімкнути",
-  "settings.providers.enabled": "Увімкнені провайдери (список дозволених)",
-  "settings.providers.enabled.description": "Якщо встановлено, доступні лише ці провайдери (власний список дозволених)",
   "settings.providers.notSet": "Не встановлено (використовувати стандартний сервера)",
-  "settings.providers.custom.note": "Додати власного провайдера через базовий URL.",
-  "settings.providers.search.placeholder": "Пошук провайдера",
-  "settings.providers.select.placeholder": "Вибрати провайдера...",
 
   "dialog.model.notSet": "Не встановлено",
 

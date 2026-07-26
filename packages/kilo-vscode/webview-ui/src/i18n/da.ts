@@ -197,6 +197,7 @@ export const dict = {
   "dialog.provider.viewAll": "Vis flere udbydere",
 
   "provider.connect.title": "Forbind {{provider}}",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Log ind med Claude Pro/Max",
   "provider.connect.selectMethod": "Vælg loginmetode for {{provider}}.",
   "provider.connect.method.apiKey": "API-nøgle",
@@ -247,9 +248,11 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} forbundet",
   "provider.connect.toast.connected.description": "{{provider}} modeller er nu tilgængelige.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} frakoblet",
-  "provider.disconnect.toast.disconnected.description": "Modeller fra {{provider}} er ikke længere tilgængelige.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} slettet",
   "provider.delete.toast.deleted.description":
     "Konfiguration og legitimationsoplysninger for {{provider}} er blevet fjernet.",
@@ -257,7 +260,7 @@ export const dict = {
   "provider.delete.confirm.body":
     "Dette vil permanent fjerne den brugerdefinerede leverandørkonfiguration og alle gemte legitimationsoplysninger.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "Gratis",
   "model.tag.dataCollected": "Data kan bruges til træning",
@@ -310,7 +313,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "Annuller",
   "common.connect": "Forbind",
-  "common.disconnect": "Frakobl",
   "common.submit": "Indsend",
   "common.save": "Gem",
   "common.saving": "Gemmer...",
@@ -953,14 +955,9 @@ export const dict = {
   "settings.indexing.tuning.description": "Avanceret søge- og batchparameter.",
 
   "settings.providers.title": "Udbydere",
-  "settings.providers.description": "Udbyderindstillinger vil kunne konfigureres her.",
-  "settings.providers.betaNotice":
-    "I øjeblikket kan kun Kilo Gateway-udbyderen konfigureres i indstillingsgrænsefladen. Understøttelse af konfiguration af andre udbydere kommer snart i løbet af betaperioden. I mellemtiden kan du konfigurere udbydere via CLI eller konfigurationsfilen. Vi er dedikerede til at holde Kilo åben, ingen lock-in.",
-  "settings.providers.section.connected": "Forbundne udbydere",
-  "settings.providers.connected.empty": "Ingen forbundne udbydere",
-  "settings.providers.section.popular": "Populære udbydere",
-  "settings.providers.search.placeholder": "Søg udbydere",
-  "settings.providers.select.placeholder": "Vælg udbyder...",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Miljø",
   "settings.providers.tag.config": "Konfiguration",
@@ -968,7 +965,12 @@ export const dict = {
   "settings.providers.tag.custom": "Brugerdefineret",
   "settings.providers.tag.other": "Andet",
   "settings.providers.tag.customProvider": "Brugerdefineret udbyder",
-  "settings.providers.connected.environmentDescription": "Forbundet fra dine miljøvariabler",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "Log ind med ChatGPT",
   "settings.providers.custom.description": "Tilføj en brugerdefineret udbyder via basis-URL.",
   "settings.providers.subagentModel.title": "Underagentmodel",
@@ -978,7 +980,6 @@ export const dict = {
   "settings.models.hidePromptTraining.description":
     "Skjul Kilo Gateway-modeller, hvis udbydere muligvis bruger dine prompts til træning.",
   "settings.providers.modeModels": "Model pr. tilstand",
-  "settings.providers.custom.note": "Tilføj en brugerdefineret udbyder via basis-URL.",
   "settings.providers.modeModels.description":
     "Tilsidesæt standardmodellen for bestemte tilstande. Hvis ikke angivet, bruges den globale standardmodel.",
   "provider.custom.title": "Brugerdefineret udbyder",
@@ -1731,11 +1732,6 @@ export const dict = {
   "settings.providers.smallModel.title": "Lille model",
   "settings.providers.smallModel.description":
     "Letvægtsmodel til titelgenerering, generering af commit-beskeder, prompt-forbedring og andre hurtige opgaver",
-  "settings.providers.disabled": "Deaktiverede udbydere",
-  "settings.providers.disabled.description": "Udbydere at skjule fra listen",
-  "settings.providers.disabled.enable": "Aktiver",
-  "settings.providers.enabled": "Aktiverede udbydere (hvidliste)",
-  "settings.providers.enabled.description": "Hvis angivet, er kun disse udbydere tilgængelige",
   "settings.providers.notSet": "Ikke angivet (brug serverstandard)",
   "dialog.model.notSet": "Ikke angivet",
   "profile.personalAccount": "Personlig konto",

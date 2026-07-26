@@ -197,6 +197,7 @@ export const dict = {
   "dialog.provider.viewAll": "Показать больше провайдеров",
 
   "provider.connect.title": "Подключить {{provider}}",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Войти с помощью Claude Pro/Max",
   "provider.connect.selectMethod": "Выберите способ входа для {{provider}}.",
   "provider.connect.method.apiKey": "API ключ",
@@ -247,16 +248,18 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} подключён",
   "provider.connect.toast.connected.description": "Модели {{provider}} теперь доступны.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} отключён",
-  "provider.disconnect.toast.disconnected.description": "Модели {{provider}} больше недоступны.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} удалён",
   "provider.delete.toast.deleted.description": "Конфигурация и учётные данные {{provider}} удалены.",
   "provider.delete.confirm.title": "Удалить {{provider}}",
   "provider.delete.confirm.body":
     "Это навсегда удалит конфигурацию пользовательского провайдера и все сохранённые учётные данные.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "Бесплатно",
   "model.tag.dataCollected": "Данные могут использоваться для обучения",
@@ -308,7 +311,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "Отмена",
   "common.connect": "Подключить",
-  "common.disconnect": "Отключить",
   "common.submit": "Отправить",
   "common.save": "Сохранить",
   "common.saving": "Сохранение...",
@@ -955,14 +957,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Запрос",
 
   "settings.providers.title": "Провайдеры",
-  "settings.providers.description": "Настройки провайдеров будут доступны здесь.",
-  "settings.providers.betaNotice":
-    "В настоящее время в интерфейсе настроек можно настроить только провайдер Kilo Gateway. Поддержка настройки других провайдеров скоро появится в период бета-тестирования. А пока вы можете настраивать провайдеров с помощью CLI или конфигурационного файла. Мы стремимся сохранить Kilo открытым — без привязки к поставщикам.",
-  "settings.providers.section.connected": "Подключённые провайдеры",
-  "settings.providers.connected.empty": "Нет подключённых провайдеров",
-  "settings.providers.section.popular": "Популярные провайдеры",
-  "settings.providers.search.placeholder": "Поиск провайдеров",
-  "settings.providers.select.placeholder": "Выберите провайдера...",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Среда",
   "settings.providers.tag.config": "Конфигурация",
@@ -970,7 +967,12 @@ export const dict = {
   "settings.providers.tag.custom": "Пользовательский",
   "settings.providers.tag.other": "Другое",
   "settings.providers.tag.customProvider": "Пользовательский провайдер",
-  "settings.providers.connected.environmentDescription": "Подключён из ваших переменных окружения",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "Войти через ChatGPT",
   "settings.providers.custom.description": "Добавьте пользовательский провайдер по базовому URL.",
   "settings.providers.subagentModel.title": "Модель субагента",
@@ -980,7 +982,6 @@ export const dict = {
   "settings.models.hidePromptTraining.description":
     "Скрывать модели Kilo Gateway, поставщики которых могут использовать ваши запросы для обучения.",
   "settings.providers.modeModels": "Модель для режима",
-  "settings.providers.custom.note": "Добавьте пользовательского провайдера по базовому URL.",
   "settings.providers.modeModels.description":
     "Переопределите модель по умолчанию для определённых режимов. Если не задано, используется глобальная модель по умолчанию.",
   "provider.custom.title": "Пользовательский провайдер",
@@ -1736,11 +1737,6 @@ export const dict = {
   "settings.providers.smallModel.title": "Малая модель",
   "settings.providers.smallModel.description":
     "Лёгкая модель для генерации заголовков, сообщений коммитов, улучшения промптов и других быстрых задач",
-  "settings.providers.disabled": "Отключённые провайдеры",
-  "settings.providers.disabled.description": "Провайдеры для скрытия из списка",
-  "settings.providers.disabled.enable": "Включить",
-  "settings.providers.enabled": "Включённые провайдеры (белый список)",
-  "settings.providers.enabled.description": "Если установлено, только эти провайдеры будут доступны",
   "settings.providers.notSet": "Не задано (использовать значение сервера по умолчанию)",
   "dialog.model.notSet": "Не задано",
   "profile.personalAccount": "Личный аккаунт",

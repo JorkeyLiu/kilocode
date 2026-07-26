@@ -197,6 +197,7 @@ export const dict = {
   "dialog.provider.viewAll": "Daha fazla sağlayıcı göster",
 
   "provider.connect.title": "{{provider}} bağla",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Claude Pro/Max ile giriş yap",
   "provider.connect.selectMethod": "{{provider}} için giriş yöntemini seçin.",
   "provider.connect.method.apiKey": "API anahtarı",
@@ -246,16 +247,18 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}} bağlandı",
   "provider.connect.toast.connected.description": "{{provider}} modelleri artık kullanımda.",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}} bağlantısı kesildi",
-  "provider.disconnect.toast.disconnected.description": "{{provider}} modelleri artık kullanılabilir değil.",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} silindi",
   "provider.delete.toast.deleted.description": "{{provider}} yapılandırması ve kimlik bilgileri kaldırıldı.",
   "provider.delete.confirm.title": "{{provider}} silinsin mi?",
   "provider.delete.confirm.body":
     "Bu işlem, özel sağlayıcı yapılandırmasını ve kayıtlı tüm kimlik bilgilerini kalıcı olarak kaldıracaktır.",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "Ücretsiz",
   "model.tag.dataCollected": "Veriler eğitim için kullanılabilir",
@@ -308,7 +311,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "İptal",
   "common.connect": "Bağlan",
-  "common.disconnect": "Bağlantı Kes",
   "common.submit": "Gönder",
   "common.save": "Kaydet",
   "common.saving": "Kaydediliyor...",
@@ -916,12 +918,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "Komut",
 
   "settings.providers.title": "Sağlayıcılar",
-  "settings.providers.description": "Sağlayıcı ayarları burada yapılandırılabilecek.",
-  "settings.providers.betaNotice":
-    "Şu anda yalnızca Kilo Gateway sağlayıcısı ayarlar arayüzünde yapılandırılabilir. Diğer sağlayıcılar için destek beta döneminde yakında gelecek. Bu arada CLI veya yapılandırma dosyası ile sağlayıcıları yapılandırabilirsiniz. Kilo'yu açık tutmaya kararlıyız, kilitlenme yok.",
-  "settings.providers.section.connected": "Bağlı sağlayıcılar",
-  "settings.providers.connected.empty": "Bağlı sağlayıcı yok",
-  "settings.providers.section.popular": "Popüler sağlayıcılar",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Ortam",
   "settings.providers.tag.config": "Yapılandırma",
@@ -929,7 +928,12 @@ export const dict = {
   "settings.providers.tag.custom": "Özel",
   "settings.providers.tag.customProvider": "Özel sağlayıcı",
   "settings.providers.tag.other": "Diğer",
-  "settings.providers.connected.environmentDescription": "Ortam değişkenlerinizden bağlandı",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "ChatGPT ile oturum aç",
   "settings.providers.custom.description": "Temel URL üzerinden özel bir sağlayıcı ekleyin.",
 
@@ -1703,16 +1707,7 @@ export const dict = {
   "settings.providers.modeModels": "Mod Başına Model",
   "settings.providers.modeModels.description":
     "Belirli modlar için varsayılan modeli geçersiz kılın. Ayarlanmadıysa genel varsayılan model kullanılır.",
-  "settings.providers.disabled": "Devre Dışı Sağlayıcılar",
-  "settings.providers.disabled.description": "Sağlayıcı listesinde gizlenecek sağlayıcılar",
-  "settings.providers.disabled.enable": "Etkinleştir",
-  "settings.providers.enabled": "Etkin Sağlayıcılar (İzin Listesi)",
-  "settings.providers.enabled.description":
-    "Ayarlanırsa yalnızca bu sağlayıcılar kullanılabilir olacak (özel izin listesi)",
   "settings.providers.notSet": "Ayarlanmadı (sunucu varsayılanını kullan)",
-  "settings.providers.custom.note": "Temel URL üzerinden özel bir sağlayıcı ekleyin.",
-  "settings.providers.search.placeholder": "Sağlayıcı ara",
-  "settings.providers.select.placeholder": "Sağlayıcı seç...",
 
   "dialog.model.notSet": "Ayarlanmadı",
 

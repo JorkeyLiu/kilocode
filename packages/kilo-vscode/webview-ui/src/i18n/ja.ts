@@ -197,6 +197,7 @@ export const dict = {
   "dialog.provider.viewAll": "さらにプロバイダーを表示",
 
   "provider.connect.title": "{{provider}}を接続",
+  "provider.connect.title.manageApiKey": "API Key — {{provider}}",
   "provider.connect.title.anthropicProMax": "Claude Pro/Maxでログイン",
   "provider.connect.selectMethod": "{{provider}}のログイン方法を選択してください。",
   "provider.connect.method.apiKey": "APIキー",
@@ -246,15 +247,17 @@ export const dict = {
   "provider.connect.toast.connected.title": "{{provider}}が接続されました",
   "provider.connect.toast.connected.description": "{{provider}}モデルが使用可能になりました。",
 
-  "provider.disconnect.toast.disconnected.title": "{{provider}}が切断されました",
-  "provider.disconnect.toast.disconnected.description": "{{provider}}のモデルは利用できなくなりました。",
-
+  "provider.apiKey.remove.confirm.title": "Remove API Key for {{provider}}",
+  "provider.apiKey.remove.confirm.body":
+    "This will remove the stored API key. The provider configuration and disabled state will be preserved. You can reconnect later by adding a new API key.",
+  "provider.apiKey.remove.toast.title": "API Key removed for {{provider}}",
+  "provider.apiKey.remove.toast.description": "The stored API key has been removed. Provider configuration is preserved.",
   "provider.delete.toast.deleted.title": "{{provider}} を削除しました",
   "provider.delete.toast.deleted.description": "{{provider}} の設定と認証情報が削除されました。",
   "provider.delete.confirm.title": "{{provider}} を削除",
   "provider.delete.confirm.body": "カスタムプロバイダーの設定と保存されたすべての認証情報が完全に削除されます。",
 
-  "settings.providers.switch.label": "{{provider}}",
+  "settings.providers.switch.label": "Enable {{provider}}",
 
   "model.tag.free": "無料",
   "model.tag.dataCollected": "データがトレーニングに使用される場合があります",
@@ -307,7 +310,6 @@ export const dict = {
   "common.loading.ellipsis": "...",
   "common.cancel": "キャンセル",
   "common.connect": "接続",
-  "common.disconnect": "切断",
   "common.submit": "送信",
   "common.save": "保存",
   "common.saving": "保存中...",
@@ -948,14 +950,9 @@ export const dict = {
   "settings.shortcuts.group.prompt": "プロンプト",
 
   "settings.providers.title": "プロバイダー",
-  "settings.providers.description": "プロバイダー設定はここで構成できます。",
-  "settings.providers.betaNotice":
-    "現在、設定画面で設定できるのはKilo Gatewayプロバイダーのみです。他のプロバイダーの設定については、ベータ期間中にまもなく対応予定です。それまでの間は、CLIまたは設定ファイルを使用してプロバイダーを設定できます。私たちはKiloをオープンに保ち、ロックインのない状態を維持することをお約束します。",
-  "settings.providers.section.connected": "接続済みプロバイダー",
-  "settings.providers.connected.empty": "接続済みプロバイダーはありません",
-  "settings.providers.section.popular": "人気のプロバイダー",
-  "settings.providers.search.placeholder": "プロバイダーを検索",
-  "settings.providers.select.placeholder": "プロバイダーを選択...",
+  "settings.providers.section.configured": "Configured providers",
+  "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
+  "settings.providers.section.add": "Add providers",
   "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "環境",
   "settings.providers.tag.config": "設定",
@@ -963,7 +960,12 @@ export const dict = {
   "settings.providers.tag.custom": "カスタム",
   "settings.providers.tag.other": "その他",
   "settings.providers.tag.customProvider": "カスタムプロバイダー",
-  "settings.providers.connected.environmentDescription": "環境変数から接続されています",
+  "settings.providers.action.configure": "Configure",
+  "settings.providers.action.apiKey": "API Key",
+  "settings.providers.action.account": "Account",
+  "settings.providers.action.remove": "Remove",
+  "settings.providers.action.update": "Update",
+  "settings.providers.action.deleteProvider": "Delete provider",
   "settings.providers.action.signInChatGPT": "ChatGPT でサインイン",
   "settings.providers.custom.description": "ベース URL でカスタムプロバイダーを追加します。",
   "settings.providers.subagentModel.title": "サブエージェントモデル",
@@ -973,7 +975,6 @@ export const dict = {
   "settings.models.hidePromptTraining.description":
     "プロバイダーがプロンプトを学習に使用する可能性のある Kilo Gateway モデルを非表示にします。",
   "settings.providers.modeModels": "モードごとのモデル",
-  "settings.providers.custom.note": "Base URL でカスタムプロバイダーを追加します。",
   "settings.providers.modeModels.description":
     "特定のモードのデフォルトモデルを上書きします。設定されていない場合、グローバルデフォルトモデルが使用されます。",
   "provider.custom.title": "カスタムプロバイダー",
@@ -1724,11 +1725,6 @@ export const dict = {
   "settings.providers.smallModel.title": "小型モデル",
   "settings.providers.smallModel.description":
     "タイトル生成、コミットメッセージ生成、プロンプト改善、およびその他の高速タスク用の軽量モデル",
-  "settings.providers.disabled": "無効化されたプロバイダー",
-  "settings.providers.disabled.description": "プロバイダーリストから非表示にするプロバイダー",
-  "settings.providers.disabled.enable": "有効化",
-  "settings.providers.enabled": "有効化されたプロバイダー（ホワイトリスト）",
-  "settings.providers.enabled.description": "設定された場合、これらのプロバイダーのみが利用可能",
   "settings.providers.notSet": "未設定（サーバーのデフォルトを使用）",
   "dialog.model.notSet": "未設定",
   "profile.personalAccount": "個人アカウント",

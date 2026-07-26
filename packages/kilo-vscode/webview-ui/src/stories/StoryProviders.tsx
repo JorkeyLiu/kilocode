@@ -96,16 +96,22 @@ const MOCK_PROVIDERS = {
 const MOCK_MODELS = flattenModels(MOCK_PROVIDERS as any)
 
 /** A synchronous mock ProviderContext — provides models without waiting for a postMessage round-trip. */
-const MockProviderProvider: ParentComponent<{ kiloAuth?: boolean }> = (props) => {
+const MockProviderProvider: ParentComponent<{
+  kiloAuth?: boolean
+  connected?: string[]
+  authStates?: Record<string, ProviderAuthState>
+  authMethods?: Record<string, any[]>
+}> = (props) => {
   const value = {
     providers: () => MOCK_PROVIDERS as any,
-    connected: () => ["kilo"],
+    connected: () => props.connected ?? ["kilo"],
     defaults: () => ({}),
     defaultSelection: () => ({ providerID: "kilo", modelID: "anthropic/claude-sonnet-4-6" }),
     models: () => MOCK_MODELS,
     findModel: (sel: any) => _findModel(MOCK_MODELS, sel),
-    authMethods: () => ({}),
-    authStates: () => (props.kiloAuth ? { kilo: "oauth" } : {}) as Record<string, ProviderAuthState>,
+    authMethods: () => props.authMethods ?? {},
+    authStates: () =>
+      props.authStates ?? (props.kiloAuth ? { kilo: "oauth" } : {}) as Record<string, ProviderAuthState>,
     isModelValid: () => true,
   }
   return <ProviderContext.Provider value={value}>{props.children}</ProviderContext.Provider>
@@ -302,6 +308,12 @@ interface StoryProvidersProps {
   onOpenDiff?: OpenDiffFn
   onOpenFile?: OpenFileFn
   kiloAuth?: boolean
+  /** Override the default connected provider IDs. */
+  connected?: string[]
+  /** Override the default auth states. */
+  authStates?: Record<string, ProviderAuthState>
+  /** Override the default auth methods per provider. */
+  authMethods?: Record<string, any[]>
   /** When true, renders children without the default 12px padding wrapper */
   noPadding?: boolean
 }
@@ -428,7 +440,7 @@ export const StoryProviders: ParentComponent<StoryProvidersProps> = (props) => {
             onProjectConfigChange={props.onProjectConfigChange}
           >
             <DisplayProvider>
-              <MockProviderProvider kiloAuth={props.kiloAuth}>
+              <MockProviderProvider kiloAuth={props.kiloAuth} connected={props.connected} authStates={props.authStates} authMethods={props.authMethods}>
                 <DialogProvider>
                   <LanguageContext.Provider
                     value={{
