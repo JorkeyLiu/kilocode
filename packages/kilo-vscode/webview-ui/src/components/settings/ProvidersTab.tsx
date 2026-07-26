@@ -243,34 +243,43 @@ const ProvidersTab: Component = () => {
                     {/* Primary slot: exactly one child per row */}
                     <SolidSwitch>
                       <Match when={primary() === "account"}>
-                        <Button
-                          size="large"
-                          variant="ghost"
-                          onClick={() => server.goToProfile()}
-                          class="settings-provider-row-credential-slot"
-                        >
-                          {language.t("settings.providers.action.account")}
-                        </Button>
+                        <div class="settings-provider-row-credential-slot settings-provider-row-credential-slot--icon">
+                          <Tooltip value={language.t("settings.providers.action.account")}>
+                            <IconButton
+                              icon="person"
+                              size="large"
+                              variant="ghost"
+                              aria-label={language.t("settings.providers.action.account")}
+                              onClick={() => server.goToProfile()}
+                            />
+                          </Tooltip>
+                        </div>
                       </Match>
                       <Match when={primary() === "edit"}>
-                        <Button
-                          size="large"
-                          variant="ghost"
-                          onClick={() => editProvider(item)}
-                          class="settings-provider-row-credential-slot"
-                        >
-                          {language.t("common.edit")}
-                        </Button>
+                        <div class="settings-provider-row-credential-slot settings-provider-row-credential-slot--icon">
+                          <Tooltip value={language.t("common.edit")}>
+                            <IconButton
+                              icon="edit"
+                              size="large"
+                              variant="ghost"
+                              aria-label={language.t("common.edit")}
+                              onClick={() => editProvider(item)}
+                            />
+                          </Tooltip>
+                        </div>
                       </Match>
                       <Match when={primary() === "apiKey"}>
-                        <Button
-                          size="large"
-                          variant="ghost"
-                          onClick={() => manageApiKey(item)}
-                          class="settings-provider-row-credential-slot"
-                        >
-                          {language.t("settings.providers.action.apiKey")}
-                        </Button>
+                        <div class="settings-provider-row-credential-slot settings-provider-row-credential-slot--icon">
+                          <Tooltip value={language.t("settings.providers.action.apiKey")}>
+                            <IconButton
+                              icon="edit"
+                              size="large"
+                              variant="ghost"
+                              aria-label={language.t("settings.providers.action.apiKey")}
+                              onClick={() => manageApiKey(item)}
+                            />
+                          </Tooltip>
+                        </div>
                       </Match>
                       <Match when={primary() === "chatgpt"}>
                         <Button
@@ -308,12 +317,12 @@ const ProvidersTab: Component = () => {
                       when={showTrashButton(item)}
                       fallback={<div class="settings-provider-row-final-slot" aria-hidden="true" />}
                     >
-                      {/* LOCK-077: wrapper provides ≥24px clickable target in the 28px slot */}
+                      {/* LOCK-077: wrapper provides 32×32 clickable target in the 32px slot */}
                       <div class="settings-provider-row-final-slot">
                         <Tooltip value={language.t("settings.providers.action.deleteProvider")}>
                           <IconButton
                             icon="close"
-                            size="small"
+                            size="large"
                             variant="ghost"
                             aria-label={language.t("settings.providers.action.deleteProvider")}
                             onClick={() => deleteCustom(item.id, item.name)}

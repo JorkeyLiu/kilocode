@@ -88,15 +88,149 @@ describe("ProvidersTab — Account uses server.goToProfile (LOCK-075)", () => {
   })
 })
 
+describe("ProvidersTab — action icon normalization", () => {
+  it("account slot renders person IconButton with Tooltip", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "account"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    const block = match![1]
+    expect(block).toContain('icon="person"')
+    expect(block).toContain("<Tooltip")
+    expect(block).toContain("IconButton")
+    expect(block).toContain("server.goToProfile()")
+  })
+
+  it("account slot has localized aria-label and tooltip", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "account"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    const block = match![1]
+    expect(block).toContain('aria-label={language.t("settings.providers.action.account")}')
+    expect(block).toContain('value={language.t("settings.providers.action.account")}')
+  })
+
+  it("account slot uses credential-slot wrapper", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "account"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toContain("settings-provider-row-credential-slot")
+  })
+
+  it("edit slot renders edit IconButton with Tooltip", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "edit"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    const block = match![1]
+    expect(block).toContain('icon="edit"')
+    expect(block).toContain("<Tooltip")
+    expect(block).toContain("IconButton")
+    expect(block).toContain("editProvider(item)")
+  })
+
+  it("edit slot has localized aria-label and tooltip", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "edit"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    const block = match![1]
+    expect(block).toContain('aria-label={language.t("common.edit")}')
+    expect(block).toContain('value={language.t("common.edit")}')
+  })
+
+  it("edit slot uses credential-slot wrapper", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "edit"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toContain("settings-provider-row-credential-slot")
+  })
+
+  it("apiKey slot renders edit IconButton with Tooltip", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "apiKey"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    const block = match![1]
+    expect(block).toContain('icon="edit"')
+    expect(block).toContain("<Tooltip")
+    expect(block).toContain("IconButton")
+    expect(block).toContain("manageApiKey(item)")
+  })
+
+  it("apiKey slot has localized aria-label and tooltip", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "apiKey"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    const block = match![1]
+    expect(block).toContain('aria-label={language.t("settings.providers.action.apiKey")}')
+    expect(block).toContain('value={language.t("settings.providers.action.apiKey")}')
+  })
+
+  it("apiKey slot uses credential-slot wrapper", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "apiKey"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toContain("settings-provider-row-credential-slot")
+  })
+
+  it("account, edit, and apiKey slots all use IconButton with ghost variant and large size", () => {
+    const slots = ["account", "edit", "apiKey"]
+    for (const slot of slots) {
+      const match = TAB_SRC.match(new RegExp(`<Match when=\\{primary\\(\\) === "${slot}"\\}>([\\s\\S]*?)<\\/Match>`))
+      expect(match).not.toBeNull()
+      const block = match![1]
+      expect(block).toContain('variant="ghost"')
+      expect(block).toContain('size="large"')
+    }
+  })
+
+  it("chatgpt slot remains a text Button (unchanged)", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "chatgpt"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    const block = match![1]
+    expect(block).toContain("<Button")
+    expect(block).not.toContain("IconButton")
+    expect(block).not.toContain("icon=")
+  })
+
+  it("anaconda slot remains a text Button (unchanged)", () => {
+    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "anaconda"\}>([\s\S]*?)<\/Match>/)
+    expect(match).not.toBeNull()
+    const block = match![1]
+    expect(block).toContain("<Button")
+    expect(block).not.toContain("IconButton")
+    expect(block).not.toContain("icon=")
+  })
+})
+
+describe("Icon credential-slot right-alignment (LOCK-033/034)", () => {
+  const iconSlots = ["account", "edit", "apiKey"]
+
+  it("icon slots use the --icon modifier class", () => {
+    for (const slot of iconSlots) {
+      const match = TAB_SRC.match(
+        new RegExp(`<Match when=\\{primary\\(\\) === "${slot}"\\}>([\\s\\S]*?)<\\/Match>`)
+      )
+      expect(match).not.toBeNull()
+      expect(match![1]).toContain("settings-provider-row-credential-slot--icon")
+    }
+  })
+
+  it("chatgpt and anaconda text buttons do NOT use the --icon modifier", () => {
+    for (const slot of ["chatgpt", "anaconda"]) {
+      const match = TAB_SRC.match(
+        new RegExp(`<Match when=\\{primary\\(\\) === "${slot}"\\}>([\\s\\S]*?)<\\/Match>`)
+      )
+      expect(match).not.toBeNull()
+      expect(match![1]).not.toContain("settings-provider-row-credential-slot--icon")
+    }
+  })
+
+  it("settings.css defines the --icon modifier with flex-end alignment", () => {
+    const SETTINGS_CSS = read("webview-ui/src/styles/settings.css")
+    expect(SETTINGS_CSS).toContain(".settings-provider-row-credential-slot--icon")
+    expect(SETTINGS_CSS).toContain("justify-content: flex-end")
+    expect(SETTINGS_CSS).toContain("display: flex")
+  })
+})
+
 describe("ProvidersTab — close icon props (LOCK-077)", () => {
-  it("close IconButton has icon='close', size='small', variant='ghost'", () => {
+  it("close IconButton has icon='close', size='large', variant='ghost'", () => {
     // Find the JSX IconButton usage near deleteCustom onClick
     const idx = TAB_SRC.indexOf("onClick={() => deleteCustom(item.id, item.name)}")
     expect(idx).toBeGreaterThan(-1)
     // IconButton is just before the onClick
     const beforeSnippet = TAB_SRC.slice(Math.max(0, idx - 300), idx)
     expect(beforeSnippet).toContain('icon="close"')
-    expect(beforeSnippet).toContain('size="small"')
+    expect(beforeSnippet).toContain('size="large"')
     expect(beforeSnippet).toContain('variant="ghost"')
   })
 
@@ -145,12 +279,11 @@ describe("Credential reveal CSS (LOCK-009)", () => {
 })
 
 describe("Close icon target CSS (LOCK-077)", () => {
-  it("final-slot has min-width and min-height >= 24px", () => {
+  it("final-slot has 32px width and height for 32×32 large IconButton", () => {
     expect(DIALOG_CSS).not.toContain("min-width: 24px")
-    // Check settings.css for the target size
     const SETTINGS_CSS = read("webview-ui/src/styles/settings.css")
-    expect(SETTINGS_CSS).toContain("min-width: 24px")
-    expect(SETTINGS_CSS).toContain("min-height: 24px")
+    expect(SETTINGS_CSS).toContain("width: 32px")
+    expect(SETTINGS_CSS).toContain("height: 32px")
   })
 })
 

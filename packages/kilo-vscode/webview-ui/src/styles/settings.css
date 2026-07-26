@@ -167,7 +167,7 @@
 /* Controls grid: primary slot + switch + final slot — fixed-width columns (LOCK-029) */
 .settings-provider-row-controls {
   display: grid;
-  grid-template-columns: minmax(88px, 112px) 28px 28px;
+  grid-template-columns: minmax(88px, 112px) 28px 32px;
   column-gap: 12px;
   align-items: center;
 }
@@ -181,23 +181,20 @@
   white-space: nowrap;
 }
 
-/* Final slot: invisible placeholder keeps Switch position stable (LOCK-029) */
-.settings-provider-row-final-slot {
-  width: 28px;
-  height: 28px;
+/* Icon credential slots: right-align content so icon sits adjacent to the toggle column */
+.settings-provider-row-credential-slot--icon {
+  display: flex;
+  justify-content: flex-end;
 }
 
-/* LOCK-077: increase close icon clickable target to ≥24px within the 28px final-slot */
+/* Final slot: invisible placeholder keeps Switch position stable (LOCK-029) */
 .settings-provider-row-final-slot {
+  width: 32px;
+  height: 32px;
   display: flex;
   align-items: center;
   justify-content: center;
   cursor: pointer;
-}
-
-.settings-provider-row-final-slot button {
-  min-width: 24px;
-  min-height: 24px;
 }
 
 /* ≤500px: identity on first row, controls right-aligned on second row (LOCK-030) */
@@ -208,6 +205,6 @@
 
   .settings-provider-row-controls {
     justify-self: end;
-    grid-template-columns: minmax(72px, 1fr) 28px 28px;
+    grid-template-columns: minmax(72px, 1fr) 28px 32px;
   }
 }

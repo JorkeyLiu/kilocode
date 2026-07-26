@@ -54,6 +54,10 @@ const icons: Record<string, { path: string; viewBox: string }> = {
     viewBox: "0 0 24 24",
     path: `<path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 3v5h-5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/><path d="M3 21v-5h5" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round"/>`,
   },
+  person: {
+    viewBox: "0 0 20 20",
+    path: `<circle cx="10" cy="7" r="3.5" stroke="currentColor" stroke-width="1.5"/><path d="M3.75 17.5C3.75 14.019 6.519 11.25 10 11.25C13.481 11.25 16.25 14.019 16.25 17.5" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>`,
+  },
 }
 
 type Name = keyof typeof icons
