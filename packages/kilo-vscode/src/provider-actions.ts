@@ -531,7 +531,9 @@ export type CredentialAuthResult = { authorized: false; error: string } | { auth
  * LOCK-003 constraints enforced:
  * - `providerID` must be non-empty and not "kilo"
  * - Target provider must exist in the fresh list
- * - `source` must be "api"
+ * - Authorized sources: "api" (built-in stored key), "custom" (custom provider),
+ *   or "config" with non-empty key AND empty env array (proving key was explicitly
+ *   stored via auth, not derived from env/config)
  * - `key` must be a non-empty string
  *
  * On failure the returned error is a generic message; the key is never
@@ -546,8 +548,24 @@ export function authorizeCredentialRead(
 
   const target = providerList.find((item) => item.id === providerID)
   if (!target) return { authorized: false, error: "Unable to load API key" }
-  if (target.source !== "api") return { authorized: false, error: "Unable to load API key" }
-  if (typeof target.key !== "string" || !target.key) return { authorized: false, error: "Unable to load API key" }
 
-  return { authorized: true, key: target.key }
+  const source = target.source
+  const key = target.key
+  const hasKey = typeof key === "string" && key.length > 0
+
+  // source="api": built-in provider with explicitly stored key
+  if (source === "api" && hasKey) return { authorized: true, key }
+
+  // source="custom": custom provider with stored key (pre-backend-init shape)
+  if (source === "custom" && hasKey) return { authorized: true, key }
+
+  // source="config": backend overwrites source to "config" after init.
+  // Only authorize when env is empty (proving key was explicitly stored via auth,
+  // not derived from an environment variable).
+  const env = target.env
+  if (source === "config" && hasKey && Array.isArray(env) && env.length === 0) {
+    return { authorized: true, key }
+  }
+
+  return { authorized: false, error: "Unable to load API key" }
 }

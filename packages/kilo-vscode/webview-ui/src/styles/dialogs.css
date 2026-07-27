@@ -79,3 +79,260 @@
   align-items: center;
   font-size: var(--kilo-font-size-13);
 }
+
+/* ── CustomProviderDialog layout overrides (LOCK-001/LOCK-002) ──────────────
+ * Scoped to .custom-provider-dialog on dialog-content.  Removes the global
+ * 512 px content cap so x-large can use the full container width (up to 960 px
+ * or 100vw-32 px, whichever is smaller).  Makes dialog-body the single
+ * vertical scroll region with a visible scrollbar. */
+[data-slot="dialog-content"].custom-provider-dialog {
+  max-width: none; /* override global 512px cap */
+}
+
+[data-slot="dialog-content"].custom-provider-dialog [data-slot="dialog-body"] {
+  overflow-y: auto;
+  /* Re-enable the native scrollbar that base dialog.css hides */
+  scrollbar-width: auto;
+}
+
+[data-slot="dialog-content"].custom-provider-dialog [data-slot="dialog-body"]::-webkit-scrollbar {
+  display: block;
+  width: 8px;
+}
+
+[data-slot="dialog-content"].custom-provider-dialog [data-slot="dialog-body"]::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-slider-background, var(--vscode-scrollbarSlider-background));
+  border-radius: 4px;
+}
+
+[data-slot="dialog-content"].custom-provider-dialog [data-slot="dialog-body"]::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-slider-hover-background, var(--vscode-scrollbarSlider-hoverBackground));
+}
+
+[data-slot="dialog-content"].custom-provider-dialog [data-slot="dialog-body"]::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* ── CustomProviderDialog form layout (responsive grid + sections) ─────────
+ * Basic fields use a 2-column grid at wide widths and collapse to 1 column
+ * at narrow widths via container queries. API key spans full width.
+ * Models and Headers are distinct full-width sections with visual dividers.
+ * The footer is sticky at the bottom of the scroll region. */
+
+/* Container query context for responsive field pairing */
+.cpd-form {
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  padding: 0 10px 24px 10px;
+}
+
+/* Basic fields: 2-column grid at wide widths */
+.cpd-basic-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+/* API key spans full width */
+.cpd-api-key-row {
+  grid-column: 1 / -1;
+}
+
+/* Package select wrapper to match TextField height */
+.cpd-package-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.cpd-package-label {
+  font-size: var(--kilo-font-size-12);
+  font-weight: 500;
+  color: var(--text-weak-base);
+}
+
+/* Section wrappers with visual divider — no nested cards */
+.cpd-section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.cpd-section-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--kilo-font-size-12);
+  font-weight: 500;
+  color: var(--text-weak-base);
+}
+
+.cpd-divider {
+  height: 1px;
+  background: var(--border-weak-base);
+  border: none;
+  margin: 0;
+}
+
+/* Sticky footer: stays at bottom of scroll region without obscuring content */
+.cpd-footer {
+  position: sticky;
+  bottom: 0;
+  background: var(--background-base);
+  padding: 12px 10px 0 10px;
+  margin: 0 -10px;
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+/* Description row */
+.cpd-description {
+  font-size: var(--kilo-font-size-14);
+  color: var(--text-base);
+}
+
+/* Header with icon + title */
+.cpd-dialog-header {
+  display: flex;
+  padding: 0 10px;
+  gap: 16px;
+  align-items: center;
+}
+
+.cpd-dialog-title {
+  font-size: var(--kilo-font-size-16);
+  font-weight: 500;
+  color: var(--vscode-foreground);
+}
+
+/* ── VariantRow: 2-column grid layout ──────────────────────────────────────
+ * Select pairs (label + select) arranged in a 2×3 grid to halve vertical
+ * height. Name field and trash button remain in their own row above. */
+.cpd-variant-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 12px;
+}
+
+/* ── Configured / Available sub-containers inside Models section ───────────
+ * cpd-configured: user-added model cards + "Add model" button
+ * cpd-available: fetched picker with API models.
+ * Separated by background + spacing (not a 3rd divider — arch test constraint). */
+.cpd-configured {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cpd-available {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 6px;
+  background: var(--surface-1-base, var(--vscode-sideBar-background));
+  border: 1px solid var(--border-weak-base, var(--vscode-panel-border));
+}
+
+.cpd-available-label {
+  font-size: var(--kilo-font-size-12);
+  font-weight: 500;
+  color: var(--text-weak-base);
+}
+
+/* ── Model picker (fetched from API) ────────────────────────────────────── */
+.cpd-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.cpd-picker-toolbar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.cpd-picker-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+/* ── Responsive model list: multi-column grid ────────────────────────────── */
+.cpd-model-list {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+  max-height: 200px;
+  overflow-y: auto;
+}
+
+.cpd-model-list-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+  cursor: pointer;
+  font-size: var(--kilo-font-size-13);
+  color: var(--text-base, var(--vscode-foreground));
+}
+
+.cpd-model-list-item span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── Checkbox row (horizontal) ──────────────────────────────────────────── */
+.cpd-checkbox-row {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.cpd-checkbox-row label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: var(--kilo-font-size-13);
+  color: var(--vscode-foreground);
+}
+
+/* ≤500px: collapse variant grid and model list to single column */
+@container (max-width: 500px) {
+  .cpd-basic-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cpd-variant-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cpd-model-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Model list responsive: 3 cols at ≥600px, 2 at 381-599px, 1 at ≤380px */
+@container (max-width: 380px) {
+  .cpd-model-list {
+    grid-template-columns: 1fr;
+  }
+}
+
+@container (min-width: 381px) and (max-width: 599px) {
+  .cpd-model-list {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@container (min-width: 600px) {
+  .cpd-model-list {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}

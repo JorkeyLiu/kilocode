@@ -870,12 +870,46 @@ describe("fetchProviderData — credential read authorization predicates", () =>
 
 describe("authorizeCredentialRead", () => {
   const apiProvider = { id: "openai", source: "api", key: "sk-test-123" }
+  const customProvider = { id: "custom1", source: "custom", key: "custom-key" }
+  const configCustomProvider = {
+    id: "configcustom",
+    source: "config",
+    key: "stored-key",
+    env: [],
+  }
+  const configEnvProvider = {
+    id: "configenv",
+    source: "config",
+    key: "env-key",
+    env: ["OPENAI_API_KEY"],
+  }
+  const configNoEnvField = { id: "confignoenv", source: "config", key: "key" }
   const envProvider = { id: "envprovider", source: "env", key: "env-key" }
   const kiloProvider = { id: "kilo", source: "config", key: "configured" }
 
   it("authorizes source='api' provider with non-empty key", () => {
     const result = authorizeCredentialRead("openai", [apiProvider as any])
     expect(result).toEqual({ authorized: true, key: "sk-test-123" })
+  })
+
+  it("authorizes source='custom' provider with non-empty key", () => {
+    const result = authorizeCredentialRead("custom1", [customProvider as any])
+    expect(result).toEqual({ authorized: true, key: "custom-key" })
+  })
+
+  it("authorizes source='config' custom provider with non-empty key and empty env", () => {
+    const result = authorizeCredentialRead("configcustom", [configCustomProvider as any])
+    expect(result).toEqual({ authorized: true, key: "stored-key" })
+  })
+
+  it("rejects source='config' provider with non-empty key and non-empty env (env-derived)", () => {
+    const result = authorizeCredentialRead("configenv", [configEnvProvider as any])
+    expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
+  })
+
+  it("rejects source='config' provider with non-empty key but missing env field", () => {
+    const result = authorizeCredentialRead("confignoenv", [configNoEnvField as any])
+    expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
   })
 
   it("rejects empty providerID", () => {
@@ -893,7 +927,7 @@ describe("authorizeCredentialRead", () => {
     expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
   })
 
-  it("rejects source !== 'api'", () => {
+  it("rejects source='env' provider with non-empty key (env-derived)", () => {
     const result = authorizeCredentialRead("envprovider", [envProvider as any])
     expect(result).toEqual({ authorized: false, error: "Unable to load API key" })
   })

@@ -1073,6 +1073,7 @@ export const dict = {
   "provider.custom.models.remove": "Modell entfernen",
   "provider.custom.models.add": "Modell hinzufügen",
   "provider.custom.models.fetch": "Modelle abrufen",
+  "provider.custom.models.fetch.available": "Über API verfügbar",
   "provider.custom.models.fetching": "Abrufen\u2026",
   "provider.custom.models.fetch.error": "Modelle konnten nicht abgerufen werden: {{error}}",
   "provider.custom.models.fetch.authError":

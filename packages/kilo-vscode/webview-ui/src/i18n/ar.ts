@@ -1000,6 +1000,7 @@ export const dict = {
   "provider.custom.models.remove": "إزالة النموذج",
   "provider.custom.models.add": "إضافة نموذج",
   "provider.custom.models.fetch": "جلب النماذج",
+  "provider.custom.models.fetch.available": "متاح من واجهة برمجة التطبيقات",
   "provider.custom.models.fetching": "جارٍ الجلب\u2026",
   "provider.custom.models.fetch.error": "فشل جلب النماذج: {{error}}",
   "provider.custom.models.fetch.authError": "فشلت المصادقة. تحقق من مفتاح API أعلاه وحاول مرة أخرى.",

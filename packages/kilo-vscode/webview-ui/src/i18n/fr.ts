@@ -1072,6 +1072,7 @@ export const dict = {
   "provider.custom.models.remove": "Supprimer le modèle",
   "provider.custom.models.add": "Ajouter un modèle",
   "provider.custom.models.fetch": "Récupérer les modèles",
+  "provider.custom.models.fetch.available": "Disponibles via l'API",
   "provider.custom.models.fetching": "Récupération\u2026",
   "provider.custom.models.fetch.error": "Échec de la récupération des modèles : {{error}}",
   "provider.custom.models.fetch.authError": "Échec de l'authentification. Vérifiez la clé API ci-dessus et réessayez.",

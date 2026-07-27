@@ -1018,6 +1018,7 @@ export const dict = {
   "provider.custom.models.remove": "Usuń model",
   "provider.custom.models.add": "Dodaj model",
   "provider.custom.models.fetch": "Pobierz modele",
+  "provider.custom.models.fetch.available": "Dostępne z API",
   "provider.custom.models.fetching": "Pobieranie\u2026",
   "provider.custom.models.fetch.error": "Nie udało się pobrać modeli: {{error}}",
   "provider.custom.models.fetch.authError":

@@ -1061,6 +1061,7 @@ export const dict = {
   "provider.custom.models.remove": "Ukloni model",
   "provider.custom.models.add": "Dodaj model",
   "provider.custom.models.fetch": "Preuzmi modele",
+  "provider.custom.models.fetch.available": "Dostupno putem API-ja",
   "provider.custom.models.fetching": "Preuzimanje\u2026",
   "provider.custom.models.fetch.error": "Preuzimanje modela nije uspjelo: {{error}}",
   "provider.custom.models.fetch.authError":

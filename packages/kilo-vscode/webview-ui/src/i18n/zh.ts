@@ -1024,6 +1024,7 @@ export const dict = {
   "provider.custom.models.remove": "移除模型",
   "provider.custom.models.add": "添加模型",
   "provider.custom.models.fetch": "获取模型",
+  "provider.custom.models.fetch.available": "可从 API 获取",
   "provider.custom.models.fetching": "获取中\u2026",
   "provider.custom.models.fetch.error": "获取模型失败：{{error}}",
   "provider.custom.models.fetch.authError": "认证失败。请检查上方的 API 密钥后重试。",

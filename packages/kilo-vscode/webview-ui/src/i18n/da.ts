@@ -1055,6 +1055,7 @@ export const dict = {
   "provider.custom.models.remove": "Fjern model",
   "provider.custom.models.add": "Tilføj model",
   "provider.custom.models.fetch": "Hent modeller",
+  "provider.custom.models.fetch.available": "Tilgængelige fra API",
   "provider.custom.models.fetching": "Henter\u2026",
   "provider.custom.models.fetch.error": "Kunne ikke hente modeller: {{error}}",
   "provider.custom.models.fetch.authError": "Godkendelse mislykkedes. Kontrollér API-nøglen ovenfor, og prøv igen.",

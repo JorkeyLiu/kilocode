@@ -988,6 +988,7 @@ export const dict = {
   "provider.custom.models.remove": "移除模型",
   "provider.custom.models.add": "新增模型",
   "provider.custom.models.fetch": "取得模型",
+  "provider.custom.models.fetch.available": "可從 API 取得",
   "provider.custom.models.fetching": "取得中\u2026",
   "provider.custom.models.fetch.error": "取得模型失敗：{{error}}",
   "provider.custom.models.fetch.authError": "驗證失敗。請檢查上方的 API 金鑰後重試。",

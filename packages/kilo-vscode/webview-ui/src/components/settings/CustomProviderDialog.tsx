@@ -5,9 +5,10 @@ import { IconButton } from "@kilocode/kilo-ui/icon-button"
 import { ProviderIcon } from "@kilocode/kilo-ui/provider-icon"
 import { Select } from "@kilocode/kilo-ui/select"
 import { Spinner } from "@kilocode/kilo-ui/spinner"
-import { TextField } from "@kilocode/kilo-ui/text-field"
+import { TextField, TextFieldRoot } from "@kilocode/kilo-ui/text-field"
+import { Tooltip } from "@kilocode/kilo-ui/tooltip"
 import { showToast } from "@kilocode/kilo-ui/toast"
-import { For, Show, createEffect, createMemo, createSignal, onCleanup } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, onMount } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { useConfig } from "../../context/config"
 import { useLanguage } from "../../context/language"
@@ -187,6 +188,53 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
     headers: form.headers.map(() => ({})),
   })
   const [apiTouched, setApiTouched] = createSignal(false)
+
+  // ── Credential reveal (LOCK-003/005) ─────────────────────────────────
+  const [originalKey, setOriginalKey] = createSignal<string | null>(null)
+  const [credentialLoading, setCredentialLoading] = createSignal(false)
+  const [credentialError, setCredentialError] = createSignal<string>()
+  const [showKey, setShowKey] = createSignal(false)
+  let pendingCredentialID: string | undefined
+
+  /** Request the saved credential on demand for an existing API-backed custom provider. */
+  function requestCredential() {
+    if (!props.existing) return
+    setCredentialLoading(true)
+    setCredentialError(undefined)
+    pendingCredentialID = action.send(
+      { type: "getProviderCredential", providerID: props.existing.providerID },
+      {
+        onCredentialLoaded: (message) => {
+          if (pendingCredentialID === undefined) return
+          pendingCredentialID = undefined
+          setOriginalKey(message.apiKey)
+          // Only seed the form field if the user hasn't started typing (LOCK: guard overwrite)
+          if (!apiTouched()) {
+            setForm("apiKey", message.apiKey)
+          }
+          setCredentialLoading(false)
+        },
+        onCredentialError: (message) => {
+          if (pendingCredentialID === undefined) return
+          pendingCredentialID = undefined
+          setCredentialLoading(false)
+          setCredentialError(message.error || language.t("provider.apiKey.manage.error"))
+        },
+      },
+    )
+  }
+
+  onMount(() => {
+    // Load saved credential for existing API-backed custom providers (no env config)
+    if (editing() && auth === "api") {
+      requestCredential()
+    }
+  })
+
+  onCleanup(() => {
+    pendingCredentialID = undefined
+    setOriginalKey(null)
+  })
 
   // ── Fetch models state ──────────────────────────────────────────────
 
@@ -541,32 +589,19 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
           aria-label={language.t("common.goBack")}
         />
       }
+      size="x-large"
+      class="custom-provider-dialog"
       transition
     >
-      <div
-        style={{
-          display: "flex",
-          "flex-direction": "column",
-          gap: "24px",
-          padding: "0 10px 12px 10px",
-          "overflow-y": "auto",
-          "max-height": "60vh",
-        }}
-      >
-        <div style={{ padding: "0 10px", display: "flex", gap: "16px", "align-items": "center" }}>
-          <ProviderIcon id="synthetic" width={20} height={20} />
-          <div
-            style={{ "font-size": "var(--kilo-font-size-16)", "font-weight": "500", color: "var(--vscode-foreground)" }}
-          >
-            {editing() ? language.t("provider.custom.edit.title") : language.t("provider.custom.title")}
-          </div>
+      <div class="cpd-dialog-header">
+        <ProviderIcon id="synthetic" width={20} height={20} />
+        <div class="cpd-dialog-title">
+          {editing() ? language.t("provider.custom.edit.title") : language.t("provider.custom.title")}
         </div>
+      </div>
 
-        <form
-          onSubmit={save}
-          style={{ padding: "0 10px 24px 10px", display: "flex", "flex-direction": "column", gap: "24px" }}
-        >
-          <div style={{ "font-size": "var(--kilo-font-size-14)", color: "var(--text-base)" }}>
+      <form onSubmit={save} class="cpd-form">
+          <div class="cpd-description">
             {language.t("provider.custom.description.prefix")}
             <a
               href="https://kilo.ai/docs/ai-providers#custom-provider"
@@ -583,7 +618,8 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
             {language.t("provider.custom.description.suffix")}
           </div>
 
-          <div style={{ display: "flex", "flex-direction": "column", gap: "16px" }}>
+          {/* Basic settings: 2-column grid that collapses at narrow widths */}
+          <div class="cpd-basic-grid">
             <TextField
               autofocus={!editing()}
               label={language.t("provider.custom.field.providerID.label")}
@@ -603,14 +639,8 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
               validationState={errors.name ? "invalid" : undefined}
               error={errors.name}
             />
-            <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
-              <label
-                style={{
-                  "font-size": "var(--kilo-font-size-12)",
-                  "font-weight": "500",
-                  color: "var(--text-weak-base)",
-                }}
-              >
+            <div class="cpd-package-field">
+              <label class="cpd-package-label">
                 {language.t("provider.custom.field.package.label")}
               </label>
               <Select
@@ -638,73 +668,221 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
               validationState={errors.baseURL ? "invalid" : undefined}
               error={errors.baseURL}
             />
-            <TextField
-              type="password"
-              label={language.t("provider.custom.field.apiKey.label")}
-              placeholder={language.t("provider.custom.field.apiKey.placeholder")}
-              description={language.t("provider.custom.field.apiKey.description")}
-              value={form.apiKey}
-              onChange={(v) => {
-                const key = !apiTouched() && form.apiKey === MASKED_CUSTOM_PROVIDER_KEY ? v.replace(/^\*+/, "") : v
-                setApiTouched(true)
-                setForm("apiKey", key)
-                setFetchKey(key)
-              }}
-            />
+
+            {/* API key: full-width row spanning both columns */}
+            <div class="cpd-api-key-row">
+              <Show when={credentialLoading()}>
+                <div style={{ display: "flex", gap: "8px", "align-items": "center", "font-size": "var(--kilo-font-size-13)" }}>
+                  <Spinner />
+                  <span>{language.t("provider.apiKey.manage.loading")}</span>
+                </div>
+              </Show>
+              <Show when={credentialError()}>
+                <div style={{ color: "var(--vscode-errorForeground)", "font-size": "var(--kilo-font-size-13)" }}>
+                  {credentialError()}
+                </div>
+              </Show>
+              <Show
+                when={originalKey() !== null}
+                fallback={
+                  <TextField
+                    type="password"
+                    label={language.t("provider.custom.field.apiKey.label")}
+                    placeholder={language.t("provider.custom.field.apiKey.placeholder")}
+                    description={language.t("provider.custom.field.apiKey.description")}
+                    value={form.apiKey}
+                    onChange={(v) => {
+                      const key = !apiTouched() && form.apiKey === MASKED_CUSTOM_PROVIDER_KEY ? v.replace(/^\*+/, "") : v
+                      setApiTouched(true)
+                      setForm("apiKey", key)
+                      setFetchKey(key)
+                    }}
+                  />
+                }
+              >
+                <TextFieldRoot
+                  data-component="input"
+                  data-variant="normal"
+                  value={form.apiKey}
+                  onChange={(v) => {
+                    const key = !apiTouched() && form.apiKey === MASKED_CUSTOM_PROVIDER_KEY ? v.replace(/^\*+/, "") : v
+                    setApiTouched(true)
+                    setForm("apiKey", key)
+                    setFetchKey(key)
+                  }}
+                >
+                  <TextFieldRoot.Label data-slot="input-label">
+                    {language.t("provider.custom.field.apiKey.label")}
+                  </TextFieldRoot.Label>
+                  <div data-slot="input-wrapper" class="provider-apikey-input-row">
+                    <TextFieldRoot.Input
+                      data-slot="input-input"
+                      type={showKey() ? "text" : "password"}
+                      placeholder={language.t("provider.custom.field.apiKey.placeholder")}
+                    />
+                    <Tooltip
+                      value={
+                        showKey()
+                          ? language.t("provider.connect.apiKey.hide")
+                          : language.t("provider.connect.apiKey.show")
+                      }
+                      placement="top"
+                      gutter={4}
+                    >
+                      <IconButton
+                        type="button"
+                        icon="eye"
+                        variant="ghost"
+                        size="small"
+                        onClick={() => setShowKey(!showKey())}
+                        class="provider-apikey-eye-toggle"
+                        aria-label={
+                          showKey()
+                            ? language.t("provider.connect.apiKey.hide")
+                            : language.t("provider.connect.apiKey.show")
+                        }
+                      />
+                    </Tooltip>
+                  </div>
+                  <TextFieldRoot.Description data-slot="input-description">
+                    {language.t("provider.custom.field.apiKey.description")}
+                  </TextFieldRoot.Description>
+                </TextFieldRoot>
+              </Show>
+            </div>
           </div>
 
-          {/* Models */}
-          <div style={{ display: "flex", "flex-direction": "column", gap: "12px" }}>
-            <div style={{ display: "flex", "align-items": "center", gap: "8px" }}>
-              <label
-                style={{
-                  "font-size": "var(--kilo-font-size-12)",
-                  "font-weight": "500",
-                  color: "var(--text-weak-base)",
-                }}
-              >
-                {language.t("provider.custom.models.label")}
-              </label>
+          {/* Models section */}
+          <div class="cpd-section">
+            <hr class="cpd-divider" />
+            <div class="cpd-section-label">
+              <span>{language.t("provider.custom.models.label")}</span>
               <Show when={fetching()}>
                 <Spinner style={{ width: "12px", height: "12px" }} />
               </Show>
             </div>
-            <For each={form.models}>
-              {(m, i) => (
-                <ModelCard
-                  m={m}
-                  i={i}
-                  errors={errors.models[i()] ?? {}}
-                  t={language.t}
-                  canRemove={form.models.length > 1}
-                  onChangeId={(v) => setForm("models", i(), "id", v)}
-                  onChangeName={(v) => setForm("models", i(), "name", v)}
-                  onChangeReasoning={(v) => setForm("models", i(), "reasoning", v)}
-                  onChangeSupportsImages={(v) => setForm("models", i(), "supportsImages", v)}
-                  onRemove={() => removeModel(i())}
-                  onAddVariant={() => addVariant(i())}
-                  onRemoveVariant={(vi) => removeVariant(i(), vi)}
-                  onChangeVariantName={(vi, val) => setForm("models", i(), "variants", vi, "name", val)}
-                  onChangeVariantEnableThinking={(vi, val) =>
-                    setForm("models", i(), "variants", vi, "enableThinking", val)
-                  }
-                  onChangeVariantThinking={(vi, val) => setForm("models", i(), "variants", vi, "thinking", val)}
-                  onChangeVariantSplitReasoning={(vi, val) =>
-                    setForm("models", i(), "variants", vi, "splitReasoning", val)
-                  }
-                  onChangeVariantReasoningEffort={(vi, val) =>
-                    setForm("models", i(), "variants", vi, "reasoningEffort", val)
-                  }
-                  onChangeVariantOutputEffort={(vi, val) => setForm("models", i(), "variants", vi, "outputEffort", val)}
-                  onChangeVariantChatTemplateArgs={(vi, val) =>
-                    setForm("models", i(), "variants", vi, "chatTemplateArgs", val)
-                  }
-                />
+
+            {/* Configured models: user-added cards + add button */}
+            <div class="cpd-configured">
+              <For each={form.models}>
+                {(m, i) => (
+                  <ModelCard
+                    m={m}
+                    i={i}
+                    errors={errors.models[i()] ?? {}}
+                    t={language.t}
+                    canRemove={form.models.length > 1}
+                    onChangeId={(v) => setForm("models", i(), "id", v)}
+                    onChangeName={(v) => setForm("models", i(), "name", v)}
+                    onChangeReasoning={(v) => setForm("models", i(), "reasoning", v)}
+                    onChangeSupportsImages={(v) => setForm("models", i(), "supportsImages", v)}
+                    onRemove={() => removeModel(i())}
+                    onAddVariant={() => addVariant(i())}
+                    onRemoveVariant={(vi) => removeVariant(i(), vi)}
+                    onChangeVariantName={(vi, val) => setForm("models", i(), "variants", vi, "name", val)}
+                    onChangeVariantEnableThinking={(vi, val) =>
+                      setForm("models", i(), "variants", vi, "enableThinking", val)
+                    }
+                    onChangeVariantThinking={(vi, val) => setForm("models", i(), "variants", vi, "thinking", val)}
+                    onChangeVariantSplitReasoning={(vi, val) =>
+                      setForm("models", i(), "variants", vi, "splitReasoning", val)
+                    }
+                    onChangeVariantReasoningEffort={(vi, val) =>
+                      setForm("models", i(), "variants", vi, "reasoningEffort", val)
+                    }
+                    onChangeVariantOutputEffort={(vi, val) => setForm("models", i(), "variants", vi, "outputEffort", val)}
+                    onChangeVariantChatTemplateArgs={(vi, val) =>
+                      setForm("models", i(), "variants", vi, "chatTemplateArgs", val)
+                    }
+                  />
+                )}
+              </For>
+              <Button type="button" size="small" variant="ghost" icon="plus-small" onClick={addModel} style={{ "align-self": "flex-start" }}>
+                {language.t("provider.custom.models.add")}
+              </Button>
+            </div>
+
+            {/* Available from API: fetched model picker */}
+            <Show when={fetchedModels()}>
+              {(models) => (
+                <div class="cpd-available">
+                  <span class="cpd-available-label">
+                    {language.t("provider.custom.models.fetch.available")}
+                  </span>
+
+                  <div class="cpd-picker">
+                    {/* Header with count + toggle */}
+                    <div class="cpd-picker-toolbar">
+                      <span
+                        style={{
+                          "font-size": "var(--kilo-font-size-12)",
+                          "font-weight": "500",
+                          color: "var(--text-weak-base)",
+                        }}
+                      >
+                        <Show
+                          when={debouncedSearch()}
+                          fallback={language.t("provider.custom.models.fetch.found", {
+                            count: String(models().length),
+                          })}
+                        >
+                          {language.t("provider.custom.models.fetch.showing", {
+                            shown: String(filtered().length),
+                            total: String(models().length),
+                          })}
+                        </Show>
+                      </span>
+                      <div class="cpd-picker-actions">
+                        <Button type="button" size="small" variant="ghost" onClick={selectAll}>
+                          {language.t("provider.custom.models.fetch.selectAll")}
+                        </Button>
+                        <Button type="button" size="small" variant="ghost" onClick={deselectAll}>
+                          {language.t("provider.custom.models.fetch.deselectAll")}
+                        </Button>
+                      </div>
+                    </div>
+
+                    {/* Search */}
+                    <Show when={models().length > 10}>
+                      <TextField
+                        label={language.t("provider.custom.models.fetch.search")}
+                        hideLabel
+                        placeholder={language.t("provider.custom.models.fetch.search")}
+                        value={search()}
+                        onChange={setSearch}
+                      />
+                    </Show>
+
+                    {/* Model list — multi-column grid */}
+                    <div class="cpd-model-list">
+                      <For each={filtered()}>
+                        {(m) => (
+                          <label class="cpd-model-list-item">
+                            <input
+                              type="checkbox"
+                              checked={selected().has(m.id)}
+                              onChange={() => toggleModel(m.id)}
+                              style={{ cursor: "pointer" }}
+                            />
+                            <span>{m.id}</span>
+                          </label>
+                        )}
+                      </For>
+                    </div>
+
+                    {/* Actions */}
+                    <div class="cpd-picker-actions">
+                      <Button type="button" size="small" variant="primary" onClick={addSelected} disabled={count() === 0}>
+                        {language.t("provider.custom.models.fetch.add", { count: String(count()) })}
+                      </Button>
+                      <Button type="button" size="small" variant="ghost" onClick={cancelFetch}>
+                        {language.t("common.cancel")}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
               )}
-            </For>
-            <Button type="button" size="small" variant="ghost" icon="plus-small" onClick={addModel}>
-              {language.t("provider.custom.models.add")}
-            </Button>
+            </Show>
 
             {/* Fetch error */}
             <Show when={fetchError()}>
@@ -730,122 +908,12 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
                 </span>
               )}
             </Show>
-
-            {/* Model selection picker */}
-            <Show when={fetchedModels()}>
-              {(models) => (
-                <div
-                  style={{
-                    border: "1px solid var(--border-weak-base, var(--vscode-panel-border))",
-                    "border-radius": "6px",
-                    padding: "12px",
-                    display: "flex",
-                    "flex-direction": "column",
-                    gap: "8px",
-                  }}
-                >
-                  {/* Header with count + toggle */}
-                  <div
-                    style={{
-                      display: "flex",
-                      "justify-content": "space-between",
-                      "align-items": "center",
-                    }}
-                  >
-                    <span
-                      style={{
-                        "font-size": "var(--kilo-font-size-12)",
-                        "font-weight": "500",
-                        color: "var(--text-weak-base)",
-                      }}
-                    >
-                      <Show
-                        when={debouncedSearch()}
-                        fallback={language.t("provider.custom.models.fetch.found", {
-                          count: String(models().length),
-                        })}
-                      >
-                        {language.t("provider.custom.models.fetch.showing", {
-                          shown: String(filtered().length),
-                          total: String(models().length),
-                        })}
-                      </Show>
-                    </span>
-                    <div style={{ display: "flex", gap: "8px" }}>
-                      <Button type="button" size="small" variant="ghost" onClick={selectAll}>
-                        {language.t("provider.custom.models.fetch.selectAll")}
-                      </Button>
-                      <Button type="button" size="small" variant="ghost" onClick={deselectAll}>
-                        {language.t("provider.custom.models.fetch.deselectAll")}
-                      </Button>
-                    </div>
-                  </div>
-
-                  {/* Search */}
-                  <Show when={models().length > 10}>
-                    <TextField
-                      label={language.t("provider.custom.models.fetch.search")}
-                      hideLabel
-                      placeholder={language.t("provider.custom.models.fetch.search")}
-                      value={search()}
-                      onChange={setSearch}
-                    />
-                  </Show>
-
-                  {/* Model list */}
-                  <div
-                    style={{
-                      "max-height": "200px",
-                      "overflow-y": "auto",
-                      display: "flex",
-                      "flex-direction": "column",
-                      gap: "2px",
-                    }}
-                  >
-                    <For each={filtered()}>
-                      {(m) => (
-                        <label
-                          style={{
-                            display: "flex",
-                            "align-items": "center",
-                            gap: "8px",
-                            padding: "4px 2px",
-                            cursor: "pointer",
-                            "font-size": "var(--kilo-font-size-13)",
-                            color: "var(--text-base, var(--vscode-foreground))",
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={selected().has(m.id)}
-                            onChange={() => toggleModel(m.id)}
-                            style={{ cursor: "pointer" }}
-                          />
-                          {m.id}
-                        </label>
-                      )}
-                    </For>
-                  </div>
-
-                  {/* Actions */}
-                  <div style={{ display: "flex", gap: "8px", "margin-top": "4px" }}>
-                    <Button type="button" size="small" variant="primary" onClick={addSelected} disabled={count() === 0}>
-                      {language.t("provider.custom.models.fetch.add", { count: String(count()) })}
-                    </Button>
-                    <Button type="button" size="small" variant="ghost" onClick={cancelFetch}>
-                      {language.t("common.cancel")}
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </Show>
           </div>
 
-          {/* Headers */}
-          <div style={{ display: "flex", "flex-direction": "column", gap: "12px" }}>
-            <label
-              style={{ "font-size": "var(--kilo-font-size-12)", "font-weight": "500", color: "var(--text-weak-base)" }}
-            >
+          {/* Headers section */}
+          <div class="cpd-section">
+            <hr class="cpd-divider" />
+            <label class="cpd-section-label">
               {language.t("provider.custom.headers.label")}
             </label>
             <For each={form.headers}>
@@ -890,12 +958,14 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
             </Button>
           </div>
 
-          <Button type="submit" size="large" variant="primary" disabled={form.saving}>
-            {form.saving ? language.t("common.saving") : language.t("common.submit")}
-          </Button>
+          {/* Sticky footer */}
+          <div class="cpd-footer">
+            <Button type="submit" size="large" variant="primary" disabled={form.saving}>
+              {form.saving ? language.t("common.saving") : language.t("common.submit")}
+            </Button>
+          </div>
         </form>
-      </div>
-    </Dialog>
+      </Dialog>
   )
 }
 

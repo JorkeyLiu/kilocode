@@ -113,15 +113,7 @@ function VariantRow(props: VariantRowProps) {
           }}
         />
       </Show>
-      <div
-        style={{
-          display: "flex",
-          gap: "8px",
-          "align-items": "stretch",
-          "flex-direction": "column",
-          "padding-top": "4px",
-        }}
-      >
+      <div style={{ display: "flex", gap: "8px", "align-items": "flex-end", "padding-top": "4px" }}>
         <div style={{ "min-width": "100px", flex: "1 1 80px" }}>
           <TextField
             label={props.t("provider.custom.models.variants.name.label")}
@@ -132,14 +124,17 @@ function VariantRow(props: VariantRowProps) {
             error={props.error?.name}
           />
         </div>
-        <div
-          style={{
-            display: "flex",
-            "flex-direction": "column",
-            gap: "4px",
-            flex: "0 0 auto",
-          }}
-        >
+        <IconButton
+          type="button"
+          icon="trash"
+          variant="ghost"
+          onClick={props.onRemove}
+          aria-label={props.t("provider.custom.models.variants.remove")}
+          style={{ "margin-bottom": "4px" }}
+        />
+      </div>
+      <div class="cpd-variant-grid">
+        <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
           <label
             style={{ "font-size": "var(--kilo-font-size-12)", "font-weight": "500", color: "var(--text-weak-base)" }}
           >
@@ -157,14 +152,7 @@ function VariantRow(props: VariantRowProps) {
             triggerVariant="settings"
           />
         </div>
-        <div
-          style={{
-            display: "flex",
-            "flex-direction": "column",
-            gap: "4px",
-            flex: "0 0 auto",
-          }}
-        >
+        <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
           <label
             style={{ "font-size": "var(--kilo-font-size-12)", "font-weight": "500", color: "var(--text-weak-base)" }}
           >
@@ -182,14 +170,7 @@ function VariantRow(props: VariantRowProps) {
             triggerVariant="settings"
           />
         </div>
-        <div
-          style={{
-            display: "flex",
-            "flex-direction": "column",
-            gap: "4px",
-            flex: "0 0 auto",
-          }}
-        >
+        <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
           <label
             style={{ "font-size": "var(--kilo-font-size-12)", "font-weight": "500", color: "var(--text-weak-base)" }}
           >
@@ -207,14 +188,7 @@ function VariantRow(props: VariantRowProps) {
             triggerVariant="settings"
           />
         </div>
-        <div
-          style={{
-            display: "flex",
-            "flex-direction": "column",
-            gap: "4px",
-            flex: "0 0 auto",
-          }}
-        >
+        <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
           <label
             style={{ "font-size": "var(--kilo-font-size-12)", "font-weight": "500", color: "var(--text-weak-base)" }}
           >
@@ -232,14 +206,7 @@ function VariantRow(props: VariantRowProps) {
             triggerVariant="settings"
           />
         </div>
-        <div
-          style={{
-            display: "flex",
-            "flex-direction": "column",
-            gap: "4px",
-            flex: "0 0 auto",
-          }}
-        >
+        <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
           <label
             style={{ "font-size": "var(--kilo-font-size-12)", "font-weight": "500", color: "var(--text-weak-base)" }}
           >
@@ -257,14 +224,7 @@ function VariantRow(props: VariantRowProps) {
             triggerVariant="settings"
           />
         </div>
-        <div
-          style={{
-            display: "flex",
-            "flex-direction": "column",
-            gap: "4px",
-            flex: "0 0 auto",
-          }}
-        >
+        <div style={{ display: "flex", "flex-direction": "column", gap: "4px" }}>
           <label
             style={{ "font-size": "var(--kilo-font-size-12)", "font-weight": "500", color: "var(--text-weak-base)" }}
           >
@@ -282,14 +242,6 @@ function VariantRow(props: VariantRowProps) {
             triggerVariant="settings"
           />
         </div>
-        <IconButton
-          type="button"
-          icon="trash"
-          variant="ghost"
-          onClick={props.onRemove}
-          aria-label={props.t("provider.custom.models.variants.remove")}
-          style={{ "margin-bottom": "4px" }}
-        />
       </div>
     </div>
   )
@@ -362,42 +314,25 @@ export function ModelCard(props: ModelCardProps) {
         />
       </div>
 
-      {/* Reasoning toggle */}
-      <label
-        style={{
-          display: "flex",
-          "align-items": "center",
-          gap: "8px",
-          cursor: "pointer",
-          "font-size": "var(--kilo-font-size-13)",
-          color: "var(--vscode-foreground)",
-        }}
-      >
-        <input
-          type="checkbox"
-          checked={props.m.reasoning}
-          onChange={(e) => props.onChangeReasoning(e.currentTarget.checked)}
-        />
-        {props.t("provider.custom.models.reasoning.label")}
-      </label>
-
-      <label
-        style={{
-          display: "flex",
-          "align-items": "center",
-          gap: "8px",
-          cursor: "pointer",
-          "font-size": "var(--kilo-font-size-13)",
-          color: "var(--vscode-foreground)",
-        }}
-      >
-        <input
-          type="checkbox"
-          checked={props.m.supportsImages}
-          onChange={(e) => props.onChangeSupportsImages(e.currentTarget.checked)}
-        />
-        {props.t("provider.custom.models.modalities.image")}
-      </label>
+      {/* Reasoning + Image toggles — horizontal row */}
+      <div class="cpd-checkbox-row">
+        <label>
+          <input
+            type="checkbox"
+            checked={props.m.reasoning}
+            onChange={(e) => props.onChangeReasoning(e.currentTarget.checked)}
+          />
+          {props.t("provider.custom.models.reasoning.label")}
+        </label>
+        <label>
+          <input
+            type="checkbox"
+            checked={props.m.supportsImages}
+            onChange={(e) => props.onChangeSupportsImages(e.currentTarget.checked)}
+          />
+          {props.t("provider.custom.models.modalities.image")}
+        </label>
+      </div>
 
       {/* Variants — only available when reasoning is enabled */}
       <Show when={props.m.reasoning}>

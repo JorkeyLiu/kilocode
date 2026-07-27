@@ -1012,6 +1012,7 @@ export const dict = {
   "provider.custom.models.remove": "Видалити модель",
   "provider.custom.models.add": "Додати модель",
   "provider.custom.models.fetch": "Отримати моделі",
+  "provider.custom.models.fetch.available": "Доступно з API",
   "provider.custom.models.fetching": "Отримання\u2026",
   "provider.custom.models.fetch.error": "Не вдалося отримати моделі: {{error}}",
   "provider.custom.models.fetch.authError": "Автентифікація не вдалася. Перевірте API-ключ вище і спробуйте ще раз.",

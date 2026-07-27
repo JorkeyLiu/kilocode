@@ -60,4 +60,11 @@
     font-weight: var(--font-weight-regular);
     color: var(--text-on-critical-base);
   }
+
+  &[data-variant="normal"] [data-slot="input-description"] {
+    font-size: var(--kilo-font-size-12);
+    line-height: var(--kilo-font-size-14);
+    font-weight: var(--font-weight-regular);
+    color: var(--text-weak-base);
+  }
 }

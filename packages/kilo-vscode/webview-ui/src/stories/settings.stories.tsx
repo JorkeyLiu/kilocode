@@ -12,6 +12,7 @@ import { KiloEmbeddingModelsContext } from "../context/kilo-embedding-models"
 import Settings from "../components/settings/Settings"
 import ProvidersTab from "../components/settings/ProvidersTab"
 import ProviderConnectDialog from "../components/settings/ProviderConnectDialog"
+import CustomProviderDialog from "../components/settings/CustomProviderDialog"
 import ModelsTab from "../components/settings/ModelsTab"
 import AgentBehaviourTab from "../components/settings/AgentBehaviourTab"
 import AutoApproveTab from "../components/settings/AutoApproveTab"
@@ -752,4 +753,120 @@ function ProviderConnectManageApiKeyInner() {
     dialog.show(() => <ProviderConnectDialog providerID="openai" manageApiKey />)
   })
   return <div style={{ width: "512px", height: "600px" }} />
+}
+
+/* ── CustomProviderDialog stories ────────────────────────────────────────── */
+
+function CustomProviderDialogInner() {
+  const dialog = useDialog()
+  onMount(() => {
+    dialog.show(() => <CustomProviderDialog />)
+  })
+  return <div style={{ height: "700px" }} />
+}
+
+/** New custom provider dialog at wide container width — basic fields should pair in 2 columns. */
+export const CustomProviderDialogWide1280: Story = {
+  name: "CustomProviderDialog — wide (1280px)",
+  render: () => (
+    <StoryProviders>
+      <div style={{ width: "1280px" }}>
+        <CustomProviderDialogInner />
+      </div>
+    </StoryProviders>
+  ),
+  parameters: { viewport: { defaultViewport: "custom" } },
+}
+
+function CustomProviderDialogNarrowInner() {
+  const dialog = useDialog()
+  onMount(() => {
+    dialog.show(() => <CustomProviderDialog />)
+  })
+  return <div style={{ height: "700px" }} />
+}
+
+/** New custom provider dialog at narrow width — basic fields should collapse to 1 column. */
+export const CustomProviderDialogNarrow: Story = {
+  name: "CustomProviderDialog — narrow (420px)",
+  render: () => (
+    <StoryProviders>
+      <div style={{ width: "420px" }}>
+        <CustomProviderDialogNarrowInner />
+      </div>
+    </StoryProviders>
+  ),
+  parameters: { viewport: { defaultViewport: "mobile1" } },
+}
+
+/** Edit existing custom provider — shows pre-filled fields and credential loading. */
+export const CustomProviderDialogEdit: Story = {
+  name: "CustomProviderDialog — edit existing",
+  render: () => {
+    // Mock postMessage to intercept getProviderCredential and respond with a test key
+    const api = getVSCodeAPI()
+    const origPost = (api as any).postMessage?.bind(api) as ((msg: any) => void) | undefined
+    if (origPost) {
+      ;(api as any).postMessage = (msg: any) => {
+        origPost(msg)
+        if (msg?.type === "getProviderCredential" && typeof msg.requestID === "string") {
+          queueMicrotask(() => {
+            window.postMessage(
+              {
+                type: "providerCredentialLoaded",
+                requestID: msg.requestID,
+                providerID: msg.providerID,
+                apiKey: "test-api-key-placeholder",
+              },
+              "*",
+            )
+          })
+        }
+      }
+      onCleanup(() => {
+        ;(api as any).postMessage = origPost
+      })
+    }
+    return (
+      <StoryProviders
+        connected={["custom-myapi"]}
+        authStates={{ "custom-myapi": "api" }}
+        config={
+          {
+            provider: {
+              "custom-myapi": {
+                name: "My API Provider",
+                npm: "@ai-sdk/openai-compatible",
+                options: { baseURL: "https://api.example.com/v1" },
+              },
+            },
+          } as any
+        }
+      >
+        <div style={{ width: "960px" }}>
+          <CustomProviderDialogEditInner />
+        </div>
+      </StoryProviders>
+    )
+  },
+  parameters: { viewport: { defaultViewport: "custom" } },
+}
+
+function CustomProviderDialogEditInner() {
+  const dialog = useDialog()
+  onMount(() => {
+    dialog.show(() => (
+      <CustomProviderDialog
+        existing={{
+          providerID: "custom-myapi",
+          name: "My API Provider",
+          config: {
+            npm: "@ai-sdk/openai-compatible",
+            options: { baseURL: "https://api.example.com/v1" },
+          },
+        }}
+      />
+    ))
+  })
+  return <div style={{ height: "700px" }} />
 }

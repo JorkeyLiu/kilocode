@@ -1007,6 +1007,7 @@ export const dict = {
   "provider.custom.models.remove": "모델 제거",
   "provider.custom.models.add": "모델 추가",
   "provider.custom.models.fetch": "모델 가져오기",
+  "provider.custom.models.fetch.available": "API에서 사용 가능",
   "provider.custom.models.fetching": "가져오는 중\u2026",
   "provider.custom.models.fetch.error": "모델을 가져오지 못했습니다: {{error}}",
   "provider.custom.models.fetch.authError": "인증에 실패했습니다. 위의 API 키를 확인하고 다시 시도하세요.",

@@ -1012,6 +1012,7 @@ export const dict = {
   "provider.custom.models.remove": "Modeli kaldır",
   "provider.custom.models.add": "Model ekle",
   "provider.custom.models.fetch": "Modelleri getir",
+  "provider.custom.models.fetch.available": "API'den kullanılabilir",
   "provider.custom.models.fetching": "Getiriliyor\u2026",
   "provider.custom.models.fetch.error": "Modeller getirilemedi: {{error}}",
   "provider.custom.models.fetch.authError":

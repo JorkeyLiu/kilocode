@@ -1050,6 +1050,7 @@ export const dict = {
   "provider.custom.models.remove": "モデルを削除",
   "provider.custom.models.add": "モデルを追加",
   "provider.custom.models.fetch": "モデルを取得",
+  "provider.custom.models.fetch.available": "APIから利用可能",
   "provider.custom.models.fetching": "取得中\u2026",
   "provider.custom.models.fetch.error": "モデルの取得に失敗しました: {{error}}",
   "provider.custom.models.fetch.authError": "認証に失敗しました。上記のAPIキーを確認して再試行してください。",

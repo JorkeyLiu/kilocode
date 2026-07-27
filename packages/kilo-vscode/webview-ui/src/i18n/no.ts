@@ -1020,6 +1020,7 @@ export const dict = {
   "provider.custom.models.remove": "Fjern modell",
   "provider.custom.models.add": "Legg til modell",
   "provider.custom.models.fetch": "Hent modeller",
+  "provider.custom.models.fetch.available": "Tilgjengelig fra API",
   "provider.custom.models.fetching": "Henter\u2026",
   "provider.custom.models.fetch.error": "Kunne ikke hente modeller: {{error}}",
   "provider.custom.models.fetch.authError": "Autentisering mislyktes. Sjekk API-nøkkelen ovenfor og prøv igjen.",

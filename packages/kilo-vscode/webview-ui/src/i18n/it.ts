@@ -834,6 +834,7 @@ export const dict = {
   "provider.custom.models.remove": "Rimuovi modello",
   "provider.custom.models.add": "Aggiungi modello",
   "provider.custom.models.fetch": "Recupera modelli",
+  "provider.custom.models.fetch.available": "Disponibili tramite API",
   "provider.custom.models.fetching": "Recupero...",
   "provider.custom.models.fetch.error": "Recupero modelli non riuscito: {{error}}",
   "provider.custom.models.fetch.authError": "Autenticazione non riuscita. Controlla l'API key sopra e riprova.",

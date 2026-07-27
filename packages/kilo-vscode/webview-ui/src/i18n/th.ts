@@ -1043,6 +1043,7 @@ export const dict = {
   "provider.custom.models.remove": "ลบโมเดล",
   "provider.custom.models.add": "เพิ่มโมเดล",
   "provider.custom.models.fetch": "ดึงโมเดล",
+  "provider.custom.models.fetch.available": "พร้อมใช้งานจาก API",
   "provider.custom.models.fetching": "กำลังดึง\u2026",
   "provider.custom.models.fetch.error": "ดึงโมเดลล้มเหลว: {{error}}",
   "provider.custom.models.fetch.authError": "การยืนยันตัวตนล้มเหลว ตรวจสอบคีย์ API ด้านบนแล้วลองอีกครั้ง",

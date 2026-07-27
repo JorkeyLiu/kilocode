@@ -1015,6 +1015,7 @@ export const dict = {
   "provider.custom.models.remove": "Model verwijderen",
   "provider.custom.models.add": "Model toevoegen",
   "provider.custom.models.fetch": "Modellen ophalen",
+  "provider.custom.models.fetch.available": "Beschikbaar via API",
   "provider.custom.models.fetching": "Ophalen\u2026",
   "provider.custom.models.fetch.error": "Kan modellen niet ophalen: {{error}}",
   "provider.custom.models.fetch.authError":
