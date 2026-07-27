@@ -17,6 +17,7 @@ import { KiloCostPropagation } from "../kilocode/session/cost-propagation" // ki
 import { KiloSessionProcessor } from "../kilocode/session/processor" // kilocode_change
 import { KiloSession } from "../kilocode/session" // kilocode_change
 import { errorMessage } from "@/util/error" // kilocode_change
+import { KiloTaskRetry } from "../kilocode/tool/task-retry" // kilocode_change
 import { Effect, Exit, Schema, Scope } from "effect"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -249,30 +250,43 @@ export const TaskTool = Tool.define(
       const runTask = Effect.fn("TaskTool.runTask")(function* () {
         const parts = yield* ops.resolvePromptParts(params.prompt)
         KiloSessionProcessor.markReviewTelemetry(parts, params.command) // kilocode_change - carry review command into child session telemetry
-        const result = yield* ops.prompt({
+        // kilocode_change start - name the child prompt input so bounded transient retries reuse it with fresh message IDs
+        const input = (): SessionPrompt.PromptInput => ({
           messageID: MessageID.ascending(),
           sessionID: nextSession.id,
           model: {
             modelID: model.modelID,
             providerID: model.providerID,
           },
-          variant, // kilocode_change
+          variant,
           agent: next.name,
           tools: {
-            question: false, // kilocode_change - subagents cannot prompt the user directly
-            interactive_terminal: false, // kilocode_change - subagents cannot take over the user's terminal
+            question: false, // subagents cannot prompt the user directly
+            interactive_terminal: false, // subagents cannot take over the user's terminal
             ...(canTodo ? {} : { todowrite: false }),
             ...(canTask ? {} : { task: false }),
             ...Object.fromEntries((cfg.experimental?.primary_tools ?? []).map((item) => [item, false])),
           },
           parts,
         })
+        const result = yield* ops.prompt(input())
+        // kilocode_change end
         // kilocode_change start - expose terminal child assistant errors through the task tool boundary,
-        // including the resumable task_id so the parent agent can continue the subagent (#11620)
+        // including the resumable task_id so the parent agent can continue the subagent (#11620).
+        // Transient provider failures first get a bounded same-session retry when the child has no
+        // committed or ambiguous tool side effects; see KiloTaskRetry.
         if (result.info.role === "assistant" && result.info.error) {
-          return yield* Effect.fail(
-            new Error(`${errorMessage(result.info.error)}\n${resumeHint(nextSession.id)}`),
-          )
+          const retried = yield* KiloTaskRetry.recover({
+            error: result.info.error,
+            sessions,
+            sessionID: nextSession.id,
+            attempt: () => ops.prompt(input()),
+          })
+          const final = retried ?? result
+          if (final.info.role === "assistant" && final.info.error) {
+            return yield* Effect.fail(new Error(`${errorMessage(final.info.error)}\n${resumeHint(nextSession.id)}`))
+          }
+          return final.parts.findLast((item) => item.type === "text")?.text ?? ""
         }
         // kilocode_change end
         return result.parts.findLast((item) => item.type === "text")?.text ?? ""
