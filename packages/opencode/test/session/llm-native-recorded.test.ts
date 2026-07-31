@@ -26,6 +26,7 @@ import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { modelsDevLayer } from "../kilocode/models-dev-layer" // kilocode_change
 
 const FIXTURES_DIR = path.join(import.meta.dir, "../fixtures/recordings")
 const KILO_FIXTURES_DIR = path.join(FIXTURES_DIR, "kilocode") // kilocode_change
@@ -281,7 +282,7 @@ function recordedNativeLLMLayer(scenario: RecordedScenario) {
     Layer.provide(Config.defaultLayer),
     Layer.provide(auth),
     Layer.provide(Plugin.defaultLayer),
-    Layer.provide(ModelsDev.defaultLayer),
+    Layer.provide(modelsDevLayer), // kilocode_change - Provider requires the distinct Kilo ModelsDev service
     Layer.provide(RuntimeFlags.defaultLayer),
   )
   // Only the HTTP client is recorded; RequestExecutor and the opencode LLM stack remain real.

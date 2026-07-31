@@ -32,7 +32,7 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectCopy } from "@opencode-ai/core/project/copy"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { ProviderAuth } from "@/provider/auth"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
+import * as ModelsDev from "@/provider/models" // kilocode_change - use Kilo wrapper for defect protection
 import { ModelCache } from "@/provider/model-cache" // kilocode_change
 import { Provider } from "@/provider/provider"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
@@ -210,6 +210,12 @@ type RouteRequirements =
 
 export function createRoutes(
   corsOptions?: CorsOptions,
+  // kilocode_change start - canonical models/provider layers come from AppRuntime
+  app?: {
+    readonly models?: Layer.Layer<ModelsDev.Service, never, never>
+    readonly provider?: Layer.Layer<Provider.Service, never, never>
+  },
+  // kilocode_change end
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
   return Layer.mergeAll(
     rootApiRoutes,
@@ -241,7 +247,7 @@ export function createRoutes(
       Installation.defaultLayer,
       MCP.defaultLayer,
       ModelCache.defaultLayer, // kilocode_change
-      ModelsDev.defaultLayer,
+       app?.models ?? ModelsDev.defaultLayer, // kilocode_change
       Permission.defaultLayer,
       Plugin.defaultLayer,
       Project.defaultLayer,
@@ -249,7 +255,7 @@ export function createRoutes(
       ProjectCopy.defaultLayer,
       MoveSession.defaultLayer,
       ProviderAuth.defaultLayer,
-      Provider.defaultLayer,
+       app?.provider ?? Provider.defaultLayer, // kilocode_change
       PtyTicket.defaultLayer,
       Question.defaultLayer,
       AgentManager.defaultLayer, // kilocode_change
@@ -297,12 +303,15 @@ export function createListenerRoutes(corsOptions?: CorsOptions) {
 
 export const routes = createRoutes()
 
-export const webHandler = lazy(() =>
-  HttpRouter.toWebHandler(routes, {
+// kilocode_change start - canonical models/provider layers come from AppRuntime
+export const webHandler = (app?: {
+  readonly models?: Layer.Layer<ModelsDev.Service, never, never>
+  readonly provider?: Layer.Layer<Provider.Service, never, never>
+}) =>
+  HttpRouter.toWebHandler(createRoutes(undefined, app), {
     disableLogger: true,
     memoMap,
     middleware: disposeMiddleware,
-  }),
-)
-
+  })
+// kilocode_change end
 export * as HttpApiApp from "./server"

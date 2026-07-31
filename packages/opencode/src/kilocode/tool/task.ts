@@ -156,10 +156,14 @@ export namespace KiloTask {
     for (const choice of choices) {
       if (!choice) continue
       if (choice.direct) {
+        const full = yield* input.provider.getModel(choice.model.providerID, choice.model.modelID).pipe(
+          Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
+        )
+        if (!full) continue
         const value = override(choice.model)
-        if (!value) return { model: choice.model, variant: choice.variant }
-        const full = yield* input.provider.getModel(choice.model.providerID, choice.model.modelID)
-        const variant = full.variants?.[value] ? value : choice.variant
+        const validOverride = value && full.variants?.[value] ? value : undefined
+        const validVariant = choice.variant && full.variants?.[choice.variant] ? choice.variant : undefined
+        const variant = validOverride ?? validVariant
         return { model: choice.model, variant }
       }
       const full = yield* input.provider.getModel(choice.model.providerID, choice.model.modelID).pipe(
@@ -185,11 +189,12 @@ export namespace KiloTask {
     }
 
     const value = override(input.parent)
-    if (!value) return { model: input.parent, variant: input.variant }
     const full = yield* input.provider
       .getModel(input.parent.providerID, input.parent.modelID)
       .pipe(Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)))
-    const variant = full?.variants?.[value] ? value : input.variant
+    const validOverride = value && full?.variants?.[value] ? value : undefined
+    const validInherited = input.variant && full?.variants?.[input.variant] ? input.variant : undefined
+    const variant = validOverride ?? validInherited
     return { model: input.parent, variant }
   })
 }

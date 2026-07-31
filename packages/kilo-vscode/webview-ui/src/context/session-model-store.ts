@@ -11,10 +11,16 @@ import { resolveModelSelection } from "./model-selection"
 export interface ModelStore {
   /** agentName -> model (global, extension-lifetime) */
   modelSelections: Record<string, ModelSelection | null>
-  /** sessionID -> per-session model override */
+  /** sessionID -> per-session model override (explicit user selection) */
   sessionOverrides: Record<string, ModelSelection>
-  /** sessionID -> agent name */
+  /** sessionID -> recovered model from message history (continuity, not override) */
+  sessionRecoveredModels: Record<string, ModelSelection>
+  /** sessionID -> agent name (explicit user selection) */
   agentSelections: Record<string, string>
+  /** sessionID -> recovered agent from message history (continuity, not override) */
+  sessionRecoveredAgents: Record<string, string>
+  /** sessionID -> recovered variant bound to recovered model (continuity) */
+  sessionRecoveredVariants: Record<string, { variant: string; model: ModelSelection }>
   recentModels: ModelSelection[]
 }
 
@@ -44,9 +50,19 @@ function resolveModel(
 }
 
 /**
- * Returns the model for a specific session, honoring per-session overrides.
+ * Returns the model for a specific session, honoring per-session overrides
+ * and recovered continuity state.
  *
- * Precedence: sessionOverride > global modelSelections[agent] > config/default.
+ * Precedence: explicit sessionOverride > per-agent normal chain (when explicit
+ * agent selected) > recovered continuity > config/default.
+ *
+ * When an explicit agent is selected, the agent's configured/default model
+ * takes precedence over recovered state — recovery is only continuity for
+ * sessions without explicit selections.
+ *
+ * Both explicit overrides and recovered state are validated against the
+ * current provider catalog. Invalid values fall through to the next
+ * precedence level so raw IDs are never surfaced in the UI.
  */
 export function getSessionModel(
   store: ModelStore,
@@ -54,16 +70,44 @@ export function getSessionModel(
   sessionID: string,
   defaultAgent: string,
 ): ModelSelection | null {
-  const override = store.sessionOverrides[sessionID]
-  if (override) return override
-  const agentName = store.agentSelections[sessionID] ?? defaultAgent
+  // LOCK-001/LOCK-005: explicit agent > recovered agent > default
+  const agentName = store.agentSelections[sessionID] ?? store.sessionRecoveredAgents[sessionID] ?? defaultAgent
+  const hasExplicitAgent = !!store.agentSelections[sessionID]
+  // Explicit override — validated against catalog
+  const explicit = store.sessionOverrides[sessionID]
+  if (explicit) {
+    const resolved = resolveModel(env, agentName, explicit)
+    // Valid explicit wins: resolved matches the candidate → use it.
+    // Invalid explicit: fall through to recovered > normal chain.
+    if (resolved && resolved.providerID === explicit.providerID && resolved.modelID === explicit.modelID) {
+      return resolved
+    }
+  }
+  // When an explicit agent is selected, the agent's configured/default model
+  // takes precedence over recovered state — recovery is only continuity
+  // for sessions without explicit selections.
+  if (hasExplicitAgent) {
+    return resolveModel(env, agentName, store.modelSelections[agentName], store.recentModels)
+  }
+  // No explicit agent — recovered continuity state may apply
+  const recovered = store.sessionRecoveredModels[sessionID]
+  if (recovered) {
+    const resolved = resolveModel(env, agentName, recovered)
+    // If the resolved model matches recovered, it was valid — use it.
+    // Otherwise it fell through (invalid) — consult the normal chain.
+    if (resolved && resolved.providerID === recovered.providerID && resolved.modelID === recovered.modelID) {
+      return resolved
+    }
+  }
+  // Normal chain: per-agent global > config/default
   return resolveModel(env, agentName, store.modelSelections[agentName], store.recentModels)
 }
 
 /**
  * Returns the model for the "current" view (model picker display).
  *
- * Precedence: sessionOverride[sid] > global modelSelections[agent] > config/default.
+ * Precedence: explicit sessionOverride > recovered continuity >
+ *             global modelSelections[agent] > config/default.
  */
 export function getSelected(
   store: ModelStore,
@@ -72,8 +116,23 @@ export function getSelected(
   agentName: string,
 ): ModelSelection | null {
   if (sessionID) {
-    const session = store.sessionOverrides[sessionID]
-    if (session) return session
+    // Explicit override — validated against catalog
+    const explicit = store.sessionOverrides[sessionID]
+    if (explicit) {
+      const resolved = resolveModel(env, agentName, explicit)
+      if (resolved && resolved.providerID === explicit.providerID && resolved.modelID === explicit.modelID) {
+        return resolved
+      }
+      // Invalid explicit — fall through to recovered > normal chain
+    }
+    // Recovered continuity state — validated as override hint
+    const recovered = store.sessionRecoveredModels[sessionID]
+    if (recovered) {
+      const resolved = resolveModel(env, agentName, recovered)
+      if (resolved && resolved.providerID === recovered.providerID && resolved.modelID === recovered.modelID) {
+        return resolved
+      }
+    }
   }
   return resolveModel(env, agentName, store.modelSelections[agentName], store.recentModels)
 }

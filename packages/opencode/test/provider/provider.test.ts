@@ -20,6 +20,7 @@ import { InstanceLayer } from "@/project/instance-layer"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { modelsDevLayer } from "../kilocode/models-dev-layer" // kilocode_change
 
 const originalEnv = new Map<string, string | undefined>()
 
@@ -63,7 +64,7 @@ const providerLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     Layer.provide(Config.defaultLayer),
     Layer.provide(Auth.defaultLayer),
     Layer.provide(Plugin.defaultLayer),
-    Layer.provide(ModelsDev.defaultLayer),
+    Layer.provide(modelsDevLayer), // kilocode_change - Provider requires the distinct Kilo ModelsDev service
     Layer.provide(RuntimeFlags.layer(flags)),
   )
 
@@ -121,6 +122,7 @@ it.instance(
     expect(providers[ProviderV2.ID.anthropic]).toBeDefined()
   }),
   { config: { provider: { anthropic: { options: { apiKey: "config-api-key" } } } } },
+  { timeout: 15_000 }, // kilocode_change - distinct ModelsDev layers add integration startup work
 )
 
 it.instance(
@@ -131,6 +133,7 @@ it.instance(
     expect(providers[ProviderV2.ID.anthropic]).toBeUndefined()
   }),
   { config: { disabled_providers: ["anthropic"] } },
+  { timeout: 15_000 }, // kilocode_change - distinct ModelsDev layers add integration startup work
 )
 
 it.instance(

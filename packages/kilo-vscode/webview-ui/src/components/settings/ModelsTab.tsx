@@ -42,6 +42,32 @@ const ModelsTab: Component = () => {
     }
   }
 
+  const defaultModel = createMemo(() => parseModelString(config().model ?? undefined))
+  const defaultModelKey = createMemo(() => config().model ?? undefined)
+  const defaultModelVariants = createMemo(() => Object.keys(provider.findModel(defaultModel())?.variants ?? {}))
+  const defaultModelVariant = createMemo(() => {
+    const key = defaultModelKey()
+    if (!key) return undefined
+    const supported = defaultModelVariants()
+    if (supported.length === 0) return undefined
+    const value = config().model_variant_overrides?.[key]
+    if (value && supported.includes(value)) return value
+    const global = config().model_variant ?? undefined
+    if (global && supported.includes(global)) return global
+    return undefined
+  })
+
+  function updateDefaultModelVariant(value: string | null) {
+    const key = defaultModelKey()
+    if (!key) return
+    // LOCK-005: per-model override update must not clear global model_variant.
+    // The override map takes precedence in resolution; the global field
+    // remains untouched so other models still benefit from it.
+    updateConfig({
+      model_variant_overrides: { [key]: value },
+    })
+  }
+
   const subagentModel = createMemo(() => parseModelString(config().subagent_model ?? undefined))
   const speechModel = createMemo(() => selectedSpeechToTextModel(config()))
   const speechOption = createMemo(() => SPEECH_TO_TEXT_MODEL_OPTIONS.find((item) => item.value === speechModel()))
@@ -51,9 +77,14 @@ const ModelsTab: Component = () => {
   const subagentVariant = createMemo(() => {
     const key = variantKey()
     if (!key) return undefined
+    const supported = subagentVariants()
+    if (supported.length === 0) return undefined
+    // LOCK-007: valid override > valid global > unset
     const value = config().subagent_variant_overrides?.[key]
-    if (value) return value
-    return config().subagent_model === key ? (config().subagent_variant ?? undefined) : undefined
+    if (value && supported.includes(value)) return value
+    const global = config().subagent_variant ?? undefined
+    if (global && supported.includes(global)) return global
+    return undefined
   })
 
   function handleSubagentModelSelect(providerID: string, modelID: string) {
@@ -71,9 +102,9 @@ const ModelsTab: Component = () => {
   function updateSubagentVariant(value: string | null) {
     const key = variantKey()
     if (!key) return
+    // LOCK-005: per-model override update must not clear global subagent_variant.
     updateConfig({
       subagent_variant_overrides: { [key]: value },
-      ...(config().subagent_model === key ? { subagent_variant: null } : {}),
     })
   }
 
@@ -117,6 +148,18 @@ const ModelsTab: Component = () => {
             label={language.t("settings.providers.defaultModel.title")}
             description={language.t("settings.providers.defaultModel.description")}
           />
+          <Show when={defaultModelVariants().length > 0}>
+            <ThinkingSelectorBase
+              variants={defaultModelVariants()}
+              value={defaultModelVariant()}
+              onSelect={(value) => updateDefaultModelVariant(value)}
+              onClear={() => updateDefaultModelVariant(null)}
+              allowClear
+              clearLabel={language.t("settings.providers.notSet")}
+              placement="bottom-start"
+              globalTrigger={false}
+            />
+          </Show>
         </SettingsRow>
         <SettingsRow
           title={language.t("settings.providers.smallModel.title")}

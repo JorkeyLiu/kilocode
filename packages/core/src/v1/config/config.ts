@@ -154,6 +154,16 @@ export const Info = Schema.Struct({
   small_model: Schema.optional(Schema.NullOr(Schema.String)).annotate({
     description: "Small model to use for tasks like title generation in the format of provider/model",
   }),
+  model_variant: Schema.optional(Schema.NullOr(Schema.String)).annotate({
+    description:
+      "Default reasoning variant for the configured default model. Used as a fallback when no explicit or saved variant is set.",
+  }),
+  model_variant_overrides: Schema.optional(
+    Schema.NullOr(Schema.Record(Schema.String, Schema.NullOr(Schema.String))),
+  ).annotate({
+    description:
+      "Model-specific variant overrides for the default model, keyed by provider/model. Per-model overrides take precedence over model_variant.",
+  }),
   subagent_model: Schema.optional(Schema.NullOr(Schema.String)).annotate({
     description:
       "Default model for task-tool subagents in the format of provider/model. If unset or unavailable, subagents inherit the calling agent model.",

@@ -1,6 +1,6 @@
 import { ProviderAuth } from "@/provider/auth"
 import { Config } from "@/config/config"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
+import * as ModelsDev from "@/provider/models" // kilocode_change - use Kilo wrapper for defect protection
 import { Provider } from "@/provider/provider"
 
 import { mapValues, pickBy } from "remeda" // kilocode_change
@@ -48,11 +48,16 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
 
     const list = Effect.fn("ProviderHttpApi.list")(function* () {
       const config = yield* cfg.get()
-      const all = overlayAnacondaDesktop(yield* ModelsDev.Service.use((s) => s.get())) // kilocode_change
+      // kilocode_change start - catalog comes from the Kilo ModelsDev wrapper which
+      // already catches core service defects (timeout, network, etc.) and falls
+      // back to an empty catalog.  No defense-in-depth catchDefect needed here.
+      const all = yield* ModelsDev.Service.use((s) => s.get())
+      const overlaid = overlayAnacondaDesktop(all)
+      // kilocode_change end
       const disabled = new Set(config.disabled_providers ?? [])
       const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
-      const filtered: Record<string, (typeof all)[string]> = {}
-      for (const [key, value] of Object.entries(all)) {
+      const filtered: Record<string, (typeof overlaid)[string]> = {}
+      for (const [key, value] of Object.entries(overlaid)) {
         if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) filtered[key] = value
       }
       const connected = yield* provider.list()

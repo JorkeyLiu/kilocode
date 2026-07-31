@@ -188,6 +188,27 @@ describe("parseImport", () => {
     }
   })
 
+  it("preserves default model variant settings", () => {
+    const json = JSON.stringify({
+      model: "anthropic/claude-sonnet-4",
+      model_variant: "high",
+      model_variant_overrides: {
+        "anthropic/claude-sonnet-4": "max",
+        "openai/gpt-5": "xhigh",
+      },
+    })
+    const result = parseImport(json)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.config.model).toBe("anthropic/claude-sonnet-4")
+      expect(result.config.model_variant).toBe("high")
+      expect(result.config.model_variant_overrides).toEqual({
+        "anthropic/claude-sonnet-4": "max",
+        "openai/gpt-5": "xhigh",
+      })
+    }
+  })
+
   it("strips _meta before returning config", () => {
     const json = JSON.stringify({
       _meta: { version: 1, exportedAt: "2026-01-01", secretsStripped: true },
@@ -376,6 +397,29 @@ describe("round-trip", () => {
       expect(result.config.mcp?.gh?.env?.TOKEN).toBe("secret")
       expect(result.config.permission).toEqual({ read: "allow" })
       expect(result.config.instructions).toEqual(["rules.md"])
+    }
+  })
+
+  it("export then import preserves model variant settings", () => {
+    const original: Config = {
+      model: "anthropic/claude-sonnet-4",
+      model_variant: "high",
+      model_variant_overrides: {
+        "anthropic/claude-sonnet-4": "max",
+        "openai/gpt-5": "xhigh",
+      },
+    }
+    const exported = buildExport(original)
+    const json = JSON.stringify(exported)
+    const result = parseImport(json)
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.config.model).toBe("anthropic/claude-sonnet-4")
+      expect(result.config.model_variant).toBe("high")
+      expect(result.config.model_variant_overrides).toEqual({
+        "anthropic/claude-sonnet-4": "max",
+        "openai/gpt-5": "xhigh",
+      })
     }
   })
 })

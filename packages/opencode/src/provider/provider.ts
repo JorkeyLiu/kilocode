@@ -2046,17 +2046,26 @@ export const layer = Layer.effect(
   }),
 )
 
-export const defaultLayer = Layer.suspend(() =>
-  layer.pipe(
-    Layer.provide(FSUtil.defaultLayer),
-    Layer.provide(Env.defaultLayer),
-    Layer.provide(Config.defaultLayer),
-    Layer.provide(Auth.defaultLayer),
-    Layer.provide(Plugin.defaultLayer),
-    Layer.provide(ModelsDev.defaultLayer),
-    Layer.provide(RuntimeFlags.defaultLayer),
-  ),
-)
+// kilocode_change start - LOCK-001: canonical combined models layer + injectable factory
+export const defaultModels = ModelsDev.combinedLayer()
+
+export const makeDefaultLayer = (
+  models: Layer.Layer<ModelsDev.Service, never, never> = defaultModels,
+): Layer.Layer<Service, never, never> =>
+  Layer.suspend(() =>
+    layer.pipe(
+      Layer.provide(FSUtil.defaultLayer),
+      Layer.provide(Env.defaultLayer),
+      Layer.provide(Config.defaultLayer),
+      Layer.provide(Auth.defaultLayer),
+      Layer.provide(Plugin.defaultLayer),
+      Layer.provide(models),
+      Layer.provide(RuntimeFlags.defaultLayer),
+    ),
+  )
+
+export const defaultLayer = makeDefaultLayer()
+// kilocode_change end
 
 const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro"]
 export function sort<T extends { id: string }>(models: T[]) {

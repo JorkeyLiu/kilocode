@@ -93,12 +93,66 @@ describe("resolveModelSelection", () => {
     expect(result).toEqual(KILO_AUTO)
   })
 
-  it("keeps the raw preference order before providers load", () => {
+  it("returns fallback when providers are empty (LOCK-001: no raw leak)", () => {
     const result = resolveModelSelection({
       providers: {},
       connected: [],
       override: { providerID: "openai", modelID: "gpt-4.1" },
       mode: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      fallback: KILO_AUTO,
+    })
+    expect(result).toEqual(KILO_AUTO)
+  })
+
+  it("returns null when providers are empty and no fallback", () => {
+    const result = resolveModelSelection({
+      providers: {},
+      connected: [],
+      override: { providerID: "openai", modelID: "gpt-4.1" },
+      mode: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+    })
+    expect(result).toBeNull()
+  })
+
+  it("empty catalog + configured global resolves to fallback", () => {
+    const result = resolveModelSelection({
+      providers: {},
+      connected: [],
+      global: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      fallback: KILO_AUTO,
+    })
+    expect(result).toEqual(KILO_AUTO)
+  })
+
+  it("empty catalog + override + recovered + no fallback returns null", () => {
+    const result = resolveModelSelection({
+      providers: {},
+      connected: [],
+      override: { providerID: "openai", modelID: "gpt-4.1" },
+      recent: [{ providerID: "anthropic", modelID: "claude-sonnet-4" }],
+    })
+    expect(result).toBeNull()
+  })
+
+  it("partial catalog rejects unvalidated models, uses fallback", () => {
+    // Only kilo provider loaded — openai/anthropic models are not in catalog
+    const partial = {
+      kilo: makeProvider("kilo", "Kilo Gateway", ["kilo-auto/free"]),
+    }
+    const result = resolveModelSelection({
+      providers: partial,
+      connected: ["kilo"],
+      override: { providerID: "openai", modelID: "gpt-4.1" },
+      fallback: KILO_AUTO,
+    })
+    expect(result).toEqual(KILO_AUTO)
+  })
+
+  it("ready catalog validates normally (LOCK-002: reactive restore)", () => {
+    const result = resolveModelSelection({
+      providers,
+      connected: ["anthropic", "openai"],
+      override: { providerID: "openai", modelID: "gpt-4.1" },
       fallback: KILO_AUTO,
     })
     expect(result).toEqual({ providerID: "openai", modelID: "gpt-4.1" })

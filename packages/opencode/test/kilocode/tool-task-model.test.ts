@@ -21,6 +21,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { Provider } from "../../src/provider/provider"
 import { TaskTool, type TaskPromptOps } from "../../src/tool/task"
+import { KiloTask } from "../../src/kilocode/tool/task"
 import { Truncate } from "../../src/tool/truncate"
 import { ToolRegistry } from "../../src/tool/registry"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
@@ -89,12 +90,14 @@ function custom(id: string, model: string, variants: string[] = []) {
   }
 }
 
+const bare = "nope"
 const catalog = {
   provider: {
     "parent-provider": custom("parent-provider", "parent-model", [inherited, overrideVariant]),
     "saved-provider": custom("saved-provider", "saved-model", [savedVariant, overrideVariant]),
     "config-provider": custom("config-provider", "config-model", [cfgVariant, overrideVariant]),
     "sub-provider": custom("sub-provider", "sub-model", [subVariant, overrideVariant]),
+    "bare-provider": custom("bare-provider", "bare-model", []),
   },
 }
 
@@ -197,7 +200,7 @@ function writeState(input: unknown) {
 }
 
 function run(input: {
-  agent: "pinned" | "worker"
+  agent: "pinned" | "worker" | "bare"
   state?: unknown
   client?: string
   variant?: string
@@ -247,6 +250,7 @@ function run(input: {
         agent: {
           worker: { mode: "subagent" },
           pinned: { mode: "subagent", model: "config-provider/config-model", variant: cfgVariant },
+          bare: { mode: "subagent", model: "bare-provider/bare-model", variant: bare },
         },
       },
     },
@@ -284,6 +288,7 @@ describe("tool.task model resolution", () => {
         }),
       ),
     ),
+    15000,
   )
 
   it.live("saved model without variant leaves variant undefined", () =>
@@ -301,6 +306,7 @@ describe("tool.task model resolution", () => {
         }),
       ),
     ),
+    15000,
   )
 
   it.live("unrelated saved variant key ignored", () =>
@@ -573,5 +579,237 @@ describe("tool.task model resolution", () => {
         }),
       ),
     ),
+  )
+
+  it.live("valid agent variant is accepted", () =>
+    run({
+      agent: "pinned",
+      variant: inherited,
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(result.prompt).toEqual(cfg)
+          expect(result.variant).toEqual(cfgVariant)
+          expect(result.model).toEqual(cfg)
+          expect(result.metadataVariant).toEqual(cfgVariant)
+        }),
+      ),
+    ),
+  )
+
+  it.live("invalid agent variant yields undefined even when global subagent_variant is valid", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          process.env.KILO_CLIENT = "cli"
+
+          const { chat, assistant } = yield* seed("pinned")
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          let seen: SessionPrompt.PromptInput | undefined
+          const promptOps = stubOps({ onPrompt: (value) => (seen = value) })
+
+          const result = yield* def.execute(
+            {
+              description: "run pinned",
+              prompt: "inspect resolution",
+              subagent_type: "pinned",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps, bypassAgentCheck: true },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+
+          expect(seen?.model).toEqual(cfg)
+          expect(seen?.variant).toBeUndefined()
+          expect(result.metadata.model).toEqual(cfg)
+          expect(result.metadata.variant).toBeUndefined()
+        }),
+      {
+        config: {
+          ...catalog,
+          subagent_model: "sub-provider/sub-model",
+          subagent_variant: subVariant,
+          agent: {
+            worker: { mode: "subagent" },
+            pinned: { mode: "subagent", model: "config-provider/config-model", variant: "bogus" },
+          },
+        },
+      },
+    ),
+  )
+
+  it.live("invalid agent variant and invalid global yield undefined", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          process.env.KILO_CLIENT = "cli"
+
+          const { chat, assistant } = yield* seed("pinned")
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          let seen: SessionPrompt.PromptInput | undefined
+          const promptOps = stubOps({ onPrompt: (value) => (seen = value) })
+
+          const result = yield* def.execute(
+            {
+              description: "run pinned",
+              prompt: "inspect resolution",
+              subagent_type: "pinned",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps, bypassAgentCheck: true },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+
+          expect(seen?.model).toEqual(cfg)
+          expect(seen?.variant).toBeUndefined()
+          expect(result.metadata.model).toEqual(cfg)
+          expect(result.metadata.variant).toBeUndefined()
+        }),
+      {
+        config: {
+          ...catalog,
+          agent: {
+            worker: { mode: "subagent" },
+            pinned: { mode: "subagent", model: "config-provider/config-model", variant: "bogus" },
+          },
+        },
+      },
+    ),
+  )
+
+  it.live("per-model override wins over invalid agent variant", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          process.env.KILO_CLIENT = "cli"
+
+          const { chat, assistant } = yield* seed("pinned")
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          let seen: SessionPrompt.PromptInput | undefined
+          const promptOps = stubOps({ onPrompt: (value) => (seen = value) })
+
+          const result = yield* def.execute(
+            {
+              description: "run pinned",
+              prompt: "inspect resolution",
+              subagent_type: "pinned",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps, bypassAgentCheck: true },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+
+          expect(seen?.model).toEqual(cfg)
+          expect(seen?.variant).toEqual(overrideVariant)
+          expect(result.metadata.model).toEqual(cfg)
+          expect(result.metadata.variant).toEqual(overrideVariant)
+        }),
+      {
+        config: {
+          ...catalog,
+          subagent_variant_overrides: { "config-provider/config-model": overrideVariant },
+          agent: {
+            worker: { mode: "subagent" },
+            pinned: { mode: "subagent", model: "config-provider/config-model", variant: "bogus" },
+          },
+        },
+      },
+    ),
+  )
+
+  it.live("model with no variants returns undefined variant", () =>
+    run({
+      agent: "bare",
+      variant: inherited,
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          const expected = { providerID: ProviderV2.ID.make("bare-provider"), modelID: ModelV2.ID.make("bare-model") }
+          expect(result.prompt).toEqual(expected)
+          expect(result.variant).toBeUndefined()
+          expect(result.model).toEqual(expected)
+          expect(result.metadataVariant).toBeUndefined()
+        }),
+      ),
+    ),
+  )
+
+  it.live("invalid inherited parent variant yields undefined", () =>
+    run({
+      agent: "worker",
+      variant: "bogus",
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(result.prompt).toEqual(parent)
+          expect(result.variant).toBeUndefined()
+          expect(result.model).toEqual(parent)
+          expect(result.metadataVariant).toBeUndefined()
+        }),
+      ),
+    ),
+    15000,
+  )
+
+  it.live("parent model with no variants returns undefined", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          process.env.KILO_CLIENT = "cli"
+          const provider = yield* Provider.Service
+          const result = yield* KiloTask.resolveModel({
+            name: "worker",
+            agent: {},
+            config: {},
+            parent: { providerID: ProviderV2.ID.make("bare-provider"), modelID: ModelV2.ID.make("bare-model") },
+            variant: inherited,
+            provider,
+          })
+          expect(result.variant).toBeUndefined()
+        }),
+      { config: catalog },
+    ),
+  )
+
+  it.live("invalid override falls back to valid inherited parent variant", () =>
+    run({
+      agent: "worker",
+      variant: inherited,
+      config: { subagent_variant_overrides: { "parent-provider/parent-model": "gone" } },
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(result.prompt).toEqual(parent)
+          expect(result.variant).toEqual(inherited)
+          expect(result.model).toEqual(parent)
+          expect(result.metadataVariant).toEqual(inherited)
+        }),
+      ),
+    ),
+    15000,
   )
 })

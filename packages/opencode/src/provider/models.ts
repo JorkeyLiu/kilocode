@@ -6,6 +6,9 @@ import * as Core from "@opencode-ai/core/models-dev"
 import { Context, Effect, Layer } from "effect"
 import { AI_SDK_PROVIDERS, KILO_OPENROUTER_BASE, PROMPTS } from "@kilocode/kilo-gateway"
 import { overlay } from "@/kilocode/anaconda-desktop/provider"
+import { Log } from "@opencode-ai/core/util/log"
+
+const log = Log.create({ service: "models-dev" })
 
 export const Model = Core.Model
 export type Model = Core.Model
@@ -16,7 +19,7 @@ export type CatalogModelStatus = Core.CatalogModelStatus
 
 export interface Interface extends Core.Interface {}
 
-export class Service extends Context.Service<Service, Interface>()("@opencode/ModelsDev") {}
+export class Service extends Context.Service<Service, Interface>()("@kilocode/ModelsDev") {}
 
 function baseURL(url: string | undefined, org: string | undefined) {
   if (!url) return
@@ -41,7 +44,19 @@ export const layer: Layer.Layer<Service, never, Core.Service | Config.Service | 
       const cache = yield* ModelCache.Service
 
       const get = Effect.fn("ModelsDev.get")(function* () {
-        const providers = overlay(yield* core.get())
+        // kilocode_change start - fall back to empty catalog when models.dev is unavailable
+        const coreProviders = yield* core.get().pipe(
+          Effect.catchDefect((defect) => {
+            // LOCK-004: never serialize raw defect — may contain configured URL or PII
+            log.warn("models.dev catalog unavailable, using empty catalog", {
+              category: "catalog-fetch",
+              errorClass: defect?.constructor?.name ?? "Unknown",
+            })
+            return Effect.succeed({} as Record<string, Core.Provider>)
+          }),
+        )
+        const providers = overlay(coreProviders)
+        // kilocode_change end
         delete providers.kilo
 
         const cfg = yield* config.get()
@@ -104,6 +119,23 @@ export const defaultLayer = layer.pipe(
   Layer.provide(Auth.defaultLayer),
   Layer.provide(ModelCache.defaultLayer),
 )
+
+// kilocode_change start - LOCK-001: canonical combined models layer
+// Produces both Core.Service and KiloModelsDev.Service from a single core
+// instance, eliminating duplicate service construction in application graphs.
+export const combinedLayer = (
+  coreLayer: Layer.Layer<Core.Service, never, never> = Core.defaultLayer,
+): Layer.Layer<Core.Service | Service, never, never> =>
+  Layer.merge(
+    coreLayer,
+    layer.pipe(
+      Layer.provide(coreLayer),
+      Layer.provide(Config.defaultLayer),
+      Layer.provide(Auth.defaultLayer),
+      Layer.provide(ModelCache.defaultLayer),
+    ),
+  )
+// kilocode_change end
 
 export { AI_SDK_PROVIDERS, PROMPTS }
 export * as ModelsDev from "./models"

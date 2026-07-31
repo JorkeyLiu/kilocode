@@ -6,6 +6,9 @@ export interface MessagePrefs {
   variant?: string
 }
 
+/**
+ * Scan messages newest-first to extract the last-used agent, model, and variant.
+ */
 export function resolveMessagePrefs(messages: Message[], names: Set<string>): MessagePrefs {
   const prefs: MessagePrefs = {}
   for (let i = messages.length - 1; i >= 0; i--) {

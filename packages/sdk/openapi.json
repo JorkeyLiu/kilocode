@@ -26741,6 +26741,15 @@
           "small_model": {
             "type": "string"
           },
+          "model_variant": {
+            "type": "string"
+          },
+          "model_variant_overrides": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
           "subagent_model": {
             "type": "string"
           },

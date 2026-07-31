@@ -1585,6 +1585,10 @@ export type Config = {
   }
   model?: string
   small_model?: string
+  model_variant?: string
+  model_variant_overrides?: {
+    [key: string]: string
+  }
   subagent_model?: string
   subagent_variant?: string
   subagent_variant_overrides?: {

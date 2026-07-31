@@ -38,6 +38,9 @@ function emptyStore(): ModelStore {
   return {
     modelSelections: {},
     sessionOverrides: {},
+    sessionRecoveredModels: {},
+    sessionRecoveredAgents: {},
+    sessionRecoveredVariants: {},
     agentSelections: {},
     recentModels: [],
   }
@@ -45,6 +48,7 @@ function emptyStore(): ModelStore {
 
 const claude: ModelSelection = { providerID: "anthropic", modelID: "claude-sonnet-4" }
 const gpt: ModelSelection = { providerID: "openai", modelID: "gpt-4.1" }
+const oldModel: ModelSelection = { providerID: "openai", modelID: "gpt-3.5-turbo" } // not in catalog
 
 describe("per-session model selection", () => {
   it("selecting a model in session A does not write per-mode globally", () => {
@@ -287,5 +291,672 @@ describe("per-mode model memory", () => {
     }
 
     expect(getSelected(switched, configured, "session-a", "code")).toEqual(gpt)
+  })
+})
+
+describe("recovered model vs explicit override", () => {
+  it("recovered model provides session continuity when valid", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    const e = env()
+
+    // Recovered claude should be used for continuity
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(claude)
+    expect(getSelected(store, e, "session-a", "code")).toEqual(claude)
+  })
+
+  it("explicit override wins over recovered model", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": gpt },
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    const e = env()
+
+    // Explicit gpt should win over recovered claude
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(gpt)
+    expect(getSelected(store, e, "session-a", "code")).toEqual(gpt)
+  })
+
+  it("invalid recovered model falls through to normal resolution", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": oldModel }, // not in catalog
+    }
+    const e = env()
+
+    // Old model not in catalog → falls through to KILO_AUTO fallback
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(KILO_AUTO)
+    expect(getSelected(store, e, "session-a", "code")).toEqual(KILO_AUTO)
+  })
+
+  it("invalid explicit override falls through to normal resolution when no recovery", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": oldModel }, // not in catalog
+    }
+    const e = env()
+
+    // Invalid explicit override with no recovery → falls through to KILO_AUTO fallback
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(KILO_AUTO)
+    expect(getSelected(store, e, "session-a", "code")).toEqual(KILO_AUTO)
+  })
+
+  it("invalid explicit override falls through to recovered state (BLOCKER 3 / LOCK-003)", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": oldModel }, // not in catalog
+      sessionRecoveredModels: { "session-a": claude }, // valid recovery
+    }
+    const e = env()
+
+    // Invalid explicit → should fall through to valid recovered, NOT skip to normal
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(claude)
+    expect(getSelected(store, e, "session-a", "code")).toEqual(claude)
+  })
+
+  it("valid explicit override wins over both recovered and normal (LOCK-002)", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": gpt },
+      sessionRecoveredModels: { "session-a": claude },
+      modelSelections: { code: { providerID: "openai", modelID: "gpt-4.1" } },
+    }
+    const e = env()
+
+    // Valid explicit gpt wins over recovered claude and global
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(gpt)
+  })
+
+  it("recovered state never alone triggers override indicator (LOCK-001)", () => {
+    // LOCK-001: Recovered message model is continuity state, not explicit override.
+    // It must never alone show reset X.
+    // This is tested by the hasModelOverride behavior in session.tsx —
+    // at the pure-logic level, recovered state does not appear in sessionOverrides.
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    // sessionOverrides is empty — no explicit override exists
+    expect(store.sessionOverrides["session-a"]).toBeUndefined()
+    // The pure-logic layer correctly resolves recovered as continuity
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(claude)
+  })
+
+  it("during empty catalog, recovered model falls to fallback (LOCK-001: no raw leak)", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    const emptyProviders: ResolveEnv = {
+      providers: {},
+      connected: [],
+      fallback: KILO_AUTO,
+      getModeModel: () => null,
+      getGlobalModel: () => null,
+    }
+
+    // Empty catalog → validate() returns null → falls through to KILO_AUTO
+    expect(getSessionModel(store, emptyProviders, "session-a", "code")).toEqual(KILO_AUTO)
+  })
+
+  it("recovered model does not affect sessions without recovery", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    const e = env()
+
+    // Session B has no recovery → uses normal resolution
+    expect(getSessionModel(store, e, "session-b", "code")).toEqual(KILO_AUTO)
+    expect(getSelected(store, e, "session-b", "code")).toEqual(KILO_AUTO)
+  })
+
+  it("recovered model with global modelSelections uses recovered as override hint", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      modelSelections: { code: gpt },
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    const e = env()
+
+    // Recovered claude is validated as override → wins over global gpt
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(claude)
+  })
+
+  it("invalid recovered falls through to global modelSelections", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      modelSelections: { code: gpt },
+      sessionRecoveredModels: { "session-a": oldModel }, // not in catalog
+    }
+    const e = env()
+
+    // Invalid recovered → falls through to global gpt
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(gpt)
+  })
+
+  it("recovered model with config mode model uses recovered as override hint", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    const withMode: ResolveEnv = {
+      ...env(),
+      getModeModel: (name) => (name === "code" ? gpt : null),
+    }
+
+    // Recovered claude is validated → wins over mode gpt
+    expect(getSessionModel(store, withMode, "session-a", "code")).toEqual(claude)
+  })
+
+  it("invalid recovered falls through to config mode model", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": oldModel }, // not in catalog
+    }
+    const withMode: ResolveEnv = {
+      ...env(),
+      getModeModel: (name) => (name === "code" ? gpt : null),
+    }
+
+    // Invalid recovered → falls through to mode gpt
+    expect(getSessionModel(store, withMode, "session-a", "code")).toEqual(gpt)
+  })
+})
+
+describe("clearModelOverride scoping (LOCK-004)", () => {
+  it("session-scoped reset deletes only session override, not global modelSelections", () => {
+    let store: ModelStore = {
+      ...emptyStore(),
+      modelSelections: { code: claude },
+      sessionOverrides: { "session-a": gpt },
+    }
+    const e = env()
+
+    // Before reset: session A has explicit gpt override
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(gpt)
+
+    // Simulate session-scoped clearModelOverride: delete only session override
+    store = {
+      ...store,
+      sessionOverrides: {},
+    }
+
+    // After reset: session A falls through to global claude
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(claude)
+    // Global modelSelections untouched
+    expect(store.modelSelections["code"]).toEqual(claude)
+  })
+
+  it("session-scoped reset does not clear recovered history", () => {
+    let store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": gpt },
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    const e = env()
+
+    // Simulate session-scoped clearModelOverride: delete only session override
+    store = {
+      ...store,
+      sessionOverrides: {},
+    }
+
+    // Recovered history preserved — continuity kicks in
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(claude)
+  })
+})
+
+describe("config change preserves session state (LOCK-005)", () => {
+  it("changing config model does not purge explicit session overrides", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": claude },
+    }
+    // Config model changed from claude to gpt — but explicit override preserved
+    const envAfterChange: ResolveEnv = {
+      ...env(),
+      getGlobalModel: () => gpt,
+    }
+
+    // Session A still sees its explicit claude override
+    expect(getSessionModel(store, envAfterChange, "session-a", "code")).toEqual(claude)
+  })
+
+  it("changing config model does not purge recovered session state", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    // Config model changed from claude to gpt — but recovered state preserved
+    const envAfterChange: ResolveEnv = {
+      ...env(),
+      getGlobalModel: () => gpt,
+    }
+
+    // Session A still sees recovered claude continuity
+    expect(getSessionModel(store, envAfterChange, "session-a", "code")).toEqual(claude)
+  })
+
+  it("session without override picks up new config model after change", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      // No explicit override, no recovery
+    }
+    const envAfterChange: ResolveEnv = {
+      ...env(),
+      getGlobalModel: () => gpt,
+    }
+
+    // Session without override picks up new config model gpt
+    expect(getSessionModel(store, envAfterChange, "session-a", "code")).toEqual(gpt)
+  })
+})
+
+describe("recovery refresh (LOCK-006)", () => {
+  it("recovery always updates to newest user-message model", () => {
+    let store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": gpt },
+    }
+    const e = env()
+
+    // Initial recovery: gpt
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(gpt)
+
+    // Simulate recovery update to newer model (user sent message with claude)
+    store = {
+      ...store,
+      sessionRecoveredModels: { "session-a": claude },
+    }
+
+    // Recovery updated to claude
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(claude)
+  })
+
+  it("recovery update blocked when explicit override exists", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": gpt },
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    const e = env()
+
+    // Explicit override wins — recovery state is ignored for resolution
+    expect(getSessionModel(store, e, "session-a", "code")).toEqual(gpt)
+  })
+})
+
+describe("draft promotion transfers recovered state (LOCK-007)", () => {
+  it("draft-to-session promotion copies recovered state", () => {
+    // Simulate draft has recovered state, promotion should transfer it
+    const draftStore: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "draft-1": claude },
+    }
+    const e = env()
+
+    // Draft has recovered claude
+    expect(getSessionModel(draftStore, e, "draft-1", "code")).toEqual(claude)
+
+    // After promotion: recovered state transferred to new session
+    const promotedStore: ModelStore = {
+      ...draftStore,
+      sessionRecoveredModels: { "session-new": claude },
+    }
+    expect(getSessionModel(promotedStore, e, "session-new", "code")).toEqual(claude)
+    // Draft entry cleaned up
+    expect(promotedStore.sessionRecoveredModels["draft-1"]).toBeUndefined()
+  })
+
+  it("draft-to-session promotion copies explicit override", () => {
+    const draftStore: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "draft-1": gpt },
+    }
+    const e = env()
+
+    // After promotion: override transferred
+    const promotedStore: ModelStore = {
+      ...draftStore,
+      sessionOverrides: { "session-new": gpt },
+    }
+    expect(getSessionModel(promotedStore, e, "session-new", "code")).toEqual(gpt)
+    expect(promotedStore.sessionOverrides["draft-1"]).toBeUndefined()
+  })
+})
+
+describe("empty catalog falls to fallback (LOCK-001: no raw leak)", () => {
+  it("explicit override falls to fallback during empty catalog", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": oldModel },
+    }
+    const emptyProviders: ResolveEnv = {
+      providers: {},
+      connected: [],
+      fallback: KILO_AUTO,
+      getModeModel: () => null,
+      getGlobalModel: () => null,
+    }
+
+    // Empty catalog → validate() returns null → override fails check → normal chain → KILO_AUTO
+    expect(getSessionModel(store, emptyProviders, "session-a", "code")).toEqual(KILO_AUTO)
+  })
+
+  it("recovered state falls to fallback during empty catalog", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": oldModel },
+    }
+    const emptyProviders: ResolveEnv = {
+      providers: {},
+      connected: [],
+      fallback: KILO_AUTO,
+      getModeModel: () => null,
+      getGlobalModel: () => null,
+    }
+
+    // Empty catalog → validate() returns null → recovered fails check → normal chain → KILO_AUTO
+    expect(getSessionModel(store, emptyProviders, "session-a", "code")).toEqual(KILO_AUTO)
+  })
+
+  it("config model falls to fallback during empty catalog", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      modelSelections: { code: claude },
+    }
+    const emptyProviders: ResolveEnv = {
+      providers: {},
+      connected: [],
+      fallback: KILO_AUTO,
+      getModeModel: () => null,
+      getGlobalModel: () => null,
+    }
+
+    // Empty catalog → normal chain validate returns null → KILO_AUTO
+    expect(getSessionModel(store, emptyProviders, "session-a", "code")).toEqual(KILO_AUTO)
+  })
+
+  it("catalog arrival restores validated selection (LOCK-002: reactive)", () => {
+    // Start with empty catalog — fallback active
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    const emptyProviders: ResolveEnv = {
+      providers: {},
+      connected: [],
+      fallback: KILO_AUTO,
+      getModeModel: () => null,
+      getGlobalModel: () => null,
+    }
+    expect(getSessionModel(store, emptyProviders, "session-a", "code")).toEqual(KILO_AUTO)
+
+    // Catalog arrives — recovered claude is now validated
+    const readyProviders: ResolveEnv = {
+      providers,
+      connected: ["kilo", "anthropic", "openai"],
+      fallback: KILO_AUTO,
+      getModeModel: () => null,
+      getGlobalModel: () => null,
+    }
+    expect(getSessionModel(store, readyProviders, "session-a", "code")).toEqual(claude)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Agent recovery integration — canonical single-resolver precedence
+// ---------------------------------------------------------------------------
+
+describe("agent recovery integration (single canonical resolver)", () => {
+  it("uses recovered agent for model resolution when no explicit agent", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    // Recovered agent "plan" + recovered model claude → claude
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(claude)
+  })
+
+  it("explicit agent wins over recovered agent for model resolution", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      agentSelections: { "session-a": "code" },
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessionRecoveredModels: { "session-a": claude },
+      modelSelections: { code: gpt },
+    }
+    // Explicit agent "code" → uses modelSelections["code"] = gpt
+    // (explicit agent skips recovered model)
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("explicit override wins over recovered agent model", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessionOverrides: { "session-a": gpt },
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    // Explicit override gpt wins over recovered model claude
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("invalid explicit override falls through to recovered model when no explicit agent", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": oldModel },
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    // Invalid explicit → no explicit agent → recovered claude applies
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(claude)
+  })
+
+  it("invalid explicit override falls through to agent normal chain when explicit agent", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      agentSelections: { "session-a": "code" },
+      sessionOverrides: { "session-a": oldModel },
+      modelSelections: { code: gpt },
+    }
+    // Invalid explicit → explicit agent "code" → agent normal chain → gpt
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("recovered agent does not affect sessions without recovery", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    // Session B has no recovery → uses normal resolution
+    expect(getSessionModel(store, env(), "session-b", "code")).toEqual(KILO_AUTO)
+  })
+
+  it("recovered plan model+variant then explicit code agent — agent normal chain wins", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessionRecoveredModels: { "session-a": claude },
+      modelSelections: { code: gpt },
+    }
+    // After user switches to explicit code agent: agent normal chain wins
+    const withExplicit: ModelStore = {
+      ...store,
+      agentSelections: { "session-a": "code" },
+    }
+    expect(getSessionModel(withExplicit, env(), "session-a", "code")).toEqual(gpt)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// LOCK-005: explicit agent switch / clear / override / invalid recovered
+// ---------------------------------------------------------------------------
+
+describe("canonical production resolution — explicit agent transitions", () => {
+  it("LOCK-003: explicit agent B after recovering A resolves B's normal model", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessionRecoveredModels: { "session-a": claude },
+      modelSelections: { plan: claude, code: gpt },
+    }
+    // User explicitly selects code agent → B's normal model (gpt) wins
+    const explicit: ModelStore = { ...store, agentSelections: { "session-a": "code" } }
+    expect(getSessionModel(explicit, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("LOCK-003: clearing explicit agent restores recovered A when still valid", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessionRecoveredModels: { "session-a": claude },
+      modelSelections: { plan: claude },
+    }
+    // No explicit agent → recovered "plan" agent + recovered claude model
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(claude)
+  })
+
+  it("explicit model override wins regardless of agent or recovered state", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      agentSelections: { "session-a": "code" },
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessionRecoveredModels: { "session-a": claude },
+      sessionOverrides: { "session-a": gpt },
+      modelSelections: { code: claude, plan: claude },
+    }
+    // Explicit override gpt wins even though agent normal chain would give claude
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("invalid explicit override falls to explicit agent normal chain", () => {
+    const oldModel: ModelSelection = { providerID: "openai", modelID: "gpt-3.5-turbo" }
+    const store: ModelStore = {
+      ...emptyStore(),
+      agentSelections: { "session-a": "code" },
+      sessionOverrides: { "session-a": oldModel },
+      modelSelections: { code: gpt },
+    }
+    // Invalid explicit → agent normal chain → gpt
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("invalid recovered falls to agent normal chain when explicit agent set", () => {
+    const oldModel: ModelSelection = { providerID: "openai", modelID: "gpt-3.5-turbo" }
+    const store: ModelStore = {
+      ...emptyStore(),
+      agentSelections: { "session-a": "code" },
+      sessionRecoveredModels: { "session-a": oldModel },
+      modelSelections: { code: gpt },
+    }
+    // Invalid recovered → explicit agent → gpt
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("invalid recovered falls to default agent normal chain when no explicit", () => {
+    const oldModel: ModelSelection = { providerID: "openai", modelID: "gpt-3.5-turbo" }
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": oldModel },
+    }
+    // Invalid recovered → default agent "code" normal chain → KILO_AUTO
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(KILO_AUTO)
+  })
+
+  it("no recovery, no explicit — uses agent normal chain", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      modelSelections: { code: gpt },
+    }
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("recovered agent invalid but recovered model valid — uses recovered model", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "unknown" },
+      sessionRecoveredModels: { "session-a": claude },
+    }
+    // Recovered agent "unknown" not in names → default "code"
+    // But recovered model claude is still valid for "code" agent → claude
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(claude)
+  })
+
+  it("recovered agent invalid AND recovered model invalid — falls to default chain", () => {
+    const oldModel: ModelSelection = { providerID: "openai", modelID: "gpt-3.5-turbo" }
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "unknown" },
+      sessionRecoveredModels: { "session-a": oldModel },
+    }
+    // Both recovered agent and model invalid → default "code" → KILO_AUTO
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(KILO_AUTO)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// LOCK-005: send-time selected path (getSelected)
+// ---------------------------------------------------------------------------
+
+describe("canonical production resolution — getSelected path", () => {
+  it("getSelected with session: recovered model valid overrides agent normal chain", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessionRecoveredModels: { "session-a": claude },
+      agentSelections: { "session-a": "code" },
+      modelSelections: { code: gpt },
+    }
+    // getSelected receives agentName as param; it checks recovered before normal chain.
+    // Recovered claude is valid → claude wins over agent normal chain gpt.
+    expect(getSelected(store, env(), "session-a", "code")).toEqual(claude)
+  })
+
+  it("getSelected with session: explicit override wins over recovered", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": gpt },
+      sessionRecoveredModels: { "session-a": claude },
+      agentSelections: { "session-a": "code" },
+      modelSelections: { code: claude },
+    }
+    expect(getSelected(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("getSelected with session: invalid recovered falls to normal chain", () => {
+    const oldModel: ModelSelection = { providerID: "openai", modelID: "gpt-3.5-turbo" }
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": oldModel },
+      modelSelections: { code: gpt },
+    }
+    // Invalid recovered → normal chain → gpt
+    expect(getSelected(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("getSelected with no session uses agent normal chain", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      modelSelections: { code: gpt },
+    }
+    // No session → agent normal chain → gpt
+    expect(getSelected(store, env(), undefined, "code")).toEqual(gpt)
+  })
+
+  it("getSelected with explicit override wins", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": gpt },
+      sessionRecoveredModels: { "session-a": claude },
+      agentSelections: { "session-a": "code" },
+      modelSelections: { code: claude },
+    }
+    expect(getSelected(store, env(), "session-a", "code")).toEqual(gpt)
   })
 })

@@ -15,6 +15,7 @@ import { PublicApi } from "./routes/instance/httpapi/public"
 import type { CorsOptions } from "./cors"
 import { lazy } from "@/util/lazy"
 import * as KiloListener from "@/kilocode/server/listener" // kilocode_change
+import type { AppLayer } from "@/effect/app-runtime" // kilocode_change
 
 // @ts-ignore This global is needed to prevent ai-sdk from logging warnings to stdout https://github.com/vercel/ai/blob/2dc67e0ef538307f21368db32d5a12345d98831b/packages/ai/src/logger/log-warnings.ts#L85
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -45,6 +46,9 @@ type ListenOptions = CorsOptions & {
   hostname: string
   mdns?: boolean
   mdnsDomain?: string
+  // kilocode_change start - deterministic listener tests can replace AppLayer services
+  appLayer?: AppLayer
+  // kilocode_change end
 }
 type ListenerState = {
   scope: Scope.Scope
@@ -65,7 +69,7 @@ class ListenerServerService extends Context.Service<ListenerServerService, Liste
 ) {}
 
 export const Default = lazy(() => {
-  const handler = HttpApiApp.webHandler().handler
+    const handler = HttpApiApp.webHandler().handler
   const app: ServerApp = {
     fetch: (request: Request) => handler(request, HttpApiApp.context),
     request(input, init) {
@@ -112,7 +116,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
 )
 
 function listenerLayer(opts: ListenOptions, port: number) {
-  return HttpRouter.serve(HttpApiApp.createListenerRoutes(opts), { // kilocode_change
+  return HttpRouter.serve(HttpApiApp.createListenerRoutes(opts), {
     middleware: disposeMiddleware,
     disableLogger: true,
     disableListenLog: true,
@@ -137,7 +141,7 @@ function startWithPortFallback(opts: ListenOptions) {
 
 function startListener(opts: ListenOptions, port: number) {
   const scope = Scope.makeUnsafe()
-  return KiloListener.build(listenerLayer(opts, port), scope).pipe( // kilocode_change
+  return KiloListener.build(listenerLayer(opts, port), scope, opts.appLayer).pipe( // kilocode_change
     Effect.provide(HttpApiApp.context),
     Effect.onError(() => Scope.close(scope, Exit.void).pipe(Effect.ignore)),
     Effect.map(

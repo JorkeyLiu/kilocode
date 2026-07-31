@@ -7,7 +7,10 @@ function validate(
   selection: ModelSelection | null | undefined,
 ): ModelSelection | null {
   if (!selection) return null
-  if (Object.keys(providers).length === 0) return selection
+  // LOCK-001: empty catalog → cannot validate → return null so
+  // resolveModelSelection falls through to its fallback (KILO_AUTO),
+  // never leaking a raw unvalidated config/override.
+  if (Object.keys(providers).length === 0) return null
   return isModelValid(providers, connected, selection) ? selection : null
 }
 

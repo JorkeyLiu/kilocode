@@ -13,6 +13,7 @@ import {
 } from "../src/services/cli-backend/cli-resources"
 import { currentBwrapTarget, ensureBwrapForTarget } from "./bwrap-helper"
 import { currentFfmpegTarget, ensureFfmpegForTarget } from "./ffmpeg-helper"
+import { generateSourceWrapperContent } from "./source-wrapper"
 
 const forceRebuild = process.argv.includes("--force")
 
@@ -199,16 +200,7 @@ async function writeSourceWrapper() {
 
   const bun = Bun.which("bun") ?? "bun"
   await $`mkdir -p ${targetBinDir}`
-  await Bun.write(
-    targetBinPath,
-    [
-      "#!/usr/bin/env bash",
-      "set -euo pipefail",
-      `cd ${JSON.stringify(opencodeDir)}`,
-      `exec ${JSON.stringify(bun)} --conditions=browser src/index.ts "$@"`,
-      "",
-    ].join("\n"),
-  )
+  await Bun.write(targetBinPath, generateSourceWrapperContent(opencodeDir, bun))
   chmodSync(targetBinPath, 0o755)
   await bundleKiloSandboxWorker()
   await ensureLocalHelpers()

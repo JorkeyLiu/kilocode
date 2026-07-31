@@ -12,7 +12,8 @@ import { Ripgrep } from "@opencode-ai/core/filesystem/ripgrep"
 import { Storage } from "@/storage/storage"
 import { Snapshot } from "@/snapshot"
 import { Plugin } from "@/plugin"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
+import { ModelsDev as CoreModelsDev } from "@opencode-ai/core/models-dev" // kilocode_change - provide core ModelsDev for direct CLI consumers
+import * as KiloModelsDev from "@/provider/models" // kilocode_change - use Kilo wrapper for defect protection
 import { ModelCache } from "@/provider/model-cache" // kilocode_change
 import { Provider } from "@/provider/provider"
 import { ProviderAuth } from "@/provider/auth"
@@ -61,7 +62,16 @@ import { ProjectCopy } from "@opencode-ai/core/project/copy" // kilocode_change 
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session" // kilocode_change - listener routes are provided by AppLayer
 import { PtyTicket } from "@opencode-ai/core/pty/ticket" // kilocode_change - listener routes are provided by AppLayer
 
-const CoreLayer = Layer.mergeAll(
+// kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers
+type ModelsLayer = Layer.Layer<CoreModelsDev.Service | KiloModelsDev.Service, never, never>
+type ProviderLayer = Layer.Layer<Provider.Service, never, never>
+
+const buildCoreLayer = (
+  models: ModelsLayer = Provider.defaultModels,
+  provider: ProviderLayer = Provider.defaultLayer,
+) =>
+// kilocode_change end
+  Layer.mergeAll( // kilocode_change
   Npm.defaultLayer,
   FSUtil.defaultLayer,
   Database.defaultLayer,
@@ -74,13 +84,24 @@ const CoreLayer = Layer.mergeAll(
   Snapshot.defaultLayer,
   Plugin.defaultLayer,
   ModelCache.defaultLayer, // kilocode_change
-  ModelsDev.defaultLayer,
-  Provider.defaultLayer,
+  models, // kilocode_change - canonical combined models layer (Provider.defaultModels)
+  provider, // kilocode_change - canonical Provider.defaultLayer identity shared with feature layers
   ProviderAuth.defaultLayer,
   Agent.defaultLayer,
   Skill.defaultLayer,
   Discovery.defaultLayer,
-)
+  ) // kilocode_change
+
+// kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair
+export function makeCoreLayer(): ReturnType<typeof buildCoreLayer>
+export function makeCoreLayer(models: ModelsLayer, provider: ProviderLayer): ReturnType<typeof buildCoreLayer>
+export function makeCoreLayer(
+  models: ModelsLayer = Provider.defaultModels,
+  provider: ProviderLayer = Provider.defaultLayer,
+) {
+  return buildCoreLayer(models, provider)
+}
+// kilocode_change end
 
 const SessionLayer = Layer.mergeAll(
   AgentManager.defaultLayer, // kilocode_change
@@ -126,10 +147,29 @@ const FeatureLayer = Layer.mergeAll(
   SessionShare.defaultLayer,
 )
 
-export const AppLayer = Layer.mergeAll(CoreLayer, SessionLayer, FeatureLayer).pipe(
-  Layer.provideMerge(InstanceLayer.layer),
-  Layer.provideMerge(Observability.layer),
-)
+// kilocode_change start - LOCK-003: makeAppLayer shares canonical defaults
+const buildAppLayer = (
+  models: ModelsLayer = Provider.defaultModels,
+  provider: ProviderLayer = Provider.defaultLayer,
+) =>
+  Layer.mergeAll(buildCoreLayer(models, provider), SessionLayer, FeatureLayer).pipe(
+    Layer.provideMerge(InstanceLayer.layer),
+    Layer.provideMerge(Observability.layer),
+  )
+// kilocode_change end
+
+// kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair
+export function makeAppLayer(): ReturnType<typeof buildAppLayer>
+export function makeAppLayer(models: ModelsLayer, provider: ProviderLayer): ReturnType<typeof buildAppLayer>
+export function makeAppLayer(
+  models: ModelsLayer = Provider.defaultModels,
+  provider: ProviderLayer = Provider.defaultLayer,
+) {
+  return buildAppLayer(models, provider)
+}
+
+export const AppLayer = makeAppLayer() // kilocode_change
+export type AppLayer = ReturnType<typeof makeAppLayer> // kilocode_change
 
 const rt = ManagedRuntime.make(AppLayer, { memoMap })
 type Runtime = Pick<typeof rt, "runSync" | "runPromise" | "runPromiseExit" | "runFork" | "runCallback" | "dispose">

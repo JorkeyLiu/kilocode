@@ -67,12 +67,14 @@ import {
 } from "./session-utils"
 import { Identifier } from "../utils/id"
 import { resolveModelSelection } from "./model-selection"
-import { resolveMessagePrefs } from "./session-preferences"
+import { recomputeRecovered } from "./session-recovery"
+import { applyRecoverAgent, resolveSessionAgent as resolveAgent } from "./session-agent-store"
+import { getSessionModel as canonicalGetSessionModel } from "./session-model-store"
 import { errorIDs } from "./session-errors"
 import { PartStash } from "./part-stash"
 import { mergeParts, sameParts } from "./session-parts"
 import { state as todoState } from "./todo-revert"
-import { getVariant, sessionVariantKeys, transferVariants, variantKey } from "./session-variant-store"
+import { getVariant, resolveSessionVariant, sessionVariantKeys, transferVariants, variantKey } from "./session-variant-store"
 import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "../../../src/shared/provider-model"
 import { reviewMetadata, type ReviewMessageData } from "../../../src/shared/review-comments"
 import { visibleMessages as filterVisibleMessages } from "./session-queue"
@@ -118,7 +120,10 @@ interface SessionStore {
   toolParts: Record<string, ToolPart[]> // sessionID -> compact per-session tool index
   todos: Record<string, TodoItem[]> // sessionID -> todos
   modelSelections: Record<string, ModelSelection | null> // agentName -> model (global, extension-lifetime)
-  sessionOverrides: Record<string, ModelSelection> // sessionID -> per-session model override (compare mode)
+  sessionOverrides: Record<string, ModelSelection> // sessionID -> explicit per-session model override
+  sessionRecoveredModels: Record<string, ModelSelection> // sessionID -> recovered model from message history (continuity)
+  sessionRecoveredAgents: Record<string, string> // sessionID -> recovered agent from message history (continuity)
+  sessionRecoveredVariants: Record<string, { variant: string; model: ModelSelection }> // sessionID -> recovered variant bound to recovered model (continuity)
   agentSelections: Record<string, string> // sessionID -> agent name
   variantSelections: Record<string, string> // session/agent scoped variant key -> variant name
   recentModels: ModelSelection[]
@@ -537,6 +542,9 @@ export const SessionProvider: ParentComponent = (props) => {
     todos: {},
     modelSelections: {},
     sessionOverrides: {},
+    sessionRecoveredModels: {},
+    sessionRecoveredAgents: {},
+    sessionRecoveredVariants: {},
     agentSelections: {},
     variantSelections: {},
     recentModels: [],
@@ -563,17 +571,19 @@ export const SessionProvider: ParentComponent = (props) => {
     })
   }
 
+  const agentNames = createMemo(() => new Set(agents().map((agent) => agent.name)))
+
   // Per-session agent selection
   const selectedAgentName = createMemo<string>(() => {
     const sessionID = currentSessionID()
     if (sessionID) {
-      return store.agentSelections[sessionID] ?? defaultAgent()
+      return resolveAgent(store, sessionID, defaultAgent(), agentNames())
     }
     return pendingAgentSelection() ?? defaultAgent()
   })
 
   function agentForScope(sessionID?: string) {
-    if (sessionID) return store.agentSelections[sessionID] ?? defaultAgent()
+    if (sessionID) return resolveAgent(store, sessionID, defaultAgent(), agentNames())
     return selectedAgentName()
   }
   const agentDrafts = createDraftAgentSeed({
@@ -587,7 +597,6 @@ export const SessionProvider: ParentComponent = (props) => {
         produce((agents) => void delete agents[draft]),
       ),
   })
-  const agentNames = createMemo(() => new Set(agents().map((agent) => agent.name)))
 
   const { pendingCloudPrune, prune: pruneCloudOrphans } = createCloudPrune((m) => setStore("parts", produce(m)), stash)
 
@@ -613,6 +622,45 @@ export const SessionProvider: ParentComponent = (props) => {
     })
   }
 
+  /** Validate an explicit override against the catalog; returns null when invalid. */
+  function resolveExplicit(agentName: string, explicit: ModelSelection): ModelSelection | null {
+    const resolved = resolveModel(agentName, explicit)
+    return resolved && resolved.providerID === explicit.providerID && resolved.modelID === explicit.modelID
+      ? resolved
+      : null
+  }
+
+  /**
+   * Resolve the effective model for a session following the canonical
+   * precedence tested in session-model-store.test.ts:
+   *   explicit override > explicit agent normal chain > recovered continuity
+   *   > recovered/default agent normal chain.
+   *
+   * LOCK-001/LOCK-002: delegates to the single canonical helper.
+   */
+  function resolveSessionModel(sessionID: string): ModelSelection | null {
+    return canonicalGetSessionModel(
+      {
+        modelSelections: store.modelSelections,
+        sessionOverrides: store.sessionOverrides,
+        sessionRecoveredModels: store.sessionRecoveredModels,
+        agentSelections: store.agentSelections,
+        sessionRecoveredAgents: store.sessionRecoveredAgents,
+        sessionRecoveredVariants: store.sessionRecoveredVariants,
+        recentModels: store.recentModels,
+      },
+      {
+        providers: provider.providers(),
+        connected: provider.connected(),
+        fallback: KILO_AUTO,
+        getModeModel,
+        getGlobalModel,
+      },
+      sessionID,
+      defaultAgent(),
+    )
+  }
+
   // Keep model selection in sync with provider/mode default until the user
   // explicitly overrides it.
   createEffect(() => {
@@ -624,21 +672,12 @@ export const SessionProvider: ParentComponent = (props) => {
 
   const currentSelected = createMemo<ModelSelection | null>(() => {
     const sid = currentSessionID()
-    if (sid) {
-      const session = store.sessionOverrides[sid]
-      if (session) return session
-    }
-    const agentName = selectedAgentName()
-    return resolveModel(agentName, store.modelSelections[agentName])
+    return sid ? resolveSessionModel(sid) : resolveModel(selectedAgentName(), store.modelSelections[selectedAgentName()])
   })
 
-  // Precedence: scoped override > per-agent global/default > config/default.
+  // Precedence: valid explicit > valid recovered > per-agent global/default > config/default.
   function selected(sessionID?: string): ModelSelection | null {
-    if (!sessionID) return currentSelected()
-    const session = store.sessionOverrides[sessionID]
-    if (session) return session
-    const agentName = agentForScope(sessionID)
-    return resolveModel(agentName, store.modelSelections[agentName])
+    return sessionID ? resolveSessionModel(sessionID) : currentSelected()
   }
 
   function pushRecent(selection: ModelSelection) {
@@ -756,30 +795,31 @@ export const SessionProvider: ParentComponent = (props) => {
     return resolveModel(agentName)
   }
 
-  /** True when the active model differs from what the config dictates. */
+  /** True when the active model differs from what the config dictates.
+   *  Only valid explicit user overrides (not recovered continuity state) trigger this. */
   function hasModelOverride(sessionID?: string) {
-    const sel = selected(sessionID)
+    const sid = sessionID ?? currentSessionID()
+    if (!sid) return false
+    const explicit = store.sessionOverrides[sid]
+    if (!explicit) return false
     const cfg = configModel(sessionID)
-    if (!sel || !cfg) return false
-    return sel.providerID !== cfg.providerID || sel.modelID !== cfg.modelID
+    if (!cfg) return false
+    const resolved = resolveExplicit(agentForScope(sid), explicit)
+    if (!resolved) return false
+    return resolved.providerID !== cfg.providerID || resolved.modelID !== cfg.modelID
   }
 
-  /** Clear the per-mode model override, falling back to config default. */
+  /** Clear the per-session model override, falling back to config default.
+   *  Session-scoped reset deletes only the explicit session override;
+   *  it must not clear modelSelections/userSetAgents or recovered history. */
   function clearModelOverride(sessionID?: string) {
     const sid = sessionID ?? currentSessionID()
-    const agentName = sid ? agentForScope(sid) : selectedAgentName()
-    // Always clear the persisted per-mode model selection so the user's
-    // configured (or fallback) model becomes effective, not the last manual pick.
-    clearModeModelSelection(agentName, true)
-    if (sid) {
-      setStore(
-        "sessionOverrides",
-        produce((overrides) => {
-          delete overrides[sid]
-        }),
-      )
-      hideErrors(sid)
+    if (!sid) {
+      clearModeModelSelection(selectedAgentName(), true)
+      return
     }
+    setStore("sessionOverrides", produce((overrides) => { delete overrides[sid] }))
+    hideErrors(sid)
   }
 
   // Handle agentsLoaded immediately (not in onMount) so we never miss
@@ -905,7 +945,12 @@ export const SessionProvider: ParentComponent = (props) => {
     if (!sel) return undefined
     const list = variantList(sid)
     if (list.length === 0) return undefined
-    return getVariant(store.variantSelections, sel, list, agentForScope(sid), sid)
+    const cfg = config()
+    const key = `${sel.providerID}/${sel.modelID}`
+    const overrideVariant = cfg.model_variant_overrides?.[key] ?? undefined
+    const globalVariant = cfg.model_variant ?? undefined
+    const recovered = sid ? store.sessionRecoveredVariants[sid] : undefined
+    return resolveSessionVariant(store.variantSelections, sel, list, agentForScope(sid), sid, overrideVariant, globalVariant, recovered).variant
   }
 
   const selectVariant = (value: string, sessionID?: string) => {
@@ -959,64 +1004,6 @@ export const SessionProvider: ParentComponent = (props) => {
   })
   vscode.postMessage({ type: "requestFavorites" })
   onCleanup(unsubFavorites)
-
-  // Clear model overrides that match the previous config model (not intentional user overrides).
-  // When config.model changes, old overrides that were just default values should be cleared
-  // so sessions fall through to resolveModel() and pick up the new config model.
-  const [lastConfigModel, setLastConfigModel] = createSignal<ModelSelection | null>(getGlobalModel())
-  createEffect(() => {
-    const newConfigModel = getGlobalModel()
-    // Use untrack to read previous value without making this effect re-trigger on its own updates
-    const oldConfigModel = untrack(() => lastConfigModel())
-    if (oldConfigModel) {
-      // Also clear when newConfigModel is null (user removed model from config)
-      if (newConfigModel) {
-        const modelChanged =
-          oldConfigModel.providerID !== newConfigModel.providerID || oldConfigModel.modelID !== newConfigModel.modelID
-        if (modelChanged) {
-          // Clear overrides that match the OLD config model - these were likely defaults,
-          // not intentional user overrides. Overrides that differ from both old and new
-          // config are preserved (intentional user selections).
-          setStore(
-            "sessionOverrides",
-            produce((overrides) => {
-              for (const sid of Object.keys(overrides)) {
-                const override = overrides[sid]
-                if (
-                  override &&
-                  override.providerID === oldConfigModel.providerID &&
-                  override.modelID === oldConfigModel.modelID
-                ) {
-                  delete overrides[sid]
-                }
-              }
-            }),
-          )
-        }
-      } else {
-        // newConfigModel is null - clear all overrides that matched the old config model
-        // since the config no longer specifies a model. This ensures sessions fall through
-        // to provider defaults rather than using a stale removed model.
-        setStore(
-          "sessionOverrides",
-          produce((overrides) => {
-            for (const sid of Object.keys(overrides)) {
-              const override = overrides[sid]
-              if (
-                override &&
-                override.providerID === oldConfigModel.providerID &&
-                override.modelID === oldConfigModel.modelID
-              ) {
-                delete overrides[sid]
-              }
-            }
-          }),
-        )
-      }
-    }
-    // Update the tracked config model
-    setLastConfigModel(newConfigModel)
-  })
 
   function handleError(message: Extract<ExtensionMessage, { type: "error" }>) {
     if (!message.sessionID || message.sessionID === currentSessionID()) setLoading(false)
@@ -1261,105 +1248,26 @@ export const SessionProvider: ParentComponent = (props) => {
     batch(() => {
       setStore("sessions", session.id, session)
 
-      if (draftID && submissionMap[draftID]) {
-        const submissions = submissionMap[draftID]
-        for (const [id, scope] of pendingSubmissions) {
-          if (scope === draftID) pendingSubmissions.set(id, session.id)
-        }
-        setSubmissionMap(session.id, (count = 0) => count + submissions)
-        setSubmissionMap(
-          produce((map) => {
-            delete map[draftID]
-          }),
-        )
-        if (busySinceMap[draftID] && !busySinceMap[session.id]) {
-          setBusySinceMap(session.id, busySinceMap[draftID])
-        }
-        setBusySinceMap(
-          produce((map) => {
-            delete map[draftID]
-          }),
-        )
-      }
-
-      const drafts = draftID ? store.messages[draftID] : undefined
-      if (draftID && drafts?.length) {
-        const current = store.messages[session.id] ?? []
-        const ids = new Set(current.map((message) => message.id))
-        const promoted = drafts
-          .filter((message) => !ids.has(message.id))
-          .map((message) => ({ ...message, sessionID: session.id }))
-        setStore("messages", session.id, [...current, ...promoted])
-        setStore(
-          "messages",
-          produce((messages) => {
-            delete messages[draftID]
-          }),
-        )
-
-        const pending = pendingOptimistic.get(draftID)
-        if (pending) {
-          const merged = pendingOptimistic.get(session.id) ?? new Set<string>()
-          for (const id of pending) merged.add(id)
-          pendingOptimistic.set(session.id, merged)
-          pendingOptimistic.delete(draftID)
-        }
-        setLoaded((prev) => {
-          if (prev.has(session.id)) return prev
-          const next = new Set(prev)
-          next.add(session.id)
-          return next
-        })
-        patchPage(session.id, { initialLoaded: true, lastMutation: "append" })
-        setPages(
-          produce((state) => {
-            delete state[draftID]
-          }),
-        )
-      }
+      if (draftID && submissionMap[draftID]) transferSubmissions(draftID, session.id)
+      if (draftID) promoteDraftMessages(draftID, session.id)
 
       // Only initialize messages if none exist yet — a cloud session import
       // (handleCloudSessionImported) may have already populated messages for
       // this session ID. The SSE session.created event can race with the
       // cloudSessionImported message, and wiping to [] causes a flash of
       // the empty/welcome screen.
-      if (!store.messages[session.id]?.length) {
-        setStore("messages", session.id, [])
-      }
+      if (!store.messages[session.id]?.length) setStore("messages", session.id, [])
       if (!store.toolParts[session.id]) setStore("toolParts", session.id, [])
 
-      const pendingAgent = draftID ? store.agentSelections[draftID] : pendingAgentSelection()
-      const pendingModel = draftID ? store.sessionOverrides[draftID] : undefined
       if (draftID) {
-        const entries = transferVariants(store.variantSelections, draftID, session.id)
-        for (const [key, value] of Object.entries(entries)) {
-          setStore("variantSelections", key, value)
-          vscode.postMessage({ type: "persistVariant", key, value })
-        }
-        if (pendingAgent) setStore("agentSelections", session.id, pendingAgent)
-        if (pendingModel) setStore("sessionOverrides", session.id, pendingModel)
-        setStore(
-          "agentSelections",
-          produce((agents) => {
-            delete agents[draftID]
-          }),
-        )
-        setStore(
-          "sessionOverrides",
-          produce((models) => {
-            delete models[draftID]
-          }),
-        )
-        setStore(
-          "variantSelections",
-          produce((variants) => {
-            for (const key of sessionVariantKeys(variants, draftID)) delete variants[key]
-          }),
-        )
+        transferDraftState(draftID, session.id)
         agentDrafts.promote(draftID)
-      } else if (pendingAgent && !store.agentSelections[session.id]) {
-        setStore("agentSelections", session.id, pendingAgent)
-        setPendingAgentSelection(null)
+      } else {
+        const pendingAgent = pendingAgentSelection()
+        if (pendingAgent && !store.agentSelections[session.id]) {
+          setStore("agentSelections", session.id, pendingAgent)
+          setPendingAgentSelection(null)
+        }
       }
 
       const active = currentSessionID()
@@ -1370,6 +1278,66 @@ export const SessionProvider: ParentComponent = (props) => {
         setUserClearedSession(false)
       }
     })
+  }
+
+  function transferSubmissions(draftID: string, sessionID: string) {
+    const submissions = submissionMap[draftID]
+    for (const [id, scope] of pendingSubmissions) {
+      if (scope === draftID) pendingSubmissions.set(id, sessionID)
+    }
+    setSubmissionMap(sessionID, (count = 0) => count + submissions)
+    setSubmissionMap(produce((map) => { delete map[draftID] }))
+    if (busySinceMap[draftID] && !busySinceMap[sessionID]) setBusySinceMap(sessionID, busySinceMap[draftID])
+    setBusySinceMap(produce((map) => { delete map[draftID] }))
+  }
+
+  function promoteDraftMessages(draftID: string, sessionID: string) {
+    const drafts = store.messages[draftID]
+    if (!drafts?.length) return
+    const current = store.messages[sessionID] ?? []
+    const ids = new Set(current.map((m) => m.id))
+    const promoted = drafts.filter((m) => !ids.has(m.id)).map((m) => ({ ...m, sessionID }))
+    setStore("messages", sessionID, [...current, ...promoted])
+    setStore("messages", produce((messages) => { delete messages[draftID] }))
+    const pending = pendingOptimistic.get(draftID)
+    if (pending) {
+      const merged = pendingOptimistic.get(sessionID) ?? new Set<string>()
+      for (const id of pending) merged.add(id)
+      pendingOptimistic.set(sessionID, merged)
+      pendingOptimistic.delete(draftID)
+    }
+    setLoaded((prev) => {
+      if (prev.has(sessionID)) return prev
+      const next = new Set(prev)
+      next.add(sessionID)
+      return next
+    })
+    patchPage(sessionID, { initialLoaded: true, lastMutation: "append" })
+    setPages(produce((state) => { delete state[draftID] }))
+  }
+
+  function transferDraftState(draftID: string, sessionID: string) {
+    const pendingAgent = store.agentSelections[draftID]
+    const pendingModel = store.sessionOverrides[draftID]
+    const pendingRecovered = store.sessionRecoveredModels[draftID]
+    const pendingRecoveredAgent = store.sessionRecoveredAgents[draftID]
+    const pendingRecoveredVariant = store.sessionRecoveredVariants[draftID]
+    const entries = transferVariants(store.variantSelections, draftID, sessionID)
+    for (const [key, value] of Object.entries(entries)) {
+      setStore("variantSelections", key, value)
+      vscode.postMessage({ type: "persistVariant", key, value })
+    }
+    if (pendingAgent) setStore("agentSelections", sessionID, pendingAgent)
+    if (pendingModel) setStore("sessionOverrides", sessionID, pendingModel)
+    if (pendingRecovered) setStore("sessionRecoveredModels", sessionID, pendingRecovered)
+    if (pendingRecoveredAgent) setStore("sessionRecoveredAgents", sessionID, pendingRecoveredAgent)
+    if (pendingRecoveredVariant) setStore("sessionRecoveredVariants", sessionID, pendingRecoveredVariant)
+    for (const key of ["agentSelections", "sessionOverrides", "sessionRecoveredModels", "sessionRecoveredAgents", "sessionRecoveredVariants"] as const) {
+      setStore(key, produce((m) => { delete m[draftID] }))
+    }
+    setStore("variantSelections", produce((variants) => {
+      for (const key of sessionVariantKeys(variants, draftID)) delete variants[key]
+    }))
   }
 
   function patchPage(sessionID: string, patch: Partial<MessagePageState>) {
@@ -1399,17 +1367,22 @@ export const SessionProvider: ParentComponent = (props) => {
   }
 
   function recoverPrefs(sessionID: string, messages: Message[], names = agentNames()) {
-    const prefs = resolveMessagePrefs(messages, names)
-    if (prefs.agent && !store.agentSelections[sessionID]) {
-      setStore("agentSelections", sessionID, prefs.agent)
+    const prefs = recomputeRecovered(messages, store.sessions[sessionID]?.revert, names)
+    // LOCK-002: always update recovered model regardless of explicit override.
+    if (prefs.model) {
+      setStore("sessionRecoveredModels", sessionID, prefs.model)
+    } else {
+      setStore("sessionRecoveredModels", produce((m) => { delete m[sessionID] }))
     }
-    if (prefs.model && !store.sessionOverrides[sessionID]) {
-      setStore("sessionOverrides", sessionID, prefs.model)
-    }
+    // LOCK-001: write recovered agent as continuity state (never to agentSelections).
+    setStore("sessionRecoveredAgents", applyRecoverAgent(store.sessionRecoveredAgents, sessionID, prefs.agent, store.agentSelections))
+    // LOCK-001: always replace recovered variant — no write-once guard.
+    // LOCK-001: recovered variant provenance includes provider/model identity.
+    // It is eligible only when effective selected model exactly matches.
     if (prefs.model && prefs.variant) {
-      const agent = prefs.agent ?? store.agentSelections[sessionID] ?? defaultAgent()
-      const key = variantKey(prefs.model, agent, sessionID)
-      if (!store.variantSelections[key]) setStore("variantSelections", key, prefs.variant)
+      setStore("sessionRecoveredVariants", sessionID, { variant: prefs.variant, model: prefs.model })
+    } else {
+      setStore("sessionRecoveredVariants", produce((v) => { delete v[sessionID] }))
     }
   }
 
@@ -1483,7 +1456,10 @@ export const SessionProvider: ParentComponent = (props) => {
     // Reconcile fast-path: if the tail matches local state shape-wise, every
     // message+part-count already agrees with the server. Skip the reactive
     // store churn entirely — virtualizer and rendering stay untouched.
+    // LOCK-003: Always recompute recovery before any early return so
+    // changed model/agent metadata is never skipped.
     if (mode === "reconcile" && sameReconcileShape(store.messages[sessionID] ?? [], messages)) {
+      recoverPrefs(sessionID, messages)
       const parts = messageParts(messages)
       for (const msg of messages) {
         if (store.parts[msg.id]) delete parts[msg.id]
@@ -1611,7 +1587,7 @@ export const SessionProvider: ParentComponent = (props) => {
     })
     patchPage(message.sessionID, { initialLoaded: true, lastMutation: exists ? "update" : "append" })
 
-    recoverPrefs(message.sessionID, [message])
+    recoverPrefs(message.sessionID, store.messages[message.sessionID] ?? [])
 
     if (message.parts && message.parts.length > 0) {
       stash.remove(message.id)
@@ -1976,6 +1952,9 @@ export const SessionProvider: ParentComponent = (props) => {
     if (!changed || (prev?.messageID === next?.messageID && prev?.partID === next?.partID)) return
     clearClose(session.id)
     resetTodos(session.id, next)
+    // LOCK-002/LOCK-004: recompute recovery from the authoritative visible
+    // message array after any revert/unrevert boundary change.
+    recoverPrefs(session.id, store.messages[session.id] ?? [])
   }
 
   function handleSessionsLoaded(
@@ -2047,6 +2026,9 @@ export const SessionProvider: ParentComponent = (props) => {
           }
           delete s.agentSelections[sessionID]
           delete s.sessionOverrides[sessionID]
+          delete s.sessionRecoveredModels[sessionID]
+          delete s.sessionRecoveredAgents[sessionID]
+          delete s.sessionRecoveredVariants[sessionID]
           for (const key of sessionVariantKeys(s.variantSelections, sessionID)) delete s.variantSelections[key]
         }),
       )
@@ -2094,6 +2076,8 @@ export const SessionProvider: ParentComponent = (props) => {
   }
 
   // Splices the message from the store and deletes its parts.
+  // Per LOCK-002/LOCK-004: recompute recovery from the authoritative
+  // visible message array after any message removal.
   function handleMessageRemoved(sessionID: string, messageID: string) {
     setStore("messages", sessionID, (msgs = []) => msgs.filter((m) => m.id !== messageID))
     dropMessageTools(sessionID, messageID)
@@ -2108,6 +2092,8 @@ export const SessionProvider: ParentComponent = (props) => {
     // removed-before-hydrated message leaks parts in the stash and can
     // resurface them via getParts() after the message is gone.
     stash.remove(messageID)
+    // LOCK-002/LOCK-004: recompute recovery from the authoritative array.
+    recoverPrefs(sessionID, store.messages[sessionID] ?? [])
   }
 
   function handleCloudSessionDataLoaded(cloudSessionId: string, title: string, messages: Message[]) {
@@ -2135,6 +2121,9 @@ export const SessionProvider: ParentComponent = (props) => {
         }
       }
       rebuildToolParts(key, messages)
+      // LOCK-004: recompute recovered agent/model/variant for cloud preview
+      // before selection/send so first continuation has correct state.
+      recoverPrefs(key, messages)
       setCurrentSessionID(key)
       setLoading(false)
     })
@@ -2145,6 +2134,12 @@ export const SessionProvider: ParentComponent = (props) => {
     const cloudKey = `cloud:${cloudSessionId}`
     const cloudMessages = store.messages[cloudKey] ?? []
     const active = cloudPreviewId() === cloudSessionId && currentSessionID() === cloudKey
+    // LOCK-004: snapshot all cloud-key explicit and recovered state before transfer
+    const cloudExplicitAgent = store.agentSelections[cloudKey]
+    const cloudExplicitModel = store.sessionOverrides[cloudKey]
+    const cloudRecoveredAgent = store.sessionRecoveredAgents[cloudKey]
+    const cloudRecoveredModel = store.sessionRecoveredModels[cloudKey]
+    const cloudRecoveredVariant = store.sessionRecoveredVariants[cloudKey]
     batch(() => {
       setLoaded((prev) => {
         const next = new Set(prev)
@@ -2154,14 +2149,26 @@ export const SessionProvider: ParentComponent = (props) => {
       })
       setStore("sessions", session.id, session)
 
+      // LOCK-004: transfer explicit cloud agent selection
+      if (cloudExplicitAgent && !store.agentSelections[session.id]) setStore("agentSelections", session.id, cloudExplicitAgent)
       const pendingAgent = pendingAgentSelection()
-      if (pendingAgent && !store.agentSelections[session.id]) {
-        setStore("agentSelections", session.id, pendingAgent)
-      }
-
+      if (pendingAgent && !store.agentSelections[session.id]) setStore("agentSelections", session.id, pendingAgent)
+      // LOCK-004: transfer explicit cloud model override
+      if (cloudExplicitModel && !store.sessionOverrides[session.id]) setStore("sessionOverrides", session.id, cloudExplicitModel)
       // Carry over cloud messages so there's no loading flash
       setStore("messages", session.id, cloudMessages)
       rebuildToolParts(session.id, cloudMessages)
+
+      // LOCK-004: transfer recovered agent/model/variant from cloud session
+      if (cloudRecoveredAgent && !store.agentSelections[session.id]) setStore("sessionRecoveredAgents", session.id, cloudRecoveredAgent)
+      if (cloudRecoveredModel) setStore("sessionRecoveredModels", session.id, cloudRecoveredModel)
+      if (cloudRecoveredVariant) setStore("sessionRecoveredVariants", session.id, cloudRecoveredVariant)
+      // LOCK-004: transfer all session-scoped explicit variant entries
+      const cloudEntries = transferVariants(store.variantSelections, cloudKey, session.id)
+      for (const [k, v] of Object.entries(cloudEntries)) {
+        setStore("variantSelections", k, v)
+        vscode.postMessage({ type: "persistVariant", key: k, value: v })
+      }
 
       if (active) {
         setCloudPreviewId(null)
@@ -2170,24 +2177,18 @@ export const SessionProvider: ParentComponent = (props) => {
         setUserClearedSession(false)
       }
 
-      setStore(
-        "sessions",
-        produce((sessions) => {
-          delete sessions[cloudKey]
-        }),
-      )
-      setStore(
-        "messages",
-        produce((messages) => {
-          delete messages[cloudKey]
-        }),
-      )
-      setStore(
-        "toolParts",
-        produce((parts) => {
-          delete parts[cloudKey]
-        }),
-      )
+      // LOCK-005: clean up ALL cloud-key state after transfer
+      setStore("sessions", produce((s) => { delete s[cloudKey] }))
+      setStore("messages", produce((m) => { delete m[cloudKey] }))
+      setStore("toolParts", produce((p) => { delete p[cloudKey] }))
+      setStore("agentSelections", produce((a) => { delete a[cloudKey] }))
+      setStore("sessionOverrides", produce((o) => { delete o[cloudKey] }))
+      setStore("sessionRecoveredAgents", produce((a) => { delete a[cloudKey] }))
+      setStore("sessionRecoveredModels", produce((m) => { delete m[cloudKey] }))
+      setStore("sessionRecoveredVariants", produce((v) => { delete v[cloudKey] }))
+      setStore("variantSelections", produce((variants) => {
+        for (const k of sessionVariantKeys(variants, cloudKey)) delete variants[k]
+      }))
     })
     const cloudPruneIDs = pendingCloudPrune.get(cloudKey)
     if (cloudPruneIDs) {
@@ -3011,13 +3012,8 @@ export const SessionProvider: ParentComponent = (props) => {
     refreshMcpStatus,
     selectedAgent: agentForScope,
     selectAgent,
-    getSessionAgent: (sessionID: string) => store.agentSelections[sessionID] ?? defaultAgent(),
-    getSessionModel: (sessionID: string) => {
-      const override = store.sessionOverrides[sessionID]
-      if (override) return override
-      const agentName = store.agentSelections[sessionID] ?? defaultAgent()
-      return resolveModel(agentName, store.modelSelections[agentName])
-    },
+    getSessionAgent: (sessionID: string) => resolveAgent(store, sessionID, defaultAgent(), agentNames()),
+    getSessionModel: (sessionID: string) => resolveSessionModel(sessionID),
     setSessionModel: (sessionID: string, providerID: string, modelID: string) => {
       // Only write per-session override — do NOT touch global modelSelections or
       // userSetAgents.  The override is what selected()/getSessionModel() actually
