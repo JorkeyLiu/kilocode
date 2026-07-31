@@ -25,6 +25,30 @@ Kilo CLI is an open source AI coding agent that generates code from natural lang
 - **workflow allowlist**: `bun run script/check-workflows.ts` from repo root. CI runs this as part of the annotations workflow — any `.yml` / `.yaml` file added to or removed from `.github/workflows/` must be reflected in the hardcoded list in `script/check-workflows.ts`. Prevents upstream-merged workflows from silently starting to run in our CI.
 - **Backend/SDK programmatic testing**: see [TESTING.md](./TESTING.md) for spawning the local main-branch backend (`bun dev serve`) and driving it via `curl` — use this instead of `kilo serve` (prod binary) when testing backend fixes.
 
+## Runtime Conventions
+
+### Config Update Lifecycle
+
+- Classify every new config field as hot or cold at introduction.
+- Hot updates persist, invalidate caches, and emit `config-updated` without disposing instances, restarting the backend, or interrupting active sessions.
+- Cold updates persist independently and defer disposal/restart until the active request completes; never reject the save or interrupt the request.
+- An in-flight request keeps the config snapshot from startup; new config applies to subsequent requests unless the field is explicitly safe for live mutation.
+- Tests must cover saving during active streaming, not only idle PATCH.
+
+### Runtime Path Parity
+
+- When clients use production `Server.listen`/`AppLayer`, validate that path; `Server.Default` alone is insufficient evidence.
+- When `bun run extension` is used as evidence, prove the backend comes from the current workspace via process ancestry or launch path. Manual launch does not replace typecheck and tests.
+- Verify provider/model UI from cold provider state; cached metadata is not sufficient.
+- Cross-reference TESTING.md instead of duplicating binary commands.
+
+### Effect Service Ownership
+
+- Kilo wrappers and upstream core services use runtime-distinct Context keys.
+- AppLayer provides one canonical instance of each stateful service; feature layers reuse it rather than embedding an independent `defaultLayer`.
+- Injectable tests preserve the production dependency graph and real service wiring, not mocks.
+- Complement, not weaken, the existing Effect facade ratchet.
+
 ## Quality Checks
 
 Before saying an implementation is ready, run the smallest relevant checks that can catch lint, typecheck, and test failures for the touched package. Do not rely on manual extension launch to discover build problems. Fix failures you introduced before the final response, or state exactly which check is still failing or could not be run.
