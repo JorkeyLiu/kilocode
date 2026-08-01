@@ -7,6 +7,7 @@ import { Authorization } from "../middleware/authorization"
 import { InstanceContextMiddleware } from "../middleware/instance-context"
 import { WorkspaceRoutingMiddleware, WorkspaceRoutingQuery } from "../middleware/workspace-routing"
 import { described } from "./metadata"
+import { ConfigOverlayInvalidError } from "@/kilocode/server/httpapi/groups/config-console" // kilocode_change
 
 const root = "/config"
 
@@ -36,7 +37,7 @@ export const ConfigApi = HttpApi.make("config")
           query: WorkspaceRoutingQuery,
           payload: ConfigV1.Info,
           success: described(ConfigV1.Info, "Successfully updated config"),
-          error: HttpApiError.BadRequest,
+           error: ConfigOverlayInvalidError, // kilocode_change
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "config.update",

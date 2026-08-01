@@ -22,6 +22,7 @@ import type { ConsoleState } from "@opencode-ai/core/v1/config/console-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
 import { Context, Duration, Effect, Exit, Fiber, Layer, Option, Schema } from "effect"
+import { ConfigSnapshotRef } from "@/kilocode/session/config-snapshot" // kilocode_change
 import { FetchHttpClient, HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 import { containsPath, type InstanceContext } from "../project/instance-context"
@@ -168,7 +169,7 @@ export interface Interface {
   readonly get: () => Effect.Effect<Info>
   readonly getGlobal: () => Effect.Effect<Info>
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
-  readonly update: (config: Info) => Effect.Effect<void>
+  readonly update: (config: Info) => Effect.Effect<{ config: Info; changed: boolean }>
   // kilocode_change start
   readonly updateGlobal: (
     config: Info,
@@ -249,6 +250,27 @@ function writableGlobal(info: Info) {
   // When a user changes config from a value back to default in the Desktop app, we don't want to leave a blank `"shell": "",` key
   if ("shell" in next && next.shell === "") return { ...next, shell: undefined }
   return next
+}
+
+function stable(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`
+  if (isRecord(value)) {
+    // kilocode_change start - undefined object values serialize to nothing in
+    // JSON, so omit them here too: an omitted key and an explicitly undefined
+    // value must compare equal (the global shell sentinel maps "" → undefined).
+    // Arrays are JSON-typed and can never contain undefined; such values are
+    // rejected by the throw below instead of being treated as JSON null.
+    return `{${Object.keys(value)
+      .sort()
+      .filter((key) => value[key] !== undefined)
+      .map((key) => `${JSON.stringify(key)}:${stable(value[key])}`)
+      .join(",")}}`
+    // kilocode_change end
+  }
+  if (value === null) return "null"
+  if (typeof value === "string") return JSON.stringify(value)
+  if (typeof value === "number" || typeof value === "boolean") return String(value)
+  throw new TypeError(`Unsupported config value in semantic comparison: ${typeof value}`) // kilocode_change
 }
 
 export const layer = Layer.effect(
@@ -911,6 +933,10 @@ export const layer = Layer.effect(
     )
 
     const get = Effect.fn("Config.get")(function* () {
+      // kilocode_change start - pin Config.get for admitted generations
+      const snapshot = yield* ConfigSnapshotRef
+      if (snapshot) return snapshot
+      // kilocode_change end
       // kilocode_change start - reload instance config when global config changed elsewhere
       if (yield* refreshGlobal()) {
         yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
@@ -936,7 +962,7 @@ export const layer = Layer.effect(
     const update = Effect.fn("Config.update")(function* (config: Info) {
       // kilocode_change start - delegate Kilo project config update behavior.
       const ctx = yield* InstanceState.context
-      yield* KilocodeConfig.updateProjectConfig({
+      const result = yield* KilocodeConfig.updateProjectConfig({
         fs,
         directory: ctx.directory,
         worktree: ctx.worktree,
@@ -946,6 +972,7 @@ export const layer = Layer.effect(
         patch: (input, patch) => patchJsonc(input, patch),
         writable,
       })
+      if (!result.changed) return result
       yield* InstanceState.invalidate(state)
       yield* Effect.sync(() =>
         GlobalBus.emit("event", {
@@ -955,7 +982,8 @@ export const layer = Layer.effect(
             properties: {},
           },
         }),
-      )
+      ).pipe(Effect.catchCause((cause) => Effect.sync(() => log.error("config update listener failed", { cause }))))
+      return result
     })
 
     const warnings = Effect.fn("Config.warnings")(function* () {
@@ -983,14 +1011,20 @@ export const layer = Layer.effect(
               const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
               const next = KilocodeConfig.mergeConfig(writable(existing), patch)
               const serialized = JSON.stringify(next, null, 2)
-              const changed = serialized !== before
+              // kilocode_change - validate the merged result before persisting,
+              // mirroring the jsonc branch and the project update path: an
+              // invalid patch surfaces as a typed ConfigInvalidError defect and
+              // writes nothing (LOCK-007) instead of persisting bad values and
+              // failing response encoding with a generic BadRequest.
+              ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(serialized, file), file)
+              const changed = stable(next) !== stable(ConfigParse.jsonc(before, file))
               if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
               return { next, changed }
             }
 
             const updated = patchJsonc(before, patch)
             const next = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(updated, file), file)
-            const changed = updated !== before
+            const changed = stable(next) !== stable(ConfigParse.jsonc(before, file))
             if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
             return { next, changed }
           }),
@@ -1003,6 +1037,7 @@ export const layer = Layer.effect(
 
       // kilocode_change start - skip dispose when caller opts out
       if (!dispose) {
+        if (!changed) return { info: next, changed }
         yield* invalidateGlobal
         yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
         yield* Effect.sync(() =>
@@ -1013,12 +1048,13 @@ export const layer = Layer.effect(
               properties: {},
             },
           }),
-        ).pipe(Effect.catchCause(() => Effect.void))
+        ).pipe(Effect.catchCause((cause) => Effect.sync(() => log.error("global config listener failed", { cause }))))
         return { info: next, changed }
       }
       // kilocode_change end
 
-      if (changed) yield* invalidate()
+      if (!changed) return { info: next, changed }
+      yield* invalidate()
       // kilocode_change start - hot-reload global config changes in the active instance
       if (changed) {
         yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
@@ -1030,7 +1066,7 @@ export const layer = Layer.effect(
               properties: {},
             },
           }),
-        ).pipe(Effect.catchCause(() => Effect.void))
+        ).pipe(Effect.catchCause((cause) => Effect.sync(() => log.error("global config listener failed", { cause }))))
       }
       // kilocode_change end
       return { info: next, changed }

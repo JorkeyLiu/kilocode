@@ -69,7 +69,7 @@ class ListenerServerService extends Context.Service<ListenerServerService, Liste
 ) {}
 
 export const Default = lazy(() => {
-    const handler = HttpApiApp.webHandler().handler
+  const handler = HttpApiApp.webHandler().handler
   const app: ServerApp = {
     fetch: (request: Request) => handler(request, HttpApiApp.context),
     request(input, init) {
@@ -116,7 +116,7 @@ const listenEffect: (opts: ListenOptions) => Effect.Effect<EffectListener, unkno
 )
 
 function listenerLayer(opts: ListenOptions, port: number) {
-  return HttpRouter.serve(HttpApiApp.createListenerRoutes(opts), {
+  return HttpRouter.serve(HttpApiApp.createListenerRoutes(opts, opts.appLayer), {
     middleware: disposeMiddleware,
     disableLogger: true,
     disableListenLog: true,
@@ -141,7 +141,8 @@ function startWithPortFallback(opts: ListenOptions) {
 
 function startListener(opts: ListenOptions, port: number) {
   const scope = Scope.makeUnsafe()
-  return KiloListener.build(listenerLayer(opts, port), scope, opts.appLayer).pipe( // kilocode_change
+  return KiloListener.build(listenerLayer(opts, port), scope, opts.appLayer).pipe(
+    // kilocode_change
     Effect.provide(HttpApiApp.context),
     Effect.onError(() => Scope.close(scope, Exit.void).pipe(Effect.ignore)),
     Effect.map(

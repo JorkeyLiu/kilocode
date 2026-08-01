@@ -410,13 +410,13 @@
             }
           },
           "400": {
-            "description": "BadRequest | InvalidRequestError",
+            "description": "ConfigInvalidError | InvalidRequestError",
             "content": {
               "application/json": {
                 "schema": {
                   "anyOf": [
                     {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                      "$ref": "#/components/schemas/ConfigInvalidError"
                     },
                     {
                       "$ref": "#/components/schemas/InvalidRequestError"
@@ -703,13 +703,13 @@
             }
           },
           "400": {
-            "description": "BadRequest | InvalidRequestError",
+            "description": "ConfigInvalidError | InvalidRequestError",
             "content": {
               "application/json": {
                 "schema": {
                   "anyOf": [
                     {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                      "$ref": "#/components/schemas/ConfigInvalidError"
                     },
                     {
                       "$ref": "#/components/schemas/InvalidRequestError"
@@ -11736,11 +11736,18 @@
             }
           },
           "400": {
-            "description": "Bad request",
+            "description": "ConfigInvalidError | InvalidRequestError",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConfigInvalidError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
                 }
               }
             }
@@ -27126,6 +27133,48 @@
             "additionalProperties": false
           }
         },
+        "additionalProperties": false
+      },
+      "ConfigInvalidError": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["ConfigInvalidError"]
+          },
+          "data": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "message": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "required": ["message", "path"]
+                }
+              }
+            },
+            "required": ["path"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["name", "data"],
         "additionalProperties": false
       },
       "Model": {

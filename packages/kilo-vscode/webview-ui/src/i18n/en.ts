@@ -1843,10 +1843,6 @@ export const dict = {
   "settings.saveBar.discard": "Discard",
   "settings.saveBar.save": "Save",
   "settings.saveBar.saving": "Saving…",
-  "settings.saveBar.warning.one": "One session is running and will be interrupted",
-  "settings.saveBar.warning.many": "Several sessions are running and will be interrupted",
-  "settings.saveBar.saveAnyway": "Save anyway",
-  "settings.saveBar.cancel": "Cancel",
   "settings.saveBar.saveFailed": "Couldn't save settings",
 
   "notifications.action.next": "Next",

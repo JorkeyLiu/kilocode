@@ -1713,6 +1713,18 @@ export type Config = {
   }
 }
 
+export type ConfigInvalidError = {
+  name: "ConfigInvalidError"
+  data: {
+    path: string
+    message?: string
+    issues?: Array<{
+      message: string
+      path: Array<string>
+    }>
+  }
+}
+
 export type Model = {
   id: string
   providerID: string
@@ -6516,9 +6528,9 @@ export type GlobalConfigUpdateData = {
 
 export type GlobalConfigUpdateErrors = {
   /**
-   * BadRequest | InvalidRequestError
+   * ConfigInvalidError | InvalidRequestError
    */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  400: ConfigInvalidError | InvalidRequestError
 }
 
 export type GlobalConfigUpdateError = GlobalConfigUpdateErrors[keyof GlobalConfigUpdateErrors]
@@ -6651,9 +6663,9 @@ export type ConfigUpdateData = {
 
 export type ConfigUpdateErrors = {
   /**
-   * BadRequest | InvalidRequestError
+   * ConfigInvalidError | InvalidRequestError
    */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  400: ConfigInvalidError | InvalidRequestError
 }
 
 export type ConfigUpdateError = ConfigUpdateErrors[keyof ConfigUpdateErrors]
@@ -11187,9 +11199,9 @@ export type ConfigOverlayUpdateData = {
 
 export type ConfigOverlayUpdateErrors = {
   /**
-   * Bad request
+   * ConfigInvalidError | InvalidRequestError
    */
-  400: BadRequestError
+  400: ConfigInvalidError | InvalidRequestError
 }
 
 export type ConfigOverlayUpdateError = ConfigOverlayUpdateErrors[keyof ConfigOverlayUpdateErrors]

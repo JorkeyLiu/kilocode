@@ -9,9 +9,12 @@ import { KilocodeModelState } from "@/kilocode/config/model-state"
 import { ConfigRules } from "@/kilocode/server/routes/config-rules"
 import { KilocodeKeybinds } from "@/kilocode/tui/keybinds"
 import { KilocodeTuiConfig } from "@/kilocode/tui/config"
-import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
 import { InstanceHttpApi } from "@/server/routes/instance/httpapi/api"
-import { markInstanceForDisposal } from "@/server/routes/instance/httpapi/lifecycle"
+import { GenerationGate } from "@/kilocode/server/generation-gate"
+import { ConfigRebuild } from "@/kilocode/server/config-rebuild"
+import { withWriteTicket } from "@/kilocode/server/config-ticket"
+import { configFailure } from "@/kilocode/server/config-failure"
+import { InstanceStore } from "@/project/instance-store"
 import { Effect, Option } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
@@ -28,6 +31,8 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
     const config = yield* Config.Service
     const auth = yield* Auth.Service
     const account = yield* Account.Service
+    const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop)
+    const store = yield* InstanceStore.Service
 
     const overlay = Effect.fn("ConfigConsoleHttpApi.overlay")(function* (ctx: {
       query: typeof ConfigOverlayQuery.Type
@@ -81,20 +86,45 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
       }
       if (body.scope === "global") {
         const hot = isHotPatch(patch)
-        const result = yield* config.updateGlobal(patch, hot ? { dispose: false } : undefined)
-        if (result.changed && !hot) {
-          yield* disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }).pipe(
-            Effect.catchCause(() => Effect.void),
-          )
-        }
-        return result.info
+        if (hot) return (yield* configFailure(config.updateGlobal(patch, { dispose: false }))).info
+        return yield* withWriteTicket({
+          acquire: gate.beginWriteGlobal(),
+          run: (ticket) =>
+            Effect.gen(function* () {
+              const dirs = yield* store.directories()
+              const olds = yield* Effect.forEach(dirs, (directory) =>
+                store.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
+              )
+              const exit = yield* configFailure(config.updateGlobal(patch)).pipe(Effect.exit)
+              if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
+              return {
+                changed: exit.value.changed,
+                value: exit.value.info,
+                rebuild: exit.value.changed ? ConfigRebuild.rebuildGlobal(ticket, olds) : undefined,
+              }
+            }),
+        })
       }
       const hot = isHotPatch(patch)
-      yield* config.update(patch)
-      if (!hot) {
-        yield* markInstanceForDisposal(yield* InstanceState.context)
+      const instance = yield* InstanceState.context
+      if (hot) {
+        yield* configFailure(config.update(patch))
+        return yield* config.get()
       }
-      return yield* config.get()
+      return yield* withWriteTicket({
+        acquire: gate.beginWrite(instance.directory),
+        run: (ticket) =>
+          Effect.gen(function* () {
+            const old = yield* store.snapshot(instance.directory)
+            const exit = yield* configFailure(config.update(patch)).pipe(Effect.exit)
+            if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
+            return {
+              changed: exit.value.changed,
+              value: yield* config.get(),
+              rebuild: exit.value.changed ? ConfigRebuild.rebuildInstance(ticket, old) : undefined,
+            }
+          }),
+      })
     })
 
     const sources = Effect.fn("ConfigConsoleHttpApi.sources")(function* () {

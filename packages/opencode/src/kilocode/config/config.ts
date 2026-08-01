@@ -95,17 +95,44 @@ export namespace KilocodeConfig {
     const patch = input.writable(input.config)
 
     if (file.endsWith(".jsonc")) {
-      if (source === undefined && Object.keys(mergeConfig({}, patch)).length === 0) return
+      if (source === undefined && Object.keys(mergeConfig({}, patch)).length === 0)
+        return { config: {} as Config.Info, changed: false }
       const updated = input.patch(before, patch)
-      yield* input.fs.writeWithDirs(file, updated).pipe(Effect.orDie)
-      return
+      const next = input.parse(updated, file)
+      const previous = input.parse(before, file)
+      const changed = stable(next) !== stable(previous)
+      if (changed) yield* input.fs.writeWithDirs(file, updated).pipe(Effect.orDie)
+      return { config: next, changed }
     }
 
     const existing = input.parse(before, file)
     const merged = mergeConfig(input.writable(existing), patch)
-    if (source === undefined && Object.keys(merged).length === 0) return
-    yield* input.fs.writeWithDirs(file, JSON.stringify(merged, null, 2)).pipe(Effect.orDie)
+    if (source === undefined && Object.keys(merged).length === 0) return { config: merged, changed: false }
+    const serialized = JSON.stringify(merged, null, 2)
+    input.parse(serialized, file)
+    const changed = stable(merged) !== stable(existing)
+    if (changed) yield* input.fs.writeWithDirs(file, serialized).pipe(Effect.orDie)
+    return { config: merged, changed }
   })
+
+  function stable(value: unknown): string {
+    if (Array.isArray(value)) return `[${value.map(stable).join(",")}]`
+    if (isRecord(value)) {
+      // kilocode_change - omit undefined object values (JSON semantics); the
+      // global shell sentinel maps "" → undefined, so an omitted key and an
+      // explicitly undefined value must compare equal. Arrays cannot contain
+      // undefined in JSON config; such values are rejected by the throw below.
+      return `{${Object.keys(value)
+        .sort()
+        .filter((key) => value[key] !== undefined)
+        .map((key) => `${JSON.stringify(key)}:${stable(value[key])}`)
+        .join(",")}}`
+    }
+    if (value === null) return "null"
+    if (typeof value === "string") return JSON.stringify(value)
+    if (typeof value === "number" || typeof value === "boolean") return String(value)
+    throw new TypeError(`Unsupported config value in semantic comparison: ${typeof value}`)
+  }
 
   export function scopeIndexing(info: Config.Info, scope: "global" | "local"): Config.Info {
     if (scope !== "global") return info
@@ -460,7 +487,11 @@ export namespace KilocodeConfig {
    * opencode configuration but no longer reads `.opencode` directories.
    * Returns the existing `.opencode` locations (global + project), highest first.
    */
-  export function detectOpencodeConfig(input: { directory: string; worktree?: string; scanProject: boolean }): string[] {
+  export function detectOpencodeConfig(input: {
+    directory: string
+    worktree?: string
+    scanProject: boolean
+  }): string[] {
     const found: string[] = []
 
     // Global opencode config dir (sibling of the kilo global config dir, e.g. ~/.config/opencode).

@@ -434,6 +434,26 @@ it.effect("updates global config and omits empty shell key in jsonc", () =>
   ),
 )
 
+// kilocode_change start - semantic comparison treats an omitted shell key and
+// the "" → undefined sentinel as equal, so re-saving an already-omitted shell
+// is a true no-op (no rewrite, changed: false).
+it.effect("re-saving an already-omitted empty shell key is a semantic no-op", () =>
+  withGlobalConfig({ config: { shell: "bash" } }, ({ dir }) =>
+    Effect.gen(function* () {
+      const removed = yield* Config.use.updateGlobal({ shell: "" })
+      expect(removed.changed).toBe(true)
+      const before = yield* FSUtil.use.readFileString(path.join(dir, "kilo.json"))
+      expect(before).not.toContain('"shell"')
+
+      const again = yield* Config.use.updateGlobal({ shell: "" })
+      expect(again.changed).toBe(false)
+      const after = yield* FSUtil.use.readFileString(path.join(dir, "kilo.json"))
+      expect(after).toBe(before)
+    }),
+  ),
+)
+// kilocode_change end
+
 it.instance(
   "loads formatter boolean config",
   Effect.gen(function* () {

@@ -369,6 +369,20 @@ describe("ConfigState", () => {
     })
   })
 
+  it("keeps pending drafts dirty when configUpdateFailed arrives", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ model: "test/original" })
+    s.updateConfig({ model: "test/invalid" })
+    s.saveConfig()
+
+    s.handleConfigSaveFailed({ model: "test/original" })
+
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(true)
+    expect(s.draft).toEqual({ model: "test/invalid" })
+    expect(s.config).toEqual({ model: "test/invalid" })
+  })
+
   describe("clearing an agent variant override", () => {
     it("keeps null in the draft so the backend receives a delete sentinel", () => {
       const s = new ConfigState()

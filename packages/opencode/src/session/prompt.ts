@@ -85,6 +85,7 @@ import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
+import { withGenerationAdmission } from "@/kilocode/session/generation-admission" // kilocode_change
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -1426,7 +1427,10 @@ export const layer = Layer.effect(
         yield* KiloSessionPrompt.recoverDanglingAssistant({ sessionID: input.sessionID, status, sessions })
         yield* KiloSessionPrompt.recoverProviderFinishError({ sessionID: input.sessionID, status, sessions })
         // kilocode_change end
-        const message = yield* KiloSessionPrompt.intake(input.sessionID, createUserMessage(input)) // kilocode_change
+        const message = yield* withGenerationAdmission(
+          config,
+          KiloSessionPrompt.intake(input.sessionID, createUserMessage(input)),
+        ) // kilocode_change
         yield* sessions.touch(input.sessionID)
 
         const permissions: PermissionV1.Rule[] = []
@@ -1462,8 +1466,11 @@ export const layer = Layer.effect(
           input.sessionID,
           message.info.id,
           bridge.run(
-            loop({ sessionID: input.sessionID, snapshotInitialization: input.snapshotInitialization }).pipe(
-              Effect.orDie,
+            withGenerationAdmission(
+              config,
+              loop({ sessionID: input.sessionID, snapshotInitialization: input.snapshotInitialization }).pipe(
+                Effect.orDie,
+              ),
             ),
           ), // kilocode_change
           bridge.run(lastAssistant(input.sessionID)),
@@ -1937,7 +1944,7 @@ export const layer = Layer.effect(
         state.ensureRunning(
           input.sessionID,
           lastAssistant(input.sessionID).pipe(Effect.orDie),
-          runLoop(input).pipe(Effect.orDie),
+          withGenerationAdmission(config, runLoop(input).pipe(Effect.orDie)),
         ), // kilocode_change
         Effect.fnUntraced(function* (exit) {
           yield* KiloSession.publishTurnClose({
@@ -1958,15 +1965,22 @@ export const layer = Layer.effect(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
       const ready = yield* Latch.make()
-      return yield* state.startShell(
-        input.sessionID,
-        lastAssistant(input.sessionID).pipe(Effect.orDie),
-        shellImpl(input, ready),
-        ready,
+      return yield* withGenerationAdmission(
+        config,
+        state.startShell(
+          input.sessionID,
+          lastAssistant(input.sessionID).pipe(Effect.orDie),
+          shellImpl(input, ready),
+          ready,
+        ),
       )
     })
 
     const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
+      return yield* withGenerationAdmission(config, commandImpl(input))
+    })
+
+    const commandImpl = Effect.fn("SessionPrompt.commandImpl")(function* (input: CommandInput) {
       yield* elog.info("command", { sessionID: input.sessionID, command: input.command, agent: input.agent })
       const cmd = yield* commands.get(input.command)
       if (!cmd) {

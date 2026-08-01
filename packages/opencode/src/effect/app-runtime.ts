@@ -56,11 +56,14 @@ import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Notebook } from "@/kilocode/notebook/service" // kilocode_change
 import { AgentManager } from "@/kilocode/agent-manager/service" // kilocode_change
+import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
 import { EventV2Bridge } from "@/event-v2-bridge"
+import * as CoreEvent from "@opencode-ai/core/event" // kilocode_change
 import { ProjectV2 } from "@opencode-ai/core/project" // kilocode_change - listener routes are provided by AppLayer
 import { ProjectCopy } from "@opencode-ai/core/project/copy" // kilocode_change - listener routes are provided by AppLayer
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session" // kilocode_change - listener routes are provided by AppLayer
 import { PtyTicket } from "@opencode-ai/core/pty/ticket" // kilocode_change - listener routes are provided by AppLayer
+import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
 
 // kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers
 type ModelsLayer = Layer.Layer<CoreModelsDev.Service | KiloModelsDev.Service, never, never>
@@ -70,26 +73,28 @@ const buildCoreLayer = (
   models: ModelsLayer = Provider.defaultModels,
   provider: ProviderLayer = Provider.defaultLayer,
 ) =>
-// kilocode_change end
-  Layer.mergeAll( // kilocode_change
-  Npm.defaultLayer,
-  FSUtil.defaultLayer,
-  Database.defaultLayer,
-  Auth.defaultLayer,
-  Account.defaultLayer,
-  Config.defaultLayer,
-  Git.defaultLayer,
-  Ripgrep.defaultLayer,
-  Storage.defaultLayer,
-  Snapshot.defaultLayer,
-  Plugin.defaultLayer,
-  ModelCache.defaultLayer, // kilocode_change
-  models, // kilocode_change - canonical combined models layer (Provider.defaultModels)
-  provider, // kilocode_change - canonical Provider.defaultLayer identity shared with feature layers
-  ProviderAuth.defaultLayer,
-  Agent.defaultLayer,
-  Skill.defaultLayer,
-  Discovery.defaultLayer,
+  // kilocode_change end
+  Layer.mergeAll(
+    // kilocode_change
+    Npm.defaultLayer,
+    GenerationGate.defaultLayer, // kilocode_change - one process-wide writer gate
+    FSUtil.defaultLayer,
+    Database.defaultLayer,
+    Auth.defaultLayer,
+    Account.defaultLayer,
+    Config.defaultLayer,
+    Git.defaultLayer,
+    Ripgrep.defaultLayer, // kilocode_change - canonical AppLayer service
+    Storage.defaultLayer, // kilocode_change - canonical AppLayer service
+    Snapshot.defaultLayer, // kilocode_change - canonical AppLayer service
+    Plugin.defaultLayer,
+    ModelCache.defaultLayer, // kilocode_change
+    models, // kilocode_change - canonical combined models layer (Provider.defaultModels)
+    provider, // kilocode_change - canonical Provider.defaultLayer identity shared with feature layers
+    ProviderAuth.defaultLayer, // kilocode_change - canonical AppLayer service
+    Agent.defaultLayer, // kilocode_change - canonical AppLayer service
+    Skill.defaultLayer, // kilocode_change - canonical AppLayer service
+    Discovery.defaultLayer, // kilocode_change - canonical AppLayer service
   ) // kilocode_change
 
 // kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair
@@ -105,6 +110,7 @@ export function makeCoreLayer(
 
 const SessionLayer = Layer.mergeAll(
   AgentManager.defaultLayer, // kilocode_change
+  KiloViewers.defaultLayer, // kilocode_change - canonical presence service
   Question.defaultLayer,
   Notebook.defaultLayer, // kilocode_change
   Permission.defaultLayer,
@@ -114,6 +120,7 @@ const SessionLayer = Layer.mergeAll(
   BackgroundJob.defaultLayer,
   RuntimeFlags.defaultLayer,
   EventV2Bridge.defaultLayer,
+  CoreEvent.defaultLayer, // kilocode_change - canonical legacy event service
   SessionRunState.defaultLayer,
   SessionProcessor.defaultLayer,
   SessionCompaction.defaultLayer,
@@ -127,7 +134,7 @@ const SessionLayer = Layer.mergeAll(
   McpAuth.defaultLayer,
   Command.defaultLayer,
   Truncate.defaultLayer,
-)
+ ) // kilocode_change
 
 const FeatureLayer = Layer.mergeAll(
   ToolRegistry.defaultLayer,
@@ -140,18 +147,16 @@ const FeatureLayer = Layer.mergeAll(
   Vcs.defaultLayer,
   Reference.defaultLayer,
   Workspace.defaultLayer,
-  Worktree.appLayer,
-  Installation.defaultLayer,
+  Worktree.appLayer, // kilocode_change - canonical AppLayer service
+  Installation.defaultLayer, // kilocode_change - canonical AppLayer service
   MemoryService.layer, // kilocode_change
-  ShareNext.defaultLayer,
-  SessionShare.defaultLayer,
-)
+  ShareNext.defaultLayer, // kilocode_change - canonical AppLayer service
+  SessionShare.defaultLayer, // kilocode_change - canonical AppLayer service
+  // kilocode_change - canonical feature service layer
+ ) // kilocode_change - canonical feature service layer
 
 // kilocode_change start - LOCK-003: makeAppLayer shares canonical defaults
-const buildAppLayer = (
-  models: ModelsLayer = Provider.defaultModels,
-  provider: ProviderLayer = Provider.defaultLayer,
-) =>
+const buildAppLayer = (models: ModelsLayer = Provider.defaultModels, provider: ProviderLayer = Provider.defaultLayer) =>
   Layer.mergeAll(buildCoreLayer(models, provider), SessionLayer, FeatureLayer).pipe(
     Layer.provideMerge(InstanceLayer.layer),
     Layer.provideMerge(Observability.layer),

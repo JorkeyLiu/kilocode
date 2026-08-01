@@ -760,6 +760,39 @@ describe("getErrorMessage", () => {
     const err = { data: { issues: [{ code: "bad" }] } }
     expect(getErrorMessage(err)).toBe('{"data":{"issues":[{"code":"bad"}]}}')
   })
+
+  it("unwraps SDK Error.cause.body for ConfigInvalidError", () => {
+    const err = new Error("PATCH /config/overlay → 400 Bad Request", {
+      cause: {
+        body: {
+          name: "ConfigInvalidError",
+          data: {
+            path: "/cfg/kilo.json",
+            issues: [{ code: "invalid_type", path: ["model"], message: "Expected string, received number" }],
+          },
+        },
+        status: 400,
+      },
+    })
+    expect(getErrorMessage(err)).toBe("Expected string, received number")
+  })
+
+  it("falls back to the SDK message when cause.body has no structured fields", () => {
+    const err = new Error("boom from sdk", { cause: { body: { weird: true }, status: 500 } })
+    expect(getErrorMessage(err)).toBe("boom from sdk")
+  })
+
+  it("prefers cause.body message over the SDK-extracted message", () => {
+    const err = new Error("generic describe", {
+      cause: { body: { data: { message: "the real problem" } }, status: 400 },
+    })
+    expect(getErrorMessage(err)).toBe("the real problem")
+  })
+
+  it("reads cause.body string errors", () => {
+    const err = new Error("generic", { cause: { body: "raw failure text", status: 400 } })
+    expect(getErrorMessage(err)).toBe("raw failure text")
+  })
 })
 
 describe("getConfigErrorDetails", () => {
@@ -814,5 +847,30 @@ describe("getConfigErrorDetails", () => {
 
   it("returns undefined when issues array is empty and no path", () => {
     expect(getConfigErrorDetails({ data: { issues: [] } })).toBeUndefined()
+  })
+
+  it("reads path and issues from SDK Error.cause.body", () => {
+    const err = new Error("PATCH /config/overlay → 400 Bad Request", {
+      cause: {
+        body: {
+          name: "ConfigInvalidError",
+          data: {
+            path: "/home/me/.config/kilo/kilo.json",
+            issues: [
+              { code: "unrecognized_keys", keys: ["indexing"], path: [], message: 'Unrecognized key: "indexing"' },
+            ],
+          },
+        },
+        status: 400,
+      },
+    })
+    expect(getConfigErrorDetails(err)).toBe(
+      'File: /home/me/.config/kilo/kilo.json\n\n✖ Unrecognized key: "indexing"',
+    )
+  })
+
+  it("keeps reading .data directly when no cause.body is present", () => {
+    const err = { data: { path: "/cfg.json", issues: [{ path: ["timeout"], message: "Expected number" }] } }
+    expect(getConfigErrorDetails(err)).toBe("File: /cfg.json\n\n✖ Expected number\n  → at timeout")
   })
 })

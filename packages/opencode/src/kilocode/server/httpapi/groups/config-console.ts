@@ -54,6 +54,25 @@ export const ConfigOverlayPatch = Schema.Struct({
   set: Schema.optional(UnknownRecord),
   unset: Schema.optional(Schema.Array(Schema.Array(Schema.String))),
 })
+// kilocode_change - structured config validation failure
+export class ConfigOverlayInvalidError extends Schema.ErrorClass<ConfigOverlayInvalidError>("ConfigInvalidError")(
+  {
+    name: Schema.Literal("ConfigInvalidError"),
+    data: Schema.Struct({
+      path: Schema.String,
+      message: Schema.optional(Schema.String),
+      issues: Schema.optional(
+        Schema.Array(
+          Schema.StructWithRest(
+            Schema.Struct({ message: Schema.String, path: Schema.Array(Schema.String) }),
+            [Schema.Record(Schema.String, Schema.Unknown)],
+          ),
+        ),
+      ),
+    }),
+  },
+  { httpApiStatus: 400 },
+) {}
 export const ConfigRulesQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   scope: Schema.optional(ProjectScope),
@@ -178,6 +197,7 @@ export const ConfigConsoleApi = HttpApi.make("config-console")
           query: WorkspaceRoutingQuery,
           payload: ConfigOverlayPatch,
           success: described(Config.Info, "Effective configuration after patch"),
+          error: ConfigOverlayInvalidError,
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "config.overlayUpdate",

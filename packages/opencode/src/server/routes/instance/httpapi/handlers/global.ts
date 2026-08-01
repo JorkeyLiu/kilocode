@@ -1,13 +1,18 @@
 import { Config } from "@/config/config"
 import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
-import { EffectBridge } from "@/effect/bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Installation } from "@/installation"
 import { disconnect } from "@/kilocode/server/sse" // kilocode_change
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
+import { ConfigRebuild } from "@/kilocode/server/config-rebuild" // kilocode_change
+import { withWriteTicket } from "@/kilocode/server/config-ticket" // kilocode_change
+import { configFailure } from "@/kilocode/server/config-failure" // kilocode_change
+import { isHotPatch } from "@/kilocode/config/hot-keys" // kilocode_change
+import { InstanceStore } from "@/project/instance-store" // kilocode_change
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import * as Log from "@opencode-ai/core/util/log"
-import { Effect, Queue, Schema } from "effect"
+import { Effect, Option, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -78,7 +83,8 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
   Effect.gen(function* () {
     const config = yield* Config.Service
     const installation = yield* Installation.Service
-    const bridge = yield* EffectBridge.make()
+    const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop) // kilocode_change
+    const store = Option.getOrElse(yield* Effect.serviceOption(InstanceStore.Service), () => undefined) // kilocode_change
 
     const health = Effect.fn("GlobalHttpApi.health")(function* () {
       return { healthy: true as const, version: InstallationVersion }
@@ -94,15 +100,25 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     const configUpdate = Effect.fn("GlobalHttpApi.configUpdate")(function* (ctx) {
-      const result = yield* config.updateGlobal(ctx.payload)
-      // kilocode_change start
-      if (result.changed) {
-        yield* bridge.run(
-          disposeAllInstancesAndEmitGlobalDisposed({ swallowErrors: true }).pipe(Effect.catchCause(() => Effect.void)),
-        )
-      }
-      // kilocode_change end
-      return result.info
+      const hot = isHotPatch(ctx.payload as Record<string, unknown>)
+      if (hot) return (yield* configFailure(config.updateGlobal(ctx.payload, { dispose: false }))).info
+      return yield* withWriteTicket({
+        acquire: gate.beginWriteGlobal(),
+        run: (ticket) =>
+          Effect.gen(function* () {
+            const dirs = store ? yield* store.directories() : []
+            const olds = yield* Effect.forEach(dirs, (directory) =>
+              store!.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
+            )
+            const exit = yield* configFailure(config.updateGlobal(ctx.payload)).pipe(Effect.exit)
+            if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
+            return {
+              changed: exit.value.changed,
+              value: exit.value.info,
+              rebuild: exit.value.changed ? ConfigRebuild.rebuildGlobal(ticket, olds) : undefined,
+            }
+          }),
+      })
     })
 
     const dispose = Effect.fn("GlobalHttpApi.dispose")(function* () {

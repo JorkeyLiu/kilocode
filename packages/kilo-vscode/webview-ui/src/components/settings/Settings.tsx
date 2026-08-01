@@ -3,11 +3,9 @@ import { Icon } from "@kilocode/kilo-ui/icon"
 import { Tabs } from "@kilocode/kilo-ui/tabs"
 import { Button } from "@kilocode/kilo-ui/button"
 import { Tooltip } from "@kilocode/kilo-ui/tooltip"
-import { showToast } from "@kilocode/kilo-ui/toast"
 import { useVSCode } from "../../context/vscode"
 import { useLanguage } from "../../context/language"
 import { useConfig } from "../../context/config"
-import { useSession } from "../../context/session"
 import ModelsTab from "./ModelsTab"
 import ProvidersTab from "./ProvidersTab"
 import AgentBehaviourTab from "./AgentBehaviourTab"
@@ -40,30 +38,9 @@ const Settings: Component<SettingsProps> = (props) => {
   const language = useLanguage()
   const vscode = useVSCode()
   const { loading, isDirty, saving, saveError, saveConfig, discardConfig, features } = useConfig()
-  const session = useSession()
   const [active, setActive] = createSignal(props.tab ?? "models")
   const [errorExpanded, setErrorExpanded] = createSignal(false)
   const sandboxing = createMemo(() => Sandboxing.visible(features()))
-
-  const busyCount = () => Object.values(session.allStatusMap()).filter((s) => s.type === "busy").length
-
-  const handleSave = () => {
-    const busy = busyCount()
-    if (busy === 0) {
-      saveConfig()
-      return
-    }
-    const msg = busy === 1 ? language.t("settings.saveBar.warning.one") : language.t("settings.saveBar.warning.many")
-    showToast({
-      variant: "error",
-      title: msg,
-      persistent: true,
-      actions: [
-        { label: language.t("settings.saveBar.saveAnyway"), onClick: saveConfig },
-        { label: language.t("settings.saveBar.cancel"), onClick: "dismiss" },
-      ],
-    })
-  }
 
   const open = (scope: "local" | "global") => {
     const label =
@@ -343,7 +320,7 @@ const Settings: Component<SettingsProps> = (props) => {
             <Button variant="ghost" size="small" onClick={discardConfig} disabled={saving()}>
               {language.t("settings.saveBar.discard")}
             </Button>
-            <Button variant="primary" size="small" onClick={handleSave} disabled={saving()}>
+            <Button variant="primary" size="small" onClick={saveConfig} disabled={saving()}>
               {saving() ? language.t("settings.saveBar.saving") : language.t("settings.saveBar.save")}
             </Button>
           </div>

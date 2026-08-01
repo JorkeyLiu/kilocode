@@ -9,6 +9,7 @@ import "@/kilocode/indexing-event" // kilocode_change - register indexing.status
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, OpenApi } from "effect/unstable/httpapi"
 import { described } from "./metadata"
+import { ConfigOverlayInvalidError } from "@/kilocode/server/httpapi/groups/config-console" // kilocode_change
 
 const GlobalHealth = Schema.Struct({
   healthy: Schema.Literal(true),
@@ -102,7 +103,7 @@ export const GlobalApi = HttpApi.make("global").add(
       HttpApiEndpoint.patch("configUpdate", GlobalPaths.config, {
         payload: ConfigV1.Info,
         success: described(ConfigV1.Info, "Successfully updated global config"),
-        error: HttpApiError.BadRequest,
+         error: ConfigOverlayInvalidError, // kilocode_change
       }).annotateMerge(
         OpenApi.annotations({
           identifier: "global.config.update",

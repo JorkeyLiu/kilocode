@@ -8,24 +8,48 @@ import { filterPromptTrainingModels, nonEmptyProviders } from "@/kilocode/provid
 // kilocode_change end
 import { Provider } from "@/provider/provider"
 import * as InstanceState from "@/effect/instance-state"
-import { Effect } from "effect"
+import { Effect, Option } from "effect"
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi" // kilocode_change
 import { InstanceHttpApi } from "../api"
-import { markInstanceForDisposal } from "../lifecycle"
+import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
+import { ConfigRebuild } from "@/kilocode/server/config-rebuild" // kilocode_change
+import { withWriteTicket } from "@/kilocode/server/config-ticket" // kilocode_change
+import { configFailure } from "@/kilocode/server/config-failure" // kilocode_change
+import { isHotPatch } from "@/kilocode/config/hot-keys" // kilocode_change
+import { InstanceStore } from "@/project/instance-store" // kilocode_change
 
 export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (handlers) =>
   Effect.gen(function* () {
     const providerSvc = yield* Provider.Service
     const configSvc = yield* Config.Service
+    const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop) // kilocode_change
+    const store = yield* InstanceStore.Service // kilocode_change
 
     const get = Effect.fn("ConfigHttpApi.get")(function* () {
       return yield* configSvc.get()
     })
 
     const update = Effect.fn("ConfigHttpApi.update")(function* (ctx) {
-      yield* configSvc.update(ctx.payload)
-      yield* markInstanceForDisposal(yield* InstanceState.context)
-      return ctx.payload
+      const instance = yield* InstanceState.context
+      const hot = isHotPatch(ctx.payload as unknown as Record<string, unknown>)
+      if (hot) {
+        yield* configFailure(configSvc.update(ctx.payload))
+        return ctx.payload
+      }
+      return yield* withWriteTicket({
+        acquire: gate.beginWrite(instance.directory),
+        run: (ticket) =>
+          Effect.gen(function* () {
+            const old = yield* store.snapshot(instance.directory)
+            const exit = yield* configFailure(configSvc.update(ctx.payload)).pipe(Effect.exit)
+            if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
+            return {
+              changed: exit.value.changed,
+              value: ctx.payload,
+              rebuild: exit.value.changed ? ConfigRebuild.rebuildInstance(ticket, old) : undefined,
+            }
+          }),
+      })
     })
 
     // kilocode_change start

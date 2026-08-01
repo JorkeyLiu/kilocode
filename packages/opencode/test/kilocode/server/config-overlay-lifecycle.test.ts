@@ -28,12 +28,14 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import fs from "fs"
 import path from "path"
+import { Effect } from "effect"
 import * as Log from "@opencode-ai/core/util/log"
 import { Global } from "@opencode-ai/core/global"
 import { Server } from "../../../src/server/server"
 import { Config } from "../../../src/config/config"
 import { Event } from "../../../src/server/event"
 import { GlobalBus } from "../../../src/bus/global"
+import { awaitRebuilds } from "../../../src/kilocode/server/config-rebuild"
 import { resetDatabase } from "../../fixture/db"
 import { disposeAllInstances, tmpdir } from "../../fixture/fixture"
 
@@ -44,6 +46,9 @@ const original = Global.Path.config
 afterEach(async () => {
   ;(Global.Path as { config: string }).config = original
   GlobalBus.removeAllListeners("event")
+  // Drain forked rebuilds before teardown; propagate failures instead of
+  // swallowing them so a broken rebuild surfaces in the failing test.
+  await Effect.runPromise(awaitRebuilds())
   await disposeAllInstances()
   await resetDatabase()
 })
@@ -432,13 +437,11 @@ describe("config overlay lifecycle - cold patches", () => {
   })
 
   /**
-   * Implementation finding: unknown keys are accepted by ConfigOverlayPatch
-   * schema but rejected by ConfigParse.schema during updateGlobal, resulting
-   * in a 500. This is correct cold-path behavior (unknown = cold) but the
-   * error surface could be improved to 400. Test verifies the 500 is emitted
-   * (not a hang/crash) and no config-updated event fires.
+   * LOCK-007: unknown keys and invalid values are rejected by the deep config
+   * validation and surface as a structured 400 carrying the file path and Zod
+   * issues, with nothing written and no lifecycle events emitted.
    */
-  test.serial("unknown key cold patch returns 500 and does not emit config-updated", async () => {
+  test.serial("invalid cold patch returns structured 400, writes nothing, and emits no config-updated", async () => {
     await using global = await tmpdir()
     await using project = await tmpdir()
     await seedGlobalConfig(global.path)
@@ -446,15 +449,24 @@ describe("config overlay lifecycle - cold patches", () => {
     const events = captureEvents()
 
     try {
+      const before = readGlobalConfig(global.path)
+
       const response = await request(undefined, "/config/overlay", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ scope: "global", set: { unknown_key: "value" } }),
       })
-      // Schema validation rejects unknown keys in ConfigV1.Info
-      expect(response.status).toBe(500)
+      expect(response.status).toBe(400)
+      const body = (await response.json()) as { name?: string; data?: { path?: string; issues?: unknown[] } }
+      expect(body.name).toBe("ConfigInvalidError")
+      expect(body.data?.path).toBeTruthy()
+      expect(Array.isArray(body.data?.issues)).toBe(true)
+
+      // The file is untouched (validation failed before any write).
+      expect(readGlobalConfig(global.path)).toEqual(before)
       // No config-updated event (update failed before write)
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(false)
+      expect(events.received.some((e) => e.type === Event.Disposed.type)).toBe(false)
     } finally {
       events.dispose()
     }

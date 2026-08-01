@@ -61,31 +61,41 @@ function safeStringify(value: unknown): string | undefined {
   return undefined
 }
 
-export function getErrorMessage(error: unknown): string {
-  if (error instanceof Error) return error.message
-  if (typeof error === "string") return error
-  if (!error || typeof error !== "object") return String(error)
+function causeBody(error: unknown): unknown {
+  if (!error || typeof error !== "object") return undefined
+  const cause = (error as Record<string, unknown>).cause
+  if (!cause || typeof cause !== "object") return undefined
+  return (cause as Record<string, unknown>).body
+}
 
-  const obj = error as Record<string, unknown>
+function messageFromObject(obj: Record<string, unknown>): string | undefined {
   if (typeof obj.message === "string") return obj.message
   if (typeof obj.error === "string") return obj.error
-
-  // SDK throwOnError shape: { error: { message: "..." } }
   if (obj.error && typeof obj.error === "object") {
     const nested = (obj.error as Record<string, unknown>).message
     if (typeof nested === "string") return nested
   }
-
   if (obj.data && typeof obj.data === "object") {
     const fromData = messageFromData(obj.data as Record<string, unknown>)
     if (fromData) return fromData
   }
+  return firstMessage(obj.errors)
+}
 
-  // BadRequestError: { errors: [...] }
-  const fromErrors = firstMessage(obj.errors)
-  if (fromErrors) return fromErrors
+export function getErrorMessage(error: unknown): string {
+  if (error instanceof Error) {
+    const body = causeBody(error)
+    if (typeof body === "string" && body.length > 0) return body
+    if (body && typeof body === "object") {
+      const message = messageFromObject(body as Record<string, unknown>)
+      if (message) return message
+    }
+    return error.message
+  }
+  if (typeof error === "string") return error
+  if (!error || typeof error !== "object") return String(error)
 
-  return safeStringify(error) ?? String(error)
+  return messageFromObject(error as Record<string, unknown>) ?? safeStringify(error) ?? String(error)
 }
 
 /**
@@ -101,7 +111,8 @@ export function getErrorMessage(error: unknown): string {
  */
 export function getConfigErrorDetails(error: unknown): string | undefined {
   if (!error || typeof error !== "object") return undefined
-  const data = (error as Record<string, unknown>).data
+  const body = causeBody(error) ?? error
+  const data = (body as Record<string, unknown>).data
   if (!data || typeof data !== "object") return undefined
   const scoped = data as Record<string, unknown>
   const path = typeof scoped.path === "string" ? scoped.path : undefined

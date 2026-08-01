@@ -114,6 +114,7 @@ import { corsVaryFix } from "./middleware/cors-vary"
 import { errorLayer } from "./middleware/error"
 import { fenceLayer } from "./middleware/fence"
 import { schemaErrorLayer } from "./middleware/schema-error"
+import { AppLayer, makeAppLayer } from "@/effect/app-runtime" // kilocode_change
 
 export const context = Context.makeUnsafe<unknown>(new Map())
 
@@ -208,14 +209,26 @@ type RouteRequirements =
   | HttpRouter.Request<"Requires", unknown>
   | HttpRouter.Request<"GlobalRequires", never>
 
+// kilocode_change start - canonical AppLayer with injectable model/provider test boundary
+type AppOptions = {
+  readonly models?: Layer.Layer<ModelsDev.Service, never, never>
+  readonly provider?: Layer.Layer<Provider.Service, never, never>
+}
+
+type RouteApp = AppLayer | AppOptions
+
+function resolveApp(app?: RouteApp) {
+  if (!app) return AppLayer
+  if ("models" in app || "provider" in app) {
+    return makeAppLayer((app.models ?? Provider.defaultModels) as never, app.provider ?? Provider.defaultLayer)
+  }
+  return app
+}
+// kilocode_change end
+
 export function createRoutes(
   corsOptions?: CorsOptions,
-  // kilocode_change start - canonical models/provider layers come from AppRuntime
-  app?: {
-    readonly models?: Layer.Layer<ModelsDev.Service, never, never>
-    readonly provider?: Layer.Layer<Provider.Service, never, never>
-  },
-  // kilocode_change end
+  app?: RouteApp, // kilocode_change - canonical stateful services
 ): Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements> {
   return Layer.mergeAll(
     rootApiRoutes,
@@ -230,73 +243,21 @@ export function createRoutes(
       errorLayer,
       compressionLayer,
       corsVaryFix,
-      fenceLayer.pipe(Layer.provide(Database.defaultLayer)),
+      fenceLayer,
       cors(corsOptions),
-      Database.defaultLayer,
-      Account.defaultLayer,
-      Agent.defaultLayer,
-      Auth.defaultLayer,
-      BackgroundJob.defaultLayer,
-      Command.defaultLayer,
-      Config.defaultLayer,
-      Format.defaultLayer,
-      Git.defaultLayer, // kilocode_change
-      LSP.defaultLayer,
-      MemoryService.layer, // kilocode_change
-      LLM.defaultLayer,
-      Installation.defaultLayer,
-      MCP.defaultLayer,
-      ModelCache.defaultLayer, // kilocode_change
-       app?.models ?? ModelsDev.defaultLayer, // kilocode_change
-      Permission.defaultLayer,
-      Plugin.defaultLayer,
-      Project.defaultLayer,
-      ProjectV2.defaultLayer,
-      ProjectCopy.defaultLayer,
-      MoveSession.defaultLayer,
-      ProviderAuth.defaultLayer,
-       app?.provider ?? Provider.defaultLayer, // kilocode_change
-      PtyTicket.defaultLayer,
-      Question.defaultLayer,
-      AgentManager.defaultLayer, // kilocode_change
-      Notebook.defaultLayer, // kilocode_change
-      KiloViewers.defaultLayer, // kilocode_change
-      Ripgrep.defaultLayer,
-      RuntimeFlags.defaultLayer,
-      Session.defaultLayer,
-      SessionCompaction.defaultLayer,
-      SessionPrompt.defaultLayer,
-      SessionRevert.defaultLayer,
-      SessionShare.defaultLayer,
-      SessionRunState.defaultLayer,
-      SessionStatus.defaultLayer,
-      SessionSummary.defaultLayer,
-      ShareNext.defaultLayer,
-      Snapshot.defaultLayer,
-      Storage.defaultLayer, // kilocode_change
-      SyncEvent.defaultLayer,
-      EventV2Bridge.defaultLayer,
-      EventV2.defaultLayer,
-      Skill.defaultLayer,
-      Todo.defaultLayer,
-      ToolRegistry.defaultLayer,
-      Vcs.defaultLayer,
-      Workspace.defaultLayer,
-      Worktree.appLayer,
-      FSUtil.defaultLayer,
       FetchHttpClient.layer,
-      HttpServer.layerServices,
-    ]),
+      HttpServer.layerServices, // kilocode_change
+    ]), // kilocode_change
     Layer.provide(Layer.succeed(CorsConfig)(corsOptions)),
-    Layer.provide(InstanceLayer.layer),
-    Layer.provide(Observability.layer),
-  )
+    Layer.provideMerge(resolveApp(app) as never), // kilocode_change
+  ) as Layer.Layer<never, EffectConfig.ConfigError, RouteRequirements>
 }
 
 // kilocode_change start - keep listener routes local while application services come from AppRuntime
-export function createListenerRoutes(corsOptions?: CorsOptions) {
+export function createListenerRoutes(corsOptions?: CorsOptions, app: AppLayer = AppLayer) {
   return Layer.mergeAll(rootApiRoutes, eventApiRoutes, ptyConnectApiRoutes, instanceRoutes, docRoute, uiRoute).pipe(
     provideKiloListenerRoutes(corsOptions),
+    Layer.provide(app), // kilocode_change
   )
 }
 // kilocode_change end
@@ -304,10 +265,7 @@ export function createListenerRoutes(corsOptions?: CorsOptions) {
 export const routes = createRoutes()
 
 // kilocode_change start - canonical models/provider layers come from AppRuntime
-export const webHandler = (app?: {
-  readonly models?: Layer.Layer<ModelsDev.Service, never, never>
-  readonly provider?: Layer.Layer<Provider.Service, never, never>
-}) =>
+export const webHandler = (app?: AppOptions) =>
   HttpRouter.toWebHandler(createRoutes(undefined, app), {
     disableLogger: true,
     memoMap,

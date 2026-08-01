@@ -1130,7 +1130,7 @@ export const layer = Layer.effect(
               ...part.state,
               status: "error",
               error: "Tool execution aborted",
-              metadata: interruptedMetadata,
+              metadata: interruptedMetadata, // kilocode_change
               time: { start: "time" in part.state ? part.state.time.start : end, end },
             },
           })
@@ -1350,10 +1350,7 @@ export const layer = Layer.effect(
             })
           }
 
-          yield* recover().pipe(
-            Effect.catch(halt),
-            Effect.ensuring(cleanup()),
-          )
+          yield* recover().pipe(Effect.catch(halt), Effect.ensuring(cleanup()))
           // kilocode_change end
 
           if (ctx.needsCompaction) return "compact"
