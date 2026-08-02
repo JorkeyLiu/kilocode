@@ -80,6 +80,14 @@ await using tmp = await tmpdir({
 - Use `await using` for automatic cleanup when the variable goes out of scope
 - Paths are sanitized to strip null bytes (defensive fix for CI environments)
 
+## Resource Ownership
+
+- **Prefer scoped helpers**: Use `tmpdir`, `tmpdirScoped`, or existing fixture functions for test directories. Do not create temp paths manually when a scoped helper exists.
+- **Isolate persistent state**: When a test uses a database or persistent config, pass `KILO_DB=":memory:"` or create a unique supported temporary XDG/Kilo directory instead of writing to the default location. XDG variables (`XDG_DATA_HOME`, `XDG_CONFIG_HOME`, etc.) must be set **before** importing any module that reads global paths — set them in the test file's top-level scope or a `beforeAll`/setup hook, not lazily inside the test body.
+- **Restore environment**: If a test modifies `process.env`, restore the original value in a `finally` block or fixture teardown. For disk-backed `KILO_DB` tests, use the existing harness/flag-override pattern and restore both the `process.env` value and the in-memory flag state so subsequent tests see a clean slate.
+- **Stop before delete**: Dispose processes, listeners, Effect scopes, and service instances before removing their owned directories.
+- **Avoid accidental installs**: Tests that do not intend to verify dependency installation should use the existing `markPluginDependenciesReady(dir)` helper from `fixture/plugin.ts` (creates a stub `node_modules/` and `package-lock.json`), not trigger full `npm install` or `bun install` in temp directories.
+
 ## Testing With Effects
 
 Use `testEffect(...)` from `test/lib/effect.ts` for tests that exercise Effect services or Effect-based workflows.

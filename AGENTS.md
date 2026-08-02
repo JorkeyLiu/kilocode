@@ -49,6 +49,16 @@ Kilo CLI is an open source AI coding agent that generates code from natural lang
 - Injectable tests preserve the production dependency graph and real service wiring, not mocks.
 - Complement, not weaken, the existing Effect facade ratchet.
 
+## Resource Lifecycle
+
+- **Ownership**: Every spawned process, open listener, bound port, or created file path has an owner. The owner must release it before the test or task ends.
+- **Tracked processes**: When a framework, test runner, or utility provides process tracking (e.g. a test fixture registry that maps handles to cleanup hooks), register long-running servers, watchers, and test helpers through it. Dispose or kill via the tracker, not by name. A raw `child_process` handle or `Effect.Fork` fiber does **not** automatically track OS process lifetime — it only tracks the in-process handle. You must still attach explicit cleanup (kill/signal) to a scope, finalizer, or teardown hook.
+- **Fallback**: When no framework-provided tracker is available, record the exact child handle or PID and command, or use a unique run-owned path (e.g. `tmpdir()` per test). Attach cleanup to a scope or finalizer. Do not rely on process names or global patterns.
+- **Pre-existing resources**: Do not terminate processes or delete files you did not create. If a fixture or helper creates a resource, only that same fixture or helper should dispose it.
+- **No global termination**: Never use process-name kills, `pkill`, pattern-based signal sends, or shared-location glob deletion to clean up. These are unsafe in shared environments.
+- **Release before delete**: Before removing owned directories or files, close all listeners, sockets, file handles, and environment overrides that reference them.
+- **Scoped cleanup**: Use `await using`, `try/finally`, Effect `Scope`/finalizers, or test framework teardown hooks to ensure cleanup runs on both success and failure paths.
+
 ## Quality Checks
 
 Before saying an implementation is ready, run the smallest relevant checks that can catch lint, typecheck, and test failures for the touched package. Do not rely on manual extension launch to discover build problems. Fix failures you introduced before the final response, or state exactly which check is still failing or could not be run.
