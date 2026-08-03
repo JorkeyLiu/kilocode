@@ -571,11 +571,7 @@ const AgentManagerContent: Component = () => {
       search: handleSearchAction,
       showTerminal: handleShowTerminalAction,
       toggleDiff: handleToggleDiffAction,
-      newTab: () => {
-        coverBottomPage()
-        addPendingTab()
-        setIsBottomPage(false)
-      },
+      newTab: handleAddSession,
       closeTab: closeActiveTab,
       showShortcuts: handleShowKeyboardShortcuts,
       focusInput: () => window.dispatchEvent(new Event("focusPrompt")),
@@ -1034,7 +1030,6 @@ const AgentManagerContent: Component = () => {
   }
 
   const handleAddSession = () => {
-    expandSidebar()
     coverBottomPage()
     addPendingTab()
     setIsBottomPage(false)
@@ -1260,9 +1255,7 @@ const AgentManagerContent: Component = () => {
 
   // Cmd+T: add a new tab
   const handleNewTabForCurrentSelection = () => {
-    coverBottomPage()
-    addPendingTab()
-    setIsBottomPage(false)
+    handleAddSession()
   }
 
   return (
