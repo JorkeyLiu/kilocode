@@ -52,7 +52,6 @@ import { KilocodeConfig } from "@/kilocode/config/config"
 import { ConfigParse } from "@/config/parse"
 import * as Log from "@opencode-ai/core/util/log"
 import { iife } from "@/util/iife"
-import { makeRuntime } from "@/effect/run-service"
 import type { Config } from "@/config/config"
 // Avoid an eager `import { Session }` here: session/index.ts indirectly
 // re-exports this module (via Snapshot.Service), so resolving
@@ -502,8 +501,6 @@ export namespace KiloSnapshotTrack {
     },
   }
 
-  const fsRt = makeRuntime(FSUtil.Service, FSUtil.defaultLayer)
-
   // Lazy to break a module-load cycle with @/session/index.ts. Narrowed to the small
   // `SessionPartAPI` surface defined above.
   let cachedSessionRt: SessionRuntime | undefined
@@ -636,8 +633,16 @@ export namespace KiloSnapshotTrack {
       // Every field on Config.Info is Schema.optional(...), so a single-key
       // object is structurally a valid Config.Info — no cast needed.
       const patch: Config.Info = { snapshot: false }
-      await fsRt.runPromise((fs) =>
+      // Run through AppRuntime (like session/question work) so
+      // `KilocodeConfig.updateProjectConfig` can acquire the canonical
+      // project target flock (LOCK-002) — the bare FSUtil runtime has no
+      // EffectFlock service. The write stays lock-protected and atomic while
+      // deliberately NOT disposing the active instance or emitting events,
+      // so the live stream is untouched.
+      const app = await import("@/effect/app-runtime")
+      await app.AppRuntime.runPromise(
         Effect.gen(function* () {
+          const fs = yield* FSUtil.Service
           yield* KilocodeConfig.updateProjectConfig({
             fs,
             directory: directory.directory,

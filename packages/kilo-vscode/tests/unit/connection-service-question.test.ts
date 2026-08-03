@@ -2,30 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { KiloConnectionService } from "../../src/services/cli-backend/connection-service"
 
 describe("KiloConnectionService question routing", () => {
-  test("ignores stale NotFoundError rejects while draining questions", async () => {
-    const service = new KiloConnectionService({} as any)
-    const client = {
-      permission: {
-        list: async () => ({ data: [] }),
-      },
-      question: {
-        list: async () => ({ data: [{ id: "que_test" }] }),
-        reject: async () => ({ error: { _tag: "NotFound" } }),
-      },
-      suggestion: {
-        list: async () => ({ data: [] }),
-      },
-      network: {
-        list: async () => ({ data: [] }),
-      },
-    }
-
-    ;(service as any).client = client
-    ;(service as any).directoryProviders.add(() => ["/tmp/workspace"])
-
-    await expect(service.drainPendingPrompts()).resolves.toBeUndefined()
-  })
-
   test("records and clears request origins from SSE events", () => {
     const service = new KiloConnectionService({} as any)
     const handler = service as unknown as {

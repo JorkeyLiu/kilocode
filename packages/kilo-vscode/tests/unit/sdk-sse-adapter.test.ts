@@ -56,6 +56,25 @@ function aborted(signal?: AbortSignal) {
 }
 
 describe("SdkSSEAdapter", () => {
+  it("passes the envelope-level transaction id through to handlers (LOCK-004)", async () => {
+    const tx = crypto.randomUUID()
+    const adapter = new SdkSSEAdapter(
+      client(async function* (opts) {
+        yield { directory: "/repo", transaction: tx, payload: event().payload }
+        await aborted(opts.signal)
+      }),
+    )
+    const received = new Promise<{ directory?: string; transaction?: string }>((resolve) =>
+      adapter.onEvent((payload, directory, transaction) => resolve({ directory, transaction })),
+    )
+
+    adapter.connect()
+    const seen = await received
+    expect(seen.directory).toBe("/repo")
+    expect(seen.transaction).toBe(tx)
+    adapter.disconnect()
+  })
+
   it("normalizes nested sync envelopes at the SSE boundary", async () => {
     const adapter = new SdkSSEAdapter(
       client(async function* (opts) {

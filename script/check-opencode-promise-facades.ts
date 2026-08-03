@@ -68,6 +68,30 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     count: 4,
     reason: "in-process server and AppRuntime integration test (global writer vs unseen-directory PATCH intake regression)",
   },
+  "kilocode/server/config-transaction.test.ts": {
+    count: 29,
+    reason: "production AppRuntime integration test (transaction, lock interruption, first-file creation race, held stream + real Server.listen)",
+  },
+  "kilocode/server/config-overlay-lifecycle.test.ts": {
+    count: 4,
+    reason: "production AppRuntime integration test for cold overlay rebuild lifecycle",
+  },
+  "kilocode/server/drain-control.test.ts": {
+    count: 2,
+    reason: "production AppRuntime integration test for the drain-control snapshot admission lane",
+  },
+  "kilocode/server/custom-provider-delete.test.ts": {
+    count: 16,
+    reason: "production AppRuntime integration test (shared memoized ModelCache seeding/assertion, ticket interruption, cache-failure layer injection, deferred final events boundary)",
+  },
+  "kilocode/server/custom-provider-save.test.ts": {
+    count: 19,
+    reason: "production AppRuntime integration test (shared memoized ModelCache seeding/assertion, deferred final events boundary, gate ticket interruption)",
+  },
+  "preload.ts": {
+    count: 4,
+    reason: "test preload harness: dispose the process-wide AppRuntime Config service before per-process data-dir cleanup",
+  },
   "kilocode/config/config-snapshot.test.ts": { count: 3, reason: "production AppRuntime config snapshot integration test" },
   "tool/recall.test.ts": { count: 11, reason: "existing runtime integration test" },
 }

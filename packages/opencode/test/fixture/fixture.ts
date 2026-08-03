@@ -95,7 +95,36 @@ type TmpDirOptions<T> = {
   config?: Partial<ConfigV1.Info>
   init?: (dir: string) => Promise<T>
   dispose?: (dir: string) => Promise<T>
+  // kilocode_change - LOCK-004: explicitly retain this entry for the preload afterAll re-disposal
+  retain?: boolean // kilocode_change
 }
+
+// kilocode_change start - per-process live tmpdir registry for preload afterAll
+/**
+ * Live tmpdir disposers in this test process (LOCK-004). A detached config
+ * install fiber can recreate a removed tmpdir after the test's `afterEach`
+ * removal, so the preload `afterAll` disposes any remaining tracked dirs AFTER
+ * the process-wide runtimes (which trigger those late loads) are disposed.
+ *
+ * A NORMAL successful disposer UNREGISTERS its entry: only fixtures explicitly
+ * marked `retain: true` (those owned by config-write/rebuild paths that can
+ * recreate their dir after disposal) stay registered for the final pass.
+ * Tracking is per-process — never a wildcard scan of other processes' dirs.
+ */
+const live: Array<() => Promise<unknown>> = []
+
+/** Number of entries still tracked by the live registry (test observability). */
+export const tmpdirRegistrySize = () => live.length
+
+/** Dispose every live tmpdir (idempotent; used by the preload `afterAll`). */
+export async function disposeAllTmpdirs() {
+  // Per-entry errors are tolerated: the bounded poll-remove already made the
+  // maximum effort, and a straggler that still persists must not fail the
+  // whole test file's teardown.
+  await Promise.all(live.splice(0).map((dispose) => dispose().catch(() => undefined)))
+}
+// kilocode_change end
+
 export async function tmpdir<T>(options?: TmpDirOptions<T>) {
   const dirpath = sanitizePath(path.join(os.tmpdir(), "opencode-test-" + Math.random().toString(36).slice(2)))
   await fs.mkdir(dirpath, { recursive: true })
@@ -120,16 +149,34 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
   const extra = await options?.init?.(realpath)
   const result = {
     [Symbol.asyncDispose]: async () => {
+      // kilocode_change start - LOCK-004: a normal successful disposer
+      // unregisters its entry; a disposer that threw, and every explicitly
+      // retained fixture, stays registered so the preload afterAll can
+      // re-dispose after the process-wide runtimes are stopped — a detached
+      // config install can recreate the dir (e.g. a node_modules tree) after
+      // this removal, and only that later pass runs after the loads that
+      // trigger it have settled.
+      let threw = false
       try {
         await options?.dispose?.(realpath)
+      } catch (error) {
+        threw = true
+        throw error
       } finally {
         if (options?.git) await stop(realpath).catch(() => undefined)
         await clean(realpath).catch(() => undefined)
+        if (!options?.retain && !threw) {
+          const index = live.indexOf(registered)
+          if (index !== -1) live.splice(index, 1)
+        }
       }
+      // kilocode_change end
     },
     path: realpath,
     extra: extra as T,
   }
+  const registered = () => result[Symbol.asyncDispose]() // kilocode_change
+  live.push(registered) // kilocode_change
   return result
 }
 

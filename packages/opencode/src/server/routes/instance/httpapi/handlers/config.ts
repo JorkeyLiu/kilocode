@@ -41,12 +41,17 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
         run: (ticket) =>
           Effect.gen(function* () {
             const old = yield* store.snapshot(instance.directory)
-            const exit = yield* configFailure(configSvc.update(ctx.payload)).pipe(Effect.exit)
+            // kilocode_change start - emit:false defers the ConfigUpdated publish
+            // so withWriteTicket emits it only after the rebuild registration
+            // handoff owns the writer ticket (LOCK-002).
+            const exit = yield* configFailure(configSvc.update(ctx.payload, { emit: false })).pipe(Effect.exit)
+            // kilocode_change end
             if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
             return {
               changed: exit.value.changed,
               value: ctx.payload,
               rebuild: exit.value.changed ? ConfigRebuild.rebuildInstance(ticket, old) : undefined,
+              event: exit.value.changed ? configSvc.emitUpdated(instance.directory) : undefined, // kilocode_change
             }
           }),
       })

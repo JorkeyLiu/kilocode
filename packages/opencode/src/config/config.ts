@@ -41,6 +41,7 @@ import z from "zod" // kilocode_change - Kilo config compatibility schemas
 // kilocode_change start
 import { ZodOverride } from "@opencode-ai/core/effect-zod"
 import { KilocodeConfig } from "../kilocode/config/config"
+import { KilocodeAtomicWrite } from "@/kilocode/config/atomic-write"
 import { primaryPaths } from "../kilocode/primary-worktree"
 import { Git } from "@/git"
 import { KilocodeDefaultPlugins } from "@/kilocode/config/default-plugins"
@@ -157,6 +158,11 @@ export type Info = ConfigV1.Info & {
 // kilocode_change - value re-export for the call sites that pass Config.Info as a schema
 export const Info = ConfigV1.Info
 
+// kilocode_change start - prepared mutation artifact shared by the canonical
+// transaction coordinator and the single-scope update APIs (LOCK-002)
+export type PreparedConfig = KilocodeConfig.PreparedConfig
+// kilocode_change end
+
 type State = {
   config: Info
   directories: string[]
@@ -169,12 +175,40 @@ export interface Interface {
   readonly get: () => Effect.Effect<Info>
   readonly getGlobal: () => Effect.Effect<Info>
   readonly getConsoleState: () => Effect.Effect<ConsoleState>
-  readonly update: (config: Info) => Effect.Effect<{ config: Info; changed: boolean }>
+  readonly update: (config: Info, options?: { emit?: boolean }) => Effect.Effect<{ config: Info; changed: boolean }> // kilocode_change
   // kilocode_change start
   readonly updateGlobal: (
     config: Info,
-    options?: { dispose?: boolean },
+    options?: { dispose?: boolean; emit?: boolean },
   ) => Effect.Effect<{ info: Info; changed: boolean }>
+  // Prepared mutation split (LOCK-002/003): prepare validates in memory
+  // without writing/invalidating/disposing/emitting; commit writes the
+  // prepared target atomically and invalidates caches; emitUpdated publishes
+  // the ConfigUpdated event only after every target committed. The combined
+  // transaction coordinator uses prepare/commit/emitUpdated under one shared
+  // cross-process lock instead of nesting update/updateGlobal (which would
+  // re-acquire the lock and deadlock). The optional resolved `file` (LOCK-002)
+  // lets a caller that already resolved + locked the target prepare/commit that
+  // exact path instead of rediscovering it under a different lock.
+  readonly prepareGlobal: (config: Info, options?: { file?: string }) => Effect.Effect<PreparedConfig>
+  readonly prepare: (config: Info, options?: { file?: string }) => Effect.Effect<PreparedConfig>
+  readonly commitGlobal: (
+    prepared: PreparedConfig,
+    options?: { dispose?: boolean; emit?: boolean },
+  ) => Effect.Effect<{ info: Info; changed: boolean }>
+  readonly commit: (
+    prepared: PreparedConfig,
+    options?: { emit?: boolean },
+  ) => Effect.Effect<{ config: Info; changed: boolean }>
+  readonly emitUpdated: (directory: string, transaction?: string) => Effect.Effect<void>
+  readonly invalidateProject: () => Effect.Effect<void>
+  /**
+   * Acquire the shared cross-process config lock for a target file (LOCK-001).
+   * Every global/project write path serializes through this key space. Lock
+   * acquisition failures are mapped to defects so the lock never leaks into
+   * an endpoint's declared error channel.
+   */
+  readonly withLock: <A, E, R>(key: string, body: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
   // kilocode_change end
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
@@ -959,118 +993,182 @@ export const layer = Layer.effect(
       )
     })
 
-    const update = Effect.fn("Config.update")(function* (config: Info) {
-      // kilocode_change start - delegate Kilo project config update behavior.
-      const ctx = yield* InstanceState.context
-      const result = yield* KilocodeConfig.updateProjectConfig({
-        fs,
-        directory: ctx.directory,
-        worktree: ctx.worktree,
-        config,
-        read: readConfigFile,
-        parse: (input, file) => ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(input, file), file),
-        patch: (input, patch) => patchJsonc(input, patch),
-        writable,
-      })
-      if (!result.changed) return result
-      yield* InstanceState.invalidate(state)
-      yield* Effect.sync(() =>
+    // kilocode_change start - canonical prepared mutation split shared by the
+    // combined transaction coordinator and the single-scope update APIs
+    const emitConfigUpdated = (directory: string, transaction?: string) =>
+      Effect.sync(() =>
         GlobalBus.emit("event", {
-          directory: ctx.directory,
+          directory,
+          transaction,
           payload: {
             type: Event.ConfigUpdated.type,
             properties: {},
           },
         }),
       ).pipe(Effect.catchCause((cause) => Effect.sync(() => log.error("config update listener failed", { cause }))))
-      return result
+
+    /** Prepare a project-scope mutation in memory (LOCK-002) — no writes/events. */
+    const prepare = Effect.fn("Config.prepare")(function* (config: Info, options?: { file?: string }) {
+      const ctx = yield* InstanceState.context
+      return yield* KilocodeConfig.prepareProjectConfig({
+        fs,
+        directory: ctx.directory,
+        worktree: ctx.worktree,
+        config,
+        file: options?.file, // kilocode_change - LOCK-002: resolved target wins over rediscovery
+        read: readConfigFile,
+        parse: (input, file) => ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(input, file), file),
+        patch: (input, patch) => patchJsonc(input, patch),
+        writable,
+      })
     })
+
+    /**
+     * Commit a prepared project artifact: atomically persist, then invalidate
+     * the instance config cache. Event emission is deferred to emitUpdated so
+     * multi-target transactions publish only after every target committed
+     * (LOCK-004). No lock is taken here — the caller holds the shared lock.
+     */
+    const commit = Effect.fn("Config.commit")(function* (prepared: PreparedConfig, options?: { emit?: boolean }) {
+      if (prepared.changed) yield* KilocodeAtomicWrite.write(fs, prepared.path, prepared.next)
+      if (!prepared.changed) return { config: prepared.info, changed: false }
+      yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
+      if (options?.emit !== false) {
+        const ctx = yield* InstanceState.context
+        yield* emitConfigUpdated(ctx.directory)
+      }
+      return { config: prepared.info, changed: true }
+    })
+
+    const update = Effect.fn("Config.update")(function* (config: Info, options?: { emit?: boolean }) {
+      const ctx = yield* InstanceState.context
+      // kilocode_change - LOCK-001: the project-domain discovery lock is
+      // acquired BEFORE target resolution so discovery and the write are one
+      // stable cross-process decision; a concurrent higher-precedence file
+      // creation can never land this save in a shadowed target.
+      return yield* withConfigLock(
+        KilocodeConfig.configDiscoveryProjectKey(ctx.directory),
+        Effect.gen(function* () {
+          const target = yield* KilocodeConfig.projectConfigUpdateTarget({
+            fs,
+            directory: ctx.directory,
+            worktree: ctx.worktree,
+          })
+          // kilocode_change - LOCK-001: prepare uses the exact resolved target
+          // resolved under the discovery lock — never rediscovered, so the
+          // locked key is always the written path.
+          const prepared = yield* prepare(config, { file: target })
+          if (!prepared.changed) return { config: prepared.info, changed: false }
+          // kilocode_change - emit:false defers the ConfigUpdated publish to
+          // the caller's deferred final event (LOCK-002); the default emits
+          // immediately (hot semantics).
+          yield* commit(prepared, options)
+          return { config: prepared.info, changed: true }
+        }),
+      )
+    })
+
+    /** Invalidate the current directory's instance config cache (rollback). */
+    const invalidateProject = Effect.fn("Config.invalidateProject")(function* () {
+      yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
+    })
+
+    /** Prepare a global-scope mutation in memory (LOCK-002) — no writes/events. */
+    const prepareGlobal = Effect.fn("Config.prepareGlobal")(function* (config: Info, options?: { file?: string }) {
+      const file = options?.file ?? globalConfigFile() // kilocode_change - LOCK-002: resolved target wins
+      const source = yield* readConfigFile(file)
+      const before = source ?? "{}"
+      const patch = writableGlobal(config)
+
+      if (!file.endsWith(".jsonc")) {
+        const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
+        const next = KilocodeConfig.mergeConfig(writable(existing), patch)
+        const serialized = JSON.stringify(next, null, 2)
+        // Validate the merged result before persisting (LOCK-007): an invalid
+        // patch surfaces as a typed ConfigInvalidError defect and writes
+        // nothing instead of persisting bad values.
+        ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(serialized, file), file)
+        const changed = stable(next) !== stable(ConfigParse.jsonc(before, file))
+        return {
+          path: file,
+          existed: source !== undefined,
+          original: source,
+          next: serialized,
+          info: next,
+          changed,
+        }
+      }
+
+      const updated = patchJsonc(before, patch)
+      const next = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(updated, file), file)
+      const changed = stable(next) !== stable(ConfigParse.jsonc(before, file))
+      return { path: file, existed: source !== undefined, original: source, next: updated, info: next, changed }
+    })
+
+    /**
+     * Commit a prepared global artifact: atomically persist, invalidate the
+     * global and instance caches. Event emission is deferred to emitUpdated
+     * (LOCK-004). No lock is taken here — the caller holds the shared lock.
+     */
+    const commitGlobal = Effect.fn("Config.commitGlobal")(
+      function* (prepared: PreparedConfig, options?: { dispose?: boolean; emit?: boolean }) {
+        const next = prepared.info
+        const changed = prepared.changed
+        if (changed) yield* KilocodeAtomicWrite.write(fs, prepared.path, prepared.next)
+        if (!changed) return { info: next, changed }
+        yield* invalidateGlobal
+        yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
+        if (options?.emit !== false) yield* emitConfigUpdated("global")
+        return { info: next, changed }
+      },
+    )
+
+    const updateGlobal = Effect.fn("Config.updateGlobal")(
+      function* (config: Info, options?: { dispose?: boolean; emit?: boolean }) {
+        // The dispose flag is preserved for API compatibility; instance disposal
+        // is owned by the caller's rebuild registration (LOCK-003), and both
+        // flag values invalidate + emit identically after a successful commit.
+        void options?.dispose
+        // kilocode_change - LOCK-001: the global-domain discovery lock is
+        // acquired BEFORE target resolution so discovery and the write are one
+        // stable cross-process decision.
+        return yield* withConfigLock(
+          KilocodeConfig.configDiscoveryGlobalKey(),
+          Effect.gen(function* () {
+            const file = globalConfigFile()
+            // kilocode_change - LOCK-001: prepareGlobal uses the exact resolved
+            // target resolved under the discovery lock — never rediscovered, so
+            // the locked key is always the written path.
+            const prepared = yield* prepareGlobal(config, { file })
+            if (!prepared.changed) return { info: prepared.info, changed: false }
+            // kilocode_change - emit:false defers the ConfigUpdated publish to
+            // the caller's deferred final event (LOCK-002); the default emits
+            // immediately (hot semantics).
+            yield* commitGlobal(prepared, options)
+            return { info: prepared.info, changed: true }
+          }),
+        )
+      },
+    )
 
     const warnings = Effect.fn("Config.warnings")(function* () {
       return yield* InstanceState.use(state, (s) => s.warnings)
     })
-    // kilocode_change end
 
     const invalidate = Effect.fn("Config.invalidate")(function* () {
       yield* invalidateGlobal
     })
 
-    // kilocode_change start - add dispose option to skip Instance.disposeAll for permission-only changes
-    const updateGlobal = Effect.fn("Config.updateGlobal")(function* (config: Info, options?: { dispose?: boolean }) {
-      const dispose = options?.dispose ?? true
-      // kilocode_change end
-      const file = globalConfigFile()
-      // kilocode_change start - serialize read-merge-write so concurrent approvals cannot lose rules
-      const result = yield* flock
-        .withLock(
-          Effect.gen(function* () {
-            const before = (yield* readConfigFile(file)) ?? "{}"
-            const patch = writableGlobal(config)
-
-            if (!file.endsWith(".jsonc")) {
-              const existing = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(before, file), file)
-              const next = KilocodeConfig.mergeConfig(writable(existing), patch)
-              const serialized = JSON.stringify(next, null, 2)
-              // kilocode_change - validate the merged result before persisting,
-              // mirroring the jsonc branch and the project update path: an
-              // invalid patch surfaces as a typed ConfigInvalidError defect and
-              // writes nothing (LOCK-007) instead of persisting bad values and
-              // failing response encoding with a generic BadRequest.
-              ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(serialized, file), file)
-              const changed = stable(next) !== stable(ConfigParse.jsonc(before, file))
-              if (changed) yield* fs.writeFileString(file, serialized).pipe(Effect.orDie)
-              return { next, changed }
-            }
-
-            const updated = patchJsonc(before, patch)
-            const next = ConfigParse.schema(ConfigV1.Info, ConfigParse.jsonc(updated, file), file)
-            const changed = stable(next) !== stable(ConfigParse.jsonc(before, file))
-            if (changed) yield* fs.writeFileString(file, updated).pipe(Effect.orDie)
-            return { next, changed }
-          }),
-          `config:global:${path.resolve(Global.Path.config)}`,
-        )
-        .pipe(Effect.orDie)
-      const next = result.next
-      const changed = result.changed
-      // kilocode_change end
-
-      // kilocode_change start - skip dispose when caller opts out
-      if (!dispose) {
-        if (!changed) return { info: next, changed }
-        yield* invalidateGlobal
-        yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
-        yield* Effect.sync(() =>
-          GlobalBus.emit("event", {
-            directory: "global",
-            payload: {
-              type: Event.ConfigUpdated.type,
-              properties: {},
-            },
-          }),
-        ).pipe(Effect.catchCause((cause) => Effect.sync(() => log.error("global config listener failed", { cause }))))
-        return { info: next, changed }
-      }
-      // kilocode_change end
-
-      if (!changed) return { info: next, changed }
-      yield* invalidate()
-      // kilocode_change start - hot-reload global config changes in the active instance
-      if (changed) {
-        yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
-        yield* Effect.sync(() =>
-          GlobalBus.emit("event", {
-            directory: "global",
-            payload: {
-              type: Event.ConfigUpdated.type,
-              properties: {},
-            },
-          }),
-        ).pipe(Effect.catchCause((cause) => Effect.sync(() => log.error("global config listener failed", { cause }))))
-      }
-      // kilocode_change end
-      return { info: next, changed }
+    const emitUpdated = Effect.fn("Config.emitUpdated")(function* (directory: string, transaction?: string) {
+      yield* emitConfigUpdated(directory, transaction)
     })
+
+    const withConfigLock = <A, E, R>(key: string, body: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
+      flock.withLock(body, key).pipe(
+        Effect.catchTag("LockTimeoutError", (error) => Effect.die(error)),
+        Effect.catchTag("LockCompromisedError", (error) => Effect.die(error)),
+      )
+    // kilocode_change end
 
     return Service.of({
       get,
@@ -1078,6 +1176,13 @@ export const layer = Layer.effect(
       getConsoleState,
       update,
       updateGlobal,
+      prepareGlobal, // kilocode_change
+      prepare, // kilocode_change
+      commitGlobal, // kilocode_change
+      commit, // kilocode_change
+      emitUpdated, // kilocode_change
+      invalidateProject, // kilocode_change
+      withLock: withConfigLock, // kilocode_change
       invalidate,
       directories,
       waitForDependencies,

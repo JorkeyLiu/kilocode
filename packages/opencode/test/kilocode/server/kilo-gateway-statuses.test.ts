@@ -1,6 +1,6 @@
 import { NodeHttpServer } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect"
 import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
 import { Auth } from "../../../src/auth"
@@ -56,7 +56,16 @@ const layer = HttpRouter.serve(
     ]),
   ),
   { disableListenLog: true, disableLogger: true },
-).pipe(Layer.provideMerge(NodeHttpServer.layerTest))
+).pipe(
+  Layer.provideMerge(NodeHttpServer.layerTest),
+  // The organization route persists provider auth through the canonical
+  // coordinator (LOCK-002), which requires FSUtil/ModelCache at the handler
+  // boundary. These statuses tests never hit that route, so an opaque handler
+  // context satisfies the requirements — same pattern as
+  // httpapi-global-sse.test.ts for controlHandlers.
+  // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion
+  Layer.provide(Layer.succeedContext(Context.empty() as Context.Context<unknown>)),
+)
 const it = testEffect(layer)
 
 function stub(run: () => Response | Promise<Response>) {

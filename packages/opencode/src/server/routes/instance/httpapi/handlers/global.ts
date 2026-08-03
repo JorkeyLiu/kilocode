@@ -3,7 +3,7 @@ import { GlobalBus, type GlobalEvent as GlobalBusEvent } from "@/bus/global"
 import { EventV2 } from "@opencode-ai/core/event"
 import { Installation } from "@/installation"
 import { disconnect } from "@/kilocode/server/sse" // kilocode_change
-import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+import { emitGlobalDisposed } from "@/server/global-lifecycle" // kilocode_change
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
 import { ConfigRebuild } from "@/kilocode/server/config-rebuild" // kilocode_change
 import { withWriteTicket } from "@/kilocode/server/config-ticket" // kilocode_change
@@ -110,19 +110,40 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
             const olds = yield* Effect.forEach(dirs, (directory) =>
               store!.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
             )
-            const exit = yield* configFailure(config.updateGlobal(ctx.payload)).pipe(Effect.exit)
+            // kilocode_change start - emit:false defers the ConfigUpdated publish
+            // so withWriteTicket emits it only after the rebuild registration
+            // handoff owns the writer ticket (LOCK-002).
+            const exit = yield* configFailure(config.updateGlobal(ctx.payload, { emit: false })).pipe(Effect.exit)
+            // kilocode_change end
             if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
             return {
               changed: exit.value.changed,
               value: exit.value.info,
               rebuild: exit.value.changed ? ConfigRebuild.rebuildGlobal(ticket, olds) : undefined,
+              event: exit.value.changed ? config.emitUpdated("global") : undefined, // kilocode_change
             }
           }),
       })
     })
 
     const dispose = Effect.fn("GlobalHttpApi.dispose")(function* () {
-      yield* disposeAllInstancesAndEmitGlobalDisposed()
+      // kilocode_change start - LOCK-001: one global writer ticket, pre-barrier
+      // identity capture, exactly one ControlLease-aware rebuild. The response
+      // returns true after rebuild registration, before generation drain; the
+      // rebuild preserves the single `global.disposed` emission after disposal.
+      yield* withWriteTicket({
+        acquire: gate.beginWriteGlobal(),
+        run: (ticket) =>
+          Effect.gen(function* () {
+            const dirs = store ? yield* store.directories() : []
+            const olds = yield* Effect.forEach(dirs, (directory) =>
+              store!.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
+            )
+            if (!store) return { changed: false, value: true as const, event: emitGlobalDisposed }
+            return { changed: true, value: true as const, rebuild: ConfigRebuild.rebuildGlobal(ticket, olds) }
+          }),
+      })
+      // kilocode_change end
       return true
     })
 

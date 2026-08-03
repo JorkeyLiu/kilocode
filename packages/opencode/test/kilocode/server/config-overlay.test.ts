@@ -93,7 +93,7 @@ describe("config overlay routes", () => {
   })
 
   test("prefers .kilo over legacy .kilocode and ignores .opencode in project overlays", async () => {
-    await using project = await tmpdir()
+    await using project = await tmpdir({ retain: true })
     const entries = [
       {
         root: ".opencode",
@@ -145,7 +145,7 @@ describe("config overlay routes", () => {
   })
 
   test.serial("tolerates unsafe project config instead of failing the overlay", async () => {
-    await using project = await tmpdir()
+    await using project = await tmpdir({ retain: true })
     // A project config that references a file outside the project root throws during substitution.
     // The overlay must skip it and still resolve, rather than rejecting the whole request.
     await Filesystem.write(
@@ -165,8 +165,8 @@ describe("config overlay routes", () => {
   })
 
   test.serial("marks global values inherited in project scope", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await setGlobal(global.path, {
       model: "kilo/global-model",
       permission: { bash: "ask" },
@@ -187,8 +187,8 @@ describe("config overlay routes", () => {
   })
 
   test.serial("resolves prompt-training model visibility across scopes", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir({ config: { hide_prompt_training_models: false } })
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true, config: { hide_prompt_training_models: false } })
     await setGlobal(global.path, { hide_prompt_training_models: true })
 
     const body = await json<Overlay>(await req(project.path, "/config/overlay?scope=project"))
@@ -202,8 +202,8 @@ describe("config overlay routes", () => {
   })
 
   test.serial("marks global indexing values inherited in project scope", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await setGlobal(global.path, {
       indexing: {
         enabled: true,
@@ -224,7 +224,7 @@ describe("config overlay routes", () => {
   })
 
   test.serial("excludes project indexing values from global scope", async () => {
-    await using project = await tmpdir()
+    await using project = await tmpdir({ retain: true })
     const global: Config.Info = {
       indexing: {
         enabled: true,
@@ -257,8 +257,8 @@ describe("config overlay routes", () => {
   })
 
   test.serial("writes project indexing overrides to .kilo/kilo.jsonc", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await setGlobal(global.path, { indexing: { enabled: true, provider: "openai" } })
 
     await json(
@@ -287,8 +287,8 @@ describe("config overlay routes", () => {
   })
 
   test.serial("removes local scalar override and falls back to global", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir({ config: { model: "kilo/project-model", username: "alice" } })
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true, config: { model: "kilo/project-model", username: "alice" } })
     await setGlobal(global.path, { model: "kilo/global-model" })
 
     await json(
@@ -307,8 +307,8 @@ describe("config overlay routes", () => {
   })
 
   test.serial("writes project mcp overrides without copying inherited servers", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await setGlobal(global.path, {
       mcp: { shared: { type: "local", command: ["node", "shared.js"], enabled: true } },
     })
@@ -331,8 +331,8 @@ describe("config overlay routes", () => {
   })
 
   test.serial("disables inherited mcp server with a minimal local override", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await setGlobal(global.path, {
       mcp: { shared: { type: "local", command: ["node", "shared.js"], enabled: true } },
     })
@@ -352,8 +352,8 @@ describe("config overlay routes", () => {
   })
 
   test.serial("refreshes effective config after project permission update", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await setGlobal(global.path, { permission: { edit: "allow" } })
 
     const before = await json<Agent[]>(await req(project.path, "/agent"))
@@ -385,8 +385,8 @@ describe("config overlay routes", () => {
   })
 
   test.serial("refreshes agent permissions after global permission update", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await setGlobal(global.path, { permission: { edit: "allow" } })
 
     const before = await json<Agent[]>(await req(project.path, "/agent"))
@@ -414,8 +414,8 @@ describe("config overlay routes", () => {
   })
 
   terminal("preserves active terminals after updating global console preferences", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     ;(Global.Path as { config: string }).config = global.path
     const headers = { "x-kilo-directory": project.path }
     const created = await Server.Default().app.request(PtyPaths.create, {
@@ -446,8 +446,8 @@ describe("config overlay routes", () => {
     test.serial(
       `${value ? "httpapi" : "legacy"} global overlay update refreshes existing project instances without a project directory`,
       async () => {
-        await using global = await tmpdir()
-        await using project = await tmpdir()
+        await using global = await tmpdir({ retain: true })
+        await using project = await tmpdir({ retain: true })
         await setGlobal(global.path, { permission: { edit: "ask" } })
         await disposeAllInstances()
         const target = app(value)

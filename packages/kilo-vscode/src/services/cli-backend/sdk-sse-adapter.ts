@@ -10,7 +10,7 @@ type Flat<T> = T extends {
 export type WireSyncPayload = Extract<WirePayload, { type: "sync" }>
 export type SyncPayload = Flat<WireSyncPayload>
 export type SSEPayload = Exclude<WirePayload, { type: "sync" }> | SyncPayload
-export type SSEEventHandler = (event: SSEPayload, directory?: string) => void
+export type SSEEventHandler = (event: SSEPayload, directory?: string, transaction?: string) => void
 export type SSEErrorHandler = (error: Error) => void
 export type SSEStateHandler = (state: "connecting" | "connected" | "disconnected") => void
 
@@ -204,7 +204,10 @@ export class SdkSSEAdapter {
             this.notifyState("connected")
           }
 
-          this.notifyEvent(normalize(event.payload), event.directory)
+          // LOCK-004: the envelope-level transaction id survives the SSE
+          // boundary so the connection service can group one logical config
+          // transaction's per-scope echoes into one revision advance.
+          this.notifyEvent(normalize(event.payload), event.directory, event.transaction)
         }
 
         console.log(
@@ -260,10 +263,10 @@ export class SdkSSEAdapter {
 
   // ── Notify helpers ─────────────────────────────────────────────────
 
-  private notifyEvent(event: SSEPayload, directory?: string): void {
+  private notifyEvent(event: SSEPayload, directory?: string, transaction?: string): void {
     for (const handler of this.handlers) {
       try {
-        handler(event, directory)
+        handler(event, directory, transaction)
       } catch (error) {
         console.error("[Kilo New] SSE: Error in event handler:", error)
       }

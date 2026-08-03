@@ -6,7 +6,6 @@ import {
   resolveCustomProviderAuth,
   sanitizeCustomProviderConfig,
   validateProviderID,
-  withCustomProviderDeletions,
 } from "../../src/shared/custom-provider"
 import { isCustomProviderPackage } from "../../src/shared/provider-model"
 
@@ -206,86 +205,5 @@ describe("sanitizeCustomProviderConfig", () => {
     })
 
     expect("error" in result ? result.error : "").toContain("mcpServer")
-  })
-})
-
-describe("withCustomProviderDeletions", () => {
-  const baseNext = {
-    npm: "@ai-sdk/openai-compatible" as const,
-    name: "My Provider",
-    options: { baseURL: "https://example.com/v1" },
-    models: { keep: { name: "Keep" } },
-  }
-
-  it("passes through unchanged when there is no prior config", () => {
-    expect(withCustomProviderDeletions(undefined, baseNext)).toEqual(baseNext)
-    expect(withCustomProviderDeletions({}, baseNext)).toEqual(baseNext)
-  })
-
-  it("emits null for models present in existing but absent in next", () => {
-    const existing = { models: { keep: { name: "Keep" }, gone: { name: "Gone" } } }
-    const result = withCustomProviderDeletions(existing, baseNext)
-    const models = result.models as Record<string, unknown>
-    expect(models.keep).toEqual({ name: "Keep" })
-    expect(models.gone).toBeNull()
-  })
-
-  it("emits null for reasoning and variants removed from a surviving model", () => {
-    const existing = {
-      models: {
-        keep: {
-          name: "Keep",
-          reasoning: true,
-          variants: { high: { reasoningEffort: "high" }, low: { reasoningEffort: "low" } },
-        },
-      },
-    }
-    const next = {
-      ...baseNext,
-      models: {
-        keep: { name: "Keep", variants: { high: { reasoningEffort: "high" } } },
-      },
-    } as typeof baseNext
-    const result = withCustomProviderDeletions(existing, next)
-    const model = (result.models as Record<string, { reasoning?: boolean | null; variants?: Record<string, unknown> }>)
-      .keep
-    expect(model.reasoning).toBeNull()
-    expect(model.variants?.high).toEqual({ reasoningEffort: "high" })
-    expect(model.variants?.low).toBeNull()
-  })
-
-  it("emits null when reasoning is disabled on a surviving model", () => {
-    const existing = { models: { keep: { name: "Keep", reasoning: true } } }
-    const result = withCustomProviderDeletions(existing, baseNext)
-    expect(result.models.keep).toEqual({ name: "Keep", reasoning: null })
-  })
-
-  it("emits null for options removed from a surviving variant", () => {
-    const existing = {
-      models: {
-        keep: {
-          name: "Keep",
-          variants: {
-            thinking: { thinking: { type: "adaptive" }, reasoning_split: true, reasoningEffort: "high" },
-          },
-        },
-      },
-    }
-    const next = {
-      ...baseNext,
-      models: {
-        keep: { name: "Keep", variants: { thinking: { reasoningEffort: "high" } } },
-      },
-    } as typeof baseNext
-    const result = withCustomProviderDeletions(existing, next)
-    const model = (result.models as Record<string, { variants: Record<string, unknown> }>).keep
-    expect(model.variants.thinking).toEqual({ reasoningEffort: "high", thinking: null, reasoning_split: null })
-  })
-
-  it("does not touch variants on a model that is being deleted", () => {
-    const existing = { models: { gone: { name: "Gone", variants: { a: {} } } } }
-    const result = withCustomProviderDeletions(existing, baseNext)
-    const models = result.models as Record<string, unknown>
-    expect(models.gone).toBeNull()
   })
 })

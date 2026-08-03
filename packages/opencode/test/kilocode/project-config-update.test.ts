@@ -1,13 +1,17 @@
 // kilocode_change - new file
 
-import { expect, test } from "bun:test"
+import { afterAll, expect, test } from "bun:test"
 import fs from "fs/promises"
 import path from "path"
-import { Effect, Layer, Option } from "effect"
+import { Effect, Layer, ManagedRuntime, Option } from "effect"
+import { applyEdits, modify } from "jsonc-parser"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
+import { Global } from "@opencode-ai/core/global"
 import { Config } from "../../src/config/config"
+import { ConfigParse } from "../../src/config/parse"
+import { KilocodeConfig } from "../../src/kilocode/config/config"
 import { Auth } from "../../src/auth"
 import { Account } from "../../src/account/account"
 import { Env } from "../../src/env"
@@ -63,7 +67,7 @@ async function writeConfig(dir: string, config: unknown) {
 }
 
 test("project config update creates .kilo/kilo.jsonc and reloads it", async () => {
-  await using tmp = await tmpdir()
+  await using tmp = await tmpdir({ retain: true })
   await provideTestInstance({
     directory: tmp.path,
     fn: async () => {
@@ -79,7 +83,7 @@ test("project config update creates .kilo/kilo.jsonc and reloads it", async () =
 })
 
 test("project config update skips empty delete-only writes when no config exists", async () => {
-  await using tmp = await tmpdir()
+  await using tmp = await tmpdir({ retain: true })
   await provideTestInstance({
     directory: tmp.path,
     fn: async () => {
@@ -91,7 +95,7 @@ test("project config update skips empty delete-only writes when no config exists
 })
 
 test("project config update prefers existing root kilo.json", async () => {
-  await using tmp = await tmpdir()
+  await using tmp = await tmpdir({ retain: true })
   await writeConfig(tmp.path, { username: "alice" })
 
   await provideTestInstance({
@@ -107,7 +111,7 @@ test("project config update prefers existing root kilo.json", async () => {
 })
 
 test("project config update patches ancestor .kilo/kilo.json from nested directory", async () => {
-  await using tmp = await tmpdir()
+  await using tmp = await tmpdir({ retain: true })
   const child = path.join(tmp.path, "nested", "workspace")
   await fs.mkdir(child, { recursive: true })
   await fs.mkdir(path.join(tmp.path, ".kilo"), { recursive: true })
@@ -126,4 +130,180 @@ test("project config update patches ancestor .kilo/kilo.json from nested directo
       await expect(fs.access(path.join(child, ".kilo", "kilo.json"))).rejects.toThrow()
     },
   })
+})
+
+// LOCK-002: `KilocodeConfig.updateProjectConfig` (the snapshot-disable
+// persistence path) acquires the canonical project target flock and commits
+// atomically, so a snapshot-disable racing an unrelated settings write never
+// loses either value and never leaves a partial file.
+const flockRt = ManagedRuntime.make(Layer.provideMerge(EffectFlock.defaultLayer, FSUtil.defaultLayer))
+
+afterAll(async () => {
+  await flockRt.dispose()
+})
+
+const applyUpdate = (dir: string, patch: Config.Info) =>
+  flockRt.runPromise(
+    Effect.gen(function* () {
+      const fsu = yield* FSUtil.Service
+      return yield* KilocodeConfig.updateProjectConfig({
+        fs: fsu,
+        directory: dir,
+        config: patch,
+        read: (file) =>
+          fsu.readFileString(file).pipe(
+            Effect.map((s) => s as string | undefined),
+            Effect.catch(() => Effect.succeed<string | undefined>(undefined)),
+          ),
+        parse: (input, file) => ConfigParse.jsonc(input, file) as Config.Info,
+        patch: patchJsonc,
+        writable: (config) => config,
+      })
+    }),
+  )
+
+function patchJsonc(input: string, config: Config.Info): string {
+  return Object.entries(config).reduce(
+    (out, [key, value]) =>
+      applyEdits(out, modify(out, [key], value, { formattingOptions: { insertSpaces: true, tabSize: 2 } })),
+    input,
+  )
+}
+
+test("concurrent snapshot-disable and unrelated settings writes preserve both and leave no partial file (LOCK-002)", async () => {
+  await using tmp = await tmpdir({ retain: true })
+  const target = path.join(tmp.path, ".kilo", "kilo.jsonc")
+
+  // Two independent writers race on the SAME target file: the snapshot
+  // disable patch and an unrelated model change. Both serialize on the
+  // canonical project target flock, so the read-modify-write of each is
+  // atomic and neither update is lost.
+  await Promise.all([applyUpdate(tmp.path, { snapshot: false }), applyUpdate(tmp.path, { model: "race/model" })])
+
+  const written = await Filesystem.readJson<{ snapshot: boolean; model: string }>(target)
+  expect(written.snapshot).toBe(false)
+  expect(written.model).toBe("race/model")
+
+  // Atomic commit: no temp-file leftovers from either writer.
+  const leftovers = (await fs.readdir(path.join(tmp.path, ".kilo"))).filter((name) => name.includes(".tmp"))
+  expect(leftovers.length).toBe(0)
+})
+
+test("updateProjectConfig serializes with the shared Config.update lock on the same target (LOCK-002)", async () => {
+  await using tmp = await tmpdir({ retain: true })
+  await provideTestInstance({
+    directory: tmp.path,
+    fn: async () => {
+      // A legacy Config.update (Config service, flock-protected) and the
+      // snapshot-disable write race on the same `.kilo/kilo.jsonc` target.
+      // Both use the identical lock key, so both values survive.
+      await Promise.all([
+        save({ small_model: "legacy/model" } as any),
+        applyUpdate(tmp.path, { snapshot: false }),
+      ])
+
+      const written = await Filesystem.readJson<{ small_model: string; snapshot: boolean }>(
+        path.join(tmp.path, ".kilo", "kilo.jsonc"),
+      )
+      expect(written.small_model).toBe("legacy/model")
+      expect(written.snapshot).toBe(false)
+    },
+  })
+})
+
+// ─── LOCK-001: stable target locking (no rediscovery under the lock) ──────
+
+test("Config.update locks and writes the resolved .kilo target even when a root config file exists (LOCK-001)", async () => {
+  await using tmp = await tmpdir({ retain: true })
+  // Both `.kilo/kilo.json` (preferred update target) and a root `kilo.json`
+  // exist. Discovery resolves `.kilo/kilo.json` once; the update must lock
+  // and write EXACTLY that path — never switch to the root file under the
+  // lock.
+  await fs.mkdir(path.join(tmp.path, ".kilo"), { recursive: true })
+  await writeConfig(path.join(tmp.path, ".kilo"), { username: "alice" })
+  await writeConfig(tmp.path, { username: "root" })
+
+  await provideTestInstance({
+    directory: tmp.path,
+    fn: async () => {
+      await save({ model: "locked/model" } as any)
+
+      const project = await Filesystem.readJson<{ model: string; username: string }>(
+        path.join(tmp.path, ".kilo", "kilo.json"),
+      )
+      expect(project.model).toBe("locked/model")
+      expect(project.username).toBe("alice")
+      const root = await Filesystem.readJson<{ username: string }>(path.join(tmp.path, "kilo.json"))
+      expect(root.username).toBe("root")
+      expect("model" in root).toBe(false)
+    },
+  })
+})
+
+test("prepareProjectConfig honors the exact pre-resolved target when rediscovery would pick another file (LOCK-001)", async () => {
+  await using tmp = await tmpdir({ retain: true })
+  const kiloDir = path.join(tmp.path, ".kilo")
+  await fs.mkdir(kiloDir, { recursive: true })
+  await writeConfig(kiloDir, { alpha: 1 })
+
+  // Resolve the update target once (the locked path).
+  const resolved = await flockRt.runPromise(
+    Effect.gen(function* () {
+      const fsu = yield* FSUtil.Service
+      return yield* KilocodeConfig.projectConfigUpdateTarget({ fs: fsu, directory: tmp.path })
+    }),
+  )
+  expect(resolved).toBe(path.join(kiloDir, "kilo.json"))
+
+  // Race: the resolved target disappears and a root config file appears, so a
+  // naive rediscovery would now select the root file — a DIFFERENT lock key.
+  await fs.rm(resolved)
+  await writeConfig(tmp.path, { beta: 2 })
+
+  // Prepare must target the pre-resolved (locked) path, not rediscover.
+  const prepared = await flockRt.runPromise(
+    Effect.gen(function* () {
+      const fsu = yield* FSUtil.Service
+      return yield* KilocodeConfig.prepareProjectConfig({
+        fs: fsu,
+        directory: tmp.path,
+        config: { gamma: 3 } as Config.Info,
+        file: resolved,
+        read: (file) =>
+          fsu.readFileString(file).pipe(
+            Effect.map((s) => s as string | undefined),
+            Effect.catch(() => Effect.succeed<string | undefined>(undefined)),
+          ),
+        parse: (input, file) => ConfigParse.jsonc(input, file) as Config.Info,
+        patch: patchJsonc,
+        writable: (config) => config,
+      })
+    }),
+  )
+  expect(prepared.path).toBe(resolved)
+  // The resolved target no longer exists, so prepare treats it as a fresh
+  // target rather than switching to the rediscovered root file.
+  expect(prepared.existed).toBe(false)
+})
+
+test("Config.updateGlobal locks and writes the resolved global file (LOCK-001)", async () => {
+  await using tmp = await tmpdir({ retain: true })
+  await writeConfig(tmp.path, { username: "alice" })
+  const previous = (Global.Path as { config: string }).config
+  ;(Global.Path as { config: string }).config = tmp.path
+  try {
+    await Effect.runPromise(
+      Config.Service.use((svc) => svc.updateGlobal({ model: "global/model" } as Config.Info)).pipe(
+        Effect.scoped,
+        Effect.provide(layer),
+      ),
+    )
+    const written = await Filesystem.readJson<{ model: string; username: string }>(
+      path.join(tmp.path, "kilo.json"),
+    )
+    expect(written.model).toBe("global/model")
+    expect(written.username).toBe("alice")
+  } finally {
+    ;(Global.Path as { config: string }).config = previous
+  }
 })

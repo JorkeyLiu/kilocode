@@ -5,6 +5,7 @@ import path from "path"
 import fs from "fs/promises"
 import { afterAll } from "bun:test"
 import { remove as cleanup } from "./kilocode/cleanup" // kilocode_change
+import { markPluginDependenciesReady } from "./fixture/plugin" // kilocode_change
 
 // Set XDG env vars FIRST, before any src/ imports
 const dir = path.join(os.tmpdir(), "opencode-test-data-" + process.pid)
@@ -12,9 +13,32 @@ await fs.mkdir(dir, { recursive: true })
 afterAll(async () => {
   const { SessionExport } = await import("../src/kilocode/session-export") // kilocode_change
   const { Database } = await import("../src/storage/db")
+  // kilocode_change start - fixture leak fix: dispose runtimes before data-dir removal
+  const { disposeAllInstances, disposeAllTmpdirs } = await import("./fixture/fixture")
+  const { AppRuntime } = await import("../src/effect/app-runtime") // kilocode_change
   await SessionExport.shutdown() // kilocode_change
+  // LOCK-003 fixture leak fix: stop the process-wide instance runtimes and the
+  // AppRuntime Config service BEFORE removing the per-process temp data dir, so
+  // no late in-flight config load can recreate `config/kilo/kilo.jsonc` (the
+  // global-config seed write) while the dir is being removed.
+  await disposeAllInstances()
+  await AppRuntime.dispose()
   Database.close()
+  // LOCK-003 fixture leak fix: a detached config install can recreate a tmpdir
+  // after its test's `afterEach` removal; dispose any remaining tracked
+  // tmpdirs now that the runtimes that trigger those late loads are stopped.
+  await disposeAllTmpdirs()
   await cleanup(dir) // kilocode_change
+  // Straggler fibers on the server request runtime (e.g. a detached rebuild
+  // that acquired the config flock) can recreate `state/kilo/locks` right
+  // after the first removal pass. Keep removing until the data dir is
+  // actually gone — bounded so teardown never hangs. (`fs/promises` has no
+  // `exists`; probe via stat like the fixture helper.)
+  for (let left = 15; left > 0 && (await fs.stat(dir).then(() => true).catch(() => false)); left--) {
+    await Bun.sleep(100)
+    await cleanup(dir) // kilocode_change
+  }
+  // kilocode_change end
 })
 
 process.env["XDG_DATA_HOME"] = path.join(dir, "share")
@@ -39,6 +63,18 @@ process.env["KILO_TEST_MANAGED_CONFIG_DIR"] = testManagedConfigDir
 const cacheDir = path.join(dir, "cache", "kilo")
 await fs.mkdir(cacheDir, { recursive: true })
 await fs.writeFile(path.join(cacheDir, "version"), "21")
+
+// kilocode_change start - mark the default global config dir plugin-deps ready
+// LOCK-003 fixture leak fix: the default Global.Path.config
+// (`XDG_CONFIG_HOME`/kilo) is the first ConfigPaths.directories entry for
+// every instance booted before a test overrides `Global.Path.config` (and for
+// the process-wide AppRuntime Config service, which captures it at first
+// use). Mark the plugin deps ready there so the detached
+// `Npm.install("@kilocode/plugin")` never fires into this shared per-process
+// data dir — an install racing the `afterAll` cleanup leaks 50MB+ per test
+// file process.
+await markPluginDependenciesReady(path.join(dir, "config", "kilo"))
+// kilocode_change end
 
 // Clear provider and server auth env vars to ensure clean test state
 delete process.env["ANTHROPIC_API_KEY"]

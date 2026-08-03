@@ -148,10 +148,26 @@ export const TuiKeybindListResponse = Schema.Struct({ keybinds: Schema.Array(Kil
   identifier: "TuiKeybindListResponse",
 })
 
+// combined global+project config transaction schema (LOCK-002/005)
+const ScopePatch = Schema.Struct({
+  set: Schema.optional(UnknownRecord),
+  unset: Schema.optional(Schema.Array(Schema.Array(Schema.String))),
+})
+export const ConfigTransactionPatch = Schema.Struct({
+  global: Schema.optional(ScopePatch),
+  project: Schema.optional(ScopePatch),
+})
+export const ConfigTransactionResponse = Schema.Struct({
+  global: Config.Info,
+  project: Config.Info,
+  effective: Config.Info,
+}).annotate({ identifier: "ConfigTransactionResponse" })
+
 export const ConfigConsolePaths = {
   sources: "/config/sources",
   effective: "/config/effective",
   overlay: "/config/overlay",
+  transaction: "/config/transaction", // combined global+project save
   rules: "/config/rules",
   modelState: "/config/model-state",
   tuiConfig: "/tui/config",
@@ -204,6 +220,20 @@ export const ConfigConsoleApi = HttpApi.make("config-console")
             summary: "Patch config overlay",
             description:
               "Apply a minimal global or project config patch, including unset paths for reverting local overrides.",
+          }),
+        ),
+        // combined global+project config transaction endpoint (LOCK-002/005)
+        HttpApiEndpoint.patch("configTransaction", ConfigConsolePaths.transaction, {
+          query: WorkspaceRoutingQuery,
+          payload: ConfigTransactionPatch,
+          success: described(ConfigTransactionResponse, "Combined config save result"),
+          error: ConfigOverlayInvalidError,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "config.transaction",
+            summary: "Save global and project config in one transaction",
+            description:
+              "Apply global and project config patches atomically. Classified once, persisted once, at most one rebuild. Returns authoritative global, project overlay, and effective config.",
           }),
         ),
         HttpApiEndpoint.get("rules", ConfigConsolePaths.rules, {

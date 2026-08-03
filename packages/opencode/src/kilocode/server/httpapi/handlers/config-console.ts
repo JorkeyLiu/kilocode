@@ -14,6 +14,7 @@ import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { ConfigRebuild } from "@/kilocode/server/config-rebuild"
 import { withWriteTicket } from "@/kilocode/server/config-ticket"
 import { configFailure } from "@/kilocode/server/config-failure"
+import { executeTransaction } from "@/kilocode/server/config-transaction"
 import { InstanceStore } from "@/project/instance-store"
 import { Effect, Option } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -22,6 +23,7 @@ import {
   ConfigOverlayPatch,
   ConfigOverlayQuery,
   ConfigRulesPatch,
+  ConfigTransactionPatch,
   TuiConfigPatch,
   TuiConfigQuery,
 } from "../groups/config-console"
@@ -95,12 +97,16 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
               const olds = yield* Effect.forEach(dirs, (directory) =>
                 store.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
               )
-              const exit = yield* configFailure(config.updateGlobal(patch)).pipe(Effect.exit)
+              // emit:false defers the ConfigUpdated publish so withWriteTicket
+              // emits it only after the rebuild registration handoff owns the
+              // writer ticket (LOCK-002).
+              const exit = yield* configFailure(config.updateGlobal(patch, { emit: false })).pipe(Effect.exit)
               if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
               return {
                 changed: exit.value.changed,
                 value: exit.value.info,
                 rebuild: exit.value.changed ? ConfigRebuild.rebuildGlobal(ticket, olds) : undefined,
+                event: exit.value.changed ? config.emitUpdated("global") : undefined,
               }
             }),
         })
@@ -116,12 +122,16 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
         run: (ticket) =>
           Effect.gen(function* () {
             const old = yield* store.snapshot(instance.directory)
-            const exit = yield* configFailure(config.update(patch)).pipe(Effect.exit)
+            // emit:false defers the ConfigUpdated publish so withWriteTicket
+            // emits it only after the rebuild registration handoff owns the
+            // writer ticket (LOCK-002).
+            const exit = yield* configFailure(config.update(patch, { emit: false })).pipe(Effect.exit)
             if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
             return {
               changed: exit.value.changed,
               value: yield* config.get(),
               rebuild: exit.value.changed ? ConfigRebuild.rebuildInstance(ticket, old) : undefined,
+              event: exit.value.changed ? config.emitUpdated(instance.directory) : undefined,
             }
           }),
       })
@@ -213,9 +223,17 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
       )
     })
 
+    // combined global+project config transaction handler (LOCK-002/005)
+    const configTransaction = Effect.fn("ConfigConsoleHttpApi.configTransaction")(function* (ctx: {
+      payload: typeof ConfigTransactionPatch.Type
+    }) {
+      return yield* executeTransaction(ctx.payload)
+    })
+
     return handlers
       .handle("overlay", overlay)
       .handle("overlayUpdate", overlayUpdate)
+      .handle("configTransaction", configTransaction)
       .handle("sources", sources)
       .handle("effective", effective)
       .handle("rules", rules)

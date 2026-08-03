@@ -1,12 +1,15 @@
 import path from "path"
 import { pathToFileURL } from "url"
 import { existsSync } from "fs"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser"
 import { mergeDeep } from "remeda"
 import * as Log from "@opencode-ai/core/util/log"
 import { Global } from "@opencode-ai/core/global"
 import { NamedError } from "@opencode-ai/core/util/error"
+import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
+import { Hash } from "@opencode-ai/core/util/hash"
+import { KilocodeAtomicWrite } from "./atomic-write"
 import type { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceRef } from "@/effect/instance-ref"
 import { isRecord } from "@/util/record"
@@ -22,6 +25,60 @@ import { IgnoreMigrator } from "../ignore-migrator"
 
 export namespace KilocodeConfig {
   const log = Log.create({ service: "kilocode.config" })
+
+  // ── Prepared mutation artifacts (LOCK-002) ───────────────────────────
+
+  /**
+   * A fully validated, in-memory config mutation. Produced by the canonical
+   * prepare APIs (no write, no cache invalidation, no events), consumed by the
+   * commit APIs. `original` is the exact persisted content before the mutation
+   * (undefined when the target did not exist) so a later failure can restore
+   * the target exactly — including deleting a newly created target.
+   */
+  export type PreparedConfig = {
+    readonly path: string
+    readonly existed: boolean
+    readonly original: string | undefined
+    readonly next: string
+    readonly info: Config.Info
+    readonly changed: boolean
+  }
+
+  /**
+   * Canonical discovery lock key for the global config domain (LOCK-001).
+   * Independent of the eventual target file, so target discovery and the write
+   * are one stable decision across processes: every global writer acquires
+   * this key BEFORE resolving the target, then holds it through prepare+commit.
+   *
+   * The key derives deterministically from the canonical global config domain
+   * (the resolved Global.Path.config) rather than a process-independent
+   * constant, mirroring `configDiscoveryProjectKey`: processes sharing the same
+   * config root hash to the same key and serialize, while isolated roots (e.g.
+   * XDG-sandboxed or test config domains) hash to distinct keys and never
+   * contend on each other's locks.
+   */
+  export const configDiscoveryGlobalKey = () =>
+    `config:discover:global:${Hash.fast(path.resolve(Global.Path.config))}`
+
+  /**
+   * Canonical discovery lock key for a project config domain (LOCK-001).
+   * Keyed on the canonical normalized directory only — never on a config
+   * candidate and never on a caller-derived worktree (the worktree is a
+   * derived property of the directory and callers do not derive it
+   * identically, e.g. non-git instances report "/" while direct callers pass
+   * nothing) — so it is deterministic across processes and every writer of
+   * any target inside the directory serializes through the same single key.
+   */
+  export const configDiscoveryProjectKey = (directory: string) =>
+    `config:discover:project:${Hash.fast(path.resolve(directory))}`
+
+  /** Global config target file (mirror of the Config module's discovery). */
+  export function globalConfigTarget(): string {
+    const candidates = ["kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json", "config.json"].map((file) =>
+      path.join(Global.Path.config, file),
+    )
+    return candidates.find((file) => existsSync(file)) ?? candidates[0]!
+  }
 
   // ── Config schema extensions ─────────────────────────────────────────
 
@@ -79,6 +136,68 @@ export namespace KilocodeConfig {
     return files.find((file) => existsSync(file)) ?? path.join(input.directory, ".kilo", "kilo.jsonc")
   })
 
+  /**
+   * Prepare a project config mutation in memory: discover the target file,
+   * read its exact current content, apply the JSONC/merge/writable/schema
+   * behavior, and validate the result — without writing, invalidating,
+   * disposing, or emitting (LOCK-002). The returned artifact carries the
+   * exact original content and the exact next content for atomic commit and
+   * compensating rollback.
+   */
+  export const prepareProjectConfig = Effect.fn("KilocodeConfig.prepareProjectConfig")(function* (input: {
+    fs: FSUtil.Interface
+    directory: string
+    worktree?: string
+    config: Config.Info
+    file?: string // kilocode_change - LOCK-002: pre-resolved target; do not rediscover under the lock
+    read: (file: string) => Effect.Effect<string | undefined>
+    parse: (input: string, file: string) => Config.Info
+    patch: (input: string, config: Config.Info) => string
+    writable: (config: Config.Info) => Config.Info
+  }) {
+    const file = input.file ?? (yield* projectConfigUpdateTarget(input))
+    const source = yield* input.read(file)
+    const before = source ?? "{}"
+    const patch = input.writable(input.config)
+
+    if (file.endsWith(".jsonc")) {
+      if (source === undefined && Object.keys(mergeConfig({}, patch)).length === 0)
+        return { path: file, existed: false, original: undefined, next: before, info: {} as Config.Info, changed: false }
+      const updated = input.patch(before, patch)
+      const next = input.parse(updated, file)
+      const previous = input.parse(before, file)
+      const changed = stable(next) !== stable(previous)
+      return { path: file, existed: source !== undefined, original: source, next: updated, info: next, changed }
+    }
+
+    const existing = input.parse(before, file)
+    const merged = mergeConfig(input.writable(existing), patch)
+    if (source === undefined && Object.keys(merged).length === 0)
+      return { path: file, existed: false, original: undefined, next: before, info: merged, changed: false }
+    const serialized = JSON.stringify(merged, null, 2)
+    input.parse(serialized, file)
+    const changed = stable(merged) !== stable(existing)
+    return { path: file, existed: source !== undefined, original: source, next: serialized, info: merged, changed }
+  })
+
+  /**
+   * Legacy project config update: prepare + persist under the canonical
+   * project target lock (LOCK-002). Used by callers that own their own
+   * serialization (snapshot tracking) and must NOT dispose the active
+   * instance or emit ConfigUpdated events for the live stream.
+   *
+   * The canonical cross-process discovery lock for the project directory is
+   * acquired BEFORE resolving the target (LOCK-001): target discovery and the
+   * write are one stable decision, and every writer of any target in the
+   * directory serializes through the same key. The target is resolved exactly
+   * once under the lock, then prepare/commit use that exact resolved path.
+   * Commit goes through `KilocodeAtomicWrite` (temp-file + rename), never a
+   * partial write. The lock is reentrant per fiber (EffectFlock depth
+   * tracking), so a caller that already holds the discovery lock cannot
+   * self-deadlock. When the EffectFlock service is absent (bare FSUtil
+   * runtimes), the write still commits atomically without the lock, preserving
+   * prior callers.
+   */
   export const updateProjectConfig = Effect.fn("KilocodeConfig.updateProjectConfig")(function* (input: {
     fs: FSUtil.Interface
     directory: string
@@ -89,30 +208,26 @@ export namespace KilocodeConfig {
     patch: (input: string, config: Config.Info) => string
     writable: (config: Config.Info) => Config.Info
   }) {
-    const file = yield* projectConfigUpdateTarget(input)
-    const source = yield* input.read(file)
-    const before = source ?? "{}"
-    const patch = input.writable(input.config)
-
-    if (file.endsWith(".jsonc")) {
-      if (source === undefined && Object.keys(mergeConfig({}, patch)).length === 0)
-        return { config: {} as Config.Info, changed: false }
-      const updated = input.patch(before, patch)
-      const next = input.parse(updated, file)
-      const previous = input.parse(before, file)
-      const changed = stable(next) !== stable(previous)
-      if (changed) yield* input.fs.writeWithDirs(file, updated).pipe(Effect.orDie)
-      return { config: next, changed }
+    const write = Effect.gen(function* () {
+      // LOCK-001: target discovery happens under the discovery lock — never
+      // before it — so a concurrent higher-precedence file creation can never
+      // make this save land in a shadowed target.
+      const file = yield* projectConfigUpdateTarget(input)
+      const prepared = yield* prepareProjectConfig({ ...input, file })
+      if (!prepared.changed) return { config: prepared.info, changed: false }
+      yield* KilocodeAtomicWrite.write(input.fs, prepared.path, prepared.next)
+      return { config: prepared.info, changed: true }
+    })
+    const flock = yield* Effect.serviceOption(EffectFlock.Service)
+    if (Option.isSome(flock)) {
+      return yield* flock.value
+        .withLock(write, configDiscoveryProjectKey(input.directory))
+        .pipe(
+          Effect.catchTag("LockTimeoutError", (error) => Effect.die(error)),
+          Effect.catchTag("LockCompromisedError", (error) => Effect.die(error)),
+        )
     }
-
-    const existing = input.parse(before, file)
-    const merged = mergeConfig(input.writable(existing), patch)
-    if (source === undefined && Object.keys(merged).length === 0) return { config: merged, changed: false }
-    const serialized = JSON.stringify(merged, null, 2)
-    input.parse(serialized, file)
-    const changed = stable(merged) !== stable(existing)
-    if (changed) yield* input.fs.writeWithDirs(file, serialized).pipe(Effect.orDie)
-    return { config: merged, changed }
+    return yield* write
   })
 
   function stable(value: unknown): string {

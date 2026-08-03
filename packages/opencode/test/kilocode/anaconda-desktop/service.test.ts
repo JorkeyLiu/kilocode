@@ -1,8 +1,14 @@
 import { expect } from "bun:test"
 import { Auth } from "@/auth"
+import { FSUtil } from "@opencode-ai/core/fs-util"
+import { ProjectV2 } from "@opencode-ai/core/project"
 import { InstanceStore } from "@/project/instance-store"
 import { ModelCache } from "@/provider/model-cache"
-import { Effect, Layer, Redacted, Ref } from "effect"
+import { ControlLease } from "../../../src/kilocode/server/control-lease"
+import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
+import { awaitRebuilds } from "../../../src/kilocode/server/config-rebuild"
+import type { InstanceContext } from "../../../src/project/instance-context"
+import { Effect, Layer, Option, Redacted, Ref } from "effect"
 import * as Discovery from "../../../src/kilocode/anaconda-desktop/discovery"
 import {
   decodeMetadata,
@@ -44,7 +50,34 @@ function ready(
   }
 }
 
-it.live("sync atomically replaces the standard auth record and invalidates provider state", () =>
+/** Captured pre-barrier instance identity the coordinator's rebuild disposes. */
+const fakeCtx: InstanceContext = {
+  directory: "/tmp/project-a",
+  worktree: "/tmp/project-a",
+  project: { id: ProjectV2.ID.make("proj-a"), worktree: "/tmp/project-a", time: { created: 0, updated: 0 }, sandboxes: [] },
+}
+
+/**
+ * Canonical coordinator graph (real gate, control leases, FSUtil) plus an
+ * InstanceStore that tracks disposal: the rebuild disposes the captured
+ * instance exactly once per registered rebuild and NEVER calls disposeAll.
+ */
+function storeLayer(events: Ref.Ref<string[]>) {
+  return Layer.mergeAll(
+    GenerationGate.defaultLayer,
+    ControlLease.defaultLayer,
+    FSUtil.defaultLayer,
+    Layer.mock(InstanceStore.Service)({
+      directories: () => Effect.succeed([fakeCtx.directory]),
+      snapshot: () => Effect.succeed(Option.some(fakeCtx)),
+      dispose: () => Ref.update(events, (items) => [...items, "dispose"]),
+      load: () => Effect.succeed(fakeCtx),
+      disposeAll: () => Ref.update(events, (items) => [...items, "dispose-all"]),
+    }),
+  )
+}
+
+it.live("sync atomically replaces the standard auth record and invalidates via the canonical coordinator", () =>
   Effect.gen(function* () {
     const index = yield* Ref.make(0)
     const records = yield* Ref.make<Record<string, Auth.Info>>({})
@@ -77,25 +110,38 @@ it.live("sync atomically replaces the standard auth record and invalidates provi
     const cache = Layer.mock(ModelCache.Service)({
       clear: (id) => Ref.update(events, (items) => [...items, `clear:${id}`]),
     })
-    const instances = Layer.mock(InstanceStore.Service)({
-      disposeAll: () => Ref.update(events, (items) => [...items, "dispose"]),
-    })
     const layer = Desktop.layer.pipe(
       Layer.provide(discovery),
       Layer.provide(platform),
       Layer.provide(auth),
       Layer.provide(cache),
-      Layer.provide(instances),
+      Layer.provide(storeLayer(events)),
     )
 
     const first = yield* Desktop.Service.use((service) => service.sync()).pipe(Effect.provide(layer))
     expect(first.serverID).toBe("first")
+    // Auth persisted and cache cleared immediately, under the ticket.
+    expect(yield* Ref.get(events)).toContain(`clear:${PROVIDER_ID}`)
+    // The rebuild disposes the captured instance exactly once — never disposeAll.
+    yield* awaitRebuilds()
+    expect(yield* Ref.get(events)).toEqual([`clear:${PROVIDER_ID}`, "dispose"])
+
+    // A no-op resync (same key + metadata) persists nothing and rebuilds nothing.
     const unchanged = yield* Desktop.Service.use((service) => service.sync()).pipe(Effect.provide(layer))
     expect(unchanged.serverID).toBe("first")
+    yield* awaitRebuilds()
     expect(yield* Ref.get(events)).toEqual([`clear:${PROVIDER_ID}`, "dispose"])
+
     yield* Ref.set(index, 1)
     const second = yield* Desktop.Service.use((service) => service.sync()).pipe(Effect.provide(layer))
     expect(second.serverID).toBe("second")
+    yield* awaitRebuilds()
+    expect(yield* Ref.get(events)).toEqual([
+      `clear:${PROVIDER_ID}`,
+      "dispose",
+      `clear:${PROVIDER_ID}`,
+      "dispose",
+    ])
 
     const stored = (yield* Ref.get(records))[PROVIDER_ID]
     expect(stored?.type).toBe("api")
@@ -104,13 +150,14 @@ it.live("sync atomically replaces the standard auth record and invalidates provi
     const metadata = decodeMetadata(stored.metadata)
     expect(metadata?.serverID).toBe("second")
     expect(metadata?.baseURL).toBe("http://127.0.0.1:8081/v1")
-    expect(yield* Ref.get(events)).toEqual([`clear:${PROVIDER_ID}`, "dispose", `clear:${PROVIDER_ID}`, "dispose"])
+    expect(yield* Ref.get(events)).not.toContain("dispose-all")
   }),
 )
 
 it.live("sync requires acknowledgement for limited tool support", () =>
   Effect.gen(function* () {
     const writes = yield* Ref.make(0)
+    const events = yield* Ref.make<string[]>([])
     const discovery = Layer.succeed(
       Discovery.Service,
       Discovery.Service.of({ discover: () => Effect.succeed(ready("limited", 8080, "fixture-key", "unknown")) }),
@@ -124,13 +171,12 @@ it.live("sync requires acknowledgement for limited tool support", () =>
       set: () => Ref.update(writes, (count) => count + 1),
     })
     const cache = Layer.mock(ModelCache.Service)({ clear: () => Effect.void })
-    const instances = Layer.mock(InstanceStore.Service)({ disposeAll: () => Effect.void })
     const layer = Desktop.layer.pipe(
       Layer.provide(discovery),
       Layer.provide(platform),
       Layer.provide(auth),
       Layer.provide(cache),
-      Layer.provide(instances),
+      Layer.provide(storeLayer(events)),
     )
 
     const refused = yield* Desktop.Service.use((service) => service.sync()).pipe(Effect.provide(layer), Effect.result)
@@ -140,5 +186,6 @@ it.live("sync requires acknowledgement for limited tool support", () =>
     const accepted = yield* Desktop.Service.use((service) => service.sync(true)).pipe(Effect.provide(layer))
     expect(accepted.serverID).toBe("limited")
     expect(yield* Ref.get(writes)).toBe(1)
+    yield* awaitRebuilds()
   }),
 )

@@ -67,10 +67,16 @@ import type {
   ConfigRulesUpdateResponses,
   ConfigSourcesErrors,
   ConfigSourcesResponses,
+  ConfigTransactionErrors,
+  ConfigTransactionResponses,
   ConfigUpdateErrors,
   ConfigUpdateResponses,
   ConfigWarningsErrors,
   ConfigWarningsResponses,
+  CustomProviderDeleteErrors,
+  CustomProviderDeleteResponses,
+  CustomProviderSaveErrors,
+  CustomProviderSaveResponses,
   EnhancePromptEnhanceErrors,
   EnhancePromptEnhanceResponses,
   EventSubscribeResponses,
@@ -1855,6 +1861,55 @@ export class Config2 extends HeyApiClient {
       url: "/config/effective",
       ...options,
       ...params,
+    })
+  }
+
+  /**
+   * Save global and project config in one transaction
+   *
+   * Apply global and project config patches atomically. Classified once, persisted once, at most one rebuild. Returns authoritative global, project overlay, and effective config.
+   */
+  public transaction<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      global?: {
+        set?: {
+          [key: string]: unknown
+        }
+        unset?: Array<Array<string>>
+      }
+      project?: {
+        set?: {
+          [key: string]: unknown
+        }
+        unset?: Array<Array<string>>
+      }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "global" },
+            { in: "body", key: "project" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).patch<ConfigTransactionResponses, ConfigTransactionErrors, ThrowOnError>({
+      url: "/config/transaction",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 
@@ -8167,6 +8222,120 @@ export class Kilocode extends HeyApiClient {
   }
 }
 
+export class CustomProvider extends HeyApiClient {
+  /**
+   * Delete custom provider
+   *
+   * Atomically remove a custom provider's auth credentials, config, and model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.
+   */
+  public delete<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+      directory?: string
+      workspace?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<
+      CustomProviderDeleteResponses,
+      CustomProviderDeleteErrors,
+      ThrowOnError
+    >({
+      url: "/custom-provider/{providerID}/delete",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Save custom provider
+   *
+   * Atomically persist a custom provider's config and auth credentials in one mutation that cannot leave partial state, clear the model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.
+   */
+  public save<ThrowOnError extends boolean = false>(
+    parameters: {
+      providerID: string
+      directory?: string
+      workspace?: string
+      config?: {
+        npm: "@ai-sdk/openai-compatible" | "@ai-sdk/openai" | "@ai-sdk/anthropic"
+        name: string
+        env?: Array<string>
+        options: {
+          baseURL: string
+          headers?: {
+            [key: string]: string
+          }
+        }
+        models: {
+          [key: string]: {
+            name: string
+            reasoning?: boolean
+            modalities?: {
+              input?: Array<"text" | "audio" | "image" | "video" | "pdf">
+              output?: Array<"text" | "audio" | "image" | "video" | "pdf">
+            }
+            variants?: {
+              [key: string]: {
+                [key: string]: unknown
+              }
+            }
+          }
+        }
+      }
+      auth?:
+        | {
+            mode: "preserve"
+          }
+        | {
+            mode: "set"
+            key: string
+          }
+        | {
+            mode: "clear"
+          }
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "providerID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "body", key: "config" },
+            { in: "body", key: "auth" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).post<CustomProviderSaveResponses, CustomProviderSaveErrors, ThrowOnError>({
+      url: "/custom-provider/{providerID}/save",
+      ...options,
+      ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
+    })
+  }
+}
+
 export class AnacondaDesktop extends HeyApiClient {
   /**
    * Get Anaconda Desktop setup status
@@ -10051,6 +10220,11 @@ export class KiloClient extends HeyApiClient {
   private _kilocode?: Kilocode
   get kilocode(): Kilocode {
     return (this._kilocode ??= new Kilocode({ client: this.client }))
+  }
+
+  private _customProvider?: CustomProvider
+  get customProvider(): CustomProvider {
+    return (this._customProvider ??= new CustomProvider({ client: this.client }))
   }
 
   private _anacondaDesktop?: AnacondaDesktop

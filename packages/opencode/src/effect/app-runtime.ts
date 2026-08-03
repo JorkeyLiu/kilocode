@@ -64,20 +64,24 @@ import { ProjectCopy } from "@opencode-ai/core/project/copy" // kilocode_change 
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session" // kilocode_change - listener routes are provided by AppLayer
 import { PtyTicket } from "@opencode-ai/core/pty/ticket" // kilocode_change - listener routes are provided by AppLayer
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
+import { ControlLease } from "@/kilocode/server/control-lease" // kilocode_change
 
 // kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers
 type ModelsLayer = Layer.Layer<CoreModelsDev.Service | KiloModelsDev.Service, never, never>
 type ProviderLayer = Layer.Layer<Provider.Service, never, never>
+type ModelCacheLayer = typeof ModelCache.defaultLayer // kilocode_change - LOCK-005: injectable for cache-failure coverage
 
 const buildCoreLayer = (
   models: ModelsLayer = Provider.defaultModels,
   provider: ProviderLayer = Provider.defaultLayer,
+  modelCache: ModelCacheLayer = ModelCache.defaultLayer, // kilocode_change - LOCK-005: test substitution boundary
 ) =>
   // kilocode_change end
   Layer.mergeAll(
     // kilocode_change
     Npm.defaultLayer,
     GenerationGate.defaultLayer, // kilocode_change - one process-wide writer gate
+    ControlLease.defaultLayer, // kilocode_change - one process-wide control lifetime lease coordinator
     FSUtil.defaultLayer,
     Database.defaultLayer,
     Auth.defaultLayer,
@@ -88,23 +92,36 @@ const buildCoreLayer = (
     Storage.defaultLayer, // kilocode_change - canonical AppLayer service
     Snapshot.defaultLayer, // kilocode_change - canonical AppLayer service
     Plugin.defaultLayer,
-    ModelCache.defaultLayer, // kilocode_change
+    modelCache, // kilocode_change - canonical ModelCache layer (LOCK-005 injectable)
     models, // kilocode_change - canonical combined models layer (Provider.defaultModels)
     provider, // kilocode_change - canonical Provider.defaultLayer identity shared with feature layers
-    ProviderAuth.defaultLayer, // kilocode_change - canonical AppLayer service
+    ProviderAuth.layer, // kilocode_change - canonical AppLayer service; consumes the same Auth/Plugin graph (LOCK-001)
     Agent.defaultLayer, // kilocode_change - canonical AppLayer service
     Skill.defaultLayer, // kilocode_change - canonical AppLayer service
     Discovery.defaultLayer, // kilocode_change - canonical AppLayer service
+    // kilocode_change start - LOCK-001: resolve ProviderAuth.layer's Auth/Plugin
+    // requirements against the canonical defaults already in this merge — the
+    // same layer nodes, so no duplicate service instances are constructed.
+  ).pipe(
+    Layer.provideMerge(Auth.defaultLayer),
+    Layer.provideMerge(Plugin.defaultLayer),
+    // kilocode_change end
   ) // kilocode_change
 
 // kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair
 export function makeCoreLayer(): ReturnType<typeof buildCoreLayer>
 export function makeCoreLayer(models: ModelsLayer, provider: ProviderLayer): ReturnType<typeof buildCoreLayer>
 export function makeCoreLayer(
+  models: ModelsLayer,
+  provider: ProviderLayer,
+  modelCache: ModelCacheLayer,
+): ReturnType<typeof buildCoreLayer>
+export function makeCoreLayer(
   models: ModelsLayer = Provider.defaultModels,
   provider: ProviderLayer = Provider.defaultLayer,
+  modelCache: ModelCacheLayer = ModelCache.defaultLayer,
 ) {
-  return buildCoreLayer(models, provider)
+  return buildCoreLayer(models, provider, modelCache)
 }
 // kilocode_change end
 
@@ -156,8 +173,12 @@ const FeatureLayer = Layer.mergeAll(
  ) // kilocode_change - canonical feature service layer
 
 // kilocode_change start - LOCK-003: makeAppLayer shares canonical defaults
-const buildAppLayer = (models: ModelsLayer = Provider.defaultModels, provider: ProviderLayer = Provider.defaultLayer) =>
-  Layer.mergeAll(buildCoreLayer(models, provider), SessionLayer, FeatureLayer).pipe(
+const buildAppLayer = (
+  models: ModelsLayer = Provider.defaultModels,
+  provider: ProviderLayer = Provider.defaultLayer,
+  modelCache: ModelCacheLayer = ModelCache.defaultLayer,
+) =>
+  Layer.mergeAll(buildCoreLayer(models, provider, modelCache), SessionLayer, FeatureLayer).pipe(
     Layer.provideMerge(InstanceLayer.layer),
     Layer.provideMerge(Observability.layer),
   )
@@ -167,10 +188,16 @@ const buildAppLayer = (models: ModelsLayer = Provider.defaultModels, provider: P
 export function makeAppLayer(): ReturnType<typeof buildAppLayer>
 export function makeAppLayer(models: ModelsLayer, provider: ProviderLayer): ReturnType<typeof buildAppLayer>
 export function makeAppLayer(
+  models: ModelsLayer,
+  provider: ProviderLayer,
+  modelCache: ModelCacheLayer,
+): ReturnType<typeof buildAppLayer>
+export function makeAppLayer(
   models: ModelsLayer = Provider.defaultModels,
   provider: ProviderLayer = Provider.defaultLayer,
+  modelCache: ModelCacheLayer = ModelCache.defaultLayer,
 ) {
-  return buildAppLayer(models, provider)
+  return buildAppLayer(models, provider, modelCache)
 }
 
 export const AppLayer = makeAppLayer() // kilocode_change

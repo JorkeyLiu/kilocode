@@ -40,6 +40,11 @@ const GlobalEventSchema = Schema.Struct({
   directory: Schema.String,
   project: Schema.optional(Schema.String),
   workspace: Schema.optional(Schema.String),
+  // kilocode_change start - logical transaction marker: per-scope ConfigUpdated
+  // events emitted by one combined config transaction carry the same id so
+  // clients can group them into one logical save (LOCK-004).
+  transaction: Schema.optional(Schema.String),
+  // kilocode_change end
   payload: Schema.Union([
     ...BusEvent.effectPayloads(), // kilocode_change
     InstanceDisposed,

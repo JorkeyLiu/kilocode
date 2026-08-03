@@ -7,7 +7,7 @@ import { resolveEventSessionId as resolveEventSessionIdPure } from "./connection
 import { SandboxPreference } from "../sandbox-preference"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
-type SSEEventListener = (event: SSEPayload, directory?: string) => void
+type SSEEventListener = (event: SSEPayload, directory?: string, transaction?: string) => void
 type StateListener = (state: ConnectionState, error?: Error) => void
 type SSEEventFilter = (event: SSEPayload, directory?: string) => boolean
 type NotificationDismissListener = (notificationId: string) => void
@@ -16,46 +16,7 @@ type ProfileChangeListener = (data: unknown) => void
 type MigrationCompleteListener = () => void
 type FavoritesChangeListener = (favorites: Array<{ providerID: string; modelID: string }>) => void
 type ModelSelectorExpandedListener = (value: boolean) => void
-type ClearPendingPromptsListener = () => void
 type DirectoryProvider = () => string[]
-const DRAIN_CONCURRENCY = 4
-
-async function parallel(items: string[], fn: (item: string) => Promise<void>): Promise<void> {
-  let next = 0
-  const errors = new Map<number, unknown>()
-  const worker = async () => {
-    while (errors.size === 0) {
-      const index = next++
-      if (index >= items.length) return
-      try {
-        await fn(items[index]!)
-      } catch (error) {
-        errors.set(index, error)
-      }
-    }
-  }
-
-  await Promise.all(Array.from({ length: Math.min(DRAIN_CONCURRENCY, items.length) }, worker))
-  if (errors.size === 0) return
-  const failures = [...errors].sort((a, b) => a[0] - b[0])
-  for (const [index, error] of failures.slice(1)) {
-    console.warn(`[Kilo New] ConnectionService: Additional prompt drain failed for ${items[index]}:`, error)
-  }
-  throw failures[0]![1]
-}
-
-function isNotFound(err: unknown) {
-  if (!err || typeof err !== "object") return false
-  const obj = err as Record<string, unknown>
-  if (obj.name === "NotFoundError") return true
-  if (obj._tag === "NotFound") return true
-  if (obj.status === 404) return true
-  if (obj.data && typeof obj.data === "object") {
-    const data = obj.data as Record<string, unknown>
-    return data.name === "NotFoundError" || data._tag === "NotFound"
-  }
-  return false
-}
 
 function sameSet(a: Set<string>, b: Set<string>): boolean {
   if (a.size !== b.size) return false
@@ -66,17 +27,6 @@ function sameSet(a: Set<string>, b: Set<string>): boolean {
 // Poll /global/health every 10 seconds.
 // This provides a second detection channel for server death independent of the SSE heartbeat.
 const HEALTH_POLL_INTERVAL_MS = 10_000
-
-/** Reject all pending network-offline waits for a given directory. */
-async function drainNetworkWaits(client: KiloClient, dir: string) {
-  const { data: waits, error: err } = await client.network.list({ directory: dir })
-  if (err) throw new Error(`Failed to list network waits for ${dir}: ${String(err)}`)
-  if (!waits) return
-  for (const w of waits) {
-    const { error } = await client.network.reject({ requestID: w.id, directory: dir })
-    if (error) throw new Error(`Failed to reject network wait ${w.id}: ${String(error)}`)
-  }
-}
 
 /**
  * Shared connection service that owns the single ServerManager, KiloClient (SDK), and SdkSSEAdapter.
@@ -103,13 +53,35 @@ export class KiloConnectionService {
   private readonly migrationCompleteListeners: Set<MigrationCompleteListener> = new Set()
   private readonly favoritesChangeListeners: Set<FavoritesChangeListener> = new Set()
   private readonly modelSelectorExpandedListeners: Set<ModelSelectorExpandedListener> = new Set()
-  private readonly clearPendingPromptsListeners: Set<ClearPendingPromptsListener> = new Set()
   private readonly directoryProviders: Set<DirectoryProvider> = new Set()
   private rootDirectory: string | undefined = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
   private currentDirectory: string | undefined
   private readonly permissionDirectories: Map<string, string> = new Map()
   private readonly questionDirectories: Map<string, string> = new Map()
   private questionRevision = 0
+  /**
+   * Shared config revision — the single counter that orders config mutations.
+   * LOCK-001: this connection service's SSE dispatch is the SOLE owner of
+   * revision advancement for backend config events; a local successful
+   * transaction never advances on its own (its canonical global.config.updated
+   * echo does so exactly once after tagged coalescing, LOCK-004). KiloProvider
+   * instances subscribe so stale reconciliation results are dropped and every
+   * window converges (LOCK-005).
+   */
+  private configRevision = 0
+  /**
+   * LOCK-004: dedupe state for tagged config transactions. One backend
+   * transaction emits one `global.config.updated` per changed scope, all
+   * carrying the same transaction id; the first sighting advances exactly once
+   * and later echoes are absorbed even when they arrive in a separate delivery
+   * turn (SSE frame split across tasks). Untagged events never touch this set —
+   * each is an independent revision. Bounded FIFO: transaction ids are fresh
+   * UUIDs, so evicting the oldest entry can never collide with a new
+   * transaction, and the set cannot grow unboundedly.
+   */
+  private static readonly MAX_SEEN_CONFIG_TRANSACTIONS = 1024
+  private readonly seenConfigTransactions = new Set<string>()
+  private readonly configRevisionListeners: Set<() => void> = new Set()
 
   /**
    * Shared mapping used to resolve session scope for events that don't reliably include a sessionID.
@@ -273,14 +245,17 @@ export class KiloConnectionService {
   }
 
   /**
-   * Subscribe to SSE events with a filter. The filter runs for every incoming SSE event.
+   * Subscribe to SSE events with a filter. The filter runs for every incoming
+   * SSE event. LOCK-004: the listener receives exactly `(event, directory,
+   * transaction)` — the full envelope forwarded from handleSseEvent, so
+   * filtered subscribers see the same transaction id as onEvent subscribers.
    */
   onEventFiltered(filter: SSEEventFilter, listener: SSEEventListener): () => void {
-    const wrapped: SSEEventListener = (event, directory) => {
+    const wrapped: SSEEventListener = (event, directory, transaction) => {
       if (!filter(event, directory)) {
         return
       }
-      listener(event, directory)
+      listener(event, directory, transaction)
     }
     return this.onEvent(wrapped)
   }
@@ -505,20 +480,8 @@ export class KiloConnectionService {
   }
 
   /**
-   * Subscribe to clear-pending-prompts broadcast. Returns unsubscribe function.
-   * Fired after a config save drains all pending permissions/questions so each
-   * webview can clear stale prompt UI.
-   */
-  onClearPendingPrompts(listener: ClearPendingPromptsListener): () => void {
-    this.clearPendingPromptsListeners.add(listener)
-    return () => {
-      this.clearPendingPromptsListeners.delete(listener)
-    }
-  }
-
-  /**
    * Register a callback that returns workspace directories tracked by a
-   * KiloProvider (root + worktree dirs). Used by drainPendingPrompts() to
+   * KiloProvider (root + worktree dirs). Used by getKnownDirectories() to
    * cover all active Instance directories across every provider.
    */
   registerDirectoryProvider(provider: DirectoryProvider): () => void {
@@ -535,57 +498,53 @@ export class KiloConnectionService {
   }
 
   /**
-   * Reject all pending permission requests and questions across every
-   * directory known to any currently-mounted KiloProvider.
-   *
-   * Must be called before operations that trigger Instance.disposeAll()
-   * (e.g. config save) to prevent orphaned Promises from freezing
-   * sessions.
-   *
-   * Throws if any list/reject call fails so callers can abort the
-   * destructive operation.
+   * Current shared config revision.
    */
-  async drainPendingPrompts(): Promise<void> {
-    const client = this.client
-    if (!client) return
+  getConfigRevision(): number {
+    return this.configRevision
+  }
 
-    // Only drain directories from currently-mounted providers (root + worktree dirs).
-    // Previously this also called project.list() to include every historically-opened
-    // directory, but each permission/question list call goes through Instance.provide()
-    // which bootstraps fresh instances (including indexing) for directories without
-    // cached instances. Disposed worktree sessions can't have pending prompts anyway.
-    const dirs = new Set<string>()
-    for (const provider of this.directoryProviders) {
-      for (const dir of provider()) {
-        dirs.add(dir)
+  /**
+   * Advance the shared config revision and notify subscribers. The immediate
+   * save ack stays independent (LOCK-001): this is called by the SSE dispatch
+   * (tagged transaction dedupe or per untagged event, LOCK-004) — never by a
+   * provider's own successful save, whose canonical echo owns the advance.
+   * Listener failures never propagate to the caller.
+   */
+  advanceConfigRevision(): void {
+    this.configRevision += 1
+    for (const listener of this.configRevisionListeners) {
+      try {
+        listener()
+      } catch (error) {
+        console.error("[Kilo New] ConnectionService: config revision listener failed:", error)
       }
     }
+  }
 
-    const list = [...dirs]
-    await parallel(list, async (dir) => {
-      const { data: perms, error: permsErr } = await client.permission.list({ directory: dir })
-      if (permsErr) throw new Error(`Failed to list permissions for ${dir}: ${String(permsErr)}`)
-      if (perms) {
-        for (const perm of perms) {
-          const { error } = await client.permission.reply({ requestID: perm.id, reply: "reject", directory: dir })
-          if (error && !isNotFound(error)) throw new Error(`Failed to reject permission ${perm.id}: ${String(error)}`)
-        }
-      }
-      const { data: qs, error: qsErr } = await client.question.list({ directory: dir })
-      if (qsErr) throw new Error(`Failed to list questions for ${dir}: ${String(qsErr)}`)
-      if (qs) {
-        for (const q of qs) {
-          const { error } = await client.question.reject({ requestID: q.id, directory: dir })
-          if (error && !isNotFound(error)) throw new Error(`Failed to reject question ${q.id}: ${String(error)}`)
-        }
-      }
-    })
+  /**
+   * LOCK-004: advance the config revision exactly once per logical tagged
+   * transaction, across any number of delivery turns, and never merge
+   * unrelated untagged edits (those advance per event in handleSseEvent).
+   * Listener failures never propagate to the caller.
+   */
+  private advanceOnceForTransaction(transaction: string): void {
+    if (this.seenConfigTransactions.has(transaction)) return
+    if (this.seenConfigTransactions.size >= KiloConnectionService.MAX_SEEN_CONFIG_TRANSACTIONS) {
+      const oldest = this.seenConfigTransactions.values().next().value
+      if (oldest !== undefined) this.seenConfigTransactions.delete(oldest)
+    }
+    this.seenConfigTransactions.add(transaction)
+    this.advanceConfigRevision()
+  }
 
-    // Suggestions are backend-global despite the directory-bearing SDK route.
-    if (list[0]) await drainSuggestions(client, list[0])
-    await parallel(list, (dir) => drainNetworkWaits(client, dir))
-    for (const listener of this.clearPendingPromptsListeners) {
-      listener()
+  /**
+   * Subscribe to config revision advances. Returns an unsubscribe function.
+   */
+  onConfigRevision(listener: () => void): () => void {
+    this.configRevisionListeners.add(listener)
+    return () => {
+      this.configRevisionListeners.delete(listener)
     }
   }
 
@@ -686,7 +645,6 @@ export class KiloConnectionService {
     this.profileChangeListeners.clear()
     this.migrationCompleteListeners.clear()
     this.favoritesChangeListeners.clear()
-    this.clearPendingPromptsListeners.clear()
     this.directoryProviders.clear()
     this.rootDirectory = undefined
     this.currentDirectory = undefined
@@ -694,6 +652,8 @@ export class KiloConnectionService {
     this.permissionDirectories.clear()
     this.questionDirectories.clear()
     this.questionRevision += 1
+    this.seenConfigTransactions.clear()
+    this.configRevisionListeners.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
         .viewed({ viewer: { id: this.viewerId, active: false }, attached: [], visible: [] })
@@ -788,6 +748,9 @@ export class KiloConnectionService {
     this.permissionDirectories.clear()
     this.questionDirectories.clear()
     this.questionRevision += 1
+    // New connection epoch: tagged-transaction dedupe state from the previous
+    // stream must not leak into the next (LOCK-004 lifecycle cleanup).
+    this.seenConfigTransactions.clear()
   }
 
   private handleServerExit(code: number | null): void {
@@ -837,13 +800,9 @@ export class KiloConnectionService {
     let didConnect = false
 
     // Wire SSE events → broadcast to all registered listeners
-    sse.onEvent((event, directory) => {
+    sse.onEvent((event, directory, transaction) => {
       if (this.sseClient !== sse) return
-      this.handlePermissionEvent(event, directory)
-      this.handleQuestionEvent(event, directory)
-      for (const listener of this.eventListeners) {
-        listener(event, directory)
-      }
+      this.handleSseEvent(event, directory, transaction)
     })
 
     sse.onError((error) => {
@@ -902,6 +861,32 @@ export class KiloConnectionService {
     }
   }
 
+  /**
+   * Handle a single SSE event: permission/question routing, the sole config
+   * revision advance for backend config events (LOCK-001/004), and broadcast
+   * to all registered event listeners. This is the exact internal dispatch
+   * wired into the SSE adapter in doConnect; tests drive it directly so the
+   * production revision/coalescing path is exercised rather than a mock.
+   *
+   * LOCK-004: a `global.config.updated` event tagged with a transaction id is
+   * one scope echo of one logical save — the first sighting of that id
+   * advances exactly once and later echoes (same or later delivery turn) are
+   * absorbed. An untagged event is an independent external revision and
+   * advances immediately; the microtask fallback must never merge unrelated
+   * untagged edits.
+   */
+  handleSseEvent(event: SSEPayload, directory?: string, transaction?: string): void {
+    this.handlePermissionEvent(event, directory)
+    this.handleQuestionEvent(event, directory)
+    if (event.type === "global.config.updated") {
+      if (transaction) this.advanceOnceForTransaction(transaction)
+      else this.advanceConfigRevision()
+    }
+    for (const listener of this.eventListeners) {
+      listener(event, directory, transaction)
+    }
+  }
+
   private handlePermissionEvent(event: SSEPayload, directory?: string): void {
     if (event.type === "permission.asked" && directory) {
       this.recordPermissionDirectory(event.properties.id, directory)
@@ -920,17 +905,6 @@ export class KiloConnectionService {
     }
     if (event.type === "question.replied" || event.type === "question.rejected") {
       this.clearQuestionDirectory(event.properties.requestID)
-    }
-  }
-}
-
-async function drainSuggestions(client: KiloClient, directory: string): Promise<void> {
-  const { data, error: err } = await client.suggestion.list({ directory })
-  if (err) throw new Error(`Failed to list suggestions for ${directory}: ${String(err)}`)
-  if (data) {
-    for (const s of data) {
-      const { error } = await client.suggestion.dismiss({ requestID: s.id, directory })
-      if (error) throw new Error(`Failed to dismiss suggestion ${s.id}: ${String(error)}`)
     }
   }
 }

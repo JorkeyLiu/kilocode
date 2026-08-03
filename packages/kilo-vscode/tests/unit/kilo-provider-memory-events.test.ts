@@ -56,6 +56,7 @@ describe("KiloProvider memory events", () => {
       {} as never,
       {
         getClient: () => client,
+        getConfigRevision: () => 0,
       } as never,
     )
     const item = provider as unknown as Internals
@@ -102,6 +103,7 @@ describe("KiloProvider memory events", () => {
       {} as never,
       {
         getClient: () => client,
+        getConfigRevision: () => 0,
       } as never,
     )
     const item = provider as unknown as Internals
@@ -162,6 +164,7 @@ describe("KiloProvider memory events", () => {
       {} as never,
       {
         getClient: () => client,
+        getConfigRevision: () => 0,
       } as never,
       undefined,
       { projectDirectory: "/repo/project" },

@@ -1010,6 +1010,7 @@ export type GlobalEvent = {
   directory: string
   project?: string
   workspace?: string
+  transaction?: string
   payload:
     | EventServerInstanceDisposed
     | EventSessionNetworkAsked
@@ -3014,6 +3015,12 @@ export type ConfigSourcesResponse = {
   }>
 }
 
+export type ConfigTransactionResponse = {
+  global: Config
+  project: Config
+  effective: Config
+}
+
 export type ConfigRulesResponse = {
   scope: "project"
   target: string
@@ -3341,6 +3348,26 @@ export type AgentManagerFailure = {
     | "unknown_session"
     | "workspace_unavailable"
   message: string
+}
+
+export type CustomProviderDeleteResult = {
+  success: boolean
+}
+
+export type CustomProviderDeleteError = {
+  code: string
+  message: string
+  detail: string
+}
+
+export type CustomProviderSaveResult = {
+  success: boolean
+}
+
+export type CustomProviderSaveError = {
+  code: string
+  message: string
+  detail: string
 }
 
 export type AnacondaDesktopStatus =
@@ -11271,6 +11298,47 @@ export type ConfigEffectiveResponses = {
 
 export type ConfigEffectiveResponse = ConfigEffectiveResponses[keyof ConfigEffectiveResponses]
 
+export type ConfigTransactionData = {
+  body?: {
+    global?: {
+      set?: {
+        [key: string]: unknown
+      }
+      unset?: Array<Array<string>>
+    }
+    project?: {
+      set?: {
+        [key: string]: unknown
+      }
+      unset?: Array<Array<string>>
+    }
+  }
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/config/transaction"
+}
+
+export type ConfigTransactionErrors = {
+  /**
+   * ConfigInvalidError | InvalidRequestError
+   */
+  400: ConfigInvalidError | InvalidRequestError
+}
+
+export type ConfigTransactionError = ConfigTransactionErrors[keyof ConfigTransactionErrors]
+
+export type ConfigTransactionResponses = {
+  /**
+   * Combined config save result
+   */
+  200: ConfigTransactionResponse
+}
+
+export type ConfigTransactionResponse2 = ConfigTransactionResponses[keyof ConfigTransactionResponses]
+
 export type ConfigRulesData = {
   body?: never
   path?: never
@@ -12815,6 +12883,104 @@ export type KilocodeSessionModelUsageResponses = {
 
 export type KilocodeSessionModelUsageResponse =
   KilocodeSessionModelUsageResponses[keyof KilocodeSessionModelUsageResponses]
+
+export type CustomProviderDeleteData = {
+  body?: never
+  path: {
+    providerID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/custom-provider/{providerID}/delete"
+}
+
+export type CustomProviderDeleteErrors = {
+  /**
+   * CustomProviderDeleteError | InvalidRequestError
+   */
+  400: CustomProviderDeleteError | InvalidRequestError
+}
+
+export type CustomProviderDeleteError2 = CustomProviderDeleteErrors[keyof CustomProviderDeleteErrors]
+
+export type CustomProviderDeleteResponses = {
+  /**
+   * Custom provider deleted
+   */
+  200: CustomProviderDeleteResult
+}
+
+export type CustomProviderDeleteResponse = CustomProviderDeleteResponses[keyof CustomProviderDeleteResponses]
+
+export type CustomProviderSaveData = {
+  body?: {
+    config: {
+      npm: "@ai-sdk/openai-compatible" | "@ai-sdk/openai" | "@ai-sdk/anthropic"
+      name: string
+      env?: Array<string>
+      options: {
+        baseURL: string
+        headers?: {
+          [key: string]: string
+        }
+      }
+      models: {
+        [key: string]: {
+          name: string
+          reasoning?: boolean
+          modalities?: {
+            input?: Array<"text" | "audio" | "image" | "video" | "pdf">
+            output?: Array<"text" | "audio" | "image" | "video" | "pdf">
+          }
+          variants?: {
+            [key: string]: {
+              [key: string]: unknown
+            }
+          }
+        }
+      }
+    }
+    auth:
+      | {
+          mode: "preserve"
+        }
+      | {
+          mode: "set"
+          key: string
+        }
+      | {
+          mode: "clear"
+        }
+  }
+  path: {
+    providerID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+  }
+  url: "/custom-provider/{providerID}/save"
+}
+
+export type CustomProviderSaveErrors = {
+  /**
+   * CustomProviderSaveError | InvalidRequestError
+   */
+  400: CustomProviderSaveError | InvalidRequestError
+}
+
+export type CustomProviderSaveError2 = CustomProviderSaveErrors[keyof CustomProviderSaveErrors]
+
+export type CustomProviderSaveResponses = {
+  /**
+   * Custom provider saved
+   */
+  200: CustomProviderSaveResult
+}
+
+export type CustomProviderSaveResponse = CustomProviderSaveResponses[keyof CustomProviderSaveResponses]
 
 export type AnacondaDesktopStatusData = {
   body?: never

@@ -38,8 +38,7 @@ import { EffectBridge } from "@/effect/bridge"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Identifier } from "@/id/id"
 import { Instance } from "@/kilocode/instance"
-import { InstanceStore } from "@/project/instance-store"
-import { ModelCache } from "@/provider/model-cache"
+import { invalidateAfterProviderAuthChange } from "@/kilocode/server/provider-auth-lifecycle"
 import { InstanceHttpApi } from "@/server/routes/instance/httpapi/api"
 import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { Session } from "@/session/session"
@@ -63,8 +62,6 @@ function logError(route: string, err: unknown) {
 export const kiloGatewayHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilo", (handlers) =>
   Effect.gen(function* () {
     const auth = yield* Auth.Service
-    const store = yield* InstanceStore.Service
-    const cache = yield* ModelCache.Service
     const events = yield* EventV2Bridge.Service
 
     const profile = Effect.fn("KiloGatewayHttpApi.profile")(function* () {
@@ -339,22 +336,31 @@ export const kiloGatewayHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilo",
     })
 
     const organization = Effect.fn("KiloGatewayHttpApi.organization")(function* (ctx) {
-      const info = yield* auth.get("kilo").pipe(Effect.mapError(() => new HttpApiError.Unauthorized({})))
-      if (!info || info.type !== "oauth") return yield* Effect.fail(new HttpApiError.Unauthorized({}))
+      // kilocode_change start - LOCK-002: read the current kilo auth record
+      // INSIDE the coordinator mutate, under the writer ticket and immediately
+      // before the set, so a concurrent newer credential can never be
+      // overwritten by a pre-ticket snapshot. The unauthorized response
+      // behavior and the modes-cache clear are unchanged; the coordinator
+      // restores the exact auth artifact if the set fails.
+      yield* invalidateAfterProviderAuthChange(
+        "kilo",
+        Effect.gen(function* () {
+          const info = yield* auth.get("kilo").pipe(Effect.mapError(() => new HttpApiError.Unauthorized({})))
+          if (!info || info.type !== "oauth") return yield* Effect.fail(new HttpApiError.Unauthorized({}))
 
-      yield* auth
-        .set("kilo", {
-          type: "oauth",
-          refresh: info.refresh,
-          access: info.access,
-          expires: info.expires,
-          ...(ctx.payload.organizationId && { accountId: ctx.payload.organizationId }),
-        })
-        .pipe(Effect.mapError(() => new HttpApiError.Unauthorized({})))
-
-      yield* cache.clear("kilo")
-      clearModesCache()
-      yield* store.disposeAll().pipe(Effect.mapError(() => new HttpApiError.Unauthorized({})))
+          yield* auth
+            .set("kilo", {
+              type: "oauth",
+              refresh: info.refresh,
+              access: info.access,
+              expires: info.expires,
+              ...(ctx.payload.organizationId && { accountId: ctx.payload.organizationId }),
+            })
+            .pipe(Effect.mapError(() => new HttpApiError.Unauthorized({})))
+          yield* Effect.sync(() => clearModesCache())
+        }),
+      )
+      // kilocode_change end
       return true
     })
 

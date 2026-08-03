@@ -9,6 +9,15 @@ export function make(overrides: Partial<Config.Interface> = {}) {
     getConsoleState: () => Effect.succeed(emptyConsoleState),
     update: (config) => Effect.succeed({ config, changed: false }),
     updateGlobal: (config) => Effect.succeed({ info: config, changed: false }),
+    // kilocode_change start - prepared mutation split added to the Config interface
+    prepareGlobal: () => Effect.die(new Error("TestConfig stub does not implement prepareGlobal")),
+    prepare: () => Effect.die(new Error("TestConfig stub does not implement prepare")),
+    commitGlobal: () => Effect.die(new Error("TestConfig stub does not implement commitGlobal")),
+    commit: () => Effect.die(new Error("TestConfig stub does not implement commit")),
+    emitUpdated: () => Effect.void,
+    invalidateProject: () => Effect.void,
+    withLock: (key, body) => Effect.suspend(() => body),
+    // kilocode_change end
     invalidate: () => Effect.void,
     directories: () => Effect.succeed([]),
     waitForDependencies: () => Effect.void,

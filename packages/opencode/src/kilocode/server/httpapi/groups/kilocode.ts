@@ -8,6 +8,10 @@ import {
   WorkspaceRoutingQueryFields,
 } from "@/server/routes/instance/httpapi/middleware/workspace-routing"
 import { described } from "@/server/routes/instance/httpapi/groups/metadata"
+import {
+  CustomProviderSaveAuthSchema,
+  CustomProviderSaveConfigSchema,
+} from "@/kilocode/server/custom-provider-save"
 import { AnacondaDesktopApi } from "./anaconda-desktop"
 import { Result as AgentRequirementResult } from "@/kilocode/agent-requirements"
 import {
@@ -24,6 +28,7 @@ import {
 } from "@/kilocode/notebook/protocol"
 import { ModelUsage } from "@/kilocode/session/model-usage"
 import { SessionID } from "@/session/schema"
+import { ProviderV2 } from "@opencode-ai/core/provider"
 
 const root = "/kilocode"
 
@@ -44,6 +49,60 @@ export const NotebookRejectPayload = Schema.Struct({ error: NotebookFailure })
 export const AgentManagerReplyPayload = Schema.Struct({ result: AgentManagerResult })
 export const AgentManagerRejectPayload = Schema.Struct({ error: AgentManagerFailure })
 
+// LOCK-001/003: canonical custom-provider deletion route. The endpoint lives in
+// an instance-authorized group (Authorization + InstanceContextMiddleware +
+// WorkspaceRoutingMiddleware) so the directory/worktree the handler passes to
+// the deletion service is derived from the trusted InstanceRef, never from an
+// arbitrary raw query value in the root control group.
+const CustomProviderDeleteParams = Schema.Struct({
+  providerID: ProviderV2.ID,
+})
+
+const CustomProviderDeleteResult = Schema.Struct({
+  success: Schema.Boolean,
+}).annotate({ identifier: "CustomProviderDeleteResult" })
+
+/** Structured non-2xx deletion failure preserving safe code/message/detail (LOCK-003). */
+export class CustomProviderDeleteFailure extends Schema.ErrorClass<CustomProviderDeleteFailure>(
+  "CustomProviderDeleteError",
+)(
+  {
+    code: Schema.String,
+    message: Schema.String,
+    detail: Schema.String,
+  },
+  { httpApiStatus: 400 },
+) {}
+
+// LOCK-001: canonical custom-provider save route — same trusted instance group
+// as deletion. The request contains the validated custom provider config plus
+// the auth mode union preserve | set(key) | clear; the response is
+// `{ success: true }` with a structured safe 400.
+const CustomProviderSaveParams = Schema.Struct({
+  providerID: ProviderV2.ID,
+})
+
+export const CustomProviderSaveBody = Schema.Struct({
+  config: CustomProviderSaveConfigSchema,
+  auth: CustomProviderSaveAuthSchema,
+})
+
+const CustomProviderSaveResult = Schema.Struct({
+  success: Schema.Boolean,
+}).annotate({ identifier: "CustomProviderSaveResult" })
+
+/** Structured non-2xx save failure preserving safe code/message/detail (LOCK-003). */
+export class CustomProviderSaveFailure extends Schema.ErrorClass<CustomProviderSaveFailure>(
+  "CustomProviderSaveError",
+)(
+  {
+    code: Schema.String,
+    message: Schema.String,
+    detail: Schema.String,
+  },
+  { httpApiStatus: 400 },
+) {}
+
 export const KilocodePaths = {
   heapSnapshot: `${root}/heap/snapshot`,
   agentRequirements: `${root}/agent/requirements`,
@@ -56,6 +115,8 @@ export const KilocodePaths = {
   agentManagerReply: `${root}/agent-manager/:requestID/reply`,
   agentManagerReject: `${root}/agent-manager/:requestID/reject`,
   sessionModelUsage: `/session/:sessionID/model-usage`,
+  customProviderDelete: "/custom-provider/:providerID/delete",
+  customProviderSave: "/custom-provider/:providerID/save",
 } as const
 
 export const KilocodeApi = HttpApi.make("kilocode")
@@ -190,6 +251,33 @@ export const KilocodeApi = HttpApi.make("kilocode")
             identifier: "kilocode.sessionModelUsage",
             summary: "Get session model usage",
             description: "Get token usage and direct cost by model for the complete top-level session tree.",
+          }),
+        ),
+        HttpApiEndpoint.post("customProviderDelete", KilocodePaths.customProviderDelete, {
+          params: CustomProviderDeleteParams,
+          query: WorkspaceRoutingQuery,
+          success: described(CustomProviderDeleteResult, "Custom provider deleted"),
+          error: CustomProviderDeleteFailure,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "customProvider.delete",
+            summary: "Delete custom provider",
+            description:
+              "Atomically remove a custom provider's auth credentials, config, and model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
+          }),
+        ),
+        HttpApiEndpoint.post("customProviderSave", KilocodePaths.customProviderSave, {
+          params: CustomProviderSaveParams,
+          query: WorkspaceRoutingQuery,
+          payload: CustomProviderSaveBody,
+          success: described(CustomProviderSaveResult, "Custom provider saved"),
+          error: CustomProviderSaveFailure,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "customProvider.save",
+            summary: "Save custom provider",
+            description:
+              "Atomically persist a custom provider's config and auth credentials in one mutation that cannot leave partial state, clear the model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
           }),
         ),
       )

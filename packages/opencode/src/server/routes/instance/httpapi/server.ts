@@ -213,14 +213,19 @@ type RouteRequirements =
 type AppOptions = {
   readonly models?: Layer.Layer<ModelsDev.Service, never, never>
   readonly provider?: Layer.Layer<Provider.Service, never, never>
+  readonly modelCache?: Layer.Layer<ModelCache.Service, never, never> // kilocode_change - LOCK-005 cache-failure coverage
 }
 
 type RouteApp = AppLayer | AppOptions
 
 function resolveApp(app?: RouteApp) {
   if (!app) return AppLayer
-  if ("models" in app || "provider" in app) {
-    return makeAppLayer((app.models ?? Provider.defaultModels) as never, app.provider ?? Provider.defaultLayer)
+  if ("models" in app || "provider" in app || "modelCache" in app) {
+    return makeAppLayer(
+      (app.models ?? Provider.defaultModels) as never,
+      (app.provider ?? Provider.defaultLayer) as never,
+      app.modelCache as never,
+    )
   }
   return app
 }

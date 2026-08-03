@@ -7,6 +7,14 @@
  * Usage:
  *   bun run script/check-opencode-annotations.ts                  # diff against origin/main
  *   bun run script/check-opencode-annotations.ts --base <ref>     # diff against <ref>
+ *   bun run script/check-opencode-annotations.ts --worktree       # check uncommitted working tree
+ *
+ * --worktree checks tracked HEAD→working-tree additions plus untracked files
+ * under the checker scopes, using working-tree content for marker detection.
+ * Marker-removal (revert) detection is disabled in this mode: removing a
+ * marker elsewhere in a file must not suppress unrelated additions. This
+ * validates uncommitted work before it lands; --base / committed-range
+ * behavior is unchanged.
  *
  * A line is "covered" if it:
  *   - contains a kilocode_change marker comment           (inline annotation)
@@ -56,6 +64,7 @@ const EXEMPT_SCOPES = [
 const args = process.argv.slice(2)
 const baseIdx = args.indexOf("--base")
 const base = baseIdx !== -1 ? args[baseIdx + 1] : "origin/main"
+const worktree = args.includes("--worktree")
 
 function run(cmd: string, args: string[]) {
   const result = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8" })
@@ -68,6 +77,11 @@ function run(cmd: string, args: string[]) {
 }
 
 function changedFiles() {
+  if (worktree) {
+    const tracked = run("git", ["diff", "--name-only", "--diff-filter=AMRT", "HEAD", "--", ...SCOPES])
+    const untracked = run("git", ["ls-files", "--others", "--exclude-standard", "--", ...SCOPES])
+    return [...new Set([...(tracked ? tracked.split("\n").filter(Boolean) : []), ...(untracked ? untracked.split("\n").filter(Boolean) : [])])]
+  }
   const out = run("git", ["diff", "--name-only", "--diff-filter=AMRT", `${base}...HEAD`, "--", ...SCOPES])
   return out ? out.split("\n").filter(Boolean) : []
 }
@@ -102,17 +116,16 @@ function isSource(file: string) {
   return content(file).startsWith("#!") // kilocode_change
 }
 
-// Parses the unified=0 diff for `file` against `base` and returns:
-//   - added: every added line number on HEAD
-//   - revert: true when the file's diff removes any kilocode_change marker.
+// Parses a unified=0 diff and returns:
+//   - added: every added line number on the new side
+//   - revert: true when the diff removes any kilocode_change marker.
 //     In that case the changes are reverting Kilo modifications back to the
 //     upstream baseline, so newly added lines (which are restoring upstream
 //     content) should not require a marker. Refs that depended on a removed
 //     Kilo construct (e.g. `unixSkip(` → `unix(`) often live in different
 //     hunks than the marker itself, so we use file-level detection rather
 //     than hunk-level to avoid false positives on legitimate reverts.
-function addedLines(file: string): { added: Set<number>; revert: boolean } {
-  const diff = run("git", ["diff", "--unified=0", "--diff-filter=AMRT", `${base}...HEAD`, "--", file])
+function parseDiff(diff: string): { added: Set<number>; revert: boolean } {
   const added = new Set<number>()
   let revert = false
   const all = diff.split("\n")
@@ -145,6 +158,19 @@ function addedLines(file: string): { added: Set<number>; revert: boolean } {
   }
 
   return { added, revert }
+}
+
+function addedLines(file: string): { added: Set<number>; revert: boolean } {
+  if (worktree) {
+    // Untracked files have no HEAD side: every working-tree line is an addition.
+    const untracked = run("git", ["ls-files", "--others", "--exclude-standard", "--", file])
+    if (untracked) {
+      const lines = content(file).split(/\r?\n/)
+      return { added: new Set(lines.map((_, i) => i + 1)), revert: false }
+    }
+    return parseDiff(run("git", ["diff", "--unified=0", "--diff-filter=AMRT", "HEAD", "--", file]))
+  }
+  return parseDiff(run("git", ["diff", "--unified=0", "--diff-filter=AMRT", `${base}...HEAD`, "--", file]))
 }
 
 // kilocode_change start
@@ -208,7 +234,7 @@ function coveredLines(text: string): { lines: string[]; covered: Set<number> } {
 
 // --- main ---
 
-if (isUpstreamMerge()) {
+if (!worktree && isUpstreamMerge()) {
   console.log("Skipping shared upstream annotation check — upstream merge detected.")
   process.exit(0)
 }
@@ -225,7 +251,7 @@ const violations: string[] = []
 for (const file of files) {
   const { added, revert } = addedLines(file)
   if (added.size === 0) continue
-  if (revert) continue // kilocode_change - file is reverting Kilo modifications back to upstream
+  if (revert && !worktree) continue // kilocode_change - file is reverting Kilo modifications back to upstream
 
   const text = content(file) // kilocode_change
   const { lines, covered } = coveredLines(text)

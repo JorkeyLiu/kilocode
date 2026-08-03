@@ -6,7 +6,7 @@ import { Provider } from "@/provider/provider"
 import { mapValues, pickBy } from "remeda" // kilocode_change
 import { ModelCache } from "@/provider/model-cache" // kilocode_change
 import {
-  disposeAllInstancesAfterProviderAuthCallback,
+  invalidateAfterProviderAuthChange, // kilocode_change
   invalidatePresence,
 } from "@/kilocode/server/provider-auth-lifecycle" // kilocode_change
 import { providerMetadata } from "@/kilocode/provider/metadata" // kilocode_change
@@ -127,17 +127,25 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       params: { providerID: ProviderV2.ID }
       payload: ProviderAuth.CallbackInput
     }) {
-      yield* mapProviderAuthError(
-        svc.callback({
-          providerID: ctx.params.providerID,
-          method: ctx.payload.method,
-          code: ctx.payload.code,
+      // kilocode_change start - OAuth persistence + invalidation under one canonical gate ticket
+      yield* invalidateAfterProviderAuthChange(
+        ctx.params.providerID,
+        Effect.gen(function* () {
+          yield* mapProviderAuthError(
+            svc.callback({
+              providerID: ctx.params.providerID,
+              method: ctx.payload.method,
+              code: ctx.payload.code,
+            }),
+          )
+          if (ctx.params.providerID === "kilo") yield* invalidatePresence()
         }),
+        // kilocode_change - LOCK-003: the OAuth callback (connect) also removes
+        // the target ID from disabled_providers under the same ticket/lifecycle —
+        // one backend mutation, exactly one rebuild/event.
+        { cleanupDisabled: true },
       )
-      // kilocode_change start - drop old-user presence before instance disposal on Kilo OAuth callback
-      if (ctx.params.providerID === "kilo") yield* invalidatePresence()
       // kilocode_change end
-      yield* disposeAllInstancesAfterProviderAuthCallback() // kilocode_change
       return true
     })
 

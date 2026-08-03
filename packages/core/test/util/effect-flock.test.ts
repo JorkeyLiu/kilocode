@@ -3,7 +3,7 @@ import { spawn } from "child_process"
 import fs from "fs/promises"
 import path from "path"
 import os from "os"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Deferred, Effect, Exit, Fiber, Layer } from "effect" // kilocode_change - Deferred/Fiber used by LOCK-003 ownership tests
 import { testEffect } from "../lib/effect"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
@@ -111,6 +111,43 @@ const testGlobal = Global.layerWith({
 })
 
 const testLayer = EffectFlock.layer.pipe(Layer.provide(testGlobal), Layer.provide(FSUtil.defaultLayer))
+
+// kilocode_change start
+// LOCK-002: a gated FSUtil layer that pauses the flock's `remove` on the lock
+// dir AFTER the directory is gone but BEFORE the effect returns. That pause is
+// the exact interleaving window of the owner-replacement race: the releasing
+// holder has dropped the fs lock but has not yet finished its release, so a
+// competing fiber can re-acquire and register as the new owner.
+let gate: { lockDir: string; removed: Deferred.Deferred<void>; proceed: Deferred.Deferred<void> } | undefined
+
+const gatedFSLayer = Layer.effect(
+  FSUtil.Service,
+  Effect.gen(function* () {
+    const real = yield* FSUtil.Service
+    return FSUtil.Service.of({
+      ...real,
+      remove: (target: string, options?: Parameters<FSUtil.Interface["remove"]>[1]) =>
+        real.remove(target, options).pipe(
+          Effect.flatMap((out) =>
+            Effect.gen(function* () {
+              const g = gate
+              if (!g || target !== g.lockDir) return out
+              yield* Deferred.succeed(g.removed, void 0)
+              yield* Deferred.await(g.proceed)
+              return out
+            }),
+          ),
+        ),
+    })
+  }),
+)
+
+const gatedLayer = EffectFlock.layer.pipe(
+  Layer.provide(testGlobal),
+  Layer.provide(gatedFSLayer.pipe(Layer.provide(FSUtil.defaultLayer))),
+)
+const gatedIt = testEffect(gatedLayer)
+// kilocode_change end
 
 // ---------------------------------------------------------------------------
 // Tests
@@ -389,4 +426,283 @@ describe("util.effect-flock", () => {
       }),
     60_000, // kilocode_change - match the wider worker readiness window
   )
+
+  // kilocode_change start
+  // ─── LOCK-003: same-process lock ownership ───────────────────────────
+
+  it.live(
+    "same-fiber nested same-key acquire is reentrant, not a deadlock",
+    Effect.gen(function* () {
+      const flock = yield* EffectFlock.Service
+      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const dir = path.join(tmp, "locks")
+      const key = "eflock:reentrant"
+
+      let inner = false
+      // Must complete immediately: a nested same-key withLock in the same
+      // fiber is a depth-tracked pass-through (LOCK-003), never a 5-minute
+      // NotAcquired retry.
+      const exit = yield* Effect.exit(
+        Effect.timeout(
+          flock.withLock(
+            Effect.gen(function* () {
+              yield* flock.withLock(
+                Effect.sync(() => {
+                  inner = true
+                }),
+                key,
+                dir,
+              )
+            }),
+            key,
+            dir,
+          ),
+          "2 seconds",
+        ),
+      )
+      expect(exit._tag).toBe("Success")
+      expect(inner).toBe(true)
+      yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))
+    }),
+  )
+
+  it.live(
+    "nested different keys both acquire (transaction lock shape)",
+    Effect.gen(function* () {
+      const flock = yield* EffectFlock.Service
+      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const dir = path.join(tmp, "locks")
+      const global = "eflock:global-target"
+      const project = "eflock:project-target"
+
+      const exit = yield* Effect.exit(
+        Effect.timeout(
+          flock.withLock(
+            Effect.gen(function* () {
+              return yield* flock.withLock(Effect.succeed("project-ok"), project, dir)
+            }),
+            global,
+            dir,
+          ),
+          "2 seconds",
+        ),
+      )
+      expect(exit._tag).toBe("Success")
+      if (exit._tag === "Success") expect(exit.value).toBe("project-ok")
+      yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))
+    }),
+  )
+
+  it.live(
+    "different fibers on the same key still serialize",
+    Effect.gen(function* () {
+      const flock = yield* EffectFlock.Service
+      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const dir = path.join(tmp, "locks")
+      const key = "eflock:serialize"
+      let concurrent = 0
+      let max = 0
+
+      const enter = Effect.gen(function* () {
+        yield* Effect.sync(() => {
+          concurrent += 1
+          max = Math.max(max, concurrent)
+        })
+        yield* Effect.sleep("60 millis")
+        yield* Effect.sync(() => {
+          concurrent -= 1
+        })
+      })
+
+      const a = yield* Effect.forkScoped(flock.withLock(enter, key, dir))
+      const b = yield* Effect.forkScoped(flock.withLock(enter, key, dir))
+      yield* Fiber.join(a)
+      yield* Fiber.join(b)
+      expect(max).toBe(1)
+      yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))
+    }),
+  )
+
+  it.live(
+    "a live in-process holder is never reaped as stale (LOCK-003)",
+    Effect.gen(function* () {
+      const flock = yield* EffectFlock.Service
+      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const dir = path.join(tmp, "locks")
+      const key = "eflock:live-stale"
+      const lockDir = lock(dir, key)
+      const entered = yield* Deferred.make<void>()
+      const release = yield* Deferred.make<void>()
+
+      // Holder A acquires, backdates its own lock files to simulate a lagged
+      // heartbeat, then parks until released.
+      const holder = yield* Effect.forkScoped(
+        flock.withLock(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(entered, void 0)
+            const old = new Date(Date.now() - 120_000)
+            yield* Effect.promise(() =>
+              Promise.all([
+                fs.utimes(lockDir, old, old),
+                fs.utimes(path.join(lockDir, "heartbeat"), old, old),
+                fs.utimes(path.join(lockDir, "meta.json"), old, old),
+              ]),
+            )
+            yield* Deferred.await(release)
+          }),
+          key,
+          dir,
+        ),
+      )
+      yield* Deferred.await(entered)
+
+      // Competitor B: the lock looks stale on disk, but A is a live in-process
+      // owner — B must wait, never reap (no LockCompromisedError).
+      const blocked = yield* Effect.exit(
+        Effect.timeout(flock.withLock(Effect.void, key, dir), "500 millis"),
+      )
+      expect(blocked._tag).toBe("Failure")
+
+      // Release A: B acquires cleanly afterwards, and A's release must not
+      // surface a ReleaseError (metadata was never reaped away).
+      yield* Deferred.succeed(release, void 0)
+      yield* Fiber.join(holder)
+      const acquired = yield* Effect.exit(
+        Effect.timeout(flock.withLock(Effect.succeed(true), key, dir), "3 seconds"),
+      )
+      expect(acquired._tag).toBe("Success")
+      yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))
+    }),
+  )
+
+  // ─── LOCK-002: owner replacement race ────────────────────────────────
+
+  gatedIt.live(
+    "release/reacquire interleaving cannot delete the replacement owner (LOCK-002)",
+    Effect.gen(function* () {
+      const flock = yield* EffectFlock.Service
+      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const dir = path.join(tmp, "locks")
+      const key = "eflock:replace"
+      const lockDir = lock(dir, key)
+
+      const removed = yield* Deferred.make<void>()
+      const proceed = yield* Deferred.make<void>()
+      gate = { lockDir, removed, proceed }
+
+      // A holds the lock; its release pauses inside `remove` right after the
+      // lock dir is gone (the exact window the audit found: forceRemove then
+      // an unconditional owners.delete).
+      const a = yield* Effect.forkScoped(
+        flock.withLock(Effect.sync(() => {}), key, dir).pipe(Effect.exit),
+      )
+      yield* Deferred.await(removed)
+
+      // B re-acquires the now-free fs lock and registers as the new owner
+      // before A's release finishes.
+      const bEntered = yield* Deferred.make<void>()
+      const bGo = yield* Deferred.make<void>()
+      const b = yield* Effect.forkScoped(
+        flock.withLock(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(bEntered, void 0)
+            yield* Deferred.await(bGo)
+          }),
+          key,
+          dir,
+        ),
+      )
+      yield* Deferred.await(bEntered)
+
+      // Let A's release complete: its compare-delete must NOT remove B's entry.
+      yield* Deferred.succeed(proceed, void 0)
+      const aExit = yield* Effect.exit(Fiber.join(a))
+      expect(aExit._tag).toBe("Success")
+
+      // Make B's lock look stale on disk. B's owner entry is the only thing
+      // keeping it alive: if A's release had removed B's entry, the competitor
+      // would stale-reap B's still-held lock and acquire. With the entry
+      // intact, the competitor must stay blocked (B's heartbeat only fires
+      // every HEARTBEAT_MS ≈ 20s, so the files stay stale for the whole
+      // 500ms competitor window — deterministic for both outcomes).
+      const old = new Date(Date.now() - 120_000)
+      yield* Effect.promise(() =>
+        Promise.all([
+          fs.utimes(lockDir, old, old).catch(() => {}),
+          fs.utimes(path.join(lockDir, "heartbeat"), old, old).catch(() => {}),
+          fs.utimes(path.join(lockDir, "meta.json"), old, old).catch(() => {}),
+        ]),
+      )
+      const blocked = yield* Effect.exit(Effect.timeout(flock.withLock(Effect.void, key, dir), "500 millis"))
+      expect(blocked._tag).toBe("Failure")
+
+      // B still releases cleanly: its fs lock was never reaped away.
+      yield* Deferred.succeed(bGo, void 0)
+      const bExit = yield* Effect.exit(Fiber.join(b))
+      expect(bExit._tag).toBe("Success")
+      gate = undefined
+      yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))
+    }),
+  )
+
+  it.live(
+    "release failure after a cross-process reap leaves no stale owner (LOCK-002)",
+    Effect.gen(function* () {
+      const flock = yield* EffectFlock.Service
+      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "eflock-test-")))
+      const dir = path.join(tmp, "locks")
+      const key = "eflock:reap-fail"
+      const lockDir = lock(dir, key)
+      const meta = path.join(lockDir, "meta.json")
+
+      const entered = yield* Deferred.make<void>()
+      const go = yield* Deferred.make<void>()
+      const holder = yield* Effect.forkScoped(
+        flock.withLock(
+          Effect.gen(function* () {
+            yield* Deferred.succeed(entered, void 0)
+            yield* Deferred.await(go)
+          }),
+          key,
+          dir,
+        ),
+      )
+      yield* Deferred.await(entered)
+
+      // Simulate another process reaping the lock and re-creating it with its
+      // own token (the fs lock no longer belongs to this holder).
+      yield* Effect.promise(async () => {
+        await fs.rm(lockDir, { recursive: true, force: true })
+        await fs.mkdir(lockDir, { recursive: true })
+        await fs.writeFile(
+          meta,
+          JSON.stringify({ token: "replaced", pid: 9999, hostname: "other-host", createdAt: new Date().toISOString() }),
+        )
+      })
+
+      // Release: reads the replaced meta, dies with token mismatch — and the
+      // ensuring path must clear ONLY the releasing owner's identity.
+      yield* Deferred.succeed(go, void 0)
+      const holderExit = yield* Effect.exit(Fiber.join(holder))
+      expect(Exit.isFailure(holderExit)).toBe(true)
+
+      // A stale owner entry would make isStale return false forever, wedging
+      // the key: backdate the recreated lock files and a fresh acquire must be
+      // able to reap and recover them.
+      const old = new Date(Date.now() - 120_000)
+      yield* Effect.promise(() =>
+        Promise.all([
+          fs.utimes(lockDir, old, old).catch(() => {}),
+          fs.utimes(meta, old, old).catch(() => {}),
+        ]),
+      )
+      const acquired = yield* Effect.exit(
+        Effect.timeout(flock.withLock(Effect.succeed("recovered"), key, dir), "3 seconds"),
+      )
+      expect(acquired._tag).toBe("Success")
+      if (acquired._tag === "Success") expect(acquired.value).toBe("recovered")
+      yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }))
+    }),
+  )
+  // kilocode_change end
 })

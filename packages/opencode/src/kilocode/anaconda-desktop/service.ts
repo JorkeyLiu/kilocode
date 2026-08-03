@@ -1,5 +1,7 @@
 import { Auth } from "@/auth"
+import { FSUtil } from "@opencode-ai/core/fs-util"
 import { invalidateAfterProviderAuthChange } from "@/kilocode/server/provider-auth-lifecycle"
+import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { InstanceStore } from "@/project/instance-store"
 import { ModelCache } from "@/provider/model-cache"
 import { Context, Effect, Layer, Redacted } from "effect"
@@ -41,6 +43,8 @@ export const layer = Layer.effect(
     const discovery = yield* Discovery.Service
     const instances = yield* InstanceStore.Service
     const platform = yield* DesktopPlatform.Service
+    const gate = yield* GenerationGate.Service
+    const fs = yield* FSUtil.Service
 
     const status = Effect.fn("AnacondaDesktop.status")(function* () {
       return (yield* discovery.discover()).status
@@ -65,19 +69,25 @@ export const layer = Layer.effect(
       const key = Redacted.value(found.connection.key)
       const stored = yield* auth.get(PROVIDER_ID).pipe(Effect.mapError(() => new SyncError({ operation: "store" })))
       if (stored?.type === "api" && stored.key === key && same(stored.metadata, metadata)) return found.status
-      yield* auth
-        .set(
-          PROVIDER_ID,
-          new Auth.Api({
-            type: "api",
-            key,
-            metadata,
-          }),
-        )
-        .pipe(Effect.mapError(() => new SyncError({ operation: "store" })))
-      yield* invalidateAfterProviderAuthChange(PROVIDER_ID).pipe(
+      yield* invalidateAfterProviderAuthChange(
+        PROVIDER_ID,
+        auth
+          .set(
+            PROVIDER_ID,
+            new Auth.Api({
+              type: "api",
+              key,
+              metadata,
+            }),
+          )
+          .pipe(Effect.mapError(() => new SyncError({ operation: "store" }))),
+      ).pipe(
+        // LOCK-005: route through the canonical AppLayer services, never a
+        // second gate/cache/store/fs instance.
         Effect.provideService(ModelCache.Service, cache),
         Effect.provideService(InstanceStore.Service, instances),
+        Effect.provideService(GenerationGate.Service, gate),
+        Effect.provideService(FSUtil.Service, fs),
       )
       return found.status
     })

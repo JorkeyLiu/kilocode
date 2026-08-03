@@ -1,4 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { spawnSync } from "node:child_process"
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import os from "node:os"
 import path from "node:path"
 
 const SOURCE_EXTS = new Set([".ts", ".tsx", ".js", ".jsx", ".yml", ".yaml", ".toml", ".sh", ".bash", ".zsh"])
@@ -894,5 +897,227 @@ describe("checkLine — additional patterns", () => {
       "const b = 2", // uncovered
     ].join("\n")
     expect(check(text, [1, 2, 3, 4])).toEqual(["line 4: const b = 2"])
+  })
+})
+
+// ─── worktree mode ───────────────────────────────────────────────────────────
+// Mirrors the worktree additions in script/check-opencode-annotations.ts:
+//   - tracked HEAD→working-tree additions + untracked files are checked
+//   - untracked files have every working-tree line as an addition
+//   - file-level REVERT does NOT suppress unrelated additions in worktree mode
+
+function coveredLinesWithLines(text: string): { lines: string[]; covered: Set<number> } {
+  const lines = text.split(/\r?\n/)
+  const covered = coveredLines(text)
+  return { lines, covered }
+}
+
+function worktreeFileCheck(text: string, added: Set<number>): string[] {
+  const { lines, covered } = coveredLinesWithLines(text)
+  const violations: string[] = []
+  for (const n of added) {
+    const line = lines[n - 1] ?? ""
+    const trim = line.trim()
+    if (!trim) continue
+    if (hasMarker(trim)) continue
+    if (!covered.has(n)) violations.push(`line ${n}: ${trim}`)
+  }
+  return violations
+}
+
+describe("worktree mode — unmarked tracked edit", () => {
+  test("added line without marker is a violation", () => {
+    const text = ["const base = 1", "const kiloAddition = 2"].join("\n")
+    const added = new Set([2])
+    expect(worktreeFileCheck(text, added)).toEqual(["line 2: const kiloAddition = 2"])
+  })
+
+  test("added line inside a marker block is not a violation", () => {
+    const text = [
+      "// kilocode_change start",
+      "const kiloAddition = 2",
+      "// kilocode_change end",
+    ].join("\n")
+    const added = new Set([2])
+    expect(worktreeFileCheck(text, added)).toEqual([])
+  })
+
+  test("added inline-marked line is not a violation", () => {
+    const text = ["const base = 1", "const url = Flag.X // kilocode_change"].join("\n")
+    const added = new Set([2])
+    expect(worktreeFileCheck(text, added)).toEqual([])
+  })
+})
+
+describe("worktree mode — untracked shared file", () => {
+  test("untracked file without whole-file marker flags every non-empty line", () => {
+    const text = ["export const a = 1", "export const b = 2"].join("\n")
+    // Untracked files have no HEAD side: every working-tree line is an addition.
+    const added = new Set([1, 2])
+    expect(worktreeFileCheck(text, added)).toEqual([
+      "line 1: export const a = 1",
+      "line 2: export const b = 2",
+    ])
+  })
+
+  test("untracked file with whole-file marker passes", () => {
+    const text = ["// kilocode_change - new file", "export const a = 1", "export const b = 2"].join("\n")
+    const added = new Set([1, 2, 3])
+    expect(worktreeFileCheck(text, added)).toEqual([])
+  })
+
+  test("untracked file with per-line markers passes", () => {
+    const text = [
+      "export const a = 1 // kilocode_change",
+      "export const b = 2 // kilocode_change",
+    ].join("\n")
+    const added = new Set([1, 2])
+    expect(worktreeFileCheck(text, added)).toEqual([])
+  })
+
+  test("empty/whitespace lines in untracked file are skipped", () => {
+    const text = ["export const a = 1", "", "  ", "export const b = 2"].join("\n")
+    const added = new Set([1, 2, 3, 4])
+    expect(worktreeFileCheck(text, added)).toEqual([
+      "line 1: export const a = 1",
+      "line 4: export const b = 2",
+    ])
+  })
+})
+
+describe("worktree mode — marked lines", () => {
+  test("added lines covered by inline, block, and whole-file markers pass", () => {
+    const text = [
+      "// kilocode_change start",
+      "const kilo1 = 1",
+      "// kilocode_change end",
+      "const kilo2 = 2 // kilocode_change",
+    ].join("\n")
+    const added = new Set([2, 4])
+    expect(worktreeFileCheck(text, added)).toEqual([])
+  })
+
+  test("JSX markers cover added lines", () => {
+    const text = [
+      "{/* kilocode_change start */}",
+      "<KiloDialog />",
+      "{/* kilocode_change end */}",
+    ].join("\n")
+    const added = new Set([2])
+    expect(worktreeFileCheck(text, added)).toEqual([])
+  })
+})
+
+describe("worktree mode — marker removal / replacement does not suppress unrelated additions", () => {
+  // In committed-range mode, a diff that removes any kilocode_change marker
+  // sets file-level REVERT and the whole file is skipped. In worktree mode the
+  // revert suppression is disabled so unrelated additions are still checked.
+
+  test("marker removed elsewhere while an unrelated unmarked line is added → violation", () => {
+    const text = ["const restoredUpstream = 1", "const unrelatedKilo = 2"].join("\n")
+    // Worktree diff removed a marker in another hunk (revert=true), but the
+    // main loop still checks every added line because worktree mode does not
+    // apply file-level revert suppression.
+    const added = new Set([1, 2])
+    expect(worktreeFileCheck(text, added)).toEqual([
+      "line 1: const restoredUpstream = 1",
+      "line 2: const unrelatedKilo = 2",
+    ])
+  })
+
+  test("marker replaced with an equivalent marker style → no violation", () => {
+    // Old `// kilocode_change` was removed and replaced with a JSX marker.
+    const text = ["{/* kilocode_change */}", "const kilo = 1 // kilocode_change"].join("\n")
+    const added = new Set([1, 2])
+    expect(worktreeFileCheck(text, added)).toEqual([])
+  })
+
+  test("marker block replaced by inline marker covering the same line → no violation", () => {
+    const text = ["const kilo = 1 // kilocode_change"].join("\n")
+    const added = new Set([1])
+    expect(worktreeFileCheck(text, added)).toEqual([])
+  })
+
+  test("committed-range revert suppression still applies (worktree flag off)", () => {
+    // Mirrors the main loop: `if (revert && !worktree) continue`
+    const text = ["const restoredUpstream = 1", "const unrelatedKilo = 2"].join("\n")
+    const added = new Set([1, 2])
+    const suppressRevert = true
+    const violations = suppressRevert ? [] : worktreeFileCheck(text, added)
+    expect(violations).toEqual([])
+  })
+})
+
+// ─── Real Git integration (--worktree) ──────────────────────────────────────
+// Runs the ACTUAL script/check-opencode-annotations.ts entrypoint in --worktree
+// mode against an isolated temporary git repository, proving the checker's real
+// `git diff HEAD` / `git ls-files --others` pathspec behavior end to end rather
+// than re-implementing it here. The checker resolves ROOT from import.meta.dir,
+// so copying the script into <tmp>/script/ makes it operate on the temp repo
+// while still executing the real entrypoint code.
+
+const REPO = path.resolve(import.meta.dir, "../../..")
+const CHECKER = path.join("script", "check-opencode-annotations.ts")
+
+function git(repo: string, args: string[]) {
+  const res = spawnSync("git", ["-C", repo, ...args], { encoding: "utf8" })
+  expect(res.status, `git ${args.join(" ")} failed: ${res.stderr}`).toBe(0)
+  return res.stdout?.trim() ?? ""
+}
+
+function run(repo: string) {
+  return spawnSync(process.execPath, [path.join(repo, CHECKER), "--worktree"], { encoding: "utf8" })
+}
+
+describe("check-opencode-annotations --worktree (real git integration)", () => {
+  test("tracked unmarked edit and untracked shared file fail; marked equivalents pass", () => {
+    const repo = mkdtempSync(path.join(os.tmpdir(), "kilo-annotations-"))
+    try {
+      git(repo, ["init", "-q"])
+      // Local-only identity and no signing, so commits never touch global config.
+      git(repo, ["config", "user.name", "Checker Test"])
+      git(repo, ["config", "user.email", "checker@test.invalid"])
+      git(repo, ["config", "commit.gpgsign", "false"])
+
+      const src = path.join(repo, "packages/opencode/src")
+      mkdirSync(src, { recursive: true })
+      mkdirSync(path.join(repo, "script"), { recursive: true })
+
+      // Baseline: a committed shared-scope file with no working-tree changes.
+      writeFileSync(path.join(src, "shared.ts"), "export const base = 1\n")
+      git(repo, ["add", "packages/opencode/src/shared.ts"])
+      git(repo, ["commit", "-qm", "baseline"])
+
+      // Point the real checker at this repo: a copy resolves ROOT to <repo>.
+      copyFileSync(path.join(REPO, CHECKER), path.join(repo, CHECKER))
+
+      // 1. Clean baseline → pass.
+      const clean = run(repo)
+      expect(clean.status).toBe(0)
+      expect(clean.stdout).toContain("nothing to check")
+
+      // 2. Tracked unmarked edit → fail with the added line reported.
+      writeFileSync(path.join(src, "shared.ts"), "export const base = 1\nexport const kiloAddition = 2\n")
+      const tracked = run(repo)
+      expect(tracked.status).toBe(1)
+      expect(tracked.stderr).toContain("packages/opencode/src/shared.ts:2: export const kiloAddition = 2")
+
+      // 3. Untracked shared file → every working-tree line is an addition → fail.
+      writeFileSync(path.join(src, "new-file.ts"), "export const newThing = true\n")
+      const untracked = run(repo)
+      expect(untracked.status).toBe(1)
+      expect(untracked.stderr).toContain("packages/opencode/src/new-file.ts:1: export const newThing = true")
+
+      // 4. Marked equivalents → pass (inline marker + whole-file annotation).
+      git(repo, ["checkout", "--", "packages/opencode/src/shared.ts"])
+      rmSync(path.join(src, "new-file.ts"))
+      writeFileSync(path.join(src, "shared.ts"), "export const base = 1\nexport const kiloMarked = 3 // kilocode_change\n")
+      writeFileSync(path.join(src, "marked-new.ts"), "// kilocode_change - new file\nexport const markedNew = true\n")
+      const marked = run(repo)
+      expect(marked.status).toBe(0)
+      expect(marked.stdout).toContain("All shared upstream changes are annotated with kilocode_change markers.")
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
   })
 })

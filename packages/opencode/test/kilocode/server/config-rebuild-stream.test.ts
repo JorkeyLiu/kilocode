@@ -33,9 +33,10 @@ import { AppRuntime } from "../../../src/effect/app-runtime"
 import { TestLLMServer } from "../../lib/llm-server"
 import { testProviderConfig } from "../../lib/test-provider"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../../lib/effect"
-import { awaitRebuilds } from "../../../src/kilocode/server/config-rebuild" // kilocode_change - rebuild completion tracking
+import { awaitRebuilds } from "../../../src/kilocode/server/config-rebuild"
 import { resetDatabase } from "../../fixture/db"
 import { disposeAllInstances, tmpdir } from "../../fixture/fixture"
+import { markPluginDependenciesReady, markProjectConfigReady } from "../../fixture/plugin"
 
 void Log.init({ print: false })
 
@@ -58,7 +59,7 @@ const dirs = new Set<string>()
 const ownedListeners = new Set<() => void>()
 
 afterEach(async () => {
-  // kilocode_change - BLOCKER 5: await all pending rebuilds; propagate failures
+  // await all pending rebuilds; propagate failures
   // instead of swallowing. If a rebuild timed out or errored, the test hook
   // must fail so the failure is visible rather than silently masked.
   await Effect.runPromise(awaitRebuilds())
@@ -89,6 +90,12 @@ async function seedGlobalConfig(dir: string, extra?: Record<string, unknown>) {
     path.join(dir, "kilo.jsonc"),
     JSON.stringify({ $schema: "https://app.kilo.ai/config.json", permission: { bash: "allow" }, ...extra }, null, 2),
   )
+  // LOCK-003 fixture leak fix: `Global.Path.config` is always the first entry
+  // of ConfigPaths.directories, so every booted instance triggers a detached
+  // `Npm.install("@kilocode/plugin")` into it. That install races fixture
+  // disposal and leaks node_modules dirs per test run. The stub marks the
+  // same dependencies ready the plugin fixture contract expects.
+  await markPluginDependenciesReady(dir)
 }
 
 function readGlobalConfig(globalDir: string): Record<string, unknown> {
@@ -191,10 +198,17 @@ const fixture = Effect.gen(function* () {
   const llm = yield* TestLLMServer
   const tmp = yield* Effect.acquireRelease(
     Effect.promise(async () => {
-      const global = await tmpdir()
+      const global = await tmpdir({ retain: true })
       await seedGlobalConfig(global.path)
-      const project = await tmpdir({ git: true, config: testProviderConfig(llm.url) })
-      const other = await tmpdir({ git: true, config: testProviderConfig(llm.url) })
+      const project = await tmpdir({ git: true, retain: true, config: testProviderConfig(llm.url) })
+      const other = await tmpdir({ git: true, retain: true, config: testProviderConfig(llm.url) })
+      // LOCK-003 fixture leak fix: seedGlobalConfig marks the global config
+      // dir (the first ConfigPaths.directories entry); pre-create `.kilo` with
+      // the plugin-deps stub in the project dirs so a booted instance's
+      // detached `@kilocode/plugin` install (fired by project config writes)
+      // can never race fixture disposal and leak node_modules.
+      await markProjectConfigReady(project.path)
+      await markProjectConfigReady(other.path)
       return { global, project, other }
     }),
     (value) =>
@@ -649,6 +663,16 @@ describe("config rebuild deferral - web handler path", () => {
         expect((yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })).status).toBe(200)
         const started = yield* Deferred.make<void>()
         const release = yield* Deferred.make<void>()
+        // Failure-safe: if the test fails while the disposer is parked on
+        // `release`, the finalizer fires it so teardown disposal can never hang
+        // on the parked disposer. `fire` is idempotent so the intended release
+        // point in the body still works exactly once.
+        let fired = false
+        const fire = () => {
+          if (fired) return
+          fired = true
+          void Effect.runPromise(Deferred.succeed(release, void 0))
+        }
         let calls = 0
         const off = registerDisposer(async (directory) => {
           if (directory !== f.project) return
@@ -658,14 +682,17 @@ describe("config rebuild deferral - web handler path", () => {
             await Effect.runPromise(Deferred.await(release))
           }
         })
-        yield* Effect.addFinalizer(() => Effect.sync(off))
+        yield* Effect.addFinalizer(() => Effect.sync(() => {
+          fire()
+          off()
+        }))
         const reload = yield* Effect.forkScoped(
           Effect.promise(() =>
             AppRuntime.runPromise(InstanceStore.Service.use((store) => store.reload({ directory: f.project }))),
           ),
         )
         yield* awaitWithTimeout(Deferred.await(started), "replacement reload did not reach disposal")
-        yield* Deferred.succeed(release, void 0)
+        yield* Effect.sync(fire)
         const replacement = yield* Fiber.join(reload)
 
         yield* Deferred.succeed(firstGate, void 0)

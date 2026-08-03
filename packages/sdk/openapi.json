@@ -11900,6 +11900,115 @@
         ]
       }
     },
+    "/config/transaction": {
+      "patch": {
+        "tags": ["config-console"],
+        "operationId": "config.transaction",
+        "parameters": [
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Combined config save result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConfigTransactionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "ConfigInvalidError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/ConfigInvalidError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Apply global and project config patches atomically. Classified once, persisted once, at most one rebuild. Returns authoritative global, project overlay, and effective config.",
+        "summary": "Save global and project config in one transaction",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "global": {
+                    "type": "object",
+                    "properties": {
+                      "set": {
+                        "type": "object"
+                      },
+                      "unset": {
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "project": {
+                    "type": "object",
+                    "properties": {
+                      "set": {
+                        "type": "object"
+                      },
+                      "unset": {
+                        "type": "array",
+                        "items": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.config.transaction({\n  ...\n})"
+          }
+        ]
+      }
+    },
     "/config/rules": {
       "get": {
         "tags": ["config-console"],
@@ -15812,6 +15921,280 @@
           {
             "lang": "js",
             "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.kilocode.sessionModelUsage({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/custom-provider/{providerID}/delete": {
+      "post": {
+        "tags": ["kilocode"],
+        "operationId": "customProvider.delete",
+        "parameters": [
+          {
+            "name": "providerID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Custom provider deleted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomProviderDeleteResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "CustomProviderDeleteError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomProviderDeleteError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Atomically remove a custom provider's auth credentials, config, and model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
+        "summary": "Delete custom provider",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.customProvider.delete({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/custom-provider/{providerID}/save": {
+      "post": {
+        "tags": ["kilocode"],
+        "operationId": "customProvider.save",
+        "parameters": [
+          {
+            "name": "providerID",
+            "in": "path",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Custom provider saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CustomProviderSaveResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "CustomProviderSaveError | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/CustomProviderSaveError"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "description": "Atomically persist a custom provider's config and auth credentials in one mutation that cannot leave partial state, clear the model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
+        "summary": "Save custom provider",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "config": {
+                    "type": "object",
+                    "properties": {
+                      "npm": {
+                        "type": "string",
+                        "enum": ["@ai-sdk/openai-compatible", "@ai-sdk/openai", "@ai-sdk/anthropic"]
+                      },
+                      "name": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 200
+                      },
+                      "env": {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "maxLength": 128
+                        }
+                      },
+                      "options": {
+                        "type": "object",
+                        "properties": {
+                          "baseURL": {
+                            "type": "string"
+                          },
+                          "headers": {
+                            "type": "object",
+                            "additionalProperties": {
+                              "type": "string"
+                            }
+                          }
+                        },
+                        "required": ["baseURL"],
+                        "additionalProperties": false
+                      },
+                      "models": {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            "reasoning": {
+                              "type": "boolean"
+                            },
+                            "modalities": {
+                              "type": "object",
+                              "properties": {
+                                "input": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "enum": ["text", "audio", "image", "video", "pdf"]
+                                  }
+                                },
+                                "output": {
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "enum": ["text", "audio", "image", "video", "pdf"]
+                                  }
+                                }
+                              },
+                              "additionalProperties": false
+                            },
+                            "variants": {
+                              "type": "object",
+                              "additionalProperties": {
+                                "type": "object"
+                              }
+                            }
+                          },
+                          "required": ["name"],
+                          "additionalProperties": false
+                        }
+                      }
+                    },
+                    "required": ["npm", "name", "options", "models"],
+                    "additionalProperties": false
+                  },
+                  "auth": {
+                    "anyOf": [
+                      {
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string",
+                            "enum": ["preserve"]
+                          }
+                        },
+                        "required": ["mode"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string",
+                            "enum": ["set"]
+                          },
+                          "key": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["mode", "key"],
+                        "additionalProperties": false
+                      },
+                      {
+                        "type": "object",
+                        "properties": {
+                          "mode": {
+                            "type": "string",
+                            "enum": ["clear"]
+                          }
+                        },
+                        "required": ["mode"],
+                        "additionalProperties": false
+                      }
+                    ]
+                  }
+                },
+                "required": ["config", "auth"],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.customProvider.save({\n  ...\n})"
           }
         ]
       }
@@ -25201,6 +25584,9 @@
           "workspace": {
             "type": "string"
           },
+          "transaction": {
+            "type": "string"
+          },
           "payload": {
             "anyOf": [
               {
@@ -31148,6 +31534,22 @@
         "required": ["sources"],
         "additionalProperties": false
       },
+      "ConfigTransactionResponse": {
+        "type": "object",
+        "properties": {
+          "global": {
+            "$ref": "#/components/schemas/Config"
+          },
+          "project": {
+            "$ref": "#/components/schemas/Config"
+          },
+          "effective": {
+            "$ref": "#/components/schemas/Config"
+          }
+        },
+        "required": ["global", "project", "effective"],
+        "additionalProperties": false
+      },
       "ConfigRulesResponse": {
         "type": "object",
         "properties": {
@@ -32159,6 +32561,58 @@
           }
         },
         "required": ["code", "message"],
+        "additionalProperties": false
+      },
+      "CustomProviderDeleteResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": ["success"],
+        "additionalProperties": false
+      },
+      "CustomProviderDeleteError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "detail"],
+        "additionalProperties": false
+      },
+      "CustomProviderSaveResult": {
+        "type": "object",
+        "properties": {
+          "success": {
+            "type": "boolean"
+          }
+        },
+        "required": ["success"],
+        "additionalProperties": false
+      },
+      "CustomProviderSaveError": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "detail": {
+            "type": "string"
+          }
+        },
+        "required": ["code", "message", "detail"],
         "additionalProperties": false
       },
       "AnacondaDesktopStatus": {

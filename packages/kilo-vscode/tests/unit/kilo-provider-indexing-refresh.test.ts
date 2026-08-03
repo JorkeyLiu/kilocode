@@ -26,8 +26,7 @@ type Internals = {
 }
 
 function createConnection() {
-  let drains = 0
-  const patches: unknown[] = []
+  const transactions: unknown[] = []
   const client = {
     global: {
       config: {
@@ -39,28 +38,27 @@ function createConnection() {
       get: async () => ({ data: {} }),
       update: async () => ({ data: {} }),
       overlay: async () => ({ data: { project: {} } }),
-      overlayUpdate: async (patch: unknown) => {
-        patches.push(patch)
-        return { data: {} }
+      transaction: async (params: unknown) => {
+        transactions.push(params)
+        return { data: { global: {}, project: {}, effective: {} } }
       },
     },
   }
 
   return {
-    drains: () => drains,
-    patches: () => patches,
+    transactions: () => transactions,
     service: {
-      drainPendingPrompts: async () => {
-        drains += 1
-      },
       getClient: () => client,
+      getConfigRevision: () => 0,
+      advanceConfigRevision: () => {},
+      onConfigRevision: () => () => undefined,
     },
   }
 }
 
 describe("KiloProvider indexing refresh", () => {
   it("reloadAfterAuthChange fetches config first, then indexing status", async () => {
-    const provider = new KiloProvider({} as never, {} as never)
+    const provider = new KiloProvider({} as never, { getConfigRevision: () => 0 } as never)
     const internal = provider as unknown as Internals
     const calls: string[] = []
 
@@ -92,7 +90,7 @@ describe("KiloProvider indexing refresh", () => {
     expect(calls.includes("indexing")).toBe(true)
   })
 
-  it("handleUpdateConfig no longer eagerly fetches indexing status", async () => {
+  it("handleUpdateConfig no longer drains prompts or eagerly fetches indexing status", async () => {
     const conn = createConnection()
     const provider = new KiloProvider({} as never, conn.service as never)
     const internal = provider as unknown as Internals
@@ -102,10 +100,11 @@ describe("KiloProvider indexing refresh", () => {
     internal.fetchAndSendIndexingStatus = async () => {
       indexing += 1
     }
+    // drainPendingPrompts no longer exists on the connection service; if the
+    // save path tried to call it, this test would fail with a type/runtime error.
 
     await internal.handleUpdateConfig({})
 
-    expect(conn.drains()).toBe(1)
     expect(indexing).toBe(0)
   })
 
@@ -124,7 +123,7 @@ describe("KiloProvider indexing refresh", () => {
     expect(calls).toBe(1)
   })
 
-  it("passes scoped unset paths to the config overlay endpoint", async () => {
+  it("passes scoped unset paths in the transaction request", async () => {
     const conn = createConnection()
     const provider = new KiloProvider({} as never, conn.service as never)
     const internal = provider as unknown as Internals
@@ -137,17 +136,12 @@ describe("KiloProvider indexing refresh", () => {
       [["indexing", "searchMinScore"]],
     )
 
-    expect(conn.patches()).toEqual([
-      expect.objectContaining({
-        scope: "global",
-        set: { indexing: { qdrant: { apiKey: undefined } } },
-        unset: [["indexing", "qdrant", "apiKey"]],
-      }),
-      expect.objectContaining({
-        scope: "project",
-        set: { indexing: { searchMinScore: undefined } },
-        unset: [["indexing", "searchMinScore"]],
-      }),
+    expect(conn.transactions()).toEqual([
+      {
+        directory: expect.any(String),
+        global: { set: { indexing: { qdrant: { apiKey: undefined } } }, unset: [["indexing", "qdrant", "apiKey"]] },
+        project: { set: { indexing: { searchMinScore: undefined } }, unset: [["indexing", "searchMinScore"]] },
+      },
     ])
   })
 
@@ -179,6 +173,7 @@ describe("KiloProvider indexing refresh", () => {
         {
           getClient: () => ({}) as never,
           getServerConfig: () => ({ baseUrl: "http://127.0.0.1:9999", password: "secret" }),
+          getConfigRevision: () => 0,
         } as never,
       )
       const internal = provider as unknown as Internals
@@ -202,6 +197,7 @@ describe("KiloProvider indexing refresh", () => {
       {} as never,
       {
         resolveEventSessionId: () => undefined,
+        getConfigRevision: () => 0,
       } as never,
     )
     const internal = provider as unknown as Internals

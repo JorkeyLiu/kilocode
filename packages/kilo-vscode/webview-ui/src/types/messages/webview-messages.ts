@@ -510,6 +510,12 @@ export interface UpdateConfigMessage {
   /** Project config patch written to the workspace's .kilo/kilo.jsonc or existing project config. */
   projectConfig?: Partial<Config>
   projectUnset?: string[][]
+  /**
+   * Identity of this save attempt. The extension echoes it on the matching
+   * configUpdated/configUpdateFailed so the webview can ignore stale echoes
+   * from older saves (LOCK-005).
+   */
+  saveID?: string
 }
 
 export interface RequestNotificationSettingsMessage {

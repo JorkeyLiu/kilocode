@@ -7,6 +7,10 @@ import { WorkspaceRouteContext } from "./workspace-routing"
 // kilocode_change start - BLOCKER 1: gate instance load during writer barriers
 import { GenerationGate } from "@/kilocode/server/generation-gate"
 // kilocode_change end
+// kilocode_change start - LOCK-004/006: drain-control bypass during writer barriers
+import { classifyDrainControl, serveControlFromSnapshot, unavailable } from "@/kilocode/server/drain-control"
+import { ControlLease } from "@/kilocode/server/control-lease"
+// kilocode_change end
 
 export class InstanceContextMiddleware extends HttpApiMiddleware.Service<
   InstanceContextMiddleware,
@@ -45,6 +49,7 @@ function provideInstanceContext<E>(
   effect: Effect.Effect<HttpServerResponse.HttpServerResponse, E>,
   store: InstanceStore.Interface,
   gate: GenerationGate,
+  leases: ControlLease,
 ): Effect.Effect<HttpServerResponse.HttpServerResponse, E, WorkspaceRouteContext | HttpServerRequest.HttpServerRequest> {
   return Effect.gen(function* () {
     const route = yield* WorkspaceRouteContext
@@ -61,6 +66,43 @@ function provideInstanceContext<E>(
         Effect.provideService(HttpServerRequest.HttpServerRequest, request),
       )
     }
+    // kilocode_change start - LOCK-003/004/006: drain-control lane.
+    // Pre-barrier lifecycle controls (abort / cancelQueued / permission reply /
+    // question reply+reject) are a separate admission lane: they serve from the
+    // pre-barrier InstanceStore.snapshot and NEVER gate.acquire / store.load /
+    // boot a runtime. Snapshot-first admission removes the racy
+    // `isBarrierActive` engagement — a control with a cached instance completes
+    // whether or not a writer barrier is observable at request time.
+    //
+    // LOCK-002/003: a control served from a cached instance holds an
+    // identity-keyed ControlLease until its handler fully completes
+    // (`Effect.ensuring` releases on success/failure/interruption). A writer
+    // seals the identity and drains outstanding leases before disposing it, so
+    // the control can never race old-instance disposal. If the identity is
+    // already sealed (writer is draining and about to dispose), the request is
+    // refused deterministically — the same semantics as the no-snapshot case.
+    // The barrier check survives only to refuse deterministically (409) when a
+    // barrier is active and the directory has no cached instance — no synthetic
+    // InstanceContext is ever built. Without a barrier and without a snapshot,
+    // the control falls through to the normal gate path so never-booted
+    // directories keep their existing boot + process semantics. Classification
+    // is exact segment matching in the Kilo helper (fail-closed decoding and
+    // route ID schemas); no near-match, traversal, or encoded shape can match.
+    const control = classifyDrainControl(request.method, path)
+    if (control) {
+      const snap = yield* store.snapshot(dir)
+      if (snap._tag === "Some") {
+        const lease = yield* Effect.sync(() => leases.acquire(snap.value))
+        if (lease._tag === "Some") {
+          return yield* serveControlFromSnapshot(effect, snap.value, route.workspaceID, request).pipe(
+            Effect.ensuring(lease.value),
+          )
+        }
+        return unavailable(control)
+      }
+      if (gate.isBarrierActive(dir)) return unavailable(control)
+    }
+    // kilocode_change end
     const release = yield* gate.acquire(dir)
     const ctx = yield* store.load({ directory: dir }).pipe(Effect.ensuring(release))
     return yield* effect.pipe(
@@ -77,6 +119,7 @@ export const instanceContextLayer = Layer.effect(
   Effect.gen(function* () {
     const store = yield* InstanceStore.Service
     const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop) // kilocode_change
-    return InstanceContextMiddleware.of((effect) => provideInstanceContext(effect, store, gate)) // kilocode_change
+    const leases = Option.getOrElse(yield* Effect.serviceOption(ControlLease.Service), () => ControlLease.noop) // kilocode_change
+    return InstanceContextMiddleware.of((effect) => provideInstanceContext(effect, store, gate, leases)) // kilocode_change
   }),
 )

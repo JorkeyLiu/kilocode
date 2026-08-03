@@ -47,6 +47,11 @@ export namespace KiloSessionPromptQueue {
     )
   }
 
+  /** @internal - test-only helper: is a target messageID still waiting to start? */
+  export function _isQueued(sessionID: SessionID, messageID: MessageID): boolean {
+    return pending.get(messageID)?.session === sessionID
+  }
+
   const version = (sessionID: SessionID) => versions.get(sessionID) ?? 0
   const settle = (promise: Promise<void>) =>
     promise.then(

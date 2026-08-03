@@ -5,6 +5,12 @@
  * Provider state does not bake in these fields, so updating them should not trigger
  * instance disposal or provider catalog reload races.
  *
+ * Agent overrides (`agent`, `default_agent`, legacy `mode`) are hot because Agent.state
+ * is fully derived: its cacheKey includes these fields (see KiloAgent.cacheKey), so the
+ * next Agent fetch invalidates and rebuilds from the new config. In-flight generations
+ * keep reading their pinned ConfigSnapshot; no provider/instance resource owns agent
+ * config, so updating it never requires a runtime swap.
+ *
  * Cold keys include provider-coupled fields and all unclassified config fields.
  */
 
@@ -18,6 +24,10 @@ const HOT_KEYS = new Set([
   "subagent_model",
   "subagent_variant",
   "subagent_variant_overrides",
+  // per-agent overrides are lazy derived state (LOCK-001)
+  "agent", // Agent.state cacheKey includes agent; no runtime owns it
+  "default_agent", // Agent.state cacheKey includes default_agent
+  "mode", // legacy per-agent overrides; Agent.state cacheKey includes mode
 ])
 
 /**

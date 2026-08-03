@@ -28,6 +28,7 @@ import { Cause, Deferred, Effect, Option } from "effect"
 import { InstanceStore } from "@/project/instance-store"
 import type { InstanceContext } from "@/project/instance-context"
 import type { GenerationGate } from "./generation-gate"
+import { ControlLease } from "./control-lease"
 import { emitGlobalDisposed } from "@/server/global-lifecycle"
 
 const logRebuildFailure = Effect.fnUntraced(function* (message: string, cause: unknown) {
@@ -55,8 +56,29 @@ let pendingRebuilds = 0
 let drainSignal: Deferred.Deferred<void> | undefined
 let rebuildFailures: Array<{ message: string; cause: unknown }> = []
 
+/**
+ * LOCK-004 registration probe for deterministic ordering tests. Records every
+ * synchronous `rebuildStarted()` call from `forkRebuild` into a test-owned
+ * array. Because registration happens synchronously in the handler fiber
+ * before the deferred final event runs, a test that observes a GlobalBus
+ * ConfigUpdated publish can assert the rebuild registration entry already
+ * exists — a deterministic happens-before proof with no network timing.
+ */
+type RebuildProbeEntry = { kind: "rebuild-registered" | "config-updated" }
+let rebuildProbe: RebuildProbeEntry[] | undefined
+export const probeRebuildRegistration = {
+  install: () => {
+    rebuildProbe = []
+  },
+  entries: () => rebuildProbe ?? [],
+  uninstall: () => {
+    rebuildProbe = undefined
+  },
+}
+
 function rebuildStarted() {
   pendingRebuilds++
+  rebuildProbe?.push({ kind: "rebuild-registered" })
 }
 
 function rebuildCompleted() {
@@ -171,6 +193,7 @@ export const rebuildInstance = Effect.fn("ConfigRebuild.rebuildInstance")(functi
   old: Option.Option<InstanceContext>, // kilocode_change - pre-captured identity from handler
 ) {
   const store = yield* InstanceStore.Service
+  const leases = Option.getOrElse(yield* Effect.serviceOption(ControlLease.Service), () => ControlLease.noop)
   yield* Effect.uninterruptible(
     Effect.gen(function* () {
       yield* Deferred.await(ticket.drained)
@@ -179,6 +202,10 @@ export const rebuildInstance = Effect.fn("ConfigRebuild.rebuildInstance")(functi
       // Effect<void, never, R> type required by forkRebuild. The rebuild fiber
       // always completes successfully; ticket.release runs via ensuring.
       if (old._tag === "Some") {
+        // LOCK-002/003: close control admission for the exact
+        // old identity and await outstanding control leases before disposal, so
+        // a snapshot-served control can never race the disposer.
+        yield* leases.sealAndDrain(old.value)
         yield* store.dispose(old.value).pipe(
           Effect.catchCause((cause) =>
             Effect.gen(function* () {
@@ -213,6 +240,7 @@ export const rebuildGlobal = Effect.fn("ConfigRebuild.rebuildGlobal")(function* 
   olds: Array<{ directory: string; old: Option.Option<InstanceContext> }>, // kilocode_change - pre-captured identities
 ) {
   const store = yield* InstanceStore.Service
+  const leases = Option.getOrElse(yield* Effect.serviceOption(ControlLease.Service), () => ControlLease.noop)
   yield* Effect.uninterruptible(
     Effect.gen(function* () {
       // kilocode_change - BLOCKER 4: per-directory disposal/boot errors are
@@ -223,6 +251,10 @@ export const rebuildGlobal = Effect.fn("ConfigRebuild.rebuildGlobal")(function* 
         Effect.fnUntraced(function* ({ directory, old }) {
           if (old._tag === "None") return
           yield* Deferred.await(ticket.drainFor(directory))
+          // LOCK-002/003: close control admission for the
+          // exact old identity and await outstanding control leases before
+          // disposal, so a snapshot-served control can never race the disposer.
+          yield* leases.sealAndDrain(old.value)
           yield* store.dispose(old.value).pipe(
             Effect.catchCause((cause) =>
               Effect.gen(function* () {

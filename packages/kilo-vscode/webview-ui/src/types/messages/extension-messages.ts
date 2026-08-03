@@ -554,12 +554,21 @@ export interface ConfigUpdatedMessage {
   projectConfig?: Config
   settings?: ExtensionSettings
   features: FeatureFlags
+  /**
+   * Present when this message acknowledges a specific saveConfig() write.
+   * The webview only clears its draft for the save matching its pending ID;
+   * echoes of already-confirmed saves are applied, and stale acks for
+   * superseded saves only release their own sent snapshot (LOCK-002/005).
+   */
+  saveID?: string
 }
 
 export interface ConfigUpdateFailedMessage {
   type: "configUpdateFailed"
   message: string
   details?: string
+  /** Save identity echoed from the webview, when the failure maps to one. */
+  saveID?: string
 }
 
 export interface GlobalConfigLoadedMessage {
@@ -942,10 +951,6 @@ export interface DiffViewerBranchesLoadedMessage {
   currentBranch: string | undefined
 }
 
-export interface ClearPendingPromptsMessage {
-  type: "clearPendingPrompts"
-}
-
 export interface ExtensionDataReadyMessage {
   type: "extensionDataReady"
 }
@@ -1220,7 +1225,6 @@ export type ExtensionMessage =
   | ModelSelectionsLoadedMessage
   | LanguageChangedMessage
   | McpStatusLoadedMessage
-  | ClearPendingPromptsMessage
   | ExtensionDataReadyMessage
   | TelemetryStateMessage
   | RemoteStatusMessage

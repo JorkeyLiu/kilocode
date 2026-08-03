@@ -64,12 +64,12 @@ describe("Config.get generation snapshot (LOCK-004)", () => {
       const llm = yield* TestLLMServer
       const tmp = yield* Effect.acquireRelease(
         Effect.promise(async () => {
-          const global = await tmpdir()
+          const global = await tmpdir({ retain: true })
           await Bun.write(
             path.join(global.path, "kilo.jsonc"),
             JSON.stringify({ $schema: "https://app.kilo.ai/config.json", permission: { bash: "allow" } }, null, 2),
           )
-          const project = await tmpdir({ git: true, config: testProviderConfig(llm.url) })
+          const project = await tmpdir({ git: true, retain: true, config: testProviderConfig(llm.url) })
           return { global, project }
         }),
         (value) =>
@@ -140,12 +140,12 @@ describe("Config.get generation snapshot (LOCK-004)", () => {
       const llm = yield* TestLLMServer
       const tmp = yield* Effect.acquireRelease(
         Effect.promise(async () => {
-          const global = await tmpdir()
+          const global = await tmpdir({ retain: true })
           await Bun.write(
             path.join(global.path, "kilo.jsonc"),
             JSON.stringify({ $schema: "https://app.kilo.ai/config.json", permission: { bash: "allow" } }, null, 2),
           )
-          const project = await tmpdir({ git: true, config: testProviderConfig(llm.url) })
+          const project = await tmpdir({ git: true, retain: true, config: testProviderConfig(llm.url) })
           return { global, project }
         }),
         (value) =>

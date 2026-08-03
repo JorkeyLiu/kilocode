@@ -1,5 +1,6 @@
 import { NodeHttpServer } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
+import { randomUUID } from "crypto"
 import { Context, Effect, Fiber, Layer, Option, Stream } from "effect"
 import { HttpClient, HttpRouter } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -8,6 +9,7 @@ import { GlobalBus } from "../../../src/bus/global"
 import { Config } from "../../../src/config/config"
 import { Installation } from "../../../src/installation"
 import { ServerAuth } from "../../../src/server/auth"
+import { Event } from "../../../src/server/event"
 import { RootHttpApi } from "../../../src/server/routes/instance/httpapi/api"
 import { GlobalPaths } from "../../../src/server/routes/instance/httpapi/groups/global"
 import { controlHandlers } from "../../../src/server/routes/instance/httpapi/handlers/control"
@@ -16,7 +18,7 @@ import { globalHandlers } from "../../../src/server/routes/instance/httpapi/hand
 import { authorizationLayer } from "../../../src/server/routes/instance/httpapi/middleware/authorization"
 import { schemaErrorLayer } from "../../../src/server/routes/instance/httpapi/middleware/schema-error"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
-import { pollWithTimeout, testEffect } from "../../lib/effect"
+import { awaitWithTimeout, pollWithTimeout, testEffect } from "../../lib/effect"
 
 const apiLayer = HttpRouter.serve(
   HttpApiBuilder.layer(RootHttpApi).pipe(
@@ -65,6 +67,52 @@ describe("global SSE lifecycle", () => {
             `global event stream ${attempt} did not remove its listener`,
           )
         }
+      }),
+    15_000,
+  )
+
+  // LOCK-004: the transaction coordinator emits ConfigUpdated events tagged
+  // with a transaction id; that id must survive the ACTUAL SSE serialization
+  // (JSON frame on the /global/event wire), not just the in-memory bus event.
+  it.live(
+    "serialized SSE frames carry the transaction id (LOCK-004)",
+    () =>
+      Effect.gen(function* () {
+        const response = yield* HttpClient.get(GlobalPaths.event)
+        expect(response.status).toBe(200)
+        const tx = randomUUID()
+        const collected: string[] = []
+        // Drain the wire bytes; takeWhile ends the drain exactly when the
+        // frame containing `global.config.updated` arrives, so the test is
+        // event-driven (no sleeps) and never hangs on the 10s heartbeat.
+        const drain = yield* response.stream
+          .pipe(
+            Stream.map((chunk) => {
+              const text = typeof chunk === "string" ? chunk : new TextDecoder().decode(chunk as Uint8Array)
+              collected.push(text)
+              return text
+            }),
+            Stream.takeWhile((text) => !text.includes(Event.ConfigUpdated.type)),
+            Stream.runDrain,
+            Effect.forkChild({ startImmediately: true }),
+          )
+
+        // Emit only once the stream subscribed its GlobalBus listener —
+        // otherwise the event races the subscription and is dropped.
+        yield* pollWithTimeout(
+          Effect.sync(() => (GlobalBus.listenerCount("event") > 0 ? true : undefined)),
+          "global event stream did not subscribe",
+        )
+        GlobalBus.emit("event", {
+          directory: "global",
+          transaction: tx,
+          payload: { type: Event.ConfigUpdated.type, properties: {} },
+        })
+        yield* awaitWithTimeout(Fiber.join(drain), "config.updated SSE frame never arrived", "5 seconds")
+
+        const all = collected.join("")
+        expect(all).toContain(tx)
+        expect(all).toContain(Event.ConfigUpdated.type)
       }),
     15_000,
   )

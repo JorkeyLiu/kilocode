@@ -331,8 +331,15 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   private cachedImageModelsMessage: unknown = null
   /** Cached mcpStatusLoaded payload so requestMcpStatus can be served before client is ready */
   private cachedMcpStatusMessage: unknown = null
-  /** Ref-count of in-flight handleUpdateConfig calls; prevents fetchAndSendConfig from sending stale data */
+  /** Ref-count of in-flight handleUpdateConfig mutations; prevents fetchAndSendConfig from sending stale data */
   private pending = 0
+  /** Newest reconciliation attempt; supersedes older in-flight reconciliation fetches (LOCK-003/004/005). */
+  private reconcileSeq = 0
+  private reconcileInFlight: { seq: number } | null = null
+  /** True once dispose() runs; queueReconcile becomes a no-op (LOCK-004). */
+  private disposed = false
+  /** Revision the last successful reconciliation covered — the dedupe key that prevents a local save from double-fetching its own canonical echo (LOCK-001/002). */
+  private lastReconcileRevision = -1
   private configWarningsShown = false
   /** Cached notificationsLoaded payload */
   private cachedNotificationsMessage: NotificationsMessage | null = null
@@ -386,8 +393,8 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   private unsubscribeFavoritesChange: (() => void) | null = null
   private unsubscribeModelSelectorExpanded: (() => void) | null = null
   private unsubscribeMigrationComplete: (() => void) | null = null // legacy-migration
-  private unsubscribeClearPendingPrompts: (() => void) | null = null
   private unsubscribeDirectoryProvider: (() => void) | null = null
+  private unsubscribeConfigRevision: (() => void) | null = null
   private unsubscribeSandboxPreference: (() => void) | null = null
   private initConnectionPromise: Promise<void> | null = null
   private webviewMessageDisposable: vscode.Disposable | null = null
@@ -449,6 +456,11 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     })
 
     TelemetryProxy.getInstance().setProvider(this)
+
+    // LOCK-001/002: seed the reconciliation dedupe with the current shared
+    // revision so the first local save does not double-fetch when its canonical
+    // SSE echo advances the revision.
+    this.lastReconcileRevision = this.connectionService.getConfigRevision()
   }
 
   setRemoteService(service: RemoteStatusService): void {
@@ -1245,6 +1257,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
             message.projectConfig,
             message.globalUnset,
             message.projectUnset,
+            message.saveID,
           )
           break
         case "openSettingsTab":
@@ -1537,8 +1550,8 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.unsubscribeProfileChange?.()
     this.unsubscribeFavoritesChange?.()
     this.unsubscribeModelSelectorExpanded?.()
-    this.unsubscribeClearPendingPrompts?.()
     this.unsubscribeDirectoryProvider?.()
+    this.unsubscribeConfigRevision?.()
 
     try {
       const workspaceDir = this.getWorkspaceDirectory()
@@ -1653,15 +1666,14 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       })
       // legacy-migration end
 
-      // Subscribe to clear-pending-prompts broadcast (fired after config save drains prompts)
-      this.unsubscribeClearPendingPrompts = this.connectionService.onClearPendingPrompts(() => {
-        this.postMessage({ type: "clearPendingPrompts" })
-      })
-
-      // Register this provider's directories so drainPendingPrompts() covers all instances
+      // Register this provider's directories so getKnownDirectories() covers all instances
       this.unsubscribeDirectoryProvider = this.connectionService.registerDirectoryProvider(() => {
         return [this.getWorkspaceDirectory(), ...this.sessionDirectories.values()]
       })
+
+      // Subscribe to shared config revision advances — any local save or
+      // foreign-window config change triggers a reconciliation (LOCK-005).
+      this.unsubscribeConfigRevision = this.connectionService.onConfigRevision(() => this.queueReconcile())
 
       // Get current state and push to webview
       const serverInfo = this.connectionService.getServerInfo()
@@ -2277,7 +2289,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     if (msg.type === "deleteCustomProvider")
       return deleteCustomProviderAction(ctx, rid, pid, this.cachedConfigMessage, set)
     if (msg.type === "saveCustomProvider" && config)
-      return saveCustomProviderAction(ctx, rid, pid, config, key, keyChanged, this.cachedConfigMessage, set)
+      return saveCustomProviderAction(ctx, rid, pid, config, key, keyChanged)
   }
 
   private async handleGetProviderCredential(msg: Record<string, unknown>): Promise<void> {
@@ -2491,9 +2503,18 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
 
   /**
    * Fetch backend config and send to webview.
+   *
+   * LOCK-002: captures the client identity, connection generation, and shared
+   * config revision BEFORE any reads. Every cache mutation/post verifies the
+   * provider is not disposed, still on the same client/generation, and the
+   * revision has not advanced; a stale result is dropped silently — the
+   * current reconcile/connect path owns the refetch. The `pending > 0` guard
+   * keeps this fetch out of an in-flight handleUpdateConfig write so it never
+   * races with a pending save/draft.
    */
   private async fetchAndSendConfig(): Promise<void> {
-    if (!this.client || this.connectionState !== "connected") {
+    const client = this.client
+    if (!client || this.connectionState !== "connected") {
       if (this.cachedConfigMessage) {
         this.postMessage(this.cachedConfigMessage)
       }
@@ -2506,13 +2527,23 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       return
     }
 
+    // LOCK-002: lifecycle snapshot captured before the reads. A reconnect
+    // (new client/generation) or a config revision advance while the fetch is
+    // held makes the result stale — it must never mutate the cache or post.
+    const generation = this.connectionGeneration
+    const revision = this.connectionService.getConfigRevision()
+
     try {
       const workspaceDir = this.getWorkspaceDirectory()
       const [{ data: config }, { data: global }, { data: overlay }] = await Promise.all([
-        retry(() => this.client!.config.get({ directory: workspaceDir }, { throwOnError: true })),
-        this.client.global.config.get({ throwOnError: true }),
-        this.client.config.overlay({ directory: workspaceDir, scope: "project" }, { throwOnError: true }),
+        retry(() => client.config.get({ directory: workspaceDir }, { throwOnError: true })),
+        client.global.config.get({ throwOnError: true }),
+        client.config.overlay({ directory: workspaceDir, scope: "project" }, { throwOnError: true }),
       ])
+      // LOCK-002: drop stale results immediately before every cache mutation/post.
+      if (!this.configGuard(client, generation, revision)) {
+        return
+      }
       this.cachedGlobalConfig = global ?? null
 
       const message = {
@@ -2609,41 +2640,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     if (!this.client || this.connectionState !== "connected") return
     const dir = this.getWorkspaceDirectory()
     await seedSessionStatuses(this.client, dir, this.sessionStatusMap, (msg) => this.postMessage(msg), reconcile)
-  }
-
-  /**
-   * Fetch the latest merged config and push it as configUpdated.
-   * Called when global.config.updated SSE fires (config changed without a full dispose).
-   */
-  private async fetchAndSendConfigUpdated(): Promise<void> {
-    if (!this.client || this.connectionState !== "connected") return
-    try {
-      const dir = this.getWorkspaceDirectory()
-      const [{ data: config }, { data: global }, { data: overlay }] = await Promise.all([
-        retry(() => this.client!.config.get({ directory: dir }, { throwOnError: true })),
-        this.client.global.config.get({ throwOnError: true }),
-        this.client.config.overlay({ directory: dir, scope: "project" }, { throwOnError: true }),
-      ])
-      this.cachedGlobalConfig = global ?? null
-      this.cachedConfigMessage = {
-        type: "configLoaded",
-        config,
-        globalConfig: global,
-        projectConfig: overlay?.project,
-        settings: { maxCost: this.maxCostSetting(), languageCommitMessage: this.commitMessageLanguageSetting() },
-        features: configFeatures(config),
-      }
-      this.postMessage({
-        type: "configUpdated",
-        config,
-        globalConfig: global,
-        projectConfig: overlay?.project,
-        settings: { maxCost: this.maxCostSetting(), languageCommitMessage: this.commitMessageLanguageSetting() },
-        features: configFeatures(config),
-      })
-    } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to fetch config after update:", error)
-    }
   }
 
   /**
@@ -2966,9 +2962,14 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     project: Partial<Config> = {},
     globalUnset: string[][] = [],
     projectUnset: string[][] = [],
+    saveID?: string,
   ): Promise<void> {
     if (!this.client || this.connectionState !== "connected") {
-      this.postMessage({ type: "configUpdateFailed", message: "Not connected to CLI backend" })
+      this.postMessage({
+        type: "configUpdateFailed",
+        message: "Not connected to CLI backend",
+        ...(saveID && { saveID }),
+      })
       return
     }
 
@@ -2985,35 +2986,202 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     const hasGlobal = Object.keys(partial).length > 0 || globalUnset.length > 0
     const hasProject = Object.keys(project).length > 0 || projectUnset.length > 0
 
-    this.pending++
+    // LOCK-006: no drainPendingPrompts — settings save must not reject
+    // permissions, questions, suggestions, or network waits.
     const dir = this.getWorkspaceDirectory()
 
+    // LOCK-001: send exactly one transaction request for all requested scopes.
+    // Do not send empty scopes; all requested scopes succeed/fail as one request.
+    const txGlobal = hasGlobal ? { set: partial, unset: globalUnset } : undefined
+    const txProject = hasProject ? { set: project, unset: projectUnset } : undefined
+
+    // LOCK-004: pending guards only the mutation/ack lifecycle and decrements
+    // exactly once in finally, so a synchronous post/ack error can never leak
+    // it; detached refresh/reconcile runs after the guard is released.
+    this.pending++
+    let txResult: { global: Config; project: Config; effective: Config } | undefined
     try {
-      await this.connectionService.drainPendingPrompts()
-      if (hasGlobal) {
-        await this.client.config.overlayUpdate(
-          { scope: "global", set: partial, unset: globalUnset, directory: dir },
-          { throwOnError: true },
-        )
-      }
-      if (hasProject) {
-        await this.client.config.overlayUpdate(
-          { scope: "project", set: project, unset: projectUnset, directory: dir },
-          { throwOnError: true },
-        )
-      }
+      const res = await this.client.config.transaction(
+        { directory: dir, global: txGlobal, project: txProject },
+        { throwOnError: true },
+      )
+      txResult = res.data
+
+      // LOCK-002: build immediate configUpdated directly from authoritative
+      // transaction response {global, project, effective}. No local
+      // reconstruction needed.
+      this.postMessage({
+        type: "configUpdated",
+        config: txResult.effective,
+        globalConfig: txResult.global,
+        projectConfig: txResult.project,
+        settings: { maxCost: this.maxCostSetting(), languageCommitMessage: this.commitMessageLanguageSetting() },
+        features: configFeatures(txResult.effective),
+        ...(saveID && { saveID }),
+      })
+      this.requirements.clear()
+
+      // LOCK-001: the immediate ack above is the authoritative save response,
+      // but the revision is NOT advanced here — the connection service's SSE
+      // dispatch owns revision advancement via the canonical
+      // global.config.updated echo (one logical revision per transaction,
+      // keyed by its transaction id, LOCK-004). queueReconcile below is the
+      // deduplicated revision path for the rare case the echo is absent; it is
+      // a no-op when the echo's advance already triggered a reconcile.
+      void this.queueReconcile()
     } catch (error) {
-      this.postConfigFailure(error)
-      this.pending--
+      // LOCK-003: real backend detail; the webview keeps its draft/optimistic
+      // state per the current failure contract — never claim success.
+      this.postConfigFailure(error, saveID)
       return
+    } finally {
+      this.pending--
     }
 
+    // Provider/agent pickers refresh independently; never blocks the ack.
+    const refresh = async () => {
+      if (refreshProviders) {
+        await this.fetchAndSendProviders().catch((error) =>
+          console.error("[Kilo New] KiloProvider: provider refresh after config save failed:", error),
+        )
+      }
+      if (refreshAgents) {
+        await this.fetchAndSendAgents().catch((error) =>
+          console.error("[Kilo New] KiloProvider: agent refresh after config save failed:", error),
+        )
+      }
+    }
+    void refresh()
+  }
+
+  /** Bounded backoff for reconciliation retries: 1s, 2s, 5s, 10s, 30s (LOCK-003). */
+  private static readonly RECONCILE_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
+  private reconcileRetryTimer: (() => void) | null = null
+  private reconcileRetryAttempt = 0
+
+  /** Outcome of one reconciliation fetch; drives the retry state machine (LOCK-003/004/005). */
+  private static readonly defaultScheduleRetry: (delayMs: number, fn: () => void) => () => void = (delay, fn) => {
+    const timer = setTimeout(fn, delay)
+    return () => clearTimeout(timer)
+  }
+
+  /**
+   * Schedule a detached config reconciliation (LOCK-003/004/005):
+   * - One fetch is in flight per provider at a time; further requests coalesce
+   *   into it (they will re-run stale for the latest revision if needed).
+   * - The dedupe key is the shared revision: a revision the last successful
+   *   reconcile already covered is never re-fetched, so a local save whose
+   *   canonical SSE echo advances the revision produces exactly one fetch.
+   * - Real fetch failures enter the single bounded backoff path
+   *   (1/2/5/10/30s) — never an immediate resolved-false loop.
+   * - Starting, succeeding, or being superseded cancels obsolete retry timers
+   *   and resets attempts appropriately.
+   * - No-op after provider disposal (LOCK-004).
+   */
+  private queueReconcile(): void {
+    if (this.disposed) return
+    if (this.reconcileInFlight) return
+    const client = this.client
+    if (!client || this.connectionState !== "connected") return
+    const revision = this.connectionService.getConfigRevision()
+    // LOCK-001/002: never re-fetch a revision the last successful reconcile
+    // already covered — the canonical echo of a local save advances exactly
+    // once, and this dedupe makes that advance the single fetch trigger.
+    if (revision === this.lastReconcileRevision) return
+    // LOCK-003: starting or being superseded by a newer revision cancels any
+    // obsolete retry timer and restarts the attempt sequence.
+    this.cancelReconcileRetry()
+    this.reconcileRetryAttempt = 0
+    this.startReconcile(revision, client)
+  }
+
+  /** Begin one reconciliation fetch for the given revision/lifecycle snapshot. */
+  private startReconcile(revision: number, client: KiloClient): void {
+    const seq = ++this.reconcileSeq
+    this.reconcileInFlight = { seq }
+    void this.reconcileConfig(seq, revision, this.connectionGeneration, client).then(
+      (result) => {
+        if (this.reconcileInFlight?.seq !== seq) return
+        this.reconcileInFlight = null
+        if (result === "ok") {
+          // Success — cancel any obsolete retry timer and record the covered revision.
+          this.cancelReconcileRetry()
+          this.reconcileRetryAttempt = 0
+          this.lastReconcileRevision = revision
+        } else if (result === "failed") {
+          // LOCK-003: real failure — exactly one bounded backoff path.
+          this.scheduleReconcileRetry()
+        } else {
+          // Stale — a newer revision/lifecycle superseded this fetch. Schedule
+          // only the latest needed attempt, never an immediate failure loop.
+          this.queueReconcile()
+        }
+      },
+      () => {
+        // Defensive: reconcileConfig catches its own failures, but an
+        // unexpected rejection must not leave the machine stuck.
+        if (this.reconcileInFlight?.seq !== seq) return
+        this.reconcileInFlight = null
+        this.scheduleReconcileRetry()
+      },
+    )
+  }
+
+  /**
+   * Schedule a bounded backoff retry for a failed reconciliation (LOCK-003).
+   * The timer is created through the injectable scheduler (tests use a fake
+   * clock; production defaults to setTimeout/clearTimeout) and is canceled by
+   * cancelReconcileRetry on success, supersession, or disposal (LOCK-004).
+   * The retry callback continues the SAME revision's attempt sequence — it
+   * must not reset the backoff counter, or the 1/2/5/10/30s schedule would
+   * never escalate.
+   */
+  private scheduleReconcileRetry(): void {
+    this.cancelReconcileRetry()
+    const attempt = this.reconcileRetryAttempt
+    const delay =
+      KiloProvider.RECONCILE_BACKOFF_MS[Math.min(attempt, KiloProvider.RECONCILE_BACKOFF_MS.length - 1)]
+    this.reconcileRetryAttempt = attempt + 1
+    const schedule = this.opts.scheduleRetry ?? KiloProvider.defaultScheduleRetry
+    this.reconcileRetryTimer = schedule(delay, () => {
+      this.reconcileRetryTimer = null
+      const client = this.client
+      if (this.disposed || !client || this.connectionState !== "connected") return
+      // Defensive dedupe: if a successful reconcile covered this revision in
+      // the meantime, there is nothing left to fetch.
+      if (this.connectionService.getConfigRevision() === this.lastReconcileRevision) return
+      this.startReconcile(this.connectionService.getConfigRevision(), client)
+    })
+  }
+
+  /** Cancel any pending reconciliation retry timer (LOCK-003/004). */
+  private cancelReconcileRetry(): void {
+    this.reconcileRetryTimer?.()
+    this.reconcileRetryTimer = null
+  }
+
+  /**
+   * Fetch fresh config and push it as configUpdated once it is safe to do so
+   * (LOCK-005): the sequence, shared revision, provider lifecycle epoch, and
+   * connection generation are rechecked immediately before every cache
+   * mutation and postMessage. Stale results return "stale" (never post), real
+   * failures return "failed" (bounded backoff), success returns "ok".
+   */
+  private async reconcileConfig(
+    seq: number,
+    revision: number,
+    generation: number,
+    client: KiloClient,
+  ): Promise<"ok" | "stale" | "failed"> {
     try {
+      const dir = this.getWorkspaceDirectory()
       const [{ data: merged }, { data: global }, { data: overlay }] = await Promise.all([
-        retry(() => this.client!.config.get({ directory: dir }, { throwOnError: true })),
-        this.client.global.config.get({ throwOnError: true }),
-        this.client.config.overlay({ directory: dir, scope: "project" }, { throwOnError: true }),
+        retry(() => client.config.get({ directory: dir }, { throwOnError: true })),
+        client.global.config.get({ throwOnError: true }),
+        client.config.overlay({ directory: dir, scope: "project" }, { throwOnError: true }),
       ])
+      // LOCK-005: drop stale results immediately before every cache mutation/post.
+      if (!this.reconcileGuard(seq, revision, generation, client)) return "stale"
       this.cachedGlobalConfig = global ?? null
       this.cachedConfigMessage = {
         type: "configLoaded",
@@ -3031,39 +3199,56 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         settings: { maxCost: this.maxCostSetting(), languageCommitMessage: this.commitMessageLanguageSetting() },
         features: configFeatures(merged),
       })
-      this.requirements.clear()
-      await Promise.all([
-        refreshProviders ? this.fetchAndSendProviders() : Promise.resolve(),
-        refreshAgents ? this.fetchAndSendAgents() : Promise.resolve(),
-      ])
+      return "ok"
     } catch (error) {
-      console.error("[Kilo New] KiloProvider: Config write succeeded but post-write refresh failed:", error)
-      const patch =
-        partial.indexing === undefined && project.indexing === undefined
-          ? { ...partial, ...project }
-          : { ...partial, ...project, indexing: { ...(partial.indexing ?? {}), ...(project.indexing ?? {}) } }
-      const cached = (this.cachedConfigMessage as { config?: unknown } | null)?.config
-      const features = (this.cachedConfigMessage as { features?: unknown } | null)?.features
-      const optimistic =
-        cached && typeof cached === "object" ? { ...(cached as Record<string, unknown>), ...patch } : patch
-      this.postMessage({
-        type: "configUpdated",
-        config: optimistic,
-        globalConfig: this.cachedGlobalConfig ?? undefined,
-        settings: { maxCost: this.maxCostSetting(), languageCommitMessage: this.commitMessageLanguageSetting() },
-        features: features ?? configFeatures(optimistic as Config),
-      })
-      this.requirements.clear()
-    } finally {
-      this.pending--
+      // LOCK-004: a fetch that was superseded while in flight is not an error
+      // and must not enter the backoff path; only real failures do.
+      if (!this.reconcileGuard(seq, revision, generation, client)) return "stale"
+      console.error("[Kilo New] KiloProvider: Config persisted but post-write reconciliation failed:", error)
+      return "failed"
     }
   }
-  private postConfigFailure(error: unknown): void {
+
+  /**
+   * LOCK-004/005: true while this reconciliation attempt may still mutate the
+   * cache and post — not disposed, still the newest attempt, same shared
+   * revision, same provider lifecycle epoch, and same live client (a backend
+   * reconnect replaces the client, so a held fetch across a reconnect goes
+   * stale and never posts).
+   */
+  private reconcileGuard(seq: number, revision: number, generation: number, client: KiloClient): boolean {
+    return (
+      !this.disposed &&
+      seq === this.reconcileSeq &&
+      revision === this.connectionService.getConfigRevision() &&
+      generation === this.connectionGeneration &&
+      this.client === client
+    )
+  }
+
+  /**
+   * LOCK-002: true while an ordinary fetchAndSendConfig result may still
+   * mutate the cache and post — not disposed, same live client (a backend
+   * reconnect replaces it, so a held fetch across a reconnect goes stale),
+   * same lifecycle epoch, and the shared config revision has not advanced.
+   * A stale result is dropped; the reconcile/connect path owns the refetch.
+   */
+  private configGuard(client: KiloClient, generation: number, revision: number): boolean {
+    return (
+      !this.disposed &&
+      this.client === client &&
+      this.connectionGeneration === generation &&
+      this.connectionService.getConfigRevision() === revision
+    )
+  }
+
+  private postConfigFailure(error: unknown, saveID?: string): void {
     console.error("[Kilo New] KiloProvider: Failed to update config:", error)
     this.postMessage({
       type: "configUpdateFailed",
       message: getErrorMessage(error) || "Failed to update config",
       details: getConfigErrorDetails(error),
+      ...(saveID && { saveID }),
     })
   }
   private async resolveSession(sessionID?: string, draftID?: string, context?: string, contextDirectory?: string) {
@@ -4094,11 +4279,12 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     }
 
     // Config was updated without a full dispose (e.g. permission-only save).
-    // Fetch and push the updated config + refresh agents and providers so the
-    // Settings panel and mode/model pickers reflect the change.
+    // The connection service already advanced the shared revision and the
+    // onConfigRevision subscription already queued reconciliation. Refresh
+    // agents/providers so the UI reflects new capability state (LOCK-003/LOCK-005).
     if (event.type === "global.config.updated") {
       this.requirements.clear()
-      void Promise.all([this.fetchAndSendConfigUpdated(), this.fetchAndSendAgents(), this.fetchAndSendProviders()])
+      void Promise.all([this.fetchAndSendAgents(), this.fetchAndSendProviders()])
       return
     }
 
@@ -4539,9 +4725,18 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.unsubscribeFavoritesChange?.()
     this.unsubscribeModelSelectorExpanded?.()
     this.unsubscribeMigrationComplete?.()
-    this.unsubscribeClearPendingPrompts?.()
     this.unsubscribeDirectoryProvider?.()
+    this.unsubscribeConfigRevision?.()
     this.unsubscribeSandboxPreference?.()
+    // LOCK-004: terminal disposal — cancel any pending reconciliation retry
+    // timer, invalidate the attempt sequence and the lifecycle epoch so a held
+    // reconciliation result can neither post nor schedule a retry, and make
+    // queueReconcile a no-op.
+    this.disposed = true
+    this.cancelReconcileRetry()
+    this.reconcileInFlight = null
+    this.reconcileSeq += 1
+    this.connectionGeneration += 1
     this.viewStateDisposable?.dispose()
     this.visibilityDisposable?.dispose()
     this.webviewMessageDisposable?.dispose()

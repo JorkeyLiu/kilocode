@@ -99,8 +99,8 @@ async function patchGlobal(set: Record<string, unknown>) {
 
 describe("config validation (LOCK-007)", () => {
   test.serial("project jsonc invalid patch returns 400, writes nothing, emits nothing", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await seedGlobalConfig(global.path, "kilo.jsonc")
     ;(Global.Path as { config: string }).config = global.path
     const events = captureEvents()
@@ -123,8 +123,8 @@ describe("config validation (LOCK-007)", () => {
   })
 
   test.serial("project json invalid patch returns 400 and does not corrupt the existing file", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir({ config: { model: "keep/model", username: "kilo" } })
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true, config: { model: "keep/model", username: "kilo" } })
     await seedGlobalConfig(global.path, "kilo.jsonc")
     ;(Global.Path as { config: string }).config = global.path
     const events = captureEvents()
@@ -149,8 +149,8 @@ describe("config validation (LOCK-007)", () => {
   })
 
   test.serial("global json invalid patch returns 400 and does not write", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await seedGlobalConfig(global.path, "kilo.json", { model: "keep/model" })
     ;(Global.Path as { config: string }).config = global.path
     const events = captureEvents()
@@ -175,8 +175,8 @@ describe("config validation (LOCK-007)", () => {
   })
 
   test.serial("valid project json patch still writes through", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir({ config: { model: "keep/model" } })
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true, config: { model: "keep/model" } })
     await seedGlobalConfig(global.path, "kilo.jsonc")
     ;(Global.Path as { config: string }).config = global.path
     const events = captureEvents()

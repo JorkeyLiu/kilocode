@@ -5,6 +5,11 @@ export type GlobalEvent = {
   directory?: string
   project?: string
   workspace?: string
+  // kilocode_change start - logical transaction marker: per-scope ConfigUpdated
+  // events emitted by the combined config transaction carry the same id so
+  // revision logic can group them into one logical save (LOCK-004).
+  transaction?: string
+  // kilocode_change end
   payload: any
 }
 

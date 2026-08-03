@@ -72,6 +72,13 @@ export interface GenerationGate {
   readonly prepareWrite: (directory: string) => Effect.Effect<Effect.Effect<void>>
   readonly beginWrite: (directory: string) => Effect.Effect<ProjectWriteTicket>
   readonly beginWriteGlobal: () => Effect.Effect<GlobalWriteTicket>
+  /**
+   * True when a reader admission for `directory` would block behind an active
+   * or queued writer barrier. Pure check, never mutates gate state. Used by
+   * the instance middleware to decide whether a drain-control request must
+   * bypass reader admission (LOCK-004).
+   */
+  readonly isBarrierActive: (directory: string) => boolean
 }
 
 const done = (deferred: Deferred.Deferred<void>) => Deferred.doneUnsafe(deferred, Effect.succeed(void 0))
@@ -86,6 +93,7 @@ export const noop: GenerationGate = {
   acquire: () => Effect.succeed(Effect.void),
   prepareWrite: () => Effect.succeed(Effect.void),
   beginWrite: (directory) => Effect.succeed(noopTicket(directory)),
+  isBarrierActive: () => false,
   beginWriteGlobal: () =>
     Effect.succeed({
       kind: "global" as const,
@@ -121,8 +129,11 @@ export const layer = Layer.effect(
         (item) => (item.kind === "project" || item.kind === "prep") && item.directory === target.directory,
       )
 
+    // Pure: true when a reader for `target` would wait behind a writer barrier.
+    const wouldBlock = (target: Entry) => hasGlobalIntent() || target.writing || hasLocalIntent(target)
+
     const admitReader = (target: Entry) => {
-      if (hasGlobalIntent() || target.writing || hasLocalIntent(target)) return false
+      if (wouldBlock(target)) return false
       target.readers += 1
       return true
     }
@@ -374,7 +385,9 @@ export const layer = Layer.effect(
       )
     })
 
-    return Service.of({ acquire, prepareWrite, beginWrite, beginWriteGlobal })
+    const isBarrierActive = (directory: string) => wouldBlock(entry(directory))
+
+    return Service.of({ acquire, prepareWrite, beginWrite, beginWriteGlobal, isBarrierActive })
   }),
 )
 

@@ -105,8 +105,8 @@ async function patchLegacyGlobal(body: Record<string, unknown>): Promise<PatchRe
 
 describe("global no-op: hot patch (overlay route)", () => {
   test.serial("unchanged hot JSON patch writes nothing and emits no events", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     // Seed with permission.bash to prevent migrateBashPermission race
     await Bun.write(
       path.join(global.path, "kilo.json"),
@@ -134,8 +134,8 @@ describe("global no-op: hot patch (overlay route)", () => {
   })
 
   test.serial("unchanged hot JSONC patch preserves exact bytes and admits later work", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     // Seed with noncanonical JSONC formatting (trailing comma, extra space)
     await Bun.write(
       path.join(global.path, "kilo.jsonc"),
@@ -162,8 +162,8 @@ describe("global no-op: hot patch (overlay route)", () => {
   })
 
   test.serial("unchanged hot JSON patch with different key order writes nothing", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     // Seed with keys in a specific order, including $schema to prevent loadGlobal from injecting it
     await Bun.write(
       path.join(global.path, "kilo.json"),
@@ -195,8 +195,8 @@ describe("global no-op: hot patch (overlay route)", () => {
 
 describe("global no-op: hot patch (legacy /global/config route)", () => {
   test.serial("unchanged hot patch via legacy route writes nothing and emits no events", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await Bun.write(
       path.join(global.path, "kilo.json"),
       JSON.stringify(
@@ -225,8 +225,8 @@ describe("global no-op: hot patch (legacy /global/config route)", () => {
 
 describe("global no-op: cold patch (overlay route)", () => {
   test.serial("unchanged cold JSON patch writes nothing, emits no events, and releases ticket", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await Bun.write(
       path.join(global.path, "kilo.json"),
       JSON.stringify({ $schema: "https://app.kilo.ai/config.json", permission: { bash: "allow" } }, null, 2),
@@ -253,8 +253,8 @@ describe("global no-op: cold patch (overlay route)", () => {
   })
 
   test.serial("unchanged cold JSONC patch writes nothing and emits no events", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await Bun.write(
       path.join(global.path, "kilo.jsonc"),
       JSON.stringify({ $schema: "https://app.kilo.ai/config.json", permission: { bash: "allow" } }, null, 2),
@@ -284,8 +284,8 @@ describe("global no-op: cold patch (overlay route)", () => {
 
 describe("global no-op: cold patch (legacy /global/config route)", () => {
   test.serial("unchanged cold patch via legacy route writes nothing and releases ticket", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await Bun.write(
       path.join(global.path, "kilo.json"),
       JSON.stringify({ $schema: "https://app.kilo.ai/config.json", permission: { bash: "allow" } }, null, 2),
@@ -316,8 +316,8 @@ describe("global no-op: cold patch (legacy /global/config route)", () => {
 
 describe("global no-op: semantic equivalence", () => {
   test.serial("JSON patch against noncanonical JSON is semantic no-op when value unchanged", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     // Noncanonical: extra spaces, different key order, includes $schema
     await Bun.write(
       path.join(global.path, "kilo.json"),
@@ -341,8 +341,8 @@ describe("global no-op: semantic equivalence", () => {
   })
 
   test.serial("actual change after no-op still writes and emits", async () => {
-    await using global = await tmpdir()
-    await using project = await tmpdir()
+    await using global = await tmpdir({ retain: true })
+    await using project = await tmpdir({ retain: true })
     await Bun.write(
       path.join(global.path, "kilo.json"),
       JSON.stringify(

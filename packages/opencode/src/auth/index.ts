@@ -47,6 +47,49 @@ export interface Interface {
   readonly remove: (key: string) => Effect.Effect<void, AuthError>
 }
 
+// kilocode_change start - exact auth-file artifact for compensating rollback
+// (LOCK-003): Auth.remove persists the file before chmod/telemetry, so a
+// thrown failure after persistence leaves the file mutated while the caller
+// sees failure. Callers that must roll back (custom provider deletion) capture
+// the exact persisted bytes + mode BEFORE the mutation and restore them on
+// compensation instead of inferring removal from method success. Content is
+// raw bytes (LOCK-002): an auth file may contain arbitrary UTF-8 or binary
+// payloads, and a string round-trip can corrupt non-UTF-8 bytes.
+export type AuthSnapshot = {
+  readonly content: Uint8Array | undefined
+  readonly mode: number
+}
+
+export const snapshotFile = (fs: FSUtil.Interface): Effect.Effect<AuthSnapshot, AuthError> =>
+  Effect.gen(function* () {
+    const content = yield* fs
+      .readFile(file)
+      .pipe(
+        Effect.catchReason("PlatformError", "NotFound", () => Effect.succeed(undefined)),
+        Effect.mapError(fail("Failed to read auth data")),
+      )
+    if (content === undefined) return { content: undefined, mode: 0o600 }
+    const stat = yield* fs.stat(file).pipe(Effect.mapError(fail("Failed to stat auth data")))
+    return { content, mode: stat.mode & 0o777 }
+  })
+
+export const restoreFile = (fs: FSUtil.Interface, snap: AuthSnapshot): Effect.Effect<void, AuthError> =>
+  Effect.gen(function* () {
+    if (snap.content === undefined) {
+      yield* fs
+        .remove(file)
+        .pipe(
+          Effect.catchIf((error) => error.reason._tag === "NotFound", () => Effect.void),
+          Effect.mapError(fail("Failed to restore auth data")),
+        )
+      return
+    }
+    // Byte-exact restore: write the raw bytes, then reapply the captured mode.
+    yield* fs.writeFile(file, snap.content).pipe(Effect.mapError(fail("Failed to restore auth data")))
+    yield* fs.chmod(file, snap.mode).pipe(Effect.mapError(fail("Failed to restore auth data")))
+  })
+// kilocode_change end
+
 export class Service extends Context.Service<Service, Interface>()("@opencode/Auth") {}
 
 export const layer = Layer.effect(

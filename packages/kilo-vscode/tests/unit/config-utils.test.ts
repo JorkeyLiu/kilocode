@@ -2,10 +2,13 @@ import { describe, it, expect } from "bun:test"
 import {
   configUnsetPaths,
   ConfigState,
+  deepEqual,
   deepMerge,
   mergeScopedConfig,
+  newSaveID,
   pruneConfigSet,
   stripNulls,
+  subtractSentDraft,
 } from "../../webview-ui/src/utils/config-utils"
 import type { Config } from "../../webview-ui/src/types/messages"
 
@@ -95,6 +98,72 @@ describe("stripNulls", () => {
   it("strips nulls recursively in nested objects", () => {
     const cfg = { agent: { code: { temperature: 0.5, prompt: null } } } as unknown as Config
     expect(stripNulls(cfg)).toEqual({ agent: { code: { temperature: 0.5 } } })
+  })
+})
+
+describe("newSaveID (LOCK-001)", () => {
+  it("produces globally unique identities across calls", () => {
+    const ids = new Set(Array.from({ length: 20 }, () => newSaveID()))
+    expect(ids.size).toBe(20)
+  })
+
+  it("never produces the old provider-local counter shape", () => {
+    expect(newSaveID()).not.toMatch(/^cfg-\d+$/)
+  })
+})
+
+describe("subtractSentDraft (LOCK-002)", () => {
+  it("drops sent paths whose value is unchanged", () => {
+    const current = { snapshot: false, username: "bob" }
+    const sent = { snapshot: false }
+    expect(subtractSentDraft(current, sent)).toEqual({ username: "bob" })
+  })
+
+  it("keeps same-field edits made after the save was sent", () => {
+    const current = { agent: { code: { temperature: 0.5 } } }
+    const sent = { agent: { code: { temperature: 0.2 } } }
+    expect(subtractSentDraft(current, sent)).toEqual({ agent: { code: { temperature: 0.5 } } })
+  })
+
+  it("keeps newer fields nested next to sent fields", () => {
+    const current = { agent: { code: { temperature: 0.2, steps: 5 } } }
+    const sent = { agent: { code: { temperature: 0.2 } } }
+    expect(subtractSentDraft(current, sent)).toEqual({ agent: { code: { steps: 5 } } })
+  })
+
+  it("prunes empty parents so isDirty stays accurate", () => {
+    const current = { agent: { code: { temperature: 0.2 } }, snapshot: false }
+    const sent = { agent: { code: { temperature: 0.2 } }, snapshot: false }
+    expect(subtractSentDraft(current, sent)).toEqual({})
+  })
+
+  it("removes null delete sentinels when the ack confirms them", () => {
+    const current = { default_agent: null, username: "alice" }
+    const sent = { default_agent: null }
+    expect(subtractSentDraft(current, sent)).toEqual({ username: "alice" })
+  })
+
+  it("keeps a re-set value when the user re-enabled a field after sending the delete", () => {
+    const current = { default_agent: "code", username: "alice" }
+    const sent = { default_agent: null }
+    expect(subtractSentDraft(current, sent)).toEqual({ default_agent: "code", username: "alice" })
+  })
+
+  it("keeps arrays that changed after the save was sent and drops unchanged ones", () => {
+    const current = { instructions: ["a", "b", "c"], disabled_providers: ["openai"] }
+    const sent = { instructions: ["a", "b"], disabled_providers: ["openai"] }
+    expect(subtractSentDraft(current, sent)).toEqual({ instructions: ["a", "b", "c"] })
+  })
+})
+
+describe("deepEqual", () => {
+  it("compares scalars, nested objects, and arrays structurally", () => {
+    expect(deepEqual(1, 1)).toBe(true)
+    expect(deepEqual({ a: { b: 1 } }, { a: { b: 1 } })).toBe(true)
+    expect(deepEqual({ a: 1 }, { a: 2 })).toBe(false)
+    expect(deepEqual(["a", "b"], ["a", "b"])).toBe(true)
+    expect(deepEqual(["a", "b"], ["a", "c"])).toBe(false)
+    expect(deepEqual({ a: { b: 1 } }, { a: { c: 1 } })).toBe(false)
   })
 })
 
@@ -202,11 +271,11 @@ describe("ConfigState", () => {
       const s = new ConfigState()
       s.handleConfigLoaded({ snapshot: true })
       s.updateConfig({ snapshot: false })
-      s.saveConfig()
+      s.saveConfig("s1", { snapshot: false })
       expect(s.saving).toBe(true)
 
       // Server confirms the write
-      s.handleConfigUpdated({ snapshot: false })
+      s.handleConfigUpdated({ snapshot: false }, "s1")
 
       expect(s.config.snapshot).toBe(false)
       expect(s.dirty).toBe(false)
@@ -218,10 +287,10 @@ describe("ConfigState", () => {
       const s = new ConfigState()
       s.handleConfigLoaded({ default_agent: "code" })
       s.updateConfig({ default_agent: null })
-      s.saveConfig()
+      s.saveConfig("s1", { default_agent: null })
 
       // Server confirms the write by returning config without default_agent.
-      s.handleConfigUpdated({})
+      s.handleConfigUpdated({}, "s1")
 
       expect(s.config.default_agent).toBeUndefined()
       expect(s.dirty).toBe(false)
@@ -281,17 +350,213 @@ describe("ConfigState", () => {
     })
   })
 
-  it("ignores repeated save attempts while a save is already in-flight", () => {
+  it("a new save while one is in flight replaces the pending identity", () => {
     const s = new ConfigState()
     s.handleConfigLoaded({ snapshot: true })
     s.updateConfig({ snapshot: false })
+    s.saveConfig("s1", { snapshot: false })
+    s.updateConfig({ username: "bob" })
+    s.saveConfig("s2", { snapshot: false, username: "bob" })
 
-    s.saveConfig()
-    s.saveConfig()
-    s.handleConfigUpdated({ snapshot: false })
+    // A stale ack for the first save must not clear the second save's draft.
+    s.handleConfigUpdated({ snapshot: false }, "s1")
+    expect(s.saving).toBe(true)
+    expect(s.dirty).toBe(true)
+    expect(s.config.username).toBe("bob")
+
+    s.handleConfigUpdated({ snapshot: false, username: "bob" }, "s2")
 
     expect(s.saving).toBe(false)
     expect(s.dirty).toBe(false)
+    expect(Object.keys(s.draft).length).toBe(0)
+  })
+
+  it("ignores a stale failure for an older, superseded save", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+    s.saveConfig("s1", { snapshot: false })
+    s.saveConfig("s2", { snapshot: false })
+
+    // Save 1 fails after save 2 started — must not disturb save 2.
+    s.handleConfigSaveFailed({ snapshot: true }, "s1")
+    expect(s.saving).toBe(true)
+    expect(s.dirty).toBe(true)
+
+    s.handleConfigSaveFailed({ snapshot: true }, "s2")
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(true)
+    expect(s.config.snapshot).toBe(false)
+  })
+
+  it("a stale failure after a newer save with the same value keeps the draft for retry (LOCK-001)", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+    s.saveConfig("s1", { snapshot: false })
+    // A second save ships with the same value while the first is in flight.
+    s.saveConfig("s2", { snapshot: false })
+
+    // Save 1 fails after save 2 started — it only releases s1's snapshot;
+    // the draft stays so the still-pending s2 can be confirmed or retried.
+    s.handleConfigSaveFailed({ snapshot: true }, "s1")
+    expect(s.saving).toBe(true)
+    expect(s.dirty).toBe(true)
+    expect(s.draft.snapshot).toBe(false)
+
+    s.handleConfigSaveFailed({ snapshot: true }, "s2")
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(true)
+    expect(s.draft.snapshot).toBe(false)
+  })
+
+  it("preserves edits made while a save is in flight", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ agent: { code: { temperature: 0.7 } } })
+    s.updateConfig({ agent: { code: { temperature: 0.2 } } })
+    s.saveConfig("s1", { agent: { code: { temperature: 0.2 } } })
+
+    // User edits another field while the save is in flight.
+    s.updateConfig({ agent: { code: { steps: 5 } } })
+
+    s.handleConfigUpdated({ agent: { code: { temperature: 0.2 } } }, "s1")
+
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(true)
+    expect(s.draft.agent?.code?.steps).toBe(5)
+    expect(s.draft.agent?.code?.temperature).toBeUndefined() // saved field dropped
+    expect(s.config.agent?.code?.steps).toBe(5)
+    expect(s.config.agent?.code?.temperature).toBe(0.2)
+  })
+
+  it("preserves same-field edits made after the save was sent (LOCK-002)", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ agent: { code: { temperature: 0.7 } } })
+    s.updateConfig({ agent: { code: { temperature: 0.2 } } })
+    s.saveConfig("s1", { agent: { code: { temperature: 0.2 } } })
+
+    // User re-edits the same field while the save is in flight.
+    s.updateConfig({ agent: { code: { temperature: 0.5 } } })
+
+    s.handleConfigUpdated({ agent: { code: { temperature: 0.2 } } }, "s1")
+
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(true)
+    expect(s.draft.agent?.code?.temperature).toBe(0.5) // post-send edit survives
+    expect(s.config.agent?.code?.temperature).toBe(0.5) // draft re-applied on top
+  })
+
+  it("a stale ack for a superseded save releases only bookkeeping, never the draft (LOCK-001)", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ snapshot: true, username: "alice" })
+    s.updateConfig({ snapshot: false })
+    s.saveConfig("s1", { snapshot: false })
+    // A second save ships while the first is in flight.
+    s.updateConfig({ username: "bob" })
+    s.saveConfig("s2", { snapshot: false, username: "bob" })
+
+    // The first (stale) ack arrives while s2 is still pending — it must NOT
+    // subtract anything from the draft; s2's own ack owns that. Subtracting
+    // here would clear paths the still-pending newer save re-sent.
+    s.handleConfigUpdated({ snapshot: false, username: "alice" }, "s1")
+    expect(s.saving).toBe(true)
+    expect(s.dirty).toBe(true)
+    expect(s.draft.username).toBe("bob")
+    expect(s.draft.snapshot).toBe(false)
+
+    // The second ack clears the rest.
+    s.handleConfigUpdated({ snapshot: false, username: "bob" }, "s2")
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(false)
+    expect(Object.keys(s.draft).length).toBe(0)
+  })
+
+  it("a stale ack after a newer save with the same value does not clear the draft (LOCK-001)", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+    s.saveConfig("s1", { snapshot: false })
+    // A second save ships with the same value while the first is in flight.
+    s.saveConfig("s2", { snapshot: false })
+    expect(s.saving).toBe(true)
+
+    // The stale ack for s1 arrives while s2 is still pending. It must only
+    // release s1's bookkeeping — never subtract snapshot, because s2's ack
+    // (still pending) re-sent the same value and owns the subtraction.
+    s.handleConfigUpdated({ snapshot: false }, "s1")
+    expect(s.saving).toBe(true)
+    expect(s.dirty).toBe(true)
+    expect(s.draft.snapshot).toBe(false)
+
+    s.handleConfigUpdated({ snapshot: false }, "s2")
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(false)
+    expect(Object.keys(s.draft).length).toBe(0)
+  })
+
+  it("a stale ack after a newer save with the restored old value keeps the draft (LOCK-001)", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+    s.saveConfig("s1", { snapshot: false })
+    // User restores the original value and ships a second save.
+    s.updateConfig({ snapshot: true })
+    s.saveConfig("s2", { snapshot: true })
+    expect(s.saving).toBe(true)
+
+    // The stale s1 ack must not disturb the newer save's pending state.
+    s.handleConfigUpdated({ snapshot: true }, "s1")
+    expect(s.saving).toBe(true)
+    expect(s.dirty).toBe(true)
+    expect(s.draft.snapshot).toBe(true)
+
+    s.handleConfigUpdated({ snapshot: true }, "s2")
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(false)
+    expect(Object.keys(s.draft).length).toBe(0)
+  })
+
+  it("releases the sent snapshot on failure but keeps the draft for retry", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+    s.saveConfig("s1", { snapshot: false })
+
+    s.handleConfigSaveFailed({ snapshot: true }, "s1")
+
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(true)
+    expect(s.draft.snapshot).toBe(false)
+
+    // A retry with a fresh identity then acks cleanly.
+    s.saveConfig("s2", { snapshot: false })
+    s.handleConfigUpdated({ snapshot: false }, "s2")
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(false)
+  })
+
+  it("generates a fresh identity when saveConfig is called without one", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+    s.saveConfig()
+    expect(s.pendingSaveID).toBeTruthy()
+    expect(s.pendingSaveID).not.toMatch(/^cfg-\d+$/)
+  })
+
+  it("re-applies an unsaved foreign update while a save is in flight", () => {
+    const s = new ConfigState()
+    s.handleConfigLoaded({ snapshot: true, username: "alice" })
+    s.updateConfig({ snapshot: false })
+    s.saveConfig("s1", { snapshot: false })
+
+    // An SSE/configUpdated from another source arrives before our ack — it
+    // must not clear the draft.
+    s.handleConfigUpdated({ snapshot: false, username: "bob" })
+
+    expect(s.saving).toBe(true)
+    expect(s.dirty).toBe(true)
+    expect(s.config.username).toBe("bob")
     expect(s.config.snapshot).toBe(false)
   })
 
@@ -357,10 +622,10 @@ describe("ConfigState", () => {
       const s = new ConfigState()
       s.handleConfigLoaded({ agent: { explore: { model: "anthropic/claude-sonnet-4-20250514" } } })
       s.updateConfig({ agent: { explore: { model: null } } })
-      s.saveConfig()
+      s.saveConfig("s1", { agent: { explore: { model: null } } })
 
       // Backend removed the override and pushes the stripped config back.
-      s.handleConfigUpdated({ agent: { explore: {} } })
+      s.handleConfigUpdated({ agent: { explore: {} } }, "s1")
 
       expect(s.config.agent?.explore?.model).toBeUndefined()
       expect(s.dirty).toBe(false)

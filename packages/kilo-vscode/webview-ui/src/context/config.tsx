@@ -16,9 +16,11 @@ import {
   configUnsetPaths,
   deepMerge,
   mergeScopedConfig,
+  newSaveID,
   pruneConfigSet,
   stripNulls,
   resolveConfig,
+  subtractSentDraft,
 } from "../utils/config-utils"
 import { splitConfigByScope } from "../utils/config-scope"
 
@@ -79,9 +81,87 @@ export const ConfigProvider: ParentComponent = (props) => {
   // True while a saveConfig() write is in-flight — used to clear draft on success
   // and to guard against stale configLoaded messages overwriting optimistic state.
   const [saving, setSaving] = createSignal(false)
+  // Identity of the in-flight save whose ack/failure we are waiting for.
+  const [pendingSaveID, setPendingSaveID] = createSignal<string | null>(null)
+  // Identity of the most recent successfully confirmed save — stale echoes of
+  // older saves are ignored so they can't clobber newer drafts (LOCK-005).
+  const [lastSavedID, setLastSavedID] = createSignal<string | null>(null)
+  // Draft snapshots sent with each in-flight save, keyed by the save identity
+  // (LOCK-002). The matching ack subtracts only paths whose current draft value
+  // still equals the sent value, so same-field edits made after send survive.
+  const sentByID = new Map<
+    string,
+    { changes: Partial<Config>; globals: Partial<Config>; projects: Partial<Config> }
+  >()
   // Error from the most recent saveConfig() attempt, or null if no error.
   // Cleared when the user edits the draft again or starts a new save.
   const [saveError, setSaveError] = createSignal<SaveError | null>(null)
+
+  function applyConfigUpdated(message: Extract<ExtensionMessage, { type: "configUpdated" }>) {
+    const id = message.saveID
+    const pending = pendingSaveID()
+    const last = lastSavedID()
+    const confirmed = id !== undefined && id === pending
+    const echo = id !== undefined && id !== pending && id === last
+    // LOCK-001: a stale save's data must never clear or overwrite a newer
+    // draft. The stale ack releases only that save's sent snapshot (bookkeeping);
+    // it never subtracts current draft paths — the still-pending newer save
+    // owns the draft, and only its matching ack subtracts sent values.
+    if (id !== undefined && !confirmed && !echo) {
+      sentByID.delete(id)
+      return
+    }
+    if (confirmed) {
+      // This configUpdated is the acknowledgement of our saveConfig() write.
+      // Drop the sent fields from the drafts — but only where the current
+      // draft value still equals the value that save sent, so edits the user
+      // made while the save was in flight stay pending and remain visible
+      // (LOCK-002).
+      setSaving(false)
+      setPendingSaveID(null)
+      setLastSavedID(id)
+      const sent = sentByID.get(id)
+      let rest = draft() as Partial<Config>
+      let restGlobal = globalDraft() as Partial<Config>
+      let restProject = projectDraft() as Partial<Config>
+      if (sent !== undefined) {
+        sentByID.delete(id)
+        rest = subtractSentDraft(rest, sent.changes)
+        restGlobal = subtractSentDraft(restGlobal, sent.globals)
+        restProject = subtractSentDraft(restProject, sent.projects)
+      }
+      setDraft(rest)
+      setGlobalDraft(restGlobal)
+      setProjectDraft(restProject)
+      setSaveError(null)
+      setConfig(resolveConfig(message.config, rest, has(rest)))
+      if (message.globalConfig !== undefined) {
+        setGlobalConfig(mergeScopedConfig(message.globalConfig, restGlobal))
+        setSavedGlobal(message.globalConfig)
+      }
+      if (message.projectConfig !== undefined) {
+        setProjectConfig(mergeScopedConfig(message.projectConfig, restProject))
+        setSavedProject(message.projectConfig)
+      }
+      setFeatures(message.features)
+    } else {
+      // configUpdated from a different source (e.g. PermissionDock save) or an
+      // echo of the last confirmed save. Re-apply the draft on top so pending
+      // settings changes are preserved.
+      setConfig(resolveConfig(message.config, draft(), has(draft() as Record<string, unknown>)))
+      if (message.globalConfig !== undefined) {
+        setGlobalConfig(mergeScopedConfig(message.globalConfig, globalDraft()))
+        setSavedGlobal(message.globalConfig)
+      }
+      if (message.projectConfig !== undefined) {
+        setProjectConfig(mergeScopedConfig(message.projectConfig, projectDraft()))
+        setSavedProject(message.projectConfig)
+      }
+      setFeatures(message.features)
+    }
+    if (message.settings) mergeSettings(message.settings)
+    setSaved(message.config)
+  }
 
   // Register handler immediately (not in onMount) so we never miss
   // a configLoaded message that arrives before the DOM mount.
@@ -130,46 +210,22 @@ export const ConfigProvider: ParentComponent = (props) => {
       return
     }
     if (message.type === "configUpdated") {
-      if (saving()) {
-        // This configUpdated is the confirmation of our saveConfig() write.
-        // Clear the draft now that the server has confirmed the write.
-        setSaving(false)
-        setDraft({})
-        setGlobalDraft({})
-        setProjectDraft({})
-        setSaveError(null)
-        setConfig(message.config)
-        if (message.globalConfig !== undefined) {
-          setGlobalConfig(mergeScopedConfig(message.globalConfig, globalDraft()))
-          setSavedGlobal(message.globalConfig)
-        }
-        if (message.projectConfig !== undefined) {
-          setProjectConfig(message.projectConfig)
-          setSavedProject(message.projectConfig)
-        }
-        setFeatures(message.features)
-      } else {
-        // configUpdated from a different source (e.g. PermissionDock save).
-        // Re-apply the draft on top so pending settings changes are preserved.
-        setConfig(resolveConfig(message.config, draft(), has(draft() as Record<string, unknown>)))
-        if (message.globalConfig !== undefined) {
-          setGlobalConfig(mergeScopedConfig(message.globalConfig, globalDraft()))
-          setSavedGlobal(message.globalConfig)
-        }
-        if (message.projectConfig !== undefined) {
-          setProjectConfig(mergeScopedConfig(message.projectConfig, projectDraft()))
-          setSavedProject(message.projectConfig)
-        }
-        setFeatures(message.features)
-      }
-      if (message.settings) mergeSettings(message.settings)
-      setSaved(message.config)
+      applyConfigUpdated(message)
       return
     }
     if (message.type === "configUpdateFailed") {
+      // A stale failure for an older save must not disturb the active save;
+      // it only releases that save's sent snapshot (the draft stays for retry).
+      if (message.saveID !== undefined && message.saveID !== pendingSaveID()) {
+        sentByID.delete(message.saveID)
+        return
+      }
       // The write was rejected (e.g. schema validation) — surface the error
-      // and keep the draft + isDirty so the user can correct and retry.
+      // and keep the draft + isDirty so the user can correct and retry. The
+      // failed save's sent snapshot is released; its paths remain in the draft.
       setSaving(false)
+      setPendingSaveID(null)
+      if (message.saveID !== undefined) sentByID.delete(message.saveID)
       setSaveError({ message: message.message, details: message.details })
       return
     }
@@ -250,9 +306,8 @@ export const ConfigProvider: ParentComponent = (props) => {
     const projectDirty = has(projects as Record<string, unknown>)
     const settingsDirty = has(pending)
     if (!configDirty && !globalDirty && !projectDirty && !settingsDirty) return
-    // Don't clear draft/isDirty yet — wait for configUpdated confirmation.
-    // If the write fails, the save bar stays visible so the user can retry.
-    setSaving(true)
+    // Settings apply immediately via updateSetting and never race the config
+    // write, so they must not disturb an in-flight config save's pending state.
     setSaveError(null)
     if (settingsDirty) {
       for (const [key, value] of Object.entries(pending)) {
@@ -261,22 +316,30 @@ export const ConfigProvider: ParentComponent = (props) => {
       setSavedSettings((prev) => ({ ...prev, ...pending }))
       setSettingsDraft({})
     }
-    if (!configDirty && !globalDirty && !projectDirty) {
-      setSaving(false)
-      return
-    }
+    if (!configDirty && !globalDirty && !projectDirty) return
+    // LOCK-001: globally unique save identity — no provider-local counter that
+    // can collide across webview reloads or windows.
+    const saveID = newSaveID()
+    // Don't clear draft/isDirty yet — wait for configUpdated confirmation.
+    // If the write fails, the save bar stays visible so the user can retry.
+    setSaving(true)
+    setPendingSaveID(saveID)
     // Split so per-project settings (e.g. commit_message.prompt) land in the
     // workspace's kilo.json instead of the global one. Send one message so the
     // extension confirms only after both scopes are saved.
     const split = splitConfigByScope(changes)
     const next = deepMerge(split.global as Config, globals)
     const project = deepMerge(split.project as Config, projects)
+    // LOCK-002: snapshot exactly what was sent under the save identity so the
+    // matching ack can preserve same-field edits made while the save flew.
+    sentByID.set(saveID, { changes, globals, projects })
     vscode.postMessage({
       type: "updateConfig",
       config: pruneConfigSet(next) as Config,
       projectConfig: pruneConfigSet(project) as Config,
       globalUnset: configUnsetPaths(next),
       projectUnset: configUnsetPaths(project),
+      saveID,
     })
   }
 

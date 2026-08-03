@@ -49,8 +49,28 @@ describe("isHotPatch", () => {
     expect(isHotPatch({ subagent_variant_overrides: { code: "high" } })).toBe(true)
   })
 
+  test("returns true for agent override key (LOCK-001)", () => {
+    expect(isHotPatch({ agent: { code: { model: "anthropic/claude-sonnet-4-20250514" } } })).toBe(true)
+  })
+
+  test("returns true for default_agent key (LOCK-001)", () => {
+    expect(isHotPatch({ default_agent: "code" })).toBe(true)
+  })
+
+  test("returns true for legacy mode key (LOCK-001)", () => {
+    expect(isHotPatch({ mode: { build: { model: "test/model" } } })).toBe(true)
+  })
+
+  test("returns true for a named per-agent model/variant override (LOCK-001)", () => {
+    expect(isHotPatch({ agent: { scout: { model: "test/model", variant: "low" } } })).toBe(true)
+  })
+
   test("returns true for multiple hot keys", () => {
     expect(isHotPatch({ model: "test", model_variant: "low", console: {} })).toBe(true)
+  })
+
+  test("returns true for agent plus model hot keys together (LOCK-001)", () => {
+    expect(isHotPatch({ agent: { code: { model: "test/model" } }, default_agent: "code" })).toBe(true)
   })
 
   test("returns false for empty patch", () => {
@@ -77,6 +97,10 @@ describe("isHotPatch", () => {
     expect(isHotPatch({ model: "test", permission: { bash: "ask" } })).toBe(false)
   })
 
+  test("returns false for agent mixed with a cold key (LOCK-001)", () => {
+    expect(isHotPatch({ agent: { code: { model: "test/model" } }, permission: { bash: "ask" } })).toBe(false)
+  })
+
   test("returns false for unknown key (cold)", () => {
     expect(isHotPatch({ unknown_key: "value" })).toBe(false)
   })
@@ -91,6 +115,9 @@ describe("isHotPatch", () => {
       "subagent_model",
       "subagent_variant",
       "subagent_variant_overrides",
+      "agent",
+      "default_agent",
+      "mode",
     ]
     for (const key of lockedHotKeys) {
       expect(isHotPatch({ [key]: "test" })).toBe(true)

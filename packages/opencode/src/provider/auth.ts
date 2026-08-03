@@ -10,7 +10,6 @@ import { errorMessage } from "@/util/error" // kilocode_change
 
 // kilocode_change start
 import { Telemetry } from "@kilocode/kilo-telemetry"
-import { ModelCache } from "./model-cache"
 // kilocode_change end
 
 const When = Schema.Struct({
@@ -112,12 +111,14 @@ export class Service extends Context.Service<Service, Interface>()("@opencode/Pr
 export const use = serviceUse(Service)
 
 // kilocode_change start
-export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service | ModelCache.Service> = Layer.effect(
+// LOCK-001: consume Auth/Plugin from the canonical AppLayer graph; the
+// coordinator (provider-auth-lifecycle) owns ModelCache invalidation, so this
+// layer never self-provides Auth.defaultLayer/ModelCache.defaultLayer.
+export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
     const auth = yield* Auth.Service
     const plugin = yield* Plugin.Service
-    const cache = yield* ModelCache.Service
     // kilocode_change end
     const state = yield* InstanceState.make<State>(
       Effect.fn("ProviderAuth.state")(function* () {
@@ -242,7 +243,8 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service | 
         }
       }
       Telemetry.trackAuthSuccess(input.providerID)
-      yield* cache.clear(input.providerID)
+      // no callback-internal cache clear: the coordinator
+      // is the sole ModelCache invalidation owner (LOCK-001).
       // kilocode_change end
     })
 
@@ -251,13 +253,8 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service | 
 )
 
 // kilocode_change start
-export const defaultLayer = Layer.suspend(() =>
-  layer.pipe(
-    Layer.provide(Auth.defaultLayer),
-    Layer.provide(Plugin.defaultLayer),
-    Layer.provide(ModelCache.defaultLayer),
-  ),
-)
+// LOCK-001: no self-provisioning defaultLayer — AppLayer provides the
+// canonical Auth/Plugin graph to `layer` directly.
 // kilocode_change end
 
 export * as ProviderAuth from "./auth"

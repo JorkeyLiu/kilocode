@@ -4,11 +4,7 @@
  */
 import type { Config, KiloClient } from "@kilocode/sdk/v2"
 import { validateProviderID as validateProviderIDShared } from "./shared/custom-provider"
-import {
-  resolveCustomProviderAuth,
-  sanitizeCustomProviderConfig,
-  withCustomProviderDeletions,
-} from "./shared/custom-provider"
+import { resolveCustomProviderAuth, sanitizeCustomProviderConfig } from "./shared/custom-provider"
 import { isCustomProviderPackage, KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
 import { configFeatures } from "./features"
 
@@ -123,14 +119,6 @@ export function buildActionContext(
     postMessage: post,
     getErrorMessage: errFn,
     workspaceDir: dir,
-    disposeGlobal: async (reason: string) => {
-      // Wait for the server to finish disposing before refreshing providers.
-      // Shared State.dispose() now has a hard per-disposer timeout, so this
-      // wait is bounded without needing a client-side timeout here.
-      await client.global.dispose().catch((error: unknown) => {
-        console.warn(`[Kilo New] KiloProvider: global.dispose() after ${reason} failed:`, error)
-      })
-    },
     fetchAndSendProviders: refresh,
   }
 }
@@ -192,7 +180,6 @@ interface ActionContext {
   postMessage: PostMessage
   getErrorMessage: GetErrorMessage
   workspaceDir: string
-  disposeGlobal: (reason: string) => Promise<void>
   fetchAndSendProviders: () => Promise<void>
 }
 
@@ -253,27 +240,6 @@ async function saveProject(ctx: ActionContext, config: Config) {
   await ctx.client.config.update({ config, directory: ctx.workspaceDir }, { throwOnError: true })
 }
 
-/**
- * LOCK-007: Remove a successfully-connected provider ID from global
- * disabled_providers. Only runs after confirmed success — never on
- * configuration start or failed completion. Preserves unrelated IDs.
- */
-async function clearStaleDisabled(ctx: ActionContext, id: string) {
-  const { data: global } = await ctx.client.global.config.get({ throwOnError: true })
-  const disabled = global?.disabled_providers ?? []
-  if (!disabled.includes(id)) return
-  await saveGlobal(ctx, { disabled_providers: disabledWithout(disabled, id) })
-}
-
-async function removeAuth(ctx: ActionContext, id: string, configured: boolean) {
-  try {
-    await ctx.client.auth.remove({ providerID: id }, { throwOnError: true })
-  } catch (err) {
-    if (!configured) throw err
-    console.warn(`[Kilo New] auth.remove failed for configured provider ${id} (non-fatal):`, err)
-  }
-}
-
 async function removeCustom(ctx: ActionContext, id: string, global: Config, merged: Config) {
   const cfg = global.provider?.[id]
   const effective = merged.provider?.[id]
@@ -314,11 +280,18 @@ export async function connectProvider(
     const meta = cleanMetadata(metadata)
     const auth = meta ? { type: "api" as const, key: apiKey, metadata: meta } : { type: "api" as const, key: apiKey }
     await ctx.client.auth.set({ providerID: id, auth }, { throwOnError: true })
-    // LOCK-007: Clear stale disabled ID on successful API-key connect
-    await clearStaleDisabled(ctx, id)
-    await ctx.disposeGlobal(`provider connect (${id})`)
-    await ctx.fetchAndSendProviders()
+    // LOCK-001: backend auth.set coordinates drain/rebuild and emits
+    // global.disposed — the extension must NOT call global.dispose. The
+    // auth.set response IS the mutation acknowledgement, so emit the success
+    // message immediately and refresh without waiting for rebuild.
     ctx.postMessage({ type: "providerConnected", requestId, providerID: id })
+    try {
+      await ctx.fetchAndSendProviders()
+    } catch (error) {
+      // A refresh failure after a successful mutation must never be reported
+      // as a connect failure.
+      console.warn(`[Kilo New] provider ${id} connected but provider refresh failed:`, error)
+    }
   } catch (error) {
     postError(ctx, requestId, providerID, "connect", ctx.getErrorMessage(error) || "Failed to connect provider")
   }
@@ -367,11 +340,18 @@ export async function completeProviderOAuth(
       { providerID: id, method, code, directory: ctx.workspaceDir },
       { throwOnError: true },
     )
-    // LOCK-007: Clear stale disabled ID on successful OAuth completion
-    await clearStaleDisabled(ctx, id)
-    await ctx.disposeGlobal(`provider oauth (${id})`)
-    await ctx.fetchAndSendProviders()
+    // LOCK-001: backend OAuth callback coordinates drain/rebuild and emits
+    // global.disposed — the extension must NOT call global.dispose. The
+    // callback response IS the mutation acknowledgement, so emit the success
+    // message immediately and refresh without waiting for rebuild.
     ctx.postMessage({ type: "providerConnected", requestId, providerID: id })
+    try {
+      await ctx.fetchAndSendProviders()
+    } catch (error) {
+      // A refresh failure after a successful mutation must never be reported
+      // as a connect failure.
+      console.warn(`[Kilo New] provider ${id} connected but provider refresh failed:`, error)
+    }
   } catch (error) {
     postError(
       ctx,
@@ -393,23 +373,28 @@ export async function disconnectProvider(
   const id = validateID(ctx, requestId, providerID, "disconnect")
   if (!id) return
   try {
-    const config = await configs(ctx)
-    const cfg = config.global.provider?.[id]
-    const effective = config.merged.provider?.[id]
-    const configured = !!cfg || !!effective
-
-    // Remove stored auth credentials only — do NOT mutate disabled_providers
-    // or delete provider config. That is the job of deleteCustomProvider or
-    // the enable/disable Switch.
-    await removeAuth(ctx, id, configured)
+    // LOCK-002: auth.remove must NEVER swallow backend failure. Backend
+    // compensation preserves credentials on failure, so the extension must
+    // retain the current connected state and surface the real error — success
+    // is claimed only after auth removal succeeds.
+    await ctx.client.auth.remove({ providerID: id }, { throwOnError: true })
 
     if (id === "kilo") {
       ctx.postMessage({ type: "profileData", data: null })
     }
 
-    await ctx.disposeGlobal(`provider disconnect (${id})`)
-    await ctx.fetchAndSendProviders()
+    // LOCK-001: backend auth.remove coordinates drain/rebuild and emits
+    // global.disposed — the extension must NOT call global.dispose. The
+    // auth.remove response IS the mutation acknowledgement, so emit the
+    // success message immediately and refresh without waiting for rebuild.
     ctx.postMessage({ type: "providerDisconnected", requestId, providerID: id })
+    try {
+      await ctx.fetchAndSendProviders()
+    } catch (error) {
+      // A refresh failure after a successful mutation must never be reported
+      // as a disconnect failure.
+      console.warn(`[Kilo New] provider ${id} disconnected but provider refresh failed:`, error)
+    }
   } catch (error) {
     postError(ctx, requestId, providerID, "disconnect", ctx.getErrorMessage(error) || "Failed to disconnect provider")
   }
@@ -435,16 +420,38 @@ export async function deleteCustomProvider(
       return
     }
 
-    // Remove auth credentials
-    await removeAuth(ctx, id, true)
+    // Atomic backend-coordinated deletion (LOCK-001/002/003/005).
+    // The backend endpoint handles ALL config deletion atomically: auth removal,
+    // ModelCache clear, global config patch, project config patch, and instance
+    // rebuild through a single GenerationGate write ticket.
+    // The extension must NOT issue a second project PATCH (LOCK-001).
+    const response = await ctx.client.customProvider.delete(
+      { providerID: id, directory: ctx.workspaceDir },
+      { throwOnError: true },
+    )
 
-    // Delete custom provider config from global and project scopes
-    await removeCustom(ctx, id, config.global, config.merged)
+    // Check the structured result — the endpoint returns 400 for validation
+    // failures (non-custom provider, config persistence errors).
+    if (!response.data?.success) {
+      postError(ctx, requestId, providerID, "delete", "Failed to delete custom provider")
+      return
+    }
 
-    await refreshConfig(ctx, setCachedConfig)
-    await ctx.disposeGlobal(`provider delete (${id})`)
-    await ctx.fetchAndSendProviders()
+    // LOCK-004: a successful backend response IS the mutation acknowledgement.
+    // Emit providerDeleted immediately after the mutation, then refresh. A
+    // refresh/config-read failure must never be reported as a deletion failure
+    // and deletion is never retried automatically — the failure is logged
+    // truthfully instead.
     ctx.postMessage({ type: "providerDeleted", requestId, providerID: id })
+    try {
+      await refreshConfig(ctx, setCachedConfig)
+      await ctx.fetchAndSendProviders()
+    } catch (error) {
+      console.warn(
+        `[Kilo New] custom provider ${id} deleted but config/provider refresh failed:`,
+        error,
+      )
+    }
   } catch (error) {
     postError(ctx, requestId, providerID, "delete", ctx.getErrorMessage(error) || "Failed to delete custom provider")
   }
@@ -457,8 +464,6 @@ export async function saveCustomProvider(
   provider: Record<string, unknown>,
   apiKey: string | undefined,
   apiKeyChanged: boolean,
-  cachedConfigMessage: unknown,
-  setCachedConfig: (msg: unknown) => void,
 ) {
   const id = validateID(ctx, requestId, providerID, "connect")
   if (!id) return
@@ -469,50 +474,37 @@ export async function saveCustomProvider(
     return
   }
 
-  const refresh = async () => {
-    await ctx.disposeGlobal(`custom provider save (${id})`)
-    await ctx.fetchAndSendProviders()
-  }
+  const auth = resolveCustomProviderAuth(apiKey, apiKeyChanged)
 
   try {
-    const globalConfig = (await ctx.client.global.config.get({ throwOnError: true })).data ?? {}
-    const disabled = globalConfig.disabled_providers ?? []
-    const nextDisabled = disabled.filter((item: string) => item !== id)
-    const existing = (globalConfig.provider as Record<string, unknown> | undefined)?.[id]
-    const patch = withCustomProviderDeletions(existing, sanitized.value)
-    const { data: updated } = await ctx.client.global.config.update(
-      {
-        config: {
-          provider: { [id]: patch },
-          disabled_providers: nextDisabled,
-        },
-      },
+    // LOCK-001/005: exactly ONE generated backend mutation. The backend
+    // persists the config (computing null deletions from the old global entry
+    // itself) and the auth union atomically, clears the model cache, registers
+    // exactly one rebuild, and emits the transaction ConfigUpdated event at
+    // the response acknowledgement boundary — the extension must NOT issue
+    // separate global.config/auth calls and must NOT dispose.
+    const response = await ctx.client.customProvider.save(
+      { providerID: id, config: sanitized.value, auth, directory: ctx.workspaceDir },
       { throwOnError: true },
     )
 
-    const merged = await ctx.client.config.get({ directory: ctx.workspaceDir }, { throwOnError: true })
-    const config = merged.data ?? updated
-    const msg = { type: "configLoaded", config, globalConfig: updated, features: configFeatures(config) }
-    setCachedConfig(msg)
-    ctx.postMessage({ type: "configUpdated", config, globalConfig: updated, features: configFeatures(config) })
-
-    const auth = resolveCustomProviderAuth(apiKey, apiKeyChanged)
-
-    try {
-      if (auth.mode === "set") {
-        await ctx.client.auth.set({ providerID: id, auth: { type: "api", key: auth.key } }, { throwOnError: true })
-      }
-      if (auth.mode === "clear") {
-        await ctx.client.auth.remove({ providerID: id }, { throwOnError: true })
-      }
-    } catch (error) {
-      await refresh()
-      postError(ctx, requestId, providerID, "connect", ctx.getErrorMessage(error) || "Failed to save custom provider")
+    // Check the structured result — the endpoint returns 400 for validation
+    // failures (non-custom provider, config schema errors).
+    if (!response.data?.success) {
+      postError(ctx, requestId, providerID, "connect", "Failed to save custom provider")
       return
     }
 
-    await refresh()
+    // LOCK-005: the backend response IS the mutation acknowledgement. The
+    // backend SSE transaction event reconciles config; post providerConnected
+    // only after success, then refresh. A refresh failure must never be
+    // reported as a save failure and save is never retried automatically.
     ctx.postMessage({ type: "providerConnected", requestId, providerID: id })
+    try {
+      await ctx.fetchAndSendProviders()
+    } catch (error) {
+      console.warn(`[Kilo New] custom provider ${id} saved but provider refresh failed:`, error)
+    }
   } catch (error) {
     postError(ctx, requestId, providerID, "connect", ctx.getErrorMessage(error) || "Failed to save custom provider")
   }
