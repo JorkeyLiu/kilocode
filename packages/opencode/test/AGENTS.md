@@ -82,11 +82,12 @@ await using tmp = await tmpdir({
 
 ## Resource Ownership
 
-- **Prefer scoped helpers**: Use `tmpdir`, `tmpdirScoped`, or existing fixture functions for test directories. Do not create temp paths manually when a scoped helper exists.
+The root AGENTS.md Resource Lifecycle rules apply to all tests in this package; this section only adds test-specific details.
+
+- **Prefer scoped helpers**: Use `tmpdir`, `tmpdirScoped`, or existing fixture functions for test directories. Do not create temp paths manually when a scoped helper exists. Use `tmpdir({ retain: true })` only for config-loading, config-write, or rebuild fixtures, or any fixture whose detached work can recreate the directory — retained entries stay registered so the preload `afterAll` can re-dispose them after the process-wide runtimes are stopped.
 - **Isolate persistent state**: When a test uses a database or persistent config, pass `KILO_DB=":memory:"` or create a unique supported temporary XDG/Kilo directory instead of writing to the default location. XDG variables (`XDG_DATA_HOME`, `XDG_CONFIG_HOME`, etc.) must be set **before** importing any module that reads global paths — set them in the test file's top-level scope or a `beforeAll`/setup hook, not lazily inside the test body.
 - **Restore environment**: If a test modifies `process.env`, restore the original value in a `finally` block or fixture teardown. For disk-backed `KILO_DB` tests, use the existing harness/flag-override pattern and restore both the `process.env` value and the in-memory flag state so subsequent tests see a clean slate.
-- **Stop before delete**: Dispose processes, listeners, Effect scopes, and service instances before removing their owned directories.
-- **Avoid accidental installs**: Tests that do not intend to verify dependency installation should use the existing `markPluginDependenciesReady(dir)` helper from `fixture/plugin.ts` (creates a stub `node_modules/` and `package-lock.json`), not trigger full `npm install` or `bun install` in temp directories.
+- **Prevent detached installs**: Tests that do not exercise dependency installation must prevent the detached plugin install from firing. Call `markProjectConfigReady(dir)` for project/config-backed fixtures; call `markPluginDependenciesReady(dir)` only when the exact loaded config directory is known (e.g. the default `Global.Path.config` or a config dir from `ConfigPaths`). Never trigger full `npm install` or `bun install` in temp directories.
 
 ## Testing With Effects
 
