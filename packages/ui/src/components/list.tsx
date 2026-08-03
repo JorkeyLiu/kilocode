@@ -48,7 +48,7 @@ export interface ListProps<T> extends FilteredListProps<T> {
   add?: ListAddProps
   groupHeader?: (group: { category: string; items: T[] }) => JSX.Element
   // kilocode_change — optional end-of-scroll content (outside keyboard navigation)
-  footer?: JSX.Element
+  footer?: JSX.Element // kilocode_change
 }
 
 export interface ListRef {
@@ -405,7 +405,7 @@ export function List<T>(props: ListProps<T> & { ref?: (ref: ListRef) => void }) 
           </Show>
         </Show>
         {/* kilocode_change — footer content rendered inside scroll, outside item navigation */}
-        {props.footer && <div data-slot="list-footer">{props.footer}</div>}
+        {props.footer && <div data-slot="list-footer">{props.footer}</div>} {/* kilocode_change */}
       </div>
     </div>
   )

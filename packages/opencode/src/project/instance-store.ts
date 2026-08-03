@@ -4,7 +4,7 @@ import { WorkspaceContext } from "@/control-plane/workspace-context"
 import { InstanceRef } from "@/effect/instance-ref"
 import { disposeInstance as runDisposers } from "@/effect/instance-registry"
 import { FSUtil } from "@opencode-ai/core/fs-util"
-import { Context, Deferred, Duration, Effect, Exit, Layer, Option, Scope } from "effect"
+import { Context, Deferred, Duration, Effect, Exit, Layer, Option, Scope } from "effect" // kilocode_change
 import { context as instanceContext, type InstanceContext } from "./instance-context" // kilocode_change
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
@@ -22,8 +22,8 @@ export interface Interface {
   readonly disposeDirectory: (directory: string) => Effect.Effect<void>
   readonly disposeAll: () => Effect.Effect<void>
   readonly provide: <A, E, R>(input: LoadInput, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
-  readonly snapshot: (directory: string) => Effect.Effect<Option.Option<InstanceContext>>
-  readonly directories: () => Effect.Effect<string[]>
+  readonly snapshot: (directory: string) => Effect.Effect<Option.Option<InstanceContext>> // kilocode_change
+  readonly directories: () => Effect.Effect<string[]> // kilocode_change
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/InstanceStore") {}
@@ -214,7 +214,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
     const provide = <A, E, R>(input: LoadInput, effect: Effect.Effect<A, E, R>): Effect.Effect<A, E, R> =>
       load(input).pipe(Effect.flatMap((ctx) => effect.pipe(Effect.provideService(InstanceRef, ctx))))
 
-    const snapshot = Effect.fn("InstanceStore.snapshot")(function* (input: string) {
+    const snapshot = Effect.fn("InstanceStore.snapshot")(function* (input: string) { // kilocode_change start
       const directory = FSUtil.resolve(input)
       const current = cache.get(directory)
       if (!current) return Option.none<InstanceContext>()
@@ -224,7 +224,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
 
     const directories = Effect.fn("InstanceStore.directories")(function* () {
       return [...cache.keys()]
-    })
+    }) // kilocode_change end
 
     yield* Effect.addFinalizer(() => disposeAll().pipe(Effect.ignore))
 
@@ -235,8 +235,8 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       disposeDirectory,
       disposeAll,
       provide,
-      snapshot,
-      directories,
+      snapshot, // kilocode_change
+      directories, // kilocode_change
     })
   }),
 )

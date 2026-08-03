@@ -162,7 +162,7 @@ export const dict = {
   "ui.message.copyMessage": "複製訊息",
   "ui.message.forkMessage": "分支到新工作階段",
   "ui.message.revertMessage": "重設至此點",
-  "ui.message.cancelQueued": "取消排隊的訊息",
+  "ui.message.cancelQueued": "取消排隊的訊息", // kilocode_change
   "ui.message.copyResponse": "複製回覆",
   "ui.message.copied": "已複製！",
   "ui.message.revert": "Revert to here",

@@ -158,7 +158,7 @@ export const dict = {
   "ui.message.copyMessage": "メッセージをコピー",
   "ui.message.forkMessage": "新しいセッションにフォーク",
   "ui.message.revertMessage": "この時点までリセット",
-  "ui.message.cancelQueued": "キュー内のメッセージをキャンセル",
+  "ui.message.cancelQueued": "キュー内のメッセージをキャンセル", // kilocode_change
   "ui.message.copyResponse": "応答をコピー",
   "ui.message.copied": "コピーしました！",
   "ui.message.revert": "Revert to here",

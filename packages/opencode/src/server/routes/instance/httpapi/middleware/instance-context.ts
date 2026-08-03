@@ -1,7 +1,7 @@
 import { InstanceRef, WorkspaceRef } from "@/effect/instance-ref"
 import { InstanceStore } from "@/project/instance-store"
-import { Effect, Layer, Option } from "effect"
-import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
+import { Effect, Layer, Option } from "effect" // kilocode_change
+import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http" // kilocode_change
 import { HttpApiMiddleware } from "effect/unstable/httpapi"
 import { WorkspaceRouteContext } from "./workspace-routing"
 // kilocode_change start - BLOCKER 1: gate instance load during writer barriers
@@ -66,7 +66,7 @@ function provideInstanceContext<E>(
         Effect.provideService(HttpServerRequest.HttpServerRequest, request),
       )
     }
-    // kilocode_change start - LOCK-003/004/006: drain-control lane.
+    // LOCK-003/004/006: drain-control lane.
     // Pre-barrier lifecycle controls (abort / cancelQueued / permission reply /
     // question reply+reject) are a separate admission lane: they serve from the
     // pre-barrier InstanceStore.snapshot and NEVER gate.acquire / store.load /
@@ -102,7 +102,7 @@ function provideInstanceContext<E>(
       }
       if (gate.isBarrierActive(dir)) return unavailable(control)
     }
-    // kilocode_change end
+    // End of drain-control lane; fall through to the standard gate path below.
     const release = yield* gate.acquire(dir)
     const ctx = yield* store.load({ directory: dir }).pipe(Effect.ensuring(release))
     return yield* effect.pipe(

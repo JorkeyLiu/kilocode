@@ -1,3 +1,4 @@
+// kilocode_change - new file
 /**
  * Regression tests for the active-preservation decision logic used in
  * useFilteredList's grouped effect.

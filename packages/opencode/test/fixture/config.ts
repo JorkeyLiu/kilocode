@@ -7,7 +7,7 @@ export function make(overrides: Partial<Config.Interface> = {}) {
     get: () => Effect.succeed({}),
     getGlobal: () => Effect.succeed({}),
     getConsoleState: () => Effect.succeed(emptyConsoleState),
-    update: (config) => Effect.succeed({ config, changed: false }),
+    update: (config) => Effect.succeed({ config, changed: false }), // kilocode_change
     updateGlobal: (config) => Effect.succeed({ info: config, changed: false }),
     // kilocode_change start - prepared mutation split added to the Config interface
     prepareGlobal: () => Effect.die(new Error("TestConfig stub does not implement prepareGlobal")),

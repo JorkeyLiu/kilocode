@@ -159,7 +159,7 @@ export const dict = {
   "ui.message.copyMessage": "Copiar mensagem",
   "ui.message.forkMessage": "Bifurcar para nova sessão",
   "ui.message.revertMessage": "Redefinir para este ponto",
-  "ui.message.cancelQueued": "Cancelar mensagem na fila",
+  "ui.message.cancelQueued": "Cancelar mensagem na fila", // kilocode_change
   "ui.message.copyResponse": "Copiar resposta",
   "ui.message.copied": "Copiado!",
   "ui.message.revert": "Revert to here",

@@ -163,7 +163,7 @@ export const dict = {
   "ui.message.copyMessage": "Kopiraj poruku",
   "ui.message.forkMessage": "Forkaj u novu sesiju",
   "ui.message.revertMessage": "Resetuj na ovu tačku",
-  "ui.message.cancelQueued": "Otkaži poruku iz reda čekanja",
+  "ui.message.cancelQueued": "Otkaži poruku iz reda čekanja", // kilocode_change
   "ui.message.copyResponse": "Kopiraj odgovor",
   "ui.message.copied": "Kopirano!",
   "ui.message.revert": "Revert to here",

@@ -8,7 +8,7 @@ import { filterPromptTrainingModels, nonEmptyProviders } from "@/kilocode/provid
 // kilocode_change end
 import { Provider } from "@/provider/provider"
 import * as InstanceState from "@/effect/instance-state"
-import { Effect, Option } from "effect"
+import { Effect, Option } from "effect" // kilocode_change
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi" // kilocode_change
 import { InstanceHttpApi } from "../api"
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
@@ -29,6 +29,7 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
       return yield* configSvc.get()
     })
 
+    // kilocode_change start - Kilo rewrite: hot-patch path + write-ticket rebuild handoff
     const update = Effect.fn("ConfigHttpApi.update")(function* (ctx) {
       const instance = yield* InstanceState.context
       const hot = isHotPatch(ctx.payload as unknown as Record<string, unknown>)
@@ -41,11 +42,10 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
         run: (ticket) =>
           Effect.gen(function* () {
             const old = yield* store.snapshot(instance.directory)
-            // kilocode_change start - emit:false defers the ConfigUpdated publish
+            // emit:false defers the ConfigUpdated publish
             // so withWriteTicket emits it only after the rebuild registration
             // handoff owns the writer ticket (LOCK-002).
             const exit = yield* configFailure(configSvc.update(ctx.payload, { emit: false })).pipe(Effect.exit)
-            // kilocode_change end
             if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
             return {
               changed: exit.value.changed,
@@ -56,6 +56,7 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
           }),
       })
     })
+    // kilocode_change end
 
     // kilocode_change start
     const warnings = Effect.fn("ConfigHttpApi.warnings")(function* () {
