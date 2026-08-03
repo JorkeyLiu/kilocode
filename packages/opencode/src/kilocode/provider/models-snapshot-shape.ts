@@ -42,6 +42,17 @@ function env(value: unknown, name: string) {
   }
 }
 
+function tier(value: unknown, name: string) {
+  const obj = record(value, name)
+  finite(obj.input, `${name}.input`)
+  finite(obj.output, `${name}.output`)
+  optionalFinite(obj.cache_read, `${name}.cache_read`)
+  optionalFinite(obj.cache_write, `${name}.cache_write`)
+  const bounds = record(obj.tier, `${name}.tier`)
+  if (bounds.type !== "context") throw new Error(`${name}.tier.type must be "context"`)
+  finite(bounds.size, `${name}.tier.size`)
+}
+
 function cost(value: unknown, name: string) {
   if (value === undefined) return
   const obj = record(value, name)
@@ -49,6 +60,12 @@ function cost(value: unknown, name: string) {
   optionalFinite(obj.output, `${name}.output`)
   optionalFinite(obj.cache_read, `${name}.cache_read`)
   optionalFinite(obj.cache_write, `${name}.cache_write`)
+  if (obj.tiers !== undefined) {
+    if (!Array.isArray(obj.tiers)) throw new Error(`${name}.tiers must be an array when present`)
+    for (const [i, item] of obj.tiers.entries()) {
+      tier(item, `${name}.tiers[${i}]`)
+    }
+  }
   if (obj.context_over_200k === undefined) return
   cost(obj.context_over_200k, `${name}.context_over_200k`)
 }

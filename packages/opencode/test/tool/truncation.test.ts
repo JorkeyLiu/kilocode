@@ -12,7 +12,9 @@ import { testEffect } from "../lib/effect"
 import { writeFileStringScoped } from "../lib/filesystem"
 import { TestConfig } from "../fixture/config"
 
-const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
+// kilocode_change start - canonical models snapshot moved to src/kilocode/provider
+const MODELS_FIXTURE = path.join(import.meta.dir, "..", "..", "src", "kilocode", "provider", "models-api.json")
+// kilocode_change end
 const ROOT = path.resolve(import.meta.dir, "..", "..")
 
 const it = testEffect(Layer.mergeAll(Truncate.defaultLayer, NodeFileSystem.layer, FSUtil.defaultLayer))
@@ -32,7 +34,7 @@ describe("Truncate", () => {
       Effect.gen(function* () {
         const svc = yield* Truncate.Service
         const fsys = yield* FSUtil.Service
-        const content = yield* fsys.readFileString(path.join(FIXTURES_DIR, "models-api.json"))
+        const content = yield* fsys.readFileString(MODELS_FIXTURE) // kilocode_change
         const result = yield* svc.output(content)
 
         expect(result.truncated).toBe(true)
@@ -166,7 +168,7 @@ describe("Truncate", () => {
       Effect.gen(function* () {
         const svc = yield* Truncate.Service
         const fsys = yield* FSUtil.Service
-        const content = yield* fsys.readFileString(path.join(FIXTURES_DIR, "models-api.json"))
+        const content = yield* fsys.readFileString(MODELS_FIXTURE) // kilocode_change
         const result = yield* svc.output(content)
 
         expect(result.truncated).toBe(true)

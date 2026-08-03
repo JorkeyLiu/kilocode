@@ -735,7 +735,7 @@ function createChatStream(text: string) {
 }
 
 const MODELS_FIXTURE = JSON.parse(
-  await Bun.file(path.join(import.meta.dir, "../tool/fixtures/models-api.json")).text(),
+  await Bun.file(path.join(import.meta.dir, "../../src/kilocode/provider/models-api.json")).text(), // kilocode_change
 ) as Record<string, ModelsDev.Provider>
 
 function loadFixture(providerID: string, modelID: string) {

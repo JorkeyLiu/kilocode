@@ -271,7 +271,7 @@ async function loadFixture(providerID: string, modelID: string) {
 }
 
 const modelsFixture = Filesystem.readJson<Record<string, ModelsDev.Provider>>(
-  path.join(import.meta.dir, "../tool/fixtures/models-api.json"),
+  path.join(import.meta.dir, "../../src/kilocode/provider/models-api.json"), // kilocode_change
 )
 
 function recordedNativeLLMLayer(scenario: RecordedScenario) {

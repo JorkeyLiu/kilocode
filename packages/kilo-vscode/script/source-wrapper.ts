@@ -8,7 +8,7 @@
 
 import { join } from "node:path"
 
-const COMMITTED_MODELS_FIXTURE = "test/tool/fixtures/models-api.json"
+const COMMITTED_MODELS_FIXTURE = "src/kilocode/provider/models-api.json"
 
 /** Absolute path to the committed models-api.json fixture. */
 export function committedModelsFixturePath(opencodeDir: string): string {

@@ -22,7 +22,7 @@ import {
 const ROOT = path.resolve(import.meta.dir, "../..")
 const OPENCODE_DIR = path.join(ROOT, "..", "opencode")
 const LOCAL_BIN_TS = path.join(ROOT, "script", "local-bin.ts")
-const FIXTURE = path.join(OPENCODE_DIR, "test", "tool", "fixtures", "models-api.json")
+const FIXTURE = path.join(OPENCODE_DIR, "src", "kilocode", "provider", "models-api.json")
 const FAKE_BUN = "/usr/local/bin/bun"
 
 describe("source wrapper — KILO_MODELS_PATH", () => {
@@ -64,7 +64,7 @@ describe("source wrapper — KILO_MODELS_PATH", () => {
   })
 
   it("source-wrapper.ts defines COMMITTED_MODELS_FIXTURE", () => {
-    expect(FIXTURE_RELATIVE).toBe("test/tool/fixtures/models-api.json")
+    expect(FIXTURE_RELATIVE).toBe("src/kilocode/provider/models-api.json")
   })
 })
 
@@ -142,7 +142,7 @@ describe("source wrapper — path with spaces", () => {
   it("quotes paths containing spaces correctly", () => {
     const spaced = generateSourceWrapperContent("/path with spaces/opencode", FAKE_BUN)
     expect(spaced).toContain('cd "/path with spaces/opencode"')
-    expect(spaced).toContain('/path with spaces/opencode/test/tool/fixtures/models-api.json')
+    expect(spaced).toContain('/path with spaces/opencode/src/kilocode/provider/models-api.json')
   })
 })
 

@@ -32,8 +32,13 @@ jobs:
           kilo-maintainer-app-secret: ${{ secrets.KILO_MAINTAINER_APP_SECRET }}
           # kilocode_change end
 
+      # kilocode_change start - explicit network refresh of the committed models snapshot; generate stays offline
+      - name: Refresh models snapshot
+        run: bun run --cwd packages/opencode refresh:models
+      # kilocode_change end
+
       - name: Generate
-        run: ./script/generate.ts
+        run: bun script/generate.ts # kilocode_change - offline: reads the committed snapshot
 
       - name: Commit and push
         run: |

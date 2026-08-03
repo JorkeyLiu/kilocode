@@ -8,6 +8,12 @@ import {
   copyTreeSitterResources,
 } from "../src/services/cli-backend/cli-resources"
 import { ensureFfmpegForTarget } from "./ffmpeg-helper"
+import {
+  VSIX_TARGET_CONFIGS,
+  normalizeTarget,
+  validateStagedBinDir,
+  validateVsixFile,
+} from "./artifact-validation"
 
 const packageJsonPath = join(import.meta.dir, "..", "package.json")
 const packageJson = await Bun.file(packageJsonPath).json()
@@ -29,16 +35,21 @@ if (!existsSync(cliDistDir)) {
   throw new Error(`CLI dist directory not found: ${cliDistDir}`)
 }
 
-const targets = [
-  { target: "linux-x64", cliDir: "@kilocode/cli-linux-x64", binary: "kilo" },
-  { target: "linux-arm64", cliDir: "@kilocode/cli-linux-arm64", binary: "kilo" },
-  { target: "alpine-x64", cliDir: "@kilocode/cli-linux-x64-musl", binary: "kilo" },
-  { target: "alpine-arm64", cliDir: "@kilocode/cli-linux-arm64-musl", binary: "kilo" },
-  { target: "darwin-x64", cliDir: "@kilocode/cli-darwin-x64", binary: "kilo" },
-  { target: "darwin-arm64", cliDir: "@kilocode/cli-darwin-arm64", binary: "kilo" },
-  { target: "win32-x64", cliDir: "@kilocode/cli-windows-x64", binary: "kilo.exe" },
-  { target: "win32-arm64", cliDir: "@kilocode/cli-windows-arm64", binary: "kilo.exe" },
-]
+// `--target <target>` selects a single target; no args builds all targets
+// (existing CI behavior preserved). Selection is validated against the
+// canonical matrix before any build step runs.
+const targetFlag = process.argv.indexOf("--target")
+const rawTarget = targetFlag !== -1 ? process.argv[targetFlag + 1] : undefined
+if (targetFlag !== -1 && !rawTarget) {
+  throw new Error(`--target requires a value (one of ${VSIX_TARGET_CONFIGS.map((c) => c.target).join(", ")})`)
+}
+const requested = rawTarget ? normalizeTarget(rawTarget) : undefined
+if (requested) {
+  console.log(`Single-target build requested: ${requested}`)
+}
+const targets = requested
+  ? VSIX_TARGET_CONFIGS.filter((cfg) => cfg.target === requested)
+  : [...VSIX_TARGET_CONFIGS]
 
 const binDir = join(import.meta.dir, "..", "bin")
 const distDir = join(import.meta.dir, "..", "dist")
@@ -93,6 +104,9 @@ for (const config of targets) {
   console.log("Adding bundled FFmpeg helper...")
   await ensureFfmpegForTarget(config.target, binDir)
 
+  console.log("  🔍 Validating staged CLI artifacts...")
+  validateStagedBinDir(binDir, config.target)
+
   console.log(`  📦 Packaging .vsix for ${config.target}${prerelease ? " (pre-release)" : ""}...`)
   const vsixPath = join(outDir, `kilo-vscode-${config.target}.vsix`)
   const args = ["--no-dependencies", "--skip-license", "--target", config.target, "-o", vsixPath]
@@ -101,6 +115,9 @@ for (const config of targets) {
     ...process.env,
     npm_config_ignore_scripts: "true",
   })
+
+  console.log("  🔍 Validating packaged VSIX archive...")
+  validateVsixFile(vsixPath, config.target)
   console.log(`  ✅ Created ${vsixPath}`)
 }
 
