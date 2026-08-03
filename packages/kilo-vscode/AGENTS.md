@@ -84,6 +84,16 @@ bun script/local-bin.ts --force
 
 The script checks for a prebuilt binary in `packages/opencode/dist/`, builds the CLI if needed, and copies it to `bin/kilo`.
 
+### Packaging a Distributable VSIX
+
+To produce a distributable VSIX (from `packages/kilo-vscode/`):
+
+```bash
+bun run package:vsix -- --target <target>
+```
+
+`<target>` must equal the current Bun platform/arch (e.g. `darwin-arm64` on Apple Silicon) — the command builds a native CLI for the machine it runs on. The VSIX is written to `out/kilo-vscode-<target>.vsix` (e.g. `out/kilo-vscode-darwin-arm64.vsix`). Unlike `bun script/local-bin.ts` above — a dev-staging helper that can fall back to a source wrapper for local development — `package:vsix` is the supported path for distributable VSIX artifacts.
+
 ## Architecture
 
 ### Extension ↔ CLI Backend

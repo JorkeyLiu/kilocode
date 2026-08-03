@@ -71,7 +71,9 @@ Hono-based HTTP server with OpenAPI spec generation. SSE for real-time events. W
 
 ## Providers and Models
 
-Uses the **Vercel AI SDK** as the abstraction layer. Providers are loaded from a bundled map or dynamically installed at runtime. Models come from models.dev (external API), cached locally.
+Uses the **Vercel AI SDK** as the abstraction layer. Providers are loaded from a bundled map or dynamically installed at runtime. Models come from a canonical committed snapshot at `src/kilocode/provider/models-api.json` (repo path `packages/opencode/src/kilocode/provider/models-api.json`).
+
+Normal builds are offline: `script/generate.ts` reads the committed snapshot and embeds it into the CLI. The only build-snapshot network path is the explicit refresh — `bun run refresh:models` from `packages/opencode/` (or `bun run --cwd packages/opencode refresh:models` from the repo root) — which fetches the current models.dev data and replaces the snapshot. Runtime models.dev caching/refresh is separate and unchanged. A local `MODELS_DEV_API_JSON=<file>` env override exists for development.
 
 ## Fork Isolation Rule
 
