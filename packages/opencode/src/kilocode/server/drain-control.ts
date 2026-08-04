@@ -1,11 +1,11 @@
 /**
- * Drain-control admission lane for cold config writer barriers (LOCK-004/006).
+ * Drain-control admission lane for cold config convergence fences (LOCK-004/006).
  *
- * During a cold config writer drain, instance-gated reader admission starves
- * behind the writer barrier. The only requests that must still complete are the
- * pre-barrier lifecycle controls: session abort, queued-message cancel,
+ * During a cold config convergence drain, instance-gated reader admission
+ * starves behind the fence. The only requests that must still complete are the
+ * pre-fence lifecycle controls: session abort, queued-message cancel,
  * permission reply, and question reply/reject. These operate on the OLD
- * (pre-barrier) runtime — the exact instance that owns the pending
+ * (pre-fence) runtime — the exact instance that owns the pending
  * permission/question/run-state entries and the generation holding the drain.
  *
  * The middleware (instance-context.ts) classifies these paths with
@@ -19,7 +19,7 @@
  * can see, whether the barrier is observable or not.
  *
  * No-snapshot semantics: when a control is classified but the directory has no
- * cached instance and a writer barrier is active, the request has nothing to
+ * cached instance and a gate barrier is active, the request has nothing to
  * act on — a running generation cannot exist without an instance, pending
  * permissions/questions live in the instance's per-directory state (and are
  * rejected by its disposal finalizer), and queued prompts serialize behind a
@@ -111,7 +111,7 @@ export function classifyDrainControl(method: string, path: string): DrainControl
   // LOCK-007: the legacy session-scoped permission reply
   // (POST /session/:sessionID/permissions/:permissionID) is drain-control
   // equivalent to the canonical /permission/:requestID/reply: both resolve the
-  // pending permission on the pre-barrier instance and unblock the generation
+  // pending permission on the pre-fence instance and unblock the generation
   // that holds the drain. Classified as the same permissionReply kind so it
   // shares the reply's snapshot-first admission and 409 no-snapshot semantics.
   if (method === "POST" && raw.length === 4 && raw[0] === "session" && raw[2] === "permissions") {
@@ -138,7 +138,7 @@ export const unavailable = (kind: DrainControlKind) =>
   )
 
 /**
- * Serve a drain-control handler from an already-obtained pre-barrier snapshot
+ * Serve a drain-control handler from an already-obtained pre-fence snapshot
  * context. The context is the exact cached instance for the directory — never a
  * boot, never a fresh load — and the handler receives the original request so
  * payload/query decoding keeps working.

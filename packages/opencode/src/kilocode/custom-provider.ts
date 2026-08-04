@@ -26,7 +26,7 @@ export function isCustomProviderPackage(value: unknown): value is CustomProvider
  * (`packages/kilo-vscode/src/shared/provider-model.ts` PROVIDER_ID_PATTERN):
  * lowercase alphanumeric start, then lowercase alphanumeric / `-` / `_`. The
  * backend save and delete services reject IDs outside this pattern with a
- * structured 400 before any ticket/lock/auth/cache/config mutation; slashed
+ * structured 400 before any fence/lock/auth/cache/config mutation; slashed
  * IDs never route and remain 404.
  */
 export const PROVIDER_ID_PATTERN = /^[a-z0-9][a-z0-9-_]*$/

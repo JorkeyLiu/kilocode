@@ -1,6 +1,6 @@
 ---
 title: "CLI Runtime Architecture"
-description: "Architecture of the Kilo CLI runtime, daemon, server, persistence, SDK, and indexing"
+description: "Architecture of the Kilo CLI runtime, daemon, server, config update lifecycle and convergence, persistence, SDK, and indexing"
 ---
 
 # CLI Runtime Architecture
@@ -266,7 +266,55 @@ Global config files load from `${Global.Path.config}`. Project updates prefer ex
 
 Signed-in organization modes become normal agent configuration during load. They override migrated legacy modes and remain overridable by later config sources in table.
 
+How a config change applies at runtime is a separate concern from merge order: every field is classified hot or cold at introduction, and saves converge as described in [Config update lifecycle](#config-update-lifecycle).
+
 Runtime config loading is separate from editor-facing JSON Schema publication. Cloud-served schema improves validation and completion for `kilo.json` and `kilo.jsonc`; it does not load, apply, or override effective runtime config. When adding or changing config key, follow [CLI Config Schema](/docs/contributing/architecture/config-schema) so CLI source and cloud overlay stay aligned.
+
+## Config update lifecycle
+
+Every config save is classified hot or cold. Schema shape lives in `Config.Info` in `packages/opencode/src/config/config.ts`; runtime hot classification lives in `packages/opencode/src/kilocode/config/hot-keys.ts`, and a field absent from the hot-key set is cold. Hot saves converge without a runtime rebuild; cold saves converge through a background pass that swaps the runtime for affected directories. Merge order for the sources is in [Config precedence](#config-precedence). The editor-facing schema contract is separate — see [CLI Config Schema](/docs/contributing/architecture/config-schema).
+
+| Component | Responsibility |
+|---|---|
+| `ConfigConvergence` | Coordinator that raises the admission fence before a cold mutation persists, assigns a monotonic sequence to each committed cold obligation, and runs serialized convergence passes |
+| `GenerationGate` | Writer-preferring admission gate; convergence fences block new reader admission per directory or globally, never writers |
+| `ControlLease` | Identity-keyed lifetime leases for drain-control and write-intent handlers; an identity is sealed and drained before it is disposed |
+| Config snapshot | Generation-scoped `Config.Info` capture; every `Config.get` inside a generation returns the config it started with |
+| `InstanceStore` | Directory-keyed runtime cache; disposal is identity-safe so an explicit reload survives convergence |
+
+```mermaid
+flowchart LR
+  patch["Config PATCH"]
+  classify{"Any cold field?"}
+  hot["Persist, invalidate caches,<br/>emit config-updated"]
+  fence["Raise admission fence<br/>for affected directories"]
+  persist["Persist and acknowledge<br/>without drain wait"]
+  register["Register convergence pass,<br/>then emit config-updated"]
+  pass["Drain readers and write/control leases,<br/>dispose exact identities,<br/>boot latest disk state"]
+  release["Release fence after latest<br/>committed version converges"]
+
+  patch --> classify
+  classify -->|"no"| hot
+  classify -->|"yes"| fence --> persist --> register --> pass --> release
+```
+
+| Aspect | Hot save | Cold save |
+|---|---|---|
+| Runtime rebuild | None | Background convergence pass |
+| Admission fence | Never | Raised before persistence for affected directories |
+| Acknowledge | Immediately after persistence and cache invalidation | Immediately after the backend transaction and synchronous side effects |
+| Generation drain wait | None | None — saves never await an active generation |
+| `config-updated` | Emitted immediately | Emitted only after rebuild registration owns the fence |
+
+Cold flow details:
+
+- **Admission lanes.** A fence blocks new readers only. Hot config writes, write-intent operations, and drain-control operations keep working during a convergence cycle. In-flight generations hold reader leases and keep their startup config snapshot; new generations and readers wait until the fence releases, then bind to the post-convergence runtime.
+- **Scope.** A project cold change fences and rebuilds only its directory; a global cold change covers every loaded directory. A cycle strengthens to global, never weakens.
+- **Coalescing and latest state.** Obligations committed before a pass's turn coalesce into one drain→dispose→boot burst. A mutation racing the pass stays pending and forces another pass, so the fence releases only after the latest committed version converges. The newest pre-fence identity wins; `InstanceStore.dispose` is identity-safe, so an explicit reload between saves survives.
+- **Reload and load during a fence.** Loads admitted under an active fence register with the fence; the coordinator converges confirmed directories before the fence can drop, so no runtime cached during convergence survives it.
+- **Failure and shutdown.** A failed save aborts its obligation: the fence ref releases and no rebuild is registered, so a failed save never leaves the fence up. Shutdown rejects new work, interrupts and joins owned passes, and releases fences without rebooting.
+
+Testing expectations: tests must cover saving during active streaming, not only idle PATCH. Drive a real handler with a held LLM stream and assert the save acknowledges before the stream releases, that hot saves never wait on a cold fence, that a cold burst coalesces into the intended disposal count, and that the final runtime serves the latest persisted config. Sequence races with Deferreds and admission side effects, not sleeps; await rebuild quiescence through the rebuild tracker.
 
 ## Global and instance SSE
 
@@ -322,6 +370,12 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 | SDK | `packages/sdk/js/`{% linebreak /%}`script/generate.ts` |
 | Console | `packages/kilo-console/`{% linebreak /%}`packages/opencode/src/kilocode/console/` |
 | Indexing | `packages/kilo-indexing/`{% linebreak /%}`packages/opencode/src/kilocode/indexing.ts` |
+| Config update lifecycle and convergence | `packages/opencode/src/kilocode/server/config-convergence.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/config-rebuild.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/generation-gate.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/control-lease.ts` |
+| Config schema shape | `packages/opencode/src/config/config.ts` |
+| Config save classification (hot/cold) | `packages/opencode/src/kilocode/config/hot-keys.ts` |
+| Provider routing and lifecycle | `packages/opencode/src/kilocode/provider/provider.ts` |
+| Provider auth lifecycle | `packages/opencode/src/kilocode/server/provider-auth-lifecycle.ts` |
+| Custom provider lifecycle | `packages/opencode/src/kilocode/custom-provider.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/custom-provider-save.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/custom-provider-delete.ts` |
 
 ## Related pages
 

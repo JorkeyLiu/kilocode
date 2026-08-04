@@ -51,7 +51,7 @@ function ready(
   }
 }
 
-/** Captured pre-barrier instance identity the coordinator's rebuild disposes. */
+/** Captured pre-fence instance identity the coordinator's rebuild disposes. */
 const fakeCtx: InstanceContext = {
   directory: "/tmp/project-a",
   worktree: "/tmp/project-a",
@@ -122,7 +122,7 @@ it.live("sync atomically replaces the standard auth record and invalidates via t
 
     const first = yield* Desktop.Service.use((service) => service.sync()).pipe(Effect.provide(layer))
     expect(first.serverID).toBe("first")
-    // Auth persisted and cache cleared immediately, under the ticket.
+    // Auth persisted and cache cleared immediately, under the fence.
     expect(yield* Ref.get(events)).toContain(`clear:${PROVIDER_ID}`)
     // The rebuild disposes the captured instance exactly once — never disposeAll.
     yield* awaitRebuilds()

@@ -8,17 +8,20 @@
  * readers, but an SSE client could observe the ConfigUpdated event before the
  * writer ticket was handed to the rebuild.
  *
- * LOCK-002 contract: withWriteTicket now runs persist/response → forkRebuild
- * registration/transfer → deferred final event effect → handler returns. So a
- * cold ConfigUpdated can only be observed AFTER the rebuild registration owns
- * the writer ticket.
+ * LOCK-002 contract: cold saves now route through `withColdMutation`, which
+ * raises the convergence fence, runs persist/response, then commits the
+ * obligation — synchronously registering the rebuild via the ConfigRebuild
+ * tracker — before the deferred final event effect runs. So a cold
+ * ConfigUpdated can only be observed AFTER the rebuild registration owns the
+ * fence.
  *
  * Determinism (no network timing): both the rebuild registration
- * (`probeRebuildRegistration`, a synchronous hook in `forkRebuild`) and the
- * ConfigUpdated publish (`GlobalBus`, a synchronous EventEmitter) execute in
- * the handler fiber in program order. The probe and the event latch share one
- * append-only order array, so by the time the GlobalBus listener observes the
- * ConfigUpdated publish the registration entry is already present.
+ * (`probeRebuildRegistration`, a synchronous hook shared by `forkRebuild` and
+ * the ConfigConvergence coordinator) and the ConfigUpdated publish
+ * (`GlobalBus`, a synchronous EventEmitter) execute in the handler fiber in
+ * program order. The probe and the event latch share one append-only order
+ * array, so by the time the GlobalBus listener observes the ConfigUpdated
+ * publish the registration entry is already present.
  *
  * Hot behavior is unchanged (LOCK-001): hot patches still emit immediately and
  * register no rebuild. No-op patches emit nothing and register no rebuild.
@@ -90,11 +93,11 @@ async function seedGlobalConfig(dir: string) {
 
 /**
  * LOCK-004 order probe: one shared append-only array written synchronously by
- * (a) the ConfigRebuild registration hook inside forkRebuild and (b) the
- * GlobalBus listener observing the ConfigUpdated publish. Both run in the
- * handler fiber in program order, so the array order is a deterministic
- * happens-before proof. `wait` resolves through a Deferred latch when the
- * ConfigUpdated event fires.
+ * (a) the ConfigRebuild registration hook inside forkRebuild/ConfigConvergence
+ * commit and (b) the GlobalBus listener observing the ConfigUpdated publish.
+ * Both run in the handler fiber in program order, so the array order is a
+ * deterministic happens-before proof. `wait` resolves through a Deferred latch
+ * when the ConfigUpdated event fires.
  */
 function installOrderProbe() {
   // The probe's own module-level array is the shared append-only log: the
@@ -125,7 +128,7 @@ function expectRegistrationBeforeEvent(order: Array<{ kind: "rebuild-registered"
   expect(registerIdx).toBeLessThan(eventIdx)
 }
 
-// ─── Cold ordering: registration owns the ticket before the event ─────
+// ─── Cold ordering: registration owns the fence before the event ──────
 
 describe("cold ConfigUpdated publish ordering (LOCK-002/003/004)", () => {
   test.serial("/config (project) cold: rebuild registration recorded before ConfigUpdated", async () => {

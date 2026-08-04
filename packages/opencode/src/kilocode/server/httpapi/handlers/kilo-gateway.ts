@@ -337,9 +337,9 @@ export const kiloGatewayHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilo",
 
     const organization = Effect.fn("KiloGatewayHttpApi.organization")(function* (ctx) {
       // kilocode_change start - LOCK-002: read the current kilo auth record
-      // INSIDE the coordinator mutate, under the writer ticket and immediately
-      // before the set, so a concurrent newer credential can never be
-      // overwritten by a pre-ticket snapshot. The unauthorized response
+      // INSIDE the coordinator mutate, under the convergence fence and
+      // immediately before the set, so a concurrent newer credential can never
+      // be overwritten by a pre-fence snapshot. The unauthorized response
       // behavior and the modes-cache clear are unchanged; the coordinator
       // restores the exact auth artifact if the set fails.
       yield* invalidateAfterProviderAuthChange(

@@ -34,7 +34,7 @@ flowchart LR
   end
 ```
 
-Changing runtime config precedence affects first path. Adding or changing config key affects both paths because editor schema must describe keys CLI accepts. See [CLI Runtime config precedence](/docs/contributing/architecture/cli-runtime#config-precedence) for runtime merge order.
+Changing runtime config precedence affects first path. Adding or changing config key affects both paths because editor schema must describe keys CLI accepts. See [CLI Runtime config precedence](/docs/contributing/architecture/cli-runtime#config-precedence) for runtime merge order. How a save applies at runtime — hot versus cold — is specified in [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle).
 
 ## Source of truth
 
@@ -71,7 +71,7 @@ Treat schema synchronization as cross-repository contract. Tests should detect b
 
 ## Adding or changing Kilo-only config key
 
-1. Add or update Effect Schema field with `kilocode_change` marker in `packages/opencode/src/config/config.ts`.
+1. Add or update Effect Schema field with `kilocode_change` marker in `packages/opencode/src/config/config.ts`. Classify the runtime save lane: add the key to the hot-key set in `packages/opencode/src/kilocode/config/hot-keys.ts`, or leave it absent for cold — see [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle).
 2. Generate JSON Schema shape:
 
 ```sh
@@ -101,5 +101,6 @@ Repository column identifies source root for each relative path.
 
 ## Related pages
 
+- [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle) - hot/cold save classification and convergence model
 - [CLI Runtime](/docs/contributing/architecture/cli-runtime#config-precedence) - runtime config loading and precedence
 - [Development Patterns](/docs/contributing/architecture/development-patterns) - shared-file markers, Kilo-owned boundaries, and cross-repository contributor workflow

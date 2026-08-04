@@ -5,7 +5,7 @@
  * 1. Global-only hot/cold patches work correctly
  * 2. Project-only hot/cold patches work correctly
  * 3. Mixed all-hot patches persist both scopes without rebuild
- * 4. Mixed cold patches use one global writer ticket and register one rebuild
+ * 4. Mixed cold patches raise one global convergence fence and register one rebuild
  * 5. No-op (empty) patches return current config without persistence
  * 6. Semantic no-op (non-empty patches that don't change values) returns without rebuild
  * 7. Invalid patches return structured 400 without persistence
@@ -297,7 +297,7 @@ describe("config transaction - mixed", () => {
     }
   })
 
-  test.serial("mixed cold patch uses one global writer ticket and registers one rebuild", async () => {
+  test.serial("mixed cold patch raises one global convergence fence and registers one rebuild", async () => {
     const global = await tmpdir({ retain: true })
     tdirs.push(global)
     const project = await tmpdir({ git: true, retain: true })
@@ -839,7 +839,7 @@ describe("config transaction - LOCK-001 first-file creation race", () => {
 
 /**
  * Deterministic dynamic coverage for the transaction coordinator:
- * - second-commit failure restores both exact files, emits nothing, cleans the ticket
+ * - second-commit failure restores both exact files, emits nothing, cleans the fence
  * - concurrent legacy (overlay) + transaction non-overlapping writes preserve both
  * - event transaction ids group one logical save across scopes
  * - interruption leaves no lock/temp artifacts and the next transaction works
@@ -849,7 +849,7 @@ describe("config transaction - LOCK-001 first-file creation race", () => {
  * fails after the global target already committed.
  */
 describe("config transaction - LOCK-005 dynamic", () => {
-  test.serial("second commit failure restores both exact files, emits nothing, and cleans the ticket", async () => {
+  test.serial("second commit failure restores both exact files, emits nothing, and cleans the fence", async () => {
     const global = await tmpdir({ retain: true })
     tdirs.push(global)
     const project = await tmpdir({ git: true, retain: true })
@@ -880,8 +880,8 @@ describe("config transaction - LOCK-005 dynamic", () => {
 
       const globalOriginal = readGlobalConfig(global.path)
 
-      // Cold patch (autoupdate) → the transaction takes one global writer
-      // ticket. The project commit fails; the global commit is compensated.
+      // Cold patch (autoupdate) → the transaction raises one global convergence
+      // fence. The project commit fails; the global commit is compensated.
       const response = await request(project.path, "/config/transaction", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
@@ -903,8 +903,8 @@ describe("config transaction - LOCK-005 dynamic", () => {
       )
       expect(configEvents.length).toBe(0)
 
-      // Ticket cleanup: the writer barrier is aborted, so a follow-up
-      // transaction completes normally (no reader is stuck behind a barrier).
+      // Fence cleanup: the convergence fence is aborted, so a follow-up
+      // transaction completes normally (no reader is stuck behind a fence).
       const followup = await json<TransactionResponse>(
         await request(undefined, "/config/transaction", {
           method: "PATCH",
@@ -1124,7 +1124,7 @@ describe("config transaction - LOCK-005 dynamic", () => {
     }
   })
 
-  test.serial("response-read failure restores committed targets, emits no events, releases the ticket (LOCK-003)", async () => {
+  test.serial("response-read failure restores committed targets, emits no events, releases the fence (LOCK-003)", async () => {
     const global = await tmpdir({ retain: true })
     tdirs.push(global)
     const project = await tmpdir({ git: true, retain: true })
@@ -1251,7 +1251,7 @@ describe("config transaction - LOCK-005 dynamic", () => {
       // Caches were invalidated for both scopes.
       expect(invalidated).toEqual(["global", "project"])
 
-      // The writer ticket was released: a follow-up transaction in the same
+      // The convergence fence was released: a follow-up transaction in the same
       // gate instance acquires without waiting and completes.
       failReads = false
       const followup = await runTx()

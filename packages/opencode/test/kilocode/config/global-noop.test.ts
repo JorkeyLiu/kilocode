@@ -6,14 +6,14 @@
  *  - writing the file
  *  - emitting ConfigUpdated/Disposed
  *  - invalidating config caches
- *  - blocking the writer barrier (ticket released promptly)
+ *  - blocking a convergence fence (fence released promptly)
  *
  * Covers both JSON and JSONC global config files, including noncanonical
  * formatting (trailing commas, extra whitespace, different key order) to prove
  * semantic comparison works.
  *
  * Also verifies that subsequent readers and writers are admitted after a no-op
- * (ticket released, barrier not permanently blocked).
+ * (fence released, not permanently blocked).
  */
 import { afterEach, describe, expect, test } from "bun:test"
 import fs from "fs"
@@ -224,7 +224,7 @@ describe("global no-op: hot patch (legacy /global/config route)", () => {
 // ─── Cold no-op: overlay route ────────────────────────────────────
 
 describe("global no-op: cold patch (overlay route)", () => {
-  test.serial("unchanged cold JSON patch writes nothing, emits no events, and releases ticket", async () => {
+  test.serial("unchanged cold JSON patch writes nothing, emits no events, and releases the fence", async () => {
     await using global = await tmpdir({ retain: true })
     await using project = await tmpdir({ retain: true })
     await Bun.write(
@@ -243,7 +243,7 @@ describe("global no-op: cold patch (overlay route)", () => {
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(false)
       expect(events.received.some((e) => e.type === Event.Disposed.type)).toBe(false)
 
-      // Ticket was released: a subsequent patch is admitted immediately
+      // The fence was released: a subsequent patch is admitted immediately
       const next = await patchGlobal({ model: "test/after-noop" })
       expect(next.status).toBe(200)
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(true)
@@ -283,7 +283,7 @@ describe("global no-op: cold patch (overlay route)", () => {
 // ─── Cold no-op: legacy route ─────────────────────────────────────
 
 describe("global no-op: cold patch (legacy /global/config route)", () => {
-  test.serial("unchanged cold patch via legacy route writes nothing and releases ticket", async () => {
+  test.serial("unchanged cold patch via legacy route writes nothing and releases the fence", async () => {
     await using global = await tmpdir({ retain: true })
     await using project = await tmpdir({ retain: true })
     await Bun.write(

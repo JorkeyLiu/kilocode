@@ -41,14 +41,15 @@ export const GenerationAdmissionScope = Context.Reference<AdmissionScope | undef
  *    SAME directory, reuse the existing admission and config snapshot without
  *    re-acquiring the gate. This prevents nested-reader/writer deadlocks.
  * 2. Otherwise, acquire a reader lease on the generation gate for the current
- *    directory. If a cold-config writer barrier is active or queued, this
- *    waits — and while waiting the work never touches an InstanceContext.
- * 3. Once admitted (the barrier released), load the CURRENT instance context
+ *    directory. If a cold-config convergence fence is active or a global
+ *    writer is queued, this waits — and while waiting the work never touches
+ *    an InstanceContext.
+ * 3. Once admitted (the fence released), load the CURRENT instance context
  *    (post-rebuild) and rebind both the Effect `InstanceRef` and the legacy
  *    AsyncLocalStorage instance context, so no stale runtime is used.
  * 4. Capture the config snapshot AFTER the rebind, so `Config.get` inside the
- *    generation returns the config that was persisted before the barrier
- *    opened (LOCK-004). The lease is held for the whole generation.
+ *    generation returns the config that was persisted before the fence
+ *    released (LOCK-004). The lease is held for the whole generation.
  */
 export const withGenerationAdmission = <A, E, R>(
   config: Config.Interface,

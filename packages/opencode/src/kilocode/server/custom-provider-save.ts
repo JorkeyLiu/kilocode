@@ -1,40 +1,42 @@
 /**
- * Canonical custom provider save (LOCK-001..008).
+ * Canonical custom provider save (LOCK-002/003/006).
  *
- * Replaces the extension's split global-config + auth mutations with ONE
- * backend mutation that cannot leave partial state and rebuilds once without
- * interrupting active sessions.
+ * One backend mutation that persists the provider config + auth atomically
+ * with exactly one rebuild — replacing the extension's split global-config +
+ * auth mutations — and never leaves partial state or interrupts active
+ * sessions.
  *
- * Lifecycle (single global convergence obligation, exactly one rebuild):
- * 1. Fast-path validation before any fence/lock/auth/cache/config mutation:
- *    the config body must satisfy the backend schema (npm exactly one of the
- *    accepted AI SDK packages, nonempty name, nonempty models, http(s)
- *    baseURL) and an existing same-ID entry must not be a non-custom provider
- *    (LOCK-002 — an existing non-custom same-ID cannot be overwritten).
- * 2. Canonical cold acquisition order (LOCK-001): the ConfigConvergence global
- *    admission fence is raised FIRST (via withColdMutation), then the
- *    deterministic global discovery flock. The save never waits for a
- *    convergence fence while holding a flock.
- * 3. Under the lock: re-read the exact global target, compute the provider
- *    patch — the null deletions are derived from the OLD global entry and the
- *    NEW config, so removed model/variant/reasoning keys never persist after
- *    the merge (LOCK-002) — and prepare the global artifact in memory (no
- *    writes/events). `disabled_providers` removes the target ID only.
+ * Lifecycle model: packages/kilo-docs/pages/contributing/architecture/cli-runtime.md#config-update-lifecycle;
+ * withColdMutation owns the fence/pass, so this header only states local invariants.
+ *
+ * Local contract (save-specific only):
+ * 1. Validation first (LOCK-002): the config body must satisfy the backend
+ *    schema (npm exactly one of the accepted AI SDK packages, nonempty name,
+ *    nonempty models, http(s) baseURL), and an existing same-ID entry must not
+ *    be a non-custom provider. Runs before any fence/lock/auth/cache/config
+ *    mutation.
+ * 2. GLOBAL-only (LOCK-002): never touches a project config scope and never
+ *    requires an instance context for the write itself; directory/worktree
+ *    inputs are only asserted to match the canonical instance context when
+ *    both are present.
+ * 3. Patch semantics (LOCK-002): under the locks the exact global target is
+ *    re-read, and the null deletions in the provider patch are derived from
+ *    the OLD global entry and the NEW config, so removed model/variant/
+ *    reasoning keys never persist after the merge; `disabled_providers`
+ *    removes the target ID only. The artifact is prepared in memory before any
+ *    write/event.
  * 4. No-op semantics (LOCK-006): when the prepared artifact is unchanged AND
  *    the auth mode is preserve, return success without auth/cache/rebuild/
  *    event — the existing UI expects save success when nothing changed. An
  *    auth set/clear counts as a change even when the config is a no-op.
- * 5. Mutate under locks + fence: capture the exact persisted auth-file
- *    artifact (bytes + mode) before the auth mutation (LOCK-003), commit the
- *    config with emit:false, apply the auth set/clear, clear the model cache
- *    LAST, then commit the obligation — the convergence pass drains readers,
- *    disposes the captured pre-fence instances, and boots replacements from
- *    the latest disk state. The transaction event is DEFERRED into the result:
- *    the HTTP handler emits it at the response acknowledgement boundary via
+ * 5. Mutation order (LOCK-003): capture the exact persisted auth-file artifact
+ *    (bytes + mode) before the auth mutation, commit the config with
+ *    emit:false, apply the auth set/clear, clear the model cache LAST. The
+ *    ConfigUpdated event is DEFERRED into the result: the HTTP handler emits
+ *    it at the response acknowledgement boundary via
  *    HttpEffect.appendPreResponseHandler, so it is never observable before
  *    persistence, rebuild registration, and the success response are all
- *    finalized. The response returns after persistence + registration, before
- *    generation drain.
+ *    finalized.
  * 6. Compensation (LOCK-004/006): any failure after mutation begins restores
  *    in reverse order while locks + fence remain held — the exact auth file
  *    artifact first (byte/mode-exact, covering Auth.set/remove's write-then-
@@ -43,11 +45,6 @@
  *    rollback surfaces as ConfigRollbackFailed (a defect, not a validation
  *    error). Auth read/set/remove, commit, cache clear, and rollback errors
  *    are never swallowed; auth state is never inferred from method success.
- *
- * The save is GLOBAL-only (LOCK-002): it never touches a project config scope
- * and never requires an instance context for the write itself; the trusted
- * directory/worktree inputs are only asserted to match the canonical instance
- * context when both are present.
  */
 
 import { randomUUID } from "crypto"
@@ -224,7 +221,7 @@ export const execute = Effect.fn("CustomProviderSave.execute")(function* (input:
 
   // LOCK-002: the provider ID must satisfy the shared product predicate
   // (lowercase alphanumeric start, then `[a-z0-9-_]`) before ANY
-  // ticket/lock/auth/cache/config work. A route-matching but invalid ID gets
+  // fence/lock/auth/cache/config work. A route-matching but invalid ID gets
   // the same structured validation 400 as an invalid config body; slashed IDs
   // never route and stay 404.
   if (!isProviderID(providerID)) {
@@ -274,7 +271,7 @@ export const execute = Effect.fn("CustomProviderSave.execute")(function* (input:
     return { globalConfig, existing }
   })
 
-  // LOCK-003: fast-path rejection before ticket/locks/auth/cache/config mutation.
+  // LOCK-003: fast-path rejection before fence/locks/auth/cache/config mutation.
   yield* validate()
 
   const transactionID = randomUUID()

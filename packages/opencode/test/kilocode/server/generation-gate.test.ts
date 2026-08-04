@@ -68,7 +68,7 @@ describe("GenerationGate admission", () => {
     }),
   )
 
-  it.live("concurrent cold PATCHes serialize: the second writer is granted only after the first releases", () =>
+  it.live("concurrent local writers serialize: the second writer is granted only after the first releases", () =>
     Effect.gen(function* () {
       const gate = yield* GenerationGate.Service
       const first = yield* gate.beginWrite("d")

@@ -28,7 +28,7 @@ Prefer Kilo-owned seams over broad changes to shared OpenCode files. Follow neig
 | VS Code, JetBrains, docs, indexing, UI, gateway, or telemetry change | Existing Kilo-owned package | These packages are Kilo-owned; do not add `kilocode_change` markers |
 | CLI server endpoint change | Effect `HttpApi` route plus handler; then run root SDK generator | Keeps server contract and generated JavaScript SDK aligned |
 | JetBrains API contract change | Shared CLI OpenAPI change; let Gradle regenerate build-local Kotlin client | Kotlin client is generated during JetBrains build |
-| Kilo-only config-key change | Update CLI Effect Schema and cloud JSON Schema overlay | Runtime acceptance and editor validation are separate cross-repository paths |
+| Kilo-only config-key change | Update CLI Effect Schema, classify the key in the hot-key set, and update cloud JSON Schema overlay | Runtime acceptance and editor validation are separate cross-repository paths |
 | Docs page move or removal | Update nav and add permanent redirect | Preserves external links and bookmarks |
 
 ## Kilo-owned boundaries
@@ -87,7 +87,7 @@ CLI server uses Effect `HttpApi` and publishes OpenAPI-compatible HTTP + SSE sur
 
 ## CLI config schema
 
-Runtime config loading and editor validation are separate paths. New Kilo-only config key requires CLI Effect Schema change in `Kilo-Org/kilocode` and JSON Schema overlay change in `Kilo-Org/cloud`. Follow [CLI Config Schema](/docs/contributing/architecture/config-schema) for exact workflow.
+Runtime config loading and editor validation are separate paths. New Kilo-only config key requires CLI Effect Schema change in `Kilo-Org/kilocode` and JSON Schema overlay change in `Kilo-Org/cloud`. Classify the field hot or cold at introduction — hot saves converge without a runtime rebuild, cold saves require runtime convergence; the full model is in [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle). Follow [CLI Config Schema](/docs/contributing/architecture/config-schema) for exact workflow.
 
 ## Module export pattern
 
@@ -192,4 +192,5 @@ Keep Kilo-specific logic extracted, shared seams narrow, markers accurate, and C
 
 - [Architecture Overview](/docs/contributing/architecture) - system layers and reading paths
 - [CLI Runtime](/docs/contributing/architecture/cli-runtime) - local runtime ownership and SDK contract
+- [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle) - hot/cold save classification and convergence obligations
 - [CLI Config Schema](/docs/contributing/architecture/config-schema) - cross-repository config-key workflow

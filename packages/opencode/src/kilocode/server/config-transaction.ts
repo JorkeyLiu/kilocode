@@ -1,45 +1,52 @@
 /**
- * Combined global+project config transaction coordinator (LOCK-001/002/003/004/005/006).
+ * Combined global+project config transaction coordinator (LOCK-002/003/005/006).
  *
- * One logical save = one backend mutation:
+ * One logical save = one backend mutation spanning both scopes:
+ * prepare-before-write, atomic temp-file + rename commits under shared locks,
+ * reverse-order compensation, and exactly one convergence obligation when any
+ * changed field is cold.
  *
- * 1. Canonical cold acquisition order (LOCK-001): the ConfigConvergence
- *    admission fence is raised FIRST (via withColdMutation), then the shared
- *    cross-process lock for the global target, then the project target
- *    (deterministic global-first flock chain). No cold path ever waits for a
- *    convergence fence while holding a config lock. Every config write path —
- *    `Config.updateGlobal`, `Config.update`, `/config/overlay`, `/config`,
- *    `/global/config`, and this transaction — serializes through the same lock
- *    key space, so no two writers of a target can interleave. Hot transactions
- *    take config locks only, never a fence.
- * 2. Prepare BOTH scopes in memory before the first write (LOCK-002): read
- *    the exact target content, apply the existing JSONC/merge/writable/schema
+ * Lifecycle model: packages/kilo-docs/pages/contributing/architecture/cli-runtime.md#config-update-lifecycle;
+ * withColdMutation owns the fence/pass, so this header only states local invariants.
+ *
+ * Local contract (transaction-specific only):
+ * 1. Lock ordering (LOCK-001): the shared flock for the global target is
+ *    acquired first, then the project target's flock inside it. Single-scope
+ *    writes acquire only their own target's lock and never take
+ *    project-then-global, so the global-first canonical order cannot deadlock.
+ *    Hot transactions take config locks only, never a fence.
+ * 2. Prepare both scopes in memory before the first write (LOCK-002): read the
+ *    exact target content, apply the existing JSONC/merge/writable/schema
  *    behavior, validate, and produce `{path, existed, original, next, info,
  *    changed}` artifacts without writing, invalidating, disposing, or emitting.
- * 3. Semantic no-op comes from the prepared artifacts (LOCK-005): when neither
- *    scope changed, nothing is persisted, no event is emitted, no writer
- *    barrier is created.
- * 4. Commit each prepared target atomically (temp-file + rename) while the
- *    shared locks are held (LOCK-003). The authoritative global/project/effective
- *    response is then constructed while still inside the compensatable region;
- *    if the second commit OR the response construction fails, every committed
- *    target is restored exactly — deleting newly created targets — and the
- *    config caches are invalidated before the error propagates. A failed
- *    compensating rollback surfaces as the dedicated `ConfigRollbackFailed`
- *    structured error.
- * 5. ConfigUpdated events are published only after ALL targets committed AND
- *    the response was constructed (LOCK-003/004), each carrying the same
+ *    Targets are resolved under the locks, exactly once, so the locked key is
+ *    always the written path.
+ * 3. Semantic no-op (LOCK-005): when neither scope changed, nothing is
+ *    persisted, no event is emitted, no convergence pass runs.
+ * 4. Commit + response (LOCK-003): commit each prepared target atomically
+ *    (temp-file + rename) while the shared locks are held, then construct the
+ *    authoritative global/project/effective response while still inside the
+ *    compensatable region. If the second commit OR the response construction
+ *    fails, every committed target is restored exactly — deleting newly created
+ *    targets — and the config caches are invalidated before the error
+ *    propagates; a failed compensating rollback surfaces as the dedicated
+ *    `ConfigRollbackFailed` structured error.
+ * 5. Events (LOCK-003/004): ConfigUpdated publishes happen only after ALL
+ *    targets committed AND the response was constructed, each carrying the same
  *    logical transaction id. No precommit or stale rollback events are ever
  *    emitted.
- * 6. An all-hot changed transaction persists without a convergence fence and
- *    without a rebuild; any changed cold transaction registers exactly one
- *    convergence obligation (global scope when a cold global change exists,
- *    project scope otherwise); a no-op registers none (LOCK-005).
- * 7. The response carries the authoritative global config, the canonical
- *    project overlay (NOT effective config), and the effective config, and is
- *    computed after commit/rebuild registration and before generation drain
- *    (LOCK-006). Every lock, ticket, and temp file has ensuring cleanup on
- *    typed error, defect, interruption, and response construction failure.
+ * 6. Hot/cold (LOCK-005): an all-hot changed transaction persists without a
+ *    convergence fence and without a rebuild; any changed cold transaction
+ *    registers exactly one convergence obligation (global scope when a cold
+ *    global change exists, project scope otherwise); a no-op registers none. A
+ *    global cold change fences/rebuilds every loaded directory; a project-only
+ *    cold change only its directory.
+ * 7. Response contract (LOCK-006): the response carries the authoritative
+ *    global config, the canonical project overlay (NOT effective config), and
+ *    the effective config, computed after commit/rebuild registration and
+ *    before generation drain. Every lock, fence, and temp file has ensuring
+ *    cleanup on typed error, defect, interruption, and response construction
+ *    failure.
  *
  * The only residual risk is a process crash between two atomic renames, which
  * a durable crash journal would close in a later phase; normal failures and
@@ -247,9 +254,9 @@ export const executeTransaction = Effect.fn("ConfigTransaction.execute")(
      * failures surface here — nothing has been persisted, invalidated,
      * disposed, or emitted (`configFailure` maps ConfigInvalidError defects to
      * the typed 400 the route declares). Semantic no-op comes from the
-     * prepared artifacts — no persistence, no events, no writer barrier, no
-     * rebuild. Runs under the canonical acquisition order (gate ticket first
-     * for cold, then the deterministic global→project flocks), so the
+     * prepared artifacts — no persistence, no events, no convergence pass, no
+     * rebuild. Runs under the canonical acquisition order (convergence fence
+     * first for cold, then the deterministic global→project flocks), so the
      * no-op/recheck decision is never racy with a concurrent writer.
      */
     const run = Effect.gen(function* () {

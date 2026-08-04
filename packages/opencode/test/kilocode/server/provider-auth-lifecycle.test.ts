@@ -1,17 +1,17 @@
 /**
  * Provider-auth lifecycle (LOCK-001..007): every provider-auth mutation routes
- * through the canonical GenerationGate/ConfigRebuild coordinator and never
- * disposes active instances outside generation drain.
+ * through the canonical ConfigConvergence coordinator and never disposes active
+ * instances outside generation drain.
  *
  * Coverage:
  * 1. Coordinator (LOCK-001/002/004): the mutation persists under one global
- *    writer ticket, the ModelCache clears immediately, exactly one
- *    ControlLease-aware rebuild is registered, the captured instance is
- *    disposed exactly once after drain, and InstanceStore.disposeAll is never
- *    called. Mutation failures (typed and defect) abort the ticket with no
+ *    convergence fence, the ModelCache clears immediately, exactly one
+ *    ControlLease-aware convergence pass is registered, the captured instance
+ *    is disposed exactly once after drain, and InstanceStore.disposeAll is
+ *    never called. Mutation failures (typed and defect) abort the fence with no
  *    cache clear / rebuild / disposal, and release it for the next mutation.
  *    A cache-clear failure after a durable mutation restores the exact auth
- *    artifact bytes/mode before the ticket aborts (LOCK-004). A mutation that
+ *    artifact bytes/mode before the fence aborts (LOCK-004). A mutation that
  *    persists auth and THEN fails restores the exact artifact too (LOCK-002).
  * 2. Anaconda caller coverage lives in anaconda-desktop/service.test.ts
  *    (service-level, proving the sync routes through the coordinator).
@@ -113,7 +113,7 @@ function seedAuth(providerID: string, info: unknown = { type: "api", key: "test-
 
 // ─── coordinator-level fixtures ─────────────────────────────────────────
 
-/** Captured pre-barrier instance identity the coordinator's rebuild disposes. */
+/** Captured pre-fence instance identity the coordinator's convergence pass disposes. */
 const fakeCtx: InstanceContext = {
   directory: "/tmp/project-a",
   worktree: "/tmp/project-a",
@@ -185,7 +185,7 @@ function cleanupLayer(events: Ref.Ref<string[]>, failClear = false) {
 
 describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
   it.live(
-    "persists the mutation under the ticket, clears the cache, and registers exactly one rebuild — never disposeAll",
+    "persists the mutation under the convergence fence, clears the cache, and registers exactly one convergence pass — never disposeAll",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<string[]>([])
@@ -216,7 +216,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
   )
 
   it.live(
-    "a typed mutation failure aborts the ticket: no cache clear, no rebuild, no disposal; the ticket is released",
+    "a typed mutation failure aborts the fence: no cache clear, no rebuild, no disposal; the fence is released",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<string[]>([])
@@ -232,7 +232,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
         expect(fs.readFileSync(authFile(), "utf-8")).toBe(beforeRaw)
         yield* awaitRebuilds()
 
-        // Ticket released: the next mutation completes end to end.
+        // Fence released: the next mutation completes end to end.
         const followup = yield* Effect.gen(function* () {
           const svc = yield* Auth.Service
           yield* invalidateAfterProviderAuthChange(
@@ -247,7 +247,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
   )
 
   it.live(
-    "a defect mutation failure propagates and aborts the ticket without disposal",
+    "a defect mutation failure propagates and aborts the fence without disposal",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<string[]>([])
@@ -266,7 +266,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
   )
 
   it.live(
-    "a cache-clear failure restores the exact auth artifact bytes/mode and releases the ticket",
+    "a cache-clear failure restores the exact auth artifact bytes/mode and releases the fence",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<string[]>([])
@@ -291,7 +291,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
         expect(yield* Ref.get(events)).toEqual([])
         yield* awaitRebuilds()
 
-        // Ticket released: with a healthy cache the next mutation completes.
+        // Fence released: with a healthy cache the next mutation completes.
         const followup = yield* Effect.gen(function* () {
           const svc = yield* Auth.Service
           yield* invalidateAfterProviderAuthChange(
@@ -309,7 +309,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
   )
 
   it.live(
-    "a mutation that persists auth and then fails restores the exact artifact bytes/mode with zero cache/rebuild/event, and releases the ticket",
+    "a mutation that persists auth and then fails restores the exact artifact bytes/mode with zero cache/rebuild/event, and releases the fence",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<string[]>([])
@@ -321,7 +321,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
 
         // mutate persists auth (set writes the file) and THEN fails — the exact
         // post-snapshot failure mode LOCK-002 compensates: the durable write
-        // must be rolled back byte/mode-exactly before the ticket aborts.
+        // must be rolled back byte/mode-exactly before the fence aborts.
         const failed = yield* Effect.gen(function* () {
           const svc = yield* Auth.Service
           yield* invalidateAfterProviderAuthChange(
@@ -341,7 +341,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
         expect(yield* Ref.get(events)).toEqual([])
         yield* awaitRebuilds()
 
-        // Ticket released: with a healthy mutation the next run completes.
+        // Fence released: with a healthy mutation the next run completes.
         const followup = yield* Effect.gen(function* () {
           const svc = yield* Auth.Service
           yield* invalidateAfterProviderAuthChange(
@@ -448,7 +448,7 @@ describe("providerAuth - OAuth callback via the coordinator (LOCK-001/004)", () 
   )
 
   it.instance(
-    "a post-write callback failure restores the exact auth artifact and releases the ticket",
+    "a post-write callback failure restores the exact auth artifact and releases the fence",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<string[]>([])
@@ -460,7 +460,7 @@ describe("providerAuth - OAuth callback via the coordinator (LOCK-001/004)", () 
 
         // The callback persists the OAuth tokens and THEN fails (mutate-level
         // post-write failure): the coordinator restores the exact artifact
-        // before the ticket aborts, with zero cache/rebuild/events.
+        // before the fence aborts, with zero cache/rebuild/events.
         const failed = yield* Effect.gen(function* () {
           const svc = yield* ProviderAuth.Service
           yield* svc.authorize({ providerID: ProviderV2.ID.make("oauth-test"), method: 0 })
@@ -477,7 +477,7 @@ describe("providerAuth - OAuth callback via the coordinator (LOCK-001/004)", () 
         expect(yield* Ref.get(events)).toEqual([])
         yield* awaitRebuilds()
 
-        // Ticket released: the next callback completes end to end.
+        // Fence released: the next callback completes end to end.
         const followup = yield* Effect.gen(function* () {
           const svc = yield* ProviderAuth.Service
           yield* svc.authorize({ providerID: ProviderV2.ID.make("oauth-test"), method: 0 })
@@ -1188,11 +1188,11 @@ describe("providerAuth - held global dispose (LOCK-001)", () => {
   )
 })
 
-// ─── LOCK-002: organization read-under-ticket ───────────────────────────
+// ─── LOCK-002: organization read-under-fence ─────────────────────────
 
-describe("providerAuth - organization read under ticket (LOCK-002)", () => {
+describe("providerAuth - organization read under fence (LOCK-002)", () => {
   it.live(
-    "the org-switch mutate runs under the writer ticket, so its auth read is never a pre-ticket snapshot",
+    "the org-switch mutate runs under the convergence fence, so its auth read is never a pre-fence snapshot",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<string[]>([])
@@ -1209,17 +1209,17 @@ describe("providerAuth - organization read under ticket (LOCK-002)", () => {
 
         // Mirrors kilo-gateway.ts exactly: read the current kilo record
         // immediately before the set, preserving the credential and only
-        // changing the org. The coordinator runs this mutate UNDER the writer
-        // ticket (fresh gate per test — no shared process state).
+        // changing the org. The coordinator runs this mutate UNDER the
+        // convergence fence (fresh gate per test — no shared process state).
         const exit = yield* Effect.gen(function* () {
           const svc = yield* Auth.Service
           const gate = yield* GenerationGate.Service
           yield* invalidateAfterProviderAuthChange(
             "kilo",
             Effect.gen(function* () {
-              // The coordinator holds the global writer ticket while mutate
-              // runs: a reader for any directory would block behind it, so a
-              // newer credential cannot land between the read and the set.
+              // The coordinator holds the global convergence fence while
+              // mutate runs: a reader for any directory would block behind it,
+              // so a newer credential cannot land between the read and the set.
               expect(gate.isBarrierActive("/probe")).toBe(true)
               const info = yield* svc.get("kilo").pipe(Effect.orDie)
               if (!info || info.type !== "oauth") return yield* Effect.fail(new Error("kilo auth missing"))
@@ -1236,7 +1236,7 @@ describe("providerAuth - organization read under ticket (LOCK-002)", () => {
         }).pipe(Effect.provide(coordinatorLayer(events)), Effect.exit)
         if (exit._tag !== "Success") throw new Error("org-switch mutate through the coordinator failed")
 
-        // Only the org changed; the credential was read under the ticket.
+        // Only the org changed; the credential was read under the fence.
         const stored = exit.value
         expect(stored?.type === "oauth" && stored.accountId === "org-2").toBe(true)
         expect((stored as { refresh?: string }).refresh).toBe("refresh-1")
@@ -1254,7 +1254,7 @@ describe("providerAuth - organization read under ticket (LOCK-002)", () => {
     const readIdx = src.indexOf('auth.get("kilo")')
     expect(coordinatorIdx).toBeGreaterThanOrEqual(0)
     // The current-credential read appears AFTER the coordinator invocation —
-    // i.e. inside the mutate under the writer ticket, never before it.
+    // i.e. inside the mutate under the convergence fence, never before it.
     expect(readIdx).toBeGreaterThan(coordinatorIdx)
   })
 })
@@ -1263,7 +1263,7 @@ describe("providerAuth - organization read under ticket (LOCK-002)", () => {
 
 describe("providerAuth - disabled_providers cleanup (LOCK-003)", () => {
   it.live(
-    "auth set removes the target ID under one ticket: one rebuild, one ConfigUpdated, unrelated IDs preserved",
+    "auth set removes the target ID under one fence: one convergence pass, one ConfigUpdated, unrelated IDs preserved",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture()
@@ -1310,7 +1310,7 @@ describe("providerAuth - disabled_providers cleanup (LOCK-003)", () => {
   )
 
   it.live(
-    "a cleanup commit failure restores the exact auth artifact, emits nothing, and releases the ticket",
+    "a cleanup commit failure restores the exact auth artifact, emits nothing, and releases the fence",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture()
@@ -1355,7 +1355,7 @@ describe("providerAuth - disabled_providers cleanup (LOCK-003)", () => {
         expect(probeRebuildRegistration.entries().length).toBe(0)
         yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle", "20 seconds")
 
-        // Ticket released: a follow-up auth set completes end to end.
+        // Fence released: a follow-up auth set completes end to end.
         const followup = yield* Effect.promise(async () => {
           const response = await request(f.project, "/auth/test", {
             method: "PUT",
@@ -1374,7 +1374,7 @@ describe("providerAuth - disabled_providers cleanup (LOCK-003)", () => {
   )
 
   it.live(
-    "a cache-clear failure after a committed disabled_providers cleanup restores auth and the committed config exactly, with zero events/rebuild/disposal, and releases the ticket",
+    "a cache-clear failure after a committed disabled_providers cleanup restores auth and the committed config exactly, with zero events/rebuild/disposal, and releases the fence",
     () =>
       Effect.gen(function* () {
         // A real global config file with the target disabled; the coordinator
@@ -1428,7 +1428,7 @@ describe("providerAuth - disabled_providers cleanup (LOCK-003)", () => {
         expect(yield* Ref.get(events)).toEqual([])
         yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle", "20 seconds")
 
-        // Ticket released: with a healthy cache the next mutation completes and
+        // Fence released: with a healthy cache the next mutation completes and
         // re-commits the cleanup.
         const followup = yield* Effect.gen(function* () {
           const svc = yield* Auth.Service

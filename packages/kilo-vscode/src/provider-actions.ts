@@ -423,7 +423,7 @@ export async function deleteCustomProvider(
     // Atomic backend-coordinated deletion (LOCK-001/002/003/005).
     // The backend endpoint handles ALL config deletion atomically: auth removal,
     // ModelCache clear, global config patch, project config patch, and instance
-    // rebuild through a single GenerationGate write ticket.
+    // rebuild through a single convergence pass.
     // The extension must NOT issue a second project PATCH (LOCK-001).
     const response = await ctx.client.customProvider.delete(
       { providerID: id, directory: ctx.workspaceDir },

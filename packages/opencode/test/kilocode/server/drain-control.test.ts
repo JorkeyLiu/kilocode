@@ -1,12 +1,12 @@
 /**
- * Drain-control admission bypass during cold config writer barriers
+ * Drain-control admission bypass during cold config convergence fences
  * (LOCK-004/005/006).
  *
- * While a cold config writer is draining active generations, instance-gated
- * reader admission starves behind the writer. The only requests that must
- * still complete are the pre-barrier lifecycle controls: session abort,
+ * While a cold config save is draining active generations, instance-gated
+ * reader admission starves behind the drain. The only requests that must
+ * still complete are the pre-fence lifecycle controls: session abort,
  * queued-message cancel, permission reply, and question reply/reject. They
- * serve from the pre-barrier `InstanceStore.snapshot` — never gate.acquire,
+ * serve from the pre-fence `InstanceStore.snapshot` — never gate.acquire,
  * store.load, or a new runtime boot — and normal new prompts remain blocked.
  *
  * Determinism: progression is driven only by Deferred/LLM gates, event latches,
@@ -398,7 +398,7 @@ describe("classifyDrainControl exact segment classification", () => {
 
 describe("drain-control bypass - web handler path", () => {
   it.live(
-    "session abort completes during an active cold writer drain and the writer rebuilds once",
+    "session abort completes during an active cold save drain and the save converges once",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -409,24 +409,25 @@ describe("drain-control bypass - web handler path", () => {
         const { fiber, done } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        // A cold project PATCH starts a writer whose drain waits on the held stream.
-        // The second session is created BEFORE the barrier: session creation is a
-        // normal data-plane request that is writer-blocked, so awaiting it inline
-        // after the PATCH would deadlock the test before the abort is ever issued.
+        // A cold project PATCH starts a convergence pass whose drain waits on
+        // the held stream. The second session is created BEFORE the fence:
+        // session creation is a normal data-plane request that is fence-blocked,
+        // so awaiting it inline after the PATCH would deadlock the test before
+        // the abort is ever issued.
         const sessionB = yield* Effect.promise(() => createSession(f.project))
         const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* isDone(done)).toBe(false)
         expect(yield* instanceDisposed.done).toBe(false)
 
-        // A normal new prompt issued while the writer drains stays blocked: the
+        // A normal new prompt issued while the save drains stays blocked: the
         // message POST waits at reader admission, never reaching the handler.
         const second = yield* forkPrompt(f.project, sessionB.id, "second", "second")
         yield* Effect.yieldNow
         expect(yield* isDone(second.done)).toBe(false)
 
-        // Abort must complete while the writer barrier is active (bypass), even
-        // though the held stream would otherwise starve reader admission.
+        // Abort must complete while the convergence fence is active (bypass),
+        // even though the held stream would otherwise starve reader admission.
         const abort = yield* Effect.promise(async () => {
           const response = await request(f.project, `/session/${session.id}/abort`, { method: "POST" })
           return response.status
@@ -440,7 +441,7 @@ describe("drain-control bypass - web handler path", () => {
         yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after abort")
         expect(yield* instanceDisposed.done).toBe(true)
 
-        // The queued normal prompt is admitted only after the barrier releases.
+        // The queued normal prompt is admitted only after the fence releases.
         expect(yield* isDone(second.done)).toBe(false)
         yield* Deferred.succeed(second.gate, void 0)
         const exit = yield* second.result()
@@ -456,7 +457,7 @@ describe("drain-control bypass - web handler path", () => {
   )
 
   it.live(
-    "queued-message cancel completes during an active cold writer drain",
+    "queued-message cancel completes during an active cold save drain",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -466,8 +467,8 @@ describe("drain-control bypass - web handler path", () => {
         const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        // Enqueue a second same-session prompt BEFORE the barrier: its intake
-        // admission passes (no writer yet), the message is persisted, and the
+        // Enqueue a second same-session prompt BEFORE the fence: its intake
+        // admission passes (no fence yet), the message is persisted, and the
         // slot waits in the queue behind the running generation. Deterministic
         // wait on the queue registry: without it the forked POST races the
         // PATCH below — a losing POST blocks at reader admission and never
@@ -488,13 +489,13 @@ describe("drain-control bypass - web handler path", () => {
         const messageID = MessageID.make(queuedMsg.info.id)
         expect(yield* isDone(queued.done)).toBe(false)
 
-        // Cold PATCH: writer drains on the running stream; the queued slot is
+        // Cold PATCH: the save drains on the running stream; the queued slot is
         // still pending.
         const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* isDone(queued.done)).toBe(false)
 
-        // cancelQueued must complete during the barrier and flag the slot.
+        // cancelQueued must complete during the fence and flag the slot.
         const cancelled = yield* Effect.promise(async () => {
           const response = await request(f.project, `/session/${session.id}/queue/${messageID}`, {
             method: "DELETE",
@@ -504,7 +505,7 @@ describe("drain-control bypass - web handler path", () => {
         expect(cancelled.status).toBe(200)
         expect(cancelled.body).toBe(true)
 
-        // Release the running generation: the writer rebuilds once and the
+        // Release the running generation: the save converges once and the
         // cancelled slot runs its cancelled effect (no new LLM call).
         yield* Deferred.succeed(gate, void 0)
         const first = yield* Fiber.await(fiber)
@@ -518,7 +519,7 @@ describe("drain-control bypass - web handler path", () => {
   )
 
   it.live(
-    "permission reply completes during an active cold writer drain",
+    "permission reply completes during an active cold save drain",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -528,7 +529,7 @@ describe("drain-control bypass - web handler path", () => {
         const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        // A real pending permission request on the pre-barrier instance.
+        // A real pending permission request on the pre-fence instance.
         const asked = yield* eventCapture<{ id: string }>("permission.asked", f.project)
         const askFiber = yield* Effect.forkDetach(
           withInstance(f.project)(
@@ -550,12 +551,12 @@ describe("drain-control bypass - web handler path", () => {
         )
         const requestID = asked.received[0]!.id
 
-        // Cold PATCH: writer drains on the held stream.
+        // Cold PATCH: the save drains on the held stream.
         const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* instanceDisposed.done).toBe(false)
 
-        // Permission reply must complete during the barrier.
+        // Permission reply must complete during the fence.
         const reply = yield* Effect.promise(async () => {
           const response = await request(f.project, `/permission/${requestID}/reply`, {
             method: "POST",
@@ -569,7 +570,7 @@ describe("drain-control bypass - web handler path", () => {
         // The pending ask resolved with the reply.
         yield* awaitWithTimeout(Fiber.join(askFiber), "permission ask never resolved")
 
-        // Release the stream: writer rebuilds once.
+        // Release the stream: the save converges once.
         yield* Deferred.succeed(gate, void 0)
         yield* Fiber.await(fiber)
         yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after release")
@@ -578,7 +579,7 @@ describe("drain-control bypass - web handler path", () => {
   )
 
   it.live(
-    "legacy session permission reply completes during an active cold writer drain (LOCK-007)",
+    "legacy session permission reply completes during an active cold save drain (LOCK-007)",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -588,7 +589,7 @@ describe("drain-control bypass - web handler path", () => {
         const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        // A real pending permission request on the pre-barrier instance.
+        // A real pending permission request on the pre-fence instance.
         const asked = yield* eventCapture<{ id: string }>("permission.asked", f.project)
         const askFiber = yield* Effect.forkDetach(
           withInstance(f.project)(
@@ -610,12 +611,12 @@ describe("drain-control bypass - web handler path", () => {
         )
         const requestID = asked.received[0]!.id
 
-        // Cold PATCH: writer drains on the held stream.
+        // Cold PATCH: the save drains on the held stream.
         const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* instanceDisposed.done).toBe(false)
 
-        // The legacy session-scoped reply must complete during the barrier:
+        // The legacy session-scoped reply must complete during the fence drain:
         // it is drain-control equivalent to the canonical permission reply and
         // unblocks the same generation the drain is holding.
         const reply = yield* Effect.promise(async () => {
@@ -631,7 +632,7 @@ describe("drain-control bypass - web handler path", () => {
         // The pending ask resolved with the reply.
         yield* awaitWithTimeout(Fiber.join(askFiber), "permission ask never resolved")
 
-        // Release the stream: writer rebuilds once.
+        // Release the stream: the save converges once.
         yield* Deferred.succeed(gate, void 0)
         yield* Fiber.await(fiber)
         yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after release")
@@ -651,7 +652,7 @@ describe("drain-control bypass - web handler path", () => {
         const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        // A pending permission with an always rule on the pre-barrier instance.
+        // A pending permission with an always rule on the pre-fence instance.
         const asked = yield* eventCapture<{ id: string }>("permission.asked", f.project)
         const askFiber = yield* Effect.forkDetach(
           withInstance(f.project)(
@@ -673,13 +674,13 @@ describe("drain-control bypass - web handler path", () => {
         )
         const requestID = asked.received[0]!.id
 
-        // Cold PATCH: writer drains on the held stream.
+        // Cold PATCH: the save drains on the held stream.
         const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* instanceDisposed.done).toBe(false)
 
-        // Reply "always" through the control lane during the barrier: the rule
-        // is persisted via updateGlobal(dispose:false) — no writer barrier, no
+        // Reply "always" through the control lane during the fence drain: the
+        // rule is persisted via updateGlobal(dispose:false) — no fence, no
         // extra rebuild.
         const reply = yield* Effect.promise(async () => {
           const response = await request(f.project, `/permission/${requestID}/reply`, {
@@ -692,7 +693,7 @@ describe("drain-control bypass - web handler path", () => {
         expect(reply).toBe(200)
         yield* awaitWithTimeout(Fiber.join(askFiber), "permission always ask never resolved")
 
-        // Release the stream: the writer rebuilds exactly once (the cold PATCH
+        // Release the stream: the save converges exactly once (the cold PATCH
         // only). The always rule was persisted to the global config by the
         // reply before the old instance was disposed, so the replacement boots
         // with it.
@@ -709,7 +710,7 @@ describe("drain-control bypass - web handler path", () => {
   )
 
   it.live(
-    "question reply and reject complete during an active cold writer drain",
+    "question reply and reject complete during an active cold save drain",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -748,12 +749,12 @@ describe("drain-control bypass - web handler path", () => {
         )
         const [replyID, rejectID] = [asked.received[0]!.id, asked.received[1]!.id]
 
-        // Cold PATCH: writer drains on the held stream.
+        // Cold PATCH: the save drains on the held stream.
         const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* instanceDisposed.done).toBe(false)
 
-        // Question reply + reject must complete during the barrier.
+        // Question reply + reject must complete during the fence drain.
         const replied = yield* Effect.promise(async () => {
           const response = await request(f.project, `/question/${replyID}/reply`, {
             method: "POST",
@@ -787,7 +788,7 @@ describe("drain-control bypass - web handler path", () => {
   )
 
   it.live(
-    "drain-control for a directory with no instance during a barrier refuses deterministically",
+    "drain-control for a directory with no instance during a convergence fence refuses deterministically",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -803,7 +804,7 @@ describe("drain-control bypass - web handler path", () => {
           expect(response.status).toBe(200)
         })
 
-        // Global cold PATCH: the barrier covers every directory.
+        // Global cold PATCH: the fence covers every directory.
         const patch = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
         expect(patch.status).toBe(200)
 
@@ -816,7 +817,7 @@ describe("drain-control bypass - web handler path", () => {
         expect(abort.status).toBe(409)
         expect(abort.body._tag).toBe("InstanceUnavailableDuringConfigRebuild")
 
-        // The barrier still drains normally on the held stream.
+        // The fence still drains normally on the held stream.
         yield* Deferred.succeed(gate, void 0)
         const exit = yield* Fiber.await(fiber)
         expect(Exit.isSuccess(exit)).toBe(true)
@@ -836,7 +837,7 @@ describe("drain-control bypass - web handler path", () => {
         const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        // Legacy (non-overlay) cold global PATCH: same writer ticket + rebuild
+        // Legacy (non-overlay) cold global PATCH: same convergence fence + pass
         // machinery as the overlay global path, so it must honor the same
         // drain-control lane and seal/drain before disposal.
         const patch = yield* Effect.promise(async () => {
@@ -850,14 +851,14 @@ describe("drain-control bypass - web handler path", () => {
         expect(patch).toBe(200)
         expect(yield* instanceDisposed.done).toBe(false)
 
-        // Abort completes during the legacy writer's drain (control lane).
+        // Abort completes during the legacy save's drain (control lane).
         const abort = yield* Effect.promise(async () => {
           const response = await request(f.project, `/session/${session.id}/abort`, { method: "POST" })
           return response.status
         })
         expect(abort).toBe(200)
 
-        // The abort ends the stream; the legacy writer rebuilds exactly once.
+        // The abort ends the stream; the legacy save converges exactly once.
         yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after abort")
         yield* Fiber.await(fiber)
         yield* awaitRebuilds()
@@ -871,7 +872,7 @@ describe("drain-control bypass - web handler path", () => {
 
 describe("drain-control bypass - Server.listen path", () => {
   it.live(
-    "session abort completes through a real listener during an active global writer drain",
+    "session abort completes through a real listener during an active global save drain",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -943,7 +944,7 @@ describe("drain-control bypass - Server.listen path", () => {
         yield* f.llm.wait(1)
         yield* waitForListenerBusy(session.id)
 
-        // A cold global PATCH through the listener: the writer barrier covers
+        // A cold global PATCH through the listener: the convergence fence covers
         // every directory and drains on the held stream.
         const patch = yield* send("", "/config/overlay", {
           method: "PATCH",
@@ -954,13 +955,13 @@ describe("drain-control bypass - Server.listen path", () => {
         expect(yield* isDone(done)).toBe(false)
         expect(yield* instanceDisposed.done).toBe(false)
 
-        // Abort through the listener must complete during the barrier: the
-        // drain-control lane serves it from the pre-barrier snapshot.
+        // Abort through the listener must complete during the fence: the
+        // drain-control lane serves it from the pre-fence snapshot.
         const abort = yield* send(f.project, `/session/${session.id}/abort`, { method: "POST" })
         expect(abort.status).toBe(200)
 
-        // The abort cancelled the generation: the stream ends and the writer
-        // rebuilds once, disposing the exact old instance.
+        // The abort cancelled the generation: the stream ends and the save
+        // converges once, disposing the exact old instance.
         yield* awaitWithTimeout(Deferred.await(done), "aborted stream did not complete through listener")
         yield* Fiber.join(fiber)
         yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after abort")

@@ -29,10 +29,12 @@ Kilo CLI is an open source AI coding agent that generates code from natural lang
 
 ### Config Update Lifecycle
 
-- Classify every new config field as hot or cold at introduction.
-- Hot updates persist, invalidate caches, and emit `config-updated` without disposing instances, restarting the backend, or interrupting active sessions.
-- Cold updates persist independently and defer disposal/restart until the active request completes; never reject the save or interrupt the request.
-- An in-flight request keeps the config snapshot from startup; new config applies to subsequent requests unless the field is explicitly safe for live mutation.
+- Classify every new config field as hot or cold at introduction. Hot saves persist, invalidate caches, and emit `config-updated` without a runtime rebuild; cold saves require runtime convergence.
+- Cold saves validate, persist, and acknowledge immediately after the backend transaction and synchronous side effects; they never await active generation drain, and later saves do not queue behind an earlier convergence.
+- Before cold persistence, affected directories receive a generation-admission fence: in-flight generations keep the config snapshot they started with, while new generations and readers wait until the latest convergence lands.
+- Later writes, write-intent operations, and drain-control operations remain available during convergence and do not queue behind it.
+- Cold obligations coalesce and version: the pass drains readers and write/control leases, disposes the exact pre-fence identities, boots the latest disk state, and releases the fence only after the latest committed version converges.
+- Reload/load during a fence and runtime shutdown ownership are part of the model. See [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle) for the full architecture.
 - Tests must cover saving during active streaming, not only idle PATCH.
 
 ### Runtime Path Parity

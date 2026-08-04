@@ -1,38 +1,40 @@
 /**
- * Canonical provider-auth mutation coordinator (LOCK-001..004).
+ * Canonical provider-auth mutation coordinator (LOCK-002/003/004).
  *
- * Every provider-auth mutation (root auth set/remove, provider OAuth callback,
- * Anaconda Desktop sync) routes through `invalidateAfterProviderAuthChange`.
- * The coordinator owns the ConfigConvergence fence/pass lifecycle so no caller
- * can dispose an active instance outside generation drain:
+ * Every provider-auth mutation — root auth set/remove, provider OAuth callback,
+ * Anaconda Desktop sync — routes through `invalidateAfterProviderAuthChange`,
+ * which runs the caller's persistence step under one cold-config convergence
+ * fence so no generation can observe a partially-applied auth change.
  *
- * 1. Raise the global admission fence (LOCK-001) before any mutation — new
- *    work waits behind the fence while the mutation is persisted.
- * 2. Capture the exact auth-file artifact (bytes + mode) BEFORE the mutation
- *    (LOCK-004) so any post-capture failure — mutation, cleanup commit, OR
- *    cache-clear — can restore it.
- * 3. Run the caller's mutation under the fence (LOCK-002: reads of the
- *    current credential must happen here, immediately before the write), then
- *    optionally prepare/commit the disabled_providers cleanup under the same
- *    fence and the canonical global discovery lock (LOCK-003), then clear the
- *    ModelCache immediately.
- * 4. Commit the obligation — exactly one ControlLease-aware global convergence
- *    pass drains readers, disposes captured pre-fence instances, and boots
- *    replacements — and return BEFORE active generations drain (LOCK-002):
- *    control operations stay usable against the pre-fence runtime. A deferred
- *    ConfigUpdated event (cleanup only) is published by withColdMutation after
- *    the commit registered the rebuild.
+ * Lifecycle model: packages/kilo-docs/pages/contributing/architecture/cli-runtime.md#config-update-lifecycle;
+ * withColdMutation owns the fence/pass (and the deferred ConfigUpdated event), so this header only states local invariants.
  *
- * Failure semantics (LOCK-004): a snapshot failure aborts the fence and
- * propagates — no mutation, no disposal, no success claim. ANY mutation
- * failure AFTER the snapshot was captured (including a failure that persisted
- * part of the mutation) restores the exact auth artifact (via the canonical
- * byte snapshot/restore API) before the fence aborts and the defect
- * propagates. A cleanup-commit or cache-clear failure after a successful
- * mutation restores the exact auth artifact AND every committed config target,
- * then invalidates config caches. If the compensation itself fails, the
- * surfaced defect is `ConfigRollbackFailed` carrying both the primary and the
- * rollback detail.
+ * Local contract (auth-specific only):
+ * 1. Snapshot first (LOCK-004): capture the exact auth-file artifact (bytes +
+ *    mode) BEFORE the mutation, so any post-capture failure — mutation, cleanup
+ *    commit, OR cache-clear — can restore it.
+ * 2. Read-then-write (LOCK-002): callers that derive a new credential from the
+ *    CURRENT auth record (e.g. the organization switch) must perform the read
+ *    inside `mutate`, immediately before the write, so a concurrent newer
+ *    credential is never overwritten by a pre-fence snapshot.
+ * 3. Optional disabled_providers cleanup (LOCK-003, root auth set + OAuth
+ *    callback only): prepare/commit removal of `providerID` from the global
+ *    `disabled_providers` list under the same fence and the canonical global
+ *    discovery lock, with emit:false; unrelated IDs are preserved. A single
+ *    deferred ConfigUpdated event (cleanup only) is returned and published only
+ *    after the obligation commit registered the rebuild. Auth remove/Anaconda/
+ *    org callers do not request cleanup.
+ * 4. Clear the model cache immediately, still under the fence.
+ * 5. Failure semantics (LOCK-004): a snapshot failure aborts the fence and
+ *    propagates — no mutation, no success claim. ANY failure after the snapshot
+ *    was captured (including one that persisted part of the mutation) restores
+ *    the exact auth artifact AND every committed config target, then
+ *    invalidates config caches, before the fence aborts. A failed compensation
+ *    surfaces as ConfigRollbackFailed carrying both the primary and the
+ *    rollback detail.
+ *
+ * Returns `true` after persistence + rebuild registration, before generation
+ * drain.
  */
 
 import { randomUUID } from "crypto"
@@ -144,7 +146,7 @@ export const invalidateAfterProviderAuthChange = <E, R>(
 
           // LOCK-002/003: ANY failure after the snapshot was captured
           // (mutation, cleanup commit, or cache clear) restores the exact auth
-          // artifact and every committed config target before the ticket
+          // artifact and every committed config target before the fence
           // aborts. A failed compensation surfaces as ConfigRollbackFailed
           // carrying both the primary and the rollback detail.
           const compensate = (primary: Cause.Cause<unknown>) =>

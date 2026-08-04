@@ -2,6 +2,11 @@
 /**
  * Cold-config mutation/convergence coordinator (LOCK-001..007).
  *
+ * Canonical specification: `packages/kilo-docs/pages/contributing/architecture/cli-runtime.md`
+ * "Config update lifecycle" (#config-update-lifecycle). This module implements
+ * the coordinator contract; the architecture doc owns the model, so lifecycle
+ * wording changes belong there, not in this header.
+ *
  * Replaces the coupling where a cold save transferred a GenerationGate writer
  * ticket to a rebuild that held it until the generation drain completed, which
  * queued every later save behind the stream. The coordinator decouples

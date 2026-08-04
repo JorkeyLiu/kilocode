@@ -1,60 +1,46 @@
 /**
- * Canonical custom provider deletion (LOCK-001/002/003/004/005/006/007).
+ * Canonical custom provider deletion (LOCK-003/005/006).
  *
- * Lifecycle (single global writer ticket, exactly one rebuild):
- * 1. Fast-path validation (LOCK-003) before any ticket/lock/auth/cache/config
- *    mutation: an entry is custom only when its npm package is one of the
- *    accepted AI SDK packages, checked independently in each canonical scope —
- *    global via Config.getGlobal, project via KilocodeConfigOverlay.project
- *    (raw file read, no cached discovery). Reject when neither scope is custom.
- * 2. Canonical cold acquisition order (LOCK-001): the ConfigConvergence global
- *    admission fence is raised FIRST (via withColdMutation), then the
- *    deterministic global→project config flocks. Deletion never waits for a
- *    convergence fence while holding a flock. A not-custom revalidation or
- *    prepared no-op aborts the fence cleanly without a rebuild.
- * 3. LOCK-002: each global/project target is resolved exactly once after
- *    ticket acquisition and before lock acquisition; prepare/commit use those
- *    exact resolved paths (Config.prepare/prepareGlobal accept the resolved
- *    file), so the locked key is always the written path.
- * 4. Under locks: re-read/validate scopes; prepare ALL config artifacts in
- *    memory (no writes/events). A valid custom validation that prepares no
- *    change means a concurrent mutation removed the provider — reject cleanly.
- * 5. Mutate under locks + fence: capture the exact persisted auth-file
- *    artifact (bytes + mode) before any auth mutation (LOCK-003), commit
- *    changed artifacts with emit:false (global then project), remove auth,
- *    clear the model cache LAST, then commit the obligation — the convergence
- *    pass drains readers, disposes the captured pre-fence instances, and boots
- *    replacements. The transaction events are DEFERRED into the result
- *    (LOCK-003): the HTTP handler emits them at the response acknowledgement
- *    boundary via HttpEffect.appendPreResponseHandler, so they are never
- *    observable before persistence, rebuild registration, and the success
- *    response value are all finalized. The response returns after persistence
- *    + registration, before generation drain (LOCK-007); the forked pass
- *    disposes old instances only after their readers and control leases drain.
+ * One backend mutation that removes the provider entry, its auth, and its model
+ * cache entry from global and/or project scope atomically with exactly one
+ * rebuild.
  *
- * Event contract (LOCK-003, framework evidence): the Effect HttpApi writes the
- * HTTP response after the handler Effect completes — `HttpEffect.toHandled`
- * runs any registered pre-response handler BEFORE `handleResponse` converts/
- * sends the response bytes, and there is no post-send hook on the web-handler
- * path. True byte-on-wire response-before-event therefore requires request
- * lifecycle support that does not exist here; the truthful maximum is: persist
- * → rebuild registration → handler result finalization → final events → bytes
- * on wire. `execute` (the service) never emits; direct service callers observe
- * zero events until they run the returned `events` effect at their own
- * acknowledgement boundary.
- * 6. Compensation (LOCK-006): any failure after mutation begins restores in
+ * Lifecycle model: packages/kilo-docs/pages/contributing/architecture/cli-runtime.md#config-update-lifecycle;
+ * withColdMutation owns the fence/pass, so this header only states local invariants.
+ *
+ * Local contract (deletion-specific only):
+ * 1. Custom predicate (LOCK-003): an entry is custom only when its npm package
+ *    is one of the accepted AI SDK packages, checked independently in each
+ *    canonical scope — global via Config.getGlobal, project via
+ *    KilocodeConfigOverlay.project (raw file read, no cached discovery). Reject
+ *    when neither scope is custom.
+ * 2. Resolved targets (LOCK-002): each global/project target is resolved
+ *    exactly once after fence acquisition and before lock acquisition;
+ *    prepare/commit use those exact resolved paths, so the locked key is always
+ *    the written path. Project scope requires the canonical instance context
+ *    (InstanceRef); the trusted directory/worktree inputs are asserted to match
+ *    it.
+ * 3. Prepare-all (LOCK-003/005): under the locks all config artifacts are
+ *    prepared in memory before the first write. A valid custom validation that
+ *    prepares no change means a concurrent mutation already removed the
+ *    provider — reject cleanly.
+ * 4. Mutation order (LOCK-003): capture the exact persisted auth-file artifact
+ *    (bytes + mode) before the auth mutation, commit changed artifacts with
+ *    emit:false (global then project), remove auth, clear the model cache LAST.
+ *    The ConfigUpdated events are DEFERRED into the result: the HTTP handler
+ *    emits them at the response acknowledgement boundary via
+ *    HttpEffect.appendPreResponseHandler, so they are never observable before
+ *    persistence, rebuild registration, and the success response value are all
+ *    finalized.
+ * 5. Compensation (LOCK-006): any failure after mutation begins restores in
  *    reverse order while locks + fence remain held — the exact auth file
  *    artifact first (byte/mode-exact, covering Auth.remove's write-then-
  *    chmod/telemetry partial mutation), then every committed artifact exactly
- *    (write original back, or delete a newly created target), then invalidate
+ *    (write original back, or delete a newly created target), then invalidates
  *    global/project caches. A failed compensating rollback surfaces as
  *    ConfigRollbackFailed (a defect, not a validation error). Auth
  *    read/remove/set, commit, cache clear, and rollback errors are never
  *    swallowed; auth removal state is never inferred from method success.
- *
- * Project scope requires the canonical instance context (InstanceRef):
- * Config.prepare/commit derive the project target from InstanceRef, and the
- * trusted directory/worktree inputs are asserted to match it.
  */
 
 import { randomUUID } from "crypto"
@@ -127,7 +113,7 @@ export const execute = Effect.fn("CustomProviderDelete.execute")(function* (inpu
 
   // LOCK-002: the provider ID must satisfy the shared product predicate
   // (lowercase alphanumeric start, then `[a-z0-9-_]`) before ANY
-  // ticket/lock/auth/cache/config work. A route-matching but invalid ID gets a
+  // fence/lock/auth/cache/config work. A route-matching but invalid ID gets a
   // structured validation 400; slashed IDs never route and stay 404.
   if (!isProviderID(providerID)) {
     return yield* Effect.fail(
@@ -178,7 +164,7 @@ export const execute = Effect.fn("CustomProviderDelete.execute")(function* (inpu
       code: "not-custom",
     })
 
-  // LOCK-003: fast-path rejection before ticket/locks/auth/cache/config mutation.
+  // LOCK-003: fast-path rejection before fence/locks/auth/cache/config mutation.
   const fast = yield* validate()
   if (!fast.global && !fast.project) {
     return yield* Effect.fail(notCustom("is not a custom provider in any config scope"))

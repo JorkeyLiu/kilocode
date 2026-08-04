@@ -1,16 +1,17 @@
 // kilocode_change - new file
 /**
- * Drain-and-rebuild coordination for cold config patches (LOCK-002/003/006).
+ * Drain-and-rebuild helpers for the explicit-dispose ticket path, plus the
+ * shared rebuild tracker (LOCK-002/003/006).
  *
- * The writer barrier itself lives in `GenerationGate`. This module performs the
- * drain→dispose→reboot→release transition for a ticket the PATCH handler
- * already established:
+ * The writer barrier lives in `GenerationGate`. This module performs the
+ * drain→dispose→reboot→release transition for a ticket the explicit
+ * global-dispose handler established via `withWriteTicket`:
  *
- * 1. The handler calls `gate.beginWrite(directory)` / `beginWriteGlobal()`
- *    BEFORE persisting, so no post-patch generation can slip into an old
- *    runtime (LOCK-002).
+ * 1. The handler calls `gate.beginWriteGlobal()` BEFORE persisting/disposing,
+ *    so no post-write generation can slip into an old runtime (LOCK-002).
  * 2. The handler captures pre-barrier identity AFTER ticket acquisition but
- *    BEFORE persistence visibility, then persists and forks rebuild (LOCK-003).
+ *    BEFORE persistence visibility, then persists and forks the rebuild
+ *    (LOCK-003).
  * 3. The rebuild fiber awaits the barrier's drain signal (event-driven, no
  *    polling), disposes the exact captured pre-barrier identity while the
  *    barrier still excludes new work, boots the replacement, and releases the
@@ -18,10 +19,13 @@
  * 4. A failed persistence aborts the barrier (`ticket.abort`) without
  *    disposing anything; queued work resumes on the unchanged instance.
  *
- * Repeated/concurrent cold PATCHes serialize through the gate's FIFO writer
- * queue: the next PATCH only persists after the previous writer released, so
- * no intermediate generation is ever orphaned and the last persisted config is
- * the one queued work observes when the gate opens.
+ * Cold config saves do NOT use this path: the ConfigConvergence coordinator
+ * raises an admission fence, commits a convergence obligation that
+ * synchronously registers the rebuild through the shared tracker, and runs a
+ * detached pass that drains readers, disposes the pre-fence identity, and
+ * boots the replacement. The tracker hooks exported here
+ * (`trackRebuildStarted`/`trackRebuildCompleted`/`recordRebuildFailure`) are
+ * shared by that coordinator so `awaitRebuilds` quiescence covers both paths.
  */
 
 import { Cause, Deferred, Effect, Option } from "effect"
@@ -168,8 +172,9 @@ export const awaitRebuilds = Effect.fn("ConfigRebuild.awaitRebuilds")(function* 
  * interruption path. The rebuild runs uninterruptibly to guarantee ticket
  * release.
  *
- * Used by all four handler paths (global config, project config,
- * overlay global, overlay project).
+ * Used by the explicit-dispose path via `withWriteTicket` (the global dispose
+ * handler). Cold saves register rebuilds through the ConfigConvergence
+ * coordinator using the shared tracker instead.
  */
 export function forkRebuild<R>(effect: Effect.Effect<void, never, R>): Effect.Effect<void, never, R> {
   return Effect.uninterruptibleMask(() =>

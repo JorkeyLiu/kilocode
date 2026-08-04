@@ -407,7 +407,7 @@ describe("config overlay lifecycle - hot patches", () => {
 
   /**
    * LOCK-001: a named per-agent model/variant override is hot. The PATCH
-   * persists without creating a writer barrier or disposing any instance, and
+   * persists without raising a convergence fence or disposing any instance, and
    * the next agent fetch serves the new model because Agent.state is derived
    * (its cacheKey includes `agent`) and rebuilds on the next request.
    */
@@ -436,7 +436,7 @@ describe("config overlay lifecycle - hot patches", () => {
       )
       expect(info.agent?.code?.model).toBe("test/new-agent-model")
 
-      // config-updated emitted; NO disposal emitted (hot, no writer barrier).
+      // config-updated emitted; NO disposal emitted (hot, no convergence fence).
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(true)
       expect(events.received.some((e) => e.type === Event.Disposed.type)).toBe(false)
 

@@ -1,12 +1,12 @@
 /**
- * Non-interrupting config-save coverage for the writer-gated rebuild
+ * Non-interrupting config-save coverage for the convergence-fenced rebuild
  * (LOCK-002/003/004/005/006/007).
  *
  * Proves through the real `/config/overlay` PATCH route (and the legacy
  * `/config` / `/global/config` routes) that cold config patches persist
  * immediately but defer instance/global disposal until in-flight generation
  * work drains, so a held LLM stream is never aborted by a config save and
- * post-barrier work never runs on a stale instance.
+ * post-fence work never runs on a stale instance.
  *
  * Determinism: progression is driven only by Deferred/LLM gates, event latches,
  * and session-status gates; the only sleeps are bounded failure timeouts inside
@@ -243,7 +243,7 @@ type PromptResult = { status: number; body: { info?: { role?: string } } }
  *
  * `done` succeeds when the prompt HTTP response completes; it is the
  * non-blocking in-flight signal for the stream (the middleware gates status
- * GETs behind an active writer barrier, so tests must not poll status while a
+ * GETs behind the active convergence fence, so tests must not poll status while a
  * cold PATCH is pending).
  */
 const startHeldPrompt = (dir: string, sessionID: string, gate: Deferred.Deferred<void>) =>
@@ -431,8 +431,9 @@ describe("config rebuild deferral - web handler path", () => {
         expect(readGlobalConfig(f.global).autoupdate).toBe("notify")
 
         // Stream still in flight; nothing disposed yet. The instance middleware
-        // gates every new request behind the active global writer, so a status
-        // GET would wait for the barrier and deadlock against the held stream.
+        // gates every new request behind the active global convergence fence,
+        // so a status GET would wait for the fence and deadlock against the
+        // held stream.
         // The in-flight proof is the non-blocking done signal: the prompt HTTP
         // response has not returned.
         expect(yield* isDone(done)).toBe(false)
@@ -456,7 +457,7 @@ describe("config rebuild deferral - web handler path", () => {
   )
 
   it.live(
-    "an unseen directory waits behind a global barrier and loads the new config",
+    "an unseen directory waits behind a global convergence fence and loads the new config",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -504,7 +505,8 @@ describe("config rebuild deferral - web handler path", () => {
         expect(patch.status).toBe(200)
         expect(readProjectConfig(f.project).autoupdate).toBe(false)
         // Stream still in flight; the status GET is gated behind the active
-        // project writer, so the in-flight proof is the non-blocking done signal.
+        // project convergence fence, so the in-flight proof is the non-blocking
+        // done signal.
         expect(yield* isDone(done)).toBe(false)
         expect(yield* instanceDisposed.done).toBe(false)
 
@@ -575,7 +577,7 @@ describe("config rebuild deferral - web handler path", () => {
   )
 
   it.live(
-    "same-session work queued behind a cold PATCH waits for the barrier and never overlaps disposal",
+    "same-session work queued behind a cold PATCH waits for the fence and never overlaps disposal",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -586,14 +588,14 @@ describe("config rebuild deferral - web handler path", () => {
         yield* waitForBusy(f.project, sessionA.id)
 
         // Session creation does not start a generation and must not block
-        // behind the barrier, so create session B before the cold patch.
+        // behind the fence, so create session B before the cold patch.
         const sessionB = yield* Effect.promise(() => createSession(f.project))
 
         const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
 
-        // Generation 2 queued on the same directory while the barrier is held:
-        // it must NOT start (no busy, no response) until the barrier releases.
+        // Generation 2 queued on the same directory while the fence is held:
+        // it must NOT start (no busy, no response) until the fence releases.
         const second = yield* forkPrompt(f.project, sessionB.id, "second", "second")
         expect(yield* isDone(second.done)).toBe(false)
 
@@ -894,7 +896,7 @@ describe("config rebuild deferral - web handler path", () => {
   )
 
   it.live(
-    "failed persistence aborts the barrier, returns structured 400, and schedules no disposal",
+    "failed persistence aborts the fence, returns structured 400, and schedules no disposal",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -919,10 +921,10 @@ describe("config rebuild deferral - web handler path", () => {
         expect(yield* disposed.done).toBe(false)
         expect(yield* instanceDisposed.done).toBe(false)
 
-        // The aborted ticket released the barrier: the next cold PATCH works.
+        // The aborted mutation released the fence: the next cold PATCH works.
         const next = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
         expect(next.status).toBe(200)
-        yield* awaitWithTimeout(disposed.await, "barrier stayed held after failed persistence")
+        yield* awaitWithTimeout(disposed.await, "fence stayed held after failed persistence")
       }),
     30_000,
   )
@@ -947,14 +949,14 @@ describe("config rebuild deferral - web handler path", () => {
         yield* waitForBusy(f.project, sessionA.id)
 
         // Session creation does not start a generation and must not block
-        // behind the barrier, so create session B before the cold patch.
+        // behind the fence, so create session B before the cold patch.
         const sessionB = yield* Effect.promise(() => createSession(f.project))
 
         const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
 
         // The command is a generation entry (admission + snapshot): it queues
-        // behind the barrier like any prompt.
+        // behind the fence like any prompt.
         const llm = yield* TestLLMServer
         const cmdGate = yield* Deferred.make<void>()
         yield* llm.hold("command", deferredAsPromise(cmdGate))
@@ -1134,8 +1136,9 @@ describe("config rebuild deferral - Server.listen path", () => {
         })
         expect(patch.status).toBe(200)
         expect(readGlobalConfig(f.global).autoupdate).toBe("notify")
-        // The instance middleware gates new requests behind the global writer,
-        // so the in-flight stream proof is the non-blocking done signal.
+        // The instance middleware gates new requests behind the global
+        // convergence fence, so the in-flight stream proof is the non-blocking
+        // done signal.
         expect(yield* isDone(done)).toBe(false)
         expect(yield* disposed.done).toBe(false)
 

@@ -30,12 +30,12 @@
  *    request state reflects the saved config. Progression uses the LLM hold
  *    Deferred and event latches — never arbitrary sleep.
  * 5. Failure matrix (LOCK-004/006): config commit failure restores every
- *    committed artifact with zero events and a released ticket; auth-set
+ *    committed artifact with zero events and a released fence; auth-set
  *    failure compensates config AND the exact auth file bytes/mode and never
  *    touches cache/events; cache-clear failure (executable via the existing
  *    injected ModelCache seam) compensates config AND the exact auth file
- *    bytes/mode with zero events and a released ticket; interruption cleans
- *    tickets and lock artifacts.
+ *    bytes/mode with zero events and a released fence; interruption cleans
+ *    the fence and lock artifacts.
  * 6. Deferred events (LOCK-003): direct `execute` returns the deferred
  *    ConfigUpdated event; nothing is emitted until the caller runs it; a
  *    semantic no-op returns success with a no-op event effect.
@@ -699,7 +699,7 @@ describe("customProviderSave - rejection matrix (LOCK-002)", () => {
         try {
           // "Test" passes the route (single path segment) but violates the
           // shared predicate /^[a-z0-9][a-z0-9-_]*$/ enforced backend-side
-          // (LOCK-002), so it rejects before any ticket/lock/auth/config work.
+          // (LOCK-002), so it rejects before any fence/lock/auth/config work.
           const result = yield* saveVia(f.project, "Test", { config: saveConfig(f.llm.url), auth: authSet })
           expect(result.status).toBe(400)
           expect(result.body?.code).toBe("validation")
@@ -953,7 +953,7 @@ describe("customProviderSave - held stream + real listener (LOCK-003/005)", () =
 
 describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
   it.live(
-    "config commit failure restores the target, emits nothing, and releases the ticket",
+    "config commit failure restores the target, emits nothing, and releases the fence",
     () =>
       Effect.gen(function* () {
         // Point Global.Path.config at a read-only directory so the global
@@ -982,7 +982,7 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
         expect(configEvents(events.received).length).toBe(0)
         expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
 
-        // Ticket released: a follow-up save completes normally.
+        // Fence released: a follow-up save completes normally.
         const followup = yield* saveVia(f.project, "test", {
           config: saveConfig("https://new.example/v1", { name: "Changed" }),
           auth: authPreserve,
@@ -1035,7 +1035,7 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
         expect(configEvents(events.received).length).toBe(0)
         expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
 
-        // Ticket released: the follow-up save succeeds end to end and the
+        // Fence released: the follow-up save succeeds end to end and the
         // seeded credentials survive (the failed save never wrote them).
         const followup = yield* saveVia(f.project, "test", {
           config: saveConfig("https://new.example/v1", { name: "Changed" }),
@@ -1049,7 +1049,7 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
   )
 
   it.live(
-    "cache-clear failure restores config AND the exact auth file bytes/mode, emits nothing, releases the ticket",
+    "cache-clear failure restores config AND the exact auth file bytes/mode, emits nothing, releases the fence",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: (url) => saveConfig(url) })
@@ -1119,7 +1119,7 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
           expect(configEvents(events.received).length).toBe(0)
           expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
 
-          // Ticket released: with the cache healthy, the follow-up save
+          // Fence released: with the cache healthy, the follow-up save
           // completes end to end (same listener, same backend).
           fail = false
           const followup = yield* send("/custom-provider/test/save", {

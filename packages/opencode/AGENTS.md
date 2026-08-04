@@ -69,6 +69,10 @@ Built with **SolidJS + OpenTUI** (`@opentui/solid`) -- a terminal UI framework. 
 
 Hono-based HTTP server with OpenAPI spec generation. SSE for real-time events. When you add/change routes, regenerate the SDK (see root AGENTS.md for the command).
 
+## Config lifecycle
+
+Config saves are classified hot or cold at field introduction; hot saves converge without a runtime rebuild, cold saves converge through a background runtime swap. The model is canonical in [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle); the coordinator implementation lives in `src/kilocode/server/config-convergence.ts`. Give every new config field its hot/cold classification and route lifecycle questions to that architecture section — do not restate the spec here or in code.
+
 ## Providers and Models
 
 Uses the **Vercel AI SDK** as the abstraction layer. Providers are loaded from a bundled map or dynamically installed at runtime. Models come from a canonical committed snapshot at `src/kilocode/provider/models-api.json` (repo path `packages/opencode/src/kilocode/provider/models-api.json`).

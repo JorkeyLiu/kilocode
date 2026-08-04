@@ -21,9 +21,9 @@
  *    deleted custom scope. Progression uses the LLM hold Deferred and event
  *    latches — never arbitrary sleep.
  * 3. Failure matrix (LOCK-006): second-scope commit failure restores every
- *    committed target with zero events and a released ticket; auth-removal
+ *    committed target with zero events and a released fence; auth-removal
  *    failure compensates config and never touches cache/events; interruption
- *    cleans tickets and lock artifacts; the structured `not-custom` 400
+ *    cleans the fence and lock artifacts; the structured `not-custom` 400
  *    preserves code/message/detail. Cache-clear failure is impossible to
  *    trigger without weakening production (ModelCache.clear is pure in-memory
  *    `Effect.all` over sync detach ops), so its coverage is static: the
@@ -540,7 +540,7 @@ describe("customProviderDelete - scope matrix (LOCK-003)", () => {
         try {
           // "Test" passes the route (single path segment) but violates the
           // shared predicate /^[a-z0-9][a-z0-9-_]*$/ enforced backend-side
-          // (LOCK-002), so it rejects before any ticket/lock/auth/config work.
+          // (LOCK-002), so it rejects before any fence/lock/auth/config work.
           const result = yield* deleteVia(f.project, "Test")
           expect(result.status).toBe(400)
           expect(result.body?.code).toBe("validation")
@@ -780,7 +780,7 @@ describe("customProviderDelete - held stream + real listener (LOCK-004/005)", ()
 
 describe("customProviderDelete - failure matrix (LOCK-006)", () => {
   it.live(
-    "second-scope commit failure restores every committed target, emits nothing, and releases the ticket",
+    "second-scope commit failure restores every committed target, emits nothing, and releases the fence",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: custom })
@@ -822,7 +822,7 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
         expect(configEvents(events.received).length).toBe(0)
         expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
 
-        // Ticket released: a follow-up deletion completes normally.
+        // Fence released: a follow-up deletion completes normally.
         const followup = yield* deleteVia(f.project, "test")
         expect(followup.status).toBe(200)
         expect(providerEntry(readGlobalConfig(f.global), "test")).toBeUndefined()
@@ -833,7 +833,7 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
   )
 
   it.live(
-    "auth removal failure compensates config, never touches cache/events, and releases the ticket",
+    "auth removal failure compensates config, never touches cache/events, and releases the fence",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: custom, project: custom })
@@ -872,7 +872,7 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
         expect(configEvents(events.received).length).toBe(0)
         expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
 
-        // Ticket released: the follow-up deletion succeeds end to end.
+        // Fence released: the follow-up deletion succeeds end to end.
         const followup = yield* deleteVia(f.project, "test")
         expect(followup.status).toBe(200)
         expect(providerEntry(readGlobalConfig(f.global), "test")).toBeUndefined()
@@ -884,7 +884,7 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
   )
 
   it.live(
-    "cache-clear failure restores config AND the exact auth file bytes/mode, emits nothing, releases the ticket",
+    "cache-clear failure restores config AND the exact auth file bytes/mode, emits nothing, releases the fence",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: custom, project: custom })
@@ -949,7 +949,7 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
           expect(configEvents(events.received).length).toBe(0)
           expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
 
-          // Ticket released: with the cache healthy, the follow-up deletion
+          // Fence released: with the cache healthy, the follow-up deletion
           // completes end to end (same listener, same backend).
           fail = false
           const followup = yield* send("/custom-provider/test/delete", { method: "POST" })
@@ -993,7 +993,7 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
 
         // LOCK-005: every path (pass AND assertion failure) releases the held
         // flock. The holder is released by the finalizer before the follow-up
-        // deletion runs, so a mid-test failure can never leak the barrier into
+        // deletion runs, so a mid-test failure can never leak the flock into
         // the next test.
         yield* Effect.gen(function* () {
           // The deletion must still be blocked on the flock: awaiting it times

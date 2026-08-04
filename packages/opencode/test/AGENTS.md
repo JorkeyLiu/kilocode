@@ -211,3 +211,7 @@ yield * prompt.cancel(chat.id)
 - Testing debounce or throttle behavior, where the sleep **is** the test.
 - Letting real wall-clock advance past a genuine timestamp resolution boundary (e.g. mtime granularity).
 - Simulating network latency in race-regression tests that intentionally exercise ordering.
+
+## Config save lifecycle tests
+
+Config-save tests must exercise saving during active streaming, not only idle PATCH. The canonical expectations are in [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle) — assert the save acknowledges before a held LLM stream releases, that hot saves never wait on a cold fence, that a cold burst coalesces into the intended disposal count, and that the final runtime serves the latest persisted config. Sequence races with Deferreds and admission side effects, not sleeps, and await rebuild quiescence through the rebuild tracker. Canonical implementation under test is `src/kilocode/server/config-convergence.ts`; existing coverage lives under `test/kilocode/server/config-*.test.ts`.

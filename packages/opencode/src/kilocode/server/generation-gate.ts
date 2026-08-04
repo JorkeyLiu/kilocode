@@ -159,7 +159,7 @@ export interface GenerationGate {
    * active or queued global writer (total FIFO), holds a per-directory write
    * intent while the caller loads/captures context — blocking later global
    * writers and same-directory writers/readers — then releases. It is NOT a
-   * reader lease, so the PATCH can later acquire its own local write ticket
+   * reader lease, so the PATCH can later raise its own convergence fence
    * without self-deadlock, and the load can never escape a global rebuild that
    * captured its identities before the directory was seen.
    */
