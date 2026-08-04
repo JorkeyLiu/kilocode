@@ -23,6 +23,7 @@ Kilo CLI is an open source AI coding agent that generates code from natural lang
 - **opencode annotation check**: `bun run script/check-opencode-annotations.ts` from repo root. CI runs this on PRs touching `packages/opencode/` — every Kilo-specific change in shared opencode files must be annotated with `kilocode_change` markers. Exempt paths (no markers needed): `packages/opencode/src/kilocode/`, `packages/opencode/test/kilocode/`, and any path containing `kilocode` in the name.
 - **Effect facade ratchet**: Do not add runtime-backed Promise facades to shared `packages/opencode/src` Effect services; use service dependencies, `AppRuntime`, or Kilo-owned boundaries. Run `bun run script/check-opencode-promise-facades.ts` when touching service adapters.
 - **workflow allowlist**: `bun run script/check-workflows.ts` from repo root. CI runs this as part of the annotations workflow — any `.yml` / `.yaml` file added to or removed from `.github/workflows/` must be reflected in the hardcoded list in `script/check-workflows.ts`. Prevents upstream-merged workflows from silently starting to run in our CI.
+- **Architecture docs impact**: Changing system boundaries, state ownership, lifecycle, persistence, concurrency, public protocol, config application semantics, a cross-client contract, or a guard/workflow model requires reviewing the [canonical architecture docs](packages/kilo-docs/pages/contributing/architecture/index.md) and, for high-impact changes, a `## Documentation Impact` declaration in the PR body. Before claiming completion or committing, run `bun run script/check-architecture-impact.ts --worktree` from the repo root and apply the Architecture documentation completion gate under Quality Checks — the PR declaration persists that same local decision and CI validates it. See [Documentation impact governance](packages/kilo-docs/pages/contributing/architecture/index.md#documentation-impact-governance).
 - **Backend/SDK programmatic testing**: see [TESTING.md](./TESTING.md) for spawning the local main-branch backend (`bun dev serve`) and driving it via `curl` — use this instead of `kilo serve` (prod binary) when testing backend fixes.
 
 ## Runtime Conventions
@@ -74,8 +75,20 @@ Before saying an implementation is ready, run the smallest relevant checks that 
 | Extension build/package | From `packages/kilo-vscode/`: `bun run compile` or `bun run package` when touching build, packaging, SDK, or webview integration paths |
 | JetBrains plugin | From `packages/kilo-jetbrains/`: `./gradlew typecheck`, `./gradlew test`. Requires Java 21; do not run `java -version` as a routine preflight. Check Java only after a Java-version or missing-Java failure. |
 | CI-only guards | Run affected guards documented above, such as `bun run knip`, `bun run check-kilocode-change`, `bun run script/check-opencode-annotations.ts`, or source link extraction |
+| Architecture docs governance | From repo root: run `bun run script/check-architecture-impact.ts --worktree` before claiming completion or committing — see the Architecture documentation completion gate below; CI validates the PR body `## Documentation Impact` declaration — evidence only, reviewers own semantic accuracy |
 
 Never run root `bun test`; the root script prints `do not run tests from root` and exits with code 1. Use package-level tests instead.
+
+### Architecture documentation completion gate
+
+Architecture documentation impact is a mandatory local completion gate, not a PR-only concern. Before claiming an implementation is complete or ready, and before creating a commit, do all of the following — even when no PR will be opened:
+
+1. **Inspect the complete intended diff** — staged, unstaged, and untracked changes (`git status`, `git diff`, and review of untracked files).
+2. **Run the checker** — `bun run script/check-architecture-impact.ts --worktree` from the repo root. Checker output is evidence, not a semantic substitute; apply your own judgment on top of it.
+3. **High signal** — read the mapped canonical docs under the [canonical architecture docs](packages/kilo-docs/pages/contributing/architecture/index.md). If the architecture meaning changed, update the docs in the same local work unit before claiming completion or committing. If not, record a concrete no-update rationale in the completion/commit-preparation report.
+4. **Medium or no signal** — still report the outcome concisely in the completion/commit-preparation report.
+
+The gate does not block commit creation (code, tests, and docs may land as separate edits) and requires no commit trailer or PR, but following it is a mandatory Agent instruction. When a PR exists, the same decision is persisted in the PR body `## Documentation Impact` declaration and CI validates it.
 
 ## Products
 

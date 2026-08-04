@@ -1,0 +1,19 @@
+#!/bin/sh
+# kilocode_change - new file
+set -e
+
+# Advisory architecture-impact reminder: fast local signal
+# before commit, never a commit blocker. CI remains the enforcement boundary.
+# This step exits 0 unconditionally; any future hook commands appended below
+# keep their own exit behavior under `set -e`.
+#
+# Skip clean worktrees: no changed or untracked files, nothing to advise on.
+if git diff --quiet HEAD && [ -z "$(git ls-files --others --exclude-standard)" ]; then
+  exit 0
+fi
+
+# Unexpected checker failures (e.g. a git operation error) are warnings here,
+# never blocks. The `if` guards the exit so `set -e` cannot propagate it.
+if ! bun run script/check-architecture-impact.ts --worktree; then
+  echo "warning: architecture-impact checker failed (advisory only — commit not blocked)" >&2
+fi

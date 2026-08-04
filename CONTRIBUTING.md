@@ -108,6 +108,7 @@ For manual docs validation, run the docs site locally, preview the affected page
 - After changing server endpoints, regenerate the SDK with `./script/generate.ts`.
 - After adding or changing guarded URLs in `packages/kilo-vscode/`, `packages/kilo-vscode/webview-ui/`, or `packages/opencode/src/`, run `bun run script/extract-source-links.ts` from the repo root.
 - When editing shared `packages/opencode/` files, keep Kilo changes small and mark Kilo-only edits with `// kilocode_change` for a single line or `// kilocode_change start` / `// kilocode_change end` for a block. Do not add these markers inside `kilocode`-named paths.
+- **Architecture documentation impact:** Changing system boundaries, state ownership, lifecycle, persistence, concurrency, public protocol, config application semantics, a cross-client contract, or a guard/workflow model requires reviewing the [canonical architecture docs](packages/kilo-docs/pages/contributing/architecture/index.md). Local assessment is the primary standard: inspect the full diff, read the mapped canonical docs for high-impact changes, and update them or record a concrete rationale in the completion result. When opening a PR, high-impact changes need an exact `## Documentation Impact` declaration in the PR body — see [Documentation Impact Declaration](#documentation-impact-declaration) — and CI enforces it. Run `bun run script/check-architecture-impact.ts --worktree` from the repo root to preview detected signals as local advice.
 
 ### Developing the VS Code Extension
 
@@ -313,6 +314,19 @@ Maintainers may close or decline review of PRs presented as review-ready at thei
 - Relevant UI proof for visual UI changes
 
 When a PR is close to this bar, addresses important work, or would benefit from further shaping, maintainers may ask for specific fixes instead of closing or declining review. Contributors may reopen or resubmit once the PR meets the documented bar.
+
+### Documentation Impact Declaration
+
+The local work unit or completion is the required semantic boundary for architecture documentation: assess the full diff against the canonical docs and either update the relevant docs or record a concrete rationale. When a PR is opened, the `## Documentation Impact` section in the PR body is the durable declaration CI checks — the persistent/CI boundary, not the only boundary.
+
+Exactly one status may be checked:
+
+- **Architecture docs updated** — the change has high architecture impact and you updated the relevant canonical doc(s) under `packages/kilo-docs/pages/contributing/architecture/`. List them in `Canonical docs:`.
+- **Not applicable** — no canonical architecture doc needs to change. Explain why in `Rationale:`.
+
+High-impact changes — system boundaries, state ownership, lifecycle, persistence, concurrency, public protocol, config application semantics, cross-client contract, or guard/workflow model — require local assessment (update the mapped canonical docs or record a concrete rationale) and, when a PR is opened, the declaration. That includes the architecture gate itself: edits to its workflow or checker are high-impact and need focused review plus the declaration in the PR. Medium-impact changes warn but do not block. CI verifies the decision evidence (the declaration exists, is well-formed, and matches the changed canonical docs), not semantic truth; local assessment and reviewers own whether the docs are accurate. The pre-commit hook is advisory only — it never substitutes for local assessment or the declaration. If the gate reports an unavailable base or head SHA, update or rebase the PR onto the current base (or rerun after the base stabilizes) rather than falling back to a different diff.
+
+See [Architecture Overview](packages/kilo-docs/pages/contributing/architecture/index.md) and [Documentation impact governance](packages/kilo-docs/pages/contributing/architecture/index.md#documentation-impact-governance) for the truth-source hierarchy and when docs must be synchronized.
 
 ## PR Titles
 

@@ -18,6 +18,10 @@
 - `packages/kilo-jetbrains/gradle.properties` `kilo.cli.pinned` ↔ Gradle and release-script gates
 - `.kilo/skills/release-jetbrains/script/check-pin.ts` / `set-pin.ts` ↔ release skill and CLI pin documentation
 
+### Architecture documentation
+
+The root AGENTS.md **Architecture documentation completion gate** is mandatory before claiming implementation complete/ready or creating a commit: inspect the full intended diff, run `bun run script/check-architecture-impact.ts --worktree` from the repo root, and read mapped canonical docs for high signals. This package owns cross-client contract surfaces (backend CLI manager, backend connection service, workspace manager, `shared/` RPC contracts); canonical governance lives in `packages/kilo-docs/pages/contributing/architecture/`. Follow the root rule — do not restate it here.
+
 ## IntelliJ Platform Source Lookup
 
 When looking for IntelliJ Platform API usage, implementation examples, extension points, services, actions, inspections, PSI/VFS/editor behavior, or plugin patterns, prefer real IntelliJ source code over Gradle caches, downloaded jars, generated parser artifacts, or decompiled classes.

@@ -61,6 +61,17 @@ Every PR marked ready for review must include testing evidence. A bare "Not test
 Docs-only, config-only, and similar changes still need concrete evidence. For examples, see [Testing Evidence for Pull Requests](https://kilo.ai/docs/contributing/development-environment#testing-evidence-for-pull-requests). Draft PRs may be incomplete until marked ready for review.
 -->
 
+## Documentation Impact
+
+<!--
+Required gate, enforced by `.github/workflows/check-architecture-impact.yml` on every pull_request. When this PR changes high-signal architecture surfaces — runtime lifecycle/ownership/concurrency, provider lifecycle, hot/cold config classification, executable config schema, HTTP API group/route contract, Effect runtime boundary, or the workflow inventory — check exactly one status below and fill its field. Medium-signal changes warn only. CI blocks until the declaration is valid; keep the status and field text exactly as shown.
+-->
+
+- [ ] Architecture docs updated
+      Canonical docs: packages/kilo-docs/pages/contributing/architecture/<doc>.md
+- [ ] Not applicable
+      Rationale: <why no architecture doc update is needed>
+
 ## Checklist
 
 - [ ] Issue linked above, or exception explained

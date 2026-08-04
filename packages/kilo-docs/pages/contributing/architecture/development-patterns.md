@@ -61,6 +61,7 @@ Marker exemptions apply to paths already owned by Kilo, including paths whose na
 | `bun run script/check-opencode-promise-facades.ts` | Service adapter changes; prevents new runtime-backed Promise facades in shared Effect services |
 | `bun run check-kilocode-change` from `packages/kilo-vscode/` | VS Code or Kilo UI changes; markers must not appear in fully Kilo-owned packages |
 | `bun run script/check-workflows.ts` | Workflow add or remove changes; keeps workflow allowlist explicit |
+| `bun run script/check-architecture-impact.ts --worktree` | Architecture-facing change; local semantic assessment is primary — inspect the full diff, read mapped canonical docs for high signals, update them or record a rationale. CI validates the PR body `## Documentation Impact` declaration when a PR is opened — see [Documentation impact governance](/docs/contributing/architecture#documentation-impact-governance) |
 
 ## CLI server API
 

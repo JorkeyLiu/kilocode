@@ -249,3 +249,4 @@ Do not pad markdown table cells for column alignment. Use `| content |` with sin
 ## Committing
 
 - Before committing, always run `bun run format` so commits don't accidentally include formatting/styling-only diffs.
+- Root AGENTS.md **Architecture documentation completion gate** applies before claiming completion and before commits: inspect the full intended diff, run `bun run script/check-architecture-impact.ts --worktree` from the repo root, and read mapped canonical docs for high signals. This package owns cross-client contract and arch-adjacent surfaces (`src/services/cli-backend/`, `src/agent-manager/`); canonical governance lives in `packages/kilo-docs/pages/contributing/architecture/`. See the root rule — do not restate it here.

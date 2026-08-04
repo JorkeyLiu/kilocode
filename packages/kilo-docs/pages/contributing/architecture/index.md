@@ -211,6 +211,44 @@ After system-boundary pages, continue with Development Patterns for implementati
 | [Development Patterns](/docs/contributing/architecture/development-patterns) | Code-ownership decisions, shared-file seams, SDK generation, validation guards, and fork maintenance |
 | [CLI Config Schema](/docs/contributing/architecture/config-schema) | Separate runtime-loading and editor-validation paths for cross-repository config contract |
 
+## Documentation impact governance
+
+Canonical architecture docs are the truth source for system boundaries and contributor-wide contracts. Source code remains the reference for feature-level implementation detail. The local work unit or completion is the required semantic boundary: assess the full diff against the canonical docs and update them or record a concrete rationale. When a PR is opened, the `## Documentation Impact` section in the PR body records the contributor's decision; CI checks the evidence, and local assessment and reviewers judge the semantics.
+
+### When architecture docs must be synchronized
+
+Changes to these areas must be assessed locally against the canonical docs, and require a `## Documentation Impact` declaration in the PR body when the impact is high and a PR is opened:
+
+- System boundaries, state ownership, or lifecycle
+- Persistence or concurrency contracts
+- Public protocol (HTTP API, SSE, SDK, config schema)
+- Config application semantics (hot/cold classification, convergence)
+- Cross-client contracts shared by editor clients, TUI, and hosted services
+- Guard or workflow models (CI guards, workflow inventory)
+
+Local assessment is the primary standard: inspect the full diff, read the mapped canonical docs for high-impact changes, and update them or record a concrete rationale in the completion or commit-preparation result. The PR is the durable declaration/CI boundary when used — the persistent surface, not the only boundary.
+
+### Declaration, CI, and reviewer judgment
+
+Exactly one status may be checked in the `## Documentation Impact` section:
+
+| Status | Meaning |
+|---|---|
+| Architecture docs updated | Lists the canonical docs actually changed; `Canonical docs:` values must match changed docs |
+| Not applicable | Requires a `Rationale:` explaining why no canonical doc changes |
+
+CI validates the decision evidence — the declaration exists, is well-formed, and matches the changed canonical docs — and never judges semantic correctness. Local assessment and reviewers own semantic accuracy. The pre-commit hook is advisory only; it never substitutes for local assessment or the declaration.
+
+Local outcomes follow two short forms: for high impact, `Docs updated: <paths>` or `No doc update: <rationale>`; for medium or no impact, a concise statement suffices. These are guidance, not a required markdown format.
+
+### Gate trust and recovery boundaries
+
+The gate executes the checker revision the base commit already contains, never the PR branch's own copy — a PR cannot edit the checker to pass its own gate. The required workflow is still not an absolute root of trust for its own PR-branch definition: branch protection and reviewer governance are the backstop. Changes to the gate itself — the workflow file or `script/check-architecture-impact.ts` — are themselves high-impact and require the `## Documentation Impact` declaration plus focused review.
+
+The gate fails closed when base or head commit objects cannot be obtained. A base SHA orphaned by a force-push is resolved by updating or rebasing the PR onto the current base, or by rerunning after the base stabilizes; the gate never silently falls back to a different diff. Checker bootstrap runs the PR's checker for one run only when the base does not yet contain the checker, and it emits a visible warning.
+
+The checker implementation and signal taxonomy live in `script/check-architecture-impact.ts`; run `bun run script/check-architecture-impact.ts --worktree` locally to preview detected signals as local assessment guidance: inspect the full diff, read the mapped canonical docs for high signals, and update them or record a concrete rationale in the completion result.
+
 ## Related pages
 
 - [CLI Runtime](/docs/contributing/architecture/cli-runtime) - local runtime, server, routing, persistence, and SDK contracts

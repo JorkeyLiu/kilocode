@@ -1,0 +1,148 @@
+# kilocode_change - new file
+name: Check architecture impact
+
+# Gate on the `## Documentation Impact` declaration.
+# Runs on every pull_request lifecycle event, including `edited`, so declaration
+# edits rerun the gate. No path filter: a body-only edit must always re-evaluate,
+# and the checker itself is cheap. Never runs on fork-pr target events; only the
+# event payload is read. The gate executes the checker revision that the base
+# commit contains, so a PR cannot modify the checker to pass its own gate; the
+# introducing PR (whose base predates the checker) bootstraps once from the
+# checked-out head checker with an explicit notice. Both base and
+# head commit objects are verified locally and, when missing, fetched by explicit
+# SHA, failing closed if they cannot be obtained.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+concurrency:
+  # One run per PR at a time; a newer body edit cancels the stale run so the
+  # latest declaration is the one evaluated.
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# Least privilege: the check only reads repo contents and the PR event payload.
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check architecture impact
+    if: github.repository == 'Kilo-Org/kilocode'
+    runs-on: ubuntu-latest
+    steps:
+      # Pinned to the repository-approved commit for checkout v6 (same SHA as
+      # nix-eval.yml / nix-hashes.yml); floating tags are not accepted.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2 # kilocode_change
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+
+      # Pinned to the repository-approved commit for setup-bun v2 (same SHA as
+      # test-jetbrains.yml / .github/actions/setup-bun).
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+
+      - name: Verify base and head commit objects
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          # The full-history checkout usually brings base along, but a
+          # force-pushed base branch can orphan the event's base SHA. Both
+          # commit objects must be locally available before the gate runs: a
+          # missing object is fetched by explicit SHA, and the gate fails
+          # closed if the fetch cannot retrieve it.
+          ensure_object() {
+            local ref="$1"
+            local label="$2"
+            if git cat-file -e "$ref^{commit}" 2>/dev/null; then
+              echo "::debug::$label commit object $ref is present."
+              return 0
+            fi
+            echo "::group::Fetching missing $label commit object $ref"
+            # `|| true`: a failed fetch (e.g. an orphaned SHA the remote no
+            # longer serves) must not abort before the fail-closed check below.
+            git fetch --no-tags origin "$ref" || true
+            echo "::endgroup::"
+            if git cat-file -e "$ref^{commit}" 2>/dev/null; then
+              echo "$label commit object $ref fetched."
+              return 0
+            fi
+            echo "::error::Cannot obtain $label commit object $ref even after fetch — failing closed."
+            return 1
+          }
+          ensure_object "$BASE_SHA" "base"
+          ensure_object "$HEAD_SHA" "head"
+
+      - name: Materialize trusted checker from base
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          TRUSTED_CHECKER: .git/check-architecture-impact.ts
+        run: |
+          set -euo pipefail
+
+          # The gate must run the checker revision that the base commit already
+          # contains, never the PR's own copy: a PR must not be able to edit the
+          # checker to pass its own gate. The trusted file is placed under .git/
+          # so the PR worktree cannot overwrite it after extraction, and so the
+          # checker's ROOT (import.meta.dir/..) resolves to the checkout. It is
+          # written via a temp file so a failed git show cannot leave a
+          # half-written checker behind.
+          TMP_CHECKER="$(mktemp)"
+          trap 'rm -f "$TMP_CHECKER"' EXIT
+          if git show "$BASE_SHA:script/check-architecture-impact.ts" > "$TMP_CHECKER"; then
+            mv "$TMP_CHECKER" "$TRUSTED_CHECKER"
+            echo "Trusted checker materialized from base commit $BASE_SHA."
+          else
+            # The verify step already proved the base commit object exists, so
+            # re-checking it here separates "checker absent from base" (the one
+            # legitimate bootstrap case) from a git operational failure.
+            if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+              echo "::error::Base commit object $BASE_SHA unavailable — cannot materialize trusted checker."
+              exit 1
+            fi
+            echo "::warning::No checker at script/check-architecture-impact.ts in base commit $BASE_SHA — BOOTSTRAP: using the checked-out head checker for this run only."
+            git show "$HEAD_SHA:script/check-architecture-impact.ts" > "$TRUSTED_CHECKER"
+          fi
+          test -s "$TRUSTED_CHECKER"
+
+      - name: Provision trusted TypeScript for the trusted checker
+        run: |
+          set -euo pipefail
+
+          # The checker imports the TypeScript scanner. Install only `typescript`
+          # from the registry with lifecycle scripts disabled, so no
+          # PR-controlled package script ever runs, and skip a full monorepo
+          # dependency install (this gate needs no other dependency). The
+          # package is installed into a scratch dir and copied under the repo's
+          # node_modules so bun resolves it from the trusted checker location.
+          TMP_TS="$(mktemp -d)"
+          trap 'rm -rf "$TMP_TS"' EXIT
+          printf '%s\n' '{"name":"arch-gate-deps","version":"1.0.0","private":true}' > "$TMP_TS/package.json"
+          (cd "$TMP_TS" && bun add --ignore-scripts typescript@5.8.2)
+          mkdir -p node_modules
+          cp -R "$TMP_TS/node_modules/typescript" node_modules/
+
+      - name: Check Documentation Impact declaration
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+
+          # PR body comes from the event payload via jq into a temp file; it is
+          # never interpolated into a shell string. Base/head
+          # SHAs flow in as environment variables and reach git only as argv.
+          # The trusted checker materialized from base is what runs, not the PR
+          # branch's own script.
+          BODY_FILE="$(mktemp)"
+          trap 'rm -f "$BODY_FILE"' EXIT
+          jq -r '.pull_request.body // ""' "$GITHUB_EVENT_PATH" > "$BODY_FILE"
+
+          bun run .git/check-architecture-impact.ts \
+            --base "$BASE_SHA" \
+            --head "$HEAD_SHA" \
+            --pr-body-file "$BODY_FILE"

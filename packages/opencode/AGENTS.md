@@ -6,6 +6,10 @@
 - **Test**: `bun test` (all tests) or `bun test test/tool/tool.test.ts` (single test)
 - **Typecheck**: `bun run typecheck` (runs `tsgo --noEmit`)
 
+## Architecture documentation
+
+The root AGENTS.md **Architecture documentation completion gate** is mandatory before claiming implementation complete/ready or creating a commit: inspect the full intended diff, run `bun run script/check-architecture-impact.ts --worktree` from the repo root, and read mapped canonical docs for high signals. This package owns most high-signal surfaces — runtime lifecycle, provider lifecycle, hot/cold config classification, executable config schema, HTTP API contract, Effect runtime boundary. Canonical governance lives in `packages/kilo-docs/pages/contributing/architecture/`; follow the root rule, do not restate it here.
+
 ## Import Aliases
 
 - `@/*` maps to `./src/*`
