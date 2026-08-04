@@ -617,10 +617,6 @@ describe("Agent Manager — VS Code import boundary", () => {
 // sidebar. Any context provider that ChatView's tree may call useXxx() on must
 // also be present in the agent manager's provider chain. A missing provider
 // crashes the entire SolidJS component tree silently.
-//
-// Regression: PR #7473 moved KiloNotifications into MessageList. It calls
-// useNotifications(), but NotificationsProvider was only in App.tsx — the agent
-// manager rendered a blank screen.
 // ---------------------------------------------------------------------------
 
 const APP_FILE = path.join(ROOT, "webview-ui/src/App.tsx")

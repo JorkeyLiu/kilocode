@@ -1355,7 +1355,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "これはVS Code拡張機能固有の設定のみをデフォルト値にリセットします。モードや自動承認ルールなど、CLIと共有される設定はCLI設定ファイルに保存されており、リセットされません。",
   "settings.aboutKiloCode.resetSettings.button": "すべての設定をリセット",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "設定の移行",
   "settings.aboutKiloCode.settingsTransfer.description":
     "VS Code インスタンス間で設定を転送するには、エクスポートまたはインポートしてください。",
@@ -1846,10 +1845,6 @@ export const dict = {
   "settings.saveBar.save": "保存",
   "settings.saveBar.saving": "保存中…",
   "settings.saveBar.saveFailed": "設定を保存できませんでした",
-  "notifications.action.next": "次へ",
-  "notifications.action.close": "閉じる",
-  "notifications.action.tryModel": "{{model}}を試す",
-  "notifications.action.tryModelGeneric": "モデルを試す",
   "diffViewer.source.workspace.label": "ブランチ",
   "diffViewer.source.workspace.tooltip":
     "ベースブランチと比較したこのブランチのすべての変更。未コミットのファイル（staged、unstaged、未追跡）とベースにまだ反映されていないローカルコミットを含みます。",

@@ -1324,7 +1324,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "此操作仅将 VS Code 扩展专属设置重置为默认值。与 CLI 共享的设置（如模式和自动审批规则）存储在 CLI 配置中，不会被重置。",
   "settings.aboutKiloCode.resetSettings.button": "重置所有设置",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "设置迁移",
   "settings.aboutKiloCode.settingsTransfer.description": "导出或导入设置，以便在 VS Code 实例之间传输。",
   "settings.aboutKiloCode.exportSettings": "导出",
@@ -1778,10 +1777,6 @@ export const dict = {
   "settings.saveBar.save": "保存",
   "settings.saveBar.saving": "保存中…",
   "settings.saveBar.saveFailed": "无法保存设置",
-  "notifications.action.next": "下一个",
-  "notifications.action.close": "关闭",
-  "notifications.action.tryModel": "尝试 {{model}}",
-  "notifications.action.tryModelGeneric": "尝试模型",
   "diffViewer.source.workspace.label": "分支",
   "diffViewer.source.workspace.tooltip":
     "此分支相对于基础分支的所有更改。包括未提交的文件（已暂存、未暂存、未跟踪）以及尚未合入基础分支的本地提交。",

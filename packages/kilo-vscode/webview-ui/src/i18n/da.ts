@@ -1361,7 +1361,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Dette nulstiller kun VS Code-udvidelsesspecifikke indstillinger til deres standardværdier. Indstillinger der deles med CLI, såsom tilstande og regler for automatisk godkendelse, er gemt i CLI-konfigurationen og vil ikke blive nulstillet.",
   "settings.aboutKiloCode.resetSettings.button": "Nulstil alle indstillinger",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Overførsel af indstillinger",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Eksportér eller importér dine indstillinger for at overføre dem mellem VS Code-instanser.",
@@ -1854,10 +1853,6 @@ export const dict = {
   "settings.saveBar.save": "Gem",
   "settings.saveBar.saving": "Gemmer…",
   "settings.saveBar.saveFailed": "Kunne ikke gemme indstillinger",
-  "notifications.action.next": "Næste",
-  "notifications.action.close": "Luk",
-  "notifications.action.tryModel": "Prøv {{model}}",
-  "notifications.action.tryModelGeneric": "Prøv model",
   "diffViewer.source.workspace.label": "Gren",
   "diffViewer.source.workspace.tooltip":
     "Alle ændringer på denne gren sammenlignet med basegrenen. Omfatter ikke-commitede filer (stagede, ikke-stagede, usporede) og lokale commits, som endnu ikke er i basen.",

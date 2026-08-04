@@ -1366,7 +1366,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Ovo resetuje samo postavke specifične za VS Code ekstenziju na njihove zadane vrijednosti. Postavke koje se dijele s CLI-jem, kao što su načini rada i pravila automatskog odobravanja, pohranjene su u CLI konfiguraciji i neće biti resetovane.",
   "settings.aboutKiloCode.resetSettings.button": "Resetuj sve postavke",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Prijenos postavki",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Izvezite ili uvezite postavke za prijenos između VS Code instanci.",
@@ -1861,10 +1860,6 @@ export const dict = {
   "settings.saveBar.save": "Spremi",
   "settings.saveBar.saving": "Spremanje…",
   "settings.saveBar.saveFailed": "Postavke nije moguće spremiti",
-  "notifications.action.next": "Sljedeći",
-  "notifications.action.close": "Zatvori",
-  "notifications.action.tryModel": "Probaj {{model}}",
-  "notifications.action.tryModelGeneric": "Probaj model",
   "diffViewer.source.workspace.label": "Grana",
   "diffViewer.source.workspace.tooltip":
     "Sve promjene na ovoj grani u poređenju s osnovnom granom. Uključuje nekomitovane datoteke (staged, unstaged, nepraćene) i lokalne commitove koji još nisu u osnovi.",

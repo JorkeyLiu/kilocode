@@ -21,7 +21,7 @@ import type { ModelSelection, Provider, ProviderAuthState } from "./providers"
 import type { AgentInfo, AgentRequirementResult, SkillInfo, SlashCommandInfo } from "./agents"
 import type { BrowserSettings, Config, FeatureFlags, IndexingStatus, KiloEmbeddingModelCatalog } from "./config"
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
-import type { KilocodeNotification, ProfileData } from "./profile"
+import type { ProfileData } from "./profile"
 import type {
   BranchInfo,
   ExternalWorktreeInfo,
@@ -605,12 +605,6 @@ export interface WorkStyleApplyFailedMessage {
   rollbackFailed: boolean
 }
 
-export interface NotificationsLoadedMessage {
-  type: "notificationsLoaded"
-  notifications: KilocodeNotification[]
-  dismissedIds: string[]
-}
-
 // Agent Manager worktree session metadata
 export interface AgentManagerSessionMetaMessage {
   type: "agentManager.sessionMeta"
@@ -1147,7 +1141,6 @@ export type ExtensionMessage =
   | WorkStyleLoadedMessage
   | WorkStyleAppliedMessage
   | WorkStyleApplyFailedMessage
-  | NotificationsLoadedMessage
   | AgentManagerSessionMetaMessage
   | AgentManagerRepoInfoMessage
   | AgentManagerWorktreeSetupMessage

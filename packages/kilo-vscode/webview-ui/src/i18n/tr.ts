@@ -1354,7 +1354,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Bu, yalnızca VS Code uzantısına özgü ayarları varsayılan değerlerine sıfırlar. Modlar ve otomatik onay kuralları gibi CLI ile paylaşılan ayarlar, CLI yapılandırmasında depolanır ve sıfırlanmaz.",
   "settings.aboutKiloCode.resetSettings.button": "Tüm Ayarları Sıfırla",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Ayar Aktarımı",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Ayarlarınızı VS Code örnekleri arasında aktarmak için dışa veya içe aktarın.",
@@ -1832,10 +1831,6 @@ export const dict = {
   "settings.saveBar.save": "Kaydet",
   "settings.saveBar.saving": "Kaydediliyor…",
   "settings.saveBar.saveFailed": "Ayarlar kaydedilemedi",
-  "notifications.action.next": "Sonraki",
-  "notifications.action.close": "Kapat",
-  "notifications.action.tryModel": "Dene {{model}}",
-  "notifications.action.tryModelGeneric": "Modeli Dene",
   "settings.indexing.kiloModel.title": "Kilo model önayarı",
   "settings.indexing.kiloModel.description": "Desteklenen bir Kilo-hosted embeddings modeli seçin.",
   "settings.indexing.kiloSignIn.title": "Kilo oturumu açmak gerekiyor",

@@ -1358,7 +1358,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Dit reset alleen VS Code-extensiespecifieke instellingen naar hun standaardwaarden. Instellingen die gedeeld worden met de CLI, zoals modi en regels voor automatisch goedkeuren, worden opgeslagen in de CLI-configuratie en worden niet gereset.",
   "settings.aboutKiloCode.resetSettings.button": "Alle instellingen resetten",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Instellingen overdragen",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Exporteer of importeer uw instellingen om ze tussen VS Code-instanties over te dragen.",
@@ -1846,10 +1845,6 @@ export const dict = {
   "settings.saveBar.save": "Opslaan",
   "settings.saveBar.saving": "Bezig met opslaan…",
   "settings.saveBar.saveFailed": "Instellingen konden niet worden opgeslagen",
-  "notifications.action.next": "Volgende",
-  "notifications.action.close": "Sluiten",
-  "notifications.action.tryModel": "Probeer {{model}}",
-  "notifications.action.tryModelGeneric": "Probeer model",
   "settings.indexing.kiloModel.title": "Kilo-model voorinstelling",
   "settings.indexing.kiloModel.description": "Kies een ondersteund Kilo-hosted embeddings model.",
   "settings.indexing.kiloSignIn.title": "Kilo-aanmelding vereist",

@@ -1164,7 +1164,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Ripristina solo le impostazioni specifiche dell'estensione VS Code ai valori predefiniti. Le impostazioni condivise con la CLI, come modalità e regole di approvazione automatica, sono salvate nella configurazione CLI e non verranno ripristinate.",
   "settings.aboutKiloCode.resetSettings.button": "Ripristina tutte le impostazioni",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Trasferimento impostazioni",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Esporta o importa le impostazioni per trasferirle tra istanze VS Code.",
@@ -1648,10 +1647,6 @@ export const dict = {
   "settings.saveBar.save": "Salva",
   "settings.saveBar.saving": "Salvataggio...",
   "settings.saveBar.saveFailed": "Impossibile salvare le impostazioni",
-  "notifications.action.next": "Avanti",
-  "notifications.action.close": "Chiudi",
-  "notifications.action.tryModel": "Prova {{model}}",
-  "notifications.action.tryModelGeneric": "Prova modello",
 
   // Marketplace agents (replaces modes)
   "settings.agentBehaviour.noAgentsFound": "Nessun agente trovato.",

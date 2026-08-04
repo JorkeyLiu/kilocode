@@ -1366,7 +1366,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Это сбрасывает только настройки, специфичные для расширения VS Code, до значений по умолчанию. Настройки, общие с CLI, такие как режимы и правила автоматического утверждения, хранятся в конфигурации CLI и не будут сброшены.",
   "settings.aboutKiloCode.resetSettings.button": "Сбросить все настройки",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Перенос настроек",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Экспортируйте или импортируйте настройки для переноса между экземплярами VS Code.",
@@ -1858,10 +1857,6 @@ export const dict = {
   "settings.saveBar.save": "Сохранить",
   "settings.saveBar.saving": "Сохранение…",
   "settings.saveBar.saveFailed": "Не удалось сохранить настройки",
-  "notifications.action.next": "Далее",
-  "notifications.action.close": "Закрыть",
-  "notifications.action.tryModel": "Попробовать {{model}}",
-  "notifications.action.tryModelGeneric": "Попробовать модель",
   "diffViewer.source.workspace.label": "Ветка",
   "diffViewer.source.workspace.tooltip":
     "Все изменения в этой ветке по сравнению с базовой. Включает незакоммиченные файлы (staged, unstaged, неотслеживаемые) и локальные коммиты, которых ещё нет в базе.",

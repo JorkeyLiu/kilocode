@@ -162,7 +162,6 @@ function createClient(options?: {
       },
     },
     kilo: {
-      notifications: async () => ({ data: [] }),
       profile: async () => ({ data: {} }),
     },
     command: { list: async () => ({ data: [] }) },
@@ -193,7 +192,6 @@ function createConnection(client: ReturnType<typeof createClient>) {
     getClient: () => client,
     onEventFiltered: () => () => undefined,
     onStateChange: (_l: (s: State) => void) => () => undefined,
-    onNotificationDismissed: () => () => undefined,
     onLanguageChanged: () => () => undefined,
     onProfileChanged: () => () => undefined,
     onMigrationComplete: () => () => undefined,
@@ -208,7 +206,6 @@ function createConnection(client: ReturnType<typeof createClient>) {
     getConnectionError: () => null,
     resolveEventSessionId: () => undefined,
     recordMessageSessionId: () => undefined,
-    notifyNotificationDismissed: () => undefined,
     pruneSession: () => undefined,
     registerVisible: () => undefined,
     unregisterVisible: () => undefined,

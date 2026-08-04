@@ -531,22 +531,9 @@ export interface ResetAllSettingsRequest {
   type: "resetAllSettings"
 }
 
-export interface ResetReadNotificationsRequest {
-  type: "resetReadNotifications"
-}
-
 export interface SettingsTabChangedMessage {
   type: "settingsTabChanged"
   tab: string
-}
-
-export interface RequestNotificationsMessage {
-  type: "requestNotifications"
-}
-
-export interface DismissNotificationMessage {
-  type: "dismissNotification"
-  notificationId: string
 }
 
 export interface SyncSessionRequest {
@@ -1302,12 +1289,9 @@ export type WebviewMessage =
   | RequestNotificationSettingsMessage
   | TestNotificationMessage
   | ResetAllSettingsRequest
-  | ResetReadNotificationsRequest
   | SettingsTabChangedMessage
   | SyncSessionRequest
   | CreateWorktreeSessionRequest
-  | RequestNotificationsMessage
-  | DismissNotificationMessage
   | CreateWorktreeRequest
   | DeleteWorktreeRequest
   | RemoveStaleWorktreeRequest

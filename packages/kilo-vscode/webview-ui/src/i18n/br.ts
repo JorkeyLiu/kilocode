@@ -1365,7 +1365,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Isso redefine apenas as configurações específicas da extensão VS Code para seus valores padrão. As configurações compartilhadas com o CLI, como modos e regras de aprovação automática, são armazenadas na configuração do CLI e não serão redefinidas.",
   "settings.aboutKiloCode.resetSettings.button": "Redefinir Todas as Configurações",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Transferência de configurações",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Exporte ou importe suas configurações para transferi-las entre instâncias do VS Code.",
@@ -1870,10 +1869,6 @@ export const dict = {
   "settings.saveBar.save": "Salvar",
   "settings.saveBar.saving": "Salvando…",
   "settings.saveBar.saveFailed": "Não foi possível salvar as configurações",
-  "notifications.action.next": "Próximo",
-  "notifications.action.close": "Fechar",
-  "notifications.action.tryModel": "Experimentar {{model}}",
-  "notifications.action.tryModelGeneric": "Experimentar modelo",
   "diffViewer.source.workspace.label": "Branch",
   "diffViewer.source.workspace.tooltip":
     "Todas as alterações desta branch em relação à branch base. Inclui arquivos não commitados (staged, unstaged e não rastreados) e commits locais que ainda não estão na base.",

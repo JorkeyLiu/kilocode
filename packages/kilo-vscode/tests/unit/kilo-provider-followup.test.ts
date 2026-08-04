@@ -18,7 +18,6 @@ type Internals = {
   fetchAndSendSkills: () => Promise<void>
   fetchAndSendCommands: () => Promise<void>
   fetchAndSendConfig: () => Promise<void>
-  fetchAndSendNotifications: () => Promise<void>
   seedSessionStatusMap: () => Promise<void>
   sendNotificationSettings: () => void
   startStatsPolling: () => void
@@ -61,7 +60,6 @@ function connection() {
       return () => undefined
     },
     onStateChange: () => () => undefined,
-    onNotificationDismissed: () => () => undefined,
     onLanguageChanged: () => () => undefined,
     onProfileChanged: () => () => undefined,
     onMigrationComplete: () => () => undefined,
@@ -77,7 +75,6 @@ function connection() {
     getConnectionError: () => null,
     resolveEventSessionId: (event: Event) => (event.type === "session.created" ? event.properties.info.id : undefined),
     recordMessageSessionId: () => undefined,
-    notifyNotificationDismissed: () => undefined,
   }
 }
 
@@ -102,7 +99,6 @@ describe("KiloProvider follow-up sessions", () => {
     internal.fetchAndSendSkills = async () => {}
     internal.fetchAndSendCommands = async () => {}
     internal.fetchAndSendConfig = async () => {}
-    internal.fetchAndSendNotifications = async () => {}
     internal.seedSessionStatusMap = async () => {}
     internal.sendNotificationSettings = () => {}
     internal.startStatsPolling = () => {}
@@ -152,7 +148,6 @@ describe("KiloProvider follow-up sessions", () => {
     internal.fetchAndSendSkills = async () => {}
     internal.fetchAndSendCommands = async () => {}
     internal.fetchAndSendConfig = async () => {}
-    internal.fetchAndSendNotifications = async () => {}
     internal.seedSessionStatusMap = async () => {}
     internal.sendNotificationSettings = () => {}
     internal.startStatsPolling = () => {}

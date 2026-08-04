@@ -1388,7 +1388,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Ceci réinitialise uniquement les paramètres spécifiques à l'extension VS Code à leurs valeurs par défaut. Les paramètres partagés avec le CLI, tels que les modes et les règles d'approbation automatique, sont stockés dans la configuration du CLI et ne seront pas réinitialisés.",
   "settings.aboutKiloCode.resetSettings.button": "Réinitialiser tous les paramètres",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Transfert des paramètres",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Exportez ou importez vos paramètres pour les transférer entre instances VS Code.",
@@ -1903,10 +1902,6 @@ export const dict = {
   "settings.saveBar.save": "Enregistrer",
   "settings.saveBar.saving": "Enregistrement…",
   "settings.saveBar.saveFailed": "Impossible d'enregistrer les paramètres",
-  "notifications.action.next": "Suivant",
-  "notifications.action.close": "Fermer",
-  "notifications.action.tryModel": "Essayer {{model}}",
-  "notifications.action.tryModelGeneric": "Essayer le modèle",
   "diffViewer.source.workspace.label": "Branche",
   "diffViewer.source.workspace.tooltip":
     "Toutes les modifications de cette branche par rapport à la branche de base. Inclut les fichiers non commités (staged, unstaged, non suivis) et les commits locaux qui ne sont pas encore dans la branche de base.",

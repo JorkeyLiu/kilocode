@@ -1350,7 +1350,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Це скине лише налаштування, специфічні для розширення VS Code, до стандартних значень. Налаштування, що зберігаються в конфігурації CLI (такі як режими та правила автоматичного схвалення), не будуть скинуті.",
   "settings.aboutKiloCode.resetSettings.button": "Скинути всі налаштування",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Перенесення налаштувань",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Експортуйте або імпортуйте налаштування для перенесення між екземплярами VS Code.",
@@ -1829,10 +1828,6 @@ export const dict = {
   "settings.saveBar.save": "Зберегти",
   "settings.saveBar.saving": "Збереження…",
   "settings.saveBar.saveFailed": "Не вдалося зберегти налаштування",
-  "notifications.action.next": "Далі",
-  "notifications.action.close": "Закрити",
-  "notifications.action.tryModel": "Спробувати {{model}}",
-  "notifications.action.tryModelGeneric": "Спробувати модель",
   "settings.indexing.kiloModel.title": "Пресет моделі Kilo",
   "settings.indexing.kiloModel.description": "Виберіть підтримувану модель Kilo-hosted embeddings.",
   "settings.indexing.kiloSignIn.title": "Потрібен вхід у Kilo",

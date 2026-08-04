@@ -361,13 +361,6 @@ const AboutKiloCodeTab: Component<AboutKiloCodeTabProps> = (props) => {
           <Button variant="primary" size="small" onClick={() => vscode.postMessage({ type: "resetAllSettings" })}>
             {language.t("settings.aboutKiloCode.resetSettings.button")}
           </Button>
-          <Button
-            variant="secondary"
-            size="small"
-            onClick={() => vscode.postMessage({ type: "resetReadNotifications" })}
-          >
-            {language.t("settings.aboutKiloCode.resetSettings.notificationsButton")}
-          </Button>
         </div>
       </div>
     </div>

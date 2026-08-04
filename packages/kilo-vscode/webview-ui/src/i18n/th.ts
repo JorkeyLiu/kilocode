@@ -1345,7 +1345,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "การดำเนินการนี้จะรีเซ็ตเฉพาะการตั้งค่าเฉพาะของส่วนขยาย VS Code กลับเป็นค่าเริ่มต้นเท่านั้น การตั้งค่าที่ใช้ร่วมกับ CLI เช่น โหมดและกฎการอนุมัติอัตโนมัติ จะถูกเก็บไว้ในการกำหนดค่า CLI และจะไม่ถูกรีเซ็ต",
   "settings.aboutKiloCode.resetSettings.button": "รีเซ็ตการตั้งค่าทั้งหมด",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "ถ่ายโอนการตั้งค่า",
   "settings.aboutKiloCode.settingsTransfer.description":
     "ส่งออกหรือนำเข้าการตั้งค่าเพื่อถ่ายโอนระหว่างอินสแตนซ์ VS Code",
@@ -1825,10 +1824,6 @@ export const dict = {
   "settings.saveBar.save": "บันทึก",
   "settings.saveBar.saving": "กำลังบันทึก…",
   "settings.saveBar.saveFailed": "ไม่สามารถบันทึกการตั้งค่าได้",
-  "notifications.action.next": "ถัดไป",
-  "notifications.action.close": "ปิด",
-  "notifications.action.tryModel": "ลองใช้ {{model}}",
-  "notifications.action.tryModelGeneric": "ลองใช้โมเดล",
   "diffViewer.source.workspace.label": "สาขา",
   "diffViewer.source.workspace.tooltip":
     "การเปลี่ยนแปลงทั้งหมดบนสาขานี้เมื่อเทียบกับสาขาเบส รวมถึงไฟล์ที่ยังไม่ได้คอมมิต (staged, unstaged, untracked) และคอมมิตในเครื่องที่ยังไม่มีในเบส",

@@ -70,13 +70,6 @@ import { interceptMessage } from "./kilo-provider/git-changes-request"
 import { matchFollowup, recordFollowup, type Followup } from "./kilo-provider/followup-session"
 import { clearCommandsCache, loadCommands } from "./kilo-provider/commands"
 import { fetchMessagePage, MESSAGE_PAGE_LIMIT } from "./kilo-provider/message-page"
-import {
-  dismissNotification,
-  fetchAndSendNotifications as fetchNotifications,
-  resetReadNotifications,
-  type NotificationsContext,
-  type NotificationsMessage,
-} from "./kilo-provider/notifications"
 import { childID } from "./kilo-provider/task-session"
 import { VisibleTaskStreams } from "./kilo-provider/visible-task-streams"
 import { handleNetworkEvent, clearNetworkWaits } from "./kilo-provider/network"
@@ -341,8 +334,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   /** Revision the last successful reconciliation covered — the dedupe key that prevents a local save from double-fetching its own canonical echo (LOCK-001/002). */
   private lastReconcileRevision = -1
   private configWarningsShown = false
-  /** Cached notificationsLoaded payload */
-  private cachedNotificationsMessage: NotificationsMessage | null = null
   private pendingKiloModel: { modelID?: string; agent?: string } | null = null
   private pendingReviewComments: { comments: unknown[]; autoSend: boolean }[] = []
   private readyResolvers: (() => void)[] = []
@@ -387,7 +378,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   private migrationCache: MigrationContext["migrationCache"] = new Map()
   /** Guard to prevent checkAndShowMigrationWizard running concurrently. */ // legacy-migration
   private migrationCheckInFlight = false // legacy-migration
-  private unsubscribeNotificationDismiss: (() => void) | null = null
   private unsubscribeLanguageChange: (() => void) | null = null
   private unsubscribeProfileChange: (() => void) | null = null
   private unsubscribeFavoritesChange: (() => void) | null = null
@@ -1338,11 +1328,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         case "requestTimelineSetting":
           this.sendTimelineSetting()
           break
-        case "requestNotifications":
-          this.fetchAndSendNotifications().catch((e) =>
-            console.error("[Kilo New] fetchAndSendNotifications failed:", e),
-          )
-          break
         case "requestCloudSessions":
           await handleRequestCloudSessions(this.cloudSessionCtx, message)
           break
@@ -1372,14 +1357,8 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
           )
           break
         }
-        case "dismissNotification":
-          await this.handleDismissNotification(message.notificationId)
-          break
         case "resetAllSettings":
           await this.handleResetAllSettings()
-          break
-        case "resetReadNotifications":
-          await resetReadNotifications(this.notificationsContext())
           break
         case "telemetry":
           TelemetryProxy.capture(message.event, message.properties)
@@ -1545,7 +1524,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     // Clean up any existing subscriptions (e.g., sidebar re-shown)
     this.unsubscribeEvent?.()
     this.unsubscribeState?.()
-    this.unsubscribeNotificationDismiss?.()
     this.unsubscribeLanguageChange?.()
     this.unsubscribeProfileChange?.()
     this.unsubscribeFavoritesChange?.()
@@ -1634,11 +1612,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         }
       })
 
-      // Subscribe to notification dismiss broadcast from other KiloProvider instances
-      this.unsubscribeNotificationDismiss = this.connectionService.onNotificationDismissed(() => {
-        this.fetchAndSendNotifications()
-      })
-
       // Subscribe to language change broadcast from other KiloProvider instances
       this.unsubscribeLanguageChange = this.connectionService.onLanguageChanged((locale) => {
         this.postMessage({ type: "languageChanged", locale })
@@ -1704,7 +1677,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       await this.flushPendingSessionRefresh("initializeConnection")
       this.recoverPendingPrompts()
 
-      // Fetch providers, agents, skills, config, notifications, and session statuses in parallel
+      // Fetch providers, agents, skills, config, and session statuses in parallel
       await Promise.all([
         this.fetchAndSendProviders(),
         this.fetchAndSendAgents(),
@@ -1712,7 +1685,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         this.fetchAndSendCommands(),
         this.fetchAndSendConfig(),
         this.fetchAndSendIndexingStatus(),
-        this.fetchAndSendNotifications(),
         this.memory.fetch(),
         this.seedSessionStatusMap(),
       ])
@@ -2685,28 +2657,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     }
   }
 
-  private notificationsContext(): NotificationsContext {
-    return {
-      context: this.extensionContext,
-      client: this.client,
-      cached: () => this.cachedNotificationsMessage,
-      set: (message) => {
-        this.cachedNotificationsMessage = message
-      },
-      post: (message) => this.postMessage(message),
-      notify: (id) => this.connectionService.notifyNotificationDismissed(id),
-    }
-  }
-
-  private async fetchAndSendNotifications(): Promise<void> {
-    await fetchNotifications(this.notificationsContext())
-  }
-
   // Cloud session methods extracted to kilo-provider/handlers/cloud-session.ts
-
-  private async handleDismissNotification(notificationId: string): Promise<void> {
-    await dismissNotification(this.notificationsContext(), notificationId)
-  }
 
   /** Read attention settings from VS Code config and push to webview. */
   private sendNotificationSettings(): void {
@@ -3931,7 +3882,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     // Clear globalState items that are not part of the configuration
     await this.extensionContext?.globalState.update("variantSelections", undefined)
     await this.extensionContext?.globalState.update("recentModels", undefined)
-    await this.extensionContext?.globalState.update("kilo.dismissedNotificationIds", undefined)
     await this.extensionContext?.globalState.update("kilo.agentMigrationBannerDismissed", undefined)
     await this.extensionContext?.globalState.update("kilo.marketplace.dismissedSuggestions", undefined)
 
@@ -3947,9 +3897,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     // Re-send globalState items to the webview
     this.postMessage({ type: "variantsLoaded", variants: {} })
     this.postMessage({ type: "recentsLoaded", recents: [] })
-
-    // Re-fetch notifications to reflect cleared dismissed IDs
-    await this.fetchAndSendNotifications()
 
     vscode.window.showInformationMessage("Kilo Code settings have been reset to defaults.")
   }
@@ -3990,7 +3937,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       this.fetchAndSendSkills(),
       this.fetchAndSendCommands(),
       this.fetchAndSendIndexingStatus(),
-      this.fetchAndSendNotifications(),
     ])
   }
 
@@ -4719,7 +4665,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.statsGitOps?.dispose()
     this.unsubscribeEvent?.()
     this.unsubscribeState?.()
-    this.unsubscribeNotificationDismiss?.()
     this.unsubscribeLanguageChange?.()
     this.unsubscribeProfileChange?.()
     this.unsubscribeFavoritesChange?.()

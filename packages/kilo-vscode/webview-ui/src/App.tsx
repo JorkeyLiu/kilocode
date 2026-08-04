@@ -37,7 +37,6 @@ registerExpandedTaskTool()
 registerVscodeToolOverrides()
 import HistoryView from "./components/history/HistoryView"
 import { MigrationWizard } from "./components/migration" // legacy-migration
-import { NotificationsProvider } from "./context/notifications"
 import { FeedbackProvider } from "./context/feedback"
 import { KiloEmbeddingModelsProvider } from "./context/kilo-embedding-models"
 import { ImageModelsProvider } from "./context/image-models"
@@ -427,21 +426,19 @@ const App: Component = () => {
                               <IndexingProvider>
                                 <KiloEmbeddingModelsProvider>
                                   <ImageModelsProvider>
-                                    <NotificationsProvider>
-                                      <SessionProvider>
-                                        <LocalTabsProvider>
-                                          <AgentRequirementsProvider>
-                                            <MemoryProvider>
-                                              <FeedbackProvider>
-                                                <DataBridge>
-                                                  <AppContent />
-                                                </DataBridge>
-                                              </FeedbackProvider>
-                                            </MemoryProvider>
-                                          </AgentRequirementsProvider>
-                                        </LocalTabsProvider>
-                                      </SessionProvider>
-                                    </NotificationsProvider>
+                                    <SessionProvider>
+                                      <LocalTabsProvider>
+                                        <AgentRequirementsProvider>
+                                          <MemoryProvider>
+                                            <FeedbackProvider>
+                                              <DataBridge>
+                                                <AppContent />
+                                              </DataBridge>
+                                            </FeedbackProvider>
+                                          </MemoryProvider>
+                                        </AgentRequirementsProvider>
+                                      </LocalTabsProvider>
+                                    </SessionProvider>
                                   </ImageModelsProvider>
                                 </KiloEmbeddingModelsProvider>
                               </IndexingProvider>

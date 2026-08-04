@@ -1338,7 +1338,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "يؤدي هذا إلى إعادة تعيين الإعدادات الخاصة بامتداد VS Code فقط إلى قيمها الافتراضية. الإعدادات المشتركة مع CLI، مثل الأوضاع وقواعد الموافقة التلقائية، مخزّنة في تكوين CLI ولن تتأثر.",
   "settings.aboutKiloCode.resetSettings.button": "إعادة تعيين جميع الإعدادات",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "نقل الإعدادات",
   "settings.aboutKiloCode.settingsTransfer.description": "تصدير أو استيراد إعداداتك لنقلها بين نُسخ VS Code.",
   "settings.aboutKiloCode.exportSettings": "تصدير",
@@ -1819,10 +1818,6 @@ export const dict = {
   "settings.saveBar.save": "حفظ",
   "settings.saveBar.saving": "جارٍ الحفظ…",
   "settings.saveBar.saveFailed": "تعذر حفظ الإعدادات",
-  "notifications.action.next": "التالي",
-  "notifications.action.close": "إغلاق",
-  "notifications.action.tryModel": "جرّب {{model}}",
-  "notifications.action.tryModelGeneric": "جرّب النموذج",
   "diffViewer.source.workspace.label": "الفرع",
   "diffViewer.source.workspace.tooltip":
     "جميع التغييرات على هذا الفرع مقارنة بالفرع الأساسي. يشمل الملفات غير الملتزمة (staged و unstaged وغير المتتبعة) والالتزامات المحلية التي لم تُضف بعد إلى الأساس.",

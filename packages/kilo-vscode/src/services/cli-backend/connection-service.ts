@@ -10,7 +10,6 @@ export type ConnectionState = "connecting" | "connected" | "disconnected" | "err
 type SSEEventListener = (event: SSEPayload, directory?: string, transaction?: string) => void
 type StateListener = (state: ConnectionState, error?: Error) => void
 type SSEEventFilter = (event: SSEPayload, directory?: string) => boolean
-type NotificationDismissListener = (notificationId: string) => void
 type LanguageChangeListener = (locale: string) => void
 type ProfileChangeListener = (data: unknown) => void
 type MigrationCompleteListener = () => void
@@ -47,7 +46,6 @@ export class KiloConnectionService {
 
   private readonly eventListeners: Set<SSEEventListener> = new Set()
   private readonly stateListeners: Set<StateListener> = new Set()
-  private readonly notificationDismissListeners: Set<NotificationDismissListener> = new Set()
   private readonly languageChangeListeners: Set<LanguageChangeListener> = new Set()
   private readonly profileChangeListeners: Set<ProfileChangeListener> = new Set()
   private readonly migrationCompleteListeners: Set<MigrationCompleteListener> = new Set()
@@ -366,25 +364,6 @@ export class KiloConnectionService {
   }
 
   /**
-   * Subscribe to notification dismiss events broadcast from any KiloProvider. Returns unsubscribe function.
-   */
-  onNotificationDismissed(listener: NotificationDismissListener): () => void {
-    this.notificationDismissListeners.add(listener)
-    return () => {
-      this.notificationDismissListeners.delete(listener)
-    }
-  }
-
-  /**
-   * Broadcast a notification dismiss event to all subscribed KiloProvider instances.
-   */
-  notifyNotificationDismissed(notificationId: string): void {
-    for (const listener of this.notificationDismissListeners) {
-      listener(notificationId)
-    }
-  }
-
-  /**
    * Subscribe to language change events broadcast from any KiloProvider. Returns unsubscribe function.
    */
   onLanguageChanged(listener: LanguageChangeListener): () => void {
@@ -641,7 +620,6 @@ export class KiloConnectionService {
     this.serverManager.dispose()
     this.eventListeners.clear()
     this.stateListeners.clear()
-    this.notificationDismissListeners.clear()
     this.profileChangeListeners.clear()
     this.migrationCompleteListeners.clear()
     this.favoritesChangeListeners.clear()

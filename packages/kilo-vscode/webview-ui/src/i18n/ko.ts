@@ -1348,7 +1348,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "이 기능은 VS Code 확장 프로그램 전용 설정만 기본값으로 초기화합니다. 모드 및 자동 승인 규칙과 같이 CLI와 공유되는 설정은 CLI 구성에 저장되며 초기화되지 않습니다.",
   "settings.aboutKiloCode.resetSettings.button": "모든 설정 초기화",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "설정 이전",
   "settings.aboutKiloCode.settingsTransfer.description":
     "VS Code 인스턴스 간에 설정을 전송하려면 내보내기 또는 가져오기하세요.",
@@ -1827,10 +1826,6 @@ export const dict = {
   "settings.saveBar.save": "저장",
   "settings.saveBar.saving": "저장 중…",
   "settings.saveBar.saveFailed": "설정을 저장할 수 없습니다",
-  "notifications.action.next": "다음",
-  "notifications.action.close": "닫기",
-  "notifications.action.tryModel": "{{model}} 시도",
-  "notifications.action.tryModelGeneric": "모델 시도",
   "diffViewer.source.workspace.label": "브랜치",
   "diffViewer.source.workspace.tooltip":
     "베이스 브랜치와 비교한 이 브랜치의 모든 변경 사항. 커밋되지 않은 파일(staged, unstaged, 추적되지 않음)과 아직 베이스에 반영되지 않은 로컬 커밋을 포함합니다.",

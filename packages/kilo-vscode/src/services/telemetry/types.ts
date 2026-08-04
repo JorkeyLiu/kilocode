@@ -80,7 +80,6 @@ export enum TelemetryEventName {
   WEBVIEW_MEMORY_USAGE = "Webview Memory Usage",
   MEMORY_WARNING_SHOWN = "Memory Warning Shown",
   ASK_APPROVAL = "Ask Approval",
-  NOTIFICATION_CLICKED = "Notification Clicked",
   SUGGESTION_BUTTON_CLICKED = "Suggestion Button Clicked",
   FREE_MODELS_LINK_CLICKED = "Free Models Link Clicked",
   CREATE_ORGANIZATION_LINK_CLICKED = "Create Organization Link Clicked",

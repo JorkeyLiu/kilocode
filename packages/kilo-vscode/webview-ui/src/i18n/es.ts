@@ -1375,7 +1375,6 @@ export const dict = {
   "settings.aboutKiloCode.resetSettings.description":
     "Esto restablece únicamente las configuraciones específicas de la extensión VS Code a sus valores predeterminados. Las configuraciones compartidas con el CLI, como los modos y las reglas de aprobación automática, se almacenan en la configuración del CLI y no serán restablecidas.",
   "settings.aboutKiloCode.resetSettings.button": "Restablecer toda la configuración",
-  "settings.aboutKiloCode.resetSettings.notificationsButton": "Reset Read Notifications",
   "settings.aboutKiloCode.settingsTransfer.title": "Transferencia de ajustes",
   "settings.aboutKiloCode.settingsTransfer.description":
     "Exporta o importa tus ajustes para transferirlos entre instancias de VS Code.",
@@ -1879,10 +1878,6 @@ export const dict = {
   "settings.saveBar.save": "Guardar",
   "settings.saveBar.saving": "Guardando…",
   "settings.saveBar.saveFailed": "No se pudieron guardar los ajustes",
-  "notifications.action.next": "Siguiente",
-  "notifications.action.close": "Cerrar",
-  "notifications.action.tryModel": "Probar {{model}}",
-  "notifications.action.tryModelGeneric": "Probar modelo",
   "diffViewer.source.workspace.label": "Rama",
   "diffViewer.source.workspace.tooltip":
     "Todos los cambios de esta rama respecto a la rama base. Incluye archivos sin commitear (staged, unstaged y no rastreados) y commits locales que todavía no están en la base.",
