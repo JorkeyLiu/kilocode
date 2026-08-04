@@ -11,6 +11,15 @@
  * keep reading their pinned ConfigSnapshot; no provider/instance resource owns agent
  * config, so updating it never requires a runtime swap.
  *
+ * `permission` (LOCK-002) is hot because permission persistence is intentionally
+ * in-memory-first: `Permission.reply` / `saveAlwaysRules` / allow-everything persist
+ * via `updateGlobal({ permission }, { dispose: false })`, the agent cache key includes
+ * permission, in-flight generations retain their pinned startup rules, and the live
+ * in-memory permission state unblocks pending asks. A cold rebuild of a permission
+ * save would drain the very generation a sibling permission ask is waiting on and drop
+ * the in-memory pending state, so permission must never ride the convergence fence.
+ * New generations observe the persisted rules through the cache-key refresh.
+ *
  * Cold keys include provider-coupled fields and all unclassified config fields.
  */
 
@@ -28,6 +37,7 @@ const HOT_KEYS = new Set([
   "agent", // Agent.state cacheKey includes agent; no runtime owns it
   "default_agent", // Agent.state cacheKey includes default_agent
   "mode", // legacy per-agent overrides; Agent.state cacheKey includes mode
+  "permission", // LOCK-002: hot permission persistence (updateGlobal dispose:false, cache-key refresh)
 ])
 
 /**

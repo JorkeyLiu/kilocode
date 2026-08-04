@@ -164,4 +164,109 @@ describe("ControlLease identity-keyed lifetime leases", () => {
       yield* leases.sealAndDrain(a)
       expect((yield* Effect.sync(() => leases.acquire(snap)))._tag).toBe("None")
     }))
+
+  it.live("concurrent sealAndDrain calls share one drain and all complete when the lease releases", () =>
+    Effect.gen(function* () {
+      const leases = yield* ControlLease.Service
+      const a = ctx("concurrent-seal")
+      const lease = yield* Effect.sync(() => leases.acquire(a))
+      expect(lease._tag).toBe("Some")
+      // LOCK-007: an explicit reload disposal and a convergence pass can seal
+      // the SAME identity concurrently. Each sealer must await the same drain
+      // signal — overwriting it would orphan the earlier waiter and deadlock
+      // the reload (the disposer would never run).
+      const firstDone = yield* Deferred.make<void>()
+      const secondDone = yield* Deferred.make<void>()
+      const first = yield* Effect.forkDetach(
+        leases.sealAndDrain(a).pipe(Effect.ensuring(Deferred.succeed(firstDone, void 0))),
+      )
+      const second = yield* Effect.forkDetach(
+        leases.sealAndDrain(a).pipe(Effect.ensuring(Deferred.succeed(secondDone, void 0))),
+      )
+      yield* Effect.yieldNow
+      yield* Effect.yieldNow
+      expect(yield* isDone(firstDone)).toBe(false)
+      expect(yield* isDone(secondDone)).toBe(false)
+      yield* unwrap(lease)
+      yield* awaitWithTimeout(Deferred.await(firstDone), "first concurrent seal did not complete after release")
+      yield* awaitWithTimeout(Deferred.await(secondDone), "second concurrent seal did not complete after release")
+      yield* Fiber.join(first)
+      yield* Fiber.join(second)
+    }))
+})
+
+describe("ControlLease write-lifetime leases (LOCK-006/007)", () => {
+  it.live("acquireWrite holds the drain until the handler releases", () =>
+    Effect.gen(function* () {
+      const leases = yield* ControlLease.Service
+      const a = ctx("w")
+      const lease = yield* Effect.sync(() => leases.acquireWrite(a))
+      expect(lease._tag).toBe("Some")
+      const drained = yield* Deferred.make<void>()
+      const sealed = yield* Effect.forkDetach(
+        leases.sealAndDrain(a).pipe(Effect.ensuring(Deferred.succeed(drained, void 0))),
+      )
+      yield* Effect.yieldNow
+      expect(yield* isDone(drained)).toBe(false)
+      yield* unwrap(lease)
+      yield* awaitWithTimeout(Deferred.await(drained), "seal did not complete after the write lease released")
+      yield* Fiber.join(sealed)
+    }))
+
+  it.live("acquireWrite after seal is refused (loaded identity cannot remain valid)", () =>
+    Effect.gen(function* () {
+      const leases = yield* ControlLease.Service
+      const a = ctx("sealed-write")
+      yield* leases.sealAndDrain(a)
+      expect((yield* Effect.sync(() => leases.acquireWrite(a)))._tag).toBe("None")
+    }))
+
+  it.live("control and write leases on one identity drain together", () =>
+    Effect.gen(function* () {
+      const leases = yield* ControlLease.Service
+      const a = ctx("shared")
+      const control = yield* Effect.sync(() => leases.acquire(a))
+      const write = yield* Effect.sync(() => leases.acquireWrite(a))
+      expect(control._tag).toBe("Some")
+      expect(write._tag).toBe("Some")
+      const drained = yield* Deferred.make<void>()
+      const sealed = yield* Effect.forkDetach(
+        leases.sealAndDrain(a).pipe(Effect.ensuring(Deferred.succeed(drained, void 0))),
+      )
+      yield* Effect.yieldNow
+      expect(yield* isDone(drained)).toBe(false)
+      yield* unwrap(control)
+      yield* Effect.yieldNow
+      expect(yield* isDone(drained)).toBe(false)
+      yield* unwrap(write)
+      yield* awaitWithTimeout(Deferred.await(drained), "seal did not complete after both lanes released")
+      yield* Fiber.join(sealed)
+    }))
+
+  it.live("acquireWrite releases on handler failure and interruption", () =>
+    Effect.gen(function* () {
+      const leases = yield* ControlLease.Service
+      const fail = ctx("w-fail")
+      const failLease = yield* Effect.sync(() => leases.acquireWrite(fail))
+      expect(failLease._tag).toBe("Some")
+      yield* Effect.fail("boom").pipe(
+        Effect.ensuring(unwrap(failLease)),
+        Effect.exit,
+      )
+      yield* awaitWithTimeout(leases.sealAndDrain(fail), "seal after write handler failure did not drain")
+
+      const interrupt = ctx("w-interrupt")
+      const interruptLease = yield* Effect.sync(() => leases.acquireWrite(interrupt))
+      expect(interruptLease._tag).toBe("Some")
+      const gate = yield* Deferred.make<void>()
+      const fiber = yield* Effect.forkDetach(
+        Effect.gen(function* () {
+          yield* Deferred.await(gate)
+        }).pipe(Effect.ensuring(unwrap(interruptLease))),
+      )
+      yield* Effect.yieldNow
+      yield* Effect.yieldNow
+      yield* Fiber.interrupt(fiber)
+      yield* awaitWithTimeout(leases.sealAndDrain(interrupt), "seal after write handler interruption did not drain")
+    }))
 })

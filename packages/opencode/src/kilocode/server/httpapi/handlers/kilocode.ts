@@ -13,10 +13,14 @@ import { AgentManager } from "@/kilocode/agent-manager/service"
 import type { RequestID as NotebookRequestID } from "@/kilocode/notebook/protocol"
 import { Notebook } from "@/kilocode/notebook/service"
 import { ModelUsage } from "@/kilocode/session/model-usage"
-import { InstanceStore } from "@/project/instance-store"
+import { containsPath } from "@/project/instance-context"
 import { InstanceHttpApi } from "@/server/routes/instance/httpapi/api"
 import { Skill } from "@/skill"
 import type { SessionID } from "@/session/schema"
+import {
+  withColdMutation,
+  type ColdScope,
+} from "@/kilocode/server/config-convergence"
 import {
   execute as executeCustomProviderDelete,
   CustomProviderDeleteError as CustomProviderDeleteFailureDomain,
@@ -43,7 +47,6 @@ export const kilocodeHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilocode"
     const agents = yield* Agent.Service
     const skills = yield* Skill.Service
     const config = yield* Config.Service
-    const store = yield* InstanceStore.Service
     const manager = yield* AgentManager.Service
     const notebook = yield* Notebook.Service
 
@@ -57,36 +60,72 @@ export const kilocodeHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilocode"
       return yield* agents.requirementStatus(ctx.query.agent)
     })
 
+    // LOCK-005/007: durable skill removal routed through withColdMutation. The
+    // scope is decided from robust path ownership evidence BEFORE the fence —
+    // the resolved SKILL.md target inside the instance boundary (directory or
+    // worktree) fences only that directory; anything else is conservatively
+    // global (all loaded directories). The response returns after the durable
+    // unlink and rebuild registration, before any generation drain; the
+    // convergence pass owns seal/drain/dispose/boot, so there is no direct
+    // store.dispose and no write-before-dispose window (LOCK-002).
     const removeSkill = Effect.fn("KilocodeHttpApi.removeSkill")(function* (ctx: {
       payload: typeof RemoveSkillPayload.Type
     }) {
       const instance = yield* InstanceState.context
       const entries = yield* skills.all()
-      yield* Effect.tryPromise({
-        try: () => KiloSkill.remove(ctx.payload.location, entries),
+      // LOCK-005: resolve the exact SKILL.md target synchronously BEFORE the
+      // fence (KiloSkill.target is pure path resolution) so the mutation scope
+      // is decided from robust path ownership evidence.
+      const file = yield* Effect.try({
+        try: () => KiloSkill.target(ctx.payload.location, entries),
         catch: () => new HttpApiError.BadRequest({}),
       })
-      yield* store.dispose(instance)
-      return true
+      const scope: ColdScope = containsPath(file, instance)
+        ? { directory: instance.directory }
+        : "global"
+      return yield* withColdMutation({
+        scope,
+        run: () =>
+          Effect.gen(function* () {
+            yield* Effect.tryPromise({
+              try: () => KiloSkill.remove(ctx.payload.location, entries),
+              catch: () => new HttpApiError.BadRequest({}),
+            })
+            return { changed: true as const, value: true as const }
+          }),
+      })
     })
 
+    // LOCK-005/007: durable agent removal routed through withColdMutation. A
+    // custom agent can live in any config directory, so the removal is
+    // GLOBAL-scoped — every loaded directory converges to the post-removal
+    // registry. The response returns after the durable removal and rebuild
+    // registration, before any generation drain; the convergence pass owns
+    // seal/drain/dispose/boot (LOCK-007 — no direct store.dispose here). A
+    // RemoveError stays a structured 400 and releases the fence via the
+    // ensuring-abort (LOCK-007), registering no rebuild.
     const removeAgent = Effect.fn("KilocodeHttpApi.removeAgent")(function* (ctx: {
       payload: typeof RemoveAgentPayload.Type
     }) {
       const instance = yield* InstanceState.context
       const agent = yield* agents.get(ctx.payload.name)
       const dirs = yield* config.directories()
-      yield* Effect.tryPromise({
-        try: () => KiloAgent.remove({ name: ctx.payload.name, agent, dirs, directory: instance.directory }),
-        catch: (err) => err,
-      }).pipe(
-        Effect.catch((err) => {
-          if (KiloAgent.RemoveError.isInstance(err)) return Effect.fail(new HttpApiError.BadRequest({}))
-          return Effect.die(err)
-        }),
-      )
-      yield* store.dispose(instance)
-      return true
+      return yield* withColdMutation({
+        scope: "global",
+        run: () =>
+          Effect.gen(function* () {
+            yield* Effect.tryPromise({
+              try: () => KiloAgent.remove({ name: ctx.payload.name, agent, dirs, directory: instance.directory }),
+              catch: (err) => err,
+            }).pipe(
+              Effect.catch((err) => {
+                if (KiloAgent.RemoveError.isInstance(err)) return Effect.fail(new HttpApiError.BadRequest({}))
+                return Effect.die(err)
+              }),
+            )
+            return { changed: true as const, value: true as const }
+          }),
+      })
     })
 
     const notebookList = Effect.fn("KilocodeHttpApi.notebookList")(function* () {

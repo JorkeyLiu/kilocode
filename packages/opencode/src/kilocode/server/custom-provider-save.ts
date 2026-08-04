@@ -5,15 +5,16 @@
  * backend mutation that cannot leave partial state and rebuilds once without
  * interrupting active sessions.
  *
- * Lifecycle (single global writer ticket, exactly one rebuild):
- * 1. Fast-path validation before any ticket/lock/auth/cache/config mutation:
+ * Lifecycle (single global convergence obligation, exactly one rebuild):
+ * 1. Fast-path validation before any fence/lock/auth/cache/config mutation:
  *    the config body must satisfy the backend schema (npm exactly one of the
  *    accepted AI SDK packages, nonempty name, nonempty models, http(s)
  *    baseURL) and an existing same-ID entry must not be a non-custom provider
  *    (LOCK-002 — an existing non-custom same-ID cannot be overwritten).
- * 2. Canonical cold acquisition order (LOCK-001): the GenerationGate global
- *    writer ticket is acquired FIRST, then the deterministic global discovery
- *    flock. The save never waits for the gate while holding a flock.
+ * 2. Canonical cold acquisition order (LOCK-001): the ConfigConvergence global
+ *    admission fence is raised FIRST (via withColdMutation), then the
+ *    deterministic global discovery flock. The save never waits for a
+ *    convergence fence while holding a flock.
  * 3. Under the lock: re-read the exact global target, compute the provider
  *    patch — the null deletions are derived from the OLD global entry and the
  *    NEW config, so removed model/variant/reasoning keys never persist after
@@ -23,18 +24,19 @@
  *    the auth mode is preserve, return success without auth/cache/rebuild/
  *    event — the existing UI expects save success when nothing changed. An
  *    auth set/clear counts as a change even when the config is a no-op.
- * 5. Mutate under locks + ticket: capture the exact persisted auth-file
+ * 5. Mutate under locks + fence: capture the exact persisted auth-file
  *    artifact (bytes + mode) before the auth mutation (LOCK-003), commit the
  *    config with emit:false, apply the auth set/clear, clear the model cache
- *    LAST, then hand the ticket to exactly one ConfigRebuild.rebuildGlobal
- *    registration. The transaction event is DEFERRED into the result: the
- *    HTTP handler emits it at the response acknowledgement boundary via
+ *    LAST, then commit the obligation — the convergence pass drains readers,
+ *    disposes the captured pre-fence instances, and boots replacements from
+ *    the latest disk state. The transaction event is DEFERRED into the result:
+ *    the HTTP handler emits it at the response acknowledgement boundary via
  *    HttpEffect.appendPreResponseHandler, so it is never observable before
  *    persistence, rebuild registration, and the success response are all
  *    finalized. The response returns after persistence + registration, before
  *    generation drain.
  * 6. Compensation (LOCK-004/006): any failure after mutation begins restores
- *    in reverse order while locks + ticket remain held — the exact auth file
+ *    in reverse order while locks + fence remain held — the exact auth file
  *    artifact first (byte/mode-exact, covering Auth.set/remove's write-then-
  *    chmod/telemetry partial mutation), then every committed config artifact
  *    exactly, then invalidates global/project caches. A failed compensating
@@ -55,13 +57,10 @@ import { Config } from "@/config/config"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Log from "@opencode-ai/core/util/log"
 import { InstanceRef } from "@/effect/instance-ref"
-import { InstanceStore } from "@/project/instance-store"
 import { ModelCache } from "@/provider/model-cache"
 import { KilocodeConfig } from "@/kilocode/config/config"
 import { CUSTOM_PROVIDER_PACKAGES, isCustomProviderPackage, isProviderID } from "@/kilocode/custom-provider"
-import { GenerationGate } from "./generation-gate"
-import { ConfigRebuild } from "./config-rebuild"
-import { withWriteTicket } from "./config-ticket"
+import { withColdMutation } from "./config-convergence"
 import { ConfigRollbackFailed } from "./config-transaction"
 import { configFailure } from "./config-failure"
 import { restoreTarget } from "./config-rollback"
@@ -252,8 +251,6 @@ export const execute = Effect.fn("CustomProviderSave.execute")(function* (input:
   const configSvc = yield* Config.Service
   const fs = yield* FSUtil.Service
   const auth = yield* Auth.Service
-  const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop)
-  const store = Option.getOrElse(yield* Effect.serviceOption(InstanceStore.Service), () => undefined)
   const modelCache = Option.getOrElse(yield* Effect.serviceOption(ModelCache.Service), () => undefined)
   const ref = yield* InstanceRef
 
@@ -282,139 +279,123 @@ export const execute = Effect.fn("CustomProviderSave.execute")(function* (input:
 
   const transactionID = randomUUID()
 
-  // LOCK-001: canonical cold acquisition order — the GenerationGate global
-  // writer ticket FIRST, then the global discovery flock. Revalidation and
-  // prepare happen only under this order, so the save never waits for the gate
-  // while holding a flock; a no-op result aborts the ticket cleanly without a
-  // rebuild (withWriteTicket releases on failure).
-  return yield* withWriteTicket({
-    acquire: gate.beginWriteGlobal(),
-    run: (ticket) =>
-      Effect.gen(function* () {
-        // LOCK-003: pre-barrier instance identities captured after ticket
-        // acquisition and before persistence visibility.
-        const dirs = store ? yield* store.directories() : []
-        const olds = yield* Effect.forEach(
-          dirs,
-          (dir) => store!.snapshot(dir).pipe(Effect.map((old) => ({ directory: dir, old }))),
-        )
+  // LOCK-001: canonical cold acquisition order — the ConfigConvergence global
+  // fence is raised FIRST (via withColdMutation), then the global discovery
+  // flock. Revalidation and prepare happen only under this order, so the save
+  // never waits for a convergence fence while holding a flock; a no-op result
+  // aborts the fence cleanly without a rebuild (withColdMutation aborts on
+  // failure).
+  const body = Effect.gen(function* () {
+    // LOCK-002: the global target is resolved exactly once under the
+    // discovery lock, before prepare/commit.
+    const globalTarget = KilocodeConfig.globalConfigTarget()
 
-        const body = Effect.gen(function* () {
-          // LOCK-002: the global target is resolved exactly once under the
-          // discovery lock, before prepare/commit.
-          const globalTarget = KilocodeConfig.globalConfigTarget()
+    // LOCK-005: re-read/validate the scope under the locks.
+    const current = yield* validate()
 
-          // LOCK-005: re-read/validate the scope under the locks.
-          const current = yield* validate()
+    // LOCK-002: provider patch with null deletions computed backend from
+    // the old global entry and the new config; disabled_providers removes
+    // the target ID only.
+    const patch = computeCustomProviderPatch(current.existing, config)
+    const disabled = current.globalConfig.disabled_providers ?? []
+    const nextDisabled = disabled.includes(providerID)
+      ? disabled.filter((item) => item !== providerID)
+      : undefined
+    const globalPatch = {
+      ...(nextDisabled !== undefined ? { disabled_providers: nextDisabled } : {}),
+      provider: { [providerID]: patch },
+    } as unknown as Config.Info
+    const artifact = yield* configFailure(configSvc.prepareGlobal(globalPatch, { file: globalTarget }))
+    const configChanged = artifact.changed
 
-          // LOCK-002: provider patch with null deletions computed backend from
-          // the old global entry and the new config; disabled_providers removes
-          // the target ID only.
-          const patch = computeCustomProviderPatch(current.existing, config)
-          const disabled = current.globalConfig.disabled_providers ?? []
-          const nextDisabled = disabled.includes(providerID)
-            ? disabled.filter((item) => item !== providerID)
-            : undefined
-          const globalPatch = {
-            ...(nextDisabled !== undefined ? { disabled_providers: nextDisabled } : {}),
-            provider: { [providerID]: patch },
-          } as unknown as Config.Info
-          const artifact = yield* configFailure(configSvc.prepareGlobal(globalPatch, { file: globalTarget }))
-          const configChanged = artifact.changed
+    // LOCK-006: no-op semantics — identical config AND auth preserve
+    // returns success with no auth/cache/rebuild/event (the existing UI
+    // expects save success). Auth set/clear counts as a change even when
+    // the config is a no-op.
+    if (!configChanged && !authChanged) {
+      return { changed: false as const, value: { success: true as const, events: Effect.void } }
+    }
 
-          // LOCK-006: no-op semantics — identical config AND auth preserve
-          // returns success with no auth/cache/rebuild/event (the existing UI
-          // expects save success). Auth set/clear counts as a change even when
-          // the config is a no-op.
-          if (!configChanged && !authChanged) {
-            return { changed: false as const, value: { success: true as const, events: Effect.void } }
-          }
+    const committed: Config.PreparedConfig[] = []
+    let authSnap: Auth.AuthSnapshot | undefined
 
-          const committed: Config.PreparedConfig[] = []
-          let authSnap: Auth.AuthSnapshot | undefined
-
-          // LOCK-004/006: compensate in reverse order while locks + ticket are
-          // held.
-          const compensate = Effect.gen(function* () {
-            let first: Cause.Cause<unknown> | undefined
-            if (authSnap) {
-              const exit = yield* Effect.exit(Auth.restoreFile(fs, authSnap))
+    // LOCK-004/006: compensate in reverse order while locks + fence are held.
+    const compensate = Effect.gen(function* () {
+      let first: Cause.Cause<unknown> | undefined
+      if (authSnap) {
+        const exit = yield* Effect.exit(Auth.restoreFile(fs, authSnap))
+        if (exit._tag === "Failure") first ??= exit.cause
+      }
+      yield* Effect.forEach(
+        [...committed].reverse(),
+        (artifact) =>
+          Effect.exit(restoreTarget(fs, artifact)).pipe(
+            Effect.flatMap((exit) => {
               if (exit._tag === "Failure") first ??= exit.cause
-            }
-            yield* Effect.forEach(
-              [...committed].reverse(),
-              (artifact) =>
-                Effect.exit(restoreTarget(fs, artifact)).pipe(
-                  Effect.flatMap((exit) => {
-                    if (exit._tag === "Failure") first ??= exit.cause
-                    return Effect.void
-                  }),
-                ),
-              { discard: true },
-            )
-            yield* configSvc.invalidate()
-            yield* configSvc.invalidateProject()
-            if (first) {
-              const detail = "compensating rollback after custom provider save failed"
-              log.error(detail, { cause: String(first) })
-              return yield* Effect.fail(new ConfigRollbackFailed({ detail, cause: String(first) }))
-            }
-          })
+              return Effect.void
+            }),
+          ),
+        { discard: true },
+      )
+      yield* configSvc.invalidate()
+      yield* configSvc.invalidateProject()
+      if (first) {
+        const detail = "compensating rollback after custom provider save failed"
+        log.error(detail, { cause: String(first) })
+        return yield* Effect.fail(new ConfigRollbackFailed({ detail, cause: String(first) }))
+      }
+    })
 
-          // LOCK-005/006: commit config (emit:false), apply auth, clear cache last.
-          const mutate = Effect.gen(function* () {
-            // LOCK-003: the exact persisted auth-file artifact captured BEFORE
-            // any mutation that can touch auth; compensation restores it
-            // regardless of how set/remove fails.
-            if (authChanged) {
-              authSnap = yield* Auth.snapshotFile(fs).pipe(Effect.orDie)
-            }
-            if (configChanged) {
-              const exit = yield* Effect.exit(configSvc.commitGlobal(artifact, { emit: false }))
-              if (exit._tag === "Failure") {
-                yield* compensate
-                return yield* Effect.failCause(exit.cause)
-              }
-              committed.push(artifact)
-            }
-            if (authChanged) {
-              const mutation =
-                input.auth.mode === "set"
-                  ? auth.set(providerID, { type: "api", key: input.auth.key })
-                  : auth.remove(providerID)
-              const authExit = yield* Effect.exit(mutation)
-              if (authExit._tag === "Failure") {
-                yield* compensate
-                return yield* Effect.failCause(authExit.cause)
-              }
-            }
-            const clearExit = yield* Effect.exit(modelCache ? modelCache.clear(providerID) : Effect.void)
-            if (clearExit._tag === "Failure") {
-              yield* compensate
-              return yield* Effect.failCause(clearExit.cause)
-            }
-            // LOCK-003: the final ConfigUpdated event is DEFERRED — tagged with
-            // the logical transaction id — and returned to the caller (HTTP
-            // handler) for emission at the response acknowledgement boundary.
-            // Nothing observable is published here, so no client can observe
-            // the transaction before persistence and rebuild registration are
-            // complete.
-            const events = configSvc.emitUpdated("global", transactionID)
-            return { success: true as const, events }
-          })
-
-          return { changed: true as const, value: yield* mutate }
-        })
-
-        // LOCK-001/003: the discovery lock is acquired after the ticket; the
-        // response returns after persistence + rebuild registration, before
-        // generation drain; exactly one rebuild is registered for the change.
-        const result = yield* configSvc.withLock(KilocodeConfig.configDiscoveryGlobalKey(), body)
-        return {
-          changed: result.changed,
-          value: result.value,
-          rebuild: result.changed ? ConfigRebuild.rebuildGlobal(ticket, olds) : undefined,
+    // LOCK-005/006: commit config (emit:false), apply auth, clear cache last.
+    const mutate = Effect.gen(function* () {
+      // LOCK-003: the exact persisted auth-file artifact captured BEFORE
+      // any mutation that can touch auth; compensation restores it
+      // regardless of how set/remove fails.
+      if (authChanged) {
+        authSnap = yield* Auth.snapshotFile(fs).pipe(Effect.orDie)
+      }
+      if (configChanged) {
+        const exit = yield* Effect.exit(configSvc.commitGlobal(artifact, { emit: false }))
+        if (exit._tag === "Failure") {
+          yield* compensate
+          return yield* Effect.failCause(exit.cause)
         }
-      }),
+        committed.push(artifact)
+      }
+      if (authChanged) {
+        const mutation =
+          input.auth.mode === "set"
+            ? auth.set(providerID, { type: "api", key: input.auth.key })
+            : auth.remove(providerID)
+        const authExit = yield* Effect.exit(mutation)
+        if (authExit._tag === "Failure") {
+          yield* compensate
+          return yield* Effect.failCause(authExit.cause)
+        }
+      }
+      const clearExit = yield* Effect.exit(modelCache ? modelCache.clear(providerID) : Effect.void)
+      if (clearExit._tag === "Failure") {
+        yield* compensate
+        return yield* Effect.failCause(clearExit.cause)
+      }
+      // LOCK-003: the final ConfigUpdated event is DEFERRED — tagged with
+      // the logical transaction id — and returned to the caller (HTTP
+      // handler) for emission at the response acknowledgement boundary.
+      // Nothing observable is published here, so no client can observe
+      // the transaction before persistence and rebuild registration are
+      // complete.
+      const events = configSvc.emitUpdated("global", transactionID)
+      return { success: true as const, events }
+    })
+
+    return { changed: true as const, value: yield* mutate }
+  })
+
+  // LOCK-001/003: the discovery lock is acquired after the fence; the
+  // response returns after persistence + rebuild registration, before
+  // generation drain; exactly one rebuild is registered for the change.
+  return yield* withColdMutation({
+    scope: "global",
+    run: () => configSvc.withLock(KilocodeConfig.configDiscoveryGlobalKey(), body),
   }).pipe(Effect.catchTag("ConfigRollbackFailed", (error) => Effect.die(error)))
 })

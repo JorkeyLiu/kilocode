@@ -47,6 +47,7 @@ import { InstanceStore } from "../../../src/project/instance-store"
 import type { InstanceContext } from "../../../src/project/instance-context"
 import { ControlLease } from "../../../src/kilocode/server/control-lease"
 import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
+import { ConfigConvergence } from "../../../src/kilocode/server/config-convergence" // kilocode_change
 import { awaitRebuilds, probeRebuildRegistration } from "../../../src/kilocode/server/config-rebuild"
 import { invalidateAfterProviderAuthChange } from "../../../src/kilocode/server/provider-auth-lifecycle"
 import { TestLLMServer } from "../../lib/llm-server"
@@ -128,6 +129,7 @@ const fakeCtx: InstanceContext = {
 function coordinatorLayer(events: Ref.Ref<string[]>, failClear = false) {
   return Layer.mergeAll(
     GenerationGate.defaultLayer,
+    ConfigConvergence.defaultLayer, // kilocode_change - canonical cold-mutation coordinator
     ControlLease.defaultLayer,
     FSUtil.defaultLayer,
     Auth.defaultLayer,
@@ -144,7 +146,7 @@ function coordinatorLayer(events: Ref.Ref<string[]>, failClear = false) {
       load: () => Effect.succeed(fakeCtx),
       disposeAll: () => Ref.update(events, (items) => [...items, "dispose-all"]),
     }),
-  )
+  ).pipe(Layer.provideMerge(GenerationGate.defaultLayer))
 }
 
 /**
@@ -158,6 +160,7 @@ function coordinatorLayer(events: Ref.Ref<string[]>, failClear = false) {
 function cleanupLayer(events: Ref.Ref<string[]>, failClear = false) {
   return Layer.mergeAll(
     GenerationGate.defaultLayer,
+    ConfigConvergence.defaultLayer, // kilocode_change - canonical cold-mutation coordinator
     ControlLease.defaultLayer,
     FSUtil.defaultLayer,
     Auth.defaultLayer,
@@ -175,7 +178,7 @@ function cleanupLayer(events: Ref.Ref<string[]>, failClear = false) {
       load: () => Effect.succeed(fakeCtx),
       disposeAll: () => Ref.update(events, (items) => [...items, "dispose-all"]),
     }),
-  )
+  ).pipe(Layer.provideMerge(GenerationGate.defaultLayer))
 }
 
 // ─── LOCK-001/002/004: coordinator lifecycle + failure semantics ────────
@@ -390,6 +393,7 @@ const oauthHook: NonNullable<Hooks["auth"]> = {
 function oauthLayer(events: Ref.Ref<string[]>, failClear = false) {
   const coordinator = Layer.mergeAll(
     GenerationGate.defaultLayer,
+    ConfigConvergence.defaultLayer, // kilocode_change - canonical cold-mutation coordinator
     ControlLease.defaultLayer,
     FSUtil.defaultLayer,
     Auth.defaultLayer,
@@ -406,7 +410,7 @@ function oauthLayer(events: Ref.Ref<string[]>, failClear = false) {
       load: () => Effect.succeed(fakeCtx),
       disposeAll: () => Ref.update(events, (items) => [...items, "dispose-all"]),
     }),
-  )
+  ).pipe(Layer.provideMerge(GenerationGate.defaultLayer))
   const plugin = Layer.mock(Plugin.Service)({
     list: () => Effect.succeed([{ auth: oauthHook }]),
   })

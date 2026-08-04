@@ -3,15 +3,15 @@
  *
  * One logical save = one backend mutation:
  *
- * 1. Canonical cold acquisition order (LOCK-001): the GenerationGate writer
- *    ticket is acquired FIRST, then the shared cross-process lock for the
- *    global target, then the project target (deterministic global-first
- *    flock chain). No cold path ever waits for the gate while holding a
- *    config lock. Every config write path — `Config.updateGlobal`,
- *    `Config.update`, `/config/overlay`, `/config`, `/global/config`, and
- *    this transaction — serializes through the same lock key space, so no
- *    two writers of a target can interleave. Hot transactions take config
- *    locks only, never a gate ticket.
+ * 1. Canonical cold acquisition order (LOCK-001): the ConfigConvergence
+ *    admission fence is raised FIRST (via withColdMutation), then the shared
+ *    cross-process lock for the global target, then the project target
+ *    (deterministic global-first flock chain). No cold path ever waits for a
+ *    convergence fence while holding a config lock. Every config write path —
+ *    `Config.updateGlobal`, `Config.update`, `/config/overlay`, `/config`,
+ *    `/global/config`, and this transaction — serializes through the same lock
+ *    key space, so no two writers of a target can interleave. Hot transactions
+ *    take config locks only, never a fence.
  * 2. Prepare BOTH scopes in memory before the first write (LOCK-002): read
  *    the exact target content, apply the existing JSONC/merge/writable/schema
  *    behavior, validate, and produce `{path, existed, original, next, info,
@@ -31,10 +31,10 @@
  *    the response was constructed (LOCK-003/004), each carrying the same
  *    logical transaction id. No precommit or stale rollback events are ever
  *    emitted.
- * 6. An all-hot changed transaction persists without a GenerationGate writer
- *    barrier and without a rebuild; any changed cold transaction acquires
- *    exactly one global writer ticket and registers exactly one rebuild;
- *    a no-op registers none (LOCK-005).
+ * 6. An all-hot changed transaction persists without a convergence fence and
+ *    without a rebuild; any changed cold transaction registers exactly one
+ *    convergence obligation (global scope when a cold global change exists,
+ *    project scope otherwise); a no-op registers none (LOCK-005).
  * 7. The response carries the authoritative global config, the canonical
  *    project overlay (NOT effective config), and the effective config, and is
  *    computed after commit/rebuild registration and before generation drain
@@ -56,11 +56,8 @@ import { isHotPatch } from "@/kilocode/config/hot-keys"
 import { KilocodeAtomicWrite } from "@/kilocode/config/atomic-write"
 import { KilocodeConfig } from "@/kilocode/config/config"
 import { KilocodeConfigOverlay } from "@/kilocode/config/overlay"
-import { GenerationGate } from "@/kilocode/server/generation-gate"
-import { ConfigRebuild } from "@/kilocode/server/config-rebuild"
-import { withWriteTicket } from "@/kilocode/server/config-ticket"
+import { withColdMutation } from "@/kilocode/server/config-convergence"
 import { configFailure } from "@/kilocode/server/config-failure"
-import { InstanceStore } from "@/project/instance-store"
 import { InstanceRef } from "@/effect/instance-ref"
 
 const log = Log.create({ service: "config-transaction" })
@@ -143,11 +140,6 @@ export const executeTransaction = Effect.fn("ConfigTransaction.execute")(
   function* (input: TransactionInput) {
     const config = yield* ConfigService.Service
     const fs = yield* FSUtil.Service
-    const gate = Option.getOrElse(
-      yield* Effect.serviceOption(GenerationGate.Service),
-      () => GenerationGate.noop,
-    )
-    const store = Option.getOrElse(yield* Effect.serviceOption(InstanceStore.Service), () => undefined)
     const ref = yield* InstanceRef
 
     const globalPatch = scopeToPatch(input.global)
@@ -216,10 +208,10 @@ export const executeTransaction = Effect.fn("ConfigTransaction.execute")(
      * the original cause propagates. LOCK-003: the authoritative response is
      * constructed BEFORE any final event is emitted — a read/response failure
      * restores every target, invalidates caches, emits nothing, and (via
-     * withWriteTicket) releases the ticket. The ConfigUpdated publishes are
+     * withColdMutation) releases the fence. The ConfigUpdated publishes are
      * DEFERRED (LOCK-002/003/004): the caller emits them only after all targets
-     * committed, the response succeeded, and the rebuild registration handoff
-     * owns the writer ticket, each tagged with the logical transaction id.
+     * committed, the response succeeded, and the convergence rebuild
+     * registration owns the fence, each tagged with the logical transaction id.
      */
     const commitAll = (targets: ScopeTarget[]) =>
       Effect.gen(function* () {
@@ -283,25 +275,30 @@ export const executeTransaction = Effect.fn("ConfigTransaction.execute")(
       return { changed: true as const, value: yield* commitAll(targets), targets }
     })
 
-    // LOCK-001: canonical cold acquisition order — GenerationGate writer
-    // ticket FIRST, then the deterministic global→project discovery flocks.
-    // The legacy cold overlay/config/global paths already acquire the gate
-    // before their Config.update/updateGlobal discovery lock, so sharing this
-    // order means no cold path ever waits for the gate while holding a config
-    // lock. Hot transactions take discovery locks only, never a gate ticket. A
-    // semantic no-op returns `changed: false`, so withWriteTicket aborts the
-    // ticket and no rebuild is registered. Lock failures are defects (mapped
-    // inside the Config service), so the only typed failure channel is the
-    // declared 400; a failed compensating rollback surfaces as the
+    // LOCK-001: canonical cold acquisition order — the ConfigConvergence fence
+    // is raised FIRST (via withColdMutation), then the deterministic
+    // global→project discovery flocks. The legacy cold overlay/config/global
+    // paths share this order, so no cold path ever waits for the gate while
+    // holding a config lock. Hot transactions take discovery locks only, never
+    // a fence. A semantic no-op returns `changed: false`, so withColdMutation
+    // aborts the fence and no rebuild is registered. Lock failures are defects
+    // (mapped inside the Config service), so the only typed failure channel is
+    // the declared 400; a failed compensating rollback surfaces as the
     // ConfigRollbackFailed defect.
+    //
+    // LOCK-005 scope: a cold transaction with any cold GLOBAL change fences and
+    // rebuilds every loaded directory (a global cold patch present), exactly
+    // like the legacy global paths; a project-only cold transaction fences and
+    // rebuilds only its directory.
     const discoveryProjectKey = hasProjectPatch
       ? KilocodeConfig.configDiscoveryProjectKey(ref!.directory)
       : undefined
+    const globalCold = hasGlobalPatch ? !globalHot : false
     // LOCK-002/003/004: the ConfigUpdated publishes are DEFERRED after the
     // response. Hot transactions emit immediately under the discovery locks
-    // (hot semantics unchanged — no gate ticket, no rebuild); cold
-    // transactions hand the deferred event to withWriteTicket, which publishes
-    // it only after forkRebuild synchronously registered the rebuild.
+    // (hot semantics unchanged — no fence, no rebuild); cold transactions hand
+    // the deferred event to withColdMutation, which publishes it only after
+    // commit synchronously registered the convergence rebuild.
     const outcome = allHot
       ? config
           .withLock(
@@ -313,28 +310,21 @@ export const executeTransaction = Effect.fn("ConfigTransaction.execute")(
               result.changed ? emitTargets(result.targets).pipe(Effect.as(result.value)) : Effect.succeed(result.value),
             ),
           )
-      : withWriteTicket({
-          acquire: gate.beginWriteGlobal(),
-          run: (ticket) =>
-            Effect.gen(function* () {
-              // Pre-barrier identities captured after ticket acquisition and
-              // before persistence visibility (LOCK-003).
-              const dirs = store ? yield* store.directories() : []
-              const olds = yield* Effect.forEach(
-                dirs,
-                (directory) => store!.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
-              )
-              const result = yield* config.withLock(
+      : withColdMutation({
+          scope: globalCold ? "global" : { directory: ref!.directory },
+          run: () =>
+            config
+              .withLock(
                 KilocodeConfig.configDiscoveryGlobalKey(),
                 discoveryProjectKey ? config.withLock(discoveryProjectKey, run) : run,
               )
-              return {
-                changed: result.changed,
-                value: result.value,
-                rebuild: result.changed ? ConfigRebuild.rebuildGlobal(ticket, olds) : undefined,
-                event: result.changed ? emitTargets(result.targets) : undefined,
-              }
-            }),
+              .pipe(
+                Effect.map((result) => ({
+                  changed: result.changed,
+                  value: result.value,
+                  event: result.changed ? emitTargets(result.targets) : undefined,
+                })),
+              ),
         })
 
     return yield* outcome.pipe(Effect.catchTag("ConfigRollbackFailed", (error) => Effect.die(error)))

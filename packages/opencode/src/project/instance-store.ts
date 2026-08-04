@@ -8,6 +8,8 @@ import { Context, Deferred, Duration, Effect, Exit, Layer, Option, Scope } from 
 import { context as instanceContext, type InstanceContext } from "./instance-context" // kilocode_change
 import { InstanceBootstrap } from "./bootstrap-service"
 import * as Project from "./project"
+import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change - LOCK-005: fence load registration
+import { ControlLease } from "@/kilocode/server/control-lease" // kilocode_change - LOCK-007: lease-aware disposal
 
 export interface LoadInput {
   directory: string
@@ -19,6 +21,11 @@ export interface Interface {
   readonly load: (input: LoadInput) => Effect.Effect<InstanceContext>
   readonly reload: (input: LoadInput) => Effect.Effect<InstanceContext>
   readonly dispose: (ctx: InstanceContext) => Effect.Effect<void>
+  // kilocode_change start - LOCK-007: lease-aware disposal. Identical identity
+  // and event semantics to `dispose`, but seals and drains the exact
+  // identity's control + write leases before any disposer runs.
+  readonly disposeSafe: (ctx: InstanceContext) => Effect.Effect<void>
+  // kilocode_change end
   readonly disposeDirectory: (directory: string) => Effect.Effect<void>
   readonly disposeAll: () => Effect.Effect<void>
   readonly provide: <A, E, R>(input: LoadInput, effect: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
@@ -101,6 +108,17 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       yield* emitDisposed({ directory: ctx.directory, project: ctx.project.id })
     })
 
+    // kilocode_change start - LOCK-007: seal and drain the exact identity's
+    // control + write leases before its disposers run. Resolved optionally so
+    // stores layered without the lease coordinator (non-AppRuntime test
+    // stores) keep the direct-disposal behavior — the seal is a no-op there.
+    const sealLeases = (ctx: InstanceContext) =>
+      Effect.gen(function* () {
+        const leases = Option.getOrElse(yield* Effect.serviceOption(ControlLease.Service), () => ControlLease.noop)
+        yield* leases.sealAndDrain(ctx)
+      })
+    // kilocode_change end
+
     const disposeEntry = Effect.fnUntraced(function* (directory: string, entry: Entry, ctx: InstanceContext) {
       if (cache.get(directory) !== entry) return false
       // kilocode_change start - remove disposed entries even when event publication fails
@@ -111,6 +129,26 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       // kilocode_change end
     })
 
+    // kilocode_change start - LOCK-005: resolve the convergence fence-load
+    // registration for a load/reload admitted while a convergence fence is
+    // active (config-write paths bypass the fence, so a first load OR an
+    // explicit reload during a cold save would otherwise cache a pre-mutation
+    // runtime the pass never sees). Resolves `Some(confirm)` when the global
+    // fence or the directory's per-directory fence is active; the caller MUST
+    // run `confirm` after the boot completes — success, failure, interruption —
+    // so the coordinator converges the cached runtime before the fence drops.
+    // The gate is resolved lazily (serviceOption), so non-server contexts and
+    // tests without the gate are unaffected. The ConvergenceLoad marker skips
+    // registration for the coordinator's own reboots, which would otherwise
+    // re-register the directory in a loop.
+    const fenceLoadConfirm = (directory: string) =>
+      Effect.gen(function* () {
+        const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => undefined)
+        const marker = yield* GenerationGate.ConvergenceLoad
+        return !gate || marker ? Option.none<Effect.Effect<void>>() : yield* gate.registerFenceLoad(directory)
+      })
+    // kilocode_change end
+
     const load = (input: LoadInput): Effect.Effect<InstanceContext> => {
       const directory = FSUtil.resolve(input.directory)
       return Effect.uninterruptibleMask((restore) =>
@@ -118,13 +156,22 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
           const existing = cache.get(directory)
           if (existing) return yield* restore(Deferred.await(existing.deferred))
 
+          // kilocode_change start - LOCK-005: register loads admitted under an
+          // active convergence fence (see fenceLoadConfirm above).
+          const confirm = yield* fenceLoadConfirm(directory)
+          // kilocode_change end
+
           const entry: Entry = { deferred: Deferred.makeUnsafe<InstanceContext>() }
           cache.set(directory, entry)
           yield* Effect.gen(function* () {
             yield* Effect.logInfo("creating instance").pipe(Effect.annotateLogs("directory", directory))
             yield* completeLoad(directory, input, entry)
           }).pipe(Effect.forkIn(scope, { startImmediately: true }))
-          return yield* restore(Deferred.await(entry.deferred))
+          // kilocode_change start - confirm the fence load registration (LOCK-005)
+          return yield* restore(Deferred.await(entry.deferred)).pipe(
+            Effect.ensuring(confirm._tag === "Some" ? confirm.value : Effect.void),
+          )
+          // kilocode_change end
         }),
       ).pipe(Effect.withSpan("InstanceStore.load"))
     }
@@ -133,25 +180,49 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       const directory = FSUtil.resolve(input.directory)
       return Effect.uninterruptibleMask((restore) =>
         Effect.gen(function* () {
+          // kilocode_change start - LOCK-005 (reload handshake): mirror the load
+          // hook. An explicit reload that replaces a cached instance while a
+          // convergence fence is active registers with the fence BEFORE the
+          // cache replacement, so the coordinator converges the replacement
+          // (dispose + reboot from current disk) before the fence releases — a
+          // pre-mutation runtime can never survive a cold save via an explicit
+          // reload. The confirm runs on every exit of the reload await —
+          // success, failure, interruption — exactly like the load hook.
+          const confirm = yield* fenceLoadConfirm(directory)
+          // kilocode_change end
+
           const previous = cache.get(directory)
           const entry: Entry = { deferred: Deferred.makeUnsafe<InstanceContext>() }
           cache.set(directory, entry)
           yield* Effect.gen(function* () {
             yield* Effect.logInfo("reloading instance").pipe(Effect.annotateLogs("directory", directory))
             if (previous) {
-              // kilocode_change start - dispose reloads under the previous instance context
+              // kilocode_change start - LOCK-007: dispose reloads under the
+              // previous instance context AFTER sealing and draining the
+              // previous identity's control + write leases, so an active
+              // snapshot control or write-intent handler on the replaced
+              // identity is awaited before its disposers run (LOCK-001: the
+              // reload may await exactly the leases for the identity it
+              // replaces). A previous boot that failed has no identity to seal;
+              // disposers still run and the disposed event still fires.
               const exit = yield* Deferred.await(previous.deferred).pipe(Effect.exit)
-              yield* Effect.promise(() =>
-                Exit.isSuccess(exit)
-                  ? instanceContext.provide(exit.value, () => runDisposers(directory))
-                  : runDisposers(directory),
-              )
+              if (Exit.isSuccess(exit)) {
+                yield* sealLeases(exit.value)
+                yield* Effect.promise(() => instanceContext.provide(exit.value, () => runDisposers(directory)))
+              } else {
+                yield* Effect.promise(() => runDisposers(directory))
+              }
               // kilocode_change end
               yield* emitDisposed({ directory, project: input.project?.id })
             }
             yield* completeLoad(directory, input, entry)
           }).pipe(Effect.forkIn(scope, { startImmediately: true }))
-          return yield* restore(Deferred.await(entry.deferred))
+          // kilocode_change start - confirm the fence load registration after
+          // the replacement boot completes (LOCK-005 reload handshake)
+          return yield* restore(Deferred.await(entry.deferred)).pipe(
+            Effect.ensuring(confirm._tag === "Some" ? confirm.value : Effect.void),
+          )
+          // kilocode_change end
         }),
       ).pipe(Effect.withSpan("InstanceStore.reload"))
     }
@@ -165,6 +236,29 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       if (exit.value !== ctx) return
       yield* disposeEntry(ctx.directory, entry, ctx).pipe(Effect.asVoid)
     })
+
+    // kilocode_change start - LOCK-007: lease-aware disposal primitive. Mirrors
+    // `dispose` exactly — entry lookup, boot-failure removal, identity check,
+    // disposed event — but seals and drains the exact identity's control +
+    // write leases BEFORE any disposer runs, so an active snapshot control or
+    // write-intent handler on the identity is awaited, never raced. Used by the
+    // response-lifecycle explicit dispose path (lifecycle.ts) and any caller
+    // that does not own a prior seal. The identity-mismatch branch stays a pure
+    // no-op: a replaced identity is owned by the reload that replaced it.
+    const disposeSafe = Effect.fn("InstanceStore.disposeSafe")(function* (ctx: InstanceContext) {
+      const entry = cache.get(ctx.directory)
+      if (!entry) {
+        yield* sealLeases(ctx)
+        return yield* disposeContext(ctx)
+      }
+
+      const exit = yield* Deferred.await(entry.deferred).pipe(Effect.exit)
+      if (Exit.isFailure(exit)) return yield* removeEntry(ctx.directory, entry).pipe(Effect.asVoid)
+      if (exit.value !== ctx) return
+      yield* sealLeases(ctx)
+      yield* disposeEntry(ctx.directory, entry, ctx).pipe(Effect.asVoid)
+    })
+    // kilocode_change end
 
     const disposeDirectory = Effect.fn("InstanceStore.disposeDirectory")(function* (input: string) {
       const directory = FSUtil.resolve(input)
@@ -232,6 +326,7 @@ export const layer: Layer.Layer<Service, never, Project.Service | InstanceBootst
       load,
       reload,
       dispose,
+      disposeSafe, // kilocode_change - LOCK-007
       disposeDirectory,
       disposeAll,
       provide,

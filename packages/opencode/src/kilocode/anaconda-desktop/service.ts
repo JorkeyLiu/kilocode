@@ -2,6 +2,7 @@ import { Auth } from "@/auth"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { invalidateAfterProviderAuthChange } from "@/kilocode/server/provider-auth-lifecycle"
 import { GenerationGate } from "@/kilocode/server/generation-gate"
+import { ConfigConvergence } from "@/kilocode/server/config-convergence"
 import { InstanceStore } from "@/project/instance-store"
 import { ModelCache } from "@/provider/model-cache"
 import { Context, Effect, Layer, Redacted } from "effect"
@@ -44,6 +45,7 @@ export const layer = Layer.effect(
     const instances = yield* InstanceStore.Service
     const platform = yield* DesktopPlatform.Service
     const gate = yield* GenerationGate.Service
+    const convergence = yield* ConfigConvergence.Service
     const fs = yield* FSUtil.Service
 
     const status = Effect.fn("AnacondaDesktop.status")(function* () {
@@ -87,6 +89,7 @@ export const layer = Layer.effect(
         Effect.provideService(ModelCache.Service, cache),
         Effect.provideService(InstanceStore.Service, instances),
         Effect.provideService(GenerationGate.Service, gate),
+        Effect.provideService(ConfigConvergence.Service, convergence),
         Effect.provideService(FSUtil.Service, fs),
       )
       return found.status

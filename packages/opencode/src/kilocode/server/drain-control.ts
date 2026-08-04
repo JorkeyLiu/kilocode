@@ -81,6 +81,7 @@ const isQuestionID = (value: string): boolean => {
  * - POST /session/:sessionID/abort
  * - DELETE /session/:sessionID/queue/:messageID
  * - POST /permission/:requestID/reply
+ * - POST /session/:sessionID/permissions/:permissionID  (legacy permission reply, LOCK-007)
  * - POST /question/:requestID/reply
  * - POST /question/:requestID/reject
  *
@@ -106,6 +107,15 @@ export function classifyDrainControl(method: string, path: string): DrainControl
   }
   if (method === "POST" && raw.length === 3 && raw[0] === "permission" && raw[2] === "reply") {
     return Schema.is(PermissionV1.ID)(ids[1]) ? "permissionReply" : undefined
+  }
+  // LOCK-007: the legacy session-scoped permission reply
+  // (POST /session/:sessionID/permissions/:permissionID) is drain-control
+  // equivalent to the canonical /permission/:requestID/reply: both resolve the
+  // pending permission on the pre-barrier instance and unblock the generation
+  // that holds the drain. Classified as the same permissionReply kind so it
+  // shares the reply's snapshot-first admission and 409 no-snapshot semantics.
+  if (method === "POST" && raw.length === 4 && raw[0] === "session" && raw[2] === "permissions") {
+    return Schema.is(SessionID)(ids[1]) && Schema.is(PermissionV1.ID)(ids[3]) ? "permissionReply" : undefined
   }
   if (method === "POST" && raw.length === 3 && raw[0] === "question" && raw[2] === "reply") {
     return isQuestionID(ids[1]) ? "questionReply" : undefined

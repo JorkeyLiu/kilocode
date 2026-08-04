@@ -6,6 +6,7 @@ import { InstanceStore } from "@/project/instance-store"
 import { ModelCache } from "@/provider/model-cache"
 import { ControlLease } from "../../../src/kilocode/server/control-lease"
 import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
+import { ConfigConvergence } from "../../../src/kilocode/server/config-convergence"
 import { awaitRebuilds } from "../../../src/kilocode/server/config-rebuild"
 import type { InstanceContext } from "../../../src/project/instance-context"
 import { Effect, Layer, Option, Redacted, Ref } from "effect"
@@ -65,6 +66,7 @@ const fakeCtx: InstanceContext = {
 function storeLayer(events: Ref.Ref<string[]>) {
   return Layer.mergeAll(
     GenerationGate.defaultLayer,
+    ConfigConvergence.defaultLayer,
     ControlLease.defaultLayer,
     FSUtil.defaultLayer,
     Layer.mock(InstanceStore.Service)({
@@ -74,7 +76,7 @@ function storeLayer(events: Ref.Ref<string[]>) {
       load: () => Effect.succeed(fakeCtx),
       disposeAll: () => Ref.update(events, (items) => [...items, "dispose-all"]),
     }),
-  )
+  ).pipe(Layer.provideMerge(GenerationGate.defaultLayer))
 }
 
 it.live("sync atomically replaces the standard auth record and invalidates via the canonical coordinator", () =>

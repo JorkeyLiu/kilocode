@@ -10,12 +10,9 @@ import { ConfigRules } from "@/kilocode/server/routes/config-rules"
 import { KilocodeKeybinds } from "@/kilocode/tui/keybinds"
 import { KilocodeTuiConfig } from "@/kilocode/tui/config"
 import { InstanceHttpApi } from "@/server/routes/instance/httpapi/api"
-import { GenerationGate } from "@/kilocode/server/generation-gate"
-import { ConfigRebuild } from "@/kilocode/server/config-rebuild"
-import { withWriteTicket } from "@/kilocode/server/config-ticket"
+import { withColdMutation } from "@/kilocode/server/config-convergence"
 import { configFailure } from "@/kilocode/server/config-failure"
 import { executeTransaction } from "@/kilocode/server/config-transaction"
-import { InstanceStore } from "@/project/instance-store"
 import { Effect, Option } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
@@ -33,8 +30,6 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
     const config = yield* Config.Service
     const auth = yield* Auth.Service
     const account = yield* Account.Service
-    const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop)
-    const store = yield* InstanceStore.Service
 
     const overlay = Effect.fn("ConfigConsoleHttpApi.overlay")(function* (ctx: {
       query: typeof ConfigOverlayQuery.Type
@@ -89,23 +84,18 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
       if (body.scope === "global") {
         const hot = isHotPatch(patch)
         if (hot) return (yield* configFailure(config.updateGlobal(patch, { dispose: false }))).info
-        return yield* withWriteTicket({
-          acquire: gate.beginWriteGlobal(),
-          run: (ticket) =>
+        return yield* withColdMutation({
+          scope: "global",
+          run: () =>
             Effect.gen(function* () {
-              const dirs = yield* store.directories()
-              const olds = yield* Effect.forEach(dirs, (directory) =>
-                store.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
-              )
-              // emit:false defers the ConfigUpdated publish so withWriteTicket
-              // emits it only after the rebuild registration handoff owns the
-              // writer ticket (LOCK-002).
+              // emit:false defers the ConfigUpdated publish so withColdMutation
+              // emits it only after the convergence rebuild registration owns
+              // the fence (LOCK-002/003).
               const exit = yield* configFailure(config.updateGlobal(patch, { emit: false })).pipe(Effect.exit)
               if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
               return {
                 changed: exit.value.changed,
                 value: exit.value.info,
-                rebuild: exit.value.changed ? ConfigRebuild.rebuildGlobal(ticket, olds) : undefined,
                 event: exit.value.changed ? config.emitUpdated("global") : undefined,
               }
             }),
@@ -117,20 +107,18 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
         yield* configFailure(config.update(patch))
         return yield* config.get()
       }
-      return yield* withWriteTicket({
-        acquire: gate.beginWrite(instance.directory),
-        run: (ticket) =>
+      return yield* withColdMutation({
+        scope: { directory: instance.directory },
+        run: () =>
           Effect.gen(function* () {
-            const old = yield* store.snapshot(instance.directory)
-            // emit:false defers the ConfigUpdated publish so withWriteTicket
-            // emits it only after the rebuild registration handoff owns the
-            // writer ticket (LOCK-002).
+            // emit:false defers the ConfigUpdated publish so withColdMutation
+            // emits it only after the convergence rebuild registration owns
+            // the fence (LOCK-002/003).
             const exit = yield* configFailure(config.update(patch, { emit: false })).pipe(Effect.exit)
             if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
             return {
               changed: exit.value.changed,
               value: yield* config.get(),
-              rebuild: exit.value.changed ? ConfigRebuild.rebuildInstance(ticket, old) : undefined,
               event: exit.value.changed ? config.emitUpdated(instance.directory) : undefined,
             }
           }),

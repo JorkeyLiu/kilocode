@@ -364,12 +364,12 @@ const assertStreamed = (exit: Exit.Exit<PromptResult, unknown>) => {
   expect(exit.value.body.info?.role).toBe("assistant")
 }
 
-const overlayPermission = (dir: string, scope: "project") =>
+const overlayValue = (dir: string, scope: "project", key: string) =>
   Effect.promise(async () => {
-    const overlay = await json<{ effective: { permission?: Record<string, unknown> } }>(
+    const overlay = await json<{ effective: Record<string, unknown> }>(
       await request(dir, `/config/overlay?scope=${scope}`),
     )
-    return overlay.effective.permission ?? {}
+    return overlay.effective[key]
   })
 
 // ─── web handler path (Server.Default) ───────────────────────────────
@@ -406,7 +406,7 @@ describe("config rebuild deferral - web handler path", () => {
 
         // Control: a cold patch on the same directory does dispose — proving the
         // hot patch contributed nothing and the disposal machinery still works.
-        const cold = yield* patchOverlay(undefined, "global", { permission: { bash: "ask" } })
+        const cold = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
         expect(cold.status).toBe(200)
         yield* awaitWithTimeout(disposed.await, "cold control global disposed event did not arrive")
       }),
@@ -425,10 +425,10 @@ describe("config rebuild deferral - web handler path", () => {
         const { fiber, done } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        const patch = yield* patchOverlay(undefined, "global", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
         expect(patch.status).toBe(200)
         // Persisted before the stream completes.
-        expect(readGlobalConfig(f.global).permission).toEqual({ bash: "ask" })
+        expect(readGlobalConfig(f.global).autoupdate).toBe("notify")
 
         // Stream still in flight; nothing disposed yet. The instance middleware
         // gates every new request behind the active global writer, so a status
@@ -450,8 +450,7 @@ describe("config rebuild deferral - web handler path", () => {
         )
 
         // The next request reads the new config on the rebuilt instance.
-        const permission = yield* overlayPermission(f.project, "project")
-        expect(permission.bash).toBe("ask")
+        expect(yield* overlayValue(f.project, "project", "autoupdate")).toBe("notify")
       }),
     30_000,
   )
@@ -466,7 +465,7 @@ describe("config rebuild deferral - web handler path", () => {
         const { fiber: held } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        const patch = yield* patchOverlay(undefined, "global", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
         expect(patch.status).toBe(200)
 
         const done = yield* Deferred.make<void>()
@@ -474,8 +473,8 @@ describe("config rebuild deferral - web handler path", () => {
           Effect.promise(async () => {
             const response = await request(f.other, "/config/overlay?scope=project")
             expect(response.status).toBe(200)
-            const body = (await response.json()) as { effective: { permission?: Record<string, unknown> } }
-            expect(body.effective.permission?.bash).toBe("ask")
+            const body = (await response.json()) as { effective: { autoupdate?: unknown } }
+            expect(body.effective.autoupdate).toBe("notify")
             await Effect.runPromise(Deferred.succeed(done, void 0))
           }),
         )
@@ -501,9 +500,9 @@ describe("config rebuild deferral - web handler path", () => {
         const { fiber, done } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
-        expect(readProjectConfig(f.project).permission).toEqual({ bash: "ask" })
+        expect(readProjectConfig(f.project).autoupdate).toBe(false)
         // Stream still in flight; the status GET is gated behind the active
         // project writer, so the in-flight proof is the non-blocking done signal.
         expect(yield* isDone(done)).toBe(false)
@@ -519,14 +518,13 @@ describe("config rebuild deferral - web handler path", () => {
         )
 
         // The next request re-boots the instance and reads the persisted config.
-        const permission = yield* overlayPermission(f.project, "project")
-        expect(permission.bash).toBe("ask")
+        expect(yield* overlayValue(f.project, "project", "autoupdate")).toBe(false)
       }),
     30_000,
   )
 
   it.live(
-    "project overlay PATCH for an unseen directory waits behind an active global writer and loads the new config",
+    "project overlay PATCH for an unseen directory proceeds during a global convergence and loads the new config",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -536,35 +534,27 @@ describe("config rebuild deferral - web handler path", () => {
         const { fiber: held } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        // The global cold writer is active: it captured its rebuild identities
-        // (project only) and its rebuild drain is holding the barrier on the
-        // held stream.
-        const patch = yield* patchOverlay(undefined, "global", { permission: { bash: "ask" } })
+        // The global cold mutation is pending: it captured its convergence
+        // identities (project only) and its pass is draining on the held
+        // stream; the fence blocks new readers, not writers (LOCK-006).
+        const patch = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
         expect(patch.status).toBe(200)
-        expect(readGlobalConfig(f.global).permission).toEqual({ bash: "ask" })
+        expect(readGlobalConfig(f.global).autoupdate).toBe("notify")
         expect(yield* disposed.done).toBe(false)
 
-        // A project-scope overlay PATCH for an UNSEEN directory: its middleware
-        // intake must wait behind the global writer — no instance boot and no
-        // handler persistence while the barrier is held.
+        // A project-scope overlay PATCH for an UNSEEN directory: write intake
+        // must NOT wait on the convergence fence — it persists immediately and
+        // boots the unseen directory from the NEW global config (no stale
+        // pre-rebuild runtime remains).
         const queued = yield* forkPatch(f.other, "project", { model: "test/hot" })
-        yield* Effect.yieldNow
-        expect(yield* isDone(queued.done)).toBe(false)
-        const dirs = yield* Effect.promise(() =>
-          AppRuntime.runPromise(InstanceStore.Service.use((store) => store.directories())),
-        )
-        expect(dirs).not.toContain(f.other)
-
-        // Release the global rebuild; the queued PATCH then loads the NEW global
-        // config and applies its hot project patch.
-        yield* Deferred.succeed(gate, void 0)
-        yield* awaitWithTimeout(disposed.await, "global disposed event did not arrive after stream completion")
+        yield* awaitWithTimeout(Deferred.await(queued.done), "unseen-directory PATCH waited on the convergence fence")
         expect((yield* queued.result()).status).toBe(200)
 
-        // The unseen directory booted from the new global config — no stale
-        // pre-rebuild runtime remains.
-        const permission = yield* overlayPermission(f.other, "project")
-        expect(permission.bash).toBe("ask")
+        // Release the global pass; the unseen directory was already booted
+        // from the new global config.
+        yield* Deferred.succeed(gate, void 0)
+        yield* awaitWithTimeout(disposed.await, "global disposed event did not arrive after stream completion")
+        expect(yield* overlayValue(f.other, "project", "autoupdate")).toBe("notify")
         yield* Fiber.await(held)
       }),
     30_000,
@@ -575,12 +565,11 @@ describe("config rebuild deferral - web handler path", () => {
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
-        const queued = yield* forkPatch(f.other, "project", { permission: { bash: "ask" } })
+        const queued = yield* forkPatch(f.other, "project", { autoupdate: false })
         const result = yield* queued.result()
         expect(result.status).toBe(200)
-        expect(readProjectConfig(f.other).permission).toEqual({ bash: "ask" })
-        const permission = yield* overlayPermission(f.other, "project")
-        expect(permission.bash).toBe("ask")
+        expect(readProjectConfig(f.other).autoupdate).toBe(false)
+        expect(yield* overlayValue(f.other, "project", "autoupdate")).toBe(false)
       }),
     30_000,
   )
@@ -600,7 +589,7 @@ describe("config rebuild deferral - web handler path", () => {
         // behind the barrier, so create session B before the cold patch.
         const sessionB = yield* Effect.promise(() => createSession(f.project))
 
-        const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
 
         // Generation 2 queued on the same directory while the barrier is held:
@@ -619,8 +608,7 @@ describe("config rebuild deferral - web handler path", () => {
         // Generation 2 is admitted only after the disposal + reboot and completes.
         yield* Deferred.succeed(second.gate, void 0)
         assertStreamed(yield* second.result())
-        const permission = yield* overlayPermission(f.project, "project")
-        expect(permission.bash).toBe("ask")
+        expect(yield* overlayValue(f.project, "project", "autoupdate")).toBe(false)
       }),
     30_000,
   )
@@ -635,7 +623,7 @@ describe("config rebuild deferral - web handler path", () => {
         const { fiber: first } = yield* startHeldPrompt(f.project, session.id, firstGate)
         yield* waitForBusy(f.project, session.id)
 
-        expect((yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })).status).toBe(200)
+        expect((yield* patchOverlay(f.project, "project", { autoupdate: false })).status).toBe(200)
         const second = yield* forkPrompt(f.project, session.id, "second", "second")
         expect(yield* isDone(second.done)).toBe(false)
 
@@ -645,13 +633,13 @@ describe("config rebuild deferral - web handler path", () => {
 
         yield* Deferred.succeed(second.gate, void 0)
         assertStreamed(yield* second.result())
-        expect((yield* overlayPermission(f.project, "project")).bash).toBe("ask")
+        expect(yield* overlayValue(f.project, "project", "autoupdate")).toBe(false)
       }),
     30_000,
   )
 
   it.live(
-    "rebuild preserves an exact replacement made before the old drain completes",
+    "a reload replacement made during a cold convergence is converged before the fence releases",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
@@ -660,7 +648,7 @@ describe("config rebuild deferral - web handler path", () => {
         const { fiber: first } = yield* startHeldPrompt(f.project, session.id, firstGate)
         yield* waitForBusy(f.project, session.id)
 
-        expect((yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })).status).toBe(200)
+        expect((yield* patchOverlay(f.project, "project", { autoupdate: false })).status).toBe(200)
         const started = yield* Deferred.make<void>()
         const release = yield* Deferred.make<void>()
         // Failure-safe: if the test fails while the disposer is parked on
@@ -691,18 +679,34 @@ describe("config rebuild deferral - web handler path", () => {
             AppRuntime.runPromise(InstanceStore.Service.use((store) => store.reload({ directory: f.project }))),
           ),
         )
+        // The reload lands while the project convergence fence is active: it
+        // replaces the cached runtime (disposer call 1) and registers with the
+        // fence, so the pass must converge the replacement before releasing.
         yield* awaitWithTimeout(Deferred.await(started), "replacement reload did not reach disposal")
         yield* Effect.sync(fire)
         const replacement = yield* Fiber.join(reload)
 
         yield* Deferred.succeed(firstGate, void 0)
         assertStreamed(yield* Fiber.await(first))
+        // The fence cannot release until the registered reload replacement is
+        // converged (disposed + rebooted from current disk) — the replacement
+        // does NOT survive the mutation.
+        yield* awaitWithTimeout(
+          awaitRebuilds(),
+          "convergence never settled after the fence-active reload",
+          "10 seconds",
+        )
 
         const current = yield* Effect.promise(() =>
           AppRuntime.runPromise(InstanceStore.Service.use((store) => store.snapshot(f.project))),
         )
         expect(current._tag).toBe("Some")
-        if (current._tag === "Some") expect(current.value).toBe(replacement)
+        if (current._tag === "Some") {
+          expect(current.value).not.toBe(replacement)
+          // The reload's disposal of the pre-fence runtime (call 1) plus the
+          // convergence's disposal of the reload replacement (call 2).
+          expect(calls).toBe(2)
+        }
       }),
     30_000,
   )
@@ -720,11 +724,11 @@ describe("config rebuild deferral - web handler path", () => {
         }
         GlobalBus.on("event", listener)
         try {
-          const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+          const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
           expect(patch.status).toBe(200)
-          expect(readProjectConfig(f.project).permission).toEqual({ bash: "ask" })
+          expect(readProjectConfig(f.project).autoupdate).toBe(false)
           yield* awaitWithTimeout(disposed.await, "project rebuild did not complete after listener failure")
-          expect((yield* overlayPermission(f.project, "project")).bash).toBe("ask")
+          expect(yield* overlayValue(f.project, "project", "autoupdate")).toBe(false)
         } finally {
           GlobalBus.off("event", listener)
         }
@@ -770,7 +774,7 @@ describe("config rebuild deferral - web handler path", () => {
         )
         yield* awaitWithTimeout(f.llm.wait(1), "async prompt never hit the LLM", "20 seconds")
 
-        const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         // The async generation is still active: no disposal of its instance.
         expect(yield* instanceDisposed.done).toBe(false)
@@ -787,51 +791,53 @@ describe("config rebuild deferral - web handler path", () => {
   )
 
   it.live(
-    "two concurrent project cold PATCHes serialize without orphaning the runtime",
+    "two concurrent project cold PATCHes both acknowledge before release and coalesce into one rebuild",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
         const gate = yield* Deferred.make<void>()
-        const instanceDisposed = yield* eventCountLatch("server.instance.disposed", f.project, 2)
+        const instanceDisposed = yield* eventCountLatch("server.instance.disposed", f.project, 1)
         const session = yield* Effect.promise(() => createSession(f.project))
         const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
         yield* waitForBusy(f.project, session.id)
 
-        // Two cold project PATCHes race. The first becomes the writer and returns
-        // immediately; the second serializes behind it and must NOT return while
-        // the held stream blocks the first writer's drain.
-        const first = yield* forkPatch(f.project, "project", { permission: { bash: "ask" } })
-        const second = yield* forkPatch(f.project, "project", { permission: { edit: { "*": "ask" } } })
+        // Two cold project PATCHes race while the stream is held. LOCK-001:
+        // every save acknowledges after persistence — BOTH return while the
+        // held stream blocks the drain. LOCK-004: the burst coalesces into one
+        // convergence pass (one disposal) that boots the latest disk state.
+        const first = yield* forkPatch(f.project, "project", { autoupdate: false })
+        const second = yield* forkPatch(f.project, "project", { username: "cold-user" })
 
         expect((yield* first.result()).status).toBe(200)
-        expect(yield* isDone(second.done)).toBe(false)
+        expect((yield* second.result()).status).toBe(200)
+        // Neither save waited for the drain: no disposal has happened yet.
+        expect(yield* instanceDisposed.done).toBe(false)
+        // Both saves persisted: the last committed config wins on disk.
+        const saved = readProjectConfig(f.project)
+        expect(saved.autoupdate).toBe(false)
+        expect(saved.username).toBe("cold-user")
 
-        // Releasing the stream lets the first writer drain/dispose/reboot and
-        // then grants the second writer, which persists the final config.
+        // Releasing the stream lets the coalesced pass drain, dispose exactly
+        // once, and reboot with the latest persisted config.
         yield* Deferred.succeed(gate, void 0)
         assertStreamed(yield* Fiber.await(fiber))
-        expect((yield* second.result()).status).toBe(200)
+        yield* awaitWithTimeout(instanceDisposed.await, "the coalesced disposal did not arrive")
+        expect(yield* instanceDisposed.count).toBe(1)
 
-        // Both rebuilds disposed the directory's instance exactly once each.
-        yield* awaitWithTimeout(instanceDisposed.await, "two instance disposals did not arrive")
-        expect(yield* instanceDisposed.count).toBe(2)
-
-        // The last persisted config wins and the live runtime serves it.
-        const saved = readProjectConfig(f.project)
-        expect(saved.permission).toEqual({ bash: "ask", edit: { "*": "ask" } })
-        const permission = yield* overlayPermission(f.project, "project")
-        expect(permission.edit).toEqual({ "*": "ask" })
+        // The live runtime serves the last persisted config.
+        expect(yield* overlayValue(f.project, "project", "autoupdate")).toBe(false)
+        expect(yield* overlayValue(f.project, "project", "username")).toBe("cold-user")
       }),
     30_000,
   )
 
   it.live(
-    "concurrent global cold PATCHes serialize and rebuild every loaded directory",
+    "concurrent global cold PATCHes coalesce into one rebuild covering every loaded directory",
     () =>
       Effect.gen(function* () {
         const f = yield* fixture
         const gate = yield* Deferred.make<void>()
-        const globalDisposed = yield* eventCountLatch(Event.Disposed.type, undefined, 2)
+        const globalDisposed = yield* eventCountLatch(Event.Disposed.type, undefined, 1)
         const otherDisposed = yield* eventLatch("server.instance.disposed", f.other)
         const session = yield* Effect.promise(() => createSession(f.project))
         const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
@@ -842,25 +848,24 @@ describe("config rebuild deferral - web handler path", () => {
           await request(f.other, "/config/overlay?scope=project")
         })
 
-        const first = yield* forkPatch(undefined, "global", { permission: { bash: "ask" } })
-        const second = yield* forkPatch(undefined, "global", { permission: { edit: { "*": "ask" } } })
+        // Both global cold PATCHes acknowledge while the stream is held; the
+        // burst coalesces into one global convergence pass.
+        const first = yield* forkPatch(undefined, "global", { autoupdate: "notify" })
+        const second = yield* forkPatch(undefined, "global", { username: "cold-user" })
 
         expect((yield* first.result()).status).toBe(200)
-        expect(yield* isDone(second.done)).toBe(false)
+        expect((yield* second.result()).status).toBe(200)
+        expect(yield* globalDisposed.done).toBe(false)
 
         yield* Deferred.succeed(gate, void 0)
         assertStreamed(yield* Fiber.await(fiber))
-        expect((yield* second.result()).status).toBe(200)
-
-        // Two global rebuilds ran; the second covered both loaded directories.
-        yield* awaitWithTimeout(globalDisposed.await, "two global disposed events did not arrive")
-        expect(yield* globalDisposed.count).toBe(2)
+        // Exactly one coalesced global rebuild; it covers both loaded dirs.
+        yield* awaitWithTimeout(globalDisposed.await, "the coalesced global disposed event did not arrive")
+        expect(yield* globalDisposed.count).toBe(1)
         yield* awaitWithTimeout(otherDisposed.await, "second directory was not rebuilt by the global patch")
 
-        const projectPermission = yield* overlayPermission(f.project, "project")
-        expect(projectPermission.edit).toEqual({ "*": "ask" })
-        const otherPermission = yield* overlayPermission(f.other, "project")
-        expect(otherPermission.edit).toEqual({ "*": "ask" })
+        expect(yield* overlayValue(f.project, "project", "username")).toBe("cold-user")
+        expect(yield* overlayValue(f.other, "project", "username")).toBe("cold-user")
       }),
     30_000,
   )
@@ -877,14 +882,13 @@ describe("config rebuild deferral - web handler path", () => {
           await request(f.project, "/config/overlay?scope=project")
         })
 
-        const patch = yield* patchOverlay(undefined, "global", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
         expect(patch.status).toBe(200)
 
         // No stream anywhere: the drain is immediate and the rebuild runs
         // promptly, gated only by the event itself.
         yield* awaitWithTimeout(disposed.await, "immediate global disposal event did not arrive", "5 seconds")
-        const permission = yield* overlayPermission(f.project, "project")
-        expect(permission.bash).toBe("ask")
+        expect(yield* overlayValue(f.project, "project", "autoupdate")).toBe("notify")
       }),
     30_000,
   )
@@ -916,7 +920,7 @@ describe("config rebuild deferral - web handler path", () => {
         expect(yield* instanceDisposed.done).toBe(false)
 
         // The aborted ticket released the barrier: the next cold PATCH works.
-        const next = yield* patchOverlay(undefined, "global", { permission: { bash: "ask" } })
+        const next = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
         expect(next.status).toBe(200)
         yield* awaitWithTimeout(disposed.await, "barrier stayed held after failed persistence")
       }),
@@ -946,7 +950,7 @@ describe("config rebuild deferral - web handler path", () => {
         // behind the barrier, so create session B before the cold patch.
         const sessionB = yield* Effect.promise(() => createSession(f.project))
 
-        const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
 
         // The command is a generation entry (admission + snapshot): it queues
@@ -977,8 +981,7 @@ describe("config rebuild deferral - web handler path", () => {
 
         yield* Deferred.succeed(cmdGate, void 0)
         expect(yield* Fiber.join(cmdFiber)).toBe(200)
-        const permission = yield* overlayPermission(f.project, "project")
-        expect(permission.bash).toBe("ask")
+        expect(yield* overlayValue(f.project, "project", "autoupdate")).toBe(false)
       }),
     30_000,
   )
@@ -1127,10 +1130,10 @@ describe("config rebuild deferral - Server.listen path", () => {
         const patch = yield* send("", "/config/overlay", {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ scope: "global", set: { permission: { bash: "ask" } } }),
+          body: JSON.stringify({ scope: "global", set: { autoupdate: "notify" } }),
         })
         expect(patch.status).toBe(200)
-        expect(readGlobalConfig(f.global).permission).toEqual({ bash: "ask" })
+        expect(readGlobalConfig(f.global).autoupdate).toBe("notify")
         // The instance middleware gates new requests behind the global writer,
         // so the in-flight stream proof is the non-blocking done signal.
         expect(yield* isDone(done)).toBe(false)
@@ -1151,9 +1154,9 @@ describe("config rebuild deferral - Server.listen path", () => {
         const overlay = yield* send(f.project, "/config/overlay?scope=project")
         expect(overlay.status).toBe(200)
         const body = yield* Effect.promise(() => overlay.json()) as Effect.Effect<{
-          effective: { permission?: Record<string, unknown> }
+          effective: { autoupdate?: unknown }
         }>
-        expect(body.effective.permission?.bash).toBe("ask")
+        expect(body.effective.autoupdate).toBe("notify")
       }),
     30_000,
   )

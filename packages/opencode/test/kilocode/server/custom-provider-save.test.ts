@@ -60,6 +60,7 @@ import { GlobalBus } from "../../../src/bus/global"
 import { ModelCache } from "../../../src/provider/model-cache"
 import { Provider } from "../../../src/provider/provider"
 import { AppRuntime, makeAppLayer } from "../../../src/effect/app-runtime"
+import { Config } from "../../../src/config/config"
 import { KilocodeConfig } from "../../../src/kilocode/config/config"
 import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
 import { execute as executeSave } from "../../../src/kilocode/server/custom-provider-save"
@@ -1143,27 +1144,25 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
   )
 
   it.live(
-    "interrupted save cleans the ticket and lock artifacts; the next save works",
+    "interrupted save cleans the fence and lock artifacts; the next save works",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: (url) => saveConfig(url) })
         yield* Effect.sync(() => seedAuth("test"))
         const globalKey = KilocodeConfig.configDiscoveryGlobalKey()
 
-        // LOCK-001: the save acquires the GenerationGate global writer ticket
-        // BEFORE the config flock. Hold the ticket so the save blocks at the
-        // interruptible gate acquisition.
-        const gateSvc = yield* Effect.promise(() =>
-          AppRuntime.runPromise(
-            Effect.serviceOption(GenerationGate.Service).pipe(
-              Effect.map(Option.getOrElse(() => GenerationGate.noop)),
-            ),
-          ),
+        // LOCK-001: the save persists under the global discovery flock. Hold
+        // the flock so the save blocks at the interruptible flock wait — a
+        // convergence fence never blocks a save, so the flock is the only
+        // interruptible point the interruption can land on.
+        const config = yield* Effect.promise(() =>
+          AppRuntime.runPromise(Config.Service.use((svc) => Effect.succeed(svc))),
         )
-        const holder = yield* Effect.promise(() => AppRuntime.runPromise(gateSvc.beginWriteGlobal()))
+        const lockGate = yield* Effect.promise(() => AppRuntime.runPromise(Deferred.make<void>()))
+        const holder = AppRuntime.runFork(config.withLock(globalKey, Deferred.await(lockGate)))
 
         // Fork the save Effect directly so interruption propagates into the
-        // ticket wait (a request-harness promise cannot be interrupted).
+        // flock wait (a request-harness promise cannot be interrupted).
         const tx = AppRuntime.runFork(
           provideInstance(f.project)(
             executeSave({
@@ -1175,14 +1174,14 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
         )
 
         yield* Effect.gen(function* () {
-          // The save must still be blocked on the ticket: awaiting it times out
+          // The save must still be blocked on the flock: awaiting it times out
           // (Exit.Failure), proving it did not complete (and cannot commit).
           const blocked = yield* Effect.promise(() =>
             AppRuntime.runPromise(Effect.exit(Effect.timeout(Fiber.await(tx), "500 millis"))),
           )
           expect(blocked._tag).toBe("Failure")
 
-          // Interrupt: the ticket acquisition is interruptible, so this returns
+          // Interrupt: the flock wait is interruptible, so this returns
           // promptly (Exit.Success) and leaves no lock or temp artifacts.
           const interrupted = yield* Effect.promise(() =>
             AppRuntime.runPromise(Effect.exit(Effect.timeout(Fiber.interrupt(tx), "5 seconds"))),
@@ -1197,11 +1196,14 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
           expect(tmpFiles.length).toBe(0)
         }).pipe(
           Effect.ensuring(
-            Effect.promise(() => AppRuntime.runPromise(holder.release)).pipe(Effect.ignore),
+            Effect.promise(async () => {
+              await Effect.runPromise(Deferred.succeed(lockGate, void 0))
+              await Effect.runPromise(Fiber.join(holder)).catch(() => undefined)
+            }),
           ),
         )
 
-        // The holder ticket is released (by the finalizer above): the next save
+        // The holder flock is released (by the finalizer above): the next save
         // completes normally and leaves NO lock dirs behind.
         const followup = yield* saveVia(f.project, "test", {
           config: saveConfig("https://new.example/v1", { name: "Changed" }),

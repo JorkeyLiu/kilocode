@@ -54,6 +54,7 @@ import { GlobalBus } from "../../../src/bus/global"
 import { ModelCache } from "../../../src/provider/model-cache"
 import { Provider } from "../../../src/provider/provider"
 import { AppRuntime, makeAppLayer } from "../../../src/effect/app-runtime"
+import { Config } from "../../../src/config/config"
 import { KilocodeConfig } from "../../../src/kilocode/config/config"
 import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
 import { execute as executeDelete } from "../../../src/kilocode/server/custom-provider-delete"
@@ -967,46 +968,42 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
   )
 
   it.live(
-    "interrupted deletion cleans the ticket and lock artifacts; the next deletion works",
+    "interrupted deletion cleans the fence and lock artifacts; the next deletion works",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: custom, project: custom })
         yield* Effect.sync(() => seedAuth("test"))
         const globalKey = KilocodeConfig.configDiscoveryGlobalKey()
 
-        // LOCK-001: the deletion acquires the GenerationGate global writer
-        // ticket BEFORE the config flocks. Hold the ticket so the deletion
-        // blocks at the interruptible gate acquisition; the flock wait inside
-        // the ticket region is intentionally uninterruptible (the ticket is
-        // owned until rebuild registration).
-        const gateSvc = yield* Effect.promise(() =>
-          AppRuntime.runPromise(
-            Effect.serviceOption(GenerationGate.Service).pipe(
-              Effect.map(Option.getOrElse(() => GenerationGate.noop)),
-            ),
-          ),
+        // LOCK-001: the deletion persists under the global discovery flock.
+        // Hold the flock so the deletion blocks at the interruptible flock
+        // wait — a convergence fence never blocks a save, so the flock is the
+        // only interruptible point the interruption can land on.
+        const config = yield* Effect.promise(() =>
+          AppRuntime.runPromise(Config.Service.use((svc) => Effect.succeed(svc))),
         )
-        const holder = yield* Effect.promise(() => AppRuntime.runPromise(gateSvc.beginWriteGlobal()))
+        const lockGate = yield* Effect.promise(() => AppRuntime.runPromise(Deferred.make<void>()))
+        const holder = AppRuntime.runFork(config.withLock(globalKey, Deferred.await(lockGate)))
 
         // Fork the deletion Effect directly so interruption propagates into the
-        // ticket wait (a request-harness promise cannot be interrupted).
+        // flock wait (a request-harness promise cannot be interrupted).
         const tx = AppRuntime.runFork(
           provideInstance(f.project)(executeDelete({ providerID: "test" })),
         )
 
         // LOCK-005: every path (pass AND assertion failure) releases the held
-        // ticket. The holder is released by the finalizer before the follow-up
+        // flock. The holder is released by the finalizer before the follow-up
         // deletion runs, so a mid-test failure can never leak the barrier into
         // the next test.
         yield* Effect.gen(function* () {
-          // The deletion must still be blocked on the ticket: awaiting it times
+          // The deletion must still be blocked on the flock: awaiting it times
           // out (Exit.Failure), proving it did not complete (and cannot commit).
           const blocked = yield* Effect.promise(() =>
             AppRuntime.runPromise(Effect.exit(Effect.timeout(Fiber.await(tx), "500 millis"))),
           )
           expect(blocked._tag).toBe("Failure")
 
-          // Interrupt: the ticket acquisition is interruptible, so this returns
+          // Interrupt: the flock wait is interruptible, so this returns
           // promptly (Exit.Success) and leaves no lock or temp artifacts.
           const interrupted = yield* Effect.promise(() =>
             AppRuntime.runPromise(Effect.exit(Effect.timeout(Fiber.interrupt(tx), "5 seconds"))),
@@ -1024,11 +1021,14 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
           expect(tmpFiles.length).toBe(0)
         }).pipe(
           Effect.ensuring(
-            Effect.promise(() => AppRuntime.runPromise(holder.release)).pipe(Effect.ignore),
+            Effect.promise(async () => {
+              await Effect.runPromise(Deferred.succeed(lockGate, void 0))
+              await Effect.runPromise(Fiber.join(holder)).catch(() => undefined)
+            }),
           ),
         )
 
-        // The holder ticket is released (by the finalizer above): the next
+        // The holder flock is released (by the finalizer above): the next
         // deletion completes normally and leaves NO lock dirs behind (holder
         // release + deletion release both clean).
         const followup = yield* deleteVia(f.project, "test")

@@ -89,16 +89,22 @@ describe("isHotPatch", () => {
     expect(isHotPatch({ disabled_providers: ["anthropic"] })).toBe(false)
   })
 
-  test("returns false for permission key (cold)", () => {
-    expect(isHotPatch({ permission: { bash: "ask" } })).toBe(false)
+  test("returns true for permission key (LOCK-002)", () => {
+    expect(isHotPatch({ permission: { bash: "ask" } })).toBe(true)
   })
 
   test("returns false for mixed hot and cold keys", () => {
-    expect(isHotPatch({ model: "test", permission: { bash: "ask" } })).toBe(false)
+    expect(isHotPatch({ model: "test", provider: { openai: { apiKey: "sk-123" } } })).toBe(false)
   })
 
   test("returns false for agent mixed with a cold key (LOCK-001)", () => {
-    expect(isHotPatch({ agent: { code: { model: "test/model" } }, permission: { bash: "ask" } })).toBe(false)
+    expect(isHotPatch({ agent: { code: { model: "test/model" } }, provider: { openai: { apiKey: "sk-123" } } })).toBe(
+      false,
+    )
+  })
+
+  test("returns true for permission mixed with other hot keys (LOCK-002)", () => {
+    expect(isHotPatch({ model: "test", permission: { bash: "ask" } })).toBe(true)
   })
 
   test("returns false for unknown key (cold)", () => {
@@ -118,6 +124,7 @@ describe("isHotPatch", () => {
       "agent",
       "default_agent",
       "mode",
+      "permission", // LOCK-002
     ]
     for (const key of lockedHotKeys) {
       expect(isHotPatch({ [key]: "test" })).toBe(true)
@@ -125,7 +132,7 @@ describe("isHotPatch", () => {
   })
 
   test("all locked cold keys are classified cold", () => {
-    const lockedColdKeys = ["provider", "enabled_providers", "disabled_providers", "permission", "mcp"]
+    const lockedColdKeys = ["provider", "enabled_providers", "disabled_providers", "mcp"]
     for (const key of lockedColdKeys) {
       expect(isHotPatch({ [key]: "test" })).toBe(false)
     }

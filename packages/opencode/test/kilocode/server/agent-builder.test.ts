@@ -1,10 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import path from "path"
+import { Effect } from "effect"
 import * as Log from "@opencode-ai/core/util/log"
 import { Server } from "../../../src/server/server"
 import { GlobalBus, type GlobalEvent } from "../../../src/bus/global"
+import { awaitRebuilds } from "../../../src/kilocode/server/config-rebuild"
 import { resetDatabase } from "../../fixture/db"
 import { disposeAllInstances, tmpdir } from "../../fixture/fixture"
+import { markProjectConfigReady } from "../../fixture/plugin"
 
 void Log.init({ print: false })
 
@@ -22,6 +25,7 @@ type Agent = {
 }
 
 afterEach(async () => {
+  await Effect.runPromise(awaitRebuilds())
   await disposeAllInstances()
   await resetDatabase()
 })
@@ -53,6 +57,7 @@ function request(target: ReturnType<typeof app>, dir: string, input: string, ini
 describe("agent builder routes", () => {
   test("previews and saves project agent markdown", async () => {
     await using tmp = await tmpdir()
+    await markProjectConfigReady(tmp.path)
     const body = {
       id: "reviewer",
       scope: "project",
@@ -86,6 +91,9 @@ describe("agent builder routes", () => {
     expect(output.path).toBe(path.join(tmp.path, ".kilo", "agent", "reviewer.md"))
     expect(await Bun.file(output.path).text()).toBe(output.markdown)
 
+    // The convergence disposal is asynchronous: await the rebuild so the next
+    // request binds to the post-save runtime.
+    await Effect.runPromise(awaitRebuilds())
     const agents = (await (await req(tmp.path, "/agent")).json()) as Agent[]
     expect(agents.find((item) => item.name === "reviewer")).toMatchObject({
       mode: "subagent",
@@ -95,6 +103,7 @@ describe("agent builder routes", () => {
 
   test("saves without a duplicated body id", async () => {
     await using tmp = await tmpdir()
+    await markProjectConfigReady(tmp.path)
     const saved = await req(tmp.path, "/agent-builder/canonical", {
       method: "PUT",
       headers: { "content-type": "application/json" },
@@ -113,6 +122,7 @@ describe("agent builder routes", () => {
 
   test("rejects whitespace-only prompts", async () => {
     await using tmp = await tmpdir()
+    await markProjectConfigReady(tmp.path)
     const preview = await req(tmp.path, "/agent-builder/preview", {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -129,6 +139,7 @@ describe("agent builder routes", () => {
   for (const value of [false, true]) {
     test.serial(`${value ? "httpapi" : "legacy"} rejects whitespace-only prompts when saving`, async () => {
       await using tmp = await tmpdir()
+    await markProjectConfigReady(tmp.path)
       const saved = await request(app(value), tmp.path, "/agent-builder/empty", {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -143,6 +154,7 @@ describe("agent builder routes", () => {
 
     test.serial(`${value ? "httpapi" : "legacy"} rejects invalid route ids`, async () => {
       await using tmp = await tmpdir()
+    await markProjectConfigReady(tmp.path)
       const saved = await request(app(value), tmp.path, "/agent-builder/bad:id", {
         method: "PUT",
         headers: { "content-type": "application/json" },
@@ -164,6 +176,7 @@ describe("agent builder routes", () => {
   // refetching `app.agents`.
   test("disposes the instance after save so open TUIs hot-reload agents", async () => {
     await using tmp = await tmpdir()
+    await markProjectConfigReady(tmp.path)
 
     const events: GlobalEvent[] = []
     const handler = (event: GlobalEvent) => events.push(event)
@@ -175,6 +188,9 @@ describe("agent builder routes", () => {
         body: JSON.stringify({ scope: "project", prompt: "Hot reload me." }),
       })
       expect(saved.status).toBe(200)
+      // LOCK-007: the convergence pass owns the disposal — await the rebuild so
+      // the disposed event (the TUI reload trigger) has fired deterministically.
+      await Effect.runPromise(awaitRebuilds())
     } finally {
       GlobalBus.off("event", handler)
     }

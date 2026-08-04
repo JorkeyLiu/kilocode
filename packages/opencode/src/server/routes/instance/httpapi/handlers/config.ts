@@ -12,24 +12,21 @@ import { Effect, Option } from "effect" // kilocode_change
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi" // kilocode_change
 import { InstanceHttpApi } from "../api"
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
-import { ConfigRebuild } from "@/kilocode/server/config-rebuild" // kilocode_change
-import { withWriteTicket } from "@/kilocode/server/config-ticket" // kilocode_change
+import { withColdMutation } from "@/kilocode/server/config-convergence" // kilocode_change - canonical cold-save wrapper
 import { configFailure } from "@/kilocode/server/config-failure" // kilocode_change
 import { isHotPatch } from "@/kilocode/config/hot-keys" // kilocode_change
-import { InstanceStore } from "@/project/instance-store" // kilocode_change
 
 export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (handlers) =>
   Effect.gen(function* () {
     const providerSvc = yield* Provider.Service
     const configSvc = yield* Config.Service
     const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop) // kilocode_change
-    const store = yield* InstanceStore.Service // kilocode_change
 
     const get = Effect.fn("ConfigHttpApi.get")(function* () {
       return yield* configSvc.get()
     })
 
-    // kilocode_change start - Kilo rewrite: hot-patch path + write-ticket rebuild handoff
+    // kilocode_change start - Kilo rewrite: hot-patch path + convergence fence handoff
     const update = Effect.fn("ConfigHttpApi.update")(function* (ctx) {
       const instance = yield* InstanceState.context
       const hot = isHotPatch(ctx.payload as unknown as Record<string, unknown>)
@@ -37,20 +34,18 @@ export const configHandlers = HttpApiBuilder.group(InstanceHttpApi, "config", (h
         yield* configFailure(configSvc.update(ctx.payload))
         return ctx.payload
       }
-      return yield* withWriteTicket({
-        acquire: gate.beginWrite(instance.directory),
-        run: (ticket) =>
+      return yield* withColdMutation({
+        scope: { directory: instance.directory },
+        run: () =>
           Effect.gen(function* () {
-            const old = yield* store.snapshot(instance.directory)
-            // emit:false defers the ConfigUpdated publish
-            // so withWriteTicket emits it only after the rebuild registration
-            // handoff owns the writer ticket (LOCK-002).
+            // emit:false defers the ConfigUpdated publish so withColdMutation
+            // emits it only after the convergence rebuild registration owns
+            // the fence (LOCK-002/003).
             const exit = yield* configFailure(configSvc.update(ctx.payload, { emit: false })).pipe(Effect.exit)
             if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
             return {
               changed: exit.value.changed,
               value: ctx.payload,
-              rebuild: exit.value.changed ? ConfigRebuild.rebuildInstance(ticket, old) : undefined,
               event: exit.value.changed ? configSvc.emitUpdated(instance.directory) : undefined, // kilocode_change
             }
           }),

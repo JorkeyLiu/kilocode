@@ -40,6 +40,7 @@ import { KilocodeConfig } from "../../../src/kilocode/config/config"
 import { KilocodeAtomicWrite } from "../../../src/kilocode/config/atomic-write"
 import { ConfigTransaction } from "../../../src/kilocode/server/config-transaction"
 import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
+import { ConfigConvergence } from "../../../src/kilocode/server/config-convergence"
 import { InstanceStore } from "../../../src/project/instance-store"
 import { InstanceRef } from "../../../src/effect/instance-ref"
 import type { InstanceContext } from "../../../src/project/instance-context"
@@ -193,12 +194,12 @@ describe("config transaction - global-only", () => {
         await request(undefined, "/config/transaction", {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ global: { set: { permission: { bash: "ask" } } } }),
+          body: JSON.stringify({ global: { set: { autoupdate: "notify" } } }),
         }),
       )
 
-      expect(result.global.permission).toMatchObject({ bash: "ask" })
-      expect(readGlobalConfig(global.path).permission).toEqual({ bash: "ask" })
+      expect(result.global.autoupdate).toBe("notify")
+      expect(readGlobalConfig(global.path).autoupdate).toBe("notify")
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(true)
     } finally {
       events.dispose()
@@ -250,11 +251,11 @@ describe("config transaction - project-only", () => {
         await request(project.path, "/config/transaction", {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ project: { set: { permission: { bash: "ask" } } } }),
+          body: JSON.stringify({ project: { set: { autoupdate: false } } }),
         }),
       )
 
-      expect(result.effective.permission).toMatchObject({ bash: "ask" })
+      expect(result.effective.autoupdate).toBe(false)
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(true)
     } finally {
       events.dispose()
@@ -313,13 +314,13 @@ describe("config transaction - mixed", () => {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
             global: { set: { model: "test/global-cold" } },
-            project: { set: { permission: { bash: "ask" } } },
+            project: { set: { autoupdate: false } },
           }),
         }),
       )
 
       expect(result.global.model).toBe("test/global-cold")
-      expect(result.effective.permission).toMatchObject({ bash: "ask" })
+      expect(result.effective.autoupdate).toBe(false)
       expect(readGlobalConfig(global.path).model).toBe("test/global-cold")
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(true)
     } finally {
@@ -388,7 +389,7 @@ describe("config transaction - no-op", () => {
 // ─── Semantic no-op (audit fix: cold no-op hardcodes changed=true) ────
 
 describe("config transaction - semantic no-op", () => {
-  test.serial("cold patch that matches existing value does not rebuild", async () => {
+  test.serial("patch that matches existing value does not rebuild", async () => {
     const global = await tmpdir({ retain: true })
     tdirs.push(global)
     const project = await tmpdir({ git: true, retain: true })
@@ -400,7 +401,7 @@ describe("config transaction - semantic no-op", () => {
     const events = captureEvents()
 
     try {
-      // Send a cold patch (permission is cold) that sets the same value
+      // Send a hot patch (permission is hot, LOCK-002) that sets the same value
       const result = await json<TransactionResponse>(
         await request(project.path, "/config/transaction", {
           method: "PATCH",
@@ -879,14 +880,14 @@ describe("config transaction - LOCK-005 dynamic", () => {
 
       const globalOriginal = readGlobalConfig(global.path)
 
-      // Cold patch (permission) → the transaction takes one global writer
+      // Cold patch (autoupdate) → the transaction takes one global writer
       // ticket. The project commit fails; the global commit is compensated.
       const response = await request(project.path, "/config/transaction", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          global: { set: { permission: { bash: "ask" } } },
-          project: { set: { permission: { read: { "*": "deny" } } } },
+          global: { set: { autoupdate: "notify" } },
+          project: { set: { username: "cold-user" } },
         }),
       })
       // A failed commit surfaces as a defect (500), not a typed 400.
@@ -1087,11 +1088,11 @@ describe("config transaction - LOCK-005 dynamic", () => {
     const events = captureEvents()
 
     try {
-      // Both writers are COLD (permission) and both follow the canonical
-      // gate-then-flock order (LOCK-001). Under the previous flock-then-gate
-      // transaction order this pair could form a deadlock cycle with the
-      // legacy gate-then-flock overlay path; the timeout guard turns any
-      // regression into a clear failure instead of a hang.
+      // Both writers are COLD (autoupdate / username) and both follow the
+      // canonical gate-then-flock order (LOCK-001). Under the previous
+      // flock-then-gate transaction order this pair could form a deadlock cycle
+      // with the legacy gate-then-flock overlay path; the timeout guard turns
+      // any regression into a clear failure instead of a hang.
       const guard = new Promise<never>((_, reject) =>
         setTimeout(() => reject(new Error("legacy cold overlay + cold transaction deadlocked")), 15_000),
       )
@@ -1100,12 +1101,12 @@ describe("config transaction - LOCK-005 dynamic", () => {
           request(undefined, "/config/overlay", {
             method: "PATCH",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ scope: "global", set: { permission: { read: { "*": "deny" } } } }),
+            body: JSON.stringify({ scope: "global", set: { autoupdate: "notify" } }),
           }),
           request(undefined, "/config/transaction", {
             method: "PATCH",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ global: { set: { permission: { bash: "ask" } } } }),
+            body: JSON.stringify({ global: { set: { username: "cold-user" } } }),
           }),
         ]),
         guard,
@@ -1116,8 +1117,8 @@ describe("config transaction - LOCK-005 dynamic", () => {
       // Both writes survive: the second writer merged onto the first's result
       // under the shared global lock.
       const saved = readGlobalConfig(global.path)
-      expect(saved.permission).toMatchObject({ bash: "ask" })
-      expect(saved.permission).toMatchObject({ read: { "*": "deny" } })
+      expect(saved.autoupdate).toBe("notify")
+      expect(saved.username).toBe("cold-user")
     } finally {
       events.dispose()
     }
@@ -1197,11 +1198,15 @@ describe("config transaction - LOCK-005 dynamic", () => {
       }),
     )
 
+    const gateAndCoordinator = Layer.mergeAll(
+      GenerationGate.defaultLayer,
+      ConfigConvergence.defaultLayer,
+    ).pipe(Layer.provideMerge(GenerationGate.defaultLayer))
     const rt = ManagedRuntime.make(
       Layer.provideMerge(
         Layer.provideMerge(
           Layer.provideMerge(configMock, FSUtil.defaultLayer),
-          GenerationGate.defaultLayer,
+          gateAndCoordinator,
         ),
         Layer.mock(InstanceStore.Service, {
           directories: () => Effect.succeed([]),
@@ -1226,8 +1231,8 @@ describe("config transaction - LOCK-005 dynamic", () => {
       rt.runPromise(
         provideInstance(project.path)(
           ConfigTransaction.executeTransaction({
-            global: { set: { permission: { bash: "ask" } } },
-            project: { set: { permission: { read: { "*": "deny" } } } },
+            global: { set: { autoupdate: "notify" } },
+            project: { set: { username: "cold-user" } },
           }),
         ).pipe(Effect.exit),
       )
@@ -1251,7 +1256,7 @@ describe("config transaction - LOCK-005 dynamic", () => {
       failReads = false
       const followup = await runTx()
       expect(followup._tag).toBe("Success")
-      expect(fs.readFileSync(projectFile, "utf8")).toContain("deny")
+      expect(fs.readFileSync(projectFile, "utf8")).toContain("cold-user")
     } finally {
       await rt.dispose()
     }
@@ -1388,7 +1393,7 @@ describe("config transaction - held stream + real listener (LOCK-005)", () => {
         const cold = yield* send(f.project, "/config/transaction", {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ global: { set: { permission: { bash: "ask" } } } }),
+          body: JSON.stringify({ global: { set: { autoupdate: "notify" } } }),
         })
         expect(cold.status).toBe(200)
         expect(yield* disposed.done).toBe(false)

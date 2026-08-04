@@ -3,39 +3,36 @@
  *
  * Every provider-auth mutation (root auth set/remove, provider OAuth callback,
  * Anaconda Desktop sync) routes through `invalidateAfterProviderAuthChange`.
- * The coordinator owns the GenerationGate/ConfigRebuild lifecycle so no caller
+ * The coordinator owns the ConfigConvergence fence/pass lifecycle so no caller
  * can dispose an active instance outside generation drain:
  *
- * 1. Acquire ONE global writer ticket (LOCK-001) before any mutation — new work
- *    waits behind the barrier while the mutation is persisted.
- * 2. Capture loaded instance snapshots after ticket acquisition, before
- *    persistence visibility — the exact pre-barrier identities the rebuild
- *    disposes only once their readers and control leases drain.
- * 3. Capture the exact auth-file artifact (bytes + mode) BEFORE the mutation
+ * 1. Raise the global admission fence (LOCK-001) before any mutation — new
+ *    work waits behind the fence while the mutation is persisted.
+ * 2. Capture the exact auth-file artifact (bytes + mode) BEFORE the mutation
  *    (LOCK-004) so any post-capture failure — mutation, cleanup commit, OR
  *    cache-clear — can restore it.
- * 4. Run the caller's mutation under the ticket (LOCK-002: reads of the
+ * 3. Run the caller's mutation under the fence (LOCK-002: reads of the
  *    current credential must happen here, immediately before the write), then
  *    optionally prepare/commit the disabled_providers cleanup under the same
- *    ticket and the canonical global discovery lock (LOCK-003), then clear the
+ *    fence and the canonical global discovery lock (LOCK-003), then clear the
  *    ModelCache immediately.
- * 5. Register exactly one ControlLease-aware global rebuild and return BEFORE
- *    active generations drain (LOCK-002): the forked rebuild disposes old
- *    instances after their readers drain; control operations stay usable
- *    against the pre-barrier runtime. A deferred ConfigUpdated event (cleanup
- *    only) is published by withWriteTicket after rebuild registration.
+ * 4. Commit the obligation — exactly one ControlLease-aware global convergence
+ *    pass drains readers, disposes captured pre-fence instances, and boots
+ *    replacements — and return BEFORE active generations drain (LOCK-002):
+ *    control operations stay usable against the pre-fence runtime. A deferred
+ *    ConfigUpdated event (cleanup only) is published by withColdMutation after
+ *    the commit registered the rebuild.
  *
- * Failure semantics (LOCK-004): a snapshot failure aborts the ticket and
+ * Failure semantics (LOCK-004): a snapshot failure aborts the fence and
  * propagates — no mutation, no disposal, no success claim. ANY mutation
  * failure AFTER the snapshot was captured (including a failure that persisted
  * part of the mutation) restores the exact auth artifact (via the canonical
- * byte snapshot/restore API) before the ticket aborts and the defect
+ * byte snapshot/restore API) before the fence aborts and the defect
  * propagates. A cleanup-commit or cache-clear failure after a successful
  * mutation restores the exact auth artifact AND every committed config target,
  * then invalidates config caches. If the compensation itself fails, the
  * surfaced defect is `ConfigRollbackFailed` carrying both the primary and the
- * rollback detail. Rebuild registration failure surfaces as a request failure
- * via the ticket handoff in `withWriteTicket`.
+ * rollback detail.
  */
 
 import { randomUUID } from "crypto"
@@ -44,14 +41,11 @@ import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { KiloViewers } from "@/kilocode/presence/service"
 import { KilocodeConfig } from "@/kilocode/config/config"
-import { InstanceStore } from "@/project/instance-store"
 import { ModelCache } from "@/provider/model-cache"
 import { Cause, Effect, Option } from "effect"
-import { ConfigRebuild } from "./config-rebuild"
 import { ConfigRollbackFailed } from "./config-transaction"
 import { restoreTarget } from "./config-rollback"
-import { withWriteTicket } from "./config-ticket"
-import { GenerationGate } from "./generation-gate"
+import { withColdMutation } from "./config-convergence"
 
 // kilocode_change - drop the old presence socket; callers invoke this for the "kilo" provider only
 export const invalidatePresence = Effect.fn("KiloServer.invalidatePresence")(function* () {
@@ -99,24 +93,24 @@ const cleanupDisabled = (
 
 /**
  * Mutate provider auth and invalidate the runtime under one canonical global
- * writer ticket (LOCK-001/002/003). `mutate` is the caller's persistence step
- * (auth set/remove, OAuth callback, Anaconda auth sync); it runs under the
- * ticket so no generation can observe a partially-applied auth change.
+ * convergence fence (LOCK-001/002/003). `mutate` is the caller's persistence
+ * step (auth set/remove, OAuth callback, Anaconda auth sync); it runs under
+ * the fence so no generation can observe a partially-applied auth change.
  *
  * LOCK-002: callers that derive a new credential from the CURRENT auth record
  * (e.g. the organization switch) must perform the read inside `mutate`,
  * immediately before the write, so a concurrent newer credential is never
- * overwritten by a pre-ticket snapshot.
+ * overwritten by a pre-fence snapshot.
  *
  * LOCK-003: when `options.cleanupDisabled` is set (root auth set and OAuth
  * callback only), the coordinator additionally removes `providerID` from the
- * global `disabled_providers` list under the same ticket and the canonical
+ * global `disabled_providers` list under the same fence and the canonical
  * global discovery lock — one backend mutation with exactly one rebuild. The
  * config is prepared/committed with emit:false; any commit/auth/cache failure
  * compensates the exact auth artifact and every committed config target before
- * the ticket aborts. A single deferred ConfigUpdated event is returned and
- * published only after rebuild registration. Auth remove/Anaconda/org callers
- * do not request cleanup.
+ * the fence aborts. A single deferred ConfigUpdated event is returned and
+ * published only after the obligation commit registered the rebuild. Auth
+ * remove/Anaconda/org callers do not request cleanup.
  *
  * Returns `true` after persistence + rebuild registration, before generation
  * drain.
@@ -131,8 +125,6 @@ export const invalidateAfterProviderAuthChange = <E, R>(
     mutate: Effect.Effect<unknown, E, R>,
     options?: { cleanupDisabled?: boolean },
   ) {
-    const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop)
-    const store = Option.getOrElse(yield* Effect.serviceOption(InstanceStore.Service), () => undefined)
     // kilocode_change - LOCK-003: Config.Service is required only when a caller
     // requests disabled_providers cleanup; Anaconda/org/auth-remove callers
     // stay free of the dependency (serviceOption adds no env requirement).
@@ -140,17 +132,10 @@ export const invalidateAfterProviderAuthChange = <E, R>(
     const cache = yield* ModelCache.Service
     const fs = yield* FSUtil.Service
 
-    return yield* withWriteTicket({
-      acquire: gate.beginWriteGlobal(),
-      run: (ticket) =>
+    return yield* withColdMutation({
+      scope: "global",
+      run: () =>
         Effect.gen(function* () {
-          // LOCK-001/003: pre-barrier identities captured after ticket
-          // acquisition and before persistence visibility.
-          const dirs = store ? yield* store.directories() : []
-          const olds = yield* Effect.forEach(dirs, (directory) =>
-            store!.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
-          )
-          // LOCK-004: exact auth-file artifact captured before the mutation.
           const snap = yield* Auth.snapshotFile(fs).pipe(Effect.orDie)
           // LOCK-003: committed config targets from the disabled-provider
           // cleanup, restored by compensation on any later failure.
@@ -204,7 +189,7 @@ export const invalidateAfterProviderAuthChange = <E, R>(
           }
 
           // LOCK-003: disabled_providers cleanup (auth set/OAuth only). Under
-          // the same ticket and the canonical global discovery lock, prepare/
+          // the same fence and the canonical global discovery lock, prepare/
           // commit removal of the target ID with emit:false; unrelated IDs are
           // preserved.
           if (options?.cleanupDisabled) {
@@ -224,27 +209,23 @@ export const invalidateAfterProviderAuthChange = <E, R>(
             // LOCK-003: record the committed config artifact immediately after
             // commit so a later cache-clear failure compensates it exactly —
             // reverse-restore the target, invalidate config caches, and let the
-            // ticket abort with zero events (the deferred ConfigUpdated is only
-            // published by withWriteTicket after a successful rebuild handoff).
+            // fence abort with zero events (the deferred ConfigUpdated is only
+            // published by withColdMutation after a successful commit).
             if (cleanupExit.value.artifact) committed.push(cleanupExit.value.artifact)
             cleanupEvent = cleanupExit.value.event
           }
 
-          // LOCK-001: clear the model cache immediately, still under the ticket.
+          // LOCK-001: clear the model cache immediately, still under the fence.
           const clearExit = yield* Effect.exit(cache.clear(providerID))
           if (clearExit._tag === "Failure") {
             yield* compensate(clearExit.cause)
             return yield* Effect.failCause(clearExit.cause)
           }
-          // LOCK-001/002/003: register exactly one ControlLease-aware global
-          // rebuild; the response returns before active generations drain.
-          // The store instance was resolved above; without a store there are
-          // no instances to dispose, so no rebuild is registered and the
-          // ticket is simply released.
-          const rebuild = store
-            ? ConfigRebuild.rebuildGlobal(ticket, olds).pipe(Effect.provideService(InstanceStore.Service, store))
-            : undefined
-          return { changed: true, value: true as const, rebuild, event: cleanupEvent }
+          // LOCK-001/002/003: the obligation commit registers exactly one
+          // ControlLease-aware global convergence pass; the response returns
+          // before active generations drain. Without a store the coordinator
+          // has no instances to dispose, so the pass only boots fresh state.
+          return { changed: true, value: true as const, event: cleanupEvent }
         }),
     })
   })(providerID, mutate, options)

@@ -300,11 +300,14 @@ const withInstance = (dir: string) => <A, E, R>(effect: Effect.Effect<A, E, R>) 
 // ─── classifier unit coverage (LOCK-006) ─────────────────────────────
 
 describe("classifyDrainControl exact segment classification", () => {
-  it.effect("classifies the five mandatory control paths", () =>
+  it.effect("classifies the six mandatory control paths", () =>
     Effect.gen(function* () {
       expect(classifyDrainControl("POST", "/session/ses_a/abort")).toBe("abort")
       expect(classifyDrainControl("DELETE", "/session/ses_a/queue/msg_b")).toBe("cancelQueued")
       expect(classifyDrainControl("POST", "/permission/per_1/reply")).toBe("permissionReply")
+      // LOCK-007: the legacy session-scoped permission reply is drain-control
+      // equivalent to the canonical /permission/:requestID/reply.
+      expect(classifyDrainControl("POST", "/session/ses_a/permissions/per_1")).toBe("permissionReply")
       expect(classifyDrainControl("POST", "/question/que_1/reply")).toBe("questionReply")
       expect(classifyDrainControl("POST", "/question/que_1/reject")).toBe("questionReject")
     }))
@@ -320,6 +323,14 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/question/que_1/reject/extra")).toBeUndefined()
       expect(classifyDrainControl("PATCH", "/config")).toBeUndefined()
       expect(classifyDrainControl("POST", "/session/ses_a/message")).toBeUndefined()
+      // legacy permission reply near-matches (LOCK-007)
+      expect(classifyDrainControl("GET", "/session/ses_a/permissions/per_1")).toBeUndefined()
+      expect(classifyDrainControl("DELETE", "/session/ses_a/permissions/per_1")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/session/ses_a/permissions/per_1/extra")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/session/ses_a/permission/per_1")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/sessions/ses_a/permissions/per_1")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/session/ses_a/permissions/")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/session/ses_a/permissions")).toBeUndefined()
       // traversal / dot shapes
       expect(classifyDrainControl("POST", "/session/../abort")).toBeUndefined()
       expect(classifyDrainControl("POST", "/session/./abort")).toBeUndefined()
@@ -327,6 +338,7 @@ describe("classifyDrainControl exact segment classification", () => {
       // trailing slash does not extend the shape
       expect(classifyDrainControl("POST", "/session/ses_a/abort/")).toBeUndefined()
       expect(classifyDrainControl("POST", "/permission/per_1/reply/")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/session/ses_a/permissions/per_1/")).toBeUndefined()
     }))
 
   it.effect("rejects malformed leading, empty, and extra segments fail-closed", () =>
@@ -366,6 +378,9 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/permission/not-a-permission/reply")).toBeUndefined()
       expect(classifyDrainControl("POST", "/question/not-a-question/reply")).toBeUndefined()
       expect(classifyDrainControl("POST", "/question/not-a-question/reject")).toBeUndefined()
+      // legacy permission reply validates BOTH variable segments (LOCK-007)
+      expect(classifyDrainControl("POST", "/session/not-a-session/permissions/per_1")).toBeUndefined()
+      expect(classifyDrainControl("POST", "/session/ses_a/permissions/not-a-permission")).toBeUndefined()
     }))
 
   it.effect("accepts harmlessly-encoded valid ID segments", () =>
@@ -374,6 +389,7 @@ describe("classifyDrainControl exact segment classification", () => {
       expect(classifyDrainControl("POST", "/session/ses%5F1/abort")).toBe("abort")
       expect(classifyDrainControl("DELETE", "/session/ses%5F1/queue/msg%5F2")).toBe("cancelQueued")
       expect(classifyDrainControl("POST", "/permission/per%5F1/reply")).toBe("permissionReply")
+      expect(classifyDrainControl("POST", "/session/ses%5F1/permissions/per%5F1")).toBe("permissionReply")
       expect(classifyDrainControl("POST", "/question/que%5F1/reject")).toBe("questionReject")
     }))
 })
@@ -398,7 +414,7 @@ describe("drain-control bypass - web handler path", () => {
         // normal data-plane request that is writer-blocked, so awaiting it inline
         // after the PATCH would deadlock the test before the abort is ever issued.
         const sessionB = yield* Effect.promise(() => createSession(f.project))
-        const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* isDone(done)).toBe(false)
         expect(yield* instanceDisposed.done).toBe(false)
@@ -474,7 +490,7 @@ describe("drain-control bypass - web handler path", () => {
 
         // Cold PATCH: writer drains on the running stream; the queued slot is
         // still pending.
-        const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* isDone(queued.done)).toBe(false)
 
@@ -535,7 +551,7 @@ describe("drain-control bypass - web handler path", () => {
         const requestID = asked.received[0]!.id
 
         // Cold PATCH: writer drains on the held stream.
-        const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* instanceDisposed.done).toBe(false)
 
@@ -545,6 +561,68 @@ describe("drain-control bypass - web handler path", () => {
             method: "POST",
             headers: { "content-type": "application/json" },
             body: JSON.stringify({ reply: "once" }),
+          })
+          return response.status
+        })
+        expect(reply).toBe(200)
+
+        // The pending ask resolved with the reply.
+        yield* awaitWithTimeout(Fiber.join(askFiber), "permission ask never resolved")
+
+        // Release the stream: writer rebuilds once.
+        yield* Deferred.succeed(gate, void 0)
+        yield* Fiber.await(fiber)
+        yield* awaitWithTimeout(instanceDisposed.await, "instance disposal did not arrive after release")
+      }),
+    30_000,
+  )
+
+  it.live(
+    "legacy session permission reply completes during an active cold writer drain (LOCK-007)",
+    () =>
+      Effect.gen(function* () {
+        const f = yield* fixture
+        const gate = yield* Deferred.make<void>()
+        const instanceDisposed = yield* eventLatch("server.instance.disposed", f.project)
+        const session = yield* Effect.promise(() => createSession(f.project))
+        const { fiber } = yield* startHeldPrompt(f.project, session.id, gate)
+        yield* waitForBusy(f.project, session.id)
+
+        // A real pending permission request on the pre-barrier instance.
+        const asked = yield* eventCapture<{ id: string }>("permission.asked", f.project)
+        const askFiber = yield* Effect.forkDetach(
+          withInstance(f.project)(
+            Permission.Service.use((svc) =>
+              svc.ask({
+                sessionID: SessionID.make(session.id),
+                permission: "bash",
+                patterns: ["npm test"],
+                metadata: { command: "npm test" },
+                always: [],
+                ruleset: [],
+              }),
+            ),
+          ),
+        )
+        yield* pollWithTimeout(
+          Effect.sync(() => (asked.received.length > 0 ? (true as const) : undefined)),
+          "permission.asked never arrived",
+        )
+        const requestID = asked.received[0]!.id
+
+        // Cold PATCH: writer drains on the held stream.
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
+        expect(patch.status).toBe(200)
+        expect(yield* instanceDisposed.done).toBe(false)
+
+        // The legacy session-scoped reply must complete during the barrier:
+        // it is drain-control equivalent to the canonical permission reply and
+        // unblocks the same generation the drain is holding.
+        const reply = yield* Effect.promise(async () => {
+          const response = await request(f.project, `/session/${session.id}/permissions/${requestID}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ response: "once" }),
           })
           return response.status
         })
@@ -596,7 +674,7 @@ describe("drain-control bypass - web handler path", () => {
         const requestID = asked.received[0]!.id
 
         // Cold PATCH: writer drains on the held stream.
-        const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* instanceDisposed.done).toBe(false)
 
@@ -671,7 +749,7 @@ describe("drain-control bypass - web handler path", () => {
         const [replyID, rejectID] = [asked.received[0]!.id, asked.received[1]!.id]
 
         // Cold PATCH: writer drains on the held stream.
-        const patch = yield* patchOverlay(f.project, "project", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(f.project, "project", { autoupdate: false })
         expect(patch.status).toBe(200)
         expect(yield* instanceDisposed.done).toBe(false)
 
@@ -726,7 +804,7 @@ describe("drain-control bypass - web handler path", () => {
         })
 
         // Global cold PATCH: the barrier covers every directory.
-        const patch = yield* patchOverlay(undefined, "global", { permission: { bash: "ask" } })
+        const patch = yield* patchOverlay(undefined, "global", { autoupdate: "notify" })
         expect(patch.status).toBe(200)
 
         // abort for the no-instance directory: no gate, no boot, no synthetic
@@ -765,7 +843,7 @@ describe("drain-control bypass - web handler path", () => {
           const response = await request(undefined, "/global/config", {
             method: "PATCH",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ permission: { bash: "ask" } }),
+            body: JSON.stringify({ autoupdate: false }),
           })
           return response.status
         })
@@ -870,7 +948,7 @@ describe("drain-control bypass - Server.listen path", () => {
         const patch = yield* send("", "/config/overlay", {
           method: "PATCH",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ scope: "global", set: { permission: { bash: "ask" } } }),
+          body: JSON.stringify({ scope: "global", set: { autoupdate: "notify" } }),
         })
         expect(patch.status).toBe(200)
         expect(yield* isDone(done)).toBe(false)

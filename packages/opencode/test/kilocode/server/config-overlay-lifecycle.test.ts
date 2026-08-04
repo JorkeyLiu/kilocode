@@ -554,7 +554,7 @@ describe("config overlay lifecycle - cold patches", () => {
     }
   })
 
-  test.serial("permission cold patch writes config and emits config-updated", async () => {
+  test.serial("permission hot patch writes config and emits config-updated (LOCK-002)", async () => {
     const global = await tmpdir({ retain: true })
     tdirs.push(global)
     const project = await tmpdir({ retain: true })
@@ -574,7 +574,7 @@ describe("config overlay lifecycle - cold patches", () => {
       )
 
       const saved = readGlobalConfig(global.path)
-      // permission is merged with the seeded permission.bash:allow
+      // permission is hot (LOCK-002) and merged with the seeded permission.bash:allow
       expect(saved.permission).toMatchObject({ edit: { "*": "ask" }, bash: "allow" })
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(true)
     } finally {
@@ -606,7 +606,7 @@ describe("config overlay lifecycle - cold patches", () => {
             scope: "global",
             set: {
               model: "anthropic/claude-sonnet-4-20250514", // hot
-              permission: { bash: "ask" }, // cold
+              autoupdate: false, // cold
             },
           }),
         }),
@@ -614,7 +614,7 @@ describe("config overlay lifecycle - cold patches", () => {
 
       const saved = readGlobalConfig(global.path)
       expect(saved.model).toBe("anthropic/claude-sonnet-4-20250514")
-      expect(saved.permission).toEqual({ bash: "ask" })
+      expect(saved.autoupdate).toBe(false)
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(true)
       // Cold path: disposal is marked via markInstanceForDisposal in handler.
       // In this test pattern (direct handler invocation without HTTP middleware),

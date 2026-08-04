@@ -65,6 +65,7 @@ import { MoveSession } from "@opencode-ai/core/control-plane/move-session" // ki
 import { PtyTicket } from "@opencode-ai/core/pty/ticket" // kilocode_change - listener routes are provided by AppLayer
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
 import { ControlLease } from "@/kilocode/server/control-lease" // kilocode_change
+import { ConfigConvergence } from "@/kilocode/server/config-convergence" // kilocode_change - canonical cold-mutation coordinator
 
 // kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers
 type ModelsLayer = Layer.Layer<CoreModelsDev.Service | KiloModelsDev.Service, never, never>
@@ -81,6 +82,7 @@ const buildCoreLayer = (
     // kilocode_change
     Npm.defaultLayer,
     GenerationGate.defaultLayer, // kilocode_change - one process-wide writer gate
+    ConfigConvergence.defaultLayer, // kilocode_change - one process-wide cold-mutation convergence coordinator
     ControlLease.defaultLayer, // kilocode_change - one process-wide control lifetime lease coordinator
     FSUtil.defaultLayer,
     Database.defaultLayer,
@@ -100,11 +102,13 @@ const buildCoreLayer = (
     Skill.defaultLayer, // kilocode_change - canonical AppLayer service
     Discovery.defaultLayer, // kilocode_change - canonical AppLayer service
     // kilocode_change start - LOCK-001: resolve ProviderAuth.layer's Auth/Plugin
-    // requirements against the canonical defaults already in this merge — the
-    // same layer nodes, so no duplicate service instances are constructed.
+    // and ConfigConvergence's GenerationGate requirements against the canonical
+    // defaults already in this merge — the same layer nodes, so no duplicate
+    // service instances are constructed.
   ).pipe(
     Layer.provideMerge(Auth.defaultLayer),
     Layer.provideMerge(Plugin.defaultLayer),
+    Layer.provideMerge(GenerationGate.defaultLayer), // kilocode_change - ConfigConvergence depends on the canonical gate
     // kilocode_change end
   ) // kilocode_change
 

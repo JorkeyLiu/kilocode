@@ -50,8 +50,15 @@ export const disposeMiddleware: HttpMiddleware.HttpMiddleware = (effect) =>
     const marked = disposeAfterResponse.get(request.source)
     if (!marked) return response
     disposeAfterResponse.delete(request.source)
-    yield* Effect.uninterruptible(marked.bridge.run(marked.store.dispose(marked.ctx))).pipe(
+    // kilocode_change start - LOCK-007: the lease-aware disposal primitive seals
+    // and drains the exact identity's control + write leases before the
+    // disposers run (serviceOption fallback inside InstanceStore keeps stores
+    // without the coordinator on the old direct path). The bridge runs in the
+    // captured request context, which carries the canonical AppRuntime
+    // ControlLease.
+    yield* Effect.uninterruptible(marked.bridge.run(marked.store.disposeSafe(marked.ctx))).pipe(
       Effect.catchCause((cause) => Effect.sync(() => log.warn("instance disposal failed", { cause }))),
     )
+    // kilocode_change end
     return response
   })

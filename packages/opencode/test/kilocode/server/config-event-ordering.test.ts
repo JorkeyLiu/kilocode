@@ -142,7 +142,7 @@ describe("cold ConfigUpdated publish ordering (LOCK-002/003/004)", () => {
       const response = request(project.path, "/config", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ permission: { bash: "ask" } } as Config.Info),
+        body: JSON.stringify({ autoupdate: false } as Config.Info),
       })
       // The response only completes after the deferred event effect ran, so
       // the latch and the response are equivalent gates; await both.
@@ -164,7 +164,7 @@ describe("cold ConfigUpdated publish ordering (LOCK-002/003/004)", () => {
       const response = request(undefined, "/global/config", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ permission: { bash: "ask" } } as Config.Info),
+        body: JSON.stringify({ autoupdate: "notify" } as Config.Info),
       })
       await Promise.all([json(await response), probe.wait()])
       expectRegistrationBeforeEvent(probe.order)
@@ -184,7 +184,7 @@ describe("cold ConfigUpdated publish ordering (LOCK-002/003/004)", () => {
       const response = request(undefined, "/config/overlay", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: "global", set: { permission: { bash: "ask" } } }),
+        body: JSON.stringify({ scope: "global", set: { autoupdate: "notify" } }),
       })
       await Promise.all([json(await response), probe.wait()])
       expectRegistrationBeforeEvent(probe.order)
@@ -207,7 +207,7 @@ describe("cold ConfigUpdated publish ordering (LOCK-002/003/004)", () => {
       const response = request(project.path, "/config/overlay", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ scope: "project", set: { permission: { bash: "ask" } } }),
+        body: JSON.stringify({ scope: "project", set: { autoupdate: false } }),
       })
       await Promise.all([json(await response), probe.wait()])
       expectRegistrationBeforeEvent(probe.order)
@@ -227,7 +227,7 @@ describe("cold ConfigUpdated publish ordering (LOCK-002/003/004)", () => {
       const response = request(undefined, "/config/transaction", {
         method: "PATCH",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ global: { set: { permission: { bash: "ask" } } } }),
+        body: JSON.stringify({ global: { set: { autoupdate: "notify" } } }),
       })
       await Promise.all([json(await response), probe.wait()])
       expectRegistrationBeforeEvent(probe.order)
@@ -251,8 +251,8 @@ describe("cold ConfigUpdated publish ordering (LOCK-002/003/004)", () => {
         method: "PATCH",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({
-          global: { set: { permission: { bash: "ask" } } },
-          project: { set: { permission: { edit: { "*": "ask" } } } },
+          global: { set: { autoupdate: "notify" } },
+          project: { set: { username: "cold-user" } },
         }),
       })
       await Promise.all([json(await response), probe.wait()])
@@ -349,7 +349,8 @@ describe("config no-op emits none and registers no rebuild (LOCK-003)", () => {
     const probe = installOrderProbe()
 
     try {
-      // Cold key set to its existing value: prepared as a semantic no-op.
+      // Cold key set to its existing value: prepared as a semantic no-op
+      // (the same value is a no-op whether the key is hot or cold).
       const result = await json<{ global: Config.Info }>(
         await request(undefined, "/config/transaction", {
           method: "PATCH",

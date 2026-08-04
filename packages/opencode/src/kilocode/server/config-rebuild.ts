@@ -31,9 +31,22 @@ import type { GenerationGate } from "./generation-gate"
 import { ControlLease } from "./control-lease"
 import { emitGlobalDisposed } from "@/server/global-lifecycle"
 
-const logRebuildFailure = Effect.fnUntraced(function* (message: string, cause: unknown) {
+/** Exported for the ConfigConvergence coordinator passes. */
+export const logRebuildFailure = Effect.fnUntraced(function* (message: string, cause: unknown) {
   yield* Effect.logError(message).pipe(Effect.annotateLogs({ cause }))
 })
+
+// kilocode_change start - shared tracker hooks used by both forkRebuild and the
+// ConfigConvergence coordinator (commit registers a rebuild, the pass completion
+// removes it). Exported for the coordinator module.
+export const trackRebuildStarted = Effect.fnUntraced(function* () {
+  yield* Effect.sync(() => rebuildStarted())
+})
+
+export const trackRebuildCompleted = Effect.fnUntraced(function* () {
+  yield* Effect.sync(() => rebuildCompleted())
+})
+// kilocode_change end
 
 // kilocode_change start - rebuild completion tracking for test isolation
 /**
@@ -90,8 +103,12 @@ function rebuildCompleted() {
   }
 }
 
-/** Record a rebuild failure for observability. Called by rebuildInstance/rebuildGlobal. */
-function recordRebuildFailure(message: string, cause: unknown) {
+/**
+ * Record a rebuild failure for observability. Called by rebuildInstance/
+ * rebuildGlobal and the ConfigConvergence coordinator passes. Exported so the
+ * convergence passes record failures for awaitRebuilds observability.
+ */
+export function recordRebuildFailure(message: string, cause: unknown) {
   rebuildFailures.push({ message, cause })
 }
 

@@ -7,15 +7,13 @@ import {
 import { described } from "@/server/routes/instance/httpapi/groups/metadata"
 import { Schema } from "effect"
 import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, OpenApi } from "effect/unstable/httpapi"
+import { AgentBuilderID } from "./agent-builder-id"
+
+export { AgentBuilderID } from "./agent-builder-id"
 
 const Scope = Schema.Literals(["global", "project"])
 const Mode = Schema.Literals(["primary", "subagent", "all"])
 const Prompt = Schema.String.check(Schema.isPattern(/\S/))
-export const AgentBuilderID = Schema.String.check(
-  Schema.isMinLength(1),
-  Schema.isMaxLength(64),
-  Schema.isPattern(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/),
-)
 const Body = {
   scope: Schema.optional(Scope),
   description: Schema.optional(Schema.String),

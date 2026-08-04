@@ -7,6 +7,7 @@ import { emitGlobalDisposed } from "@/server/global-lifecycle" // kilocode_chang
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
 import { ConfigRebuild } from "@/kilocode/server/config-rebuild" // kilocode_change
 import { withWriteTicket } from "@/kilocode/server/config-ticket" // kilocode_change
+import { withColdMutation } from "@/kilocode/server/config-convergence" // kilocode_change - canonical cold-save wrapper
 import { configFailure } from "@/kilocode/server/config-failure" // kilocode_change
 import { isHotPatch } from "@/kilocode/config/hot-keys" // kilocode_change
 import { InstanceStore } from "@/project/instance-store" // kilocode_change
@@ -102,28 +103,25 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const configUpdate = Effect.fn("GlobalHttpApi.configUpdate")(function* (ctx) {
       const hot = isHotPatch(ctx.payload as Record<string, unknown>)
       if (hot) return (yield* configFailure(config.updateGlobal(ctx.payload, { dispose: false }))).info
-      return yield* withWriteTicket({
-        acquire: gate.beginWriteGlobal(),
-        run: (ticket) =>
+      // kilocode_change start - cold global save routed through the canonical
+      // ConfigConvergence fence; emits only after the rebuild registration owns
+      // the fence (LOCK-002/003).
+      return yield* withColdMutation({
+        scope: "global",
+        run: () =>
           Effect.gen(function* () {
-            const dirs = store ? yield* store.directories() : []
-            const olds = yield* Effect.forEach(dirs, (directory) =>
-              store!.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
-            )
             // kilocode_change start - emit:false defers the ConfigUpdated publish
-            // so withWriteTicket emits it only after the rebuild registration
-            // handoff owns the writer ticket (LOCK-002).
             const exit = yield* configFailure(config.updateGlobal(ctx.payload, { emit: false })).pipe(Effect.exit)
             // kilocode_change end
             if (exit._tag === "Failure") return yield* Effect.failCause(exit.cause)
             return {
               changed: exit.value.changed,
               value: exit.value.info,
-              rebuild: exit.value.changed ? ConfigRebuild.rebuildGlobal(ticket, olds) : undefined,
               event: exit.value.changed ? config.emitUpdated("global") : undefined, // kilocode_change
             }
           }),
       })
+      // kilocode_change end
     })
 
     const dispose = Effect.fn("GlobalHttpApi.dispose")(function* () {
