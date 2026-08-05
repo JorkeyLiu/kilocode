@@ -181,6 +181,8 @@ export function mockSessionValue(overrides?: {
     closeReason: () => overrides?.closeReason,
     statusText: () => (status === "idle" ? undefined : "Thinking…"),
     busySince: () => (status === "busy" ? Date.now() - 2000 : undefined),
+    timingFor: () => undefined,
+    setTimingSnapshots: noop,
     loading: () => false,
     loadingOlderMessages: () => false,
     hasOlderMessages: () => false,

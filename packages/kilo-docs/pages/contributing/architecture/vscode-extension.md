@@ -99,6 +99,22 @@ session worktree path -> SDK directory -> CLI directory-routing middleware -> In
 
 Agent Manager persists state in `.kilo/agent-manager.json` and worktrees under `.kilo/worktrees/`. Startup migration moves Agent Manager-owned data from legacy `.kilocode/` paths when target items do not already exist and repairs git worktree refs.
 
+### Durable session runtime timer
+
+The right-bottom working indicator in Agent Manager shows a session's cumulative active-generation runtime. The extension host owns the timing state and the webview only renders extension snapshots.
+
+| Aspect | Behavior |
+|---|---|
+| Owner | Extension host (`src/agent-manager/session-timing.ts`), a vscode-free module driven by `session.status` SSE events |
+| Durable storage | VS Code `workspaceState` via the Host `Store` contract (`VscodeHost.workspaceStore`) — a versioned key, not `.kilo/agent-manager.json` |
+| Counting | Only non-idle statuses count (busy, retry, offline). Idle settles the segment; duplicate events are idempotent |
+| Persistence | Writes on status boundaries only, never per display tick |
+| Shutdown | `AgentManagerProvider.disposeAsync()` settles active segments and awaits the durable write, so normal shutdown does not count later downtime |
+| Pruning | Forget/close in Agent Manager and backend `session.deleted` prune the session's timing entry |
+| Webview bridge | Snapshots ride `agentManager.state` pushes and land in the shared `SessionContext` (`timingFor`/`setTimingSnapshots`). The shared `WorkingIndicator` prefers a snapshot when present (cumulative + running segment) and falls back to the legacy `busySince` timestamp otherwise, keeping sidebar behavior unchanged |
+
+An abnormal crash can leave a stale active-segment marker persisted; the backend supplies no segment start timestamp, so the marker is preserved conservatively and the segment keeps counting until the next status event settles it.
+
 ## State boundaries
 
 Directory-keyed CLI state is isolated by worktree path. Process-owned state remains shared because all Agent Manager sessions use one CLI process. Snapshot implementation state is directory-keyed, but slow-snapshot prompt guard belongs to shared `Snapshot.Service` scope. Managed Agent Manager prompts pass `snapshotInitialization: "wait"` so slow baseline setup waits without interrupting concurrently started sessions.

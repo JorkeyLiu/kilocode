@@ -11,8 +11,10 @@ import type { SnapshotFileDiff } from "@kilocode/sdk/v2/client"
 import type { DiffImage } from "../diff/types"
 import type { RunStatus } from "./run/manager"
 import type { TerminalFont } from "./terminal-font"
+import type { SessionTimingMap } from "./session-timing"
 
 export type { TerminalFont }
+export type { SessionTimingEntry } from "./session-timing"
 
 // ---------------------------------------------------------------------------
 // Shared payload types
@@ -47,6 +49,7 @@ interface StateMessage {
   type: "agentManager.state"
   worktrees: never[]
   sessions: ManagedSession[]
+  timing?: SessionTimingMap
   tabOrder?: Record<string, string[]>
   sessionsCollapsed?: boolean
   sidebarCollapsed?: boolean

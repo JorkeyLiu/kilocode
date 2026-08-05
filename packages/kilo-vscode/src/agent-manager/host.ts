@@ -28,6 +28,16 @@ export interface OutputHandle {
 }
 
 // ---------------------------------------------------------------------------
+// Durable key-value store
+// ---------------------------------------------------------------------------
+
+/** Minimal durable key-value store. Backed by VS Code workspaceState in VscodeHost. */
+export interface Store {
+  get<T>(key: string): T | undefined
+  update(key: string, value: unknown): Thenable<void>
+}
+
+// ---------------------------------------------------------------------------
 // Session provider (abstracts KiloProvider interactions)
 // ---------------------------------------------------------------------------
 
@@ -108,6 +118,9 @@ export interface Host {
 
   /** Read the user's automatic branch naming preferences. */
   autoBranchNaming(): { enabled: boolean; prefix: string }
+
+  /** Per-workspace durable storage (VS Code workspaceState in the adapter). */
+  readonly workspaceStore: Store
 
   /** Show an error notification. */
   showError(msg: string): void

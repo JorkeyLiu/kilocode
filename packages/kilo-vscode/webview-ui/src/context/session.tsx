@@ -49,6 +49,7 @@ import type {
   McpStatusEntry,
   MessageLoadMode,
   ToolPart,
+  SessionTimingEntry,
 } from "../types/messages"
 import { removeSessionPermissions, upsertPermission } from "./permission-queue"
 import {
@@ -155,6 +156,12 @@ interface SessionContextValue {
   loadingOlderMessages: Accessor<boolean>
   hasOlderMessages: Accessor<boolean>
   messageMutation: Accessor<MessageMutation | undefined>
+
+  // Cumulative active-generation runtime snapshots pushed by the Agent Manager
+  // extension host. Empty in sidebar/editor webviews, which keep the legacy
+  // busySince behavior.
+  timingFor: (sessionID: string) => SessionTimingEntry | undefined
+  setTimingSnapshots: (map: Record<string, SessionTimingEntry>) => void
 
   // Messages for current session
   messages: Accessor<Message[]>
@@ -338,6 +345,10 @@ export const SessionProvider: ParentComponent = (props) => {
   const [statusMap, setStatusMap] = createStore<Record<string, SessionStatusInfo>>({})
   const [closeMap, setCloseMap] = createStore<Record<string, SessionCloseReason | undefined>>({})
   const [busySinceMap, setBusySinceMap] = createStore<Record<string, number>>({})
+  // Cumulative runtime snapshots from the Agent Manager extension host
+  // (sessionID -> settled ms + optional running segment start). Replaced on
+  // every agentManager.state push; empty outside Agent Manager.
+  const [timingMap, setTimingMap] = createStore<Record<string, SessionTimingEntry>>({})
   const [submissionMap, setSubmissionMap] = createStore<Record<string, number>>({})
   const pendingSubmissions = new Map<string, string>()
   const aborts = createAbortState()
@@ -364,6 +375,7 @@ export const SessionProvider: ParentComponent = (props) => {
     const id = currentSessionID() ?? draftSessionID()
     return id ? busySinceMap[id] : undefined
   }
+  const timingFor = (sessionID: string): SessionTimingEntry | undefined => timingMap[sessionID]
   const submitting = () => {
     const id = currentSessionID() ?? draftSessionID()
     return id ? isSubmitting(id) : false
@@ -2055,6 +2067,8 @@ export const SessionProvider: ParentComponent = (props) => {
       clearClose(sessionID)
       // prettier-ignore
       setBusySinceMap(produce((map) => { delete map[sessionID] }))
+      // prettier-ignore
+      setTimingMap(produce((map) => { delete map[sessionID] }))
       if (currentSessionID() === sessionID) {
         setCurrentSessionID(undefined)
         setLoading(false)
@@ -2954,6 +2968,8 @@ export const SessionProvider: ParentComponent = (props) => {
     closeReason,
     statusText,
     busySince,
+    timingFor,
+    setTimingSnapshots: (map) => setTimingMap(map),
     submitting,
     isSubmitting,
     loading,

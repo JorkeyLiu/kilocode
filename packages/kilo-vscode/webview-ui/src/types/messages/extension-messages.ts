@@ -31,6 +31,7 @@ import type {
   ReviewComment,
   RunStatus,
   SectionState,
+  SessionTimingEntry,
   TerminalFont,
   WorktreeErrorCode,
   WorktreeFileDiff,
@@ -653,6 +654,7 @@ export interface AgentManagerStateMessage {
   type: "agentManager.state"
   worktrees: WorktreeState[]
   sessions: ManagedSessionState[]
+  timing?: Record<string, SessionTimingEntry>
   sections?: SectionState[]
   staleWorktreeIds?: string[]
   tabOrder?: Record<string, string[]>

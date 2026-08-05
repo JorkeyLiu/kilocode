@@ -751,6 +751,7 @@ const AgentManagerContent: Component = () => {
       if (msg.type === "agentManager.state") {
         const state = msg as AgentManagerStateMessage
         setManagedSessions(state.sessions)
+        if (state.timing) session.setTimingSnapshots(state.timing)
         if (state.isGitRepo !== undefined) setIsGitRepo(state.isGitRepo)
         if (!sessionsLoaded()) setSessionsLoaded(true)
         if (state.isGitRepo === false && !sessionsLoaded()) setSessionsLoaded(true)

@@ -108,6 +108,17 @@ export interface ManagedSessionState {
   createdAt: string
 }
 
+/**
+ * Per-session cumulative active-generation runtime, pushed by the extension
+ * host. Must stay in sync with src/agent-manager/session-timing.ts.
+ */
+export interface SessionTimingEntry {
+  /** Settled milliseconds across all completed active segments. */
+  elapsedMs: number
+  /** Epoch ms when the current active segment started; absent when idle/settled. */
+  activeStart?: number
+}
+
 export interface BranchInfo {
   name: string
   isLocal: boolean

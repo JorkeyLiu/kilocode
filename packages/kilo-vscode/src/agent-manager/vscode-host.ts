@@ -6,7 +6,7 @@
  */
 
 import * as vscode from "vscode"
-import type { Host, PanelContext, OutputHandle, SessionProvider, Disposable } from "./host"
+import type { Host, PanelContext, OutputHandle, SessionProvider, Disposable, Store } from "./host"
 import type { KiloConnectionService } from "../services/cli-backend"
 import { KiloProvider } from "../KiloProvider"
 import { PLATFORM, SNAPSHOT_INITIALIZATION } from "./constants"
@@ -179,6 +179,11 @@ export class VscodeHost implements Host {
       enabled: cfg.get("autoBranchNaming", true),
       prefix: cfg.get("branchPrefix", ""),
     }
+  }
+
+  /** Per-workspace durable store backed by VS Code workspaceState. */
+  get workspaceStore(): Store {
+    return this.context.workspaceState
   }
 
   showError(msg: string): void {

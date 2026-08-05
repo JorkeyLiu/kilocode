@@ -6,6 +6,7 @@ type Manager = {
   connectionService: { getClient: () => unknown }
   managedSessions: Map<string, unknown>
   panelSessions: Set<string>
+  timing: { forget: (sessionId: string) => void }
   getRoot: () => string
   pushState: () => void
   log: (...args: unknown[]) => void
@@ -28,6 +29,7 @@ function createManager() {
   manager.connectionService = { getClient: () => client }
   manager.managedSessions = new Map([["s1", { id: "s1" }]])
   manager.panelSessions = new Set(["s1"])
+  manager.timing = { forget: mock(() => undefined) }
   manager.getRoot = () => "/repo"
   manager.pushState = mock(() => undefined)
   manager.log = mock(() => undefined)
@@ -62,6 +64,7 @@ describe("AgentManagerProvider closeSession", () => {
     manager.connectionService = { getClient: () => client }
     manager.managedSessions = new Map([["s1", { id: "s1" }]])
     manager.panelSessions = new Set(["s1"])
+    manager.timing = { forget: mock(() => undefined) }
     manager.getRoot = () => "/repo"
     manager.pushState = mock(() => undefined)
     manager.log = mock(() => undefined)

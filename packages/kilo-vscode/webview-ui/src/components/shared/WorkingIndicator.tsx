@@ -10,7 +10,14 @@ import { Button } from "@kilocode/kilo-ui/button"
 import { useSession } from "../../context/session"
 import { useLanguage } from "../../context/language"
 import { useVSCode } from "../../context/vscode"
-import { tracksElapsed } from "./working-indicator-utils"
+import {
+  cumulativeElapsedMs,
+  formatElapsedSeconds,
+  showIdleCumulative,
+  showSpinner,
+  showWorkingIndicator,
+  tracksElapsedMs,
+} from "./working-indicator-utils"
 
 export const WorkingIndicator: Component = () => {
   const session = useSession()
@@ -20,20 +27,32 @@ export const WorkingIndicator: Component = () => {
   const [elapsed, setElapsed] = createSignal(0)
   const [retryCountdown, setRetryCountdown] = createSignal(0)
 
+  // Agent Manager cumulative snapshot for the current session (undefined in
+  // sidebar/editor webviews, which keep the legacy busySince behavior).
+  const snapshot = () => {
+    const id = session.currentSessionID() ?? session.draftSessionID()
+    return id ? session.timingFor(id) : undefined
+  }
+
+  // Settled Agent Manager snapshot: keep showing the final cumulative duration
+  // while the session is idle.
+  const idleCumulative = () => showIdleCumulative(snapshot())
+
+  const elapsedMs = () => cumulativeElapsedMs(snapshot(), session.busySince(), Date.now())
+
   createEffect(() => {
     const since = session.busySince()
     const status = session.status()
+    const submitting = session.submitting()
 
-    if (!tracksElapsed(status, session.submitting(), since)) {
+    if (!tracksElapsedMs(status, submitting, since, snapshot())) {
       setElapsed(0)
       return
     }
 
-    setElapsed(Math.floor((Date.now() - since) / 1000))
-
-    const id = setInterval(() => {
-      setElapsed(Math.floor((Date.now() - since) / 1000))
-    }, 1000)
+    const tick = () => setElapsed(Math.floor(elapsedMs() / 1000))
+    tick()
+    const id = setInterval(tick, 1000)
 
     onCleanup(() => clearInterval(id))
   })
@@ -70,13 +89,7 @@ export const WorkingIndicator: Component = () => {
     return session.statusText() ?? language.t("ui.sessionTurn.status.thinking")
   }
 
-  const formatElapsed = () => {
-    const s = elapsed()
-    if (s < 60) return `${s}s`
-    const m = Math.floor(s / 60)
-    const rem = s % 60
-    return `${m}m ${rem}s`
-  }
+  const formatElapsed = () => formatElapsedSeconds(elapsed())
 
   const blocked = () => {
     const id = session.currentSessionID()
@@ -99,14 +112,16 @@ export const WorkingIndicator: Component = () => {
 
   return (
     <div class="working-indicator-slot">
-      <Show when={session.submitting() || (session.status() !== "idle" && !blocked())}>
+      <Show when={showWorkingIndicator(session.submitting(), session.status(), blocked(), snapshot())}>
         <div class="working-indicator">
-          <Spinner />
-          <span class="working-text">{statusText()}</span>
+          <Show when={showSpinner(snapshot(), session.submitting())}>
+            <Spinner />
+            <span class="working-text">{statusText()}</span>
+          </Show>
           <Show when={elapsed() > 0}>
             <span class="working-elapsed">{formatElapsed()}</span>
           </Show>
-          <Show when={isRetrying()}>
+          <Show when={isRetrying() && !idleCumulative()}>
             <Button
               variant="secondary"
               size="small"

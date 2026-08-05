@@ -21,6 +21,7 @@ import { startSession } from "./mcp-warmup"
 import { readTerminalFont, watchTerminalFont } from "./terminal-font"
 import { buildKeybindingMap } from "./format-keybinding"
 import { Semaphore } from "./semaphore"
+import { SessionTiming } from "./session-timing"
 import { PLATFORM } from "./constants"
 import type { AgentManagerOutMessage, AgentManagerInMessage, ManagedSession } from "./types"
 import type { Host, PanelContext, OutputHandle, Disposable } from "./host"
@@ -39,7 +40,9 @@ export class AgentManagerProvider implements Disposable {
   private cachedLocalStats: { type: "agentManager.localStats"; stats: LocalStats } | undefined
   private unsubTool: (() => void) | undefined
   private unsubStatus: (() => void) | undefined
+  private unsubDeleted: (() => void) | undefined
   private unsubFont: (() => void) | undefined
+  private timing: SessionTiming
   private closing: Promise<void> | undefined
   private onVisibilityChange: ((visible: boolean) => void) | undefined
   // Tracks sessions owned by this panel until they are explicitly closed.
@@ -62,6 +65,7 @@ export class AgentManagerProvider implements Disposable {
     private readonly connectionService: KiloConnectionService,
   ) {
     this.outputChannel = host.createOutput("Kilo Agent Manager")
+    this.timing = new SessionTiming(host.workspaceStore)
     this.terminalManager = new SessionTerminalManager(
       (msg) => this.outputChannel.appendLine(`[SessionTerminal] ${msg}`),
       createTerminalHost(),
@@ -111,10 +115,39 @@ export class AgentManagerProvider implements Disposable {
       (event) => (event as { type?: string }).type === "session.status",
       (event) => this.onSessionStatus(event),
     )
+    // Prune timing state when the backend deletes a session (external delete,
+    // sidebar delete, or CLI/TUI cascade). Sessions forgotten/closed in the
+    // Agent Manager prune via forgetSession/onCloseSession instead.
+    this.unsubDeleted = this.connectionService.onEventFiltered(
+      (event) => (event as { type?: string }).type === "session.deleted",
+      (event) => this.onSessionDeleted(event),
+    )
   }
 
   private onSessionStatus(event: unknown): void {
-    // No-op without branch naming controller
+    const props = (event as { properties?: { sessionID?: string; status?: { type?: string } } }).properties
+    const sid = props?.sessionID
+    const type = props?.status?.type
+    if (!sid || !type) return
+    // Persist and push only on actual timing boundaries. Duplicate active and
+    // duplicate idle events are idempotent (onStatus reports no change) and
+    // must not trigger a redundant full Agent Manager state push.
+    const changed = this.timing.onStatus(sid, type)
+    if (!changed) return
+    // Push fresh snapshots on status boundaries so the open panel renders the
+    // settled cumulative value as soon as a segment ends. Posting to a closed
+    // panel is a no-op; the panel bootstrap reads the full map on request.
+    this.pushState()
+  }
+
+  /**
+   * Prune timing state when the backend deletes a session (external delete,
+   * sidebar delete, or CLI/TUI cascade). Sessions forgotten/closed in the
+   * Agent Manager prune via forgetSession/onCloseSession instead.
+   */
+  private onSessionDeleted(event: unknown): void {
+    const sid = (event as { properties?: { sessionID?: string } }).properties?.sessionID
+    if (sid) this.timing.forget(sid)
   }
 
   private log(...args: unknown[]) {
@@ -264,6 +297,7 @@ export class AgentManagerProvider implements Disposable {
         if (!this.managedSessions.has(m.sessionId)) this.addSession(m.sessionId)
       } else {
         this.managedSessions.delete(m.sessionId)
+        this.timing.forget(m.sessionId)
       }
       return null
     }
@@ -544,6 +578,7 @@ export class AgentManagerProvider implements Disposable {
       this.log(`Failed to stop session processes for ${sessionId}:`, err)
     }
     this.managedSessions.delete(sessionId)
+    this.timing.forget(sessionId)
     this.pushState()
   }
 
@@ -617,6 +652,7 @@ export class AgentManagerProvider implements Disposable {
       type: "agentManager.state",
       worktrees: [],
       sessions: [...this.managedSessions.values()],
+      timing: this.timing.snapshot(),
       tabOrder: this.tabOrder,
       sessionsCollapsed: this.sessionsCollapsed,
       sidebarCollapsed: this.sidebarCollapsed,
@@ -779,8 +815,16 @@ export class AgentManagerProvider implements Disposable {
 
   private async disposeAsync(): Promise<void> {
     await this.stateReady?.catch((err) => this.log("dispose: stateReady rejected:", err))
-    this.unsubTool?.()
+    // Stop accepting timing-mutating backend events before settling. If a
+    // session.status/session.deleted event arrived while settle awaited its
+    // durable write, it could re-open a segment (or rewrite state) after the
+    // final settle and persist downtime as runtime.
     this.unsubStatus?.()
+    this.unsubDeleted?.()
+    // Normal extension shutdown: settle every active segment and await the
+    // durable write so later downtime is never counted as session runtime.
+    await this.timing.settle()
+    this.unsubTool?.()
     this.unsubFont?.()
     this.visiblePresence.clear()
     this.statsPoller.stop()
