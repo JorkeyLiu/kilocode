@@ -17,9 +17,9 @@ import { registerCustomTheme, RegisteredCustomThemes, type ThemeRegistrationReso
 // register the theme. Keeping it here, free of katex/marked, lets those consumers
 // stay light while removing the race entirely.
 //
-// Upstream owns the equivalent registerCustomTheme("OpenCode", …) block inline in
-// context/marked.tsx. Do not restore that inline block on upstream merges — route
-// the registration through ensureKiloDiffTheme() instead.
+// Central registration: ensureKiloDiffTheme() is the single authoritative place
+// the "Kilo" theme is registered. Route every diff and markdown surface through
+// it so theme registration never depends on which module was imported first.
 
 export const KILO_DIFF_THEME = "Kilo"
 

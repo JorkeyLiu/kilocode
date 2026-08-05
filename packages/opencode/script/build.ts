@@ -106,8 +106,8 @@ async function smokeModels(binaryPath: string) {
   }
 }
 
-// Kilo dropped the packages/app web UI. Kept here as a commented reference so future upstream merges
-// can see the deliberate divergence rather than treating a re-add as a clean re-introduction.
+// Kilo dropped the packages/app web UI. Kept here as a commented reference so the
+// deliberate divergence stays visible rather than treating a re-add as a clean re-introduction.
 // const createEmbeddedWebUIBundle = async () => {
 //   console.log(`Building Web UI to embed in the binary`)
 //   const appDir = path.join(import.meta.dirname, "../../app")

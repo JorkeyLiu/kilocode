@@ -51,7 +51,7 @@ export namespace KiloTask {
    * OpenCode removed parent-agent inheritance entirely in anomalyco/opencode#31696.
    * Kilo intentionally differs: parent denials remain hard ceilings for Plan Mode
    * and MCP restrictions, while parent ask/allow rules must not replace the
-   * selected subagent's policy. Preserve this distinction during upstream merges.
+   * selected subagent's policy.
    *
    * The caller must resolve `caller` (Agent.Info) and `session` (Session.Info)
    * before calling. This function is pure/synchronous.

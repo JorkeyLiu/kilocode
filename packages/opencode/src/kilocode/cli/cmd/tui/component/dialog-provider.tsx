@@ -1,8 +1,9 @@
 /**
  * Kilo-specific overrides for the provider dialog.
  *
- * Exports constants and renderers consumed by the shared upstream
- * `dialog-provider.tsx` so the upstream diff stays minimal.
+ * Exports constants and renderers consumed by the shared TUI
+ * `dialog-provider.tsx` through thin call sites, keeping Kilo-specific
+ * provider details out of the shared engine file.
  */
 
 import type { JSX } from "solid-js"
@@ -42,7 +43,7 @@ export function failedDescription(providerID: string, failed: string[]): string 
 }
 
 // ---------------------------------------------------------------------------
-// Provider priority (replaces upstream map entirely)
+// Provider priority (replaces the shared provider map entirely)
 // ---------------------------------------------------------------------------
 
 export const PROVIDER_PRIORITY: Record<string, number> = {

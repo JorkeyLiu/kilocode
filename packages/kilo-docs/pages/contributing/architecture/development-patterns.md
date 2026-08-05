@@ -1,67 +1,61 @@
 ---
 title: "Development Patterns"
-description: "Contributor patterns for Kilo architecture implementation and fork maintenance"
+description: "Contributor patterns for Kilo architecture implementation and modular boundaries"
 ---
 
 # Development Patterns
 
-This page turns architecture boundaries into contributor decisions. Read [Architecture Overview](/docs/contributing/architecture) and relevant subsystem page first, then use this guide before editing architecture-facing code in `Kilo-Org/kilocode` or its cross-repository contracts.
+This page turns architecture boundaries into contributor decisions. Read [Architecture Overview](/docs/contributing/architecture) and relevant subsystem page first, then use this guide before editing architecture-facing code in `Kilo-Org/kilocode`.
 
 {% callout type="info" title="Default rule" %}
-Prefer Kilo-owned seams over broad changes to shared OpenCode files. Follow neighboring style when changing existing modules.
+Prefer narrow, well-scoped seams and Kilo-owned packages for additive behavior. Follow neighboring style when changing existing modules.
 {% /callout %}
 
 ## How to use this page
 
 1. Identify owning subsystem in architecture docs.
 2. Choose narrowest source boundary that can hold change.
-3. Update generated or cross-repository contracts when public surface changes.
+3. Update generated artifacts when public surface changes.
 4. Run smallest relevant checks plus affected repository guards.
 
 ## Where should change live?
 
 | Change shape | Preferred location or action | Reason |
 |---|---|---|
-| Additive Kilo CLI behavior | `packages/opencode/src/kilocode/` | Keeps Kilo-only behavior out of upstream-owned files |
+| Additive Kilo CLI behavior | `packages/opencode/src/kilocode/` | Concentrates Kilo-only behavior in Kilo-owned paths |
 | Kilo CLI test for additive behavior | `packages/opencode/test/kilocode/` | Avoids shared tests that encode only Kilo behavior |
-| Required shared OpenCode edit | Small import, route, or injection seam in shared file plus `kilocode_change` marker | Keeps upstream diff narrow and merge review obvious |
-| VS Code, JetBrains, docs, indexing, UI, gateway, or telemetry change | Existing Kilo-owned package | These packages are Kilo-owned; do not add `kilocode_change` markers |
+| Required shared engine edit | Small import, route, or injection seam in shared file | Keeps the edit local and reviewable |
+| VS Code, JetBrains, docs, indexing, UI, gateway, or telemetry change | Existing Kilo-owned package | These packages are Kilo-owned; no shared-file seam needed |
 | CLI server endpoint change | Effect `HttpApi` route plus handler; then run root SDK generator | Keeps server contract and generated JavaScript SDK aligned |
 | JetBrains API contract change | Shared CLI OpenAPI change; let Gradle regenerate build-local Kotlin client | Kotlin client is generated during JetBrains build |
-| Kilo-only config-key change | Update CLI Effect Schema, classify the key in the hot-key set, and update cloud JSON Schema overlay | Runtime acceptance and editor validation are separate cross-repository paths |
+| Kilo-only config-key change | Update CLI Effect Schema and classify the key in the hot-key set | Config schema and hot/cold classification are complete within this repository |
 | Docs page move or removal | Update nav and add permanent redirect | Preserves external links and bookmarks |
 
 ## Kilo-owned boundaries
 
-Kilo CLI forks upstream OpenCode. Prefer Kilo-owned directories and packages for additive behavior:
+The Kilo CLI runtime began as a fork of OpenCode. Prefer Kilo-owned directories and packages for additive behavior — this is modular guidance, not an upstream-merge obligation:
 
 | Prefer | Avoid unless necessary |
 |---|---|
 | `packages/opencode/src/kilocode/` | Broad edits to shared `packages/opencode/src/` files |
 | `packages/opencode/test/kilocode/` | Shared tests that encode only Kilo behavior |
-| `packages/kilo-vscode/`, `packages/kilo-jetbrains/`, `packages/kilo-docs/`, `packages/kilo-indexing/` | Moving Kilo-only behavior into upstream-owned modules |
-| Narrow import or route seams in shared files | Refactors that enlarge upstream merge conflicts |
+| `packages/kilo-vscode/`, `packages/kilo-jetbrains/`, `packages/kilo-docs/`, `packages/kilo-indexing/` | Moving Kilo-only behavior into shared engine modules |
+| Narrow import or route seams in shared files | Refactors that broadly restructure shared engine files |
 
-## Shared OpenCode files
+## Shared engine files
 
-Use `kilocode_change` markers when Kilo-specific code must modify shared upstream files.
+Shared engine files historically carried `kilocode_change` markers identifying Kilo-specific additions. That marker mechanism is retired: the annotation guard and the editor-client marker check have been removed, and no marker is required for current edits. Existing markers in the tree are historical provenance: trailing `// kilocode_change` comments, `// kilocode_change start` / `// kilocode_change end` blocks, and JSX comment equivalents record where Kilo-specific additions were made, but they are retired and non-normative for current edits.
 
-| Change shape | Marker |
-|---|---|
-| One line | Trailing `// kilocode_change` |
-| Multi-line block | `// kilocode_change start` and `// kilocode_change end` |
-| New file in shared path | Top-level `// kilocode_change - new file` |
-| JSX or TSX | JSX comment equivalents |
-
-Marker exemptions apply to paths already owned by Kilo, including paths whose names contain `kilocode` and Kilo packages such as `packages/kilo-vscode/` or `packages/kilo-ui/`. Do not add markers there.
+Keep changes to shared engine files small and well-scoped so they stay reviewable.
 
 | Guard | When to run |
 |---|---|
-| `bun run script/check-opencode-annotations.ts` | PR touches `packages/opencode/`; verifies shared OpenCode Kilo edits are annotated |
 | `bun run script/check-opencode-promise-facades.ts` | Service adapter changes; prevents new runtime-backed Promise facades in shared Effect services |
-| `bun run check-kilocode-change` from `packages/kilo-vscode/` | VS Code or Kilo UI changes; markers must not appear in fully Kilo-owned packages |
+| `bun run script/check-model-tool-network.ts` | Tool networking changes; keeps tool network boundaries explicit |
 | `bun run script/check-workflows.ts` | Workflow add or remove changes; keeps workflow allowlist explicit |
 | `bun run script/check-architecture-impact.ts --worktree` | Architecture-facing change; local semantic assessment is primary — inspect the full diff, read mapped canonical docs for high signals, update them or record a rationale. CI validates the PR body `## Documentation Impact` declaration when a PR is opened — see [Documentation impact governance](/docs/contributing/architecture#documentation-impact-governance) |
+
+The first three run in CI through `.github/workflows/check-repository-guards.yml`.
 
 ## CLI server API
 
@@ -71,13 +65,13 @@ CLI server uses Effect `HttpApi` and publishes OpenAPI-compatible HTTP + SSE sur
 |---|---|
 | Define shared routes under `packages/opencode/src/server/routes/instance/httpapi/` | Keeps route contract close to runtime handlers |
 | Normalize public spec in `packages/opencode/src/server/routes/instance/httpapi/public.ts` | Preserves legacy-compatible request and response shapes during Effect migration |
-| Put additive Kilo groups and handlers under `packages/opencode/src/kilocode/server/httpapi/` | Reduces edits in shared upstream-owned files |
-| Inject Kilo APIs through narrow shared seam | Keeps upstream diff small and marker placement obvious |
+| Put additive Kilo groups and handlers under `packages/opencode/src/kilocode/server/httpapi/` | Concentrates Kilo-specific server code in Kilo-owned paths |
+| Inject Kilo APIs through narrow shared seam | Keeps the injection seam local and Kilo additions identifiable |
 | Preserve route spans and stable attributes | Keeps diagnostics and telemetry understandable |
 
 ## SDK generation
 
-[CLI Runtime SDK contract](/docs/contributing/architecture/cli-runtime#sdk-contract) owns generation pipeline detail. Contributor rules are short:
+[CLI Runtime SDK contract](/docs/contributing/architecture/cli-runtime#sdk-contract) owns generation pipeline detail. Contributor rules are short. These describe the current pipeline; the SDK boundary is an implementation choice that may be refactored or removed, so treat compatibility with generated clients as present state, not a permanent contract:
 
 | Change | Action |
 |---|---|
@@ -88,7 +82,7 @@ CLI server uses Effect `HttpApi` and publishes OpenAPI-compatible HTTP + SSE sur
 
 ## CLI config schema
 
-Runtime config loading and editor validation are separate paths. New Kilo-only config key requires CLI Effect Schema change in `Kilo-Org/kilocode` and JSON Schema overlay change in `Kilo-Org/cloud`. Classify the field hot or cold at introduction — hot saves converge without a runtime rebuild, cold saves require runtime convergence; the full model is in [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle). Follow [CLI Config Schema](/docs/contributing/architecture/config-schema) for exact workflow.
+Runtime config loading and editor validation are separate paths. A new Kilo-only config key requires a CLI Effect Schema change and a hot/cold classification in `Kilo-Org/kilocode`; that completes the key within this repository. Classify the field hot or cold at introduction — hot saves converge without a runtime rebuild, cold saves require runtime convergence; the full model is in [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle). A cloud-served JSON Schema overlay currently exists as an external compatibility surface for editor completion; it is non-authoritative and does not gate runtime acceptance. Follow [CLI Config Schema](/docs/contributing/architecture/config-schema) for exact workflow.
 
 ## Module export pattern
 
@@ -173,25 +167,16 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 | Kilo route seam | `packages/opencode/src/kilocode/server/httpapi/` |
 | JavaScript SDK generation | `packages/sdk/js/script/build.ts`{% linebreak /%}`script/generate.ts` |
 | JetBrains client generation | `packages/kilo-jetbrains/backend/build.gradle.kts` |
-| Upstream merge automation | `script/upstream/` |
 
-## Upstream merge workflow
+## Historical upstream merge workflow
 
-`bun install` runs `script/setup-git.ts`, which sets repo-local merge conflict style to `zdiff3`. Base-aware markers make manual resolution and syntax-aware tooling more useful. Upstream automation under `script/upstream/` applies transforms before merge, forces `zdiff3` for merge operation, and runs `mergiraf` against remaining textual conflicts. `mergiraf` is required by merge script.
+This repository is independently governed and has no ongoing upstream merge or update stream. The upstream merge automation (`script/upstream/`), the annotation guard, and the editor-client marker checks have been removed. `bun install` still runs `script/setup-git.ts`, which keeps `merge.conflictStyle=zdiff3` set repo-locally; base-aware conflict markers make manual conflict resolution easier, and that is now their only purpose.
 
-From `script/upstream/`, use:
-
-```bash
-bun run analyze.ts --version <tag>
-bun run merge.ts --version <tag> --dry-run
-bun run merge.ts --version <tag>
-```
-
-Keep Kilo-specific logic extracted, shared seams narrow, markers accurate, and CI guards green before upstream merge work lands.
+No future merge work is planned or required by these pages.
 
 ## Related pages
 
 - [Architecture Overview](/docs/contributing/architecture) - system layers and reading paths
 - [CLI Runtime](/docs/contributing/architecture/cli-runtime) - local runtime ownership and SDK contract
 - [CLI Runtime config update lifecycle](/docs/contributing/architecture/cli-runtime#config-update-lifecycle) - hot/cold save classification and convergence obligations
-- [CLI Config Schema](/docs/contributing/architecture/config-schema) - cross-repository config-key workflow
+- [CLI Config Schema](/docs/contributing/architecture/config-schema) - config-key workflow

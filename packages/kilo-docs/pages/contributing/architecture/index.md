@@ -32,6 +32,10 @@ Architecture pages cross two repositories:
 | [Kilo&#8209;Org/kilocode](https://github.com/Kilo-Org/kilocode) | Kilo CLI runtime, local daemon, Kilo Console, VS Code extension, JetBrains plugin, JavaScript SDK, codebase indexing, Kilo Gateway client, telemetry, docs, and shared UI packages |
 | [Kilo&#8209;Org/cloud](https://github.com/Kilo-Org/cloud) | Web control plane, Kilo Gateway routes, Cloud Agent session runtime, automation, generated-application preview and deployment services, KiloClaw, Gas Town, billing, and supporting Workers |
 
+### Repository autonomy
+
+`Kilo-Org/kilocode` is independently governed and authoritative for its own behavior. Its ancestry from the OpenCode project and its current integrations with `Kilo-Org/cloud`, the generated JavaScript SDK, and external schema endpoints are historical or current implementation facts. They are not upstream authorities, and compatibility with them is not a future design invariant: these names, boundaries, and integrations may be refactored or removed as this repository evolves. Contents of other repositories are described for context only, and nothing on these pages obligates this repository to synchronize with them.
+
 ## Three architecture layers
 
 | Layer | Responsibility | Typical boundaries |
@@ -204,12 +208,12 @@ These supporting packages also live in [`Kilo-Org/kilocode`](https://github.com/
 
 ## Development pages
 
-After system-boundary pages, continue with Development Patterns for implementation rules. Use CLI Config Schema when changing config keys or editor-facing schema publication.
+After system-boundary pages, continue with Development Patterns for implementation rules. Use CLI Config Schema when changing config keys.
 
 | Page | What it covers |
 |---|---|
-| [Development Patterns](/docs/contributing/architecture/development-patterns) | Code-ownership decisions, shared-file seams, SDK generation, validation guards, and fork maintenance |
-| [CLI Config Schema](/docs/contributing/architecture/config-schema) | Separate runtime-loading and editor-validation paths for cross-repository config contract |
+| [Development Patterns](/docs/contributing/architecture/development-patterns) | Code-ownership decisions, modular boundaries, SDK generation, validation guards, and historical fork provenance |
+| [CLI Config Schema](/docs/contributing/architecture/config-schema) | Runtime-loading and editor-validation paths for CLI config keys |
 
 ## Documentation impact governance
 

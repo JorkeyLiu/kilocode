@@ -231,7 +231,7 @@ Slow initial tracking has guarded behavior:
 
 ## SDK contract
 
-CLI server contract flows through generated and handwritten layers:
+CLI server contract flows through generated and handwritten layers. This describes the current pipeline; the SDK and generated-client boundary is an implementation choice that may be refactored or removed, so compatibility with generated clients is present state, not a future invariant:
 
 1. Effect `HttpApi` groups under `packages/opencode/src/server/routes/instance/httpapi/` define routes.
 2. `packages/opencode/src/server/routes/instance/httpapi/public.ts` normalizes public OpenAPI to legacy-compatible request and response shapes.
@@ -268,11 +268,11 @@ Signed-in organization modes become normal agent configuration during load. They
 
 How a config change applies at runtime is a separate concern from merge order: every field is classified hot or cold at introduction, and saves converge as described in [Config update lifecycle](#config-update-lifecycle).
 
-Runtime config loading is separate from editor-facing JSON Schema publication. Cloud-served schema improves validation and completion for `kilo.json` and `kilo.jsonc`; it does not load, apply, or override effective runtime config. When adding or changing config key, follow [CLI Config Schema](/docs/contributing/architecture/config-schema) so CLI source and cloud overlay stay aligned.
+Runtime config loading is separate from editor-facing JSON Schema publication. A cloud-served schema currently improves validation and completion for `kilo.json` and `kilo.jsonc`; it does not load, apply, or override effective runtime config, and it is a non-authoritative external surface. When adding or changing a config key, follow [CLI Config Schema](/docs/contributing/architecture/config-schema); the key completes within this repository regardless of the overlay.
 
 ## Config update lifecycle
 
-Every config save is classified hot or cold. Schema shape lives in `Config.Info` in `packages/opencode/src/config/config.ts`; runtime hot classification lives in `packages/opencode/src/kilocode/config/hot-keys.ts`, and a field absent from the hot-key set is cold. Hot saves converge without a runtime rebuild; cold saves converge through a background pass that swaps the runtime for affected directories. Merge order for the sources is in [Config precedence](#config-precedence). The editor-facing schema contract is separate — see [CLI Config Schema](/docs/contributing/architecture/config-schema).
+Every config save is classified hot or cold. Schema shape lives in `Config.Info` in `packages/opencode/src/config/config.ts`; runtime hot classification lives in `packages/opencode/src/kilocode/config/hot-keys.ts`, and a field absent from the hot-key set is cold. Hot saves converge without a runtime rebuild; cold saves converge through a background pass that swaps the runtime for affected directories. Merge order for the sources is in [Config precedence](#config-precedence). The editor-facing schema surface is separate and non-authoritative — see [CLI Config Schema](/docs/contributing/architecture/config-schema).
 
 | Component | Responsibility |
 |---|---|
@@ -382,5 +382,5 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 - [Architecture Overview](/docs/contributing/architecture) - local and hosted execution map
 - [VS Code Extension](/docs/contributing/architecture/vscode-extension) - extension-host ownership, Agent Manager, and webview bridge
 - [JetBrains Plugin](/docs/contributing/architecture/jetbrains-plugin) - split-mode client, bundled server lifecycle, and workspace cache
-- [Development Patterns](/docs/contributing/architecture/development-patterns) - API generation, code-ownership seams, and fork-maintenance rules
-- [CLI Config Schema](/docs/contributing/architecture/config-schema) - editor validation contract for CLI config keys
+- [Development Patterns](/docs/contributing/architecture/development-patterns) - API generation, code-ownership seams, and modular-boundary rules
+- [CLI Config Schema](/docs/contributing/architecture/config-schema) - editor-facing schema surface for CLI config keys

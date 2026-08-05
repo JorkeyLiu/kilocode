@@ -1,19 +1,17 @@
 #!/usr/bin/env bun
-// kilocode_change - new file
 
 /**
- * Guards against accidentally inheriting workflows from upstream opencode.
+ * Keeps an explicit inventory of the workflows allowed to run in CI.
  *
- * We regularly merge upstream. When upstream adds a new workflow under
- * `.github/workflows/`, it silently starts running in our CI unless we
- * explicitly review and accept it. This check makes that decision explicit:
- * the list of allowed workflows is hardcoded below, and any drift (added or
- * removed file in `.github/workflows/`) fails CI until the list is updated
- * deliberately.
+ * GitHub runs every `.yml` / `.yaml` file under `.github/workflows/`, so a
+ * workflow that appears there runs with repository privileges whether it was
+ * added deliberately or arrived as an unvetted change. This check makes that
+ * decision explicit: the list of allowed workflows is hardcoded below, and any
+ * drift (added or removed file in `.github/workflows/`) fails CI until the
+ * list is updated deliberately.
  *
  * Only runnable workflows are checked (`.yml` / `.yaml`). Files under
- * `.github/workflows/disabled/` are Kilo-specific and can't run, so they're
- * not tracked here.
+ * `.github/workflows/disabled/` can't run, so they're not tracked here.
  *
  * To accept a new workflow: add its filename to `active`.
  * To drop one: remove its filename from the list.
@@ -33,8 +31,8 @@ const active = new Set([
   "check-forbidden-strings.yml",
   "check-kilo-generated-artifacts.yml",
   "check-md-table-padding.yml",
-  "check-opencode-annotations.yml",
   "check-org-member.yml",
+  "check-repository-guards.yml",
   "codeql-kotlin.yml",
   "codeql.yml",
   "containers.yml",
@@ -54,11 +52,10 @@ const active = new Set([
   "test.yml",
   "typecheck.yml",
   "visual-regression.yml",
-  "watch-opencode-releases.yml",
 ])
 
 // GitHub picks up both .yml and .yaml in .github/workflows/. We accept both so
-// an upstream `.yaml` addition also shows up as unexpected drift.
+// a `.yaml` addition also shows up as unexpected drift.
 const isWorkflow = (f: string) => f.endsWith(".yml") || f.endsWith(".yaml")
 const actualActive = new Set(readdirSync(DIR).filter(isWorkflow))
 
@@ -81,6 +78,6 @@ if (errs.length === 0) {
 
 for (const e of errs) console.error(e)
 console.error("")
-console.error(`Found ${errs.length} workflow drift issue(s).`)
-console.error("This guard prevents upstream-merged workflows from silently running in our CI.")
+console.error(`Found ${errs.length} workflow inventory issue(s).`)
+console.error("The workflow inventory must be updated deliberately when workflows are added or removed.")
 process.exit(1)

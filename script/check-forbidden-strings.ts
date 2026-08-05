@@ -1,13 +1,12 @@
 #!/usr/bin/env bun
-// kilocode_change - new file
 
 /**
  * Greps tracked files for forbidden strings that must not appear in the repo.
  *
  * Each entry is a literal substring (no regex / globs) plus a one-line reason.
- * If a hit is genuinely legitimate (e.g. inside upstream-merge tooling), fix the
- * call site rather than weakening the rule -- the list is intentionally
- * narrow so it stays low-noise.
+ * If a hit is genuinely legitimate (e.g. docs describing the fork lineage),
+ * fix the call site rather than weakening the rule -- the list is
+ * intentionally narrow so it stays low-noise.
  */
 
 import { spawnSync } from "node:child_process"
@@ -18,7 +17,7 @@ const SELF = path.relative(ROOT, import.meta.path).replaceAll("\\", "/")
 
 // Each entry: pattern (literal substring) + reason + optional allow list of path
 // prefixes where the string is legitimate (e.g. docs describing the fork lineage,
-// upstream-merge tooling, generated source-link manifests).
+// generated source-link manifests).
 const forbidden: { pattern: string; reason: string; allow?: string[] }[] = [
   { pattern: "opncd.ai/s/", reason: "legacy upstream share URL pattern" },
   {
@@ -32,14 +31,12 @@ const forbidden: { pattern: string; reason: string; allow?: string[] }[] = [
       "packages/kilo-vscode/AGENTS.md",
       "packages/kilo-docs/source-links.md",
       "patches/",
-      "script/upstream/",
       "translations/",
     ],
   },
   {
     pattern: "sst/opencode",
     reason: "old upstream org path -- should be Kilo-Org/kilocode",
-    allow: [".kilo/agent/upstream-merge.md", "script/upstream/"],
   },
   { pattern: `"HTTP-Referer": "https://opencode.ai/"`, reason: "attributes outbound LLM traffic to upstream" },
   { pattern: `"http-referer": "https://opencode.ai/"`, reason: "attributes outbound LLM traffic to upstream" },

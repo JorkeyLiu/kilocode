@@ -1,8 +1,9 @@
 /**
  * Kilo-specific TUI app customizations.
  *
- * Everything in this module is called from the shared upstream `app.tsx`
- * via thin integration points so the upstream diff stays minimal.
+ * Everything in this module is called from the shared TUI `app.tsx` via thin
+ * integration points, so the shared engine stays free of Kilo-specific wiring
+ * and this module is the single customization surface for the Kilo TUI.
  */
 
 import { createEffect, createMemo, on, onCleanup } from "solid-js"
@@ -27,7 +28,7 @@ import { KiloTerminalTitle } from "./terminal-title"
 import type { KiloTitleIcon } from "./title-icon"
 import { Session as SessionApi } from "@/session/session"
 
-// Re-export so upstream can render the route without importing directly
+// Re-export so the shared TUI app renders the route without importing Kilo modules directly
 export { KiloClawView } from "@/kilocode/claw/view"
 export { KiloTerminalTitle } from "./terminal-title"
 

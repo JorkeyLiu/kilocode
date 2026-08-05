@@ -1,10 +1,9 @@
 import { marked } from "marked"
-// kilocode_change: marked-shiki highlighted code blocks synchronously during
-// parse, freezing the main thread on session switches with many code blocks
-// (issue #6221 / PR #7102). We render plain <pre><code data-lang="..."> here
-// and hand off to deferredHighlight() in markdown.tsx for progressive Shiki.
-// This import was re-added by an upstream merge; removing it restores the
-// two-pass rendering design.
+// Kilo renders plain <pre><code data-lang="..."> here and hands off to
+// deferredHighlight() in markdown.tsx for progressive Shiki: running Shiki
+// inside parse froze the main thread on session switches with many code blocks
+// (issue #6221 / PR #7102). The marked-shiki import is intentionally absent to
+// preserve this two-pass rendering design.
 import katex from "katex"
 // kilocode_change start: import types for double-dollar math extension
 import type { MarkedExtension, TokenizerAndRendererExtension } from "marked"
@@ -18,9 +17,9 @@ import { ensureKiloDiffTheme } from "../pierre/kilo-diff-theme" // kilocode_chan
 // kilocode_change start: the "Kilo" diff/highlight theme registration moved to
 // ../pierre/kilo-diff-theme so the diff worker pool can register it without
 // importing this module's katex/marked dependencies. This call keeps the markdown
-// highlighter (getSharedHighlighter, below) working. Upstream keeps an inline
-// registerCustomTheme("OpenCode", …) block here — do not restore it on merges;
-// route registration through ensureKiloDiffTheme() instead.
+// highlighter (getSharedHighlighter, below) working. Kilo routes registration
+// through ensureKiloDiffTheme() instead of the shared module's inline
+// registerCustomTheme("OpenCode", …) block.
 ensureKiloDiffTheme()
 // kilocode_change end
 

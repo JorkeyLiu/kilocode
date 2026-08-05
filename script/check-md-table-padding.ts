@@ -5,8 +5,8 @@
  *
  * Prettier pads markdown table cells for column alignment. Any content change
  * then re-pads every row, which pollutes diffs on untouched lines. Markdown is
- * in .prettierignore, but hand-written / upstream-synced padded tables still
- * sneak in — this check catches them.
+ * in .prettierignore, but hand-written padded tables still sneak in — this
+ * check catches them.
  *
  * Usage:
  *   bun run script/check-md-table-padding.ts               # check all tracked *.md
@@ -19,10 +19,10 @@
  *   - Content row cells have more than one space of padding between the
  *     content and the enclosing pipes.
  *
- * Enforcement scope (Kilo-owned paths only, to avoid upstream-sync churn):
+ * Enforcement scope (focused to markdown this repository owns and edits):
  *   - Any top-level markdown file (TESTING.md, AGENTS.md, README.md, …)
  *   - Any path segment containing "kilocode" or starting with "kilo-"
- *   - Everything else under packages/ is treated as upstream and skipped.
+ *   - Everything else under packages/ is out of scope and skipped.
  *   - .changeset/** and CHANGELOG.md are skipped (auto-generated).
  */
 

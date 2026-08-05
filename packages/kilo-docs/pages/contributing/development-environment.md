@@ -246,7 +246,6 @@ Agent limitations, local resource constraints, OOM constraints, or an agent prom
 - User-facing changes usually need a changeset. Run `bunx changeset add` or add a file under `.changeset/`.
 - After changing server endpoints, run `./script/generate.ts` from the repo root to regenerate `packages/sdk/js/`.
 - After adding or changing guarded URLs in `packages/kilo-vscode/`, `packages/kilo-vscode/webview-ui/`, or `packages/opencode/src/`, run `bun run script/extract-source-links.ts` from the repo root.
-- When editing shared `packages/opencode/` files, keep changes small and mark Kilo-only edits with `// kilocode_change` for a single line or `// kilocode_change start` / `// kilocode_change end` for a block. Do not add these markers inside `kilocode`-named paths.
 
 ## Git Hooks
 

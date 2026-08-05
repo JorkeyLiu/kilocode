@@ -1100,7 +1100,6 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
-    "check-kilocode-change": "! grep -rIn 'kilocode_change' . ../kilo-ui/ --exclude='package.json' --exclude='*.md' --exclude-dir='node_modules' --exclude-dir='dist' | grep -v '`kilocode_change`'",
     "lint": "eslint src webview-ui script/e2e-probe.ts tests/e2e",
     "test": "vscode-test",
     "test:unit": "bun test tests/unit/ --dots",

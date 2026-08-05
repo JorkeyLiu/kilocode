@@ -8,7 +8,7 @@ Kilo Code is an open source AI coding agent platform. It ships as a CLI and edit
 
 ### Products and How They Relate
 
-All products are thin clients over the **CLI** (`packages/opencode/`, published as `@kilocode/cli`). The CLI is a fork of upstream [OpenCode](https://github.com/anomalyco/opencode) with Kilo-specific additions (gateway auth, telemetry, migration, code review, branding). It contains the full AI agent runtime, tool execution, session management, provider integrations (500+ models), and an HTTP API server.
+All products are thin clients over the **CLI** (`packages/opencode/`, published as `@kilocode/cli`). The CLI originated as a fork of [OpenCode](https://github.com/anomalyco/opencode) and is now independently governed, with Kilo-specific additions (gateway auth, telemetry, migration, code review, branding). It contains the full AI agent runtime, tool execution, session management, provider integrations (500+ models), and an HTTP API server.
 
 Every client spawns or connects to a `kilo serve` process and communicates via HTTP REST + SSE using the auto-generated `@kilocode/sdk`.
 
@@ -43,11 +43,11 @@ Every client spawns or connects to a `kilo serve` process and communicates via H
 | `packages/kilo-i18n/` | `@kilocode/kilo-i18n` | Translation strings (16 languages) |
 | `packages/kilo-docs/` | `@kilocode/kilo-docs` | Documentation site (Next.js + Markdoc) |
 
-### Upstream OpenCode Packages (not Kilo-specific)
+### Inherited Core Packages (not Kilo-specific)
 
 | Package | Name | Role |
 |---|---|---|
-| `packages/opencode/` | `@kilocode/cli` | Core CLI — forked from upstream OpenCode. AI agents, tools, sessions, server. |
+| `packages/opencode/` | `@kilocode/cli` | Core CLI — originated from OpenCode. AI agents, tools, sessions, server. |
 | `packages/sdk/js/` | `@kilocode/sdk` | Auto-generated TypeScript SDK client for the server API. Do not edit `src/gen/` by hand. |
 | `packages/ui/` | `@opencode-ai/ui` | Shared UI primitives |
 | `packages/util/` | `@opencode-ai/util` | Shared utilities (error, path, retry, slug) |
@@ -228,10 +228,6 @@ Generated screenshot baselines live under `packages/kilo-docs/public/img/screens
 
 - All VSCode commands must use `kilo-code.new.` prefix (not `kilo-code.`)
 - All view IDs must use `kilo-code.new.` prefix, **except** the sidebar view which uses `kilo-code.SidebarProvider` to preserve user sidebar position when upgrading from the legacy extension
-
-## Kilocode Change Markers
-
-This package is entirely Kilo-specific — `kilocode_change` markers are NOT needed in any files under `packages/kilo-vscode/`. The markers are only necessary when modifying shared upstream opencode files.
 
 ## Process Spawning (Windows)
 

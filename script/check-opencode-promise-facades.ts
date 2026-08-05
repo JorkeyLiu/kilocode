@@ -65,7 +65,7 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   "server/experimental-session-list.test.ts": { count: 2, reason: "Kilo session list integration test" },
   "kilocode/server/listener-runtime.test.ts": { count: 4, reason: "listener and AppRuntime integration test" },
   "kilocode/server/config-rebuild-stream.test.ts": {
-    count: 4,
+    count: 3,
     reason: "in-process server and AppRuntime integration test (global writer vs unseen-directory PATCH intake regression)",
   },
   "kilocode/server/config-transaction.test.ts": {

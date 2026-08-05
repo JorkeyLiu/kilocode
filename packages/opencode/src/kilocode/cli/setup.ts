@@ -22,12 +22,11 @@ import { JsonMigration } from "@/kilocode/storage/json-migration"
 
 const log = Log.create({ service: "kilocode.cli" })
 
-// All Kilo-specific CLI customization lives here so the shared upstream entrypoint
-// (src/index.ts) only needs a handful of thin call-sites behind kilocode_change markers.
-// This keeps index.ts close to upstream and reduces merge conflicts on every sync.
+// All Kilo-specific CLI customization lives here so the shared entrypoint
+// (src/index.ts) stays thin and only hosts Kilo call-sites.
 export namespace KiloCli {
-  // Register only the Kilo-specific commands. Upstream commands stay in index.ts's chain so
-  // upstream merges that add or remove commands keep working without touching this file.
+  // Register only the Kilo-specific commands. Shared commands stay in index.ts's chain,
+  // so this module only owns Kilo command registration.
   export function register<T>(cli: Argv<T>): Argv<T> {
     cli
       .command(KiloConsoleCommand)
@@ -49,8 +48,8 @@ export namespace KiloCli {
     return (await import("@/kilocode/background-process/runner")).BackgroundProcessRunner.maybe()
   }
 
-  // Runs from the upstream `.middleware`, before any command handler. Env tagging is additive so
-  // it never has to modify upstream's own env assignments.
+  // Runs from the shared `.middleware` hook, before any command handler. Env tagging is
+  // additive so the shared entrypoint's env assignments are left untouched.
   export async function bootstrap(): Promise<void> {
     if (!process.env[ENV_FEATURE]) process.env[ENV_FEATURE] = process.argv.includes("serve") ? "unknown" : "cli"
     if (!process.env[ENV_VERSION]) process.env[ENV_VERSION] = InstallationVersion

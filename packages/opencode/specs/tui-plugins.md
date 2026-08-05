@@ -538,4 +538,4 @@ The plugin manager is exposed as a command with title `Plugins` and value `plugi
 
 ## Current in-repo examples
 
-The upstream `.opencode` smoke fixtures remain in the repository for OpenCode compatibility, but Kilo does not auto-load them. Kilo-local examples must live under `.kilo` or legacy `.kilocode`.
+The `.opencode` smoke fixtures are inherited legacy fixtures from the OpenCode codebase and remain in the repository, but Kilo does not auto-load them. Kilo-local examples must live under `.kilo` or legacy `.kilocode`.

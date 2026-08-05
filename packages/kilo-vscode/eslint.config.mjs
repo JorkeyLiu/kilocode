@@ -73,9 +73,8 @@ export default [
   },
   {
     files: ["webview-ui/src/context/session.tsx"],
-    // Raised from the default 3000 as this session context grew past the cap
-    // after upstream merges; kept as a targeted override rather than loosening
-    // the global limit.
+    // Raised from the default 3000 as this session context grew past the cap;
+    // kept as a targeted override rather than loosening the global limit.
     rules: { complexity: ["error", 31], "max-lines": ["error", 3100] },
   },
   {

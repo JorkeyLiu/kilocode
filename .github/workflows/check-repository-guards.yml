@@ -1,4 +1,4 @@
-name: Check shared upstream annotations
+name: Check repository guards
 
 on:
   pull_request:
@@ -14,30 +14,26 @@ on:
       - "script/**"
   workflow_dispatch:
 
+# Least privilege: the guards only scan the checked-out files.
+permissions:
+  contents: read
+
 jobs:
-  check-annotations:
-    name: Check kilocode_change annotations
-    if: github.repository == 'Kilo-Org/kilocode'
+  check-guards:
+    name: Check repository guards
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6 # kilocode_change
+      # Pinned to the repository-approved commit for checkout v6 (same SHA as
+      # check-architecture-impact.yml / nix-eval.yml / nix-hashes.yml). Default
+      # fetch-depth (1) is enough: these guards scan current files only.
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
-          fetch-depth: 0
 
-      - uses: oven-sh/setup-bun@v2
+      # Pinned to the repository-approved commit for setup-bun v2 (same SHA as
+      # check-architecture-impact.yml / test-jetbrains.yml).
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
-      - name: Check kilocode_change annotations in shared upstream files
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          if [ -n "$BASE_SHA" ]; then
-            bun run script/check-opencode-annotations.ts --base "$BASE_SHA"
-          else
-            echo "No PR base SHA available (workflow_dispatch without PR context) — skipping."
-          fi
-
-      # kilocode_change start
       - name: Check Effect Promise facade allowlist
         run: bun run script/check-opencode-promise-facades.ts
 
@@ -46,4 +42,3 @@ jobs:
 
       - name: Check workflow allowlist
         run: bun run script/check-workflows.ts
-      # kilocode_change end

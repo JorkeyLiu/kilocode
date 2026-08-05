@@ -97,7 +97,6 @@ Skip the changeset only for internal refactors, CI tweaks, test-only changes, or
 
 - Regenerate `packages/sdk/js/` with `./script/generate.ts` after changing server endpoints.
 - Run `bun run script/extract-source-links.ts` after adding or changing guarded URLs in `packages/kilo-vscode/`, `packages/kilo-vscode/webview-ui/`, or `packages/opencode/src/`.
-- When editing shared `packages/opencode/` files, keep Kilo changes small and mark Kilo-only edits with `// kilocode_change` for a single line or `// kilocode_change start` / `// kilocode_change end` for a block. Do not add these markers inside `kilocode`-named paths.
 
 ### Testing Your Changes
 

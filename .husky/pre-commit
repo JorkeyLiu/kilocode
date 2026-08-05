@@ -1,5 +1,4 @@
 #!/bin/sh
-# kilocode_change - new file
 set -e
 
 # Advisory architecture-impact reminder: fast local signal

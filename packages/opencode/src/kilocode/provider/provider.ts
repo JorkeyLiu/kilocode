@@ -1,10 +1,7 @@
-// kilocode_change - new file
-//
-// Kilo-specific provider logic extracted from packages/opencode/src/provider/provider.ts
-// to minimize merge conflicts with upstream opencode.
-//
-// This module exports patch functions and data that the upstream provider.ts
-// calls at well-defined injection points (each marked with kilocode_change).
+// Kilo-specific provider logic for the shared provider module
+// (packages/opencode/src/provider/provider.ts). This module exports patch
+// functions and data that the provider module calls at well-defined injection
+// points.
 
 import { createKilo, type KiloProvider, AI_SDK_PROVIDERS, PROMPTS } from "@kilocode/kilo-gateway"
 import { DEFAULT_HEADERS } from "@/kilocode/const"
@@ -105,7 +102,7 @@ type CustomDep = {
   get: (key: string) => Effect.Effect<string | undefined>
 }
 
-// Mirrors upstream's CustomLoader return type so Object.entries preserves proper typing
+// Mirrors the shared provider module's CustomLoader return type so Object.entries preserves proper typing
 type CustomLoaderResult = {
   autoload: boolean
   getModel?: (sdk: any, modelID: string, options?: Record<string, any>) => Promise<any>
@@ -190,7 +187,7 @@ export function kiloCustomLoaders(dep: CustomDep): Record<string, CustomLoader> 
 
 // ---------------------------------------------------------------------------
 // Post-processing for custom loader results
-// Patches options/headers for providers whose upstream loaders we don't fully
+// Patches options/headers for providers whose default loaders we don't fully
 // replace but where specific values differ (headers, branding, env vars).
 // ---------------------------------------------------------------------------
 
@@ -231,7 +228,7 @@ export function patchCustomLoaderResult(
       break
     }
     // gitlab User-Agent and cloudflare error message are patched inline
-    // in provider.ts with single-line kilocode_change markers
+    // in the shared provider module
   }
 }
 

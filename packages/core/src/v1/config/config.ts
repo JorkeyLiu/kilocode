@@ -94,9 +94,8 @@ export const Info = Schema.Struct({
     description: "When set, ONLY these providers will be enabled. All other providers will be ignored",
   }),
   // kilocode_change start
-  // NOTE: Any new kilocode_change key added to Config.Info must also be mirrored in
-  // apps/web/src/app/config.json/extras.ts in the cloud repo, otherwise
-  // $schema: https://app.kilo.ai/config.json will not recognize it.
+  // NOTE: The external editor schema (app.kilo.ai/config.json) may need an independent
+  // update to expose any new kilocode_change key; the in-repo config is complete locally.
   remote_control: Schema.optional(Schema.Boolean).annotate({
     description: "Enable remote control of sessions via Kilo Cloud. Equivalent to running /remote on startup.",
   }),

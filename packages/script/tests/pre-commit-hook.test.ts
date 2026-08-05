@@ -8,13 +8,8 @@ const HOOK = path.resolve(import.meta.dir, "../../../.husky/pre-commit")
 const hook = readFileSync(HOOK, "utf8")
 
 describe(".husky/pre-commit", () => {
-  test("is an executable sh script with a Kilo-owned new-file marker", () => {
-    expect(hook.startsWith("#!/bin/sh\n")).toBe(true)
-    // The shared-path hook is marked Kilo-owned right after the shebang so
-    // upstream merges recognize it as a Kilo addition.
-    const off = hook.indexOf("\n") + 1
-    expect(hook.startsWith("# kilocode_change - new file\n", off)).toBe(true)
-    expect(hook.startsWith("set -e\n", off + "# kilocode_change - new file\n".length)).toBe(true)
+  test("is an executable sh script", () => {
+    expect(hook.startsWith("#!/bin/sh\nset -e\n")).toBe(true)
     const mode = statSync(HOOK).mode
     expect(mode & 0o111).not.toBe(0)
   })
