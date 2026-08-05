@@ -427,7 +427,7 @@ describe("session processor incomplete response retry", () => {
     ),
   )
 
-  it.effect("does not retry an unknown finish with non-zero usage", () =>
+  it.effect("retries an empty unknown finish with non-zero usage", () =>
     provideTmpdirProject(
       (dir) =>
         Effect.gen(function* () {
@@ -439,11 +439,18 @@ describe("session processor incomplete response retry", () => {
             LLMEvent.stepFinish({ index: 0, reason: "unknown", usage }),
             LLMEvent.finish({ reason: "unknown", usage: empty }),
           )
+          yield* ctx.test.reply(...success())
+          const delay = spyOn(SessionRetry, "delay").mockReturnValue(0)
 
-          expect(yield* ctx.handle.process(ctx.input)).toBe("continue")
-          expect(yield* ctx.test.calls).toBe(1)
-          expect(ctx.handle.message.finish).toBe("unknown")
-          expect(ctx.handle.message.tokens.input).toBe(10)
+          try {
+            expect(yield* ctx.handle.process(ctx.input)).toBe("continue")
+          } finally {
+            delay.mockRestore()
+          }
+
+          expect(yield* ctx.test.calls).toBe(2)
+          expect(ctx.handle.message.finish).toBe("stop")
+          expect((yield* MessageV2.parts(ctx.msg.id)).find((part) => part.type === "text")?.text).toBe("Recovered")
         }),
       { git: true },
     ),

@@ -1,4 +1,4 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Effect, Schema } from "effect"
 import { Catalog } from "@opencode-ai/core/catalog"
 import { Config } from "@opencode-ai/core/config"
@@ -6,6 +6,8 @@ import { ConfigProviderPlugin } from "@opencode-ai/core/config/plugin/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ProviderV2 } from "@opencode-ai/core/provider"
+import { ConfigProviderV1 } from "@opencode-ai/core/v1/config/provider"
+import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { it } from "../plugin/provider-helper"
 
 function request(headers: Record<string, string>, variant?: string) {
@@ -127,4 +129,37 @@ describe("ConfigProviderPlugin.Plugin", () => {
       expect(model.variants[1]?.headers).toEqual({ slow: "slow" })
     }),
   )
+})
+
+describe("ConfigProviderV1.Info provider options", () => {
+  const decode = Schema.decodeUnknownSync(ConfigProviderV1.Info)
+
+  test.each([1, 5000, 60_000])("accepts positive integer firstChunkTimeout %i", (ms) => {
+    const info = decode({ options: { firstChunkTimeout: ms } })
+    expect(info.options?.firstChunkTimeout).toBe(ms)
+  })
+
+  test("accepts false firstChunkTimeout to disable the first-chunk wait", () => {
+    const info = decode({ options: { firstChunkTimeout: false } })
+    expect(info.options?.firstChunkTimeout).toBe(false)
+  })
+
+  test("accepts omitted firstChunkTimeout", () => {
+    expect(() => decode({ options: { timeout: 5000 } })).not.toThrow()
+  })
+
+  test.each(["5000", 0, -1, 1.5])("rejects invalid firstChunkTimeout %j", (value) => {
+    expect(() => decode({ options: { firstChunkTimeout: value } })).toThrow()
+  })
+
+  test("config load rejects invalid firstChunkTimeout through ConfigV1.Info", () => {
+    const decodeConfig = Schema.decodeUnknownSync(ConfigV1.Info)
+    expect(() =>
+      decodeConfig({
+        provider: {
+          custom: { options: { firstChunkTimeout: 0 } },
+        },
+      }),
+    ).toThrow()
+  })
 })

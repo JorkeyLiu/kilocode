@@ -1386,7 +1386,11 @@ export type ProviderConfig = {
      */
     headerTimeout?: number | false
     chunkTimeout?: number
-    [key: string]: unknown | string | boolean | number | false | number | false | number | undefined
+    /**
+     * Timeout in milliseconds until the first streamed response chunk arrives after response headers. Defaults to the configured timeout. Set to false to disable timeout.
+     */
+    firstChunkTimeout?: number | false
+    [key: string]: unknown | string | boolean | number | false | number | false | number | number | false | undefined
   }
   models?: {
     [key: string]: {

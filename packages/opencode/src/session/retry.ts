@@ -155,8 +155,10 @@ export function policy(opts: {
           if (result !== "retry") {
             return yield* Cause.done(meta.attempt)
           }
-          yield* opts.set({ attempt: 0, message: "Reconnected", next: Date.now() })
-          return [0, Duration.zero] as [number, Duration.Duration]
+          // A "retry" result falls through to the normal delay/status path below,
+          // so disconnected errors share the same exponential backoff, attempt
+          // counter, status update, and schedule output as other retryable errors
+          // instead of publishing attempt 0 / zero delay.
         }
         // kilocode_change end
 

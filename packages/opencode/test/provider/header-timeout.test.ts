@@ -1,4 +1,4 @@
-import { afterEach, expect } from "bun:test"
+import { afterEach, expect, test } from "bun:test"
 import { createServer, type Server } from "node:http"
 import { streamText } from "ai"
 import { Effect, Layer } from "effect"
@@ -12,6 +12,7 @@ import { Env } from "@/env"
 import { Plugin } from "@/plugin"
 import { Provider } from "@/provider/provider"
 import { ProviderError } from "@/provider/error"
+import { REQUEST_TIMEOUT_MS, resolveFirstChunkTimeout } from "@/kilocode/provider/provider"
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -78,6 +79,237 @@ it.live("chunkTimeout raises a response stream error when SSE body stalls", () =
     )
   }),
 )
+
+// kilocode_change start
+it.live("default request timeout is one minute", () =>
+  Effect.gen(function* () {
+    expect(REQUEST_TIMEOUT_MS).toBe(60_000)
+  }),
+)
+
+test("firstChunkTimeout resolution defaults to the one-minute constant", () => {
+  expect(resolveFirstChunkTimeout(undefined, undefined)).toBe(REQUEST_TIMEOUT_MS)
+  expect(resolveFirstChunkTimeout(undefined, undefined)).toBe(60_000)
+})
+
+test("firstChunkTimeout resolution inherits the configured timeout", () => {
+  expect(resolveFirstChunkTimeout(undefined, 50)).toBe(50)
+  expect(resolveFirstChunkTimeout(undefined, 300_000)).toBe(300_000)
+  expect(resolveFirstChunkTimeout(null, 50)).toBe(50)
+})
+
+test("firstChunkTimeout resolution inherits timeout false as a disable", () => {
+  expect(resolveFirstChunkTimeout(undefined, false)).toBe(false)
+})
+
+test("explicit firstChunkTimeout overrides the configured timeout", () => {
+  expect(resolveFirstChunkTimeout(50, 300_000)).toBe(50)
+  expect(resolveFirstChunkTimeout(50, false)).toBe(50)
+  expect(resolveFirstChunkTimeout(false, 50)).toBe(false)
+  expect(resolveFirstChunkTimeout(false, undefined)).toBe(false)
+})
+
+it.live("startup timeout fails when headers arrive but the first body chunk never does", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => stalledBodyServer()),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* Provider.Service
+          const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+          const result = streamText({
+            model: yield* provider.getLanguage(model),
+            onError() {},
+            messages: [{ role: "user", content: "hello" }],
+          })
+
+          const error = yield* Effect.promise(async () => {
+            try {
+              for await (const part of result.fullStream) {
+                if (part.type === "error") return part.error
+              }
+            } catch (error) {
+              return error
+            }
+          })
+          expect(error).toBeInstanceOf(ProviderError.ResponseStreamError)
+          expect(String(error)).toContain("first chunk")
+        }),
+      { config: providerConfig(server.url, { firstChunkTimeout: 50 }) },
+    )
+  }),
+)
+
+it.live("first chunk clears the startup timeout and later stalls are unconstrained", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => delayedBodyServer(400, ":\n\n")),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* Provider.Service
+          const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+          const result = streamText({
+            model: yield* provider.getLanguage(model),
+            messages: [{ role: "user", content: "hello" }],
+          })
+
+          expect(yield* Effect.promise(() => result.text)).toBe("late")
+        }),
+      { config: providerConfig(server.url, { firstChunkTimeout: 50 }) },
+    )
+  }),
+)
+
+it.live("startup timeout can be disabled explicitly", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => delayedBodyServer(300)),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* Provider.Service
+          const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+          const result = streamText({
+            model: yield* provider.getLanguage(model),
+            messages: [{ role: "user", content: "hello" }],
+          })
+
+          expect(yield* Effect.promise(() => result.text)).toBe("late")
+        }),
+      { config: providerConfig(server.url, { firstChunkTimeout: false }) },
+    )
+  }),
+)
+
+it.live("startup timeout inherits the configured timeout value", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => stalledBodyServer()),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* Provider.Service
+          const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+          const result = streamText({
+            model: yield* provider.getLanguage(model),
+            onError() {},
+            messages: [{ role: "user", content: "hello" }],
+          })
+
+          const error = yield* Effect.promise(async () => {
+            try {
+              for await (const part of result.fullStream) {
+                if (part.type === "error") return part.error
+              }
+            } catch (error) {
+              return error
+            }
+          })
+          expect(error).toBeInstanceOf(ProviderError.ResponseStreamError)
+          expect(String(error)).toContain("first chunk")
+        }),
+      { config: providerConfig(server.url, { timeout: 300 }) },
+    )
+  }),
+)
+
+it.live("startup timeout is disabled when timeout is false", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => delayedBodyServer(300)),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* Provider.Service
+          const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+          const result = streamText({
+            model: yield* provider.getLanguage(model),
+            messages: [{ role: "user", content: "hello" }],
+          })
+
+          expect(yield* Effect.promise(() => result.text)).toBe("late")
+        }),
+      { config: providerConfig(server.url, { timeout: false }) },
+    )
+  }),
+)
+
+it.live("explicit firstChunkTimeout overrides an inherited disabled timeout", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => stalledBodyServer()),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* Provider.Service
+          const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+          const result = streamText({
+            model: yield* provider.getLanguage(model),
+            onError() {},
+            messages: [{ role: "user", content: "hello" }],
+          })
+
+          const error = yield* Effect.promise(async () => {
+            try {
+              for await (const part of result.fullStream) {
+                if (part.type === "error") return part.error
+              }
+            } catch (error) {
+              return error
+            }
+          })
+          expect(error).toBeInstanceOf(ProviderError.ResponseStreamError)
+          expect(String(error)).toContain("first chunk")
+        }),
+      { config: providerConfig(server.url, { timeout: false, firstChunkTimeout: 50 }) },
+    )
+  }),
+)
+
+it.live("explicit firstChunkTimeout false overrides an inherited numeric timeout", () =>
+  Effect.gen(function* () {
+    const server = yield* Effect.acquireRelease(
+      Effect.promise(() => delayedBodyServer(300)),
+      (server) => Effect.sync(() => server.server.close()),
+    )
+
+    yield* provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          const provider = yield* Provider.Service
+          const model = yield* provider.getModel(ProviderV2.ID.make("test"), ModelV2.ID.make("test-model"))
+          const result = streamText({
+            model: yield* provider.getLanguage(model),
+            messages: [{ role: "user", content: "hello" }],
+          })
+
+          expect(yield* Effect.promise(() => result.text)).toBe("late")
+        }),
+      { config: providerConfig(server.url, { timeout: 300, firstChunkTimeout: false }) },
+    )
+  }),
+)
+// kilocode_change end
 
 it.live("headerTimeout aborts when response headers do not arrive", () =>
   Effect.gen(function* () {
@@ -205,6 +437,18 @@ async function delayedBodyServer(delay: number, prelude = ""): Promise<{ server:
     setTimeout(() => {
       res.end('data: {"choices":[{"delta":{"content":"late"}}]}\n\ndata: [DONE]\n\n')
     }, delay)
+  })
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
+  const address = server.address()
+  if (!address || typeof address === "string") throw new Error("server did not bind to a TCP port")
+  return { server, url: `http://127.0.0.1:${address.port}` }
+}
+
+// Sends headers immediately and never writes body data, holding the socket open.
+async function stalledBodyServer(): Promise<{ server: Server; url: string }> {
+  const server = createServer((_, res) => {
+    res.writeHead(200, { "content-type": "text/event-stream" })
+    res.flushHeaders()
   })
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve))
   const address = server.address()

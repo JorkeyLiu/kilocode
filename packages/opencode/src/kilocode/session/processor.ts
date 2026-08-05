@@ -132,11 +132,38 @@ export namespace KiloSessionProcessor {
   }
 
   /**
+   * Bounded one-shot connectivity probe that also resolves "aborted" as soon
+   * as the session abort signal fires, so an interrupted session never
+   * proceeds into the offline ask/wait lifecycle. Runs the shared generic
+   * `SessionNetwork.online()` probe; when the signal aborts first the probe
+   * result is discarded and "aborted" wins.
+   */
+  async function probe(abort: AbortSignal): Promise<"online" | "offline" | "aborted"> {
+    if (abort.aborted) return "aborted"
+    return new Promise((resolve) => {
+      const onAbort = () => resolve("aborted")
+      abort.addEventListener("abort", onAbort, { once: true })
+      void SessionNetwork.online().then((ok) => {
+        abort.removeEventListener("abort", onAbort)
+        resolve(ok ? "online" : "offline")
+      })
+    })
+  }
+
+  /**
    * Effect-based offline handler for the retry schedule.
-   * Shows offline status, waits for network reconnection or user rejection.
+   *
+   * Runs a bounded generic connectivity probe first. When the general internet
+   * is reachable — the failure is provider-scoped, e.g. an unreachable provider
+   * host, a certificate error, or a header/first-chunk timeout — returns
+   * "retry" without creating an ask or setting offline status, so
+   * SessionRetry.policy applies the normal exponential provider backoff. Only
+   * when connectivity is confirmed down does the existing ask/status/watch/
+   * restore/reply/reject/abort lifecycle run.
    *
    * Returns:
-   * - "retry"   → network restored, retry immediately
+   * - "retry"   → generic connectivity intact (provider-scoped failure) or
+   *               network restored; retry through the normal backoff
    * - "blocked" → user rejected reconnection
    * - "aborted" → abort signal fired
    */
@@ -148,6 +175,12 @@ export namespace KiloSessionProcessor {
   }): Effect.Effect<"retry" | "blocked" | "aborted"> {
     return Effect.gen(function* () {
       const msg = SessionNetwork.message(input.error)
+
+      const result = yield* EffectBridge.fromPromise(() => probe(input.abort))
+      // Abort is checked again after the probe settles so an abort that lands
+      // between probe resolution and the ask below cannot proceed into ask.
+      if (result === "aborted" || input.abort.aborted) return "aborted"
+      if (result === "online") return "retry"
 
       const { id, promise } = yield* EffectBridge.fromPromise(() =>
         SessionNetwork.ask({
@@ -247,7 +280,8 @@ export namespace KiloSessionProcessor {
     usage: boolean
   }) {
     if (input.finish !== undefined && input.finish !== "unknown") return false
-    return !input.text && !input.reasoning && !input.tool && !input.usage
+    // Usage is accounting-only; text/reasoning/tool flags guard duplicate output and side effects.
+    return !input.text && !input.reasoning && !input.tool
   }
 
   export function blockRetry(error: ReturnType<typeof MessageV2.fromError>) {

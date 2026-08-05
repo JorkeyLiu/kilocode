@@ -41,6 +41,7 @@ import {
   patchKiloProviderPrivacy,
   kiloSmallModelPriority,
   buildTimeoutSignal,
+  resolveFirstChunkTimeout, // kilocode_change
 } from "@/kilocode/provider/provider"
 import * as ModelsRefresh from "@/kilocode/provider/models-refresh"
 // kilocode_change end
@@ -96,6 +97,60 @@ function wrapSSE(res: Response, ms: number, ctl: AbortController) {
     statusText: res.statusText,
   })
 }
+
+// kilocode_change start
+// First-body-data startup timeout. Unlike wrapSSE (per-chunk idle timeout), the
+// timer only covers the first read after headers: once the first chunk arrives
+// the stream passes reads through untouched, so later slow-but-active chunks
+// are never constrained unless an explicit chunkTimeout is configured.
+function wrapFirstRead(res: Response, ms: number) {
+  if (typeof ms !== "number" || ms <= 0) return res
+  if (!res.body) return res
+  if (!res.headers.get("content-type")?.includes("text/event-stream")) return res
+
+  const reader = res.body.getReader()
+  let first = true
+  const body = new ReadableStream<Uint8Array>({
+    async pull(ctrl) {
+      const part = first ? await readFirst(reader, ms) : await reader.read()
+      first = false
+      if (part.done) {
+        ctrl.close()
+        return
+      }
+      ctrl.enqueue(part.value)
+    },
+    async cancel(reason) {
+      await reader.cancel(reason)
+    },
+  })
+  return new Response(body, {
+    headers: new Headers(res.headers),
+    status: res.status,
+    statusText: res.statusText,
+  })
+}
+
+function readFirst(reader: ReadableStreamDefaultReader<Uint8Array>, ms: number) {
+  return new Promise<Awaited<ReturnType<typeof reader.read>>>((resolve, reject) => {
+    const id = setTimeout(() => {
+      const err = new ProviderError.ResponseStreamError("Provider response timed out waiting for the first chunk")
+      void reader.cancel(err)
+      reject(err)
+    }, ms)
+    reader.read().then(
+      (part) => {
+        clearTimeout(id)
+        resolve(part)
+      },
+      (err) => {
+        clearTimeout(id)
+        reject(err)
+      },
+    )
+  })
+}
+// kilocode_change end
 
 function timeoutController(ms: number) {
   const ctl = new AbortController()
@@ -1756,8 +1811,10 @@ export const layer = Layer.effect(
         const customFetch = options["fetch"]
         const chunkTimeout = options["chunkTimeout"]
         const headerTimeout = options["headerTimeout"]
+        const firstChunkTimeout = options["firstChunkTimeout"] // kilocode_change
         delete options["chunkTimeout"]
         delete options["headerTimeout"]
+        delete options["firstChunkTimeout"] // kilocode_change
 
         options["fetch"] = async (input: any, init?: BunFetchRequestInit) => {
           const fetchFn = customFetch ?? fetch
@@ -1804,8 +1861,15 @@ export const layer = Layer.effect(
               timeout: false,
             }).finally(() => headerTimeoutCtl?.clear())
             timeout.clear()
-            if (!chunkAbortCtl) return res
-            return wrapSSE(res, chunkTimeout, chunkAbortCtl)
+            // kilocode_change start - startup timeout covering the first stream chunk
+            // Precedence: explicit firstChunkTimeout wins (including false to
+            // disable); otherwise the configured timeout (including false to
+            // disable); otherwise the one-minute REQUEST_TIMEOUT_MS default.
+            const ms = resolveFirstChunkTimeout(firstChunkTimeout, options["timeout"])
+            const started = typeof ms === "number" && ms > 0 ? wrapFirstRead(res, ms) : res
+            if (!chunkAbortCtl) return started
+            return wrapSSE(started, chunkTimeout, chunkAbortCtl)
+            // kilocode_change end
           } catch (err) {
             timeout.clear()
             throw err

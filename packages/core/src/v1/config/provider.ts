@@ -119,6 +119,15 @@ export const Info = Schema.Struct({
           description:
             "Timeout in milliseconds between streamed SSE chunks for this provider. If no chunk arrives within this window, the request is aborted.",
         }),
+        firstChunkTimeout: Schema.optional(
+          Schema.Union([PositiveInt, Schema.Literal(false)]).annotate({
+            description:
+              "Timeout in milliseconds until the first streamed response chunk arrives after response headers. Defaults to the configured timeout. Set to false to disable timeout.",
+          }),
+        ).annotate({
+          description:
+            "Timeout in milliseconds until the first streamed response chunk arrives after response headers. Defaults to the configured timeout. Set to false to disable timeout.",
+        }),
       }),
       [Schema.Record(Schema.String, Schema.Any)],
     ),

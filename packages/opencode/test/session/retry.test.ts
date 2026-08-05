@@ -3,14 +3,14 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import type { NamedError } from "@opencode-ai/core/util/error"
 import { APICallError } from "ai"
 import { setTimeout as sleep } from "node:timers/promises"
-import { Effect, Layer, Schedule, Schema } from "effect"
+import { Clock, Duration, Effect, Exit, Layer, Schedule, Schema } from "effect"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { SessionRetry } from "../../src/session/retry"
 import { MessageV2 } from "../../src/session/message-v2"
 import { ProviderError } from "../../src/provider/error"
 import { SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
-import { testEffect } from "../lib/effect"
+import { it as bareIt, testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 
 const providerID = ProviderV2.ID.make("test")
@@ -127,6 +127,202 @@ describe("session.retry.delay", () => {
     }),
   )
 })
+
+// kilocode_change start
+describe("session.retry.policy offline", () => {
+  const disconnected = () => new Error("fetch failed")
+  const parseDisconnected = (e: unknown) => MessageV2.fromError(e, { providerID })
+
+  type StatusCall = { attempt: number; message: string; next: number }
+
+  function retryOut(exit: Exit.Exit<unknown, unknown>): [number, Duration.Duration] | undefined {
+    if (Exit.isSuccess(exit)) {
+      return Array.isArray(exit.value) ? (exit.value as [number, Duration.Duration]) : undefined
+    }
+    return undefined
+  }
+
+  function retry(exit: Exit.Exit<unknown, unknown>): [number, Duration.Duration] {
+    const out = retryOut(exit)
+    if (!out) throw new Error("expected a retry step, got a done step")
+    return out
+  }
+
+  function policy(opts: {
+    offline: (info: { error: unknown; message: string }) => Effect.Effect<"retry" | "blocked" | "aborted">
+    set?: (info: StatusCall) => Effect.Effect<void>
+    limit?: number
+  }) {
+    const calls: StatusCall[] = []
+    const order: string[] = []
+    const schedule = SessionRetry.policy({
+      provider: retryProvider,
+      parse: parseDisconnected,
+      set: (info) => {
+        calls.push(info)
+        order.push(`set:${info.attempt}`)
+        return opts.set ? opts.set(info) : Effect.void
+      },
+      offline: (info) => {
+        order.push(`offline:${info.message}`)
+        return opts.offline(info)
+      },
+      limit: opts.limit,
+    })
+    return { schedule, calls, order }
+  }
+
+  bareIt.effect("invokes the offline handler before scheduling status and retries with backoff", () =>
+    Effect.gen(function* () {
+      const p = policy({ offline: () => Effect.succeed("retry") })
+      const step = yield* Schedule.toStep(p.schedule)
+
+      const before = yield* Clock.currentTimeMillis
+      const [attempt, wait] = retry(yield* step(0, disconnected()).pipe(Effect.exit))
+
+      expect(attempt).toBe(1)
+      expect(Duration.toMillis(wait)).toBe(2000)
+      expect(p.calls).toEqual([{ attempt: 1, message: "Network request failed", next: before + 2000 }])
+      expect(p.order).toEqual(["offline:Network request failed", "set:1"])
+    }),
+  )
+
+  bareIt.effect("repeats disconnected retries with increasing capped backoff and attempts", () =>
+    Effect.gen(function* () {
+      const p = policy({ offline: () => Effect.succeed("retry") })
+      const step = yield* Schedule.toStep(p.schedule)
+
+      const out: Array<[number, number]> = []
+      for (const index of Array.from({ length: 5 }, (_, index) => index)) {
+        const [attempt, wait] = retry(yield* step(0, disconnected()).pipe(Effect.exit))
+        out.push([attempt, Duration.toMillis(wait)])
+      }
+
+      expect(out).toEqual([
+        [1, 2000],
+        [2, 4000],
+        [3, 8000],
+        [4, 16000],
+        [5, 30000],
+      ])
+      expect(p.calls.map((c) => c.attempt)).toEqual([1, 2, 3, 4, 5])
+      expect(p.calls.every((c) => c.attempt > 0)).toBe(true)
+      expect(p.calls.every((c) => c.message !== "Reconnected")).toBe(true)
+    }),
+  )
+
+  bareIt.effect("does not reset the attempt counter when a non-disconnected retry follows", () =>
+    Effect.gen(function* () {
+      const p = policy({ offline: () => Effect.succeed("retry") })
+      const step = yield* Schedule.toStep(p.schedule)
+
+      yield* step(0, disconnected()).pipe(Effect.exit)
+      const [attempt, wait] = retry(yield* step(0, new ProviderError.HeaderTimeoutError(10000)).pipe(Effect.exit))
+
+      expect(attempt).toBe(2)
+      expect(Duration.toMillis(wait)).toBe(4000)
+      expect(p.calls.map((c) => c.attempt)).toEqual([1, 2])
+      expect(p.order).toEqual(["offline:Network request failed", "set:1", "set:2"])
+    }),
+  )
+
+  bareIt.effect("stops immediately when the offline handler returns blocked", () =>
+    Effect.gen(function* () {
+      const p = policy({ offline: () => Effect.succeed("blocked") })
+      const step = yield* Schedule.toStep(p.schedule)
+
+      const exit = yield* step(0, disconnected()).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(retryOut(exit)).toBeUndefined()
+      expect(p.order).toEqual(["offline:Network request failed"])
+      expect(p.calls).toEqual([])
+    }),
+  )
+
+  bareIt.effect("stops immediately when the offline handler returns aborted", () =>
+    Effect.gen(function* () {
+      const p = policy({ offline: () => Effect.succeed("aborted") })
+      const step = yield* Schedule.toStep(p.schedule)
+
+      const exit = yield* step(0, disconnected()).pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(retryOut(exit)).toBeUndefined()
+      expect(p.order).toEqual(["offline:Network request failed"])
+      expect(p.calls).toEqual([])
+    }),
+  )
+
+  bareIt.effect("enforces the configured retry limit for disconnected retries", () =>
+    Effect.gen(function* () {
+      const p = policy({ offline: () => Effect.succeed("retry"), limit: 2 })
+      const step = yield* Schedule.toStep(p.schedule)
+
+      const [a1, w1] = retry(yield* step(0, disconnected()).pipe(Effect.exit))
+      const [a2, w2] = retry(yield* step(0, disconnected()).pipe(Effect.exit))
+      const exit = yield* step(0, disconnected()).pipe(Effect.exit)
+
+      expect(a1).toBe(1)
+      expect(a2).toBe(2)
+      expect(Exit.isFailure(exit)).toBe(true)
+      expect(retryOut(exit)).toBeUndefined()
+      expect(p.calls.map((c) => c.attempt)).toEqual([1, 2])
+      expect(p.order).toEqual(["offline:Network request failed", "set:1", "offline:Network request failed", "set:2"])
+      expect(p.order.filter((o) => o.startsWith("offline:"))).toHaveLength(2)
+    }),
+  )
+
+  bareIt.effect("honors retry-after headers when a disconnected error carries them", () =>
+    Effect.gen(function* () {
+      const input = new SessionV1.APIError({
+        message: "fetch failed",
+        isRetryable: true,
+        responseHeaders: { "retry-after-ms": "1500" },
+      })
+      const calls: StatusCall[] = []
+      const schedule = SessionRetry.policy({
+        provider: retryProvider,
+        parse: (e) => e as SessionV1.APIError,
+        set: (info) => {
+          calls.push(info)
+          return Effect.void
+        },
+        offline: () => Effect.succeed("retry"),
+      })
+      const step = yield* Schedule.toStep(schedule)
+
+      const before = yield* Clock.currentTimeMillis
+      const [attempt, wait] = retry(yield* step(0, input).pipe(Effect.exit))
+
+      expect(attempt).toBe(1)
+      expect(Duration.toMillis(wait)).toBe(1500)
+      expect(calls).toEqual([{ attempt: 1, message: "fetch failed", next: before + 1500 }])
+    }),
+  )
+
+  bareIt.effect("passes the original disconnected error and message to the offline handler", () =>
+    Effect.gen(function* () {
+      const err = disconnected()
+      const seen: Array<{ error: unknown; message: string }> = []
+      const schedule = SessionRetry.policy({
+        provider: retryProvider,
+        parse: parseDisconnected,
+        set: () => Effect.void,
+        offline: (info) => {
+          seen.push(info)
+          return Effect.succeed("blocked")
+        },
+      })
+      const step = yield* Schedule.toStep(schedule)
+
+      yield* step(0, err).pipe(Effect.exit)
+
+      expect(seen).toEqual([{ error: err, message: "Network request failed" }])
+    }),
+  )
+})
+// kilocode_change end
 
 describe("session.retry.retryable", () => {
   test("maps too_many_requests json messages", () => {
@@ -392,4 +588,56 @@ describe("session.message-v2.fromError", () => {
       message: "An error occurred while processing your request.",
     })
   })
+
+  // kilocode_change start
+  test("converts the exact unknown certificate verification error to a retryable APIError", () => {
+    const error = new Error("request failed", { cause: new Error("unknown certificate verification error") })
+    const result = MessageV2.fromError(error, { providerID })
+
+    expect(SessionV1.APIError.isInstance(result)).toBe(true)
+    if (!SessionV1.APIError.isInstance(result)) throw new Error("expected APIError")
+    expect(result.data.isRetryable).toBe(true)
+    expect(SessionRetry.retryable(result, retryProvider)).toEqual({
+      message: "Network connection failed",
+    })
+  })
+
+  test("recognizes the certificate message case-insensitively through nested causes", () => {
+    const error = { message: "upstream failed", cause: { message: "Unknown Certificate Verification Error" } }
+    const result = MessageV2.fromError(error, { providerID })
+
+    expect(SessionV1.APIError.isInstance(result)).toBe(true)
+    if (!SessionV1.APIError.isInstance(result)) throw new Error("expected APIError")
+    expect(result.data.isRetryable).toBe(true)
+    expect(SessionRetry.retryable(result, retryProvider)).toEqual({
+      message: "Network connection failed",
+    })
+  })
+
+  test("does not retry neighboring certificate messages", () => {
+    for (const message of [
+      "certificate has expired",
+      "certificate verification failed",
+      "TLS handshake failed",
+      "self-signed certificate",
+    ]) {
+      const result = MessageV2.fromError(new Error(message), { providerID })
+      expect(SessionV1.APIError.isInstance(result)).toBe(false)
+      expect(result.data).toMatchObject({ message })
+    }
+  })
+
+  test("retries first-chunk startup timeouts as retryable APIErrors", () => {
+    const request = MessageV2.fromError(
+      new ProviderError.ResponseStreamError("Provider response timed out waiting for the first chunk"),
+      { providerID },
+    )
+    expect(SessionV1.APIError.isInstance(request)).toBe(true)
+    if (!SessionV1.APIError.isInstance(request)) throw new Error("expected APIError")
+    expect(request.data.isRetryable).toBe(true)
+    expect(SessionRetry.retryable(request, retryProvider)).toEqual({
+      message: "Provider response timed out waiting for the first chunk",
+    })
+  })
+  // kilocode_change end
 })

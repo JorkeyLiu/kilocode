@@ -387,7 +387,8 @@ You can also set options that apply to all models from a provider:
 |---|---|---|
 | `apiKey` | `string` | API key (supports `{env:VAR}` and `{file:...}` syntax in trusted config — see note below) |
 | `baseURL` | `string` | Override the provider's base API URL |
-| `timeout` | `number \| false` | Request timeout in milliseconds. Defaults to `300000` (5 minutes); set to `false` to disable |
+| `timeout` | `number \| false` | Request timeout in milliseconds for the startup phase (connection, headers, and the first streamed chunk). Defaults to `60000` (1 minute); set to `false` to disable. The first-chunk wait inherits this value unless `firstChunkTimeout` is set explicitly |
+| `firstChunkTimeout` | `number \| false` | Timeout in milliseconds until the first response chunk after headers arrive. Defaults to the `timeout` value — including `timeout: false`, which disables this wait too. When both are set, an explicit `firstChunkTimeout` takes precedence over `timeout`. Catches providers that send headers but never start streaming. Set to `false` to disable |
 | `chunkTimeout` | `number` | Timeout in milliseconds between streamed response chunks. If no chunk arrives within this window, the request is aborted and retried. This catches silent provider dropouts where the TCP connection stays open but SSE streaming stops. Recommended: `15000`–`30000` (15–30 seconds) for providers with unreliable streaming. |
 
 {% callout type="warning" title="{env:} / {file:} only resolve in trusted config" %}

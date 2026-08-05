@@ -161,6 +161,9 @@ export namespace SessionNetwork {
     }
     return msgs(err).some((item) => {
       const msg = item.toLowerCase()
+      // kilocode_change - provider TLS handshake failure surfaces as a disconnect;
+      // exact message only, do not broaden to certificate/TLS/SSL patterns.
+      if (msg.includes("unknown certificate verification error")) return true
       if (msg.includes("load failed")) return true
       if (msg.includes("failed to fetch")) return true
       if (msg.includes("fetch failed")) return true
@@ -216,7 +219,12 @@ export namespace SessionNetwork {
       .finally(() => clearTimeout(timer))
   }
 
-  async function probe() {
+  /**
+   * One-shot generic connectivity check: concurrently HEADs three public
+   * endpoints, bounded by the existing 5s per-endpoint timeout. Resolves true
+   * when any endpoint answers, false when all fail. Never rejects.
+   */
+  export async function online() {
     return Promise.any(
       urls.map(async (url) => {
         if (await check(url)) return true
@@ -255,7 +263,7 @@ export namespace SessionNetwork {
       const s = await state()
       const req = s.pending.get(input.requestID)
       if (!req || req.info.restored) return
-      const ok = await probe().catch(() => false)
+      const ok = await online().catch(() => false)
       if (!ok) continue
       await restore({ requestID: input.requestID })
       return

@@ -12,8 +12,26 @@ import { Effect, Schema } from "effect"
 import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { mapValues, omit, pickBy } from "remeda"
 
-/** Default timeout (ms) for provider HTTP requests (connection phase). */
-export const REQUEST_TIMEOUT_MS = 300_000 // 5 minutes
+/**
+ * Default timeout (ms) for provider request startup: the connection/headers
+ * phase and, once headers arrive, the wait for the first response body chunk.
+ * Explicit provider timeout configuration remains authoritative.
+ */
+export const REQUEST_TIMEOUT_MS = 60_000 // 1 minute
+
+/**
+ * Effective first-chunk startup timeout (ms). Precedence:
+ * 1. explicit `firstChunkTimeout` when provided (a number, or `false` to
+ *    disable the first-chunk wait entirely);
+ * 2. otherwise the configured `timeout` when provided (`false` inherits the
+ *    disable);
+ * 3. otherwise the one-minute `REQUEST_TIMEOUT_MS` default.
+ * Explicit `firstChunkTimeout` always wins over `timeout`, including when
+ * `timeout` is `false`.
+ */
+export function resolveFirstChunkTimeout(firstChunkTimeout: unknown, timeout: unknown): number | false {
+  return (firstChunkTimeout ?? timeout ?? REQUEST_TIMEOUT_MS) as number | false
+}
 
 // ---------------------------------------------------------------------------
 // Bundled providers

@@ -26600,6 +26600,19 @@
               "chunkTimeout": {
                 "type": "integer",
                 "exclusiveMinimum": 0
+              },
+              "firstChunkTimeout": {
+                "anyOf": [
+                  {
+                    "type": "integer",
+                    "exclusiveMinimum": 0
+                  },
+                  {
+                    "type": "boolean",
+                    "enum": [false]
+                  }
+                ],
+                "description": "Timeout in milliseconds until the first streamed response chunk arrives after response headers. Defaults to the configured timeout. Set to false to disable timeout."
               }
             },
             "additionalProperties": {}
