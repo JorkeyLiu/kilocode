@@ -37,7 +37,8 @@ export interface SessionProvider {
   getSessionDirectories(): ReadonlyMap<string, string>
   getSessionInfo?(id: string): Promise<Session | undefined>
   trackSession(id: string): void
-  refreshSessions(): void
+  /** Re-fetch and send the full session list; resolves once the load has been applied. */
+  refreshSessions(): Promise<void>
   registerSession(session: Session): void
   /** Recover any pending permission/question prompts for tracked sessions. */
   recoverPendingPrompts(): void

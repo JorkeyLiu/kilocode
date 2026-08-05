@@ -521,6 +521,30 @@ export function activate(context: vscode.ExtensionContext) {
     ),
   )
 
+  // E2E fixture bridge (gated). Registered only when the real Extension Host
+  // E2E harness (script/e2e-probe.ts) sets KILO_E2E_FIXTURE. Exposes three
+  // deterministic probes to the extension-host test runner: Agent Manager
+  // panel readiness, typed webview posting, and session-list settlement
+  // (await the real backend session refresh so the runner can re-seed after
+  // it). No production effect when the env var is absent — no commands are
+  // registered and no webview code runs.
+  if (process.env.KILO_E2E_FIXTURE) {
+    context.subscriptions.push(
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerReady", async () => {
+        await agentManagerProvider.waitForReady()
+        return true
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.postToAgentManager", (msg: unknown) => {
+        agentManagerProvider.postMessage(msg)
+        return true
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.settleSessions", async () => {
+        await agentManagerProvider.settleSessionsForFixture()
+        return true
+      }),
+    )
+  }
+
   // Dispose services when extension deactivates (kills the server)
   context.subscriptions.push({
     dispose: () => {

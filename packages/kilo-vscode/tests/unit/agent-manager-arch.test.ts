@@ -423,12 +423,19 @@ describe("KiloProvider — pending session refresh on reconnect", () => {
     )
   })
 
-  it("handleLoadSessions delegates to loadSessionsUtil", () => {
-    // Tolerant of the optional cursor param added for cursor-based paging.
-    const start = provider.indexOf("private async handleLoadSessions(")
+  it("handleLoadSessions delegates to loadSessionsUtil through the serialized load chain", () => {
+    // Session-list loads are serialized (enqueueSessionLoad) so concurrent
+    // refreshes never interleave; the actual fetch lives in runLoadSessions.
+    const start = provider.indexOf("private handleLoadSessions(")
     expect(start, "handleLoadSessions must exist").toBeGreaterThan(-1)
     const snippet = provider.slice(start, start + 400)
-    expect(snippet, "must call loadSessionsUtil").toContain("loadSessionsUtil")
+    expect(snippet, "must enqueue through the serialized load chain").toContain("enqueueSessionLoad")
+    expect(snippet, "must delegate the fetch to runLoadSessions").toContain("runLoadSessions")
+    const runStart = provider.indexOf("private async runLoadSessions(")
+    expect(runStart, "runLoadSessions must exist").toBeGreaterThan(-1)
+    expect(provider.slice(runStart, runStart + 500), "runLoadSessions must call loadSessionsUtil").toContain(
+      "loadSessionsUtil",
+    )
   })
 
   it("connected state handler flushes deferred session refresh", () => {
@@ -713,9 +720,80 @@ describe("Agent Manager — viewChildSession event contract", () => {
     const source = fs.readFileSync(AGENT_MANAGER_APP_FILE, "utf-8")
     // Phase 4A: selection is always LOCAL (a function returning the constant),
     // so no explicit setSelection(LOCAL) call is needed. The handler navigates
-    // via openSession which sets selection internally.
+    // via the child-open transaction which sets selection internally.
     expect(source).toContain("handleViewChildSession")
-    expect(source).toContain("openSession(id, openDeps)")
+    expect(source).toContain("openChildSession")
+  })
+
+  it("viewChildSession carries the source session ID into the child-open transaction", () => {
+    const source = fs.readFileSync(AGENT_MANAGER_APP_FILE, "utf-8")
+    // The production task renderer (TaskToolExpanded, shared with the sidebar)
+    // posts sourceSessionID alongside sessionID. AgentManagerApp must forward
+    // both so the child opens immediately right of its source tab.
+    expect(source).toContain(
+      "handleViewChildSession(msg.sessionID as string, msg.sourceSessionID as string | undefined)",
+    )
+    expect(source).toContain("const handleViewChildSession = (id: string, source: string | undefined) =>")
+  })
+
+  it("generic openSession stays append — only the child-open path is source-relative", () => {
+    const openSessionSrc = fs.readFileSync(path.join(ROOT, "webview-ui/agent-manager/open-session.ts"), "utf-8")
+    // The canonical openSession transaction (used by +/Cmd+T/navigation/sessionAdded)
+    // must remain append-or-focus via tabMgr.open. The source-relative behavior is
+    // isolated in the dedicated openChildSession transaction.
+    expect(openSessionSrc).toContain("deps.tabMgr.open(LOCAL, id)")
+    expect(openSessionSrc).toContain("export function openChildSession")
+    expect(openSessionSrc).toContain("deps.tabMgr.openAfter(LOCAL, source, id)")
+  })
+
+  it("TaskToolExpanded emits sourceSessionID alongside sessionID", () => {
+    const file = path.join(ROOT, "webview-ui/src/components/chat/TaskToolExpanded.tsx")
+    const source = fs.readFileSync(file, "utf-8")
+    expect(source).toContain('type: "viewChildSession", sessionID: id, sourceSessionID: session.currentSessionID()')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Agent Manager — explicit task renderer registration (LOCK-001)
+//
+// TaskToolExpanded was previously active in the Agent Manager webview only as
+// an accidental module-scope side effect of importing DataBridge from App.tsx
+// (which calls registerExpandedTaskTool/registerVscodeToolOverrides). The
+// bridges moved to side-effect-free AppBridge.tsx; the Agent Manager must
+// register the renderers it owns explicitly at its own boundary, and the
+// sidebar must keep its own single registration.
+// ---------------------------------------------------------------------------
+
+describe("Agent Manager — explicit tool renderer registration (LOCK-001)", () => {
+  const APP_BRIDGE_FILE = path.join(ROOT, "webview-ui/src/AppBridge.tsx")
+
+  it("AgentManagerApp imports DataBridge from AppBridge, not from App.tsx", () => {
+    const source = fs.readFileSync(AGENT_MANAGER_APP_FILE, "utf-8")
+    expect(source).toContain('import { DataBridge, MermaidDownloadBridge } from "../src/AppBridge"')
+    expect(source).not.toContain('from "../src/App"')
+  })
+
+  it("AgentManagerApp registers TaskToolExpanded and sidebar tool overrides explicitly", () => {
+    const source = fs.readFileSync(AGENT_MANAGER_APP_FILE, "utf-8")
+    expect(source).toContain("registerExpandedTaskTool()")
+    expect(source).toContain("registerVscodeToolOverrides()")
+  })
+
+  it("AppBridge is side-effect-free (no module-scope tool registration)", () => {
+    const bridge = fs.readFileSync(APP_BRIDGE_FILE, "utf-8")
+    expect(bridge).not.toContain("registerExpandedTaskTool()")
+    expect(bridge).not.toContain("registerVscodeToolOverrides()")
+  })
+
+  it("sidebar App.tsx still registers the task renderer exactly once at module scope", () => {
+    const sidebar = fs.readFileSync(APP_FILE, "utf-8")
+    expect(sidebar).toContain("registerExpandedTaskTool()")
+    expect(sidebar).toContain("registerVscodeToolOverrides()")
+  })
+
+  it("App.tsx re-exports the bridges so the sidebar public API is unchanged", () => {
+    const sidebar = fs.readFileSync(APP_FILE, "utf-8")
+    expect(sidebar).toContain("export { DataBridge, MermaidDownloadBridge }")
   })
 })
 

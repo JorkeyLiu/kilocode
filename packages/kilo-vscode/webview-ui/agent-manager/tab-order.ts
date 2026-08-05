@@ -45,10 +45,10 @@ export function replaceInTabOrder(order: string[] | undefined, oldId: string, ne
  * If `afterId` is missing from `order`, appends `id` at the end.
  * Returns a new array, or undefined if `id` is already present.
  */
-export function insertInTabOrderAfter(order: string[] | undefined, afterId: string, id: string): string[] {
+export function insertInTabOrderAfter(order: string[] | undefined, afterId: string | undefined, id: string): string[] {
   const base = order ?? []
   if (base.includes(id)) return base
-  const i = base.indexOf(afterId)
+  const i = afterId === undefined ? -1 : base.indexOf(afterId)
   if (i === -1) return [...base, id]
   return [...base.slice(0, i + 1), id, ...base.slice(i + 1)]
 }

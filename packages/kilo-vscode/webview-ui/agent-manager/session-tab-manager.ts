@@ -11,6 +11,7 @@ import { createSignal } from "solid-js"
 import {
   seedTabs,
   openTab,
+  openTabAfter,
   selectTab,
   closeTab,
   closeOtherTabs,
@@ -60,6 +61,11 @@ export function createSessionTabManager() {
     /** Open or focus a session tab. Appends if missing, focuses if present. */
     open(ctx: string, id: string) {
       update(ctx, (s) => openTab(s, id))
+    },
+
+    /** Open or focus a session right after its source; appends if source is missing. */
+    openAfter(ctx: string, source: string | undefined, id: string) {
+      update(ctx, (s) => openTabAfter(s, source, id))
     },
 
     /** Select an existing tab. No-op if not present. */

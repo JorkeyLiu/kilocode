@@ -64,7 +64,9 @@ import { ChatView } from "../src/components/chat"
 import { SpeechToTextPrewarm } from "../src/components/speech-to-text/SpeechToTextPrewarm"
 import HistoryView from "../src/components/history/HistoryView"
 import { SidebarSessionList } from "./SidebarSessionList"
-import { DataBridge, MermaidDownloadBridge } from "../src/App"
+import { DataBridge, MermaidDownloadBridge } from "../src/AppBridge"
+import { registerExpandedTaskTool } from "../src/components/chat/TaskToolExpanded"
+import { registerVscodeToolOverrides } from "../src/components/chat/VscodeToolOverrides"
 import { LanguageBridge } from "../src/context/language-bridge"
 import { useLanguage } from "../src/context/language"
 import { formatRelativeDate } from "../src/utils/date"
@@ -108,9 +110,20 @@ import { setTabWidths } from "./tab-widths"
 import { buildShortcutCategories } from "./shortcuts"
 import { tracker } from "./telemetry"
 import { createSessionTabManager } from "./session-tab-manager"
-import { openSession, type OpenSessionDeps } from "./open-session"
+import { openSession, openChildSession, type OpenChildSessionDeps, type OpenSessionDeps } from "./open-session"
 import "./agent-manager.css"
 import "./agent-manager-review.css"
+
+// Explicit tool registration at the Agent Manager boundary. The task renderer
+// (TaskToolExpanded) and VS Code sidebar tool overrides were previously active
+// in this webview only as an accidental side effect of importing DataBridge
+// from ../src/App (whose module scope called these). DataBridge now lives in
+// the side-effect-free ../src/AppBridge, so Agent Manager must register the
+// renderers it owns explicitly — this is the Agent Manager-owned boundary for
+// that registration. ToolRegistry.register is idempotent, so this is safe to
+// run alongside the sidebar's own App.tsx registration.
+registerExpandedTaskTool()
+registerVscodeToolOverrides()
 const REVIEW_TAB_ID = "review"
 
 type SidePanel = "diff" | "pr" | null
@@ -188,9 +201,6 @@ const AgentManagerContent: Component = () => {
       setActivePendingId(undefined)
       session.clearCurrentSession()
     }
-  }
-  const handleViewChildSession = (id: string) => {
-    handleOpenSession(id)
   }
   const handleSearchAction = () => {
     if (!sidebarCollapsed()) sidebarSearchMenu?.open()
@@ -419,6 +429,23 @@ const AgentManagerContent: Component = () => {
     return openSession(id, openDeps)
   }
 
+  // Source-relative child-open (Agent Manager task/tool-call open action):
+  // keeps the local inventory and persisted tab order consistent with the tab
+  // registry before openChildSession selects the child. Mirrors the fork
+  // transaction's three-store insertAfter pattern. Already-open children are
+  // focused without mutating any store (see tabOrderSync.insertLocalAfter).
+  const insertLocalAfter = (source: string | undefined, id: string) => {
+    tabOrderSync.insertLocalAfter(source, id, setLocalSessionIDs)
+  }
+  const childOpenDeps: OpenChildSessionDeps = {
+    ...openDeps,
+    insertLocalAfter,
+  }
+  const handleViewChildSession = (id: string, source: string | undefined) => {
+    coverBottomPage()
+    return openChildSession(id, source, childOpenDeps)
+  }
+
   const localSet = createMemo(() => new Set(localSessionIDs()))
 
   // Local sessions (resolved from session list + pending tabs, in insertion order)
@@ -582,7 +609,7 @@ const AgentManagerContent: Component = () => {
       const msg = event.data
       if (msg?.type === "navigate" && msg.view === "history") return setHistory(true)
       if (msg?.type === "viewChildSession" && msg.sessionID) {
-        handleViewChildSession(msg.sessionID as string)
+        handleViewChildSession(msg.sessionID as string, msg.sourceSessionID as string | undefined)
         return
       }
       if (msg?.type !== "action") return

@@ -162,6 +162,82 @@ describe("createTabOrderSync.insertAfter", () => {
     sync.insertAfter("LOCAL", "s1", "child")
     expect(state.order.LOCAL).toEqual(["s1", "child", "s2"])
   })
+
+  it("leaves an already-stored id untouched (focus-only, no reorder — LOCK-002)", () => {
+    // The child is already persisted at a NON-adjacent position. Re-opening it
+    // from the source must NOT move it in the persisted order or repersist.
+    const { state, sync, deps } = scene({
+      order: { LOCAL: ["s1", "child", "s2", "t1"] },
+      sessions: ["s1", "child", "s2"],
+      terminals: { LOCAL: ["t1"] },
+    })
+    sync.insertAfter("LOCAL", "s1", "child")
+    expect(state.order.LOCAL).toEqual(["s1", "child", "s2", "t1"])
+    expect(state.persisted).toEqual([])
+    expect(render(deps, "LOCAL")).toEqual(["s1", "child", "s2", "t1"])
+  })
+})
+
+describe("createTabOrderSync.insertLocalAfter (LOCK-002 three-store coordination)", () => {
+  function setLocal(state: ReturnType<typeof scene>["state"], u: (prev: string[]) => string[]) {
+    state.localIds = u(state.localIds)
+  }
+
+  it("inserts a new child after its source in inventory AND persisted order", () => {
+    const { state, sync } = scene({
+      order: { LOCAL: ["s1", "s2"] },
+      sessions: ["s1", "s2"],
+    })
+    sync.insertLocalAfter("s1", "child", (u) => setLocal(state, u))
+    expect(state.localIds).toEqual(["s1", "child", "s2"])
+    expect(state.order.LOCAL).toEqual(["s1", "child", "s2"])
+  })
+
+  it("appends when the source is missing, in both stores", () => {
+    const { state, sync } = scene({
+      order: { LOCAL: ["s1", "s2"] },
+      sessions: ["s1", "s2"],
+    })
+    sync.insertLocalAfter("missing", "child", (u) => setLocal(state, u))
+    expect(state.localIds).toEqual(["s1", "s2", "child"])
+    expect(state.order.LOCAL).toEqual(["s1", "s2", "child"])
+  })
+
+  it("leaves an already-open child untouched in BOTH stores (no reorder, no repersist)", () => {
+    const { state, sync } = scene({
+      order: { LOCAL: ["s1", "child", "s2"] },
+      sessions: ["s1", "child", "s2"],
+    })
+    const before = { local: [...state.localIds], order: [...(state.order.LOCAL ?? [])] }
+    sync.insertLocalAfter("s1", "child", (u) => setLocal(state, u))
+    expect(state.localIds).toEqual(before.local)
+    expect(state.order.LOCAL).toEqual(before.order)
+    expect(state.persisted).toEqual([])
+  })
+
+  it("positions a child that is in inventory but not yet persisted", () => {
+    const { state, sync } = scene({
+      order: { LOCAL: ["s1", "s2"] },
+      sessions: ["s1", "child", "s2"],
+    })
+    sync.insertLocalAfter("s1", "child", (u) => setLocal(state, u))
+    expect(state.localIds).toEqual(["s1", "child", "s2"])
+    expect(state.order.LOCAL).toEqual(["s1", "child", "s2"])
+  })
+
+  it("does not move an already-persisted non-adjacent child (LOCK-002 regression)", () => {
+    // Simulates: source s1 at position 0, child persisted at position 2 after
+    // a drag. Re-opening the child from s1 must focus WITHOUT yanking it back
+    // next to s1 in the persisted order.
+    const { state, sync } = scene({
+      order: { LOCAL: ["s1", "s2", "child"] },
+      sessions: ["s1", "s2", "child"],
+    })
+    sync.insertLocalAfter("s1", "child", (u) => setLocal(state, u))
+    expect(state.localIds).toEqual(["s1", "s2", "child"])
+    expect(state.order.LOCAL).toEqual(["s1", "s2", "child"])
+    expect(state.persisted).toEqual([])
+  })
 })
 
 describe("createTabOrderSync persistence filter", () => {

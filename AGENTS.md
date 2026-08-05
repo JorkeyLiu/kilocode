@@ -67,6 +67,16 @@ Kilo CLI is an open source AI coding agent that generates code from natural lang
 
 Before saying an implementation is ready, run the smallest relevant checks that can catch lint, typecheck, and test failures for the touched package. Do not rely on manual extension launch to discover build problems. Fix failures you introduced before the final response, or state exactly which check is still failing or could not be run.
 
+### Test layer selection
+
+Choose the smallest test layer that proves the risk:
+
+- Unit tests for pure logic/state.
+- Storybook Playwright for isolated rendering, component interaction, visual, and a11y.
+- `bun run test:e2e` (real VS Code Extension Host, explicit/manual) only for real Extension Host/API behavior, extension↔webview messaging, command routing, bundle/surface registration, process/backend lifecycle, or when manual runtime contradicts static/unit evidence.
+
+Copy, CSS, isolated components, and faithfully reproducible Storybook UI do not require Extension Host E2E. E2E stays explicit/manual today — never wire it into hooks, workflows, or other scripts. Details live in `packages/kilo-vscode/AGENTS.md` and root `TESTING.md`.
+
 | Area | Checks |
 |---|---|
 | Root / cross-package | `bun run lint`, `bun run typecheck` |

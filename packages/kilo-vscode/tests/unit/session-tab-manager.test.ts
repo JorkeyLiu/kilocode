@@ -93,6 +93,45 @@ describe("session-tab-manager — viewChildSession contract", () => {
     }))
 })
 
+describe("session-tab-manager — openAfter (source-relative child open)", () => {
+  it("inserts a missing child immediately after its source", () =>
+    withManager((mgr) => {
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B], ROOT_A)
+      mgr.openAfter(LOCAL, ROOT_A, CHILD_A)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, CHILD_A, ROOT_B])
+      expect(mgr.active(LOCAL)).toBe(CHILD_A)
+    }))
+
+  it("preserves relative order of other tabs after a middle source", () =>
+    withManager((mgr) => {
+      mgr.seed(LOCAL, [ROOT_C, ROOT_A, ROOT_B], ROOT_A)
+      mgr.openAfter(LOCAL, ROOT_A, CHILD_A)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_C, ROOT_A, CHILD_A, ROOT_B])
+    }))
+
+  it("focuses an already-open child without reordering", () =>
+    withManager((mgr) => {
+      mgr.seed(LOCAL, [ROOT_A, CHILD_A, ROOT_B], ROOT_A)
+      mgr.openAfter(LOCAL, ROOT_A, CHILD_A)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, CHILD_A, ROOT_B])
+      expect(mgr.active(LOCAL)).toBe(CHILD_A)
+    }))
+
+  it("appends when the source is unknown", () =>
+    withManager((mgr) => {
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B], ROOT_A)
+      mgr.openAfter(LOCAL, "missing-source", CHILD_A)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B, CHILD_A])
+    }))
+
+  it("appends when the source is undefined", () =>
+    withManager((mgr) => {
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B], ROOT_A)
+      mgr.openAfter(LOCAL, undefined, CHILD_A)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B, CHILD_A])
+    }))
+})
+
 describe("session-tab-manager — close and deletion fallback", () => {
   it("close removes ID and returns adjacent fallback", () =>
     withManager((mgr) => {

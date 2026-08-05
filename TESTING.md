@@ -257,3 +257,49 @@ Regenerate the SDK and OpenAPI spec so `/doc` and typed clients stay in sync:
 ```
 
 See `AGENTS.md` for the full rationale.
+
+## 11. VS Code Extension test layers (static → unit → E2E)
+
+`packages/kilo-vscode/` runs three test layers. E2E is explicit/manual only — no CI workflow and no package script invokes it automatically.
+
+| Layer | Command (from `packages/kilo-vscode/`) | What it runs | Launches VS Code? |
+|---|---|---|---|
+| Static | `bun run typecheck` | Extension + webview + E2E source type checks | No |
+| Static | `bun run lint` | ESLint on `src/`, `webview-ui/`, `script/e2e-probe.ts`, `tests/e2e/` | No |
+| Unit | `bun run test:unit` | Bun tests under `tests/unit/` | No |
+| E2E | `bun run test:e2e` | Real Extension Host probe (below) | Yes — explicit only |
+
+`bun install`, `bun run extension`, dev, commit, push, `bun run typecheck`, `bun run lint`, and `bun run test:unit` never launch or download E2E resources.
+
+### Real VS Code E2E (`bun run test:e2e`)
+
+The probe (`script/e2e-probe.ts`, Node-only — Playwright's CDP transport hangs under Bun) runs the current workspace extension in a real VS Code instance and asserts real webview DOM behavior:
+
+| Component | Role |
+|---|---|
+| `@vscode/test-electron` | Reuses or downloads VS Code and spawns the workbench with the extension |
+| Extension Host runner (`tests/e2e/runner.ts`) | Activates the extension, opens the Agent Manager, seeds a deterministic offline fixture, drives phases |
+| Playwright over CDP | Connects to the workbench over a uniquely owned loopback CDP port, finds the Agent Manager webview frame, asserts tab order, clicks the real production button |
+| Fixture bridge (`kilo-code.new.e2eFixture.*`) | Env-gated (`KILO_E2E_FIXTURE`); registered only inside the real E2E host — zero production effect otherwise |
+| Scratch dir | One unique temp root owns user-data, extensions, workspace, runner bundle, and coordination markers |
+
+VS Code binary resolution: `VSCODE_TEST_EXECUTABLE` (must exist) wins, else a cached download under `.vscode-test/` is reused, else `vscodeExecutablePath` is omitted and `@vscode/test-electron` downloads into `.vscode-test/` automatically. A clean checkout needs no binary present.
+
+Ownership rules:
+
+- All spawned processes are terminated by exact PID matched to the unique user-data dir (`ps` PID+args); no process-name kills, no shared-path glob cleanup.
+- Scratch and the CDP port are verified released before the scratch dir is deleted, on success and failure paths.
+- Platforms: macOS and Linux. Windows fails fast with a documented error (exact-owned termination depends on `ps`).
+
+Test-only debugging/failure flags (env-gated, not a public API):
+
+| Flag | Effect |
+|---|---|
+| `KILO_E2E_TIMEOUT` | Overall VS Code exit watchdog, ms (default 300000) |
+| `KILO_E2E_FORCE_FAIL` | Force a failure after launch to exercise failure-path cleanup |
+| `KILO_E2E_FIXTURE_HANG` | Keep the runner alive after readiness to exercise exact-owned termination |
+| `VSCODE_TEST_EXECUTABLE` | Point the probe at a specific VS Code executable |
+
+### Future Linux CI (recommendation only)
+
+Linux CI for the E2E probe is a future recommendation, not a current workflow. A future path-scoped job would need an Xvfb virtual display, a cached `.vscode-test` download (the VS Code archive is ~900 MB, so re-downloading per run is not viable), a clean checkout that proves `bun install` + `bun run test:e2e` work from scratch, and a trigger limited to extension-package changes. No `.github/workflows/**` change exists today and none is planned in this work — E2E remains explicit/manual until that path is built.

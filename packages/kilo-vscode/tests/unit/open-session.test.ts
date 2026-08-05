@@ -11,13 +11,21 @@
  */
 
 import { describe, expect, it } from "bun:test"
-import { createRoot } from "solid-js"
-import { openSession, type OpenSessionDeps } from "../../webview-ui/agent-manager/open-session"
+import { createRoot, createSignal } from "solid-js"
+import {
+  openSession,
+  openChildSession,
+  type OpenChildSessionDeps,
+  type OpenSessionDeps,
+} from "../../webview-ui/agent-manager/open-session"
 import { createSessionTabManager } from "../../webview-ui/agent-manager/session-tab-manager"
+import { createTabOrderSync } from "../../webview-ui/agent-manager/tab-order-sync"
+import { applyTabOrder } from "../../webview-ui/agent-manager/tab-order"
 import { LOCAL } from "../../webview-ui/agent-manager/navigate"
 
 const ROOT_A = "root-aaaa-bbbb"
 const ROOT_B = "root-cccc-dddd"
+const ROOT_C = "root-eeee-ffff"
 const CHILD_A = "child-aaaa-bbbb"
 const PENDING = "pending:aaa-bbb"
 
@@ -31,8 +39,9 @@ function createDeps() {
     terminal: "some-terminal" as string | undefined,
     selection: "old-selection" as string,
     ensured: [] as string[],
+    insertedAfter: [] as { source?: string; id: string }[],
   }
-  const deps: OpenSessionDeps = {
+  const deps: OpenChildSessionDeps = {
     tabMgr: mgr,
     selectSession: (id) => state.selected.push(id),
     setActivePendingId: (id) => {
@@ -52,6 +61,7 @@ function createDeps() {
     },
     isPending: (id) => id.startsWith("pending:"),
     ensureLocal: (id) => state.ensured.push(id),
+    insertLocalAfter: (source, id) => state.insertedAfter.push({ source, id }),
   }
   return { mgr, state, deps }
 }
@@ -329,4 +339,206 @@ describe("Phase 3A — single LOCAL context invariants", () => {
     // If saveTabMemory were required, this object literal would fail typecheck
     expect(deps).toBeDefined()
   })
+})
+
+describe("openChildSession — source-relative placement contract", () => {
+  it("returns false for empty ID and does not clear overlays", () =>
+    createRoot(() => {
+      const { state, deps } = createDeps()
+      expect(openChildSession("", ROOT_A, deps)).toBe(false)
+      expect(state.history).toBe(true)
+    }))
+
+  it("inserts a missing child immediately after its source in the tab registry", () =>
+    createRoot(() => {
+      const { mgr, deps } = createDeps()
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B], ROOT_A)
+      openChildSession(CHILD_A, ROOT_A, deps)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, CHILD_A, ROOT_B])
+      expect(mgr.active(LOCAL)).toBe(CHILD_A)
+    }))
+
+  it("inserts after a middle source preserving the other tabs' relative order", () =>
+    createRoot(() => {
+      const { mgr, deps } = createDeps()
+      mgr.seed(LOCAL, [ROOT_C, ROOT_A, ROOT_B], ROOT_A)
+      openChildSession(CHILD_A, ROOT_A, deps)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_C, ROOT_A, CHILD_A, ROOT_B])
+    }))
+
+  it("focuses an already-open child without reordering", () =>
+    createRoot(() => {
+      const { mgr, deps } = createDeps()
+      mgr.seed(LOCAL, [ROOT_A, CHILD_A, ROOT_B], ROOT_A)
+      openChildSession(CHILD_A, ROOT_A, deps)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, CHILD_A, ROOT_B])
+      expect(mgr.active(LOCAL)).toBe(CHILD_A)
+    }))
+
+  it("appends when the source is missing from the registry", () =>
+    createRoot(() => {
+      const { mgr, deps } = createDeps()
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B], ROOT_A)
+      openChildSession(CHILD_A, "missing-source", deps)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B, CHILD_A])
+      expect(mgr.active(LOCAL)).toBe(CHILD_A)
+    }))
+
+  it("appends when the source is undefined", () =>
+    createRoot(() => {
+      const { mgr, deps } = createDeps()
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B], ROOT_A)
+      openChildSession(CHILD_A, undefined, deps)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B, CHILD_A])
+    }))
+
+  it("calls insertLocalAfter with the explicit source before selecting", () =>
+    createRoot(() => {
+      const { state, deps } = createDeps()
+      openChildSession(CHILD_A, ROOT_A, deps)
+      expect(state.insertedAfter).toEqual([{ source: ROOT_A, id: CHILD_A }])
+      expect(state.selected).toEqual([CHILD_A])
+    }))
+
+  it("clears overlays and sets selection to LOCAL", () =>
+    createRoot(() => {
+      const { state, deps } = createDeps()
+      openChildSession(CHILD_A, ROOT_A, deps)
+      expect(state.history).toBe(false)
+      expect(state.review).toBe(false)
+      expect(state.terminal).toBeUndefined()
+      expect(state.selection).toBe(LOCAL)
+    }))
+
+  it("handles pending IDs like openSession (no insertLocalAfter, sets pending)", () =>
+    createRoot(() => {
+      const { mgr, state, deps } = createDeps()
+      openChildSession(PENDING, ROOT_A, deps)
+      expect(state.insertedAfter).toEqual([])
+      expect(state.pending).toBe(PENDING)
+      expect(state.selected).toEqual([])
+      expect(mgr.ids(LOCAL)).toContain(PENDING)
+    }))
+
+  it("keeps generic openSession append semantics untouched", () =>
+    createRoot(() => {
+      const { mgr, deps } = createDeps()
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B], ROOT_A)
+      openSession(CHILD_A, deps)
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B, CHILD_A])
+    }))
+})
+
+// ---------------------------------------------------------------------------
+// Real three-store integration (LOCK-002): openChildSession wired to the real
+// tabOrderSync (local inventory signal + persisted tab order) and the real tab
+// registry. Uses the exact production `insertLocalAfter` wiring
+// (tabOrderSync.insertLocalAfter), NOT a stub — this is what catches the
+// persisted-order reorder that the stubbed deps hide.
+// ---------------------------------------------------------------------------
+
+const REVIEW_TAB_ID = "review"
+
+describe("openChildSession — real three-store coordination (LOCK-002)", () => {
+  function realDeps(initIds: string[], initOrder: string[] | undefined) {
+    const [local, setLocal] = createSignal<string[]>(initIds)
+    const [order, setOrder] = createSignal<Record<string, string[]>>({ [LOCAL]: initOrder ?? [] })
+    const persisted: string[][] = []
+    const mgr = createSessionTabManager()
+    const tabOrderSync = createTabOrderSync({
+      LOCAL,
+      REVIEW_TAB_ID,
+      order,
+      setOrder,
+      persist: (_key, value) => persisted.push([...value]),
+      localSessionIDs: local,
+      sessions: () => [],
+      managedSessions: () => [],
+      reviewOpenByContext: () => ({}),
+      terminalIdsFor: () => [],
+    })
+    const deps: OpenChildSessionDeps = {
+      tabMgr: mgr,
+      selectSession: () => {},
+      setActivePendingId: () => {},
+      setHistory: () => {},
+      setReviewActive: () => {},
+      setTermsActiveId: () => {},
+      setSelection: () => {},
+      isPending: (id) => id.startsWith("pending:"),
+      ensureLocal: () => {},
+      insertLocalAfter: (source, id) => tabOrderSync.insertLocalAfter(source, id, setLocal),
+    }
+    return { mgr, deps, local, order, persisted }
+  }
+
+  it("focuses an already-open child without changing ANY of the three stores", () =>
+    createRoot(() => {
+      const { mgr, deps, local, order, persisted } = realDeps([ROOT_A, CHILD_A, ROOT_B], [ROOT_A, CHILD_A, ROOT_B])
+      mgr.seed(LOCAL, [ROOT_A, CHILD_A, ROOT_B], ROOT_A)
+      const before = {
+        local: local(),
+        order: order()[LOCAL],
+        mgr: mgr.ids(LOCAL),
+        persistedCount: persisted.length,
+      }
+      openChildSession(CHILD_A, ROOT_A, deps)
+      expect(local()).toEqual(before.local)
+      expect(order()[LOCAL]).toEqual(before.order)
+      expect(mgr.ids(LOCAL)).toEqual(before.mgr)
+      expect(mgr.active(LOCAL)).toBe(CHILD_A)
+      expect(persisted.length).toBe(before.persistedCount)
+    }))
+
+  it("does not reorder an already-persisted non-adjacent child (LOCK-002 regression)", () =>
+    createRoot(() => {
+      // Child is persisted at the far end (user dragged it there). Re-opening
+      // from the source must focus it without yanking it back next to source.
+      const { mgr, deps, local, order, persisted } = realDeps([ROOT_A, ROOT_B, CHILD_A], [ROOT_A, ROOT_B, CHILD_A])
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B, CHILD_A], ROOT_A)
+      openChildSession(CHILD_A, ROOT_A, deps)
+      expect(local()).toEqual([ROOT_A, ROOT_B, CHILD_A])
+      expect(order()[LOCAL]).toEqual([ROOT_A, ROOT_B, CHILD_A])
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B, CHILD_A])
+      expect(mgr.active(LOCAL)).toBe(CHILD_A)
+      expect(persisted).toEqual([])
+    }))
+
+  it("inserts a missing child after its source in all three stores", () =>
+    createRoot(() => {
+      const { mgr, deps, local, order, persisted } = realDeps([ROOT_A, ROOT_B], [ROOT_A, ROOT_B])
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B], ROOT_A)
+      openChildSession(CHILD_A, ROOT_A, deps)
+      expect(local()).toEqual([ROOT_A, CHILD_A, ROOT_B])
+      expect(order()[LOCAL]).toEqual([ROOT_A, CHILD_A, ROOT_B])
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, CHILD_A, ROOT_B])
+      expect(mgr.active(LOCAL)).toBe(CHILD_A)
+      expect(persisted.at(-1)).toEqual([ROOT_A, CHILD_A, ROOT_B])
+    }))
+
+  it("appends in all three stores when the source is unknown", () =>
+    createRoot(() => {
+      const { mgr, deps, local, order, persisted } = realDeps([ROOT_A, ROOT_B], [ROOT_A, ROOT_B])
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B], ROOT_A)
+      openChildSession(CHILD_A, "missing-source", deps)
+      expect(local()).toEqual([ROOT_A, ROOT_B, CHILD_A])
+      expect(order()[LOCAL]).toEqual([ROOT_A, ROOT_B, CHILD_A])
+      expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B, CHILD_A])
+      expect(persisted.at(-1)).toEqual([ROOT_A, ROOT_B, CHILD_A])
+    }))
+
+  it("renders the persisted order in the visible tab strip (applyTabOrder)", () =>
+    createRoot(() => {
+      // The tab strip derives from tabOrder via applyTabOrder; a non-adjacent
+      // already-open child must render where it was persisted, not beside the
+      // source, after re-open.
+      const { mgr, deps, order } = realDeps([ROOT_A, ROOT_B, CHILD_A], [ROOT_A, ROOT_B, CHILD_A])
+      mgr.seed(LOCAL, [ROOT_A, ROOT_B, CHILD_A], ROOT_A)
+      openChildSession(CHILD_A, ROOT_A, deps)
+      const rendered = applyTabOrder(
+        mgr.ids(LOCAL).map((id) => ({ id })),
+        order()[LOCAL],
+      ).map((i) => i.id)
+      expect(rendered).toEqual([ROOT_A, ROOT_B, CHILD_A])
+    }))
 })

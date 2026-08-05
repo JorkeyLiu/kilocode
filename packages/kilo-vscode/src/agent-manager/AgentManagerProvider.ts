@@ -415,7 +415,10 @@ export class AgentManagerProvider implements Disposable {
       ?.then(() => {
         this.pushState()
         if (this.cachedLocalStats) this.postToWebview(this.cachedLocalStats)
-        this.panel?.sessions.refreshSessions()
+        // Intentionally fire-and-forget: the refresh enqueues through the
+        // serialized session-load chain and its internal error handling is
+        // preserved inside KiloProvider. Explicit void marks the intent.
+        void this.panel?.sessions.refreshSessions()
       })
       .catch((err) => {
         this.log("initializeState failed, pushing partial state:", err)
@@ -737,6 +740,32 @@ export class AgentManagerProvider implements Disposable {
 
   public postMessage(message: unknown): void {
     this.panel?.postMessage(message)
+  }
+
+  /**
+   * Deterministically wait until the Agent Manager's session list has been
+   * synced from the real backend — including any deferred refresh flushed
+   * when the CLI connection comes up. Used only by the env-gated E2E fixture
+   * bridge (KILO_E2E_FIXTURE); the extension-host runner calls this before
+   * its final re-seed so no later in-flight refresh can reconcile the
+   * fixture sessions away.
+   */
+  public async settleSessionsForFixture(): Promise<void> {
+    const panel = this.panel
+    if (!panel) return
+    await this.waitForStateReady("settleSessionsForFixture")
+    // Ensure the CLI connection is established so the refresh performs a real
+    // fetch now instead of deferring (pendingSessionRefresh). KiloProvider
+    // serializes session-list loads, so this awaited refresh is the last one
+    // the webview applies.
+    try {
+      await this.connectionService.getClientAsync(this.getRoot())
+    } catch {
+      // Best effort — refreshSessions still enqueues; if the client is
+      // unavailable it defers and flushes on connect, which the serialized
+      // load chain resolves in order.
+    }
+    await panel.sessions.refreshSessions()
   }
 
   public shutdown(): Promise<void> {

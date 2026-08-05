@@ -2,7 +2,10 @@ import { describe, it, expect } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
 
-const APP_FILE = join(__dirname, "..", "..", "webview-ui", "src", "App.tsx")
+// DataBridge moved out of App.tsx into the side-effect-free AppBridge module so
+// the Agent Manager can reuse it without pulling in App.tsx's module-scope tool
+// registrations (LOCK-001). The shape guards below read the bridge module.
+const APP_FILE = join(__dirname, "..", "..", "webview-ui", "src", "AppBridge.tsx")
 const src = readFileSync(APP_FILE, "utf8")
 
 /**
@@ -31,7 +34,7 @@ const src = readFileSync(APP_FILE, "utf8")
  * `tests/webview-reactivity/databridge-reactivity.test.ts`.
  */
 describe("DataBridge shape (perf regression guard)", () => {
-  it("DataBridge exists in App.tsx", () => {
+  it("DataBridge exists in AppBridge.tsx", () => {
     expect(src).toMatch(/export const DataBridge/)
   })
 

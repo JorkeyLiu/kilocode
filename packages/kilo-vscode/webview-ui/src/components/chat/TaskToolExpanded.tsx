@@ -115,7 +115,7 @@ const TaskToolRenderer: Component<ToolProps> = (props) => {
     e.stopPropagation()
     const id = childSessionId()
     if (!id) return
-    window.postMessage({ type: "viewChildSession", sessionID: id }, "*")
+    window.postMessage({ type: "viewChildSession", sessionID: id, sourceSessionID: session.currentSessionID() }, "*")
   }
 
   const trigger = () => (

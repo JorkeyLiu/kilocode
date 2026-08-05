@@ -157,7 +157,23 @@ Speech-to-text captures audio locally, then sends completed recording through sh
 | Diff Virtual webview | `webview-ui/diff-virtual/index.tsx` | `dist/diff-virtual.js` |
 | Shared Shiki worker | synthetic worker entry | `dist/shiki-worker.js` |
 
-Extension host bundle targets Node/CommonJS. Browser webviews and shared worker use esbuild browser bundles. Run `bun run typecheck`, `bun run lint`, and targeted unit tests from `packages/kilo-vscode/` after changing this area.
+Extension host bundle targets Node/CommonJS. Browser webviews and shared worker use esbuild browser bundles. Run `bun run typecheck`, `bun run lint`, and targeted unit tests from `packages/kilo-vscode/` after changing this area. `typecheck` and `lint` also cover the E2E sources without launching VS Code.
+
+## Extension Host E2E testing
+
+`packages/kilo-vscode/` owns a real Extension Host E2E harness (`bun run test:e2e`, entry `script/e2e-probe.ts`). It is explicit/manual only: no CI workflow or package hook invokes it, and normal dev/build/run paths have zero effect from it.
+
+| Concern | Behavior |
+|---|---|
+| Real host | `@vscode/test-electron` spawns a real VS Code workbench loading the current workspace extension; the runner (`tests/e2e/runner.ts`) activates the extension and drives a deterministic offline scenario through production message shapes and the production `SessionInfo` type |
+| CDP control | The harness connects Playwright to the workbench over a uniquely owned loopback CDP port (`--remote-debugging-port`) and asserts real webview DOM: tab order, then clicks the production sub-agent open button |
+| Fixture bridge | `kilo-code.new.e2eFixture.*` commands are registered in `src/extension.ts` only when `KILO_E2E_FIXTURE` is set; they expose panel readiness, typed webview posting, and deterministic session-list settlement. Zero production effect when the env var is absent |
+| Session-load serialization | `KiloProvider` serializes session-list loads (full refreshes, load-more, deferred flushes) so the bridge's awaited refresh is the last applied, making fixture survival deterministic without timers |
+| Process lifecycle | All owned processes are terminated by exact PID matched to the unique user-data dir, the CDP port is verified released, then the scratch dir is deleted — on success and failure paths |
+| Binary resolution | `VSCODE_TEST_EXECUTABLE` (must exist) → cached `.vscode-test/` → `@vscode/test-electron` auto-download into `.vscode-test/`; clean checkouts need no preinstalled binary |
+| Platforms | macOS and Linux. Windows fails fast because exact-owned termination relies on `ps` PID+args inspection |
+
+This harness spans a real Extension Host, Electron/CDP, and fixture lifecycle boundary and is owned by the extension package. Future Linux CI (Xvfb virtual display, cached `.vscode-test` download, clean-checkout proof, path-scoped trigger) is documented as a recommendation only — no workflow exists or is planned in this work.
 
 ## Source map
 
@@ -170,6 +186,8 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 | Shared SDK and SSE ownership | `packages/kilo-vscode/src/services/cli-backend/connection-service.ts` |
 | SSE reconnect adapter | `packages/kilo-vscode/src/services/cli-backend/sdk-sse-adapter.ts` |
 | Agent Manager | `packages/kilo-vscode/src/agent-manager/` |
+| Env-gated E2E fixture bridge | `packages/kilo-vscode/src/extension.ts` (registration), `packages/kilo-vscode/src/agent-manager/AgentManagerProvider.ts` (settlement) |
+| E2E harness | `packages/kilo-vscode/script/e2e-probe.ts` (probe), `packages/kilo-vscode/tests/e2e/runner.ts` (Extension Host runner) |
 | Build entries | `packages/kilo-vscode/esbuild.js` |
 
 ## Related pages

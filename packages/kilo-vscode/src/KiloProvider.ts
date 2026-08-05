@@ -821,9 +821,20 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   /**
    * Re-fetch and send the full session list to the webview.
    * Called by AgentManagerProvider after worktree recovery completes.
+   *
+   * Any deferred refresh (requested before the client was ready) is flushed
+   * first through the serialized load chain, so the load enqueued by THIS
+   * call is always the last one applied. Resolves once it has been applied,
+   * letting the env-gated E2E fixture deterministically re-seed after the
+   * real backend list has landed.
    */
-  public refreshSessions(): void {
-    void this.handleLoadSessions()
+  public refreshSessions(): Promise<void> {
+    return this.enqueueSessionLoad(async () => {
+      if (this.pendingSessionRefresh) {
+        await this.runFlushPendingSessionRefresh("refreshSessions")
+      }
+      await this.runLoadSessions()
+    })
   }
 
   /** Register a listener invoked when a plan follow-up session is adopted. */
@@ -1977,6 +1988,10 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
    */
   private async flushPendingSessionRefresh(reason: string): Promise<void> {
     if (!this.pendingSessionRefresh) return
+    return this.enqueueSessionLoad(() => this.runFlushPendingSessionRefresh(reason))
+  }
+
+  private async runFlushPendingSessionRefresh(reason: string): Promise<void> {
     console.log("[Kilo New] KiloProvider: 🔄 Flushing deferred sessions refresh", { reason })
     const ctx = this.sessionRefreshContext
     try {
@@ -1992,7 +2007,11 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
    * Handle loading sessions. Without a cursor this is a full refresh;
    * with a cursor it appends the next page ("load more").
    */
-  private async handleLoadSessions(cursor?: number): Promise<void> {
+  private handleLoadSessions(cursor?: number): Promise<void> {
+    return this.enqueueSessionLoad(() => this.runLoadSessions(cursor))
+  }
+
+  private async runLoadSessions(cursor?: number): Promise<void> {
     const ctx = this.sessionRefreshContext
     try {
       const resolved = await loadSessionsUtil(ctx, cursor)
@@ -2005,6 +2024,22 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       })
     }
     this.syncSessionPaging(ctx)
+  }
+
+  /**
+   * Serialize session-list loads (full refreshes, load-more pages, and
+   * deferred flushes) so concurrent refreshes never interleave: the last
+   * `sessionsLoaded` posted to the webview always belongs to the last load
+   * enqueued. This is what lets the E2E fixture deterministically re-seed
+   * after the real backend list has settled — no later in-flight refresh
+   * can reconcile the fixture sessions away.
+   */
+  private sessionLoadChain: Promise<void> = Promise.resolve()
+
+  private enqueueSessionLoad(task: () => Promise<void>): Promise<void> {
+    const run = this.sessionLoadChain.then(task, task)
+    this.sessionLoadChain = run.catch(() => {})
+    return run
   }
 
   /** Copy pagination state mutated by the session-refresh helpers back onto this instance. */

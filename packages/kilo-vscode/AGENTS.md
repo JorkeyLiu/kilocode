@@ -68,6 +68,20 @@ The `extension` commands also work from the repo root. Pass `--insiders` to pref
 
 Single test: `bun run test -- --grep "test name"`
 
+## E2E Testing (real VS Code)
+
+`bun run test:e2e` runs the real Extension Host E2E probe (`script/e2e-probe.ts`, Node-only — Playwright's CDP transport hangs under Bun). It is explicit/manual only: no CI workflow, no preinstall/postinstall/git hook, and no other package script invokes it. The canonical operational standard and the test-layer matrix live in the root `TESTING.md`.
+
+Mandatory rules:
+
+- Never wire `test:e2e` (or any E2E resource download/launch) into another script, a hook, or a workflow. `bun install`, `bun run extension`, dev, commit, push, `bun run typecheck`, `bun run lint`, and `bun run test:unit` must not launch or download E2E resources.
+- The fixture bridge (`kilo-code.new.e2eFixture.*` commands, `KILO_E2E_*` env behavior) is gated behind `KILO_E2E_FIXTURE` and is test-only. No production path may depend on it, and the commands must stay unregistered when the env var is absent.
+- Runtime evidence is required when a change affects the child-tab open path, tab-order sync, Agent Manager webview rendering, the fixture bridge, or the E2E harness itself: run `bun run test:e2e` and report the outcome. Static checks alone are incomplete for UI-affecting behavior the harness covers.
+- VS Code binary resolution: `VSCODE_TEST_EXECUTABLE` (must exist) → cached `.vscode-test/` → automatic download by `@vscode/test-electron` into `.vscode-test/`. A clean checkout works without a binary; do not require one.
+- Process ownership: the harness terminates only exact PIDs owning its unique user-data dir, verifies the CDP port is released, then deletes its scratch. Do not add global `pkill`/name-based cleanup.
+- Platforms: macOS and Linux. Windows fails fast by design; do not "fix" the fail-fast without implementing taskkill-by-PID cleanup first.
+- Keep `bun run typecheck` and `bun run lint` covering E2E sources (`tests/e2e/`, `script/e2e-probe.ts`); these static checks must never launch VS Code.
+
 ## CLI Binary
 
 The extension bundles its own CLI binary at `bin/kilo` — it does NOT use a system-installed CLI. To build it:

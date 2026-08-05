@@ -447,11 +447,11 @@ export const MessageList: Component<MessageListProps> = (props) => {
     // TaskToolExpanded.tsx only shows the raw <task_result> body when there's
     // no live child session to display instead (result() there resolves to
     // undefined once a child session exists) — mirror that exactly so a
-    // completed task with no child session stays searchable, without
-    // indexing text that's actually replaced by the child tool list. Agent
-    // Manager never registers TaskToolExpanded at all (it always uses
-    // kilo-ui's default hideDetails task card, which never shows result
-    // text there), so skip this entirely in that surface.
+    // completed task with no child session stays searchable. The fallback is
+    // indexed for the sidebar only (`inAgentManager` skips it): the sidebar
+    // registers TaskToolExpanded, and the Agent Manager now registers the
+    // same renderer explicitly at its own entry boundary (AgentManagerApp.tsx)
+    // but indexes no result text.
     if (state.status === "completed" && !inAgentManager) {
       const child = childID({
         type: "tool",

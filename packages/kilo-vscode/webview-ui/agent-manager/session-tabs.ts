@@ -28,6 +28,22 @@ export function openTab(state: SessionTabState, id: string): SessionTabState {
   return { ids: [...state.ids, id], active: id }
 }
 
+/**
+ * Open or focus a session immediately after its source session.
+ * Focuses an already-open ID without reordering; appends when the
+ * source is missing or undefined (same as openTab).
+ */
+export function openTabAfter(state: SessionTabState, source: string | undefined, id: string): SessionTabState {
+  if (!id) return state
+  if (state.ids.includes(id)) return { ids: state.ids, active: id }
+  if (!source) return openTab(state, id)
+  const index = state.ids.indexOf(source)
+  if (index === -1) return openTab(state, id)
+  const ids = [...state.ids]
+  ids.splice(index + 1, 0, id)
+  return { ids, active: id }
+}
+
 /** Select an existing ID safely. No-op if the ID is not in the list. */
 export function selectTab(state: SessionTabState, id: string): SessionTabState {
   if (!state.ids.includes(id)) return state

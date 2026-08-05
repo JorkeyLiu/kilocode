@@ -56,7 +56,7 @@ export function createTabOrderSync(deps: TabOrderSyncDeps) {
     return [...stored, ...unknowns]
   }
 
-  return {
+  const api = {
     /** Place `id` at the tail of the persisted order for `key`. */
     append(key: string | undefined, id: string) {
       const k = resolve(key)
@@ -72,12 +72,37 @@ export function createTabOrderSync(deps: TabOrderSyncDeps) {
       const rest = merge(k).filter((x) => x !== newId)
       commit(k, [...rest, newId])
     },
-    /** Place `id` directly after `anchorId`; append if anchor is missing. */
-    insertAfter(key: string | undefined, anchorId: string, id: string) {
+    /**
+     * Place `id` directly after `anchorId`; append if anchor is missing.
+     * An id already present in the persisted order is left exactly where it
+     * is (focus-only — no reorder), matching the "already-open child is
+     * focused without reordering" contract. New ids are inserted after the
+     * anchor, or appended when the anchor is missing/unknown.
+     */
+    insertAfter(key: string | undefined, anchorId: string | undefined, id: string) {
       const k = resolve(key)
+      const stored = deps.order()[k] ?? []
+      if (stored.includes(id)) return
       const rest = merge(k).filter((x) => x !== id)
       const next = insertInTabOrderAfter(rest, anchorId, id)
       commit(k, next)
     },
+    /**
+     * Source-relative child-open coordination: keeps the local session
+     * inventory AND the persisted tab order consistent with the tab registry
+     * (see tabMgr.openAfter). An already-open child leaves both stores
+     * untouched so the visible strip never reorders; a new child is inserted
+     * immediately after its source in both, and appended when the source is
+     * missing/undefined.
+     */
+    insertLocalAfter(
+      source: string | undefined,
+      id: string,
+      setLocal: (updater: (prev: string[]) => string[]) => void,
+    ) {
+      setLocal((prev) => insertInTabOrderAfter(prev, source, id))
+      api.insertAfter(deps.LOCAL, source, id)
+    },
   }
+  return api
 }

@@ -28,6 +28,16 @@ export interface OpenSessionDeps {
 }
 
 /**
+ * Source-relative child-open deps: the caller provides a helper that keeps the
+ * local session inventory and persisted tab order consistent with the tab
+ * registry (AgentManagerApp wires this to tabOrderSync.insertLocalAfter).
+ */
+export interface OpenChildSessionDeps extends OpenSessionDeps {
+  /** Insert `id` after `source` in the local inventory and persisted tab order. */
+  insertLocalAfter: (source: string | undefined, id: string) => void
+}
+
+/**
  * Canonical transaction to open/focus a session by ID.
  *
  * Single entry point for all ordinary Agent Manager session navigation:
@@ -56,6 +66,42 @@ export function openSession(id: string, deps: OpenSessionDeps): boolean {
 
   // Register in tab registry — add-or-focus semantics.
   deps.tabMgr.open(LOCAL, id)
+
+  if (deps.isPending(id)) {
+    deps.setActivePendingId(id)
+  } else {
+    deps.setActivePendingId(undefined)
+    deps.selectSession(id)
+  }
+
+  return true
+}
+
+/**
+ * Canonical transaction to open a related child session immediately to the
+ * right of its source session (Agent Manager child task/tool-call open action).
+ *
+ * Same overlay-clearing and selection semantics as openSession, but the tab
+ * placement is source-relative:
+ *   1. localSessionIDs + persisted tabOrder updated via insertLocalAfter
+ *   2. tab registry insert-after via tabMgr.openAfter
+ *   3. clear history/terminal/review/pending overlays
+ *   4. select the child session
+ *
+ * An already-open child is focused without reordering; a missing/unknown source
+ * falls back to the append-or-focus behavior of openSession.
+ */
+export function openChildSession(id: string, source: string | undefined, deps: OpenChildSessionDeps): boolean {
+  if (!id) return false
+
+  deps.setHistory(false)
+  deps.setReviewActive(false)
+  deps.setTermsActiveId(undefined)
+  deps.setSelection(LOCAL)
+
+  // Keep inventory + persisted order + tab registry consistent before selection.
+  if (!deps.isPending(id)) deps.insertLocalAfter(source, id)
+  deps.tabMgr.openAfter(LOCAL, source, id)
 
   if (deps.isPending(id)) {
     deps.setActivePendingId(id)
