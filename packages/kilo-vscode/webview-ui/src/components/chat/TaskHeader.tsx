@@ -305,7 +305,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
                 value={ctx().pct ? `${ctx().tokens} tokens (${ctx().pct} of context)` : `${ctx().tokens} tokens`}
                 placement="bottom"
               >
-                <span>{ctx().pct ?? ctx().tokens}</span>
+                <span>{ctx().pct ? `${ctx().tokens} (${ctx().pct})` : ctx().tokens}</span>
               </Tooltip>
             )}
           </Show>
