@@ -217,6 +217,8 @@ When adding or updating Storybook stories for screenshots used by docs, make the
 
 Generated screenshot baselines live under `packages/kilo-docs/public/img/screenshot-tests/` and are referenced from docs as `/docs/img/screenshot-tests/...`. If a generated VS Code visual-regression screenshot is used in docs, add the docs usage to the `DOCS` map in `tests/visual-regression.spec.ts` and keep `tests/visual-regression.spec.mts` in sync while that file exists.
 
+Visual regression baselines are Linux Chromium only and are never produced or committed by PR runs: `visual-regression.yml` compares read-only on `pull_request` and fails with uploaded Playwright results when screenshots differ. A maintainer regenerates and commits baselines by triggering the `Visual Regression Tests` acceptance workflow (`workflow_dispatch` with `ref` set to the branch and `scope: kilo-vscode`); see [Development Patterns - Visual regression baselines](/docs/contributing/architecture/development-patterns#visual-regression-baselines).
+
 ## Debugging
 
 - Extension logs: "Extension Host" output channel (not Debug Console)

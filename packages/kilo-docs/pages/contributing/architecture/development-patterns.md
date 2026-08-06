@@ -57,6 +57,34 @@ Keep changes to shared engine files small and well-scoped so they stay reviewabl
 
 The first three run in CI through `.github/workflows/check-repository-guards.yml`.
 
+## Visual regression baselines
+
+Pixel baselines are Linux Chromium only: rendering differs by OS, so macOS developers never produce baselines locally. Baselines live under `packages/kilo-docs/public/img/screenshot-tests/` and are tracked through Git LFS.
+
+The `.github/workflows/visual-regression.yml` workflow has two modes:
+
+| Mode | Trigger | Behavior |
+|---|---|---|
+| Compare | `pull_request` | Runs `test:visual` without `--update-snapshots` on Linux, read-only. Never writes baselines, never commits, never pushes, and never touches write credentials. Fails and uploads Playwright results when screenshots differ. |
+| Acceptance | `workflow_dispatch` | The selected visual test jobs check out the requested same-repository branch with no persisted credentials, run `test:visual:update` and stale cleanup with no write token, re-run the compare to prove stability, and upload the regenerated baseline directories as artifacts, each recording the exact tested `HEAD` revision. A single isolated `commit-baselines` job then validates the branch, checks out the same ref with `lfs: false` and `persist-credentials: false`, aborts unless exactly one distinct tested revision is recorded and the fresh checkout HEAD matches it, downloads and overlays only the selected baseline directories, verifies the staged tree, and in its final step configures a narrowly scoped `GITHUB_TOKEN` (`contents: write`) and pushes one commit. For no changes, acceptance succeeds without a commit. |
+
+Acceptance inputs:
+
+| Input | Values | Meaning |
+|---|---|---|
+| `ref` | Branch name | Trusted in-repository branch whose baselines are updated and pushed back to |
+| `scope` | `all`, `kilo-ui`, `kilo-vscode` | Which baseline set the acceptance run updates |
+
+Security model:
+
+- PR runs never reference any write credential and never run `--update-snapshots`, `git commit`, or `git push`; the workflow-level `GITHUB_TOKEN` is `contents: read`, `pull-requests: read`, and PR jobs only upload failure artifacts.
+- Acceptance visual test jobs hold no write token (`persist-credentials: false` checkout, no job-level `contents: write`); they run branch-controlled code only inside the unprivileged job and upload the regenerated baseline directories as artifacts.
+- The `commit-baselines` job is the only write-capable job and is isolated from target code: it runs only trusted workflow YAML shell plus major-tagged `actions/checkout` and `actions/download-artifact` steps, checks out with `lfs: false` and `persist-credentials: false`, pins Git LFS to the canonical GitHub repository endpoint (overriding any branch-controlled `.lfsconfig`), never invokes local actions or package scripts from the target branch, and configures the push credential (a job-scoped `GITHUB_TOKEN` with `contents: write`) only in its final push step after a tree-consistency gate. Each acceptance visual job records the exact `HEAD` revision it tested in its uploaded artifact, and the commit job aborts unless exactly one distinct tested revision is recorded across the selected jobs and its fresh checkout HEAD matches it — closing the window where a branch could advance between the test checkout and the commit checkout. Stability is proven by a compare-only re-run in the unprivileged test jobs before any upload or push.
+- Acceptance requires write access to trigger (workflow_dispatch), rejects forks, and validates that the requested ref is a plain branch that exists in the current repository before checkout; `pull_request_target` is never used, and checkout and push are restricted to the current repository.
+- For `scope: all`, both visual test jobs run in parallel and the single `commit-baselines` job pushes once after consuming both artifacts; acceptance runs targeting the same branch are serialized by a concurrency group, so two dispatches cannot race the baseline commit/push.
+
+When a PR reports changed baselines, contributors do not generate PNGs locally. A maintainer runs the acceptance workflow with `ref` set to the PR branch and the matching `scope`; the workflow commits the regenerated baselines to that branch and the PR re-runs green.
+
 ## CLI server API
 
 CLI server uses Effect `HttpApi` and publishes OpenAPI-compatible HTTP + SSE surfaces consumed by JavaScript SDK and JetBrains build-local Kotlin client.

@@ -65,7 +65,7 @@ test.describe("Permission Dock Dropdown — bash", () => {
     await openDropdown(page)
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "bash-expanded-pending.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "bash-expanded-pending-chromium-linux.png"])
   })
 
   test("rules expanded — first rule approved", async ({ page }) => {
@@ -79,7 +79,7 @@ test.describe("Permission Dock Dropdown — bash", () => {
     await approveButtons.first().dispatchEvent("click")
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "bash-rule-approved.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "bash-rule-approved-chromium-linux.png"])
   })
 
   test("rules expanded — first rule denied", async ({ page }) => {
@@ -93,7 +93,7 @@ test.describe("Permission Dock Dropdown — bash", () => {
     await denyButtons.first().dispatchEvent("click")
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "bash-rule-denied.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "bash-rule-denied-chromium-linux.png"])
   })
 
   test("rules expanded — mixed (first approved, second denied)", async ({ page }) => {
@@ -109,7 +109,7 @@ test.describe("Permission Dock Dropdown — bash", () => {
     await denyButtons.nth(1).dispatchEvent("click")
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "bash-rules-mixed.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "bash-rules-mixed-chromium-linux.png"])
   })
 })
 
@@ -127,7 +127,7 @@ test.describe("Permission Dock Dropdown — glob", () => {
     await openDropdown(page)
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "glob-expanded-pending.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "glob-expanded-pending-chromium-linux.png"])
   })
 
   test("rules expanded — rule approved", async ({ page }) => {
@@ -140,7 +140,7 @@ test.describe("Permission Dock Dropdown — glob", () => {
     await approveButtons.first().dispatchEvent("click")
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "glob-rule-approved.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "glob-rule-approved-chromium-linux.png"])
   })
 })
 
@@ -158,7 +158,7 @@ test.describe("Permission Dock Dropdown — write", () => {
     await openDropdown(page)
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "write-expanded-pending.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "write-expanded-pending-chromium-linux.png"])
   })
 })
 
@@ -176,7 +176,7 @@ test.describe("Permission Dock Dropdown — edit", () => {
     await openDropdown(page)
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "edit-expanded-pending.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "edit-expanded-pending-chromium-linux.png"])
   })
 })
 
@@ -194,7 +194,7 @@ test.describe("Permission Dock Dropdown — websearch", () => {
     await openDropdown(page)
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "websearch-expanded-pending.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "websearch-expanded-pending-chromium-linux.png"])
   })
 })
 
@@ -227,7 +227,7 @@ test.describe("Permission Dock Dropdown — external directory", () => {
     ).toBe(false)
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "external-dir-expanded-pending.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "external-dir-expanded-pending-chromium-linux.png"])
   })
 })
 
@@ -245,7 +245,7 @@ test.describe("Permission Dock Dropdown — many rules", () => {
     await openDropdown(page)
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "many-rules-expanded-pending.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "many-rules-expanded-pending-chromium-linux.png"])
   })
 
   test("rules expanded — some approved, some denied", async ({ page }) => {
@@ -270,7 +270,7 @@ test.describe("Permission Dock Dropdown — many rules", () => {
     await denyInRow(3).dispatchEvent("click")
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "many-rules-mixed.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "many-rules-mixed-chromium-linux.png"])
   })
 })
 
@@ -289,7 +289,7 @@ test.describe.skip("Permission Dock Dropdown — config pre-populated", () => {
     await openDropdown(page)
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "config-preloaded-expanded.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "config-preloaded-expanded-chromium-linux.png"])
   })
 })
 
@@ -307,6 +307,6 @@ test.describe("Permission Dock Dropdown — subagent", () => {
     await openDropdown(page)
 
     const root = page.locator("#storybook-root")
-    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "subagent-expanded.png"])
+    await expect(root).toHaveScreenshot(["permission-dock-dropdown", "subagent-expanded-chromium-linux.png"])
   })
 })

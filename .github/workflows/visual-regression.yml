@@ -1,9 +1,54 @@
-# kilocode_change - new file
 name: Visual Regression Tests
 
 on:
   pull_request:
     types: [opened, synchronize, reopened]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Trusted branch in this repository whose baselines should be updated
+        required: true
+        default: main
+      scope:
+        description: Which baseline scope to update
+        required: true
+        default: all
+        type: choice
+        options:
+          - all
+          - kilo-ui
+          - kilo-vscode
+
+# Two modes:
+#   pull_request       compare-only, read-only, artifact-free. Never writes
+#                      baselines, never commits, never pushes, never touches
+#                      write credentials.
+#   workflow_dispatch  explicit acceptance. The selected visual test jobs check
+#                      out the requested same-repository branch with no
+#                      persisted credentials, run `--update-snapshots` + stale
+#                      cleanup with no write token, prove stability with a
+#                      compare-only re-run, and upload the regenerated baseline
+#                      directories as artifacts, each recording the exact tested
+#                      `HEAD` revision. A single isolated `commit-baselines` job
+#                      then downloads the artifacts, validates the branch,
+#                      checks out the same ref with `lfs: false` and
+#                      `persist-credentials: false`, and aborts unless exactly
+#                      one distinct tested revision is recorded and its fresh
+#                      checkout HEAD matches it — so a branch that advanced
+#                      after the tests ran can never receive stale artifacts. It
+#                      then overlays only the selected baseline directories,
+#                      runs a tree-consistency gate, and only in its final step
+#                      configures a narrowly scoped push credential
+#                      (`GITHUB_TOKEN`, `contents: write`) and pushes one
+#                      commit. Target-branch local actions, package scripts and
+#                      `.lfsconfig` never run in the credentialed job.
+#
+# Acceptance runs that target the same branch are serialized so two dispatches
+# cannot race the commit/push. Stale PR runs for the same pull request are
+# cancelled when a new push arrives.
+concurrency:
+  group: visual-regression-${{ github.event_name == 'workflow_dispatch' && format('acceptance-{0}', inputs.ref) || format('pr-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -12,10 +57,10 @@ permissions:
 jobs:
   check-paths:
     name: Check changed paths
-    runs-on: ubuntu-latest # kilocode_change
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
     outputs:
       matched: ${{ steps.filter.outputs.matched }}
-      can_autocommit: ${{ steps.autocommit-check.outputs.can_autocommit }}
     steps:
       - uses: actions/checkout@v6
       - name: Check changed files
@@ -35,63 +80,77 @@ jobs:
           done < <(gh api --paginate "repos/${GITHUB_REPOSITORY}/pulls/${PR}/files" --jq '.[].filename')
           echo "matched=$matched" >> "$GITHUB_OUTPUT"
           echo "matched=$matched"
-      - name: Check if PR is from a fork
-        id: fork-check
-        run: |
-          if [ "${{ github.event.pull_request.head.repo.full_name }}" != "${{ github.repository }}" ]; then
-            echo "is_fork=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "is_fork=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Check baseline auto-commit permissions
-        id: autocommit-check
-        env:
-          MAINTAINER_APP_ID: ${{ secrets.KILO_MAINTAINER_APP_ID }}
-          MAINTAINER_APP_SECRET: ${{ secrets.KILO_MAINTAINER_APP_SECRET }}
-        run: |
-          if [ "${{ steps.fork-check.outputs.is_fork }}" != "true" ] && [ -n "$MAINTAINER_APP_ID" ] && [ -n "$MAINTAINER_APP_SECRET" ]; then
-            echo "can_autocommit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "can_autocommit=false" >> "$GITHUB_OUTPUT"
-          fi
 
   visual-regression:
     needs: check-paths
-    if: needs.check-paths.outputs.matched == 'true'
-    name: Visual Regression (kilo-ui) # kilocode_change
+    if: >
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.scope == 'all' || inputs.scope == 'kilo-ui'))
+      || (github.event_name == 'pull_request' &&
+          needs.check-paths.outputs.matched == 'true')
+    name: Visual Regression (kilo-ui)
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 15
+    timeout-minutes: 20
 
     steps:
-      - name: Checkout (internal)
-        if: needs.check-paths.outputs.can_autocommit == 'true'
-        uses: actions/checkout@v6
-        with:
-          lfs: true
-          # Use github.token for LFS access. The maintainer app is used only for generated commits.
-          token: ${{ github.token }}
-          ref: ${{ github.head_ref }}
-
-      - name: Checkout (read-only)
-        if: needs.check-paths.outputs.can_autocommit != 'true'
+      - name: Checkout (PR, read-only)
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v6
         with:
           lfs: true
 
-      - name: Check if HEAD is a baseline update commit
-        if: needs.check-paths.outputs.can_autocommit == 'true'
-        id: check-baseline-commit
+      # Acceptance only: validate the ref BEFORE any branch-controlled content
+      # is checked out. Rejects forks and anything that is not a plain branch in
+      # this repository. No credentials are involved.
+      - name: Validate acceptance ref
+        if: github.event_name == 'workflow_dispatch'
+        id: validate
+        env:
+          REF: ${{ inputs.ref }}
+          FORK: ${{ github.event.repository.fork }}
         run: |
-          COMMIT_MSG=$(git log -1 --format=%s)
-          if [ "$COMMIT_MSG" = "chore: update visual regression baselines" ] || [ "$COMMIT_MSG" = "chore: update kilo-vscode visual regression baselines" ]; then
-            echo "is_baseline_update=true" >> "$GITHUB_OUTPUT"
-            echo "HEAD commit is a baseline update commit — will not auto-commit again."
-          else
-            echo "is_baseline_update=false" >> "$GITHUB_OUTPUT"
+          if [ "$FORK" = "true" ]; then
+            echo "::error::Refusing acceptance run in a fork. Dispatch acceptance only in the canonical repository."
+            exit 1
           fi
+          ref="$REF"
+          case "$ref" in
+            refs/heads/*) branch="${ref#refs/heads/}" ;;
+            *) branch="$ref" ;;
+          esac
+          case "$branch" in
+            *:*|*..*|refs/tags/*|refs/pull/*|refs/remotes/*|refs/heads/*)
+              echo "::error::Unsafe acceptance ref: $ref"
+              exit 1
+              ;;
+          esac
+          case "$branch" in
+            *[!A-Za-z0-9._/-]*)
+              echo "::error::Unsafe acceptance ref: $ref"
+              exit 1
+              ;;
+          esac
+          git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/heads/$branch" >/dev/null || {
+            echo "::error::Acceptance ref '$ref' not found in ${{ github.repository }}"
+            exit 1
+          }
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "Acceptance run on ${{ github.repository }} branch $branch"
+
+      # Acceptance checkout reads the requested branch from THIS repository only
+      # (actions/checkout defaults to github.repository; no repository input is
+      # accepted). No persisted credentials: this job has no write token and
+      # nothing branch-controlled may receive or control maintainer credentials.
+      - name: Checkout (acceptance ref, no persisted credentials)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+          persist-credentials: false
+          ref: ${{ steps.validate.outputs.branch }}
 
       - name: Setup Bun
-        uses: ./.github/actions/setup-bun # kilocode_change
+        uses: ./.github/actions/setup-bun
 
       - name: Cache Playwright browsers
         id: playwright-cache
@@ -121,14 +180,24 @@ jobs:
         run: bun run build-storybook
         working-directory: packages/kilo-ui
 
-      - name: Generate baselines for new/missing stories
+      - name: Compare baselines (PR, read-only)
+        if: github.event_name == 'pull_request'
+        run: bun run test:visual
+        working-directory: packages/kilo-ui
+        env:
+          CI: true
+          PLAYWRIGHT_WORKERS: "4"
+
+      - name: Generate baselines (acceptance)
+        if: github.event_name == 'workflow_dispatch'
         run: bun run test:visual:update
         working-directory: packages/kilo-ui
         env:
           CI: true
           PLAYWRIGHT_WORKERS: "4"
 
-      - name: Remove stale baselines for deleted stories
+      - name: Remove stale baselines (acceptance)
+        if: github.event_name == 'workflow_dispatch'
         run: |
           node -e "
             const fs = require('fs'), path = require('path');
@@ -148,66 +217,38 @@ jobs:
           "
         working-directory: packages/kilo-ui
 
-      - name: Check for baseline changes (read-only PRs)
-        if: needs.check-paths.outputs.can_autocommit != 'true'
-        run: |
-          git add packages/kilo-docs/public/img/screenshot-tests/kilo-ui/
-          if git diff --cached --quiet; then
-            echo "No visual regression detected."
-          else
-            echo "::error::Visual regression detected. Screenshot baselines have changed."
-            echo "::error::Since this PR cannot receive baseline commits automatically, updated screenshots cannot be committed."
-            echo "::error::Please ask a Kilo developer for help updating the screenshots."
-            git diff --cached --stat
-            exit 1
-          fi
+      # Stability gate: after regeneration and stale cleanup, re-run the compare
+      # mode. If any baseline is not deterministic, this fails the job and the
+      # commit-baselines job never runs — stability is proven before a single
+      # push, and this job holds no write credentials.
+      - name: Prove baselines stable (acceptance)
+        if: github.event_name == 'workflow_dispatch'
+        run: bun run test:visual
+        working-directory: packages/kilo-ui
+        env:
+          CI: true
+          PLAYWRIGHT_WORKERS: "4"
 
-      - name: Fail if baselines still changing after auto-update
-        if: needs.check-paths.outputs.can_autocommit == 'true' && steps.check-baseline-commit.outputs.is_baseline_update == 'true'
+      # Package under a uniquely-named wrapper so the artifact layout is
+      # deterministic (`kilo-ui/...`) and cannot collide with the kilo-vscode
+      # artifact when both are merged for `scope: all`. Record the exact tested
+      # revision (`kilo-ui.sha`) in the artifact so the isolated commit job can
+      # prove its fresh checkout matches before any push.
+      - name: Package baselines for upload (acceptance)
+        if: github.event_name == 'workflow_dispatch'
         run: |
-          git add packages/kilo-docs/public/img/screenshot-tests/kilo-ui/
-          if git diff --cached --quiet; then
-            echo "Baselines are stable after auto-update."
-          else
-            echo "::error::Visual regression baselines changed again after a previous auto-update commit."
-            echo "::error::This indicates non-deterministic screenshots that would cause an infinite update loop."
-            echo "::error::Please investigate the flaky screenshots and add non-deterministic stories to the SKIP set."
-            git diff --cached --stat
-            exit 1
-          fi
+          mkdir -p baselines-upload
+          cp -R packages/kilo-docs/public/img/screenshot-tests/kilo-ui baselines-upload/
+          git rev-parse HEAD > baselines-upload/kilo-ui.sha
 
-      - name: Check for baseline updates
-        if: needs.check-paths.outputs.can_autocommit == 'true' && steps.check-baseline-commit.outputs.is_baseline_update != 'true'
-        id: baseline-changes
-        run: |
-          git add packages/kilo-docs/public/img/screenshot-tests/kilo-ui/
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Setup Git Committer
-        if: steps.baseline-changes.outputs.changed == 'true'
-        uses: ./.github/actions/setup-git-committer
+      - name: Upload regenerated baselines (acceptance)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
         with:
-          kilo-maintainer-app-id: ${{ secrets.KILO_MAINTAINER_APP_ID }}
-          kilo-maintainer-app-secret: ${{ secrets.KILO_MAINTAINER_APP_SECRET }}
-
-      - name: Commit and push new baselines (if any)
-        if: steps.baseline-changes.outputs.changed == 'true'
-        id: commit-baselines
-        run: |
-          git commit -m "chore: update visual regression baselines"
-          git lfs push --all origin
-          git push --no-verify origin "HEAD:${GITHUB_HEAD_REF}"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Fail if baselines changed
-        if: needs.check-paths.outputs.can_autocommit == 'true' && steps.commit-baselines.outputs.changed == 'true'
-        run: |
-          echo "::error::Visual regression baselines changed. New baselines have been committed to the branch. Please pull and review."
-          exit 1
+          name: baselines-kilo-ui
+          path: baselines-upload
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload test results on failure
         if: failure()
@@ -219,43 +260,69 @@ jobs:
 
   visual-regression-vscode:
     needs: check-paths
-    if: needs.check-paths.outputs.matched == 'true'
-    name: Visual Regression (kilo-vscode webview) # kilocode_change
+    if: >
+      (github.event_name == 'workflow_dispatch' &&
+       (inputs.scope == 'all' || inputs.scope == 'kilo-vscode'))
+      || (github.event_name == 'pull_request' &&
+          needs.check-paths.outputs.matched == 'true')
+    name: Visual Regression (kilo-vscode webview)
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    timeout-minutes: 15
+    timeout-minutes: 20
     env:
       NODE_OPTIONS: --max-old-space-size=4096
 
     steps:
-      - name: Checkout (internal)
-        if: needs.check-paths.outputs.can_autocommit == 'true'
-        uses: actions/checkout@v6
-        with:
-          lfs: true
-          # Use github.token for LFS access. The maintainer app is used only for generated commits.
-          token: ${{ github.token }}
-          ref: ${{ github.head_ref }}
-
-      - name: Checkout (read-only)
-        if: needs.check-paths.outputs.can_autocommit != 'true'
+      - name: Checkout (PR, read-only)
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v6
         with:
           lfs: true
 
-      - name: Check if HEAD is a baseline update commit
-        if: needs.check-paths.outputs.can_autocommit == 'true'
-        id: check-baseline-commit-vscode
+      - name: Validate acceptance ref
+        if: github.event_name == 'workflow_dispatch'
+        id: validate-vscode
+        env:
+          REF: ${{ inputs.ref }}
+          FORK: ${{ github.event.repository.fork }}
         run: |
-          COMMIT_MSG=$(git log -1 --format=%s)
-          if [ "$COMMIT_MSG" = "chore: update visual regression baselines" ] || [ "$COMMIT_MSG" = "chore: update kilo-vscode visual regression baselines" ]; then
-            echo "is_baseline_update=true" >> "$GITHUB_OUTPUT"
-            echo "HEAD commit is a baseline update commit — will not auto-commit again."
-          else
-            echo "is_baseline_update=false" >> "$GITHUB_OUTPUT"
+          if [ "$FORK" = "true" ]; then
+            echo "::error::Refusing acceptance run in a fork. Dispatch acceptance only in the canonical repository."
+            exit 1
           fi
+          ref="$REF"
+          case "$ref" in
+            refs/heads/*) branch="${ref#refs/heads/}" ;;
+            *) branch="$ref" ;;
+          esac
+          case "$branch" in
+            *:*|*..*|refs/tags/*|refs/pull/*|refs/remotes/*|refs/heads/*)
+              echo "::error::Unsafe acceptance ref: $ref"
+              exit 1
+              ;;
+          esac
+          case "$branch" in
+            *[!A-Za-z0-9._/-]*)
+              echo "::error::Unsafe acceptance ref: $ref"
+              exit 1
+              ;;
+          esac
+          git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/heads/$branch" >/dev/null || {
+            echo "::error::Acceptance ref '$ref' not found in ${{ github.repository }}"
+            exit 1
+          }
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "Acceptance run on ${{ github.repository }} branch $branch"
+
+      - name: Checkout (acceptance ref, no persisted credentials)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+          persist-credentials: false
+          ref: ${{ steps.validate-vscode.outputs.branch }}
 
       - name: Setup Bun
-        uses: ./.github/actions/setup-bun # kilocode_change
+        uses: ./.github/actions/setup-bun
 
       - name: Cache Playwright browsers
         id: playwright-cache-vscode
@@ -287,7 +354,17 @@ jobs:
         env:
           NODE_OPTIONS: --max-old-space-size=4096
 
-      - name: Generate baselines and enforce webview accessibility checks
+      - name: Compare baselines and enforce accessibility checks (PR, read-only)
+        if: github.event_name == 'pull_request'
+        run: bun run test:visual
+        working-directory: packages/kilo-vscode
+        env:
+          CI: true
+          PLAYWRIGHT_WORKERS: "4"
+          NODE_OPTIONS: --max-old-space-size=4096
+
+      - name: Generate baselines and enforce accessibility checks (acceptance)
+        if: github.event_name == 'workflow_dispatch'
         run: bun run test:visual:update
         working-directory: packages/kilo-vscode
         env:
@@ -295,7 +372,8 @@ jobs:
           PLAYWRIGHT_WORKERS: "4"
           NODE_OPTIONS: --max-old-space-size=4096
 
-      - name: Remove stale baselines for deleted stories
+      - name: Remove stale baselines for deleted stories (acceptance)
+        if: github.event_name == 'workflow_dispatch'
         run: |
           node -e "
             const fs = require('fs'), path = require('path');
@@ -315,7 +393,11 @@ jobs:
           "
         working-directory: packages/kilo-vscode
 
-      - name: Remove stale baselines for permission-dock-dropdown tests
+      # Snapshot file names in permission-dock-dropdown.spec.ts already carry the
+      # `-chromium-linux` suffix (the single canonical baseline environment), so
+      # the expected set below matches committed baselines verbatim.
+      - name: Remove stale baselines for permission-dock-dropdown tests (acceptance)
+        if: github.event_name == 'workflow_dispatch'
         run: |
           node -e "
             const fs = require('fs');
@@ -328,7 +410,7 @@ jobs:
               while ((m = re.exec(spec)) !== null) {
                 const parts = m[1].split(',').map(s => s.trim().replace(/[\"']/g, ''));
                 const file = parts[parts.length - 1];
-                if (file) expected.add(file.replace(/\.png$/, '-chromium-linux.png'));
+                if (file) expected.add(file);
               }
             }
             const dir = '../kilo-docs/public/img/screenshot-tests/kilo-vscode/permission-dock-dropdown';
@@ -342,66 +424,30 @@ jobs:
           "
         working-directory: packages/kilo-vscode
 
-      - name: Check for baseline changes (read-only PRs)
-        if: needs.check-paths.outputs.can_autocommit != 'true'
-        run: |
-          git add packages/kilo-docs/public/img/screenshot-tests/kilo-vscode/
-          if git diff --cached --quiet; then
-            echo "No visual regression detected."
-          else
-            echo "::error::Visual regression detected. Screenshot baselines have changed."
-            echo "::error::Since this PR cannot receive baseline commits automatically, updated screenshots cannot be committed."
-            echo "::error::Please ask a Kilo developer for help updating the screenshots."
-            git diff --cached --stat
-            exit 1
-          fi
+      - name: Prove baselines stable (acceptance)
+        if: github.event_name == 'workflow_dispatch'
+        run: bun run test:visual
+        working-directory: packages/kilo-vscode
+        env:
+          CI: true
+          PLAYWRIGHT_WORKERS: "4"
+          NODE_OPTIONS: --max-old-space-size=4096
 
-      - name: Fail if baselines still changing after auto-update
-        if: needs.check-paths.outputs.can_autocommit == 'true' && steps.check-baseline-commit-vscode.outputs.is_baseline_update == 'true'
+      - name: Package baselines for upload (acceptance)
+        if: github.event_name == 'workflow_dispatch'
         run: |
-          git add packages/kilo-docs/public/img/screenshot-tests/kilo-vscode/
-          if git diff --cached --quiet; then
-            echo "Baselines are stable after auto-update."
-          else
-            echo "::error::Visual regression baselines changed again after a previous auto-update commit."
-            echo "::error::This indicates non-deterministic screenshots that would cause an infinite update loop."
-            echo "::error::Please investigate the flaky screenshots and add non-deterministic stories to the SKIP set."
-            git diff --cached --stat
-            exit 1
-          fi
+          mkdir -p baselines-upload
+          cp -R packages/kilo-docs/public/img/screenshot-tests/kilo-vscode baselines-upload/
+          git rev-parse HEAD > baselines-upload/kilo-vscode.sha
 
-      - name: Check for baseline updates
-        if: needs.check-paths.outputs.can_autocommit == 'true' && steps.check-baseline-commit-vscode.outputs.is_baseline_update != 'true'
-        id: baseline-changes-vscode
-        run: |
-          git add packages/kilo-docs/public/img/screenshot-tests/kilo-vscode/
-          if git diff --cached --quiet; then
-            echo "changed=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "changed=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: Setup Git Committer
-        if: steps.baseline-changes-vscode.outputs.changed == 'true'
-        uses: ./.github/actions/setup-git-committer
+      - name: Upload regenerated baselines (acceptance)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v7
         with:
-          kilo-maintainer-app-id: ${{ secrets.KILO_MAINTAINER_APP_ID }}
-          kilo-maintainer-app-secret: ${{ secrets.KILO_MAINTAINER_APP_SECRET }}
-
-      - name: Commit and push new baselines (if any)
-        if: steps.baseline-changes-vscode.outputs.changed == 'true'
-        id: commit-baselines-vscode
-        run: |
-          git commit -m "chore: update kilo-vscode visual regression baselines"
-          git lfs push --all origin
-          git push --no-verify origin "HEAD:${GITHUB_HEAD_REF}"
-          echo "changed=true" >> "$GITHUB_OUTPUT"
-
-      - name: Fail if baselines changed
-        if: needs.check-paths.outputs.can_autocommit == 'true' && steps.commit-baselines-vscode.outputs.changed == 'true'
-        run: |
-          echo "::error::Visual regression baselines changed. New baselines have been committed to the branch. Please pull and review."
-          exit 1
+          name: baselines-kilo-vscode
+          path: baselines-upload
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload test results on failure
         if: failure()
@@ -410,3 +456,207 @@ jobs:
           name: visual-regression-vscode-results
           path: packages/kilo-vscode/test-results/
           retention-days: 7
+
+  # Isolated explicit-acceptance commit job. Runs only trusted workflow YAML
+  # shell and the major-tagged `actions/*` steps below — no local actions, no
+  # package scripts, and no target-branch code of any kind. The push credential
+  # (`GITHUB_TOKEN`, `contents: write`, job-scoped) is configured only in the
+  # final step, after stability (proven in the unprivileged test jobs), the
+  # tested-revision match below, and the tree-consistency gate.
+  commit-baselines:
+    name: Commit baselines (isolated)
+    needs: [visual-regression, visual-regression-vscode]
+    if: >
+      always() && !cancelled() && !failure() &&
+      github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Validate acceptance ref
+        id: validate
+        env:
+          REF: ${{ inputs.ref }}
+          FORK: ${{ github.event.repository.fork }}
+        run: |
+          if [ "$FORK" = "true" ]; then
+            echo "::error::Refusing acceptance run in a fork. Dispatch acceptance only in the canonical repository."
+            exit 1
+          fi
+          ref="$REF"
+          case "$ref" in
+            refs/heads/*) branch="${ref#refs/heads/}" ;;
+            *) branch="$ref" ;;
+          esac
+          case "$branch" in
+            *:*|*..*|refs/tags/*|refs/pull/*|refs/remotes/*|refs/heads/*)
+              echo "::error::Unsafe acceptance ref: $ref"
+              exit 1
+              ;;
+          esac
+          case "$branch" in
+            *[!A-Za-z0-9._/-]*)
+              echo "::error::Unsafe acceptance ref: $ref"
+              exit 1
+              ;;
+          esac
+          git ls-remote --exit-code "https://github.com/${GITHUB_REPOSITORY}.git" "refs/heads/$branch" >/dev/null || {
+            echo "::error::Acceptance ref '$ref' not found in ${{ github.repository }}"
+            exit 1
+          }
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "Acceptance run on ${{ github.repository }} branch $branch"
+
+      # Fresh checkout of the same repo ref with LFS disabled and no persisted
+      # credentials, so no branch-controlled `.lfsconfig` or hook can influence
+      # any credentialed operation.
+      - name: Checkout target branch (no LFS, no persisted credentials)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.validate.outputs.branch }}
+          lfs: false
+          persist-credentials: false
+          fetch-depth: 1
+
+      # Git LFS is configured against the canonical GitHub repo endpoint and
+      # overrides any `.lfsconfig` that may exist on the target branch.
+      - name: Configure Git LFS (canonical endpoint)
+        run: |
+          set -euo pipefail
+          git lfs install --local
+          git config --local lfs.url "https://github.com/${GITHUB_REPOSITORY}.git"
+
+      - name: Download regenerated baseline artifacts
+        uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      # TOCTOU gate: the unprivileged visual jobs recorded the exact revision
+      # they checked out and tested (`kilo-ui.sha` / `kilo-vscode.sha`).
+      # Abort unless exactly one distinct revision is recorded across the
+      # selected jobs and this fresh checkout's HEAD matches it — artifacts
+      # produced from a branch that advanced after the tests ran must never be
+      # pushed onto a newer HEAD.
+      - name: Verify tested revision matches fresh checkout
+        env:
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          set -euo pipefail
+          case "$SCOPE" in
+            kilo-ui) markers="artifacts/kilo-ui.sha" ;;
+            kilo-vscode) markers="artifacts/kilo-vscode.sha" ;;
+            all) markers="artifacts/kilo-ui.sha artifacts/kilo-vscode.sha" ;;
+            *) echo "::error::Unknown scope: $SCOPE"; exit 1 ;;
+          esac
+          tested=""
+          for m in $markers; do
+            if [ ! -f "$m" ]; then
+              echo "::error::Missing tested-revision marker: $m"
+              exit 1
+            fi
+            sha="$(tr -d '[:space:]' < "$m")"
+            case "$sha" in
+              ''|*[!0-9a-f]*)
+                echo "::error::Malformed tested-revision marker: $m"
+                exit 1
+                ;;
+            esac
+            if [ -n "$tested" ] && [ "$sha" != "$tested" ]; then
+              echo "::error::Tested-revision markers disagree: $tested vs $sha"
+              exit 1
+            fi
+            tested="$sha"
+          done
+          head="$(git rev-parse HEAD)"
+          if [ "$tested" != "$head" ]; then
+            echo "::error::Fresh checkout HEAD $head does not match the tested revision $tested; the branch advanced after the visual jobs ran. Refusing to push stale baselines."
+            exit 1
+          fi
+          echo "Verified: baselines generated and stabilized at $tested; fresh checkout HEAD matches."
+
+      - name: Overlay selected baseline directories
+        run: |
+          set -euo pipefail
+          root="packages/kilo-docs/public/img/screenshot-tests"
+          if [ -d "artifacts/kilo-ui" ]; then
+            rm -rf "$root/kilo-ui"
+            mkdir -p "$root"
+            cp -R "artifacts/kilo-ui" "$root/kilo-ui"
+          fi
+          if [ -d "artifacts/kilo-vscode" ]; then
+            rm -rf "$root/kilo-vscode"
+            mkdir -p "$root"
+            cp -R "artifacts/kilo-vscode" "$root/kilo-vscode"
+          fi
+
+      # Pre-push gate: stage the overlay and verify tree consistency WITHOUT
+      # executing any target-branch code. Only the selected baseline directories
+      # may change, every staged path must be a PNG under them, and every
+      # content-bearing staged PNG — added, modified, or renamed — must carry
+      # the PNG signature (catches truncated/corrupt artifacts).
+      - name: Stage baselines and verify tree consistency
+        id: stage
+        env:
+          SCOPE: ${{ inputs.scope }}
+        run: |
+          set -euo pipefail
+          git add packages/kilo-docs/public/img/screenshot-tests/
+          if git diff --cached --quiet; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Baselines are already up to date on branch '$BRANCH'."
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          git diff --cached --name-only > /tmp/staged.txt
+          while IFS= read -r f; do
+            case "$SCOPE" in
+              kilo-ui)
+                case "$f" in
+                  packages/kilo-docs/public/img/screenshot-tests/kilo-ui/*.png) ;;
+                  *) echo "::error::Unexpected staged path for scope kilo-ui: $f"; exit 1 ;;
+                esac
+                ;;
+              kilo-vscode)
+                case "$f" in
+                  packages/kilo-docs/public/img/screenshot-tests/kilo-vscode/*.png) ;;
+                  *) echo "::error::Unexpected staged path for scope kilo-vscode: $f"; exit 1 ;;
+                esac
+                ;;
+              *)
+                case "$f" in
+                  packages/kilo-docs/public/img/screenshot-tests/kilo-ui/*.png|packages/kilo-docs/public/img/screenshot-tests/kilo-vscode/*.png) ;;
+                  *) echo "::error::Unexpected staged path for scope all: $f"; exit 1 ;;
+                esac
+                ;;
+            esac
+          done < /tmp/staged.txt
+          while IFS= read -r f; do
+            sig="$(od -An -tx1 -N8 "$f" | tr -d ' \n')"
+            if [ "$sig" != "89504e470d0a1a0a" ]; then
+              echo "::error::Staged file is not a PNG: $f"
+              exit 1
+            fi
+          done < <(git diff --cached --name-only --diff-filter=ACMR -- '*.png')
+          echo "Staged baseline changes:"
+          git diff --cached --stat
+          git lfs status
+
+      - name: Commit and push baselines
+        if: steps.stage.outputs.changed == 'true'
+        env:
+          TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.validate.outputs.branch }}
+        run: |
+          set -euo pipefail
+          git config --local user.name "github-actions[bot]"
+          git config --local user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update visual regression baselines"
+          push_url="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          # Configure the push credential only here, in the final push step.
+          git config --local lfs.url "${push_url}/info/lfs"
+          git remote set-url origin "$push_url"
+          git lfs push --all origin
+          git push --no-verify origin "HEAD:refs/heads/${BRANCH}"
+          echo "Pushed baseline commit to ${BRANCH}"

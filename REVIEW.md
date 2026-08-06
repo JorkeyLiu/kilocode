@@ -14,7 +14,7 @@ CI already runs and will report failures directly. Do **not** comment on:
 - Workflow allowlist drift (`script/check-workflows.ts`)
 - Stale `packages/kilo-docs/source-links.md` (`script/extract-source-links.ts`)
 - Markdown table padding (`script/check-md-table-padding.ts`)
-- Visual regression snapshots (CI generates baselines on Linux)
+- Visual regression snapshot failures (PR runs are read-only compare; the manual `Visual Regression Tests` acceptance workflow regenerates baselines on Linux)
 - SDK regeneration drift (`generate.yml`)
 - Generated artifact freshness (`check-kilo-generated-artifacts.yml`)
 - Docs link checks, nix evals, container builds
@@ -66,7 +66,7 @@ When suggesting fixes, ensure the suggestion is valid TypeScript (matched braces
 For changes under `packages/kilo-vscode/webview-ui/`:
 
 - Significant visual or layout changes should have a Storybook story added under `webview-ui/src/stories/`. Minor tweaks and i18n-only changes don't need one.
-- Don't ask for locally generated baseline PNGs — those must come from Linux CI.
+- Don't ask for locally generated baseline PNGs — baselines come from Linux only. PR runs are read-only; a maintainer must trigger the `Visual Regression Tests` acceptance workflow (`workflow_dispatch`, `ref` = PR branch) to regenerate and commit them.
 
 ## How to comment
 
