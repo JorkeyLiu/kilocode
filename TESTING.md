@@ -260,7 +260,7 @@ See `AGENTS.md` for the full rationale.
 
 ## 11. VS Code Extension test layers (static → unit → E2E)
 
-`packages/kilo-vscode/` runs three test layers. E2E is explicit/manual only — no CI workflow and no package script invokes it automatically.
+`packages/kilo-vscode/` runs three test layers. E2E is explicit/manual only — no automatic trigger and no package script invokes it; the sole automation is the manual-dispatch-only `vscode-e2e` Linux workflow (below).
 
 | Layer | Command (from `packages/kilo-vscode/`) | What it runs | Launches VS Code? |
 |---|---|---|---|
@@ -300,6 +300,6 @@ Test-only debugging/failure flags (env-gated, not a public API):
 | `KILO_E2E_FIXTURE_HANG` | Keep the runner alive after readiness to exercise exact-owned termination |
 | `VSCODE_TEST_EXECUTABLE` | Point the probe at a specific VS Code executable |
 
-### Future Linux CI (recommendation only)
+### Linux E2E workflow (manual dispatch only)
 
-Linux CI for the E2E probe is a future recommendation, not a current workflow. A future path-scoped job would need an Xvfb virtual display, a cached `.vscode-test` download (the VS Code archive is ~900 MB, so re-downloading per run is not viable), a clean checkout that proves `bun install` + `bun run test:e2e` work from scratch, and a trigger limited to extension-package changes. No `.github/workflows/**` change exists today and none is planned in this work — E2E remains explicit/manual until that path is built.
+The manual-only `vscode-e2e` workflow (`.github/workflows/vscode-e2e.yml`) runs the identical `bun run test:e2e` entrypoint on Linux under Xvfb and is available only via `workflow_dispatch` — no `push`, `pull_request`, `schedule`, `workflow_call`, hook, or aggregate package script. It validates the requested same-repository branch, resolves it to one immutable commit SHA, and checks out exactly that SHA with `persist-credentials: false`, `fetch-depth: 1`, and `contents: read` only (no repository secrets, no write scopes). The clean checkout runs `bun install` (shared setup action) and builds the extension's bundled CLI with `bun script/local-bin.ts`, with `KILO_SKIP_BUNDLED_BWRAP=1` scoped to that one step: the Linux runner installs no Zig, and the E2E fixture path never invokes sandbox tooling — the production `ServerManager` tolerates a missing local bwrap, so the CLI runs without a bundled bwrap, and release/package validation (`bun run package:vsix`) remains the separate path that stages bundled sandbox resources. The probe then builds the extension/webview bundles and auto-downloads VS Code into `packages/kilo-vscode/.vscode-test/` — proving the harness works from scratch. The VS Code download is cached under a Linux/x64 key tied to the resolved SHA and the extension package manifest, so an executable cache can never be restored across different target commits. Complete E2E stdout/stderr is captured with `set -o pipefail` + `tee` into a runner-owned diagnostics directory and uploaded on failure or cancellation (7-day retention); GitHub hard job cancellation can still prevent later steps, in which case the console log survives only in the Actions UI. Harness scratch and exact-PID cleanup are untouched. Xvfb is verified or installed explicitly, and the job timeout (30 min) bounds the whole run above the harness watchdog (`KILO_E2E_TIMEOUT`). E2E remains never-automatic: triggering the workflow is an explicit, read-only, manual act, and macOS runs stay local-only.

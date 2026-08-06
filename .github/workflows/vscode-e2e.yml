@@ -1,0 +1,159 @@
+name: vscode-e2e
+
+# Manual-only real VS Code Extension Host E2E on Linux under Xvfb.
+#
+# Security/trigger model:
+#   - `workflow_dispatch` only. No push/pull_request/schedule/workflow_call,
+#     no hook, no package-script aggregation. E2E is never automatic.
+#   - The requested same-repository branch is validated BEFORE any branch-
+#     controlled content is checked out, then resolved with `git ls-remote`
+#     to one immutable commit SHA. `actions/checkout` checks out exactly that
+#     SHA with no persisted credentials and `fetch-depth: 1`.
+#   - The job scope is `contents: read` only. No repository secrets are used
+#     and nothing in the target branch can write, push, or act with credentials.
+#   - Cache is limited to the VS Code download (`packages/kilo-vscode/.vscode-test`)
+#     under a Linux/x64 key tied to the resolved SHA and the extension package
+#     manifest, so an executable cache from a different target commit is never
+#     restored. Scratch, user-data, workspace, and profile are never cached.
+#   - Complete E2E stdout/stderr is captured with `set -o pipefail` + `tee`
+#     into a runner-owned diagnostics directory and uploaded on failure or
+#     cancellation with 7-day bounded retention. Harness scratch and exact-PID
+#     cleanup are untouched. GitHub can only run the upload when it processes
+#     the cancellation between steps — hard job cancellation can still prevent
+#     later steps.
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Same-repository branch/ref to test (resolved to one immutable commit SHA before checkout)
+        required: true
+        default: main
+
+concurrency:
+  group: vscode-e2e-${{ inputs.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Real VS Code E2E (Linux/Xvfb)
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    # Bounded above the harness watchdog (KILO_E2E_TIMEOUT, default 300000 ms).
+    timeout-minutes: 30
+    steps:
+      - name: Validate E2E ref and resolve immutable SHA
+        id: resolve
+        env:
+          REF: ${{ inputs.ref }}
+          FORK: ${{ github.event.repository.fork }}
+        run: |
+          set -euo pipefail
+          if [ "$FORK" = "true" ]; then
+            echo "::error::Refusing E2E run in a fork. Dispatch E2E only in the canonical repository."
+            exit 1
+          fi
+          ref="$REF"
+          case "$ref" in
+            refs/heads/*) branch="${ref#refs/heads/}" ;;
+            *) branch="$ref" ;;
+          esac
+          case "$branch" in
+            *:*|*..*|refs/tags/*|refs/pull/*|refs/remotes/*|refs/heads/*)
+              echo "::error::Unsafe E2E ref: $ref"
+              exit 1
+              ;;
+          esac
+          case "$branch" in
+            *[!A-Za-z0-9._/-]*)
+              echo "::error::Unsafe E2E ref: $ref"
+              exit 1
+              ;;
+          esac
+          # Resolve the branch to exactly ONE immutable commit SHA. The awk
+          # filter requires an exact refname match so a prefix like
+          # `refs/heads/main/x` can never substitute for `refs/heads/main`.
+          line="$(git ls-remote "https://github.com/${GITHUB_REPOSITORY}.git" "refs/heads/$branch" 2>/dev/null || true)"
+          sha="$(printf '%s\n' "$line" | awk -v b="refs/heads/$branch" '$2 == b {print $1}')"
+          case "$sha" in
+            ''|*[!0-9a-f]*)
+              echo "::error::Could not resolve ref '$ref' to a commit SHA in ${{ github.repository }}"
+              exit 1
+              ;;
+          esac
+          if [ "${#sha}" -ne 40 ]; then
+            echo "::error::Resolved ref '$ref' did not yield a 40-hex-char immutable commit SHA"
+            exit 1
+          fi
+          echo "branch=$branch" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "E2E run on ${{ github.repository }} branch '$branch' at immutable SHA $sha"
+
+      - name: Checkout immutable SHA (no persisted credentials)
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ steps.resolve.outputs.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      - name: Setup Bun and Node
+        uses: ./.github/actions/setup-bun
+
+      - name: Cache VS Code download
+        id: vscode-cache
+        uses: actions/cache@v5
+        with:
+          path: packages/kilo-vscode/.vscode-test
+          key: vscode-e2e-${{ runner.os }}-${{ runner.arch }}-${{ steps.resolve.outputs.sha }}-${{ hashFiles('packages/kilo-vscode/package.json') }}
+
+      - name: Verify or install Xvfb
+        run: |
+          set -euo pipefail
+          if ! command -v Xvfb >/dev/null 2>&1 || ! command -v xvfb-run >/dev/null 2>&1; then
+            sudo apt-get update
+            sudo apt-get install -y xvfb
+          fi
+          Xvfb -help >/dev/null 2>&1 || { echo "::error::Xvfb is unavailable"; exit 1; }
+          xvfb-run --help >/dev/null 2>&1 || { echo "::error::xvfb-run is unavailable"; exit 1; }
+          echo "Xvfb: $(Xvfb -version 2>&1 | head -n 1)"
+
+      # The extension spawns `bin/kilo serve` and ServerManager fails hard when
+      # the binary is missing (bin/ is gitignored, so a clean checkout has
+      # none). This is the documented CLI build command for the extension
+      # (packages/kilo-vscode/AGENTS.md "CLI Binary"); it compiles the CLI via
+      # packages/opencode and stages the bundled resources the extension needs
+      # under bin/.
+      #
+      # On Linux, local-bin.ts would otherwise also compile a bundled
+      # bubblewrap helper through Zig, which this runner does not install. That
+      # is unnecessary here: the E2E fixture path never invokes sandbox
+      # tooling, and the production ServerManager tolerates a missing local
+      # bwrap (it simply omits KILO_BWRAP_PATH). KILO_SKIP_BUNDLED_BWRAP is
+      # therefore scoped to this one step so the clean checkout builds without
+      # Zig. This is a test-facility boundary, not a release build: packaged
+      # VSIX validation (bun run package:vsix) is a separate, untouched path
+      # that still stages bundled sandbox resources.
+      - name: Build bundled CLI binary for the extension
+        working-directory: packages/kilo-vscode
+        env:
+          KILO_SKIP_BUNDLED_BWRAP: "1"
+        run: bun script/local-bin.ts
+
+      - name: Run real VS Code E2E under Xvfb
+        working-directory: packages/kilo-vscode
+        env:
+          KILO_E2E_TIMEOUT: "300000"
+        run: |
+          set -o pipefail
+          mkdir -p "$RUNNER_TEMP/vscode-e2e-diagnostics"
+          xvfb-run -a bun run test:e2e 2>&1 | tee "$RUNNER_TEMP/vscode-e2e-diagnostics/e2e-console.log"
+
+      - name: Upload E2E diagnostics on failure or cancellation
+        if: failure() || cancelled()
+        uses: actions/upload-artifact@v7
+        with:
+          name: vscode-e2e-diagnostics
+          path: ${{ runner.temp }}/vscode-e2e-diagnostics/
+          retention-days: 7
+          if-no-files-found: ignore

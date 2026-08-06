@@ -201,7 +201,7 @@ bun run package
 bun run test:e2e
 ```
 
-`test:e2e` launches a real VS Code instance, connects Playwright over CDP, and asserts real webview DOM behavior through the env-gated fixture bridge. It is never run automatically — no CI workflow, no hooks, and normal `bun install` / `bun run extension` / dev / commit / push flows do not touch E2E resources. On a clean checkout the first run auto-downloads VS Code into `.vscode-test/`. See the root [TESTING.md](https://github.com/Kilo-Org/kilocode/blob/main/TESTING.md) for the full standard and `packages/kilo-vscode/AGENTS.md` for the mandatory package rules.
+`test:e2e` launches a real VS Code instance, connects Playwright over CDP, and asserts real webview DOM behavior through the env-gated fixture bridge. It is never run automatically — no push/PR/schedule trigger, no hooks, and normal `bun install` / `bun run extension` / dev / commit / push flows do not touch E2E resources. The only automation is the manual-dispatch-only `vscode-e2e` workflow (`.github/workflows/vscode-e2e.yml`), which runs the identical entrypoint on Linux under Xvfb from a clean immutable-SHA checkout. On a clean checkout the first local run auto-downloads VS Code into `.vscode-test/`. See the root [TESTING.md](https://github.com/Kilo-Org/kilocode/blob/main/TESTING.md) for the full standard and `packages/kilo-vscode/AGENTS.md` for the mandatory package rules.
 
 ### Documentation Checks
 

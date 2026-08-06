@@ -177,7 +177,7 @@ Extension host bundle targets Node/CommonJS. Browser webviews and shared worker 
 
 ## Extension Host E2E testing
 
-`packages/kilo-vscode/` owns a real Extension Host E2E harness (`bun run test:e2e`, entry `script/e2e-probe.ts`). It is explicit/manual only: no CI workflow or package hook invokes it, and normal dev/build/run paths have zero effect from it.
+`packages/kilo-vscode/` owns a real Extension Host E2E harness (`bun run test:e2e`, entry `script/e2e-probe.ts`). It is explicit/manual only: no automatic trigger or package hook invokes it, and normal dev/build/run paths have zero effect from it. The sole automation is the manual-dispatch-only `vscode-e2e` workflow (below).
 
 | Concern | Behavior |
 |---|---|
@@ -189,7 +189,25 @@ Extension host bundle targets Node/CommonJS. Browser webviews and shared worker 
 | Binary resolution | `VSCODE_TEST_EXECUTABLE` (must exist) → cached `.vscode-test/` → `@vscode/test-electron` auto-download into `.vscode-test/`; clean checkouts need no preinstalled binary |
 | Platforms | macOS and Linux. Windows fails fast because exact-owned termination relies on `ps` PID+args inspection |
 
-This harness spans a real Extension Host, Electron/CDP, and fixture lifecycle boundary and is owned by the extension package. Future Linux CI (Xvfb virtual display, cached `.vscode-test` download, clean-checkout proof, path-scoped trigger) is documented as a recommendation only — no workflow exists or is planned in this work.
+This harness spans a real Extension Host, Electron/CDP, and fixture lifecycle boundary and is owned by the extension package.
+
+### Linux E2E workflow (manual dispatch only)
+
+`vscode-e2e` (`.github/workflows/vscode-e2e.yml`) runs the same `bun run test:e2e` entrypoint on Linux under Xvfb, dispatched explicitly from the Actions UI. It is the only automation that invokes the harness, and it is never automatic.
+
+| Guard | Behavior |
+|---|---|
+| Trigger | `workflow_dispatch` only — no `push`, `pull_request`, `schedule`, `workflow_call`, hook, or package-script aggregation |
+| Immutable-ref checkout | The requested same-repository branch is validated before checkout and resolved with `git ls-remote` to one 40-hex commit SHA; `actions/checkout@v6` checks out exactly that SHA with `persist-credentials: false` and `fetch-depth: 1` |
+| Permissions | Job scope is `contents: read` only; no repository secrets are used; nothing in the target branch can write, push, or act with credentials |
+| Display | `xvfb-run -a bun run test:e2e` — the unmodified package entrypoint; no harness logic is duplicated in YAML |
+| Xvfb | Verified or installed explicitly (`apt-get install -y xvfb`) before the run |
+| Cache scope | Only `packages/kilo-vscode/.vscode-test` (the VS Code download) is cached, keyed Linux/x64 by the resolved target SHA and the extension package manifest; scratch, user-data, workspace, and profile are never cached, and an executable cache from a different target commit is never restored |
+| Clean checkout | Each run starts from a fresh checkout of the immutable SHA, runs `bun install`, and builds the bundled CLI (`bun script/local-bin.ts`) with `KILO_SKIP_BUNDLED_BWRAP=1` scoped to that one step: the Linux runner installs no Zig, the E2E fixture coverage never invokes sandbox tooling, and production `ServerManager` tolerates a missing local bwrap, so the CLI runs without a bundled bwrap; release/package validation (`bun run package:vsix`) remains the separate path that stages bundled sandbox resources. The probe then builds the extension/webview bundles and auto-downloads VS Code — proving the harness works from scratch |
+| Failure diagnostics | Complete E2E stdout/stderr is captured via `set -o pipefail` + `tee` into a runner-owned diagnostics directory and uploaded on failure or cancellation (`if: failure() || cancelled()`) with 7-day bounded retention; GitHub hard job cancellation can still prevent later steps. Harness scratch and exact-PID cleanup are untouched |
+| Resource lifecycle | Workflow timeout is bounded above the harness watchdog (`KILO_E2E_TIMEOUT`); no broad process killing or global cleanup — the harness's exact-owned termination and CDP-port verification are the only process controls |
+
+E2E remains never-automatic: the workflow is a read-only, explicit, manual act, and macOS runs stay local-only.
 
 ## Source map
 
