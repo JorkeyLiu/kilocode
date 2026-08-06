@@ -199,7 +199,6 @@ function planGuard(worktree: string, mcp: Record<string, "allow" | "ask" | "deny
   return Permission.fromConfig({
     "*": "deny",
     question: "allow",
-    suggest: "allow",
     skill: "allow",
     plan_exit: "allow",
     bash: readOnlyBash,
@@ -447,7 +446,6 @@ export function patchAgents(
       defaults,
       Permission.fromConfig({
         question: "allow",
-        suggest: "allow", // kilocode_change
         plan_enter: "allow",
         semantic_search: "allow",
       }),
@@ -473,7 +471,6 @@ export function patchAgents(
         list: "allow",
         question: "allow",
         skill: "allow",
-        suggest: "allow", // kilocode_change
         task: "allow",
         todoread: "allow",
         todowrite: "allow",

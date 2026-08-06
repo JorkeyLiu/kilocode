@@ -44,7 +44,6 @@ import { SessionPrompt } from "../../src/session/prompt"
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { KiloSession } from "../../src/kilocode/session" // kilocode_change
-import { Suggestion } from "../../src/kilocode/suggestion" // kilocode_change - accept suggestion in telemetry test
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@opencode-ai/core/session"
@@ -2689,58 +2688,6 @@ it.instance(
       const tagged = trackSpy.mock.calls
         .map((args) => args[0] as Parameters<typeof Telemetry.trackLlmCompletion>[0])
         .find((p) => p.mode === "review" && p.feature === "code_reviews" && p.command === "review")
-      expect(tagged).toBeDefined()
-    }),
-  30_000,
-)
-
-it.instance(
-  "accepted suggest tool marks following completion with review telemetry",
-  () =>
-    Effect.gen(function* () {
-      const trackSpy = spyOn(Telemetry, "trackLlmCompletion")
-      yield* Effect.addFinalizer(() => Effect.sync(() => trackSpy.mockRestore()))
-      const { llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({
-        title: "Suggest telemetry",
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
-      })
-
-      yield* llm.tool("suggest", {
-        suggest: "Run a local review?",
-        actions: [{ label: "Review", prompt: "/review uncommitted --focus telemetry" }],
-      })
-      yield* llm.text("review done", { usage: { input: 100, output: 50 } })
-
-      const fiber = yield* prompt
-        .prompt({
-          sessionID: chat.id,
-          agent: "build",
-          model: ref,
-          parts: [{ type: "text", text: "Suggest a review action." }],
-        })
-        .pipe(Effect.forkChild)
-      const request = yield* pollWithTimeout(
-        Effect.promise(() => Suggestion.list()).pipe(
-          Effect.map((items) => items.find((item) => item.sessionID === chat.id)),
-        ),
-        "timed out waiting for suggestion request",
-      )
-
-      yield* Effect.promise(() => Suggestion.accept({ requestID: request.id, index: 0 }))
-      yield* Fiber.join(fiber)
-
-      const tagged = trackSpy.mock.calls
-        .map((args) => args[0] as Parameters<typeof Telemetry.trackLlmCompletion>[0])
-        .find(
-          (p) =>
-            p.mode === "review" &&
-            p.feature === "code_reviews" &&
-            p.command === "review" &&
-            p.tool === "suggest",
-        )
       expect(tagged).toBeDefined()
     }),
   30_000,

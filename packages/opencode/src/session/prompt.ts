@@ -1542,10 +1542,9 @@ export const layer = Layer.effect(
           KiloSessionMessageOrder.compare(latest.userMessage, latest.assistantMessage) < 0
         // kilocode_change end
         // kilocode_change start - carry local review command marker into LLM telemetry
-        const telemetry =
-          KiloSessionProcessor.extractReviewTelemetry(
-            msgs.findLast((m) => m.info.role === "user" && m.info.id === lastUser.id)?.parts ?? [],
-          ) ?? KiloSessionProcessor.extractSuggestionReviewTelemetry(lastAssistantMsg?.parts ?? [])
+        const telemetry = KiloSessionProcessor.extractReviewTelemetry(
+          msgs.findLast((m) => m.info.role === "user" && m.info.id === lastUser.id)?.parts ?? [],
+        )
         // kilocode_change end
 
         // Some providers return "stop" even when the assistant message contains

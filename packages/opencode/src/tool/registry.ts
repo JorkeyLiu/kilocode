@@ -2,7 +2,6 @@ import { PlanExitTool } from "./plan"
 import { Session } from "@/session/session"
 import { QuestionTool } from "./question"
 // kilocode_change start
-import { SuggestTool } from "../kilocode/suggestion/tool"
 import { Command } from "@/command"
 // kilocode_change end
 import { ShellTool } from "./shell"
@@ -167,7 +166,6 @@ export const layer: Layer.Layer<
     const skilltool = yield* SkillTool
     const agent = yield* Agent.Service
     // kilocode_change start
-    const suggesttool = yield* SuggestTool
     const manager = Option.getOrUndefined(yield* Effect.serviceOption(AgentManager.Service))
     const notebook = Option.getOrUndefined(yield* Effect.serviceOption(Notebook.Service))
     const kiloToolInfos = yield* KiloToolRegistry.infos(manager, notebook).pipe(Effect.provide(MemoryService.layer))
@@ -284,7 +282,6 @@ export const layer: Layer.Layer<
           question: Tool.init(question),
           lsp: Tool.init(lsptool),
           plan: Tool.init(plan),
-          suggest: Tool.init(suggesttool), // kilocode_change
         })
 
         // kilocode_change start
@@ -316,7 +313,6 @@ export const layer: Layer.Layer<
               tool.skill,
               tool.patch,
               tool.plan,
-              ...(["cli", "vscode"].includes(flags.client) ? [tool.suggest] : []),
               ...KiloToolRegistry.extra(kilo, cfg),
               ...(flags.experimentalLspTool ? [tool.lsp] : []),
             ],

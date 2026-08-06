@@ -1,11 +1,7 @@
 import { afterEach, describe, expect, mock, spyOn, test } from "bun:test"
-import { Effect } from "effect"
 import { Telemetry } from "@kilocode/kilo-telemetry"
-import { Command } from "../../../src/command"
-import { reviewCommand } from "../../../src/kilocode/review/command"
 import { provideTestInstance } from "../../fixture/fixture"
 import { Suggestion } from "../../../src/kilocode/suggestion"
-import { resolvePrompt } from "../../../src/kilocode/suggestion/tool"
 import { SessionID } from "../../../src/session/schema"
 import { tmpdir } from "../../fixture/fixture"
 
@@ -14,17 +10,6 @@ afterEach(() => {
 })
 
 describe("suggestion", () => {
-  test("resolves review command arguments into static templates", async () => {
-    const commands = Command.Service.of({
-      get: (name) => Effect.succeed(name === "review" ? reviewCommand() : undefined),
-      list: () => Effect.succeed([reviewCommand()]),
-    })
-    const out = await Effect.runPromise(resolvePrompt("/review uncommitted --focus telemetry", commands))
-
-    expect(out).toContain("## User Input\n\nuncommitted --focus telemetry")
-    expect(out).not.toContain("$ARGUMENTS")
-  })
-
   test("show adds pending request with blocking flag", async () => {
     await using tmp = await tmpdir({ git: true })
     await provideTestInstance({

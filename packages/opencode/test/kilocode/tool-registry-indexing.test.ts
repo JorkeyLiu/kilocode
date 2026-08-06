@@ -3,12 +3,14 @@ import { Effect, Layer, Schema, Stream } from "effect"
 import * as Log from "@opencode-ai/core/util/log"
 import { Agent } from "../../src/agent/agent"
 import { Bus } from "../../src/bus"
+import { Command } from "../../src/command"
 import { KiloIndexing } from "../../src/kilocode/indexing"
 import { KilocodeBootstrap } from "../../src/kilocode/bootstrap"
 import { KiloSessions } from "../../src/kilo-sessions/kilo-sessions"
 import { KiloMemory } from "@kilocode/kilo-memory/effect"
 import { MemoryService } from "@kilocode/kilo-memory/effect/service"
 import { InstanceState } from "../../src/effect/instance-state"
+import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import { KiloToolRegistry } from "../../src/kilocode/tool/registry"
 import { Provider } from "../../src/provider/provider"
 import { ProviderV2 } from "@opencode-ai/core/provider"
@@ -22,7 +24,21 @@ import * as CrossSpawnSpawner from "@opencode-ai/core/cross-spawn-spawner"
 import { testEffect } from "../lib/effect"
 
 const node = CrossSpawnSpawner.defaultLayer
-const it = testEffect(Layer.mergeAll(Agent.defaultLayer, ToolRegistry.defaultLayer, node))
+const it = testEffect(Layer.mergeAll(Agent.defaultLayer, ToolRegistry.defaultLayer, Command.defaultLayer, node))
+// A per-client runner that provisions `client` through RuntimeFlags.layer so the
+// registry's internal `flags.client` capture genuinely reflects the client under
+// test — env mutation is unreliable here because ToolRegistry.defaultLayer reads
+// the flag once at layer build, not per instance.
+const clientIt = (client: "cli" | "vscode") =>
+  testEffect(
+    Layer.mergeAll(
+      Agent.defaultLayer,
+      ToolRegistry.defaultLayer,
+      Command.defaultLayer,
+      RuntimeFlags.layer({ client }),
+      node,
+    ),
+  )
 const ref = {
   providerID: ProviderV2.ID.make("test"),
   modelID: ModelV2.ID.make("test-model"),
@@ -49,7 +65,7 @@ describe("kilocode tool registry indexing", () => {
             expect(ids).not.toContain("codesearch")
             expect(ids).toContain("question")
             expect(ids).toContain("read")
-            expect(ids).toContain("suggest")
+            expect(ids).not.toContain("suggest")
             expect(avail).not.toHaveBeenCalled()
           } finally {
             avail.mockRestore()
@@ -76,7 +92,7 @@ describe("kilocode tool registry indexing", () => {
             expect(ids).toContain("semantic_search")
             expect(ids).toContain("question")
             expect(ids).toContain("read")
-            expect(ids).toContain("suggest")
+            expect(ids).not.toContain("suggest")
             expect(warn).not.toHaveBeenCalled()
           } finally {
             ready.mockRestore()
@@ -102,7 +118,7 @@ describe("kilocode tool registry indexing", () => {
             expect(ids).toContain("semantic_search")
             expect(ids).toContain("question")
             expect(ids).toContain("read")
-            expect(ids).toContain("suggest")
+            expect(ids).not.toContain("suggest")
             expect(warn).not.toHaveBeenCalled()
           } finally {
             ready.mockRestore()
@@ -215,6 +231,32 @@ describe("kilocode tool registry indexing", () => {
         }),
     ),
   )
+
+  for (const client of ["cli", "vscode"] as const) {
+    clientIt(client).live(`removes suggest tool for ${client} while keeping question and review command`, () =>
+      provideTmpdirInstance(
+        () =>
+          Effect.gen(function* () {
+            const agent = yield* Agent.Service
+            const build = yield* agent.get("build")
+            const registry = yield* ToolRegistry.Service
+            const ids = yield* registry.ids()
+            const tools = yield* registry.tools({ ...ref, agent: build })
+
+            expect(ids).not.toContain("suggest")
+            expect(tools.map((tool) => tool.id)).not.toContain("suggest")
+            // question remains model-initiated and user-choice driven
+            expect(ids).toContain("question")
+            expect(tools.map((tool) => tool.id)).toContain("question")
+
+            // /review command support is unrelated to the removed suggest tool
+            const commands = yield* Command.Service
+            expect((yield* commands.get("review"))?.name).toBe("review")
+          }),
+        { git: true },
+      ),
+    )
+  }
 
   test("enables semantic search from indexing configuration before the index is ready", () => {
     expect(

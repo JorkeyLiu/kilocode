@@ -133,7 +133,6 @@ export const layer = Layer.effect(
             "*": "ask",
             ...Object.fromEntries(whitelistedDirs.map((dir) => [dir, "allow"])),
           },
-          suggest: "deny", // kilocode_change
           question: "deny",
           interactive_terminal: "deny", // kilocode_change - human-driven tools are primary-agent only
           plan_enter: "deny",
@@ -166,7 +165,6 @@ export const layer = Layer.effect(
               Permission.fromConfig({
                 question: "allow",
                 interactive_terminal: "allow", // kilocode_change
-                suggest: "allow", // kilocode_change
                 plan_enter: "allow",
               }),
               user,
