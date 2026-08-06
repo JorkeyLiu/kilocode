@@ -181,6 +181,10 @@
 }
 
 .working-elapsed {
+  /* Keep the elapsed label pinned to the right edge even when the spinner and
+     status text are hidden (settled idle cumulative total): the auto margin
+     absorbs all free space, so the label does not fall back to flex-start. */
+  margin-left: auto;
   flex-shrink: 0;
   font-variant-numeric: tabular-nums;
   opacity: 0.7;

@@ -21,6 +21,7 @@ import { SuggestBar } from "../components/chat/SuggestBar"
 import { MessageList } from "../components/chat/MessageList"
 import { VscodeUserMessage } from "../components/chat/VscodeUserMessage"
 import { TurnOutcome } from "../components/shared/TurnOutcome"
+import { WorkingIndicator } from "../components/shared/WorkingIndicator"
 import { SessionContext } from "../context/session"
 import { MemoryContext, type MemoryContextValue } from "../context/memory"
 import { ProviderContext } from "../context/provider"
@@ -1176,4 +1177,54 @@ const mockServer = {
   languageOverride: () => undefined,
   workspaceDirectory: () => "/project",
   gitInstalled: () => true,
+}
+
+// ---------------------------------------------------------------------------
+// WorkingIndicator — elapsed label alignment (active vs settled idle)
+//
+// Locks in the layout-only fix for the persisted Agent Manager session timer:
+// the elapsed duration must stay pinned to the right edge of the working
+// indicator whether the spinner/status text are visible (active run) or hidden
+// behind a settled cumulative total (idle). Both rows share the same container
+// width below the last message, so their right edges must coincide. If the
+// elapsed label loses its own right alignment, the idle row's label falls back
+// to the left and this baseline diverges.
+//
+// Both rows model the visual DOM deterministically. The active row pairs
+// `submitting` (spinner + status text) with a settled timing snapshot — fixed
+// `elapsedMs`, no `activeStart` — so elapsed content never changes during
+// capture. The settled-idle row renders only the static cumulative total.
+// Storybook's viewport controls the width; no wrapper width is set.
+// ---------------------------------------------------------------------------
+
+const activeRow = {
+  ...mockSessionValue({ id: SESSION_ID, status: "idle" }),
+  // Submission feedback keeps the spinner and status text visible on top of
+  // the settled snapshot, without a live segment to tick.
+  submitting: () => true,
+  timingFor: () => ({ elapsedMs: 90_000 }),
+}
+
+const settledRow = {
+  ...mockSessionValue({ id: SESSION_ID, status: "idle" }),
+  // Settled cumulative total: spinner/text hidden, only the static label shows.
+  timingFor: () => ({ elapsedMs: 300_000 }),
+}
+
+export const WorkingIndicatorElapsedAlignment: Story = {
+  name: "WorkingIndicator — active and settled-idle elapsed right-aligned",
+  render: () => (
+    <StoryProviders sessionID={SESSION_ID} status="idle" noPadding>
+      <div class="chat-view">
+        <div class="message-list-content">
+          <SessionContext.Provider value={activeRow as any}>
+            <WorkingIndicator />
+          </SessionContext.Provider>
+          <SessionContext.Provider value={settledRow as any}>
+            <WorkingIndicator />
+          </SessionContext.Provider>
+        </div>
+      </div>
+    </StoryProviders>
+  ),
 }
