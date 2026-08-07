@@ -13,7 +13,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 import { SessionV2 } from "@opencode-ai/core/session"
 
-import { NotFoundError } from "@/storage/storage"
+import { NotFoundError, Storage } from "@/storage/storage"
 import { eq, and, gte, isNull, desc, like, sql, inArray, lt, or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 import { PartTable, SessionTable } from "@opencode-ai/core/session/sql"
@@ -566,7 +566,7 @@ export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" 
 export const layer: Layer.Layer<
   Service,
   never,
-  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service
+  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service | Storage.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -575,6 +575,7 @@ export const layer: Layer.Layer<
     const background = yield* BackgroundJob.Service
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
+    const storage = yield* Storage.Service
 
     // kilocode_change start - inherited sandbox policy source
     const createNext = Effect.fn("Session.createNext")(function* (input: {
@@ -723,6 +724,17 @@ export const layer: Layer.Layer<
             const workspaceKey = hasInstance ? yield* InstanceState.directory : undefined // kilocode_change
             yield* Effect.promise(() => SessionExport.onSessionClose(sessionID, workspaceKey)) // kilocode_change
             yield* events.remove(sessionID)
+            // kilocode_change - session_diff/session_diff_base are session-owned artifacts orphaned by
+            // remove; Storage.remove treats a missing file as idempotent success and serializes file
+            // access per key, so only genuine (non-ENOENT) failures surface here and are logged.
+            yield* Effect.forEach(["session_diff", "session_diff_base"] as const, (kind) =>
+              storage.remove([kind, sessionID]).pipe(
+                Effect.catch((err) =>
+                  Effect.sync(() => log.error("failed to remove session diff artifact", { sessionID, kind, err })),
+                ),
+              ),
+              { discard: true },
+            )
           }),
         )
         // kilocode_change end
@@ -1085,6 +1097,7 @@ export const defaultLayer = layer.pipe(
   Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provide(SessionV2.defaultLayer),
   Layer.provide(RuntimeFlags.defaultLayer),
+  Layer.provide(Storage.defaultLayer),
 )
 
 const cancelBackgroundJobs = Effect.fn("Session.cancelBackgroundJobs")(function* (
