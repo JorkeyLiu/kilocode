@@ -92,14 +92,12 @@ export const dict = {
   "command.language.set": "Usa lingua: {{language}}",
   "command.session.new": "Nuova sessione",
   "command.session.new.task": "Nuovo task",
-  "command.session.show.changes": "Mostra modifiche",
   "command.file.open": "Apri file",
   "command.tab.close": "Chiudi scheda",
   "command.context.addSelection": "Aggiungi selezione al contesto",
   "command.context.addSelection.description": "Aggiungi le righe selezionate dal file corrente",
   "command.terminal.toggle": "Mostra/nascondi terminale",
   "command.fileTree.toggle": "Mostra/nascondi albero file",
-  "command.review.toggle": "Mostra/nascondi revisione",
   "command.terminal.new": "Nuovo terminale",
   "command.terminal.new.description": "Crea una nuova scheda terminale",
   "command.steps.toggle": "Mostra/nascondi passaggi",
@@ -552,7 +550,6 @@ export const dict = {
   "home.empty.title": "Nessun progetto recente",
   "home.empty.description": "Inizia aprendo un progetto locale",
   "session.tab.session": "Sessione",
-  "session.tab.review": "Revisione",
   "session.tab.context": "Contesto",
   "session.panel.reviewAndFiles": "Revisione e file",
   "session.review.filesChanged": "{{count}} file modificati",
@@ -1097,35 +1094,6 @@ export const dict = {
   "session.status.offline": "Rete disconnessa - riconnessione...",
   "sidebar.session.newSession": "Nuova sessione",
   "sidebar.session.newSession.tooltip": "Avvia una nuova conversazione mantenendo intatta la sessione corrente.",
-  "sidebar.session.newSession.disabled": "Questa sessione è già nuova. Inizia a chattare o crea invece un worktree.",
-  "sidebar.session.newWorktree": "Nuovo worktree",
-  "sidebar.session.newWorktree.tooltip":
-    "Crea un worktree git isolato per sperimentare in sicurezza, tenere separate le modifiche ed eseguire sessioni parallele senza interferire con il branch corrente.",
-  "sidebar.session.configureWorktree.tooltip":
-    "Apri il dialog del worktree in Agent Manager per configurare un nuovo worktree prima di crearlo.",
-  "sidebar.session.newWorktree.from": "Nuovo worktree da",
-  "sidebar.session.currentBranch": "branch corrente",
-  "sidebar.session.moveToWorktree": "Sposta nel worktree",
-  "sidebar.session.moveToWorktree.tooltip.empty":
-    "Sposta questa conversazione e le modifiche locali correnti in un worktree dedicato per lavoro successivo isolato.",
-  "sidebar.session.moveToWorktree.tooltip.one":
-    "Sposta questa conversazione e 1 file modificato in un worktree dedicato per lavoro successivo isolato.",
-  "sidebar.session.moveToWorktree.tooltip.other":
-    "Sposta questa conversazione e {{files}} file modificati in un worktree dedicato per lavoro successivo isolato.",
-  "sidebar.session.showChanges.tooltip.empty": "Apri la vista modifiche per ispezionare il working tree corrente.",
-  "sidebar.session.showChanges.tooltip.one":
-    "1 file modificato · +{{additions}} -{{deletions}}. Apri la vista modifiche.",
-  "sidebar.session.showChanges.tooltip.other":
-    "{{files}} file modificati · +{{additions}} -{{deletions}}. Apri la vista modifiche.",
-  "sidebar.session.agentManager.tooltip":
-    "Apri Agent Manager per una panoramica completa di sessioni parallele e worktree, così puoi coordinare task lunghi in un unico posto.",
-  "sidebar.session.openAgentManager": "Apri Agent Manager",
-  "sidebar.session.progress.capturing": "Acquisizione modifiche...",
-  "sidebar.session.progress.creating": "Creazione worktree...",
-  "sidebar.session.progress.setup": "Esecuzione setup...",
-  "sidebar.session.progress.transferring": "Trasferimento modifiche...",
-  "sidebar.session.progress.forking": "Avvio sessione...",
-  "sidebar.session.progress.failed": "Continuazione nel worktree non riuscita",
   "ui.sessionTurn.cancel": "Annulla",
   "ui.sessionTurn.status.thinking": "Sto pensando...",
   "ui.sessionTurn.status.consideringNextSteps": "Valutazione prossimi passi...",

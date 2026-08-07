@@ -9,20 +9,17 @@ function scene(init: {
   order?: Record<string, string[]>
   sessions?: string[]
   worktreeSessions?: { key: string; ids: string[] }[]
-  review?: Record<string, boolean>
   terminals?: Record<string, string[]>
 }) {
   const state = {
     order: { ...(init.order ?? {}) } as Record<string, string[]>,
     localIds: [...(init.sessions ?? [])],
     worktreeSessions: init.worktreeSessions ?? [],
-    review: init.review ?? {},
     terminals: { ...(init.terminals ?? {}) } as Record<string, string[]>,
     persisted: [] as { key: string; order: string[] }[],
   }
   const deps: TabOrderSyncDeps = {
     LOCAL: "LOCAL",
-    REVIEW_TAB_ID: "review",
     order: () => state.order,
     setOrder: (u) => {
       state.order = u(state.order)
@@ -36,14 +33,13 @@ function scene(init: {
         w.ids.map((id, i) => ({ id, createdAt: new Date(1700000000000 + wi * 1000 + i).toISOString() })),
       ),
     managedSessions: () => state.worktreeSessions.flatMap((w) => w.ids.map((id) => ({ id, worktreeId: w.key }))),
-    reviewOpenByContext: () => state.review,
     terminalIdsFor: (key) => state.terminals[key] ?? [],
   }
   return { state, sync: createTabOrderSync(deps), deps }
 }
 
 // Simulate how `tabIds()` renders the final tab bar: base composed as
-// `[...sessions, review, ...terminals]` and `applyTabOrder` layered on top.
+// `[...sessions, ...terminals]` and `applyTabOrder` layered on top.
 function render(deps: TabOrderSyncDeps, key: string): string[] {
   const sids =
     key === deps.LOCAL
@@ -53,8 +49,7 @@ function render(deps: TabOrderSyncDeps, key: string): string[] {
           .filter((s) => deps.managedSessions().some((ms) => ms.id === s.id && ms.worktreeId === key))
           .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
           .map((s) => s.id)
-  const withReview = deps.reviewOpenByContext()[key] === true ? [...sids, deps.REVIEW_TAB_ID] : sids
-  const base = [...withReview, ...deps.terminalIdsFor(key)]
+  const base = [...sids, ...deps.terminalIdsFor(key)]
   return applyTabOrder(
     base.map((id) => ({ id })),
     deps.order()[key],
@@ -241,34 +236,31 @@ describe("createTabOrderSync.insertLocalAfter (LOCK-002 three-store coordination
 })
 
 describe("createTabOrderSync persistence filter", () => {
-  it("callers strip transient ids before persisting (review + terminal:* never hit disk)", () => {
-    // Mirror AgentManagerApp's real filter: strip review + terminal ids.
+  it("callers strip transient ids before persisting (terminal:* never hit disk)", () => {
+    // Mirror AgentManagerApp's real filter: strip terminal ids.
     const { state, sync } = scene({
       sessions: ["s1", "pending_1"],
       terminals: { LOCAL: ["terminal:abc"] },
-      review: { LOCAL: true },
     })
     // Rebuild sync with a filtering persist to mimic the call site.
     const filteredSync = createTabOrderSync({
       LOCAL: "LOCAL",
-      REVIEW_TAB_ID: "review",
       order: () => state.order,
       setOrder: (u) => {
         state.order = u(state.order)
       },
       persist: (key, order) => {
-        const clean = order.filter((id) => id !== "review" && !id.startsWith("terminal:"))
+        const clean = order.filter((id) => !id.startsWith("terminal:"))
         state.persisted.push({ key, order: clean })
       },
       localSessionIDs: () => state.localIds,
       sessions: () => [],
       managedSessions: () => [],
-      reviewOpenByContext: () => state.review,
       terminalIdsFor: (key) => state.terminals[key] ?? [],
     })
     filteredSync.append("LOCAL", "pending_1")
-    // In-memory order still has terminals/review for drag state.
-    expect(state.order.LOCAL).toEqual(["s1", "review", "terminal:abc", "pending_1"])
+    // In-memory order still has terminals for drag state.
+    expect(state.order.LOCAL).toEqual(["s1", "terminal:abc", "pending_1"])
     // Persisted payload is session-only.
     expect(state.persisted.at(-1)?.order).toEqual(["s1", "pending_1"])
   })

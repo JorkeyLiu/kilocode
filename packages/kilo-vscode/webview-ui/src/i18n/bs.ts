@@ -98,14 +98,12 @@ export const dict = {
 
   "command.session.new": "Nova sesija",
   "command.session.new.task": "Novi zadatak",
-  "command.session.show.changes": "Prikaži promjene",
   "command.file.open": "Otvori datoteku",
   "command.tab.close": "Zatvori karticu",
   "command.context.addSelection": "Dodaj odabir u kontekst",
   "command.context.addSelection.description": "Dodaj odabrane linije iz trenutne datoteke",
   "command.terminal.toggle": "Prikaži/sakrij terminal",
   "command.fileTree.toggle": "Prikaži/sakrij stablo datoteka",
-  "command.review.toggle": "Prikaži/sakrij pregled",
   "command.terminal.new": "Novi terminal",
   "command.terminal.new.description": "Kreiraj novu karticu terminala",
   "command.steps.toggle": "Prikaži/sakrij korake",
@@ -678,7 +676,6 @@ export const dict = {
   "home.empty.description": "Kreni tako što ćeš otvoriti lokalni projekat",
 
   "session.tab.session": "Sesija",
-  "session.tab.review": "Pregled",
   "session.tab.context": "Kontekst",
   "session.panel.reviewAndFiles": "Pregled i datoteke",
   "session.review.filesChanged": "Izmijenjeno {{count}} datoteka",
@@ -706,36 +703,6 @@ export const dict = {
   "session.new.lastModified": "Posljednja izmjena",
   "sidebar.session.newSession": "Nova Sesija",
   "sidebar.session.newSession.tooltip": "Započnite novi razgovor držeći trenutnu sesiju netaknutom.",
-  "sidebar.session.newSession.disabled":
-    "Ova sesija je već nova. Započnite razgovor ili umjesto toga kreirajte worktree.",
-  "sidebar.session.newWorktree": "Novi Worktree",
-  "sidebar.session.newWorktree.tooltip":
-    "Kreirajte izolovani git worktree za sigurno eksperimentisanje, odvojeno čuvanje izmjena i pokretanje paralelnih sesija bez prekidanja vaše trenutne grane.",
-  "sidebar.session.configureWorktree.tooltip":
-    "Otvorite Agent Manager worktree dijalog za konfigurisanje novog worktree-a prije kreiranja.",
-  "sidebar.session.newWorktree.from": "Novi Worktree od",
-  "sidebar.session.currentBranch": "trenutna grana",
-  "sidebar.session.moveToWorktree": "Premjesti u Worktree",
-  "sidebar.session.moveToWorktree.tooltip.empty":
-    "Premjestite ovaj razgovor i vaše trenutne lokalne izmjene u namjenski worktree za izolovani radni nastavak.",
-  "sidebar.session.moveToWorktree.tooltip.one":
-    "Premjesti ovaj razgovor i 1 izmijenjen fajl u namjenski worktree za izolovani naknadni rad.",
-  "sidebar.session.moveToWorktree.tooltip.other":
-    "Premjesti ovaj razgovor i {{files}} izmijenjenih fajlova u namjenski worktree za izolovani naknadni rad.",
-  "sidebar.session.showChanges.tooltip.empty": "Otvorite prikaz izmjena da pregledate trenutno radno stablo.",
-  "sidebar.session.showChanges.tooltip.one":
-    "1 fajl izmijenjen · +{{additions}} -{{deletions}}. Otvori pregled izmjena.",
-  "sidebar.session.showChanges.tooltip.other":
-    "{{files}} fajlova izmijenjeno · +{{additions}} -{{deletions}}. Otvori pregled izmjena.",
-  "sidebar.session.agentManager.tooltip":
-    "Otvorite Agent Manager za potpuni pregled paralelnih sesija i worktree-a, kako biste mogli koordinirati dugotrajne zadatke na jednom mjestu.",
-  "sidebar.session.openAgentManager": "Otvori Agent Manager",
-  "sidebar.session.progress.capturing": "Snimanje izmjena...",
-  "sidebar.session.progress.creating": "Kreiranje worktree-a...",
-  "sidebar.session.progress.setup": "Pokretanje podešavanja...",
-  "sidebar.session.progress.transferring": "Prijenos izmjena...",
-  "sidebar.session.progress.forking": "Pokretanje sesije...",
-  "sidebar.session.progress.failed": "Nije uspjelo nastavljanje u worktree-u",
   "session.header.search.placeholder": "Pretraži {{project}}",
   "session.header.searchFiles": "Pretraži datoteke",
   "session.header.openIn": "Otvori u",

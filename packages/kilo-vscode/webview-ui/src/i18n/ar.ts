@@ -97,14 +97,12 @@ export const dict = {
 
   "command.session.new": "جلسة جديدة",
   "command.session.new.task": "مهمة جديدة",
-  "command.session.show.changes": "إظهار التغييرات",
   "command.file.open": "فتح ملف",
   "command.tab.close": "إغلاق علامة التبويب",
   "command.context.addSelection": "إضافة التحديد إلى السياق",
   "command.context.addSelection.description": "إضافة الأسطر المحددة من الملف الحالي",
   "command.terminal.toggle": "تبديل المحطة الطرفية",
   "command.fileTree.toggle": "تبديل شجرة الملفات",
-  "command.review.toggle": "تبديل المراجعة",
   "command.terminal.new": "محطة طرفية جديدة",
   "command.terminal.new.description": "إنشاء علامة تبويب جديدة للمحطة الطرفية",
   "command.steps.toggle": "تبديل الخطوات",
@@ -667,7 +665,6 @@ export const dict = {
   "home.empty.description": "ابدأ بفتح مشروع محلي",
 
   "session.tab.session": "جلسة",
-  "session.tab.review": "مراجعة",
   "session.tab.context": "سياق",
   "session.panel.reviewAndFiles": "المراجعة والملفات",
   "session.review.filesChanged": "تم تغيير {{count}} ملفات",
@@ -693,34 +690,6 @@ export const dict = {
   "session.new.lastModified": "آخر تعديل",
   "sidebar.session.newSession": "جلسة جديدة",
   "sidebar.session.newSession.tooltip": "ابدأ محادثة جديدة مع الاحتفاظ بالجلسة الحالية كما هي.",
-  "sidebar.session.newSession.disabled": "هذه الجلسة جديدة بالفعل. ابدأ الدردشة أو أنشئ worktree بدلاً من ذلك.",
-  "sidebar.session.newWorktree": "Worktree جديد",
-  "sidebar.session.newWorktree.tooltip":
-    "أنشئ git worktree معزول للتجربة بأمان، وفصل التغييرات، وتشغيل جلسات متوازية دون تعطيل فرعك الحالي.",
-  "sidebar.session.configureWorktree.tooltip":
-    "افتح مربع حوار worktree في Agent Manager لتكوين worktree جديد قبل إنشائه.",
-  "sidebar.session.newWorktree.from": "Worktree جديد من",
-  "sidebar.session.currentBranch": "الفرع الحالي",
-  "sidebar.session.moveToWorktree": "نقل إلى Worktree",
-  "sidebar.session.moveToWorktree.tooltip.empty":
-    "انقل هذه المحادثة وتغييراتك المحلية الحالية إلى worktree مخصص لمتابعة العمل في بيئة معزولة.",
-  "sidebar.session.moveToWorktree.tooltip.one":
-    "انقل هذه المحادثة وملفًا واحدًا معدلًا إلى worktree مخصص لمتابعة العمل في بيئة معزولة.",
-  "sidebar.session.moveToWorktree.tooltip.other":
-    "انقل هذه المحادثة و{{files}} ملفات معدلة إلى worktree مخصص لمتابعة العمل في بيئة معزولة.",
-  "sidebar.session.showChanges.tooltip.empty": "افتح عرض التغييرات لفحص شجرة العمل الحالية.",
-  "sidebar.session.showChanges.tooltip.one": "تم تعديل ملف واحد · +{{additions}} -{{deletions}}. افتح عرض التغييرات.",
-  "sidebar.session.showChanges.tooltip.other":
-    "تم تعديل {{files}} ملفات · +{{additions}} -{{deletions}}. افتح عرض التغييرات.",
-  "sidebar.session.agentManager.tooltip":
-    "افتح Agent Manager للحصول على نظرة عامة كاملة على الجلسات المتوازية و worktrees، لتتمكن من تنسيق المهام الطويلة في مكان واحد.",
-  "sidebar.session.openAgentManager": "فتح Agent Manager",
-  "sidebar.session.progress.capturing": "جاري التقاط التغييرات...",
-  "sidebar.session.progress.creating": "جاري إنشاء worktree...",
-  "sidebar.session.progress.setup": "جاري تشغيل الإعداد...",
-  "sidebar.session.progress.transferring": "جاري نقل التغييرات...",
-  "sidebar.session.progress.forking": "جاري بدء الجلسة...",
-  "sidebar.session.progress.failed": "فشلت المتابعة في worktree",
   "session.header.search.placeholder": "بحث {{project}}",
   "session.header.searchFiles": "بحث عن الملفات",
   "session.header.openIn": "فتح في",

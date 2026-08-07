@@ -22,7 +22,5 @@ test("does not report synthetic pending or cloud preview IDs", () => {
 test("blocks visible presence while an empty pane covers chat", () => {
   const source = flat(fs.readFileSync(APP, "utf-8"))
   // Phase 4A: overlay() removed (worktree setup overlay); contextEmpty() still blocks.
-  expect(source).toContain(
-    "visible( session.currentSessionID(), !!terms.activeId() || reviewActive() || history() || contextEmpty(), )",
-  )
+  expect(source).toContain("visible(session.currentSessionID(), !!terms.activeId() || history() || contextEmpty())")
 })

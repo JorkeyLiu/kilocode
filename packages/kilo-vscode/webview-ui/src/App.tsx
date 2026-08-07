@@ -175,7 +175,6 @@ const AppContent: Component = () => {
           <Switch
             fallback={
               <ChatView
-                continueInWorktree
                 onForkMessage={session.status() === "idle" ? handleForkMessage : undefined}
                 promptBoxId="sidebar:fallback"
                 emptyState={emptyState}
@@ -187,7 +186,6 @@ const AppContent: Component = () => {
                 onSelectSession={openSession}
                 onShowHistory={() => setCurrentView("history")}
                 onForkMessage={session.status() === "idle" ? handleForkMessage : undefined}
-                continueInWorktree
                 promptBoxId="sidebar:new-task"
                 emptyState={emptyState}
               />

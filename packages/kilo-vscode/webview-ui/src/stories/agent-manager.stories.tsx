@@ -1,13 +1,12 @@
 /** @jsxImportSource solid-js */
 /**
  * Stories for Agent Manager components:
- * FileTree, DiffPanel, FullScreenDiffView, WorktreeItem, TabBar
+ * FileTree, FullScreenDiffView, WorktreeItem, TabBar
  */
 
 import type { Meta, StoryObj } from "storybook-solidjs-vite"
 import { StoryProviders, defaultMockData, mockSessionValue } from "./StoryProviders"
 import { FileTree } from "../../diff-viewer/FileTree"
-import { DiffPanel } from "../../agent-manager/DiffPanel"
 import { FullScreenDiffView } from "../../diff-viewer/FullScreenDiffView"
 import { ChatView } from "../components/chat/ChatView"
 import { registerVscodeToolOverrides } from "../components/chat/VscodeToolOverrides"
@@ -232,7 +231,6 @@ function renderChat() {
     visibleMessages: () => chatMessages,
     userMessages: () => chatMessages.filter((message) => message.role === "user"),
     getParts: (id: string) => chatParts[id as keyof typeof chatParts] ?? [],
-    worktreeStats: () => ({ files: 3, additions: 32, deletions: 8 }),
   }
   return (
     <StoryProviders data={chatData} sessionID={chatSessionID} status="idle" noPadding>
@@ -288,28 +286,8 @@ export const FileTreeEmpty: Story = {
 }
 
 // ---------------------------------------------------------------------------
-// DiffPanel
+// Inline diff bulk actions
 // ---------------------------------------------------------------------------
-
-export const DiffPanelWithDiffs: Story = {
-  name: "DiffPanel — with diffs (unified)",
-  render: () => (
-    <StoryProviders>
-      <div style={{ width: "420px", height: "500px", display: "flex", "flex-direction": "column" }}>
-        <DiffPanel
-          diffs={mockDiffs}
-          loading={false}
-          diffStyle="unified"
-          onDiffStyleChange={() => {}}
-          comments={[]}
-          onCommentsChange={() => {}}
-          onClose={() => {}}
-          onExpand={() => {}}
-        />
-      </div>
-    </StoryProviders>
-  ),
-}
 
 const buttonFixtureStyle: JSX.CSSProperties = {
   display: "inline-flex",
@@ -469,7 +447,7 @@ export const FullScreenDiffAgentEditScroll: Story = {
 }
 
 // ---------------------------------------------------------------------------
-// TabBar — renders tab bar structure matching SortableTab / SortableReviewTab
+// TabBar — renders tab bar structure matching SortableTab
 // DOM to verify the tooltip-trigger height chain is correct.
 // ---------------------------------------------------------------------------
 
@@ -491,23 +469,6 @@ const MockTab = (props: { title: string; active?: boolean }) => (
         </TooltipKeybind>
       </ContextMenu.Trigger>
     </ContextMenu>
-  </div>
-)
-
-/** Mock review tab matching SortableReviewTab DOM (no ContextMenu wrapper). */
-const MockReviewTab = (props: { active?: boolean }) => (
-  <div class="am-tab-sortable">
-    <TooltipKeybind title="Toggle review" keybind="⌘⇧R" placement="bottom" inactive={props.active}>
-      <div class={`am-tab am-tab-review ${props.active ? "am-tab-active" : ""}`}>
-        <span class="am-tab-icon">
-          <Icon name="layers" size="small" />
-        </span>
-        <span class="am-tab-label">Review</span>
-        <TooltipKeybind title="Close" keybind="⌘W" placement="bottom" class="am-tab-close-wrap">
-          <IconButton icon="close-small" size="small" variant="ghost" label="Close" class="am-tab-close" />
-        </TooltipKeybind>
-      </div>
-    </TooltipKeybind>
   </div>
 )
 
@@ -544,41 +505,6 @@ export const TabBarMultipleTabs: Story = {
           </div>
         </div>
         <MockTabAdd />
-        <div class="am-tab-actions">
-          <button class="am-diff-toggle-btn am-diff-toggle-has-changes">
-            <Icon name="layers" size="small" />
-            <span class="am-diff-toggle-stats">
-              <span class="am-stat-files">4f</span>
-              <span class="am-stat-additions">+32</span>
-              <span class="am-stat-deletions">−8</span>
-            </span>
-          </button>
-          <IconButton icon="console" size="small" variant="ghost" label="Terminal" />
-        </div>
-      </div>
-    </StoryProviders>
-  ),
-}
-
-export const TabBarWithReviewTab: Story = {
-  name: "TabBar — with review tab",
-  render: () => (
-    <StoryProviders noPadding>
-      <div class="am-tab-bar">
-        <MockTabLeading />
-        <div class="am-tab-scroll-area">
-          <div class="am-tab-list-wrap">
-            <div class="am-tab-list" style={{ "--tab-count": "2" } as JSX.CSSProperties}>
-              <MockTab title="Implement auth" />
-              <MockReviewTab active />
-            </div>
-          </div>
-        </div>
-        <MockTabAdd />
-        <div class="am-tab-actions">
-          <IconButton icon="expand" size="small" variant="ghost" label="Review" class="am-tab-diff-btn-active" />
-          <IconButton icon="console" size="small" variant="ghost" label="Terminal" />
-        </div>
       </div>
     </StoryProviders>
   ),
@@ -598,17 +524,6 @@ export const TabBarSingleTab: Story = {
           </div>
         </div>
         <MockTabAdd />
-        <div class="am-tab-actions">
-          <button class="am-diff-toggle-btn am-diff-toggle-has-changes">
-            <Icon name="layers" size="small" />
-            <span class="am-diff-toggle-stats">
-              <span class="am-stat-files">188f</span>
-              <span class="am-stat-additions">+23625</span>
-              <span class="am-stat-deletions">−359</span>
-            </span>
-          </button>
-          <IconButton icon="console" size="small" variant="ghost" label="Terminal" />
-        </div>
       </div>
     </StoryProviders>
   ),

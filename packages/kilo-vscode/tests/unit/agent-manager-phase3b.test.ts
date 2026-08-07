@@ -34,7 +34,6 @@ describe("Phase 3B — loadLocalUIState", () => {
     expect(state.activeTabId).toBeUndefined()
     expect(state.sidebarCollapsed).toBe(false)
     expect(state.sidebarWidth).toBe(260)
-    expect(state.reviewDiffStyle).toBe("unified")
     expect(state.legacyImported).toBe(false)
   })
 
@@ -45,7 +44,6 @@ describe("Phase 3B — loadLocalUIState", () => {
       activeTabId: "s1",
       sidebarCollapsed: true,
       sidebarWidth: 300,
-      reviewDiffStyle: "split",
       legacyImported: true,
     }
     const state = loadLocalUIState(() => ({ localUIState: ui }))
@@ -53,7 +51,6 @@ describe("Phase 3B — loadLocalUIState", () => {
     expect(state.activeTabId).toBe("s1")
     expect(state.sidebarCollapsed).toBe(true)
     expect(state.sidebarWidth).toBe(300)
-    expect(state.reviewDiffStyle).toBe("split")
     expect(state.legacyImported).toBe(true)
   })
 
@@ -74,7 +71,6 @@ describe("Phase 3B — loadLocalUIState", () => {
       activeTabId: undefined,
       sidebarCollapsed: false,
       sidebarWidth: 260,
-      reviewDiffStyle: "unified",
       legacyImported: true,
     }
     const state = loadLocalUIState(() => ({
@@ -93,7 +89,6 @@ describe("Phase 3B — loadLocalUIState", () => {
         activeTabId: "s1",
         sidebarCollapsed: false,
         sidebarWidth: 260,
-        reviewDiffStyle: "unified",
         legacyImported: false,
       },
     }))
@@ -109,7 +104,6 @@ describe("Phase 3B — loadLocalUIState", () => {
         activeTabId: "",
         sidebarCollapsed: false,
         sidebarWidth: 260,
-        reviewDiffStyle: "unified",
         legacyImported: false,
       },
     }))
@@ -137,7 +131,6 @@ describe("Phase 3B — loadLocalUIState", () => {
         activeTabId: "ghost-tab",
         sidebarCollapsed: false,
         sidebarWidth: 260,
-        reviewDiffStyle: "unified",
         legacyImported: false,
       },
     }))
@@ -153,7 +146,6 @@ describe("Phase 3B — loadLocalUIState", () => {
         activeTabId: "",
         sidebarCollapsed: false,
         sidebarWidth: 260,
-        reviewDiffStyle: "unified",
         legacyImported: false,
       },
     }))
@@ -170,7 +162,6 @@ describe("Phase 3B — loadLocalUIState", () => {
           activeTabId: bad,
           sidebarCollapsed: false,
           sidebarWidth: 260,
-          reviewDiffStyle: "unified",
           legacyImported: false,
         },
       }))
@@ -186,7 +177,6 @@ describe("Phase 3B — loadLocalUIState", () => {
         activeTabId: "s2",
         sidebarCollapsed: false,
         sidebarWidth: 260,
-        reviewDiffStyle: "unified",
         legacyImported: false,
       },
     }))
@@ -207,7 +197,6 @@ describe("Phase 3B — saveLocalUIState", () => {
       activeTabId: "s1",
       sidebarCollapsed: false,
       sidebarWidth: 260,
-      reviewDiffStyle: "unified",
       legacyImported: true,
     }
     saveLocalUIState(
@@ -290,20 +279,18 @@ describe("Phase 3B — importLegacyLocalTabs", () => {
     // wt-1 is filtered out even though it was in the tab order
   })
 
-  it("imports sidebarCollapsed and reviewDiffStyle", () => {
+  it("imports sidebarCollapsed", () => {
     const result = importLegacyLocalTabs(
       {
         managedSessions: [{ id: "s1", worktreeId: null }],
         sidebarCollapsed: true,
-        reviewDiffStyle: "split",
       },
       LOCAL,
     )
     expect(result.sidebarCollapsed).toBe(true)
-    expect(result.reviewDiffStyle).toBe("split")
   })
 
-  it("defaults sidebarCollapsed to false and reviewDiffStyle to unified when absent", () => {
+  it("defaults sidebarCollapsed to false when absent", () => {
     const result = importLegacyLocalTabs(
       {
         managedSessions: [{ id: "s1", worktreeId: null }],
@@ -311,7 +298,6 @@ describe("Phase 3B — importLegacyLocalTabs", () => {
       LOCAL,
     )
     expect(result.sidebarCollapsed).toBe(false)
-    expect(result.reviewDiffStyle).toBe("unified")
   })
 
   it("returns empty when no local sessions exist", () => {
@@ -462,7 +448,6 @@ describe("Phase 3B — migration marker semantics", () => {
         activeTabId: "s1",
         sidebarCollapsed: false,
         sidebarWidth: 260,
-        reviewDiffStyle: "unified",
       },
     }))
     expect(state.legacyImported).toBe(false)

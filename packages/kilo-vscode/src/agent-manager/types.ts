@@ -53,8 +53,6 @@ interface StateMessage {
   tabOrder?: Record<string, string[]>
   sessionsCollapsed?: boolean
   sidebarCollapsed?: boolean
-  reviewDiffStyle?: "unified" | "split"
-  reviewMarkdownRender?: boolean
   isGitRepo?: boolean
   runStatuses?: RunStatus[]
   runScriptConfigured?: boolean
@@ -131,33 +129,6 @@ interface RepoInfoMessage {
   defaultBranch?: string
 }
 
-interface WorktreeDiffLoadingMessage {
-  type: "agentManager.worktreeDiffLoading"
-  sessionId: string
-  loading: boolean
-}
-
-interface WorktreeDiffMessage {
-  type: "agentManager.worktreeDiff"
-  sessionId: string
-  diffs: unknown[]
-}
-
-interface WorktreeDiffFileMessage {
-  type: "agentManager.worktreeDiffFile"
-  sessionId: string
-  file: string
-  diff: unknown | null
-}
-
-interface RevertWorktreeFileResultMessage {
-  type: "agentManager.revertWorktreeFileResult"
-  sessionId: string
-  file: string
-  status: "success" | "error"
-  message: string
-}
-
 interface ActionOutMessage {
   type: "action"
   action: string
@@ -178,10 +149,6 @@ export type AgentManagerOutMessage =
   | SendInitialMessage
   | KeybindingsMessage
   | RepoInfoMessage
-  | WorktreeDiffLoadingMessage
-  | WorktreeDiffMessage
-  | WorktreeDiffFileMessage
-  | RevertWorktreeFileResultMessage
   | ActionOutMessage
   | RunStatusMessage
   | TerminalCreatedMessage
@@ -265,37 +232,6 @@ interface SetSessionsCollapsedIn {
 interface SetSidebarCollapsedIn {
   type: "agentManager.setSidebarCollapsed"
   collapsed: boolean
-}
-
-interface SetReviewDiffStyleIn {
-  type: "agentManager.setReviewDiffStyle"
-  style: "unified" | "split"
-}
-
-interface SetReviewMarkdownRenderIn {
-  type: "agentManager.setReviewMarkdownRender"
-  render: boolean
-}
-
-interface StartDiffWatchIn {
-  type: "agentManager.startDiffWatch"
-  sessionId: string
-}
-
-interface StopDiffWatchIn {
-  type: "agentManager.stopDiffWatch"
-}
-
-interface RequestWorktreeDiffFileIn {
-  type: "agentManager.requestWorktreeDiffFile"
-  sessionId: string
-  file: string
-}
-
-interface RevertWorktreeFileIn {
-  type: "agentManager.revertWorktreeFile"
-  sessionId: string
-  file: string
 }
 
 interface OpenSessionsIn {
@@ -476,12 +412,6 @@ export type AgentManagerInMessage =
   | SetTabOrderIn
   | SetSessionsCollapsedIn
   | SetSidebarCollapsedIn
-  | SetReviewDiffStyleIn
-  | SetReviewMarkdownRenderIn
-  | StartDiffWatchIn
-  | StopDiffWatchIn
-  | RequestWorktreeDiffFileIn
-  | RevertWorktreeFileIn
   | OpenSessionsIn
   | VisibleSessionIn
   | OpenFileIn

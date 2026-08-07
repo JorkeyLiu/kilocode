@@ -22,7 +22,6 @@ const TSX_FILES = [
   path.join(ROOT, "webview-ui/agent-manager/AgentManagerApp.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/SidebarSessionList.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/sortable-tab.tsx"),
-  path.join(ROOT, "webview-ui/agent-manager/DiffPanel.tsx"),
   path.join(ROOT, "webview-ui/diff-viewer/FullScreenDiffView.tsx"),
   path.join(ROOT, "webview-ui/diff-viewer/ImageDiffView.tsx"),
   path.join(ROOT, "webview-ui/diff-viewer/MarkdownDiffView.tsx"),
@@ -47,7 +46,6 @@ const TSX_FILES = [
 ]
 const TSX_FILE = TSX_FILES[0]!
 const PROVIDER_FILE = path.join(ROOT, "src/agent-manager/AgentManagerProvider.ts")
-const DIFF_CONTROLLER_FILE = path.join(ROOT, "src/agent-manager/worktree-diff-controller.ts")
 const SETUP_SCRIPT_RUNNER_FILE = path.join(ROOT, "src/agent-manager/SetupScriptRunner.ts")
 const RUN_MESSAGE_FILE = path.join(ROOT, "src/agent-manager/run/message.ts")
 const TERMINAL_ROUTING_FILE = path.join(ROOT, "src/agent-manager/terminal-routing.ts")
@@ -149,7 +147,6 @@ describe("Agent Manager CSS/TSX Consistency", () => {
       "am-pr-",
       "am-local-",
       "am-section-",
-      "am-run-badge",
       "am-default-base-branch",
       "am-tab-switcher",
       "am-compare-",
@@ -288,10 +285,6 @@ describe("Agent Manager Provider — onMessage routing", () => {
     return fs.readFileSync(PROVIDER_FILE, "utf-8")
   }
 
-  function diff(): string {
-    return fs.readFileSync(DIFF_CONTROLLER_FILE, "utf-8")
-  }
-
   // -- onMessage dispatches all expected message types -----------------------
 
   it("provider routing handles all documented agentManager.* message types", () => {
@@ -345,8 +338,23 @@ describe("Agent Manager Provider — onMessage routing", () => {
     expect(text).toContain("onSessionMessage")
     expect(text).toContain("onUiMessage")
     expect(text).toContain("onStateMessage")
-    expect(text).toContain("onDiffMessage")
+    expect(text).not.toContain("onDiffMessage")
     expect(text).not.toContain("agentManager.requestState")
+  })
+
+  // LOCK-002: the shared sidebar Diff Viewer stays intact, and its
+  // agentManager.openFile route (session file → VS Code editor) is preserved
+  // even though the feature-exclusive Agent Manager diff/review surface was
+  // removed. Guard the routing so a future cleanup cannot drop it silently.
+  it("routes agentManager.openFile through onUiMessage to the file opener", () => {
+    const text = body("onUiMessage")
+    expect(text, "onUiMessage must route agentManager.openFile").toContain('m.type === "agentManager.openFile"')
+    expect(text, "openFile handler must call the shared file opener").toContain(
+      "this.openFile(m.sessionId, m.filePath, m.line, m.column)",
+    )
+    expect(text, "openFile must be consumed (return null), not forwarded to the backend").toContain(
+      "this.openFile(m.sessionId, m.filePath, m.line, m.column)\n      return null",
+    )
   })
 
   // Phase 4C: onDeleteWorktree, onCreateWorktree, notifyWorktreeReady removed.
@@ -361,10 +369,9 @@ describe("Agent Manager Provider — onMessage routing", () => {
     expect(text, "must call pushState for the normal path").toContain("this.pushState()")
   })
 
-  // Phase 4B: onDiffMessage and onImportMessage were removed from AgentManagerProvider.
-  // WorktreeDiffController is still instantiated for cleanup (stop()) in attachPanel/disposeAsync
-  // and onDeleteWorktree. The controller file remains for those consumers and 4C tool mode.
-  // worktree-importer.ts was deleted as entirely unused.
+  // Phase 4C: onDiffMessage and onImportMessage were removed from AgentManagerProvider.
+  // The Agent Manager diff/review surface and its worktree diff controller no longer
+  // exist — the sidebar Diff Viewer owns all diff rendering via DiffViewerProvider.
 })
 
 // ---------------------------------------------------------------------------

@@ -1,20 +1,6 @@
 /* Review tab + file tree + default base branch picker styles.
    Extracted from the main agent-manager stylesheet to keep files under 3000 lines. */
 
-/* Review tab in tab bar */
-
-.am-tab-review {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-left: 1px solid var(--border-weak-base);
-}
-
-.am-tab-review [data-component="icon"] {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
-
 /* Full-screen review tab layout */
 
 .am-review-layout {
@@ -100,14 +86,6 @@
 /* Review body: file tree + diff viewer */
 
 .am-review-body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.am-review-host {
   display: flex;
   flex: 1;
   min-height: 0;

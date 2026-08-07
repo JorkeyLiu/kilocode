@@ -3,7 +3,6 @@ import * as path from "path"
 import type { KiloClient, Session } from "@kilocode/sdk/v2/client"
 import type { KiloConnectionService } from "../services/cli-backend"
 import { getErrorMessage } from "../kilo-provider-utils"
-import { getDiffMarkdownRender, setDiffMarkdownRender } from "../review-settings"
 import { isAbsolutePath } from "../path-utils"
 import { GitStatsPoller, type LocalStats } from "./GitStatsPoller"
 import { GitOps } from "./GitOps"
@@ -51,7 +50,6 @@ export class AgentManagerProvider implements Disposable {
   private tabOrder: Record<string, string[]> = {}
   private sessionsCollapsed = false
   private sidebarCollapsed = false
-  private reviewDiffStyle: "unified" | "split" = "unified"
 
   /** Session ID most recently loaded via `loadMessages`; updated synchronously. */
   private activeSessionId: string | undefined
@@ -252,8 +250,6 @@ export class AgentManagerProvider implements Disposable {
     if (ui !== undefined) return ui
     const state = this.onStateMessage(m)
     if (state !== undefined) return state
-    const diff = this.onDiffMessage(m)
-    if (diff !== undefined) return diff
     if (this.terminalRouter.handle(m)) return null
 
     return msg
@@ -393,6 +389,10 @@ export class AgentManagerProvider implements Disposable {
       void this.sendRepoInfo()
       return null
     }
+    if (m.type === "agentManager.openFile") {
+      this.openFile(m.sessionId, m.filePath, m.line, m.column)
+      return null
+    }
   }
 
   private onStateMessage(m: AgentManagerInMessage): Record<string, unknown> | null | undefined {
@@ -410,36 +410,6 @@ export class AgentManagerProvider implements Disposable {
     }
     if (m.type === "agentManager.setSidebarCollapsed") {
       this.sidebarCollapsed = m.collapsed
-      return null
-    }
-    if (m.type === "agentManager.setReviewDiffStyle") {
-      this.reviewDiffStyle = m.style
-      return null
-    }
-    if (m.type === "agentManager.setReviewMarkdownRender") {
-      void setDiffMarkdownRender(m.render).then(() => this.pushState())
-      return null
-    }
-  }
-
-  private onDiffMessage(m: AgentManagerInMessage): Record<string, unknown> | null | undefined {
-    if (m.type === "agentManager.requestWorktreeDiffFile") {
-      // Local-only: diff file requests are no longer served via worktree controller
-      this.postToWebview({ type: "agentManager.worktreeDiffFile", sessionId: m.sessionId, file: m.file, diff: null })
-      return null
-    }
-    if (m.type === "agentManager.revertWorktreeFile") {
-      this.postToWebview({
-        type: "agentManager.revertWorktreeFileResult",
-        sessionId: m.sessionId,
-        file: m.file,
-        status: "error",
-        message: "Revert is not supported in local-only mode",
-      })
-      return null
-    }
-    if (m.type === "agentManager.openFile") {
-      this.openFile(m.sessionId, m.filePath, m.line, m.column)
       return null
     }
   }
@@ -467,7 +437,6 @@ export class AgentManagerProvider implements Disposable {
       case "agentManager.setTabOrder":
       case "agentManager.setSessionsCollapsed":
       case "agentManager.setSidebarCollapsed":
-      case "agentManager.setReviewDiffStyle":
         return true
       default:
         return false
@@ -656,8 +625,6 @@ export class AgentManagerProvider implements Disposable {
       tabOrder: this.tabOrder,
       sessionsCollapsed: this.sessionsCollapsed,
       sidebarCollapsed: this.sidebarCollapsed,
-      reviewDiffStyle: this.reviewDiffStyle,
-      reviewMarkdownRender: getDiffMarkdownRender(),
       isGitRepo: true,
       ...run,
     })

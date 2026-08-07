@@ -661,8 +661,6 @@ export interface AgentManagerStateMessage {
   worktreeOrder?: string[]
   sessionsCollapsed?: boolean
   sidebarCollapsed?: boolean
-  reviewDiffStyle?: "unified" | "split"
-  reviewMarkdownRender?: boolean
   isGitRepo?: boolean
   defaultBaseBranch?: string
   runStatuses?: RunStatus[]
@@ -800,36 +798,6 @@ export interface AgentManagerImportResultMessage {
   success: boolean
   message: string
   errorCode?: WorktreeErrorCode
-}
-
-// Agent Manager: Diff data push (extension → webview)
-export interface AgentManagerWorktreeDiffMessage {
-  type: "agentManager.worktreeDiff"
-  sessionId: string
-  diffs: WorktreeFileDiff[]
-}
-
-export interface AgentManagerWorktreeDiffFileMessage {
-  type: "agentManager.worktreeDiffFile"
-  sessionId: string
-  file: string
-  diff: WorktreeFileDiff | null
-}
-
-// Agent Manager: Diff loading state (extension → webview)
-export interface AgentManagerWorktreeDiffLoadingMessage {
-  type: "agentManager.worktreeDiffLoading"
-  sessionId: string
-  loading: boolean
-}
-
-// Agent Manager: Revert single file result (extension → webview)
-export interface AgentManagerRevertWorktreeFileResultMessage {
-  type: "agentManager.revertWorktreeFileResult"
-  sessionId: string
-  file: string
-  status: "success" | "error"
-  message: string
 }
 
 // Agent Manager: Local workspace git stats push (extension → webview)
@@ -1172,12 +1140,8 @@ export type ExtensionMessage =
   | AgentManagerBranchesMessage
   | AgentManagerExternalWorktreesMessage
   | AgentManagerImportResultMessage
-  | WorkspaceDirectoryChangedMessage
-  | AgentManagerWorktreeDiffMessage
-  | AgentManagerWorktreeDiffFileMessage
-  | AgentManagerWorktreeDiffLoadingMessage
-  | AgentManagerRevertWorktreeFileResultMessage
   | AgentManagerLocalStatsMessage
+  | WorkspaceDirectoryChangedMessage
   | AgentManagerPRStatusMessage
   | AgentManagerTerminalCreatedMessage
   | AgentManagerTerminalFontChangedMessage

@@ -90,12 +90,11 @@ export function remoteSessions(
 
 /**
  * A "focus chat search" request only reaches TaskHeader while ChatView is
- * the visible main surface — history, an active terminal tab, and the
- * full-screen review each replace it. Reset to chat first, then dispatch.
+ * the visible main surface — history and an active terminal tab each
+ * replace it. Reset to chat first, then dispatch.
  */
-export function focusChatSearch(reset: { history(v: boolean): void; review(v: boolean): void; terminal(): void }) {
+export function focusChatSearch(reset: { history(v: boolean): void; terminal(): void }) {
   reset.history(false)
-  reset.review(false)
   reset.terminal()
   window.dispatchEvent(new CustomEvent("focusTranscriptSearch"))
 }

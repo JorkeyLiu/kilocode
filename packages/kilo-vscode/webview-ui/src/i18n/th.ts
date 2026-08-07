@@ -97,14 +97,12 @@ export const dict = {
 
   "command.session.new": "เซสชันใหม่",
   "command.session.new.task": "งานใหม่",
-  "command.session.show.changes": "แสดงการเปลี่ยนแปลง",
   "command.file.open": "เปิดไฟล์",
   "command.tab.close": "ปิดแท็บ",
   "command.context.addSelection": "เพิ่มส่วนที่เลือกไปยังบริบท",
   "command.context.addSelection.description": "เพิ่มบรรทัดที่เลือกจากไฟล์ปัจจุบัน",
   "command.terminal.toggle": "สลับเทอร์มินัล",
   "command.fileTree.toggle": "สลับต้นไม้ไฟล์",
-  "command.review.toggle": "สลับการตรวจสอบ",
   "command.terminal.new": "เทอร์มินัลใหม่",
   "command.terminal.new.description": "สร้างแท็บเทอร์มินัลใหม่",
   "command.steps.toggle": "สลับขั้นตอน",
@@ -670,7 +668,6 @@ export const dict = {
   "home.empty.description": "เริ่มต้นโดยเปิดโปรเจกต์ในเครื่อง",
 
   "session.tab.session": "เซสชัน",
-  "session.tab.review": "ตรวจสอบ",
   "session.tab.context": "บริบท",
   "session.panel.reviewAndFiles": "ตรวจสอบและไฟล์",
   "session.review.filesChanged": "{{count}} ไฟล์ที่เปลี่ยนแปลง",
@@ -698,35 +695,6 @@ export const dict = {
   "session.new.lastModified": "แก้ไขล่าสุด",
   "sidebar.session.newSession": "เซสชันใหม่",
   "sidebar.session.newSession.tooltip": "เริ่มการสนทนาใหม่โดยที่ยังคงเซสชันปัจจุบันไว้",
-  "sidebar.session.newSession.disabled": "เซสชันนี้เป็นเซสชันใหม่อยู่แล้ว เริ่มแชทหรือสร้าง worktree แทน",
-  "sidebar.session.newWorktree": "Worktree ใหม่",
-  "sidebar.session.newWorktree.tooltip":
-    "สร้าง git worktree ที่แยกออกมาต่างหากเพื่อทดลองอย่างปลอดภัย แยกการเปลี่ยนแปลงออกจากกัน และรันเซสชันคู่ขนานโดยไม่รบกวน branch ปัจจุบันของคุณ",
-  "sidebar.session.configureWorktree.tooltip":
-    "เปิดกล่องโต้ตอบ worktree ของ Agent Manager เพื่อกำหนดค่า worktree ใหม่ก่อนที่จะสร้าง",
-  "sidebar.session.newWorktree.from": "Worktree ใหม่จาก",
-  "sidebar.session.currentBranch": "branch ปัจจุบัน",
-  "sidebar.session.moveToWorktree": "ย้ายไปยัง Worktree",
-  "sidebar.session.moveToWorktree.tooltip.empty":
-    "ย้ายบทสนทนานี้และการเปลี่ยนแปลงในเครื่องปัจจุบันของคุณไปยัง worktree เฉพาะสำหรับการทำงานต่อเนื่องแบบแยกส่วน",
-  "sidebar.session.moveToWorktree.tooltip.one":
-    "ย้ายบทสนทนานี้และ 1 ไฟล์ที่ถูกแก้ไขไปยัง worktree เฉพาะสำหรับการทำงานต่อเนื่องแบบแยกส่วน",
-  "sidebar.session.moveToWorktree.tooltip.other":
-    "ย้ายบทสนทนานี้และ {{files}} ไฟล์ที่ถูกแก้ไขไปยัง worktree เฉพาะสำหรับการทำงานต่อเนื่องแบบแยกส่วน",
-  "sidebar.session.showChanges.tooltip.empty": "เปิดมุมมองการเปลี่ยนแปลงเพื่อตรวจสอบ working tree ปัจจุบัน",
-  "sidebar.session.showChanges.tooltip.one":
-    "เปลี่ยนแปลง 1 ไฟล์ · +{{additions}} -{{deletions}} เปิดมุมมองการเปลี่ยนแปลง",
-  "sidebar.session.showChanges.tooltip.other":
-    "เปลี่ยนแปลง {{files}} ไฟล์ · +{{additions}} -{{deletions}} เปิดมุมมองการเปลี่ยนแปลง",
-  "sidebar.session.agentManager.tooltip":
-    "เปิด Agent Manager เพื่อดูภาพรวมของเซสชันและ worktree คู่ขนาน เพื่อให้คุณสามารถประสานงานงานที่ใช้เวลานานได้ในที่เดียว",
-  "sidebar.session.openAgentManager": "เปิด Agent Manager",
-  "sidebar.session.progress.capturing": "กำลังบันทึกการเปลี่ยนแปลง...",
-  "sidebar.session.progress.creating": "กำลังสร้าง worktree...",
-  "sidebar.session.progress.setup": "กำลังรันการตั้งค่า...",
-  "sidebar.session.progress.transferring": "กำลังถ่ายโอนการเปลี่ยนแปลง...",
-  "sidebar.session.progress.forking": "กำลังเริ่มเซสชัน...",
-  "sidebar.session.progress.failed": "ดำเนินการต่อใน worktree ไม่สำเร็จ",
   "session.header.search.placeholder": "ค้นหา {{project}}",
   "session.header.searchFiles": "ค้นหาไฟล์",
   "session.header.openIn": "เปิดใน",

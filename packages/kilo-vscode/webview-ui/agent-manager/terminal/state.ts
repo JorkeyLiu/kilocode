@@ -184,7 +184,7 @@ export function createTerminalState(selection: Accessor<string | null>): Termina
    * Reorder terminals in the current context by moving `from` to `to`'s
    * position. Returns `true` when the reorder was applied, `false` when
    * either end isn't a terminal in the current context (so the caller
-   * can fall through to session / review drag logic).
+   * can fall through to session drag logic).
    */
   const reorderDrag = (from: string, to: string): boolean => {
     const key = currentKey()
@@ -220,10 +220,9 @@ export function createTerminalState(selection: Accessor<string | null>): Termina
 export interface TerminalHandlerDeps {
   state: TerminalStateControls
   tabIds: Accessor<string[]>
-  selectReview: () => void
   selectSessionTab: (id: string, pending: boolean) => void
   clearSession: () => void
-  /** Reset review/pending state when activating a terminal. */
+  /** Reset pending state when activating a terminal. */
   resetOthers: () => void
   isPendingId: (id: string) => boolean
   /** Locate a session/pending tab by id. */
@@ -234,7 +233,6 @@ export interface TerminalHandlerDeps {
   getSelection: () => string | null
   /** Sentinel value for the LOCAL sidebar selection. */
   LOCAL: string
-  REVIEW_TAB_ID: string
 }
 
 /**
@@ -279,7 +277,6 @@ export function createTerminalHandlers(deps: TerminalHandlerDeps) {
       deps.state.setActiveId(undefined)
       if (nextId) {
         if (isTerminalTabId(nextId)) activate(nextId)
-        else if (nextId === deps.REVIEW_TAB_ID) deps.selectReview()
         else {
           const target = deps.findTab(nextId)
           if (target) deps.selectSessionTab(target.id, deps.isPendingId(target.id))

@@ -81,7 +81,7 @@ Global SSE carries wrapped events for multiple directories. Connection service b
 
 ## Agent Manager
 
-Agent Manager is extension feature, not separate product. It opens as editor tab and manages parallel sessions, optional worktrees, terminals, diffs, setup scripts, and extra editor windows.
+Agent Manager is extension feature, not separate product. It opens as editor tab and manages parallel sessions, optional worktrees, terminals, setup scripts, and extra editor windows. Worktree diff/review rendering was removed from the Agent Manager; the sidebar Diff Viewer webview owns all diff rendering.
 
 | Aspect | Sidebar | Agent Manager |
 |---|---|---|

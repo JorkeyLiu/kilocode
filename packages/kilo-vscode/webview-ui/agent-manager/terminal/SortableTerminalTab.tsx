@@ -2,7 +2,7 @@
  * Draggable tab chrome for an xterm terminal tab.
  *
  * Shares the same hover/tooltip/close/right-click mechanism as the
- * session and review tab variants so users get consistent navigation
+ * session tab variants so users get consistent navigation
  * hints and context actions regardless of tab kind.
  */
 

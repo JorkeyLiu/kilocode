@@ -98,14 +98,12 @@ export const dict = {
 
   "command.session.new": "新しいセッション",
   "command.session.new.task": "新しいタスク",
-  "command.session.show.changes": "変更を表示",
   "command.file.open": "ファイルを開く",
   "command.tab.close": "タブを閉じる",
   "command.context.addSelection": "選択範囲をコンテキストに追加",
   "command.context.addSelection.description": "現在のファイルから選択した行を追加",
   "command.terminal.toggle": "ターミナルの切り替え",
   "command.fileTree.toggle": "ファイルツリーを切り替え",
-  "command.review.toggle": "レビューの切り替え",
   "command.terminal.new": "新しいターミナル",
   "command.terminal.new.description": "新しいターミナルタブを作成",
   "command.steps.toggle": "ステップの切り替え",
@@ -673,7 +671,6 @@ export const dict = {
   "home.empty.description": "ローカルプロジェクトを開いて始めましょう",
 
   "session.tab.session": "セッション",
-  "session.tab.review": "レビュー",
   "session.tab.context": "コンテキスト",
   "session.panel.reviewAndFiles": "レビューとファイル",
   "session.review.filesChanged": "{{count}} ファイル変更",
@@ -699,36 +696,6 @@ export const dict = {
   "session.new.lastModified": "最終更新",
   "sidebar.session.newSession": "新規セッション",
   "sidebar.session.newSession.tooltip": "現在のセッションを維持したまま、新しい会話を開始します。",
-  "sidebar.session.newSession.disabled":
-    "このセッションは既に新規です。チャットを開始するか、代わりに worktree を作成してください。",
-  "sidebar.session.newWorktree": "新規 Worktree",
-  "sidebar.session.newWorktree.tooltip":
-    "隔離された git worktree を作成して、安全に実験し、変更を分離し、現在のブランチを中断することなく並行セッションを実行します。",
-  "sidebar.session.configureWorktree.tooltip":
-    "Agent Manager の worktree ダイアログを開き、作成する前に新しい worktree を構成します。",
-  "sidebar.session.newWorktree.from": "新規 Worktree の作成元",
-  "sidebar.session.currentBranch": "現在のブランチ",
-  "sidebar.session.moveToWorktree": "Worktree に移動",
-  "sidebar.session.moveToWorktree.tooltip.empty":
-    "この会話と現在のローカルの変更を専用の worktree に移動して、隔離された環境で作業を続行します。",
-  "sidebar.session.moveToWorktree.tooltip.one":
-    "この会話と1つの変更されたファイルを、分離されたフォローアップ作業用の専用 worktree に移動します。",
-  "sidebar.session.moveToWorktree.tooltip.other":
-    "この会話と{{files}}個の変更されたファイルを、分離されたフォローアップ作業用の専用 worktree に移動します。",
-  "sidebar.session.showChanges.tooltip.empty": "変更ビューを開いて、現在の作業ツリーを検査します。",
-  "sidebar.session.showChanges.tooltip.one":
-    "1つのファイルが変更されました · +{{additions}} -{{deletions}}。変更ビューを開きます。",
-  "sidebar.session.showChanges.tooltip.other":
-    "{{files}}個のファイルが変更されました · +{{additions}} -{{deletions}}。変更ビューを開きます。",
-  "sidebar.session.agentManager.tooltip":
-    "Agent Manager を開いて、並行セッションと worktree の全体像を把握し、時間のかかるタスクを 1 か所で調整できます。",
-  "sidebar.session.openAgentManager": "Agent Manager を開く",
-  "sidebar.session.progress.capturing": "変更をキャプチャ中...",
-  "sidebar.session.progress.creating": "worktree を作成中...",
-  "sidebar.session.progress.setup": "セットアップを実行中...",
-  "sidebar.session.progress.transferring": "変更を転送中...",
-  "sidebar.session.progress.forking": "セッションを開始中...",
-  "sidebar.session.progress.failed": "worktree での再開に失敗しました",
   "session.header.search.placeholder": "{{project}}を検索",
   "session.header.searchFiles": "ファイルを検索",
   "session.header.openIn": "で開く",

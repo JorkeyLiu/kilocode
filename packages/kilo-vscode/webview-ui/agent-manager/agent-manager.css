@@ -139,10 +139,6 @@ html[data-theme="kilo-vscode"]
   color: color-mix(in srgb, var(--text-on-interactive-base) 70%, transparent);
 }
 
-.am-local-item-active .am-stat-files {
-  color: rgba(255, 255, 255, 0.7);
-}
-
 .am-local-icon {
   width: 18px;
   height: 18px;
@@ -272,103 +268,6 @@ button.am-section-toggle:hover .am-section-label {
     opacity: 1;
     transform: translateX(0);
   }
-}
-
-/* Per-worktree git stats (diff lines + commits missing from origin) */
-
-.am-run-badge {
-  --am-run-accent: var(--text-muted);
-  display: inline-flex;
-  align-items: center;
-  gap: 3px;
-  padding: 1px 5px 1px 3px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--am-run-accent) 12%, transparent);
-  color: var(--am-run-accent);
-  font-size: var(--kilo-font-size-10);
-  line-height: 1;
-  margin-left: auto;
-}
-
-.am-run-badge [data-component="icon"] {
-  width: 11px;
-  height: 11px;
-  color: currentColor;
-}
-
-.am-run-badge-label {
-  color: currentColor;
-}
-
-.am-run-badge[data-run-state="running"] {
-  --am-run-accent: var(--vscode-testing-iconPassed, #34d399);
-  animation: am-run-pulse 1.5s ease-in-out infinite;
-}
-
-.am-run-badge[data-run-state="stopping"] {
-  --am-run-accent: #fbbf24;
-}
-
-.am-run-badge[data-run-state="success"] {
-  --am-run-accent: var(--vscode-testing-iconPassed, #34d399);
-}
-
-.am-run-badge[data-run-state="error"] {
-  --am-run-accent: #f87171;
-}
-
-@keyframes am-run-pulse {
-  0%,
-  100% {
-    opacity: 0.95;
-  }
-  50% {
-    opacity: 0.45;
-  }
-}
-
-/* Toolbar Run button group */
-.am-run-group {
-  display: inline-flex;
-  align-items: center;
-  gap: 0;
-}
-
-.am-run-group-chevron {
-  padding: 0 2px !important;
-  min-width: 0 !important;
-  width: auto !important;
-}
-
-.am-run-group-chevron [data-component="icon"] {
-  width: 12px;
-  height: 12px;
-}
-
-/* Unconfigured — muted until hover */
-.am-run-unconfigured {
-  opacity: 0.5;
-}
-.am-run-unconfigured:hover {
-  opacity: 0.85;
-}
-
-/* Green accent when running — uses VS Code's standard green token */
-.am-run-active,
-.am-run-active [data-component="icon"] {
-  color: var(--vscode-testing-iconPassed, #34d399) !important;
-}
-
-.am-stat-files {
-  color: var(--text-muted);
-}
-
-.am-stat-additions {
-  color: #34d399;
-}
-
-.am-stat-deletions {
-  color: #f87171;
 }
 
 /* User-defined sections — collapsible, color-coded groups */
@@ -851,17 +750,6 @@ button.am-section-toggle:hover .am-section-label {
   align-self: center;
 }
 
-.am-tab-actions {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex-shrink: 0;
-  align-self: stretch;
-  margin-left: auto;
-  padding-left: 6px;
-  padding-right: 4px;
-  border-left: 1px solid var(--border-weak-base);
-}
 .am-sidebar-search-trigger {
   display: inline-flex;
   width: 24px;
@@ -1065,63 +953,6 @@ button.am-section-toggle:hover .am-section-label {
 
 /* Diff Panel */
 
-.am-diff-toggle-btn {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  border: none;
-  background: transparent;
-  color: var(--text-weak);
-  cursor: pointer;
-  padding: 3px 6px;
-  border-radius: 5px;
-  font-family: var(--font-mono, monospace);
-  font-size: var(--kilo-font-size-10);
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  white-space: nowrap;
-  transition:
-    background 120ms,
-    color 120ms;
-}
-
-.am-diff-toggle-btn:hover {
-  background: var(--button-ghost-hover, var(--surface-base-hover));
-  color: var(--text-base);
-}
-
-.am-diff-toggle-btn.am-tab-diff-btn-active {
-  background: var(--surface-interactive-base) !important;
-  color: var(--text-base) !important;
-}
-
-.am-diff-toggle-btn.am-diff-toggle-has-changes {
-  color: var(--text-base);
-}
-
-.am-diff-toggle-stats {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-}
-
-.am-diff-toggle-btn.am-tab-diff-btn-active .am-stat-files {
-  color: rgba(255, 255, 255, 0.7);
-}
-
-.am-diff-toggle-btn.am-tab-diff-btn-active .am-stat-additions {
-  color: #6ee7b7;
-}
-
-.am-diff-toggle-btn.am-tab-diff-btn-active .am-stat-deletions {
-  color: #fca5a5;
-}
-
-.am-tab-diff-btn-active {
-  background: var(--surface-interactive-base) !important;
-  color: var(--text-base) !important;
-}
-
 .am-detail-content {
   display: flex;
   flex-direction: column;
@@ -1129,18 +960,6 @@ button.am-section-toggle:hover .am-section-label {
   min-height: 0;
   min-width: 0;
   isolation: isolate;
-}
-
-.am-detail-content-hidden {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  pointer-events: none;
-  z-index: 0;
-}
-
-.am-detail-split {
-  flex-direction: row;
 }
 
 .am-main-pane {
@@ -1158,104 +977,13 @@ button.am-section-toggle:hover .am-section-label {
   pointer-events: none;
 }
 
-.am-detail-split .am-main-pane {
-  border-right: 1px solid var(--border-weak-base);
-}
-
-.am-diff-resize {
-  position: relative;
-  display: flex;
-  flex-shrink: 0;
-  min-width: 0;
-}
-
-.am-diff-resize > [data-component="resize-handle"]::after {
-  background: var(--surface-interactive-base);
-}
-
-.am-diff-panel-wrapper {
-  position: relative;
-  flex: 1;
-  width: 100%;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.am-diff-panel-wrapper > [data-component="resize-handle"]::after {
-  background: var(--surface-interactive-base);
-}
-
-.am-diff-panel {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  width: 100%;
-  min-height: 0;
-  --am-diff-count-size: 12px;
-}
-
-.am-diff-panel:focus,
-.am-review-layout:focus {
-  outline: none;
-}
-
-.am-diff-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 4px 4px 4px 12px;
-  flex-shrink: 0;
-  border-bottom: 1px solid var(--border-weak-base);
-  position: relative;
-  z-index: 20;
-  background: var(--surface-base);
-}
-
-.am-diff-header-title {
-  font-size: var(--font-size-small);
-  font-weight: 500;
-  color: var(--text-weak);
-}
-
-.am-diff-header-main {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  flex: 1;
-  min-width: 0;
-}
-
-.am-diff-header-stats {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: var(--font-size-small);
-  color: var(--text-weak);
-  white-space: nowrap;
-}
-
-.am-diff-header-adds {
-  color: var(--syntax-diff-add, #318430);
-  font-weight: 500;
-}
-
-.am-diff-header-dels {
-  color: var(--syntax-diff-delete, #da3319);
-  font-weight: 500;
-}
-
-.am-diff-header-collapsed,
 .am-review-toolbar-collapsed {
   color: var(--text-weaker);
   font-variant-numeric: tabular-nums;
 }
 
-.am-diff-header [data-component="radio-group"],
-.am-diff-header [data-component="radio-group"] [data-slot="radio-group-item-label"],
-.am-diff-header [data-component="radio-group"] [data-slot="radio-group-item-control"] {
-  cursor: pointer;
+.am-review-layout:focus {
+  outline: none;
 }
 
 .am-diff-loading {
@@ -1327,102 +1055,65 @@ button.am-section-toggle:hover .am-section-label {
   }
 }
 
-.am-diff-content {
-  flex: 1;
-  min-height: 0;
-  overflow-y: auto;
-  cursor: pointer;
-}
-
-/* Override session-review defaults that assume a 40px header slot.
-   The upstream styles set height:100%, contain:strict, scrollbar-width:none
-   on [data-component="session-review"] and --sticky-accordion-top:40px on
-   its sticky headers. We don't render the 40px title row so reset to 0. */
-.am-diff-content[data-component="session-review"] {
-  height: auto;
-  contain: none;
-  scrollbar-width: auto;
-  width: 100%;
-}
-
-.am-diff-content[data-component="session-review"] [data-component="sticky-accordion-header"] {
-  --sticky-accordion-top: 0px;
-}
-
 /* Ensure virtualized accordion rows span the panel without per-row rounded corners. */
-.am-diff-content [data-component="accordion"],
 .am-review-diff-content [data-component="accordion"] {
   width: 100% !important;
   align-items: stretch !important;
 }
 
-.am-diff-content [data-slot="accordion-item"],
 .am-review-diff-content [data-slot="accordion-item"],
-.am-diff-content [data-slot="accordion-header"],
 .am-review-diff-content [data-slot="accordion-header"],
-.am-diff-content [data-slot="accordion-trigger"],
 .am-review-diff-content [data-slot="accordion-trigger"] {
   width: 100% !important;
   align-self: stretch !important;
 }
 
-.am-diff-content [data-slot="accordion-trigger"],
 .am-review-diff-content [data-slot="accordion-trigger"],
-.am-diff-content [data-slot="accordion-content"],
 .am-review-diff-content [data-slot="accordion-content"] {
   border-radius: 0 !important;
 }
 
-.am-diff-content [data-slot="accordion-item"][data-file-path],
 .am-review-diff-content [data-slot="accordion-item"][data-file-path] {
   width: 100% !important;
   align-self: stretch !important;
 }
 
-.am-diff-content [data-slot="accordion-content"],
 .am-review-diff-content [data-slot="accordion-content"] {
   width: 100% !important;
 }
 
-.am-diff-content [data-component="sticky-accordion-header"],
 .am-review-diff-content [data-component="sticky-accordion-header"] {
   width: 100% !important;
   left: 0;
   right: 0;
 }
 
-.am-diff-content [data-slot="session-review-trigger-content"],
 .am-review-diff-content [data-slot="session-review-trigger-content"] {
   width: 100%;
   min-width: 0;
 }
 
-.am-diff-content [data-slot="session-review-file-info"],
 .am-review-diff-content [data-slot="session-review-file-info"] {
   min-width: 0;
   flex: 1 1 auto;
   cursor: grab;
 }
 
-.am-diff-content [data-slot="session-review-file-info"]:active,
 .am-review-diff-content [data-slot="session-review-file-info"]:active {
   cursor: grabbing;
 }
 
-.am-diff-content [data-slot="session-review-file-name-container"],
 .am-review-diff-content [data-slot="session-review-file-name-container"] {
   min-width: 0;
   flex: 1 1 auto;
   overflow: hidden;
 }
 
-.am-diff-content [data-slot="session-review-directory"],
 .am-review-diff-content [data-slot="session-review-directory"] {
   min-width: 0;
   flex: 0 1 auto;
 }
 
-.am-diff-content [data-slot="session-review-filename"],
 .am-review-diff-content [data-slot="session-review-filename"] {
   min-width: 0;
   flex: 0 1 auto;
@@ -1431,7 +1122,6 @@ button.am-section-toggle:hover .am-section-label {
   white-space: nowrap;
 }
 
-.am-diff-content [data-slot="session-review-trigger-actions"],
 .am-review-diff-content [data-slot="session-review-trigger-actions"] {
   flex-shrink: 0;
   min-width: max-content;
@@ -1487,10 +1177,6 @@ button.am-section-toggle:hover .am-section-label {
   max-height: 440px;
   object-fit: contain;
   box-shadow: 0 8px 28px color-mix(in oklab, black 20%, transparent);
-}
-
-.am-diff-panel .am-image-diff-canvas img {
-  max-height: 320px;
 }
 
 .am-image-diff-message,
@@ -1641,9 +1327,7 @@ button.am-section-toggle:hover .am-section-label {
   }
 }
 
-/* Keep +N/-N indicators at consistent size across side/fullscreen views */
-.am-diff-panel [data-component="diff-changes"] [data-slot="diff-changes-additions"],
-.am-diff-panel [data-component="diff-changes"] [data-slot="diff-changes-deletions"],
+/* Keep +N/-N indicators at consistent size across fullscreen review views */
 .am-review-layout [data-component="diff-changes"] [data-slot="diff-changes-additions"],
 .am-review-layout [data-component="diff-changes"] [data-slot="diff-changes-deletions"] {
   font-size: var(--am-diff-count-size);
@@ -1843,22 +1527,6 @@ button.am-section-toggle:hover .am-section-label {
   border-top: 1px solid var(--border-weak-base);
   color: var(--text-weak);
   font-size: var(--font-size-small);
-}
-
-/* Comments footer bar */
-
-.am-diff-comments-footer {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 12px;
-  border-top: 1px solid var(--border-weak-base);
-  flex-shrink: 0;
-}
-
-.am-diff-comments-count {
-  font-size: var(--font-size-small);
-  color: var(--text-weak);
 }
 
 /* Setup overlay */
@@ -2932,38 +2600,7 @@ button.am-section-toggle:hover .am-section-label {
   line-height: 1.5;
 }
 
-/* Diff panel header actions row */
-
-.am-diff-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin-left: 8px;
-  min-width: 0;
-}
-
-.am-diff-header-actions > * {
-  flex-shrink: 0;
-}
-
-.am-apply-spinner {
-  width: 12px;
-  height: 12px;
-}
-
 /* Review tab in tab bar */
-
-.am-tab-review {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  border-left: 1px solid var(--border-weak-base);
-}
-
-.am-tab-review [data-component="icon"] {
-  flex-shrink: 0;
-  opacity: 0.7;
-}
 
 /* Full-screen review tab layout */
 
@@ -3067,14 +2704,6 @@ button.am-section-toggle:hover .am-section-label {
 /* Review body: file tree + diff viewer */
 
 .am-review-body {
-  display: flex;
-  flex: 1;
-  min-height: 0;
-  min-width: 0;
-  overflow: hidden;
-}
-
-.am-review-host {
   display: flex;
   flex: 1;
   min-height: 0;
@@ -3438,16 +3067,6 @@ body.vscode-high-contrast-light {
     border-color: var(--vscode-contrastBorder, transparent) !important;
   }
 
-  /* Diff toggle button */
-  .am-diff-toggle-btn {
-    border: 1px solid var(--vscode-contrastBorder, transparent);
-  }
-
-  /* Diff panel header */
-  .am-diff-header {
-    border-bottom-color: var(--vscode-contrastBorder, var(--border-weak-base));
-  }
-
   /* Inline annotations */
   .am-annotation {
     border-color: var(--vscode-contrastBorder, var(--border-weak-base));
@@ -3531,7 +3150,6 @@ body.vscode-high-contrast-light {
   .am-tab:focus-visible,
   .am-nv-pill:focus-visible,
   .am-tab-switcher-pill:focus-visible,
-  .am-diff-toggle-btn:focus-visible,
   .am-branch-item:focus-visible,
   .am-file-tree-dir:focus-visible,
   .am-file-tree-file:focus-visible,

@@ -8,19 +8,17 @@
 import { replaceInTabOrder, insertInTabOrderAfter } from "./tab-order"
 
 export interface TabOrderSyncDeps {
-  /** Constants that identify the local context and review tab. */
+  /** Constant that identifies the local context. */
   LOCAL: string
-  REVIEW_TAB_ID: string
   /** Read/update the `contextKey → ordered tab ids` map (in-memory). */
   order: () => Record<string, string[]>
   setOrder: (updater: (prev: Record<string, string[]>) => Record<string, string[]>) => void
   /** Persist to durable state. Callers should strip transient ids here. */
   persist: (key: string, value: string[]) => void
-  /** State accessors used to rebuild the base order `[sessions, review, terminals]`. */
+  /** State accessors used to rebuild the base order `[sessions, terminals]`. */
   localSessionIDs: () => string[]
   sessions: () => { id: string; createdAt: string }[]
   managedSessions: () => { id: string; worktreeId?: string | null }[] // worktreeId is a legacy field name
-  reviewOpenByContext: () => Record<string, boolean>
   terminalIdsFor: (key: string) => string[]
 }
 
@@ -34,8 +32,7 @@ export function createTabOrderSync(deps: TabOrderSyncDeps) {
             .filter((s) => deps.managedSessions().some((ms) => ms.id === s.id && ms.worktreeId === key)) // worktreeId is legacy
             .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
             .map((s) => s.id)
-    const withReview = deps.reviewOpenByContext()[key] === true ? [...sids, deps.REVIEW_TAB_ID] : sids
-    return [...withReview, ...deps.terminalIdsFor(key)]
+    return [...sids, ...deps.terminalIdsFor(key)]
   }
 
   const commit = (key: string, next: string[]) => {

@@ -98,14 +98,12 @@ export const dict = {
 
   "command.session.new": "Nieuwe sessie",
   "command.session.new.task": "Nieuwe taak",
-  "command.session.show.changes": "Wijzigingen tonen",
   "command.file.open": "Bestand openen",
   "command.tab.close": "Tabblad sluiten",
   "command.context.addSelection": "Selectie aan context toevoegen",
   "command.context.addSelection.description": "Geselecteerde regels uit het huidige bestand toevoegen",
   "command.terminal.toggle": "Terminal in-/uitschakelen",
   "command.fileTree.toggle": "Bestandenstructuur in-/uitschakelen",
-  "command.review.toggle": "Review in-/uitschakelen",
   "command.terminal.new": "Nieuwe terminal",
   "command.terminal.new.description": "Een nieuw terminal-tabblad aanmaken",
   "command.steps.toggle": "Stappen in-/uitschakelen",
@@ -680,7 +678,6 @@ export const dict = {
   "home.empty.description": "Ga aan de slag door een lokaal project te openen",
 
   "session.tab.session": "Sessie",
-  "session.tab.review": "Beoordelen",
   "session.tab.context": "Context",
   "session.panel.reviewAndFiles": "Beoordeling en bestanden",
   "session.review.filesChanged": "{{count}} bestanden gewijzigd",
@@ -708,37 +705,6 @@ export const dict = {
   "session.new.lastModified": "Laatst gewijzigd",
   "sidebar.session.newSession": "Nieuwe Sessie",
   "sidebar.session.newSession.tooltip": "Start een nieuw gesprek terwijl je de huidige sessie intact houdt.",
-  "sidebar.session.newSession.disabled":
-    "Deze sessie is al nieuw. Begin met chatten of maak in plaats daarvan een worktree aan.",
-  "sidebar.session.newWorktree": "Nieuwe Worktree",
-  "sidebar.session.newWorktree.tooltip":
-    "Maak een geïsoleerde git worktree aan om veilig te experimenteren, wijzigingen gescheiden te houden en parallelle sessies uit te voeren zonder je huidige branch te verstoren.",
-  "sidebar.session.configureWorktree.tooltip":
-    "Open het Agent Manager worktree-dialoogvenster om een nieuwe worktree te configureren voordat je deze aanmaakt.",
-  "sidebar.session.newWorktree.from": "Nieuwe Worktree van",
-  "sidebar.session.currentBranch": "huidige branch",
-  "sidebar.session.moveToWorktree": "Verplaats naar Worktree",
-  "sidebar.session.moveToWorktree.tooltip.empty":
-    "Verplaats dit gesprek en je huidige lokale wijzigingen naar een toegewijde worktree voor geïsoleerd vervolgwerk.",
-  "sidebar.session.moveToWorktree.tooltip.one":
-    "Verplaats deze conversatie en 1 gewijzigd bestand naar een specifieke worktree voor geïsoleerd vervolgwerk.",
-  "sidebar.session.moveToWorktree.tooltip.other":
-    "Verplaats deze conversatie en {{files}} gewijzigde bestanden naar een specifieke worktree voor geïsoleerd vervolgwerk.",
-  "sidebar.session.showChanges.tooltip.empty":
-    "Open de weergave met wijzigingen om de huidige worktree te inspecteren.",
-  "sidebar.session.showChanges.tooltip.one":
-    "1 bestand gewijzigd · +{{additions}} -{{deletions}}. Open de wijzigingenweergave.",
-  "sidebar.session.showChanges.tooltip.other":
-    "{{files}} bestanden gewijzigd · +{{additions}} -{{deletions}}. Open de wijzigingenweergave.",
-  "sidebar.session.agentManager.tooltip":
-    "Open Agent Manager voor een compleet overzicht van parallelle sessies en worktrees, zodat je langlopende taken op één plek kunt coördineren.",
-  "sidebar.session.openAgentManager": "Open Agent Manager",
-  "sidebar.session.progress.capturing": "Wijzigingen vastleggen...",
-  "sidebar.session.progress.creating": "Worktree aanmaken...",
-  "sidebar.session.progress.setup": "Setup uitvoeren...",
-  "sidebar.session.progress.transferring": "Wijzigingen overzetten...",
-  "sidebar.session.progress.forking": "Sessie starten...",
-  "sidebar.session.progress.failed": "Kan niet doorgaan in worktree",
   "session.header.search.placeholder": "Zoek in {{project}}",
   "session.header.searchFiles": "Bestanden zoeken",
   "session.header.openIn": "Open in",

@@ -239,14 +239,6 @@ export interface OpenMarketplacePanelRequest {
   directory?: string
 }
 
-export interface OpenAgentManagerRequest {
-  type: "openAgentManager"
-}
-
-export interface OpenAdvancedWorktreeRequest {
-  type: "openAdvancedWorktree"
-}
-
 export interface OpenKiloClawRequest {
   type: "openKiloClaw"
 }
@@ -558,14 +550,6 @@ export interface TelemetryRequest {
   properties?: Record<string, unknown>
 }
 
-// Create a new worktree (with auto-created first session)
-export interface CreateWorktreeRequest {
-  type: "agentManager.createWorktree"
-  baseBranch?: string
-  branchName?: string
-  variant?: string
-}
-
 // Delete a worktree and dissociate its sessions
 export interface DeleteWorktreeRequest {
   type: "agentManager.deleteWorktree"
@@ -768,18 +752,6 @@ export interface SetSidebarCollapsedRequest {
   collapsed: boolean
 }
 
-// Persist review diff style preference
-export interface SetReviewDiffStyleRequest {
-  type: "agentManager.setReviewDiffStyle"
-  style: "unified" | "split"
-}
-
-// Persist Markdown render preference in diff viewers
-export interface SetReviewMarkdownRenderRequest {
-  type: "agentManager.setReviewMarkdownRender"
-  render: boolean
-}
-
 export interface RequestBranchesMessage {
   type: "agentManager.requestBranches"
 }
@@ -808,29 +780,6 @@ export interface ImportAllExternalWorktreesRequest {
   type: "agentManager.importAllExternalWorktrees"
 }
 
-// Agent Manager: Request one-shot diff fetch (webview → extension)
-export interface RequestWorktreeDiffMessage {
-  type: "agentManager.requestWorktreeDiff"
-  sessionId: string
-}
-
-export interface RequestWorktreeDiffFileMessage {
-  type: "agentManager.requestWorktreeDiffFile"
-  sessionId: string
-  file: string
-}
-
-// Agent Manager: Start polling for live diff updates (webview → extension)
-export interface StartDiffWatchMessage {
-  type: "agentManager.startDiffWatch"
-  sessionId: string
-}
-
-// Agent Manager: Stop polling for diff updates (webview → extension)
-export interface StopDiffWatchMessage {
-  type: "agentManager.stopDiffWatch"
-}
-
 // Agent Manager: PR messages (webview → extension)
 export interface RefreshPRMessage {
   type: "agentManager.refreshPR"
@@ -840,13 +789,6 @@ export interface RefreshPRMessage {
 export interface OpenPRMessage {
   type: "agentManager.openPR"
   worktreeId: string
-}
-
-// Agent Manager: Revert a single file in a worktree (webview → extension)
-export interface RevertWorktreeFileMessage {
-  type: "agentManager.revertWorktreeFile"
-  sessionId: string
-  file: string
 }
 
 // Variant persistence (webview → extension)
@@ -1228,8 +1170,6 @@ export type WebviewMessage =
   | OpenVSCodeSettingsRequest
   | OpenConfigFileRequest
   | OpenMarketplacePanelRequest
-  | OpenAgentManagerRequest
-  | OpenAdvancedWorktreeRequest
   | OpenKiloClawRequest
   | OpenFileRequest
   | ValidateFilesRequest
@@ -1292,7 +1232,6 @@ export type WebviewMessage =
   | SettingsTabChangedMessage
   | SyncSessionRequest
   | CreateWorktreeSessionRequest
-  | CreateWorktreeRequest
   | DeleteWorktreeRequest
   | RemoveStaleWorktreeRequest
   | PromoteSessionRequest
@@ -1322,8 +1261,6 @@ export type WebviewMessage =
   | SetWorktreeOrderRequest
   | SetSessionsCollapsedRequest
   | SetSidebarCollapsedRequest
-  | SetReviewDiffStyleRequest
-  | SetReviewMarkdownRenderRequest
   | PersistVariantRequest
   | RequestVariantsMessage
   | RequestCloudSessionDataMessage
@@ -1334,10 +1271,6 @@ export type WebviewMessage =
   | ImportFromPRRequest
   | ImportExternalWorktreeRequest
   | ImportAllExternalWorktreesRequest
-  | RequestWorktreeDiffMessage
-  | RequestWorktreeDiffFileMessage
-  | StartDiffWatchMessage
-  | StopDiffWatchMessage
   | RefreshPRMessage
   | OpenPRMessage
   // legacy-migration start
@@ -1347,7 +1280,6 @@ export type WebviewMessage =
   | ClearLegacyDataMessage
   | FinalizeLegacyMigrationMessage
   // legacy-migration end
-  | RevertWorktreeFileMessage
   | EnhancePromptRequest
   | OpenChangesRequest
   | OpenDiffVirtualRequest

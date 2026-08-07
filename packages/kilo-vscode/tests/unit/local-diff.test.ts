@@ -120,8 +120,8 @@ describe("diffSummary", () => {
       const entry = result.find((e) => e.file === "seed.txt")
       expect(entry?.status).toBe("modified")
       // Pin the export contract: resolveBase("HEAD") must resolve to a real
-      // candidate branch when one exists locally. If this regresses, the
-      // revert-file fix below also silently regresses.
+      // candidate branch when one exists locally — the sidebar diff viewer
+      // relies on this to compute the base for local worktree diffs.
       expect(await resolveBase(git(), dir, "HEAD")).toBe("main")
     })
   })

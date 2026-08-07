@@ -237,7 +237,6 @@ export function mockSessionValue(overrides?: {
     revert: () => undefined,
     revertedCount: () => 0,
     summary: () => undefined,
-    worktreeStats: () => undefined,
     revertSession: noop,
     unrevertSession: noop,
     cancelQueued: noop,

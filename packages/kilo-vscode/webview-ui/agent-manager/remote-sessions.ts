@@ -31,7 +31,7 @@ export function reportRemoteSessions(
 }
 
 // Report the actually displayed real session id, or null when a terminal,
-// review, pending, or empty tab is shown. Drives only visible presence;
+// pending, or empty tab is shown. Drives only visible presence;
 // retained attached tabs are unaffected.
 export function reportVisibleSession(vscode: VisibleBridge, visible: Accessor<string | null>): void {
   createEffect(() => {

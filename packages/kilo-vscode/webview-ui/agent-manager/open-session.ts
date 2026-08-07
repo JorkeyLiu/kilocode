@@ -4,7 +4,7 @@
  * Single entry point for ordinary session navigation:
  *   1. Tab registry add-or-focus in the given UI context
  *   2. Set active session/tab
- *   3. Clear history/terminal/review/pending overlays
+ *   3. Clear history/terminal/pending overlays
  *   4. Call session.selectSession(id)
  *
  * No parent/root classification, no managed ownership mutation,
@@ -19,7 +19,6 @@ export interface OpenSessionDeps {
   selectSession: (id: string) => void
   setActivePendingId: (id: string | undefined) => void
   setHistory: (v: boolean) => void
-  setReviewActive: (v: boolean) => void
   setTermsActiveId: (id: string | undefined) => void
   setSelection: (sel: string) => void
   isPending: (id: string) => boolean
@@ -43,7 +42,7 @@ export interface OpenChildSessionDeps extends OpenSessionDeps {
  * Single entry point for all ordinary Agent Manager session navigation:
  *   1. Tab registry add-or-focus in LOCAL UI context
  *   2. Set active session/tab
- *   3. Clear history/terminal/review/pending overlays
+ *   3. Clear history/terminal/pending overlays
  *   4. Call session.selectSession(id)
  *
  * No parent/root classification, no managed ownership mutation,
@@ -57,7 +56,6 @@ export function openSession(id: string, deps: OpenSessionDeps): boolean {
   if (!id) return false
 
   deps.setHistory(false)
-  deps.setReviewActive(false)
   deps.setTermsActiveId(undefined)
   deps.setSelection(LOCAL)
 
@@ -85,7 +83,7 @@ export function openSession(id: string, deps: OpenSessionDeps): boolean {
  * placement is source-relative:
  *   1. localSessionIDs + persisted tabOrder updated via insertLocalAfter
  *   2. tab registry insert-after via tabMgr.openAfter
- *   3. clear history/terminal/review/pending overlays
+ *   3. clear history/terminal/pending overlays
  *   4. select the child session
  *
  * An already-open child is focused without reordering; a missing/unknown source
@@ -95,7 +93,6 @@ export function openChildSession(id: string, source: string | undefined, deps: O
   if (!id) return false
 
   deps.setHistory(false)
-  deps.setReviewActive(false)
   deps.setTermsActiveId(undefined)
   deps.setSelection(LOCAL)
 

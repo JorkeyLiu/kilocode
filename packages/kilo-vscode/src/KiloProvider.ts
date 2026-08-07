@@ -46,10 +46,6 @@ import {
   buildSettingPath,
   type SessionRefreshContext,
 } from "./kilo-provider-utils"
-import { GitOps } from "./agent-manager/GitOps"
-import { GitStatsPoller, type LocalStats } from "./agent-manager/GitStatsPoller"
-import { diffSummary as localDiffSummary } from "./agent-manager/local-diff"
-import { getWorkspaceRoot } from "./review-utils"
 import { createMarketplaceRemover, removeMcp } from "./kilo-provider/remove-config-item"
 import { AgentRequirementsController } from "./kilo-provider/agent-requirements-controller"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
@@ -404,9 +400,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
 
   private pendingFollowup: Followup | null = null
   private followupListeners: Array<(session: Session, directory: string) => void> = []
-  private statsPoller: GitStatsPoller | null = null
-  private statsGitOps: GitOps | null = null
-  private cachedStats: unknown = null
   private cachedGitRepo = false
 
   private onBeforeMessage: ((msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>) | null = null
@@ -667,8 +660,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         this.refreshSessionDetails(this.currentSession.id, this.getWorkspaceDirectory(this.currentSession.id))
       }
 
-      // Re-send cached worktree stats and git status after webview reload.
-      if (this.cachedStats) this.postMessage(this.cachedStats)
+      // Re-send cached git status after webview reload.
       this.postMessage({ type: "gitStatus", repo: this.cachedGitRepo })
 
       // Seed session status map so the Settings panel knows about already-running sessions.
@@ -716,10 +708,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.visibilityDisposable?.dispose()
     this.visibilityDisposable = webviewView.onDidChangeVisibility(() => {
       this.setSidebarVisible(webviewView.visible)
-      if (this.statsPoller) {
-        this.statsPoller.setEnabled(webviewView.visible)
-        this.statsPoller.setVisible(webviewView.visible)
-      }
       this.focusSession(webviewView.visible ? this.contextSessionID : undefined)
     })
     this.initializeConnection()
@@ -1704,8 +1692,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       this.sendNotificationSettings()
       this.sendTimelineSetting()
       this.postMessage({ type: "extensionDataReady" })
-
-      if (this.cachedGitRepo) this.startStatsPolling()
 
       console.log("[Kilo New] KiloProvider: ✅ initializeConnection completed successfully")
     } catch (error) {
@@ -4658,35 +4644,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
 
   // legacy-migration end ---------------------------------------------------------
 
-  // ── Worktree stats polling (sidebar diff badge) ──────────────────
-  private startStatsPolling(): void {
-    this.statsPoller?.stop()
-    this.statsGitOps?.dispose()
-    const git = new GitOps({ log: () => {} })
-    this.statsGitOps = git
-    this.statsPoller = new GitStatsPoller({
-      getWorktrees: () => [],
-      getWorkspaceRoot: () => getWorkspaceRoot(),
-      localDiff: (dir, base) => localDiffSummary(git, dir, base),
-      git,
-      onStats: () => {},
-      onLocalStats: (stats: LocalStats) => {
-        const msg = {
-          type: "worktreeStatsLoaded" as const,
-          files: stats.files,
-          additions: stats.additions,
-          deletions: stats.deletions,
-        }
-        this.cachedStats = msg
-        this.postMessage(msg)
-      },
-      log: () => {},
-      hiddenIntervalMs: 60000,
-    })
-    this.statsPoller.setEnabled(true)
-    this.statsPoller.setVisible(true)
-  }
-
   /**
    * Dispose of the provider and clean up subscriptions.
    * Does NOT kill the server — that's the connection service's job.
@@ -4696,8 +4653,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.streams.focus(undefined)
     this.connectionService.unregisterVisible(this.instanceId)
     this.connectionService.unregisterAttached(this.instanceId)
-    this.statsPoller?.stop()
-    this.statsGitOps?.dispose()
     this.unsubscribeEvent?.()
     this.unsubscribeState?.()
     this.unsubscribeLanguageChange?.()

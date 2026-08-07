@@ -4,7 +4,7 @@
  * Verifies the Phase 2/3A contract:
  *   1. Tab registry add-or-focus in LOCAL UI context
  *   2. Set active session/tab
- *   3. Clear history/terminal/review/pending overlays
+ *   3. Clear history/terminal/pending overlays
  *   4. Call session.selectSession(id)
  *   5. No parent/root classification, no ownership mutation
  *   6. Phase 3A: no saveTabMemory, always LOCAL context, no read-only path
@@ -35,7 +35,6 @@ function createDeps() {
     selected: [] as string[],
     pending: undefined as string | undefined,
     history: true,
-    review: true,
     terminal: "some-terminal" as string | undefined,
     selection: "old-selection" as string,
     ensured: [] as string[],
@@ -49,9 +48,6 @@ function createDeps() {
     },
     setHistory: (v) => {
       state.history = v
-    },
-    setReviewActive: (v) => {
-      state.review = v
     },
     setTermsActiveId: (id) => {
       state.terminal = id
@@ -82,12 +78,11 @@ describe("openSession — returns false for empty/undefined ID", () => {
 })
 
 describe("openSession — clears overlays", () => {
-  it("closes history, review, and terminal", () =>
+  it("closes history and terminal", () =>
     createRoot(() => {
       const { state, deps } = createDeps()
       openSession(ROOT_A, deps)
       expect(state.history).toBe(false)
-      expect(state.review).toBe(false)
       expect(state.terminal).toBeUndefined()
     }))
 
@@ -199,7 +194,6 @@ describe("openSession — no ownership mutation", () => {
       expect(result).toBe(true)
       // Only these side effects occur (Phase 3A: saveTabMemory removed):
       expect(state.history).toBe(false) // clear history
-      expect(state.review).toBe(false) // clear review
       expect(state.terminal).toBeUndefined() // clear terminal
       expect(state.selection).toBe(LOCAL) // set selection
       expect(state.selected).toEqual([ROOT_A]) // selectSession
@@ -330,7 +324,6 @@ describe("Phase 3A — single LOCAL context invariants", () => {
       selectSession: () => {},
       setActivePendingId: () => {},
       setHistory: () => {},
-      setReviewActive: () => {},
       setTermsActiveId: () => {},
       setSelection: () => {},
       isPending: () => false,
@@ -405,7 +398,6 @@ describe("openChildSession — source-relative placement contract", () => {
       const { state, deps } = createDeps()
       openChildSession(CHILD_A, ROOT_A, deps)
       expect(state.history).toBe(false)
-      expect(state.review).toBe(false)
       expect(state.terminal).toBeUndefined()
       expect(state.selection).toBe(LOCAL)
     }))
@@ -437,8 +429,6 @@ describe("openChildSession — source-relative placement contract", () => {
 // persisted-order reorder that the stubbed deps hide.
 // ---------------------------------------------------------------------------
 
-const REVIEW_TAB_ID = "review"
-
 describe("openChildSession — real three-store coordination (LOCK-002)", () => {
   function realDeps(initIds: string[], initOrder: string[] | undefined) {
     const [local, setLocal] = createSignal<string[]>(initIds)
@@ -447,14 +437,12 @@ describe("openChildSession — real three-store coordination (LOCK-002)", () => 
     const mgr = createSessionTabManager()
     const tabOrderSync = createTabOrderSync({
       LOCAL,
-      REVIEW_TAB_ID,
       order,
       setOrder,
       persist: (_key, value) => persisted.push([...value]),
       localSessionIDs: local,
       sessions: () => [],
       managedSessions: () => [],
-      reviewOpenByContext: () => ({}),
       terminalIdsFor: () => [],
     })
     const deps: OpenChildSessionDeps = {
@@ -462,7 +450,6 @@ describe("openChildSession — real three-store coordination (LOCK-002)", () => 
       selectSession: () => {},
       setActivePendingId: () => {},
       setHistory: () => {},
-      setReviewActive: () => {},
       setTermsActiveId: () => {},
       setSelection: () => {},
       isPending: (id) => id.startsWith("pending:"),

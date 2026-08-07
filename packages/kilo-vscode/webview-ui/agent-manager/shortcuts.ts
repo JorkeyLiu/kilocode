@@ -46,11 +46,7 @@ export function buildShortcutCategories(
     },
     {
       title: t("agentManager.shortcuts.category.terminal"),
-      shortcuts: [
-        { label: t("agentManager.shortcuts.toggleTerminal"), binding: bindings.showTerminal ?? "" },
-        { label: t("agentManager.shortcuts.runScript"), binding: bindings.runScript ?? "" },
-        { label: t("agentManager.shortcuts.toggleDiff"), binding: bindings.toggleDiff ?? "" },
-      ],
+      shortcuts: [{ label: t("agentManager.shortcuts.toggleTerminal"), binding: bindings.showTerminal ?? "" }],
     },
     {
       title: t("agentManager.shortcuts.category.global"),

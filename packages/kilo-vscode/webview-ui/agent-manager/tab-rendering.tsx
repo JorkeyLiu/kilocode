@@ -13,7 +13,7 @@ import { IconButton } from "@kilocode/kilo-ui/icon-button"
 import { DropdownMenu } from "@kilocode/kilo-ui/dropdown-menu"
 import { Icon } from "@kilocode/kilo-ui/icon"
 import { TooltipKeybind } from "@kilocode/kilo-ui/tooltip"
-import { SortableTab, SortableReviewTab } from "./sortable-tab"
+import { SortableTab } from "./sortable-tab"
 import type { TerminalStateControls } from "./terminal"
 import { isTerminalTabId, renderTerminalTab } from "./terminal"
 import type { SessionInfo } from "../src/types/messages"
@@ -24,10 +24,6 @@ interface FocusTabDeps {
   terms: TerminalStateControls
   isTerminal: (id: string) => boolean
   isPending: (id: string) => boolean
-  reviewId: string
-  reviewOpen: Accessor<boolean>
-  setReviewOpen: (open: boolean) => void
-  setReviewActive: (active: boolean) => void
   tabLookup: Accessor<Map<string, SessionInfo>>
   setActivePendingId: (id: string | undefined) => void
   clearSession: () => void
@@ -41,14 +37,8 @@ export function focusCurrentTab(deps: FocusTabDeps) {
     return
   }
   deps.terms.setActiveId(undefined)
-  if (deps.id === deps.reviewId) {
-    if (!deps.reviewOpen()) deps.setReviewOpen(true)
-    deps.setReviewActive(true)
-    return
-  }
   const target = deps.tabLookup().get(deps.id)
   if (!target) return
-  deps.setReviewActive(false)
   if (deps.isPending(target.id)) {
     deps.setActivePendingId(target.id)
     deps.clearSession()
@@ -60,15 +50,13 @@ export function focusCurrentTab(deps: FocusTabDeps) {
 
 export interface TabRenderDeps {
   terms: TerminalStateControls
-  REVIEW_TAB_ID: string
   tabIds: () => string[]
   kb: () => Record<string, string>
-  reviewActive: () => boolean
   currentSessionID: () => string | undefined
   activePendingId: () => string | undefined
   /** Id of the currently visible tab. Single source of truth — kept in
-   *  the parent component as `visibleTabId` (sessions, review, and
-   *  terminal kinds collapsed into one id string). Consumed here as a
+   *  the parent component as `visibleTabId` (sessions and terminal
+   *  kinds collapsed into one id string). Consumed here as a
    *  getter so Solid tracks its reactivity inside rendered JSX. */
   visibleTabId: () => string | undefined
   isPending: (id: string) => boolean
@@ -83,9 +71,6 @@ export interface TabRenderDeps {
   deactivateTerminal: () => void
   closeTerminal: (id: string) => void
   terminalMiddleClick: (id: string, e: MouseEvent) => void
-  closeReview: () => void
-  reviewMiddleClick: (e: MouseEvent) => void
-  selectReviewTab: () => void
   selectSessionTab: (id: string, pending: boolean) => void
   sessionMiddleClick: (id: string, e: MouseEvent) => void
   sessionClose: (id: string) => void
@@ -94,11 +79,9 @@ export interface TabRenderDeps {
   sessionCloseMessage: (id: string) => void
   sessionFork: (id: string) => void
   onTabKey: (id: string, event: KeyboardEvent) => void
-  reviewLabel: string
-  reviewTooltip: string
 }
 
-/** Render a single tab by id — routes to terminal / review / session render paths. */
+/** Render a single tab by id — routes to terminal or session render paths. */
 export function renderTab(id: string, deps: TabRenderDeps): JSX.Element {
   if (isTerminalTabId(id)) {
     // Pass `keybind` as a getter — Solid's JSX compiler wraps getter
@@ -127,43 +110,7 @@ export function renderTab(id: string, deps: TabRenderDeps): JSX.Element {
       onKeyDown: (event) => deps.onTabKey(id, event),
     })
   }
-  if (id === deps.REVIEW_TAB_ID) return renderReviewTab(deps)
   return <Show when={deps.tabLookup().get(id)}>{(s) => renderSessionTab(s, deps)}</Show>
-}
-
-function renderReviewTab(deps: TabRenderDeps): JSX.Element {
-  const keybind = deps.reviewActive()
-    ? ""
-    : deps.adjacentHint(
-        deps.REVIEW_TAB_ID,
-        deps.visibleTabId() ?? "",
-        deps.tabIds(),
-        deps.kb().previousTab ?? "",
-        deps.kb().nextTab ?? "",
-      )
-  return (
-    <SortableReviewTab
-      id={deps.REVIEW_TAB_ID}
-      label={deps.reviewLabel}
-      tooltip={deps.reviewTooltip}
-      keybind={keybind}
-      closeKeybind={deps.kb().closeTab ?? ""}
-      active={deps.reviewActive() && !deps.terms.activeId()}
-      role="tab"
-      selected={deps.visibleTabId() === deps.REVIEW_TAB_ID}
-      tabIndex={deps.visibleTabId() === deps.REVIEW_TAB_ID ? 0 : -1}
-      onKeyDown={(event) => deps.onTabKey(deps.REVIEW_TAB_ID, event)}
-      onSelect={() => {
-        deps.deactivateTerminal()
-        deps.selectReviewTab()
-      }}
-      onMiddleClick={deps.reviewMiddleClick}
-      onClose={(e: MouseEvent) => {
-        e.stopPropagation()
-        deps.closeReview()
-      }}
-    />
-  )
 }
 
 function renderSessionTab(s: () => SessionInfo | undefined, deps: TabRenderDeps): JSX.Element {
@@ -184,7 +131,7 @@ function renderSessionTab(s: () => SessionInfo | undefined, deps: TabRenderDeps)
   return (
     <SortableTab
       tab={s()!}
-      active={active() && !deps.reviewActive()}
+      active={active()}
       busy={deps.isBusy(s()!.id)}
       role="tab"
       selected={deps.visibleTabId() === s()!.id}
@@ -205,20 +152,15 @@ function renderSessionTab(s: () => SessionInfo | undefined, deps: TabRenderDeps)
 }
 
 function closeOthers(target: string, deps: TabRenderDeps) {
-  // Collect the non-session removals (terminal and review) that still need
+  // Collect the non-session removals (terminals) that still need
   // individual cleanup, and the session IDs that need individual close
   // messages sent to the backend.
   const removedSessions: string[] = []
   const removedTerminals: string[] = []
-  let closeReview = false
   for (const id of deps.tabIds()) {
     if (id === target) continue
     if (isTerminalTabId(id)) {
       removedTerminals.push(id)
-      continue
-    }
-    if (id === deps.REVIEW_TAB_ID) {
-      closeReview = true
       continue
     }
     removedSessions.push(id)
@@ -231,11 +173,10 @@ function closeOthers(target: string, deps: TabRenderDeps) {
   for (const id of removedSessions) {
     deps.sessionCloseMessage(id)
   }
-  // Preserve terminal and review close behavior.
+  // Preserve terminal close behavior.
   for (const id of removedTerminals) {
     deps.closeTerminal(id)
   }
-  if (closeReview) deps.closeReview()
   // Activate the surviving target.
   if (isTerminalTabId(target)) {
     deps.activateTerminal(target)

@@ -137,7 +137,6 @@ export function activate(context: vscode.ExtensionContext) {
   // terminal.integrated.commandsToSkipShell, which only contains built-in
   // commands by default.
   const skip = ["kilo-code.new.agentManagerOpen", "kilo-code.new.agentManager.showTerminal"]
-  if (process.platform === "darwin") skip.push("kilo-code.new.agentManager.runScript")
   ensureCommandsSkipShell(skip)
 
   // Create KiloClaw chat provider for editor panel
@@ -442,12 +441,6 @@ export function activate(context: vscode.ExtensionContext) {
       // Route through the webview so it can reach into the active session
       // state and open the VS Code integrated terminal for it.
       agentManagerProvider.postMessage({ type: "action", action: "showTerminal" })
-    }),
-    vscode.commands.registerCommand("kilo-code.new.agentManager.runScript", () => {
-      agentManagerProvider.postMessage({ type: "action", action: "runScript" })
-    }),
-    vscode.commands.registerCommand("kilo-code.new.agentManager.toggleDiff", () => {
-      agentManagerProvider.postMessage({ type: "action", action: "toggleDiff" })
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.showShortcuts", () => {
       agentManagerProvider.postMessage({ type: "action", action: "showShortcuts" })

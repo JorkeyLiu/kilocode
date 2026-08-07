@@ -1,8 +1,7 @@
 /**
  * Local-only UI state model for Agent Manager webview persistence.
  *
- * Source of truth for presentation state (open tabs, active tab,
- * sidebar, review style).
+ * Source of truth for presentation state (open tabs, active tab, sidebar).
  *
  * Uses VS Code webview state API (getState/setState) for persistence.
  * Schema-versioned; one-time migration from legacy extension state
@@ -15,7 +14,7 @@ export const LOCAL_UI_STATE_VERSION = 1
 export interface LocalUIState {
   /** Schema version for future migration. */
   version: number
-  /** Ordered open session tab IDs (excluding pending/terminal/review). */
+  /** Ordered open session tab IDs (excluding pending/terminal). */
   openTabIds: string[]
   /** Active session tab ID (may be a pending ID). */
   activeTabId: string | undefined
@@ -23,8 +22,6 @@ export interface LocalUIState {
   sidebarCollapsed: boolean
   /** Sidebar width in pixels. */
   sidebarWidth: number
-  /** Review diff style. */
-  reviewDiffStyle: "unified" | "split"
   /** True after one-time migration from legacy extension state. */
   legacyImported: boolean
 }
@@ -39,7 +36,6 @@ export function defaultLocalUIState(): LocalUIState {
     activeTabId: undefined,
     sidebarCollapsed: false,
     sidebarWidth: DEFAULT_SIDEBAR_WIDTH,
-    reviewDiffStyle: "unified",
     legacyImported: false,
   }
 }
@@ -93,7 +89,6 @@ export function loadLocalUIState(getState: () => unknown): LocalUIState {
       activeTabId: active,
       sidebarCollapsed: s.sidebarCollapsed === true,
       sidebarWidth: typeof s.sidebarWidth === "number" ? s.sidebarWidth : defaults.sidebarWidth,
-      reviewDiffStyle: s.reviewDiffStyle === "split" ? "split" : "unified",
       legacyImported: s.legacyImported === true,
     }
   }
@@ -140,8 +135,6 @@ export interface LegacyImportSource {
   tabOrder?: Record<string, string[]>
   /** Sidebar collapsed from extension state. */
   sidebarCollapsed?: boolean
-  /** Review diff style from extension state. */
-  reviewDiffStyle?: "unified" | "split"
 }
 
 /**
@@ -155,7 +148,7 @@ export interface LegacyImportSource {
 export function importLegacyLocalTabs(
   source: LegacyImportSource,
   LOCAL: string,
-): Pick<LocalUIState, "openTabIds" | "activeTabId" | "sidebarCollapsed" | "reviewDiffStyle"> {
+): Pick<LocalUIState, "openTabIds" | "activeTabId" | "sidebarCollapsed"> {
   const localSessions = source.managedSessions.filter((s) => !s.worktreeId) // worktreeId is legacy; null means local
   const localIds = new Set(localSessions.map((s) => s.id))
 
@@ -176,6 +169,5 @@ export function importLegacyLocalTabs(
     openTabIds: ordered,
     activeTabId: ordered[0],
     sidebarCollapsed: source.sidebarCollapsed ?? false,
-    reviewDiffStyle: source.reviewDiffStyle ?? "unified",
   }
 }

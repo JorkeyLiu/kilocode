@@ -97,14 +97,12 @@ export const dict = {
 
   "command.session.new": "New session",
   "command.session.new.task": "New task",
-  "command.session.show.changes": "Show Changes",
   "command.file.open": "Open file",
   "command.tab.close": "Close tab",
   "command.context.addSelection": "Add selection to context",
   "command.context.addSelection.description": "Add selected lines from the current file",
   "command.terminal.toggle": "Toggle terminal",
   "command.fileTree.toggle": "Toggle file tree",
-  "command.review.toggle": "Toggle review",
   "command.terminal.new": "New terminal",
   "command.terminal.new.description": "Create a new terminal tab",
   "command.steps.toggle": "Toggle steps",
@@ -673,7 +671,6 @@ export const dict = {
   "home.empty.description": "Get started by opening a local project",
 
   "session.tab.session": "Session",
-  "session.tab.review": "Review",
   "session.tab.context": "Context",
   "session.panel.reviewAndFiles": "Review and files",
   "session.review.filesChanged": "{{count}} Files Changed",
@@ -1269,34 +1266,6 @@ export const dict = {
   "session.costAlert.stop": "Stop",
   "sidebar.session.newSession": "New Session",
   "sidebar.session.newSession.tooltip": "Start a fresh conversation while keeping the current session intact.",
-  "sidebar.session.newSession.disabled": "This session is already new. Start chatting or create a worktree instead.",
-  "sidebar.session.newWorktree": "New Worktree",
-  "sidebar.session.newWorktree.tooltip":
-    "Create an isolated git worktree to experiment safely, keep changes separated, and run parallel sessions without disrupting your current branch.",
-  "sidebar.session.configureWorktree.tooltip":
-    "Open the Agent Manager worktree dialog to configure a new worktree before creating it.",
-  "sidebar.session.newWorktree.from": "New Worktree from",
-  "sidebar.session.currentBranch": "current branch",
-  "sidebar.session.moveToWorktree": "Move to Worktree",
-  "sidebar.session.moveToWorktree.tooltip.empty":
-    "Move this conversation and your current local changes into a dedicated worktree for isolated follow-up work.",
-  "sidebar.session.moveToWorktree.tooltip.one":
-    "Move this conversation and 1 changed file into a dedicated worktree for isolated follow-up work.",
-  "sidebar.session.moveToWorktree.tooltip.other":
-    "Move this conversation and {{files}} changed files into a dedicated worktree for isolated follow-up work.",
-  "sidebar.session.showChanges.tooltip.empty": "Open the changes view to inspect the current working tree.",
-  "sidebar.session.showChanges.tooltip.one": "1 file changed · +{{additions}} -{{deletions}}. Open the changes view.",
-  "sidebar.session.showChanges.tooltip.other":
-    "{{files}} files changed · +{{additions}} -{{deletions}}. Open the changes view.",
-  "sidebar.session.agentManager.tooltip":
-    "Open Agent Manager for a full overview of parallel sessions and worktrees, so you can coordinate long-running tasks in one place.",
-  "sidebar.session.openAgentManager": "Open Agent Manager",
-  "sidebar.session.progress.capturing": "Capturing changes...",
-  "sidebar.session.progress.creating": "Creating worktree...",
-  "sidebar.session.progress.setup": "Running setup...",
-  "sidebar.session.progress.transferring": "Transferring changes...",
-  "sidebar.session.progress.forking": "Starting session...",
-  "sidebar.session.progress.failed": "Failed to continue in worktree",
 
   "ui.sessionTurn.cancel": "Cancel",
   "ui.sessionTurn.status.thinking": "Thinking...",

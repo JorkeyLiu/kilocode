@@ -99,14 +99,12 @@ export const dict = {
 
   "command.session.new": "新增工作階段",
   "command.session.new.task": "新增任務",
-  "command.session.show.changes": "顯示變更",
   "command.file.open": "開啟檔案",
   "command.tab.close": "關閉分頁",
   "command.context.addSelection": "將選取內容加入上下文",
   "command.context.addSelection.description": "加入目前檔案中選取的行",
   "command.terminal.toggle": "切換終端機",
   "command.fileTree.toggle": "切換檔案樹",
-  "command.review.toggle": "切換審查",
   "command.terminal.new": "新增終端機",
   "command.terminal.new.description": "建立新的終端機標籤頁",
   "command.steps.toggle": "切換步驟",
@@ -659,7 +657,6 @@ export const dict = {
   "home.empty.description": "透過開啟本機專案開始使用",
 
   "session.tab.session": "工作階段",
-  "session.tab.review": "審查",
   "session.tab.context": "上下文",
   "session.panel.reviewAndFiles": "審查與檔案",
   "session.review.filesChanged": "{{count}} 個檔案變更",
@@ -685,33 +682,6 @@ export const dict = {
   "session.new.lastModified": "最後修改",
   "sidebar.session.newSession": "新會話",
   "sidebar.session.newSession.tooltip": "在保持當前會話完整的同時開始全新的對話。",
-  "sidebar.session.newSession.disabled": "此會話已經是新的。請開始聊天或建立一個 worktree。",
-  "sidebar.session.newWorktree": "新 Worktree",
-  "sidebar.session.newWorktree.tooltip":
-    "建立一個隔離的 git worktree 以安全地進行實驗、保持變更分離並在不中斷當前分支的情況下執行平行會話。",
-  "sidebar.session.configureWorktree.tooltip":
-    "打開 Agent Manager 的 worktree 對話框，以便在建立之前配置新的 worktree。",
-  "sidebar.session.newWorktree.from": "新 Worktree 來源：",
-  "sidebar.session.currentBranch": "當前分支",
-  "sidebar.session.moveToWorktree": "移動到 Worktree",
-  "sidebar.session.moveToWorktree.tooltip.empty":
-    "將此對話和您當前的本地變更移動到專用的 worktree 中，以便進行隔離的後續工作。",
-  "sidebar.session.moveToWorktree.tooltip.one":
-    "將此對話和 1 個變更的檔案移動到專用的 worktree 中，以便進行隔離的後續工作。",
-  "sidebar.session.moveToWorktree.tooltip.other":
-    "將此對話和 {{files}} 個變更的檔案移動到專用的 worktree 中，以便進行隔離的後續工作。",
-  "sidebar.session.showChanges.tooltip.empty": "打開變更檢視以檢查當前工作樹。",
-  "sidebar.session.showChanges.tooltip.one": "1 個檔案已變更 · +{{additions}} -{{deletions}}。開啟變更檢視。",
-  "sidebar.session.showChanges.tooltip.other": "{{files}} 個檔案已變更 · +{{additions}} -{{deletions}}。開啟變更檢視。",
-  "sidebar.session.agentManager.tooltip":
-    "打開 Agent Manager 以全面了解平行會話和 worktree，讓您可以在一個地方協調長期執行的任務。",
-  "sidebar.session.openAgentManager": "打開 Agent Manager",
-  "sidebar.session.progress.capturing": "正在捕獲變更...",
-  "sidebar.session.progress.creating": "正在建立 worktree...",
-  "sidebar.session.progress.setup": "正在執行設定...",
-  "sidebar.session.progress.transferring": "正在傳輸變更...",
-  "sidebar.session.progress.forking": "正在啟動會話...",
-  "sidebar.session.progress.failed": "在 worktree 中繼續失敗",
   "session.header.search.placeholder": "搜尋 {{project}}",
   "session.header.searchFiles": "搜尋檔案",
   "session.header.openIn": "開啟方式",
