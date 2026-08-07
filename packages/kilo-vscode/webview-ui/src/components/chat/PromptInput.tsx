@@ -881,12 +881,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       ghost.dismiss()
       return
     }
-    if (e.key === "Escape" && isBusy()) {
-      e.preventDefault()
-      e.stopPropagation()
-      session.abort()
-      return
-    }
     if (isEnterKeyCommitNotIme(e) && !e.shiftKey) {
       e.preventDefault()
       handleSend()

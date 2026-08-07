@@ -5,7 +5,7 @@
  * Main chat container that combines all chat components
  */
 
-import { type Component, type JSX, Show, createMemo, createSignal, onCleanup, onMount } from "solid-js"
+import { type Component, type JSX, Show, createMemo, createSignal } from "solid-js"
 import { Button } from "@kilocode/kilo-ui/button"
 import { Icon } from "@kilocode/kilo-ui/icon"
 import { Tooltip } from "@kilocode/kilo-ui/tooltip"
@@ -78,17 +78,6 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   // Session is busy only because a question tool call is pending — prompt should behave as idle
   const questioning = () => isQuestioning(blocked(), familyQuestions().length)
   const dock = () => !props.readonly || !!permissionRequest()
-
-  onMount(() => {
-    if (props.readonly) return
-    const handler = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || (!session.submitting() && session.status() === "idle") || e.defaultPrevented) return
-      e.preventDefault()
-      session.abort()
-    }
-    document.addEventListener("keydown", handler)
-    onCleanup(() => document.removeEventListener("keydown", handler))
-  })
 
   const decide = (response: "once" | "always" | "reject", approvedAlways: string[], deniedAlways: string[]) => {
     const perm = permissionRequest()
