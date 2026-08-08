@@ -82,7 +82,7 @@ describe("per-session variant selection", () => {
     store[variantKey(model, "code", "session-a")] = "medium"
     store[variantKey(model, "code", "session-b")] = "high"
 
-    expect(sessionVariants(store, "session-a")).toEqual({ "anthropic/claude-sonnet-4": "medium" })
+    expect(sessionVariants(store, "session-a")).toEqual({ "code/anthropic/claude-sonnet-4": "medium" })
   })
 
   it("finds only variant keys for the requested session", () => {
@@ -91,7 +91,7 @@ describe("per-session variant selection", () => {
     store[variantKey(model, "code", "pending-local-1")] = "medium"
     store[variantKey(model, "code", "pending-local-2")] = "high"
 
-    expect(sessionVariantKeys(store, "pending-local-1")).toEqual(["session/pending-local-1/anthropic/claude-sonnet-4"])
+    expect(sessionVariantKeys(store, "pending-local-1")).toEqual(["session/pending-local-1/code/anthropic/claude-sonnet-4"])
   })
 })
 
@@ -436,6 +436,159 @@ describe("LOCK-006 — variant recovery transitions", () => {
   it("both invalid recovered and override fall to variants[0]", () => {
     const store: Record<string, string> = {}
     const result = resolveSessionVariant(store, model, variants, "code", "session-a", "invalid1", undefined, { variant: "invalid2", model })
+    expect(result.variant).toBe("low")
+    expect(result.explicit).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// LOCK-002: Per-model variant memory — last-used variant restored on switch
+// ---------------------------------------------------------------------------
+
+describe("per-model variant memory (LOCK-002)", () => {
+  it("restores the remembered variant of the switched-to model instead of variants[0]", () => {
+    // Model A memory "low" and model B memory "high" were picked earlier in
+    // different contexts. Resolving B must return B's memory, not variants[0].
+    const store: Record<string, string> = {
+      "anthropic/claude-sonnet-4": "low",
+      "openai/gpt-4.1": "high",
+    }
+    const result = resolveSessionVariant(store, gpt, variants, "code", "session-a")
+    expect(result.variant).toBe("high")
+    expect(result.explicit).toBe(true)
+  })
+
+  it("does not leak model A's memory into model B", () => {
+    const store: Record<string, string> = { "anthropic/claude-sonnet-4": "low" }
+    const result = resolveSessionVariant(store, gpt, variants, "code", "session-a")
+    expect(result.variant).toBe("low") // variants[0]
+    expect(result.explicit).toBe(false)
+  })
+
+  it("explicit session selection beats per-model memory", () => {
+    const store: Record<string, string> = { "openai/gpt-4.1": "high" }
+    store[variantKey(gpt, "code", "session-a")] = "low"
+    const result = resolveSessionVariant(store, gpt, variants, "code", "session-a")
+    expect(result.variant).toBe("low")
+    expect(result.explicit).toBe(true)
+  })
+
+  it("explicit agent selection beats per-model memory", () => {
+    const store: Record<string, string> = { "openai/gpt-4.1": "high" }
+    store[variantKey(gpt, "code")] = "medium"
+    const result = resolveSessionVariant(store, gpt, variants, "code", "session-a")
+    expect(result.variant).toBe("medium")
+    expect(result.explicit).toBe(true)
+  })
+
+  it("stale memory not in the model's variant list is skipped for config fallback", () => {
+    const store: Record<string, string> = { "openai/gpt-4.1": "ultra" }
+    const result = resolveSessionVariant(store, gpt, variants, "code", "session-a", undefined, "medium")
+    expect(result.variant).toBe("medium")
+    expect(result.explicit).toBe(false)
+  })
+
+  it("stale memory with no config falls through to variants[0]", () => {
+    const store: Record<string, string> = { "openai/gpt-4.1": "ultra" }
+    const result = resolveSessionVariant(store, gpt, variants, "code", "session-a")
+    expect(result.variant).toBe("low")
+    expect(result.explicit).toBe(false)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// Agent-scoped tier (LOCK-002): per (agent, model) variant memory
+// ---------------------------------------------------------------------------
+
+describe("per-agent variant memory (LOCK-002)", () => {
+  it("restores the per-agent remembered variant when switching agents", () => {
+    const store: Record<string, string> = {
+      "agent/build/openai/gpt-4.1": "low",
+      "agent/ask/openai/gpt-4.1": "high",
+    }
+    expect(resolveSessionVariant(store, gpt, variants, "build")).toEqual({ variant: "low", explicit: true })
+    expect(resolveSessionVariant(store, gpt, variants, "ask")).toEqual({ variant: "high", explicit: true })
+  })
+
+  it("restores the per-agent remembered variant inside a session context", () => {
+    const store: Record<string, string> = {
+      "agent/build/openai/gpt-4.1": "low",
+      "agent/ask/openai/gpt-4.1": "high",
+    }
+    expect(resolveSessionVariant(store, gpt, variants, "build", "session-a").variant).toBe("low")
+    expect(resolveSessionVariant(store, gpt, variants, "ask", "session-a").variant).toBe("high")
+  })
+
+  it("session key still beats agent+model memory", () => {
+    const store: Record<string, string> = { "agent/build/openai/gpt-4.1": "low" }
+    store[variantKey(gpt, "build", "session-a")] = "high"
+    const result = resolveSessionVariant(store, gpt, variants, "build", "session-a")
+    expect(result.variant).toBe("high")
+    expect(result.explicit).toBe(true)
+  })
+
+  it("LOCK-001: session-scoped picks are keyed per agent — agent B never sees agent A's session pick", () => {
+    // Regression: the session key previously had no agent component
+    // (`session/{sid}/{provider}/{model}`), so A's in-session pick hit for
+    // every agent and shadowed the agent tier. Each agent's session pick
+    // must resolve independently.
+    const store: Record<string, string> = {}
+    store[variantKey(gpt, "build", "session-a")] = "low" // agent A picks low
+    store[variantKey(gpt, "ask", "session-a")] = "high" // agent B picks high
+    expect(resolveSessionVariant(store, gpt, variants, "ask", "session-a")).toEqual({ variant: "high", explicit: true })
+    expect(resolveSessionVariant(store, gpt, variants, "build", "session-a")).toEqual({ variant: "low", explicit: true })
+  })
+
+  it("LOCK-001: one agent's session pick does not shadow the other agent's agent+model memory", () => {
+    // Regression: with the old agent-less session key, A's session pick was
+    // read first for B too, making B's agent+model memory unreachable.
+    const store: Record<string, string> = {
+      "agent/ask/openai/gpt-4.1": "high", // agent B's remembered agent+model value
+    }
+    store[variantKey(gpt, "build", "session-a")] = "low" // agent A's session pick
+    // B resolves to its own agent+model memory, not A's session pick.
+    expect(resolveSessionVariant(store, gpt, variants, "ask", "session-a")).toEqual({ variant: "high", explicit: true })
+    // A resolves to its own session pick.
+    expect(resolveSessionVariant(store, gpt, variants, "build", "session-a")).toEqual({ variant: "low", explicit: true })
+  })
+
+  it("LOCK-001: transferVariants preserves the per-agent dimension of session keys", () => {
+    const store: Record<string, string> = { "session/pending-local-1/build/openai/gpt-4.1": "low" }
+    const transferred = transferVariants(store, "pending-local-1", "session-a")
+    expect(transferred).toEqual({ "session/session-a/build/openai/gpt-4.1": "low" })
+    Object.assign(store, transferred)
+    expect(resolveSessionVariant(store, gpt, variants, "build", "session-a").variant).toBe("low")
+    // The transferred pick stays out of the other agent's resolution path.
+    expect(resolveSessionVariant(store, gpt, variants, "ask", "session-a").variant).toBe("low") // variants[0]
+  })
+
+  it("agent+model memory beats model-only legacy memory", () => {
+    const store: Record<string, string> = {
+      "openai/gpt-4.1": "medium",
+      "agent/build/openai/gpt-4.1": "high",
+    }
+    const result = resolveSessionVariant(store, gpt, variants, "build", "session-a")
+    expect(result.variant).toBe("high")
+    expect(result.explicit).toBe(true)
+  })
+
+  it("a new agent with no agent memory falls back to the model-only legacy memory", () => {
+    const store: Record<string, string> = { "openai/gpt-4.1": "medium" }
+    const result = resolveSessionVariant(store, gpt, variants, "fresh-agent", "session-a")
+    expect(result.variant).toBe("medium")
+    expect(result.explicit).toBe(true)
+  })
+
+  it("stale agent memory not in the model's variant list is skipped for config fallback", () => {
+    const store: Record<string, string> = { "agent/build/openai/gpt-4.1": "ultra" }
+    const result = resolveSessionVariant(store, gpt, variants, "build", "session-a", undefined, "medium")
+    expect(result.variant).toBe("medium")
+    expect(result.explicit).toBe(false)
+  })
+
+  it("stale agent memory with no config falls through to variants[0]", () => {
+    const store: Record<string, string> = { "agent/build/openai/gpt-4.1": "ultra" }
+    const result = resolveSessionVariant(store, gpt, variants, "build", "session-a")
     expect(result.variant).toBe("low")
     expect(result.explicit).toBe(false)
   })

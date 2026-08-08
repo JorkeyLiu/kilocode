@@ -75,7 +75,7 @@ import { errorIDs } from "./session-errors"
 import { PartStash } from "./part-stash"
 import { mergeParts, sameParts } from "./session-parts"
 import { state as todoState } from "./todo-revert"
-import { getVariant, resolveSessionVariant, sessionVariantKeys, transferVariants, variantKey } from "./session-variant-store"
+import { getVariant, legacyVariantKey, resolveSessionVariant, sessionVariantKeys, transferVariants, variantKey } from "./session-variant-store"
 import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "../../../src/shared/provider-model"
 import { reviewMetadata, type ReviewMessageData } from "../../../src/shared/review-comments"
 import { visibleMessages as filterVisibleMessages } from "./session-queue"
@@ -965,9 +965,18 @@ export const SessionProvider: ParentComponent = (props) => {
     const sid = sessionID ?? currentSessionID()
     const sel = selected(sid)
     if (!sel) return
-    const key = variantKey(sel, agentForScope(sid), sid)
-    setStore("variantSelections", key, value)
-    if (!sid) vscode.postMessage({ type: "persistVariant", key, value })
+    const agent = agentForScope(sid)
+    // Session-scoped key stays ephemeral (never persisted).
+    if (sid) setStore("variantSelections", variantKey(sel, agent, sid), value)
+    // Agent+model memory (LOCK-002): remembered per (agent, model) pair, so the
+    // same model keeps an independent variant under each agent. Persisted always
+    // so it survives extension reloads.
+    const agentKey = variantKey(sel, agent)
+    setStore("variantSelections", agentKey, value)
+    vscode.postMessage({ type: "persistVariant", key: agentKey, value })
+    // Model-only memory: keyed by providerID/modelID only. Persisted always.
+    setStore("variantSelections", legacyVariantKey(sel), value)
+    vscode.postMessage({ type: "persistVariant", key: legacyVariantKey(sel), value })
   }
 
   // Load persisted variants from extension globalState

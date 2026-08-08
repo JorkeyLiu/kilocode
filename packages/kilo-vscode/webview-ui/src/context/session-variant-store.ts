@@ -4,9 +4,18 @@ export function legacyVariantKey(sel: ModelSelection) {
   return `${sel.providerID}/${sel.modelID}`
 }
 
+/**
+ * Build the canonical variant store key.
+ *
+ * LOCK-001: the session-scoped key includes the agent
+ * (`session/{sessionID}/{agent}/{providerID}/{modelID}`) so a variant picked
+ * for one agent in a session never shadows the per-agent tier for other
+ * agents. The agent-scoped key (`agent/{agent}/{providerID}/{modelID}`) and
+ * the model-only legacy key (`{providerID}/{modelID}`) are unchanged.
+ */
 export function variantKey(sel: ModelSelection, agent: string, session?: string) {
   const base = legacyVariantKey(sel)
-  if (session) return `session/${session}/${base}`
+  if (session) return `session/${session}/${agent}/${base}`
   return `agent/${agent}/${base}`
 }
 

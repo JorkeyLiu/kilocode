@@ -12,6 +12,22 @@
  *   node script/e2e-probe.ts            (via `bun run test:e2e`)
  *   node script/e2e-probe.ts --no-build
  *
+ * Scenario selection (KILO_E2E_SCENARIO, forwarded to the extension-host
+ * runner so it seeds only the selected scenario's fixtures):
+ *   - (unset) | all      => child-task-order AND variant-memory in one VS Code
+ *                           lifecycle (the delivery gate),
+ *   - child-task-order   => only the child-task scenario + its fixtures,
+ *   - variant-memory     => only the variant-memory scenario + its fixtures.
+ *   Any other value fails fast before VS Code launches. Focused runs:
+ *     KILO_E2E_SCENARIO=child-task-order node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=variant-memory   node script/e2e-probe-launch.mjs
+ *   (package shortcuts: `bun run test:e2e:child-task-order`,
+ *   `bun run test:e2e:variant-memory`.)
+ *
+ * Scenarios are independent: each seeds only its own fixtures and coordinates
+ * through scenario-specific markers (child-phase1-done / child-phase2-ready /
+ * child-phase2-done, variant-ready). No scenario waits on another's markers.
+ *
  * MUST run under Node, not Bun: Playwright's CDP WebSocket transport hangs
  * under Bun's runtime against VS Code's Electron CDP endpoint (verified:
  * raw ws + Node both connect; Playwright connectOverCDP under Bun times out).
@@ -63,6 +79,19 @@ const root = process.env.KILO_E2E_ROOT ? resolve(process.env.KILO_E2E_ROOT) : re
 const runnerEntry = join(root, "tests", "e2e", "runner.ts")
 const shouldBuild = !process.argv.includes("--no-build")
 const timeoutMs = Number(process.env.KILO_E2E_TIMEOUT ?? 300_000)
+
+// LOCK-002: scenario selection. `all` (default) runs every scenario in one VS
+// Code lifecycle; a focused value runs exactly that scenario. Unknown values
+// fail fast BEFORE VS Code launches (see main()).
+const SCENARIO_VALUES = ["all", "child-task-order", "variant-memory"] as const
+function parseScenarios(value: string): Set<string> {
+  if (value === "all") return new Set(["child-task-order", "variant-memory"])
+  if (value === "child-task-order" || value === "variant-memory") return new Set([value])
+  throw new Error(
+    `[probe] unknown KILO_E2E_SCENARIO "${value}". ` +
+      `Supported values: ${SCENARIO_VALUES.join(" | ")} (default: all).`,
+  )
+}
 
 // LOCK-006: macOS and Linux are first-class. Windows must fail fast with a
 // clear documented error instead of silently skipping cleanup — exact-owned
@@ -186,9 +215,11 @@ interface E2EPlan {
   sourceId: string
   siblingId: string
   childId: string
+  variantId: string
   sourceTitle: string
   siblingTitle: string
   childTitle: string
+  variantTitle: string
 }
 
 /**
@@ -196,13 +227,17 @@ interface E2EPlan {
  * OOPIF iframes; Playwright exposes them as frames (page.frames()) of the
  * workbench page whose URL starts with `vscode-webview://`. The Agent Manager
  * is anchored by its distinctive tab strip: the `.am-tab-sortable` container
- * (rendered only by the Agent Manager tab bar) that shows the fixture source
- * title. Anchoring on the sortable container — not just `.am-tab-label` —
- * prevents matching the sidebar webview, which never renders `.am-tab-sortable`.
+ * (rendered only by the Agent Manager tab bar) showing the tab whose title is
+ * `anchorTitle`. Each scenario passes its own fixture title (child: source
+ * title; variant: variant title) so the finder never depends on a tab seeded
+ * by another scenario. Anchoring on the sortable container — not just
+ * `.am-tab-label` — prevents matching the sidebar webview, which never renders
+ * `.am-tab-sortable`.
  */
 async function findAgentManagerFrame(
   browser: Browser,
   plan: E2EPlan,
+  anchorTitle: string,
   timeoutMs: number,
 ): Promise<{ page: Page; frame: Frame; url: string }> {
   const deadline = Date.now() + timeoutMs
@@ -215,7 +250,7 @@ async function findAgentManagerFrame(
           if (!url.includes("vscode-webview")) continue
           const hit = await frame
             .locator(".am-tab-sortable[data-tab-id]")
-            .filter({ hasText: plan.sourceTitle })
+            .filter({ hasText: anchorTitle })
             .count()
             .then((n) => n > 0)
             .catch(() => false)
@@ -363,7 +398,7 @@ async function clickChildTaskLink(frame: Frame, timeoutMs: number): Promise<void
  *   5. assert the already-open child is focused WITHOUT reordering.
  */
 async function assertChildTaskOrder(browser: Browser, plan: E2EPlan, scratch: string): Promise<void> {
-  const { frame } = await findAgentManagerFrame(browser, plan, 60_000)
+  const { frame } = await findAgentManagerFrame(browser, plan, plan.sourceTitle, 60_000)
   const phase1Timeout = 30_000
 
   // Phase 1: initial order [source, sibling], source active. Tab IDs are the
@@ -394,8 +429,8 @@ async function assertChildTaskOrder(browser: Browser, plan: E2EPlan, scratch: st
   )
 
   // Phase 2 coordination: tell the runner to re-select the source session.
-  writeFileSync(join(scratch, "phase1-done"), "ok")
-  await waitForFile(join(scratch, "phase2-ready"), 60_000, "phase2-ready marker")
+  writeFileSync(join(scratch, "child-phase1-done"), "ok")
+  await waitForFile(join(scratch, "child-phase2-ready"), 60_000, "child-phase2-ready marker")
 
   // Source active again, order untouched: [source, child, sibling].
   await expectTabOrder(
@@ -434,6 +469,282 @@ async function assertChildTaskOrder(browser: Browser, plan: E2EPlan, scratch: st
       2,
     ),
   )
+  // Phase 2 complete.
+  writeFileSync(join(scratch, "child-phase2-done"), "ok")
+}
+
+// ---------------------------------------------------------------------------
+// Variant memory across agents (LOCK-001) — real webview DOM
+// ---------------------------------------------------------------------------
+
+/** Text of the first element matching the selector (label of a selector trigger). */
+async function labelText(frame: Frame, selector: string): Promise<string | undefined> {
+  return frame
+    .locator(selector)
+    .first()
+    // Bounded per-read wait so a transiently absent node (e.g. a selector that
+    // unmounts/remounts during an agent-switch re-render) never blocks a poll
+    // loop on Playwright's 30s default — the caller's loop survives it.
+    .textContent({ timeout: 2_000 })
+    .then((s) => s?.trim())
+    .catch(() => undefined)
+}
+
+/** Poll until the selector trigger label equals the expected text. */
+async function waitForLabel(frame: Frame, selector: string, expected: string, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const text = await labelText(frame, selector)
+    if (text === expected) {
+      console.log(`[probe] PASS ${label}: "${text}"`)
+      return
+    }
+    if (Date.now() > deadline) {
+      const evidence = await frame
+        .evaluate((sel) => {
+          const nodes = Array.from(document.querySelectorAll<HTMLElement>(sel))
+          const body = document.body?.innerText ?? ""
+          return {
+            selector: sel,
+            count: nodes.length,
+            texts: nodes.map((n) => n.textContent?.trim() ?? ""),
+            modeTrigger: document.querySelector(".mode-switcher-trigger-label")?.textContent?.trim() ?? null,
+            thinkingTrigger: document.querySelector(".thinking-selector-trigger-label")?.textContent?.trim() ?? null,
+            body: body.slice(0, 1200),
+          }
+        }, selector)
+        .catch(() => ({ selector, error: "evaluate failed" }))
+      throw new Error(
+        `probe: ${label} failed: expected "${expected}", got "${text ?? "<none>"}".\n` +
+          `  dom=${JSON.stringify(evidence, null, 2)}`,
+      )
+    }
+    await sleep(250)
+  }
+}
+
+async function clickTab(frame: Frame, tabId: string, timeoutMs: number): Promise<void> {
+  const tab = frame.locator(`.am-tab-sortable[data-tab-id="${tabId}"]`).first()
+  await tab.waitFor({ state: "visible", timeout: timeoutMs })
+  await tab.click({ timeout: timeoutMs })
+}
+
+/**
+ * Close an open popover list if one exists. Counts first so an absent list
+ * never blocks on Playwright's default 30s action timeout (an unconditional
+ * `press("Escape")` on a locator with no match did exactly that and exhausted
+ * the pick retry deadline), and bounds the press itself for the Kobalte detach
+ * race (options can detach on focus).
+ */
+async function closePopover(frame: Frame, listSelector: string): Promise<void> {
+  const open = await frame.locator(listSelector).count().catch(() => 0)
+  if (open > 0) {
+    await frame.locator(listSelector).first().press("Escape", { timeout: 2_000 }).catch(() => {})
+  }
+}
+
+/**
+ * Open a popover selector (trigger) and click the option whose label matches
+ * `value` exactly. Matching is scoped to the option's label span
+ * (`nameSelector`, e.g. `.mode-switcher-item-name` or
+ * `.thinking-selector-item-name`) and is case-sensitive whole-string
+ * (`getByText(value, { exact: true })`) — never a case-insensitive substring of
+ * the option's full text — so a label like "Ask" cannot match a sibling
+ * description containing "tasks", and a label like "Code" cannot match a
+ * description containing "codebase". The owning `[role="option"]` is clicked,
+ * not the span. Retries the open→pick sequence because kobalte popovers
+ * re-render option nodes on focus, so a single located reference can detach
+ * mid-click. Every wait inside is bounded (≤5s per attempt, retried until the
+ * overall deadline) so a transiently missing list can never stall the retry
+ * loop.
+ */
+async function pickOption(
+  frame: Frame,
+  triggerSelector: string,
+  listSelector: string,
+  nameSelector: string,
+  value: string,
+  timeoutMs: number,
+  label: string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    // Ensure any open popover is closed so the trigger click opens fresh.
+    await closePopover(frame, listSelector)
+    await frame.locator(triggerSelector).first().click({ timeout: 5_000 }).catch(() => {})
+    try {
+      const name = frame
+        .locator(`${listSelector} [role="option"] ${nameSelector}`)
+        .getByText(value, { exact: true })
+        .first()
+      await name.waitFor({ state: "visible", timeout: 5_000 })
+      const option = name.locator("xpath=ancestor::*[@role='option']").first()
+      await option.waitFor({ state: "visible", timeout: 5_000 })
+      await option.click({ timeout: 5_000 })
+      console.log(`[probe] picked "${value}" from ${label}`)
+      return
+    } catch (err) {
+      if (Date.now() > deadline) {
+        const evidence = await frame
+          .evaluate(
+            ([triggerSel, listSel, nameSel]) => {
+              const body = document.body?.innerText ?? ""
+              const nodes = Array.from(document.querySelectorAll<HTMLElement>(listSel))
+              const names = Array.from(document.querySelectorAll<HTMLElement>(`${listSel} ${nameSel}`))
+              return {
+                trigger: document.querySelector(triggerSel)?.textContent?.trim() ?? null,
+                listCount: nodes.length,
+                listText: nodes.map((n) => n.textContent?.trim() ?? "").slice(0, 20),
+                names: names.map((n) => n.textContent?.trim() ?? "").slice(0, 20),
+                modeTrigger: document.querySelector(".mode-switcher-trigger-label")?.textContent?.trim() ?? null,
+                body: body.slice(0, 800),
+              }
+            },
+            [triggerSelector, listSelector, nameSelector] as const,
+          )
+          .catch(() => ({ evaluate: "failed" }))
+        throw new Error(
+          `probe: could not pick "${value}" from ${label}: ${err instanceof Error ? err.message : String(err)}. dom=${JSON.stringify(evidence, null, 2)}`,
+        )
+      }
+      await sleep(250)
+    }
+  }
+}
+
+/** Open the ThinkingSelector and pick a variant option (real production popover). */
+async function pickVariant(frame: Frame, value: string, timeoutMs: number): Promise<void> {
+  await pickOption(
+    frame,
+    ".thinking-selector-trigger-label",
+    ".thinking-selector-list",
+    ".thinking-selector-item-name",
+    value,
+    timeoutMs,
+    "variant picker",
+  )
+}
+
+/** Open the ModeSwitcher and pick an agent option (real production popover). */
+async function pickAgent(frame: Frame, value: string, timeoutMs: number): Promise<void> {
+  await pickOption(
+    frame,
+    ".mode-switcher-trigger-label",
+    ".mode-switcher-list",
+    ".mode-switcher-item-name",
+    value,
+    timeoutMs,
+    "agent picker",
+  )
+}
+
+/** Agent labels offered by the ModeSwitcher (production popover options), then close it. */
+async function agentOptions(frame: Frame, timeoutMs: number): Promise<string[]> {
+  await frame.locator(".mode-switcher-trigger-label").first().click({ timeout: 5_000 }).catch(() => {})
+  const names = await frame
+    .locator('.mode-switcher-list .mode-switcher-item-name')
+    .allTextContents()
+    .then((items) => items.map((s) => s.trim()).filter((s) => s.length > 0))
+    .catch(() => [])
+  // Close the popover again (Escape) so the next pick starts from a closed state.
+  await closePopover(frame, ".mode-switcher-list")
+  return names
+}
+
+/**
+ * Real-webview E2E for the LOCK-001 regression: within ONE session, each agent
+ * keeps its own session-scoped reasoning variant.
+ *
+ * The runner seeds session D with a transcript whose recovery selects
+ * kilo/e2e-probe (a model with variants low/medium/high injected by the
+ * env-gated fixture bridge), then this drives the real DOM:
+ *   1. the current agent (whatever the machine's default is) picks "Low",
+ *   2. switch to a second agent → picks "High",
+ *   3. switch back to the first agent → the ThinkingSelector must show "Low"
+ *      again (with the old agent-less session key `session/{sid}/{provider}/{model}`,
+ *      the second agent's pick overwrote the shared session key, so the first
+ *      agent would show "High"),
+ *   4. switch back to the second agent → "High".
+ *
+ * Agent labels are read from the real ModeSwitcher so the case runs on any
+ * machine's agent catalog (builtin or custom). It runs standalone: it only
+ * requires the variant session D (seeded by the runner when this scenario is
+ * selected) and the `variant-ready` marker — never another scenario's markers.
+ */
+async function assertVariantMemoryAcrossAgents(browser: Browser, plan: E2EPlan, scratch: string): Promise<void> {
+  const { frame } = await findAgentManagerFrame(browser, plan, plan.variantTitle, 60_000)
+  const timeout = 30_000
+
+  await waitForFile(join(scratch, "variant-ready"), 60_000, "variant-ready marker")
+
+  // Open the variant session tab; its chat resolves to kilo/e2e-probe via the
+  // seeded transcript recovery, so the ThinkingSelector is interactive.
+  await clickTab(frame, plan.variantId, timeout)
+  await waitForLabel(frame, ".thinking-selector-trigger-label", "Low", timeout, "initial variant (variants[0])")
+
+  // Resolve the two agents from the real ModeSwitcher instead of assuming
+  // builtin names (the machine's config may replace the builtin catalog).
+  const deadline = Date.now() + timeout
+  let aLabel = ""
+  let bLabel = ""
+  for (;;) {
+    const mode = await labelText(frame, ".mode-switcher-trigger-label")
+    const options = mode ? await agentOptions(frame, timeout) : []
+    if (mode && options.length > 0) {
+      aLabel = mode
+      bLabel = options.find((name) => name !== mode) ?? ""
+      if (bLabel) break
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `probe: could not resolve two switchable agents. mode="${mode ?? "<none>"}" options=[${options.join(", ")}]`,
+      )
+    }
+    await sleep(250)
+  }
+  console.log(`[probe] variant scenario agents: A="${aLabel}" B="${bLabel}"`)
+
+  // Agent A picks "Low" explicitly → session-scoped key for A.
+  await pickVariant(frame, "Low", timeout)
+  await waitForLabel(frame, ".thinking-selector-trigger-label", "Low", timeout, "agent A picks low")
+
+  // Switch to agent B: the model stays e2e-probe (per-agent model memory), and
+  // B has no own variant yet — the legacy model memory ("low") applies.
+  await pickAgent(frame, bLabel, timeout)
+  await waitForLabel(frame, ".mode-switcher-trigger-label", bLabel, timeout, "agent switched to B")
+  await waitForLabel(frame, ".thinking-selector-trigger-label", "Low", timeout, "agent B inherits model memory before picking")
+
+  // Agent B picks "High" → session-scoped key for B.
+  await pickVariant(frame, "High", timeout)
+  await waitForLabel(frame, ".thinking-selector-trigger-label", "High", timeout, "agent B picks high")
+
+  // Back to A: must restore "Low" — the regression assertion. Pre-fix, the
+  // agent-less session key shadows this and shows B's "High".
+  await pickAgent(frame, aLabel, timeout)
+  await waitForLabel(frame, ".mode-switcher-trigger-label", aLabel, timeout, "agent switched back to A")
+  await waitForLabel(frame, ".thinking-selector-trigger-label", "Low", timeout, "agent A restores low in-session (LOCK-001)")
+
+  // Back to B: restores "High".
+  await pickAgent(frame, bLabel, timeout)
+  await waitForLabel(frame, ".mode-switcher-trigger-label", bLabel, timeout, "agent switched back to B")
+  await waitForLabel(frame, ".thinking-selector-trigger-label", "High", timeout, "agent B restores high in-session (LOCK-001)")
+
+  writeFileSync(
+    join(scratch, "variant-dom-evidence"),
+    JSON.stringify(
+      {
+        url: frame.url(),
+        plan,
+        agentA: aLabel,
+        agentB: bLabel,
+        variant: await labelText(frame, ".thinking-selector-trigger-label"),
+        agent: await labelText(frame, ".mode-switcher-trigger-label"),
+      },
+      null,
+      2,
+    ),
+  )
+  console.log("[probe] variant memory across agents passed")
 }
 
 async function describeTargets(browser: Browser): Promise<string> {
@@ -524,6 +835,11 @@ let vscodeRun: Promise<number> | undefined
 
 async function main() {
   const started = Date.now()
+  // LOCK-002: resolve the scenario set BEFORE any build or VS Code launch so an
+  // unknown value fails fast and never spawns an owned Electron process.
+  const scenario = process.env.KILO_E2E_SCENARIO ?? "all"
+  const scenarios = parseScenarios(scenario)
+  console.log(`[probe] scenarios: ${scenario} (${[...scenarios].join(", ")})`)
   cleanEnv()
   await compile()
 
@@ -570,6 +886,19 @@ async function main() {
         KILO_E2E_FIXTURE: "1",
         KILO_E2E_SCRATCH: scratch,
         KILO_E2E_FIXTURE_ID: fixtureId,
+        // The runner seeds only the selected scenario(s) — never markers or
+        // state produced by another scenario.
+        KILO_E2E_SCENARIO: scenario,
+        // Hermetic isolation: point the spawned CLI backend at a scratch XDG
+        // tree so it loads a clean global config instead of the developer's
+        // real ~/.config/kilo. This makes the Agent Manager's agent catalog and
+        // provider/model config deterministic across machines (builtin agents
+        // code/ask/plan, no custom providers, no model_variant overrides) and
+        // prevents a dev's local config from breaking the scenario.
+        XDG_CONFIG_HOME: join(scratch, "xdg-config"),
+        XDG_DATA_HOME: join(scratch, "xdg-data"),
+        XDG_CACHE_HOME: join(scratch, "xdg-cache"),
+        XDG_STATE_HOME: join(scratch, "xdg-state"),
       },
       launchArgs: [
         workspace,
@@ -599,9 +928,17 @@ async function main() {
       await waitForFile(join(scratch, "ready"), 120_000, "runner ready marker")
       await waitForFile(join(scratch, "plan.json"), 30_000, "runner plan marker")
       const plan = JSON.parse(readFileSync(join(scratch, "plan.json"), "utf8")) as E2EPlan
-      console.log(`[probe] runner ready, plan: source=${plan.sourceId} sibling=${plan.siblingId} child=${plan.childId}`)
-      await assertChildTaskOrder(browser, plan, scratch)
-      console.log("[probe] child-task tab-order assertion passed")
+      console.log(
+        `[probe] runner ready, plan: source=${plan.sourceId} sibling=${plan.siblingId} child=${plan.childId} variant=${plan.variantId}`,
+      )
+      if (scenarios.has("child-task-order")) {
+        await assertChildTaskOrder(browser, plan, scratch)
+        console.log("[probe] child-task tab-order assertion passed")
+      }
+      if (scenarios.has("variant-memory")) {
+        await assertVariantMemoryAcrossAgents(browser, plan, scratch)
+        console.log("[probe] variant-memory assertion passed")
+      }
     } finally {
       // Unblock the extension-host runner on success AND failure so VS Code
       // always exits under program control (no detached processes).

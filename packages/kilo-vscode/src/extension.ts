@@ -38,6 +38,85 @@ const panelTitleHandler = (panel: vscode.WebviewPanel) => (title: string) => {
   panel.title = title || EXTENSION_DISPLAY_NAME
 }
 
+/**
+ * E2E fixture (KILO_E2E_FIXTURE only): inject a model with ≥2 reasoning
+ * variants into the real served provider catalog and post a synthetic
+ * providersLoaded to the Agent Manager webview, then pin that model as the
+ * per-agent model for every backend agent so switching agents in the webview
+ * keeps the variant-bearing model selected. The models.dev snapshot ships no
+ * variant-bearing models, so without this the real ThinkingSelector is never
+ * interactive in the harness. The provider/agent round trips are awaited
+ * first so this synthetic state stays the last catalog/model messages the
+ * webview processes.
+ *
+ * The synthetic catalog is then re-asserted on a short bounded schedule: the
+ * extension's real providersLoaded (from the connection-init catalog fetch)
+ * can complete AFTER this first synthetic post and clobber the injected
+ * model, which would leave the real ThinkingSelector unrenderable mid-scenario
+ * (the harness observed this as an intermittent all-mode failure). Re-posting
+ * a few times over ~6s supersedes any late real catalog so the injected model
+ * is the effective webview state while the harness drives the DOM. Bounded and
+ * deterministic — no polling/network dependency.
+ */
+async function provisionVariantModelFixture(
+  agentManagerProvider: AgentManagerProvider,
+  connectionService: KiloConnectionService,
+  providerID: string,
+  modelID: string,
+  variants: string[],
+): Promise<void> {
+  await agentManagerProvider.settleSessionsForFixture()
+  const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+  const variantMap: Record<string, unknown> = {}
+  for (const variant of variants) variantMap[variant] = {}
+  const injected = { id: modelID, name: modelID, variants: variantMap }
+  const providers: Record<string, unknown> = {}
+  let connected: string[] = []
+  let defaults: Record<string, string> = {}
+  let selections: Record<string, { providerID: string; modelID: string }> = {}
+  try {
+    const client = await connectionService.getClientAsync(root)
+    const { data } = await client.provider.list({ directory: root }, { throwOnError: true })
+    connected = data?.connected ?? []
+    defaults = data?.default ?? {}
+    for (const item of data?.all ?? []) {
+      const p = item as { id?: string; models?: Record<string, unknown> }
+      providers[p.id ?? ""] = p.id === providerID ? { ...p, models: { ...(p.models ?? {}), [modelID]: injected } } : p
+    }
+    const agentResult = await client.app.agents({ directory: root }, { throwOnError: true })
+    const agentNames = (agentResult.data ?? [])
+      .map((agent) => (agent as { name?: string }).name ?? "")
+      .filter((name) => name.length > 0)
+    for (const name of agentNames) selections[name] = { providerID, modelID }
+  } catch (err) {
+    console.error("[Kilo New] provisionVariantModelFixture: real catalog/agents unavailable:", err)
+  }
+  if (!providers[providerID]) providers[providerID] = { id: providerID, name: providerID, models: { [modelID]: injected } }
+  if (!connected.includes(providerID)) connected = [...connected, providerID]
+
+  const post = () => {
+    if (Object.keys(selections).length > 0) {
+      agentManagerProvider.postMessage({ type: "modelSelectionsLoaded", selections })
+    }
+    agentManagerProvider.postMessage({
+      type: "providersLoaded",
+      providers,
+      connected,
+      defaults,
+      defaultSelection: { providerID, modelID },
+      authMethods: {},
+      authStates: {},
+    })
+  }
+  post()
+  // Bounded re-assertion window (see comment above): 500ms, 2s, 5s after the
+  // first post. Any real catalog delivered in this window is superseded.
+  for (const delayMs of [500, 1500, 3000, 5000]) {
+    await new Promise((resolve) => setTimeout(resolve, delayMs))
+    post()
+  }
+}
+
 // Activated via "onStartupFinished" and "onUri" (package.json) so that commands, code actions,
 // keybindings, autocomplete, commit-message generation, and URI deep links all work immediately —
 // without requiring the user to open a Kilo sidebar or panel first. The CLI backend is NOT spawned here;
@@ -515,11 +594,14 @@ export function activate(context: vscode.ExtensionContext) {
   )
 
   // E2E fixture bridge (gated). Registered only when the real Extension Host
-  // E2E harness (script/e2e-probe.ts) sets KILO_E2E_FIXTURE. Exposes three
+  // E2E harness (script/e2e-probe.ts) sets KILO_E2E_FIXTURE. Exposes four
   // deterministic probes to the extension-host test runner: Agent Manager
-  // panel readiness, typed webview posting, and session-list settlement
+  // panel readiness, typed webview posting, session-list settlement
   // (await the real backend session refresh so the runner can re-seed after
-  // it). No production effect when the env var is absent — no commands are
+  // it), and variant-model provisioning (inject a model with ≥2 reasoning
+  // variants into the served provider catalog so the real ThinkingSelector is
+  // interactive — the models.dev snapshot ships no variant-bearing models).
+  // No production effect when the env var is absent — no commands are
   // registered and no webview code runs.
   if (process.env.KILO_E2E_FIXTURE) {
     context.subscriptions.push(
@@ -535,6 +617,19 @@ export function activate(context: vscode.ExtensionContext) {
         await agentManagerProvider.settleSessionsForFixture()
         return true
       }),
+      vscode.commands.registerCommand(
+        "kilo-code.new.e2eFixture.provisionVariantModel",
+        async (opts?: { providerID?: string; modelID?: string; variants?: string[] }) => {
+          await provisionVariantModelFixture(
+            agentManagerProvider,
+            connectionService,
+            opts?.providerID ?? "kilo",
+            opts?.modelID ?? "e2e-probe",
+            opts?.variants ?? ["low", "medium", "high"],
+          )
+          return true
+        },
+      ),
     )
   }
 
