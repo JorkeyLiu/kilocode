@@ -43,6 +43,8 @@ export interface SessionInfo {
   id: string
   parentID?: string | null
   title?: string
+  /** Delegated agent stored on the backend session (child sessions keep their subagent here). */
+  agent?: string
   createdAt: string
   updatedAt: string
   revert?: {

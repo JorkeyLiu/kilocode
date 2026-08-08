@@ -98,6 +98,9 @@ const AppContent: Component = () => {
     const available = session.agents().filter((a) => a.mode !== "subagent" && !a.hidden)
     if (available.length <= 1) return
     const current = session.selectedAgent()
+    // Fixed-agent sessions (e.g. child sessions with a delegated subagent that
+    // is not in the visible list) must not cycle.
+    if (!available.some((a) => a.name === current)) return
     const idx = available.findIndex((a) => a.name === current)
     const raw = idx + direction
     const next = raw < 0 ? available.length - 1 : raw >= available.length ? 0 : raw

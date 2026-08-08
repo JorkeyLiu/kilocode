@@ -39,6 +39,11 @@ export interface ModeSwitcherBaseProps {
   portal?: boolean
   /** Delay outside dismissal while the popover opens inside a dialog. */
   deferDismiss?: boolean
+  /** Render the trigger fixed and non-interactive (no popover, no selection).
+   *  The resolved agent is then not in `agents` (e.g. a delegated subagent). */
+  disabled?: boolean
+  /** Display label for the trigger when `value` is not in `agents` (fallback: raw name). */
+  label?: string
 }
 
 export const ModeSwitcherBase: Component<ModeSwitcherBaseProps> = (props) => {
@@ -52,6 +57,7 @@ export const ModeSwitcherBase: Component<ModeSwitcherBaseProps> = (props) => {
 
   // Listen for slash command trigger
   const onTrigger = () => {
+    if (props.disabled) return
     slash = true
     openSelected()
   }
@@ -80,6 +86,7 @@ export const ModeSwitcherBase: Component<ModeSwitcherBaseProps> = (props) => {
   }
 
   function onOpen(val: boolean) {
+    if (props.disabled) return
     if (val) {
       // A click on the trigger opens without the slash flag.
       slash = false
@@ -115,76 +122,88 @@ export const ModeSwitcherBase: Component<ModeSwitcherBaseProps> = (props) => {
   }
 
   const triggerLabel = () => {
+    if (props.label) return props.label
     const agent = props.agents.find((a) => a.name === props.value)
     if (agent) return formatAgentLabel(agent)
     return props.value || "Code"
   }
 
+  const showTrigger = () => hasAgents() || props.disabled
+
   return (
-    <Show when={hasAgents()}>
-      <PopupSelector
-        expanded={false}
-        placement="top-start"
-        minHeight={100}
-        portal={props.portal}
-        deferDismiss={props.deferDismiss}
-        open={open()}
-        onOpenChange={onOpen}
-        triggerAs={Button}
-        triggerProps={{ variant: "ghost", size: "small" }}
-        trigger={
-          <>
+    <Show when={showTrigger()}>
+      <Show
+        when={!props.disabled}
+        fallback={
+          <Button variant="ghost" size="small" disabled aria-disabled="true" aria-label={triggerLabel()}>
             <span class="mode-switcher-trigger-label">{triggerLabel()}</span>
-            <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style={{ "flex-shrink": "0" }}>
-              <path d="M8 4l4 5H4l4-5z" />
-            </svg>
-          </>
+          </Button>
         }
       >
-        {(bodyH) => (
-          <div
-            class="mode-switcher-list"
-            role="listbox"
-            ref={listRef}
-            onKeyDown={onKeyDown}
-            style={bodyH() !== undefined ? { "max-height": `${bodyH()}px` } : {}}
-          >
-            <For each={props.agents}>
-              {(agent, i) => (
-                <div
-                  class={`mode-switcher-item${agent.name === props.value ? " selected" : ""}`}
-                  role="option"
-                  aria-selected={agent.name === props.value}
-                  tabindex={focused() === i() ? 0 : -1}
-                  data-autofocus={focused() === i() ? "" : undefined}
-                  onClick={() => pick(agent.name)}
-                  onFocus={() => setFocused(i())}
-                >
-                  <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
-                    <span class="mode-switcher-item-name">{formatAgentLabel(agent)}</span>
-                    <Show when={agent.deprecated}>
-                      <span
-                        style={{
-                          "font-size": "var(--kilo-font-size-10)",
-                          padding: "1px 5px",
-                          "border-radius": "3px",
-                          background: "var(--vscode-editorWarning-foreground, #cca700)",
-                          color: "var(--vscode-editorWarning-foreground-text, #1e1e1e)",
-                        }}
-                      >
-                        {language.t("settings.agentBehaviour.badge.deprecated")}
-                      </span>
+        <PopupSelector
+          expanded={false}
+          placement="top-start"
+          minHeight={100}
+          portal={props.portal}
+          deferDismiss={props.deferDismiss}
+          open={open()}
+          onOpenChange={onOpen}
+          triggerAs={Button}
+          triggerProps={{ variant: "ghost", size: "small" }}
+          trigger={
+            <>
+              <span class="mode-switcher-trigger-label">{triggerLabel()}</span>
+              <svg width="10" height="10" viewBox="0 0 16 16" fill="currentColor" style={{ "flex-shrink": "0" }}>
+                <path d="M8 4l4 5H4l4-5z" />
+              </svg>
+            </>
+          }
+        >
+          {(bodyH) => (
+            <div
+              class="mode-switcher-list"
+              role="listbox"
+              ref={listRef}
+              onKeyDown={onKeyDown}
+              style={bodyH() !== undefined ? { "max-height": `${bodyH()}px` } : {}}
+            >
+              <For each={props.agents}>
+                {(agent, i) => (
+                  <div
+                    class={`mode-switcher-item${agent.name === props.value ? " selected" : ""}`}
+                    role="option"
+                    aria-selected={agent.name === props.value}
+                    tabindex={focused() === i() ? 0 : -1}
+                    data-autofocus={focused() === i() ? "" : undefined}
+                    onClick={() => pick(agent.name)}
+                    onFocus={() => setFocused(i())}
+                  >
+                    <div style={{ display: "flex", "align-items": "center", gap: "6px" }}>
+                      <span class="mode-switcher-item-name">{formatAgentLabel(agent)}</span>
+                      <Show when={agent.deprecated}>
+                        <span
+                          style={{
+                            "font-size": "var(--kilo-font-size-10)",
+                            padding: "1px 5px",
+                            "border-radius": "3px",
+                            background: "var(--vscode-editorWarning-foreground, #cca700)",
+                            color: "var(--vscode-editorWarning-foreground-text, #1e1e1e)",
+                          }}
+                        >
+                          {language.t("settings.agentBehaviour.badge.deprecated")}
+                        </span>
+                      </Show>
+                    </div>
+                    <Show when={agent.description}>
+                      <span class="mode-switcher-item-desc">{agent.description}</span>
                     </Show>
                   </div>
-                  <Show when={agent.description}>
-                    <span class="mode-switcher-item-desc">{agent.description}</span>
-                  </Show>
-                </div>
-              )}
-            </For>
-          </div>
-        )}
-      </PopupSelector>
+                )}
+              </For>
+            </div>
+          )}
+        </PopupSelector>
+      </Show>
     </Show>
   )
 }
@@ -201,10 +220,23 @@ export const ModeSwitcher: Component<ModeSwitcherProps> = (props) => {
   const session = useSession()
   const id = () => props.sessionID?.()
 
+  const value = () => session.selectedAgent(id())
+  // Fixed when the resolved agent is not among the visible agents (e.g. a child
+  // session's delegated subagent). Only after agents load so there is no flash.
+  const disabled = () => session.agents().length > 0 && !session.agents().some((a) => a.name === value())
+  // Label for the fixed case: prefer the agent's display name from the full
+  // catalog (which includes subagents), fall back to the raw name.
+  const label = () => {
+    const agent = session.allAgents().find((a) => a.name === value())
+    return agent ? formatAgentLabel(agent) : value()
+  }
+
   return (
     <ModeSwitcherBase
       agents={session.agents()}
-      value={session.selectedAgent(id())}
+      value={value()}
+      disabled={disabled()}
+      label={disabled() ? label() : undefined}
       onSelect={(name) => {
         session.selectAgent(name, id())
         requestAnimationFrame(() => window.dispatchEvent(new Event("focusPrompt")))

@@ -113,7 +113,73 @@ describe("resolveSessionAgent", () => {
 })
 
 // ---------------------------------------------------------------------------
-// LOCK-001: Recovered agent is continuity state, never explicit
+// LOCK-002: Delegated session agent (child sessions keep their subagent)
+// ---------------------------------------------------------------------------
+
+describe("resolveSessionAgent — delegated session agent (LOCK-002)", () => {
+  // Full catalog: visible (code/plan) + a subagent only present in allAgents.
+  const allNames = new Set(["code", "plan", "delegate-writer"])
+
+  it("resolves to the delegated subagent stored on the session", () => {
+    const store: AgentStore = {
+      ...emptyStore(),
+      sessions: { "session-a": { agent: "delegate-writer" } },
+    }
+    expect(resolveSessionAgent(store, "session-a", "code", names, allNames)).toBe("delegate-writer")
+  })
+
+  it("delegated subagent resolves even when not in the visible names set", () => {
+    // `names` (visible) lacks the subagent; only `allNames` (full catalog) has it.
+    expect(names.has("delegate-writer")).toBe(false)
+    expect(allNames.has("delegate-writer")).toBe(true)
+    const store: AgentStore = {
+      ...emptyStore(),
+      sessions: { "session-a": { agent: "delegate-writer" } },
+    }
+    expect(resolveSessionAgent(store, "session-a", "code", names, allNames)).toBe("delegate-writer")
+  })
+
+  it("explicit agent selection wins over the delegated session agent", () => {
+    const store: AgentStore = {
+      ...emptyStore(),
+      agentSelections: { "session-a": "code" },
+      sessions: { "session-a": { agent: "delegate-writer" } },
+    }
+    expect(resolveSessionAgent(store, "session-a", "code", names, allNames)).toBe("code")
+  })
+
+  it("recovered visible agent wins over the delegated session agent", () => {
+    const store: AgentStore = {
+      ...emptyStore(),
+      sessionRecoveredAgents: { "session-a": "plan" },
+      sessions: { "session-a": { agent: "delegate-writer" } },
+    }
+    expect(resolveSessionAgent(store, "session-a", "code", names, allNames)).toBe("plan")
+  })
+
+  it("invalid delegated session agent (removed from catalog) falls to default", () => {
+    const store: AgentStore = {
+      ...emptyStore(),
+      sessions: { "session-a": { agent: "removed-subagent" } },
+    }
+    expect(resolveSessionAgent(store, "session-a", "code", names, allNames)).toBe("code")
+  })
+
+  it("delegated agent for a different session is ignored", () => {
+    const store: AgentStore = {
+      ...emptyStore(),
+      sessions: { "session-b": { agent: "delegate-writer" } },
+    }
+    expect(resolveSessionAgent(store, "session-a", "code", names, allNames)).toBe("code")
+  })
+
+  it("no sessions data keeps the previous resolution behavior", () => {
+    expect(resolveSessionAgent(emptyStore(), "session-a", "code", names, allNames)).toBe("code")
+  })
+})
+
+// ---------------------------------------------------------------------------
+// LOCK-001: Recovered agent is continuity, never explicit
 // ---------------------------------------------------------------------------
 
 describe("LOCK-001 — recovered agent is continuity, not selection", () => {

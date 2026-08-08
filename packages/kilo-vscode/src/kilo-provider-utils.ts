@@ -205,11 +205,20 @@ export async function runWithMessageConfirmation<T>(
   }
 }
 
-export function sessionToWebview(session: Session) {
+/**
+ * The generated SDK `Session` type predates the backend `Session.Info.agent`
+ * field (packages/opencode/src/session/session.ts), so the field is not typed
+ * even though the backend always returns it. Local intersection keeps the
+ * bridge type-safe without hand-editing generated SDK files.
+ */
+type SessionWithAgent = Session & { agent?: string }
+
+export function sessionToWebview(session: SessionWithAgent) {
   return {
     id: session.id,
     parentID: session.parentID ?? null,
     title: session.title,
+    agent: session.agent,
     createdAt: new Date(session.time.created).toISOString(),
     updatedAt: new Date(session.time.updated).toISOString(),
     // Use null (not undefined) so the value survives postMessage JSON serialization.

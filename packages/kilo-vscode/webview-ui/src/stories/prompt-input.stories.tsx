@@ -51,6 +51,33 @@ const PromptProviders: ParentComponent<{ variants?: boolean; modelOverride?: boo
   )
 }
 
+// Child-session scenario: the resolved agent is a delegated subagent that is NOT in
+// the visible agent list, so the mode switcher renders fixed/disabled.
+const FixedSubagentProviders: ParentComponent = (props) => {
+  const base = mockSessionValue({ status: "idle" })
+  const session = {
+    ...base,
+    agents: () => agents,
+    allAgents: () => [
+      ...agents,
+      { name: "delegate-writer", displayName: "Delegate Writer", mode: "subagent" as const },
+    ],
+    selectedAgent: () => "delegate-writer",
+    variantList: () => [],
+    currentVariant: () => undefined,
+    hasModelOverride: () => false,
+    clearModelOverride: noop,
+  }
+
+  return (
+    <StoryProviders noPadding>
+      <div style={{ overflow: "hidden" }}>
+        <SessionContext.Provider value={session as any}>{props.children}</SessionContext.Provider>
+      </div>
+    </StoryProviders>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Meta — fullscreen so the screenshot is exactly the component width
 // ---------------------------------------------------------------------------
@@ -165,5 +192,27 @@ export const WithModelOverride200: Story = {
     <PromptProviders modelOverride>
       <PromptInput />
     </PromptProviders>
+  ),
+}
+
+// ---------------------------------------------------------------------------
+// Stories — fixed delegated subagent (child session): mode switcher disabled
+// ---------------------------------------------------------------------------
+
+export const FixedSubagent420: Story = {
+  name: "Fixed subagent — 420px",
+  render: () => (
+    <FixedSubagentProviders>
+      <PromptInput />
+    </FixedSubagentProviders>
+  ),
+}
+
+export const FixedSubagent200: Story = {
+  name: "Fixed subagent — 200px",
+  render: () => (
+    <FixedSubagentProviders>
+      <PromptInput />
+    </FixedSubagentProviders>
   ),
 }

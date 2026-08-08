@@ -576,18 +576,26 @@ export const SessionProvider: ParentComponent = (props) => {
   }
 
   const agentNames = createMemo(() => new Set(agents().map((agent) => agent.name)))
+  // Full catalog (visible + subagents), excluding hidden non-subagent agents —
+  // used to validate the delegated agent a child session carries on its backend
+  // session record. A session whose backend agent is a hidden (non-subagent)
+  // agent falls through to defaultAgent (old behavior, no lockout); subagent
+  // sessions still resolve to their delegated subagent (disabled fixed selector).
+  const allAgentNames = createMemo(
+    () => new Set(allAgents().filter((agent) => agent.mode === "subagent" || !agent.hidden).map((agent) => agent.name)),
+  )
 
   // Per-session agent selection
   const selectedAgentName = createMemo<string>(() => {
     const sessionID = currentSessionID()
     if (sessionID) {
-      return resolveAgent(store, sessionID, defaultAgent(), agentNames())
+      return resolveAgent(store, sessionID, defaultAgent(), agentNames(), allAgentNames())
     }
     return pendingAgentSelection() ?? defaultAgent()
   })
 
   function agentForScope(sessionID?: string) {
-    if (sessionID) return resolveAgent(store, sessionID, defaultAgent(), agentNames())
+    if (sessionID) return resolveAgent(store, sessionID, defaultAgent(), agentNames(), allAgentNames())
     return selectedAgentName()
   }
   const agentDrafts = createDraftAgentSeed({
@@ -778,10 +786,6 @@ export const SessionProvider: ParentComponent = (props) => {
       }),
     )
     if (persist) vscode.postMessage({ type: "clearModelSelection", agent: agentName })
-  }
-
-  function shouldClearModeModelSelection(agentName: string) {
-    return getModeModel(agentName) !== null && userSetAgents()[agentName] === true
   }
 
   function clearHiddenErrors(ids: string[]) {
@@ -2203,23 +2207,8 @@ export const SessionProvider: ParentComponent = (props) => {
     const id = sessionID ?? currentSessionID()
     if (id) {
       setStore("agentSelections", id, name)
-      // Clear per-session model override so the new mode's configured/default
-      // model takes effect instead of the previous mode's override.
-      setStore(
-        "sessionOverrides",
-        produce((overrides) => {
-          delete overrides[id]
-        }),
-      )
-      if (shouldClearModeModelSelection(name)) {
-        clearModeModelSelection(name)
-      }
     } else {
       setPendingAgentSelection(name)
-      if (shouldClearModeModelSelection(name)) {
-        clearModeModelSelection(name)
-        return
-      }
       // When switching mode, initialize model for the new mode if the user
       // hasn't explicitly set one for it
       if (!userSetAgents()[name] && !store.modelSelections[name]) {
@@ -3011,7 +3000,7 @@ export const SessionProvider: ParentComponent = (props) => {
     refreshMcpStatus,
     selectedAgent: agentForScope,
     selectAgent,
-    getSessionAgent: (sessionID: string) => resolveAgent(store, sessionID, defaultAgent(), agentNames()),
+    getSessionAgent: (sessionID: string) => resolveAgent(store, sessionID, defaultAgent(), agentNames(), allAgentNames()),
     getSessionModel: (sessionID: string) => resolveSessionModel(sessionID),
     setSessionModel: (sessionID: string, providerID: string, modelID: string) => {
       // Only write per-session override — do NOT touch global modelSelections or

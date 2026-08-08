@@ -15,6 +15,8 @@ export interface AgentStore {
   agentSelections: Record<string, string>
   /** sessionID -> recovered agent from message history (continuity) */
   sessionRecoveredAgents: Record<string, string>
+  /** Backend session records — child sessions carry their delegated subagent here. */
+  sessions?: Record<string, { agent?: string }>
 }
 
 /**
@@ -60,6 +62,13 @@ export function applyRecoverAgent(
  * Recovered agent is only used when no explicit selection exists and the
  * recovered agent is in the valid names set.
  *
+ * LOCK-002: a session whose backend record carries a delegated agent (e.g. a
+ * child session created by the task tool with a subagent) resolves to that
+ * agent when it is in the full agent catalog (`allNames`, visible + subagents)
+ * and no explicit/recovered-visible selection applies. The recovered check
+ * stays validated against the VISIBLE `names` set (LOCK-004), so a recovered
+ * visible agent still beats the delegated subagent.
+ *
  * @returns The resolved agent name.
  */
 export function resolveSessionAgent(
@@ -67,6 +76,7 @@ export function resolveSessionAgent(
   sessionID: string,
   defaultAgent: string,
   names: Set<string>,
+  allNames?: Set<string>,
 ): string {
   // Explicit user selection wins
   const explicit = store.agentSelections[sessionID]
@@ -74,5 +84,9 @@ export function resolveSessionAgent(
   // Recovered continuity state — only if valid in current agent catalog
   const recovered = store.sessionRecoveredAgents[sessionID]
   if (recovered && names.has(recovered)) return recovered
+  // Delegated agent stored on the backend session — only if still in the
+  // full catalog (the agent may have been removed from config).
+  const sessionAgent = store.sessions?.[sessionID]?.agent
+  if (sessionAgent && allNames?.has(sessionAgent)) return sessionAgent
   return defaultAgent
 }
