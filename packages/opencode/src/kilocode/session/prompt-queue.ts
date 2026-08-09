@@ -30,26 +30,42 @@ export namespace KiloSessionPromptQueue {
   // start; the entry is removed the moment the slot begins running, so a
   // running slot is no longer cancellable per-message. dropped holds targets
   // flagged by cancelOne so the waiting slot runs its cancelled effect instead
-  // of its work.
+  // of its work. adopted holds targets folded into the running slot's extras by
+  // adopt() at a safe post-stream boundary: they leave pending (so they stop
+  // counting as follow-ups and are no longer individually cancellable) and
+  // their slots run the cancelled effect instead of independent work.
   const pending = new Map<MessageID, { session: SessionID; seq: number }>()
   const dropped = new Set<MessageID>()
+  const adopted = new Map<MessageID, SessionID>()
   let seq = 0
 
   /** @internal - test-only helper */
   export function _hasInternalState(sessionID: SessionID): boolean {
     const waiting = [...pending.values()].some((item) => item.session === sessionID)
+    const folded = [...adopted.values()].some((item) => item === sessionID)
     return (
       versions.has(sessionID) ||
       targets.has(sessionID) ||
       latest.has(sessionID) ||
       activeSince.has(sessionID) ||
-      waiting
+      waiting ||
+      folded
     )
   }
 
   /** @internal - test-only helper: is a target messageID still waiting to start? */
   export function _isQueued(sessionID: SessionID, messageID: MessageID): boolean {
     return pending.get(messageID)?.session === sessionID
+  }
+
+  /** @internal - test-only helper: was a target folded into the running slot's extras? */
+  export function _isAdopted(sessionID: SessionID, messageID: MessageID): boolean {
+    return adopted.get(messageID) === sessionID
+  }
+
+  /** @internal - test-only helper: adopted target IDs for a session, in FIFO order. */
+  export function _adoptedIDs(sessionID: SessionID): MessageID[] {
+    return [...adopted.entries()].filter(([, s]) => s === sessionID).map(([id]) => id)
   }
 
   const version = (sessionID: SessionID) => versions.get(sessionID) ?? 0
@@ -126,6 +142,36 @@ export namespace KiloSessionPromptQueue {
     return false
   }
 
+  /**
+   * Adopt every non-cancelled prompt waiting behind the running slot into the
+   * running slot's extras (LOCK-002: all waiting prompts, FIFO, atomically).
+   * Called by runLoop at a safe post-stream boundary after the current
+   * handle.process has fully drained. Each adopted target leaves the pending
+   * registry, so it stops counting as a follow-up and is no longer individually
+   * cancellable via cancelOne; its slot runs its cancelled effect (the caller's
+   * settled result) instead of independent generation work when it reaches the
+   * front of the queue. The production call site discards the outcome; test
+   * observability of which targets were folded in, in FIFO order, goes through
+   * _adoptedIDs.
+   */
+  export function adopt(sessionID: SessionID): void {
+    const target = targets.get(sessionID)
+    if (!target) return
+    const a = activeSince.get(sessionID) ?? 0
+    const waiting = [...pending.entries()]
+      .filter(([id, item]) => item.session === sessionID && item.seq > a && !dropped.has(id))
+      .sort((x, y) => x[1].seq - y[1].seq)
+      .map(([id]) => id)
+    if (waiting.length === 0) return
+    const extras = new Set(target.extras)
+    for (const id of waiting) {
+      extras.add(id)
+      adopted.set(id, sessionID)
+      pending.delete(id)
+    }
+    targets.set(sessionID, { base: target.base, extras })
+  }
+
   export function scope(sessionID: SessionID, messages: MessageV2.WithParts[]) {
     const target = targets.get(sessionID)
     if (!target) return messages
@@ -186,9 +232,12 @@ export namespace KiloSessionPromptQueue {
           Effect.flatMap(() => {
             // The slot reached the front of the queue: it is now the running one
             // and no longer cancellable per-message. dropped.delete both reads and
-            // clears the per-message flag set by cancelOne.
+            // clears the per-message flag set by cancelOne; adopted.delete reads
+            // and clears the fold set by adopt(), so an adopted slot settles with
+            // the cancelled effect instead of starting independent work.
             pending.delete(target)
-            if (slot.version !== version(sessionID) || dropped.delete(target)) return cancelled
+            if (slot.version !== version(sessionID) || dropped.delete(target) || adopted.delete(target))
+              return cancelled
             // Snapshot the latest seq at the moment this slot actually starts
             // running. hasFollowup compares against this value so the slot only
             // breaks when something newer than itself arrives.
@@ -209,6 +258,7 @@ export namespace KiloSessionPromptQueue {
         Effect.sync(() => {
           pending.delete(target)
           dropped.delete(target)
+          adopted.delete(target)
           slot.done.resolve()
           if (tails.get(sessionID) !== slot.tail) return
           tails.delete(sessionID)

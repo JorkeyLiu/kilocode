@@ -1454,8 +1454,8 @@ export const layer = Layer.effect(
         // Critically we never cancel the in-flight fiber here — that would abort the
         // streamText call mid-tokens and cut off the assistant reply. The enqueue call
         // below serializes this prompt after the current turn's current LLM step, and
-        // runLoop checks hasFollowup between steps to break out once it has been
-        // enqueued during the turn.
+        // runLoop adopts every waiting prompt at the next safe post-stream boundary
+        // so the continued run answers them without closing the turn.
         yield* Effect.promise(() => Suggestion.dismissAll(input.sessionID))
         yield* question.dismissAll(input.sessionID)
         if (input.noReply === true) return message
@@ -1894,14 +1894,13 @@ export const layer = Layer.effect(
               overflow: !handle.message.finish && handle.compactError?.() !== undefined, // kilocode_change
             })
           }
-          // kilocode_change start — break out so a newer queued prompt can take over
-          // instead of starting another LLM step for the now-superseded turn. The
-          // current handle.process has fully drained (tokens + inline tool calls) by
-          // the time we get here, so nothing is cut off.
-          if (KiloSessionPromptQueue.hasFollowup(sessionID)) {
-            closeReasons.set(sessionID, "interrupted")
-            return "break" as const
-          }
+          // kilocode_change start — adopt every non-cancelled prompt waiting at
+          // this safe post-stream boundary into the current run's visible scope
+          // instead of closing the turn (LOCK-001/LOCK-002). The current
+          // handle.process has fully drained (tokens + inline tool calls) by the
+          // time we get here, so nothing is cut off; the adopted prompts appear
+          // in the next LLM input and the loop continues in the same run.
+          KiloSessionPromptQueue.adopt(sessionID)
           // kilocode_change end
           // kilocode_change start - guard against providers that end the stream
           // without a terminal stop_reason (e.g. an Anthropic-style message_delta

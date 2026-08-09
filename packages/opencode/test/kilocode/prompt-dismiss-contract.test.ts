@@ -45,11 +45,18 @@ describe("prompt.ts Kilo-specific invariants", () => {
     expect(content).not.toMatch(/KiloSessionPromptQueue\.reserve/)
   })
 
-  test("runLoop breaks out between LLM steps when a newer prompt was enqueued", () => {
+  test("runLoop adopts waiting prompts at the post-stream boundary and continues", () => {
     const content = fs.readFileSync(PROMPT_FILE, "utf-8")
-    // hasFollowup has to be checked inside runLoop so the current handle.process
-    // finishes naturally (tokens + inline tool calls) and the next LLM step is
-    // skipped when a follow-up is already queued.
-    expect(content).toContain("KiloSessionPromptQueue.hasFollowup(sessionID)")
+    // adopt() has to be invoked inside runLoop so the current handle.process
+    // finishes naturally (tokens + inline tool calls) before the queued prompts
+    // are folded into the run. The queue-driven path must never close the turn
+    // as interrupted (LOCK-001): the adopt block may not pair adopt with an
+    // interrupted close reason.
+    expect(content).toContain("KiloSessionPromptQueue.adopt(sessionID)")
+    const block = content.match(
+      /kilocode_change start[^\n]*adopt every non-cancelled prompt[\s\S]*?KiloSessionPromptQueue\.adopt\(sessionID\)[\s\S]*?\/\/ kilocode_change end/,
+    )
+    expect(block).not.toBeNull()
+    expect(block?.[0]).not.toContain('closeReasons.set(sessionID, "interrupted")')
   })
 })

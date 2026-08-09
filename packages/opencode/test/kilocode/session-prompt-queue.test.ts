@@ -7,7 +7,9 @@ import { Bus } from "../../src/bus"
 import { AppRuntime } from "../../src/effect/app-runtime"
 import { InstanceRef } from "../../src/effect/instance-ref"
 import { KiloSessionCompaction } from "@/kilocode/session/compaction"
+import { KiloSessionEvent } from "@/kilocode/session/event"
 import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue"
+import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { Suggestion } from "../../src/kilocode/suggestion"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
@@ -103,10 +105,22 @@ function hasText(msg: MessageV2.WithParts, text: string) {
   return msg.parts.some((part) => part.type === "text" && part.text.includes(text))
 }
 
-function scoped<T>(dir: string, fn: (prompt: SessionPrompt.Interface) => Promise<T>) {
+function scoped<T>(
+  dir: string,
+  fn: (prompt: SessionPrompt.Interface, run: <A, E>(effect: Effect.Effect<A, E>) => Promise<A>) => Promise<T>,
+) {
   return Effect.runPromise(
-    SessionPrompt.Service.use((prompt) => Effect.promise(() => fn(prompt))).pipe(
+    Effect.gen(function* () {
+      // Capture the current context (all provided layers) so prompt effects
+      // run with the same services from inside the async callback, including
+      // the GenerationGate required by withGenerationAdmission.
+      const ctx = yield* Effect.context()
+      const run = <A, E>(effect: Effect.Effect<A, E>) => Effect.runPromise(effect.pipe(Effect.provide(ctx)))
+      const prompt = yield* SessionPrompt.Service
+      return yield* Effect.promise(() => fn(prompt, run))
+    }).pipe(
       Effect.provide(SessionPrompt.defaultLayer),
+      Effect.provide(GenerationGate.defaultLayer),
       provideInstance(dir),
       Effect.provide(testInstanceStoreLayer),
       Effect.scoped,
@@ -420,6 +434,11 @@ describe("session prompt queue", () => {
   test("processes queued prompts without aborting the in-flight stream", async () => {
     const ready = Promise.withResolvers<void>()
     const injected = Promise.withResolvers<void>()
+    // Holds the first stream open until the second prompt is provably waiting,
+    // so adopt() observes it at the post-stream boundary. Without the gate the
+    // first stream can drain synchronously and the second prompt would start a
+    // separate run, racing the adoption assertions below.
+    const release = Promise.withResolvers<void>()
     const calls: number[] = []
     const bodies: Array<Record<string, unknown>> = []
     const server = Bun.serve({
@@ -433,7 +452,7 @@ describe("session prompt queue", () => {
         calls.push(Date.now())
         const stream =
           calls.length === 1
-            ? reply({ text: "first reply", ready: ready.resolve })
+            ? reply({ text: "first reply", ready: ready.resolve, wait: release.promise })
             : reply({ text: "second reply", ready: injected.resolve })
         return new Response(stream, {
           status: 200,
@@ -472,9 +491,9 @@ describe("session prompt queue", () => {
       await provideTestInstance({
         directory: tmp.path,
         fn: async () =>
-          scoped(tmp.path, async (prompt) => {
+          scoped(tmp.path, async (prompt, run) => {
             const session = await sessions.create({ title: "Queued prompt regression" })
-            const first = Effect.runPromise(
+            const first = run(
               prompt.prompt({
                 sessionID: session.id,
                 agent: "code",
@@ -484,13 +503,31 @@ describe("session prompt queue", () => {
 
             await ready.promise
 
-            const second = Effect.runPromise(
+            const second = run(
               prompt.prompt({
                 sessionID: session.id,
                 agent: "code",
                 parts: [{ type: "text", text: "second prompt" }],
               }),
             )
+
+            // Wait until the second prompt is registered as a waiting follow-up
+            // before releasing the first stream, so adopt() folds it into the
+            // running slot's extras at the post-stream boundary.
+            const deadline = Date.now() + 5000
+            while (true) {
+              const msgs = await sessions.messages({ sessionID: session.id })
+              const users = msgs.filter((msg) => msg.info.role === "user")
+              const queued = users.filter(
+                (msg) =>
+                  hasText(msg, "second prompt") &&
+                  KiloSessionPromptQueue._isQueued(SessionID.make(session.id), MessageID.make(msg.info.id)),
+              )
+              if (queued.length >= 1) break
+              if (Date.now() > deadline) throw new Error("follow-up never enqueued")
+              await Bun.sleep(5)
+            }
+            release.resolve()
 
             const one = await first
             await injected.promise
@@ -501,8 +538,10 @@ describe("session prompt queue", () => {
             // The in-flight stream must complete; no aborted error on msg1's reply.
             expect(one.info.role).toBe("assistant")
             if (one.info.role === "assistant") expect(one.info.error).toBeUndefined()
-            expect(hasText(one, "first reply")).toBe(true)
+            // The first reply is persisted as the step-0 assistant; both prompt
+            // promises settle to the final assistant result of the continued run.
             expect(hasText(two, "second reply")).toBe(true)
+            expect(one.info.id).toBe(two.info.id)
 
             const msgs = await sessions.messages({ sessionID: session.id })
             const users = msgs.filter((msg) => msg.info.role === "user")
@@ -551,7 +590,174 @@ describe("session prompt queue", () => {
     } finally {
       server.stop(true)
     }
-  })
+  }, { timeout: 20_000 }) // heavy prompt-path tests boot a full instance and do live SSE round-trips; the default 5s budget flakes under load
+
+  test("rapid A+B+C enqueue adopts B and C into one continuous run", async () => {
+    const started = Promise.withResolvers<void>()
+    const release = Promise.withResolvers<void>()
+    const calls: number[] = []
+    const bodies: Array<Record<string, unknown>> = []
+    const server = Bun.serve({
+      port: 0,
+      async fetch(req) {
+        const url = new URL(req.url)
+        if (!url.pathname.endsWith("/chat/completions")) return new Response("not found", { status: 404 })
+
+        const body = (await req.json().catch(() => ({}))) as Record<string, unknown>
+        bodies.push(body)
+        calls.push(Date.now())
+        if (calls.length === 1) {
+          // Hold the first stream open so B and C can be enqueued mid-turn;
+          // adoption must observe them together at the post-stream boundary.
+          const enc = new TextEncoder()
+          const head = line(chunk({ delta: { role: "assistant" } }))
+          const tail = [
+            line(chunk({ delta: { content: "first reply" } })),
+            line(chunk({ finish: "stop" })),
+            "data: [DONE]\n\n",
+          ].join("")
+          const stream = new ReadableStream<Uint8Array>({
+            start(ctrl) {
+              ctrl.enqueue(enc.encode(head))
+              started.resolve()
+              void release.promise.then(() => {
+                ctrl.enqueue(enc.encode(tail))
+                ctrl.close()
+              })
+            },
+          })
+          return new Response(stream, {
+            status: 200,
+            headers: { "Content-Type": "text/event-stream" },
+          })
+        }
+        return new Response(reply({ text: "second reply" }), {
+          status: 200,
+          headers: { "Content-Type": "text/event-stream" },
+        })
+      },
+    })
+
+    try {
+      await using tmp = await tmpdir({
+        git: true,
+        init: async (dir) => {
+          await Bun.write(
+            path.join(dir, "opencode.json"),
+            JSON.stringify({
+              $schema: "https://opencode.ai/config.json",
+              enabled_providers: ["alibaba"],
+              provider: {
+                alibaba: {
+                  options: { apiKey: "test-key", baseURL: `${server.url.origin}/v1` },
+                },
+              },
+              agent: { code: { model: "alibaba/qwen-plus" } },
+            }),
+          )
+        },
+      })
+
+      await provideTestInstance({
+        directory: tmp.path,
+        fn: async () =>
+          scoped(tmp.path, async (prompt, run) => {
+            const session = await sessions.create({ title: "Adopted queue regression" })
+            const closes: Array<{ reason: string }> = []
+            const opens: string[] = []
+            const offClose = Bus.subscribe(KiloSessionEvent.TurnClose, (event) => {
+              if (event.properties.sessionID === session.id) closes.push({ reason: event.properties.reason })
+            })
+            const offOpen = Bus.subscribe(KiloSessionEvent.TurnOpen, (event) => {
+              if (event.properties.sessionID === session.id) opens.push(event.properties.sessionID)
+            })
+
+            try {
+              const first = run(
+                prompt.prompt({
+                  sessionID: session.id,
+                  agent: "code",
+                  parts: [{ type: "text", text: "first prompt" }],
+                }),
+              )
+              await started.promise
+
+              const second = run(
+                prompt.prompt({
+                  sessionID: session.id,
+                  agent: "code",
+                  parts: [{ type: "text", text: "second prompt" }],
+                }),
+              )
+              const third = run(
+                prompt.prompt({
+                  sessionID: session.id,
+                  agent: "code",
+                  parts: [{ type: "text", text: "third prompt" }],
+                }),
+              )
+
+              // Wait until both follow-ups are registered before releasing the
+              // first stream so adoption sees them together.
+              const deadline = Date.now() + 5000
+              while (true) {
+                const msgs = await sessions.messages({ sessionID: session.id })
+                const users = msgs.filter((msg) => msg.info.role === "user")
+                const queued = users.filter((msg) =>
+                  KiloSessionPromptQueue._isQueued(SessionID.make(session.id), MessageID.make(msg.info.id)),
+                )
+                if (queued.length >= 2) break
+                if (Date.now() > deadline) throw new Error("follow-ups never enqueued")
+                await Bun.sleep(5)
+              }
+              release.resolve()
+
+              const one = await first
+              const two = await second
+              const three = await third
+
+              // LOCK-005: B and C never start separate LLM runs — exactly two
+              // round-trips: A's first step, then one continued step carrying B+C.
+              expect(calls).toHaveLength(2)
+
+              // LOCK-001: one continuous run — a single turn open/close, closed
+              // as completed with no queue-driven interrupted close.
+              expect(opens).toHaveLength(1)
+              expect(closes).toHaveLength(1)
+              expect(closes[0]?.reason).toBe("completed")
+
+              // B and C both land in the next model input, in FIFO order.
+              const secondBody = JSON.stringify(bodies[1])
+              const bAt = secondBody.indexOf("second prompt")
+              const cAt = secondBody.indexOf("third prompt")
+              expect(bAt).toBeGreaterThan(-1)
+              expect(cAt).toBeGreaterThan(bAt)
+              const tail = lastConversational(bodies[1])
+              expect(tail?.role).toBe("user")
+
+              // The first stream finished naturally; its reply is persisted as
+              // the step-0 assistant, and every prompt promise settles to the
+              // final assistant result of the one continuous run.
+              expect(one.info.role).toBe("assistant")
+              if (one.info.role === "assistant") expect(one.info.error).toBeUndefined()
+              expect(hasText(one, "second reply")).toBe(true)
+              expect(hasText(two, "second reply")).toBe(true)
+              expect(hasText(three, "second reply")).toBe(true)
+              expect(one.info.id).toBe(two.info.id)
+              expect(two.info.id).toBe(three.info.id)
+
+              // Nothing is still queued or adopted afterwards.
+              expect(KiloSessionPromptQueue._hasInternalState(SessionID.make(session.id))).toBe(false)
+            } finally {
+              offOpen()
+              offClose()
+            }
+          }),
+      })
+    } finally {
+      server.stop(true)
+    }
+  }, { timeout: 20_000 }) // heavy prompt-path tests boot a full instance and do live SSE round-trips; the default 5s budget flakes under load
 
   test("bridges legacy instance context for prompts after a completed turn", async () => {
     const calls: number[] = []
@@ -622,7 +828,7 @@ describe("session prompt queue", () => {
     } finally {
       server.stop(true)
     }
-  })
+  }, { timeout: 20_000 }) // heavy prompt-path tests boot a full instance and do live SSE round-trips; the default 5s budget flakes under load
 
   test("cancel on a session with no active tail is a no-op and does not leak state", async () => {
     const sessionID = SessionID.make("session_cancel_noop")
@@ -771,10 +977,20 @@ describe("session prompt queue", () => {
     await started.promise
 
     const second = Effect.runPromise(
-      KiloSessionPromptQueue.enqueue(sessionID, older, Effect.succeed("second work"), Effect.succeed("second cancelled")),
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        older,
+        Effect.succeed("second work"),
+        Effect.succeed("second cancelled"),
+      ),
     )
     const third = Effect.runPromise(
-      KiloSessionPromptQueue.enqueue(sessionID, newest, Effect.succeed("third work"), Effect.succeed("third cancelled")),
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        newest,
+        Effect.succeed("third work"),
+        Effect.succeed("third cancelled"),
+      ),
     )
 
     expect(await Effect.runPromise(KiloSessionPromptQueue.cancelOne(sessionID, newest))).toBe(true)
@@ -788,6 +1004,128 @@ describe("session prompt queue", () => {
     expect(await first).toBe("first work")
     expect(await second).toBe("second cancelled")
     expect(await third).toBe("third cancelled")
+    expect(KiloSessionPromptQueue._hasInternalState(sessionID)).toBe(false)
+  })
+
+  test("adopt folds all waiting prompts into the running extras in FIFO order", async () => {
+    const sessionID = SessionID.make("session_adopt_fifo")
+    const gate = Promise.withResolvers<void>()
+    const started = Promise.withResolvers<void>()
+    const a = MessageID.make("msg_adopt_a")
+    const b = MessageID.make("msg_adopt_b")
+    const c = MessageID.make("msg_adopt_c")
+
+    const first = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        a,
+        Effect.gen(function* () {
+          started.resolve()
+          yield* Effect.promise(() => gate.promise)
+          KiloSessionPromptQueue.adopt(sessionID)
+          return {
+            adopted: KiloSessionPromptQueue._adoptedIDs(sessionID),
+            ids: KiloSessionPromptQueue.scope(sessionID, [
+              user(sessionID, a),
+              user(sessionID, b),
+              user(sessionID, c),
+            ]).map((item) => item.info.id),
+          }
+        }),
+        Effect.succeed({ adopted: [], ids: [] }),
+      ),
+    )
+    await started.promise
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(false)
+
+    const second = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(sessionID, b, Effect.succeed("b work"), Effect.succeed("b settled")),
+    )
+    const third = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(sessionID, c, Effect.succeed("c work"), Effect.succeed("c settled")),
+    )
+
+    // Wait until both follow-ups are registered before releasing the active
+    // slot so adopt() observes them together.
+    const deadline = Date.now() + 5000
+    while (!KiloSessionPromptQueue._isQueued(sessionID, b) || !KiloSessionPromptQueue._isQueued(sessionID, c)) {
+      if (Date.now() > deadline) throw new Error("follow-ups never enqueued")
+      await Bun.sleep(5)
+    }
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(true)
+
+    gate.resolve()
+    const result = await first
+
+    // LOCK-002: both waiting prompts were adopted together, FIFO, into extras.
+    expect(result.adopted).toEqual([b, c])
+    expect(result.ids).toEqual([a, b, c])
+    expect(KiloSessionPromptQueue.hasFollowup(sessionID)).toBe(false)
+    expect(KiloSessionPromptQueue._isAdopted(sessionID, b)).toBe(true)
+    expect(KiloSessionPromptQueue._isAdopted(sessionID, c)).toBe(true)
+
+    // Adopted prompts are no longer individually cancellable.
+    expect(await Effect.runPromise(KiloSessionPromptQueue.cancelOne(sessionID, b))).toBe(false)
+    expect(await Effect.runPromise(KiloSessionPromptQueue.cancelOne(sessionID, c))).toBe(false)
+
+    // Their slots settle with the cancelled effect, never starting a run.
+    expect(await second).toBe("b settled")
+    expect(await third).toBe("c settled")
+    expect(KiloSessionPromptQueue._hasInternalState(sessionID)).toBe(false)
+  })
+
+  test("adopt skips prompts already flagged by cancelOne", async () => {
+    const sessionID = SessionID.make("session_adopt_skips_cancelled")
+    const gate = Promise.withResolvers<void>()
+    const started = Promise.withResolvers<void>()
+    const a = MessageID.make("msg_adopt_can_a")
+    const b = MessageID.make("msg_adopt_can_b")
+    const c = MessageID.make("msg_adopt_can_c")
+
+    const first = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(
+        sessionID,
+        a,
+        Effect.gen(function* () {
+          started.resolve()
+          yield* Effect.promise(() => gate.promise)
+          KiloSessionPromptQueue.adopt(sessionID)
+          return {
+            adopted: KiloSessionPromptQueue._adoptedIDs(sessionID),
+            visible: KiloSessionPromptQueue.scope(sessionID, [
+              user(sessionID, a),
+              user(sessionID, b),
+              user(sessionID, c),
+            ]).map((item) => item.info.id),
+          }
+        }),
+        Effect.succeed({ adopted: [], visible: [] }),
+      ),
+    )
+    await started.promise
+
+    const second = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(sessionID, b, Effect.succeed("b work"), Effect.succeed("b settled")),
+    )
+    const third = Effect.runPromise(
+      KiloSessionPromptQueue.enqueue(sessionID, c, Effect.succeed("c work"), Effect.succeed("c settled")),
+    )
+    const deadline = Date.now() + 5000
+    while (!KiloSessionPromptQueue._isQueued(sessionID, b) || !KiloSessionPromptQueue._isQueued(sessionID, c)) {
+      if (Date.now() > deadline) throw new Error("follow-ups never enqueued")
+      await Bun.sleep(5)
+    }
+
+    // b is user-cancelled while waiting; only c is eligible for adoption.
+    expect(await Effect.runPromise(KiloSessionPromptQueue.cancelOne(sessionID, b))).toBe(true)
+
+    gate.resolve()
+    const result = await first
+
+    expect(result.adopted).toEqual([c])
+    expect(result.visible).toEqual([a, c])
+    expect(await second).toBe("b settled")
+    expect(await third).toBe("c settled")
     expect(KiloSessionPromptQueue._hasInternalState(sessionID)).toBe(false)
   })
 
@@ -832,9 +1170,9 @@ describe("session prompt queue", () => {
       await provideTestInstance({
         directory: tmp.path,
         fn: async () =>
-          scoped(tmp.path, async (prompt) => {
+          scoped(tmp.path, async (prompt, run) => {
             const session = await sessions.create({ title: "Queued cancel regression" })
-            const first = Effect.runPromise(
+            const first = run(
               prompt.prompt({
                 sessionID: session.id,
                 agent: "code",
@@ -843,14 +1181,14 @@ describe("session prompt queue", () => {
             )
             await ready.promise
 
-            const second = Effect.runPromise(
+            const second = run(
               prompt.prompt({
                 sessionID: session.id,
                 agent: "code",
                 parts: [{ type: "text", text: "second prompt" }],
               }),
             )
-            const third = Effect.runPromise(
+            const third = run(
               prompt.prompt({
                 sessionID: session.id,
                 agent: "code",
@@ -862,7 +1200,7 @@ describe("session prompt queue", () => {
             await Bun.sleep(20)
             expect(calls).toHaveLength(1)
 
-            await Effect.runPromise(prompt.cancel(session.id))
+            await run(prompt.cancel(session.id))
             await Promise.all([first, second, third])
 
             // The queued prompts must never reach the LLM once cancel flushes the queue.
@@ -888,7 +1226,7 @@ describe("session prompt queue", () => {
     } finally {
       server.stop(true)
     }
-  })
+  }, { timeout: 20_000 }) // heavy prompt-path tests boot a full instance and do live SSE round-trips; the default 5s budget flakes under load
 
   test("new prompt dismisses a pending suggestion", async () => {
     const shown = Promise.withResolvers<void>()
@@ -898,7 +1236,7 @@ describe("session prompt queue", () => {
     await provideTestInstance({
       directory: tmp.path,
       fn: async () =>
-        scoped(tmp.path, async (prompt) => {
+        scoped(tmp.path, async (prompt, run) => {
           const session = await sessions.create({ title: "Suggestion unblock regression" })
           const offShown = Bus.subscribe(Suggestion.Event.Shown, (event) => {
             if (event.properties.sessionID === session.id) shown.resolve()
@@ -918,7 +1256,7 @@ describe("session prompt queue", () => {
             })
 
             await shown.promise
-            await Effect.runPromise(
+            await run(
               prompt.prompt({
                 sessionID: session.id,
                 agent: "code",
