@@ -74,8 +74,8 @@ export const TranscriptRowView: Component<TranscriptRowViewProps> = (props) => {
                     }
                   : undefined
               }
-              onCancel={
-                row().queued ? () => session.cancelQueued(row().message.sessionID, row().message.id) : undefined
+              onPullBack={
+                row().queued ? () => session.pullBackQueued(row().message.sessionID, row().message.id) : undefined
               }
             />
           </div>

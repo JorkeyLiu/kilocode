@@ -79,7 +79,9 @@ import { getVariant, legacyVariantKey, resolveSessionVariant, sessionVariantKeys
 import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "../../../src/shared/provider-model"
 import { reviewMetadata, type ReviewMessageData } from "../../../src/shared/review-comments"
 import { visibleMessages as filterVisibleMessages } from "./session-queue"
+import { createPendingPullBacks } from "./session-pull-back"
 import { clearSessionDraftDiscarded, deleteDraftsForSession } from "../utils/draft-store"
+import { capturePullBack } from "../utils/pull-back"
 import { createAbortState } from "./abort-state"
 import { clearIfOn, createCloudPrune } from "./session-cloud-prune"
 import { isSameSessionTree } from "./model-usage"
@@ -271,7 +273,7 @@ interface SessionContextValue {
   // Actions
   revertSession: (messageID: string, partID?: string) => void
   unrevertSession: () => void
-  cancelQueued: (sessionID: string, messageID: string) => void
+  pullBackQueued: (sessionID: string, messageID: string) => void
   sendMessage: (
     text: string,
     providerID?: string,
@@ -2089,6 +2091,16 @@ export const SessionProvider: ParentComponent = (props) => {
   // Per LOCK-002/LOCK-004: recompute recovery from the authoritative
   // visible message array after any message removal.
   function handleMessageRemoved(sessionID: string, messageID: string) {
+    // A pending pull-back restores content before the parts are cleaned up
+    // below; an empty capture is dropped, never wiping the composer.
+    const sid = pullBacks.pending.get(messageID)
+    if (sid !== undefined) {
+      pullBacks.pending.delete(messageID)
+      const { text, images, paths, review } = capturePullBack(getParts(messageID))
+      if (text || images.length > 0 || paths.length > 0 || review.length > 0) {
+        window.postMessage({ type: "setChatBoxMessage", text, paths, images, review, focus: true }, "*")
+      }
+    }
     setStore("messages", sessionID, (msgs = []) => msgs.filter((m) => m.id !== messageID))
     dropMessageTools(sessionID, messageID)
     clearHiddenErrors([messageID])
@@ -2845,11 +2857,17 @@ export const SessionProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "unrevertSession", sessionID: id })
   }
 
-  // Cancel a single not-yet-started queued message. The backend removes the
-  // message on success and emits message.removed, which drops it from state and
-  // updates the queued shimmer/counter. Only the queued slot is affected; the
-  // running turn is never interrupted.
-  function cancelQueued(sessionID: string, messageID: string) {
+  // Pending pull-back requests (messageID → sessionID): restore fires only on
+  // backend-confirmed removal; no-op cancels are pruned by the helper.
+  const pullBacks = createPendingPullBacks((sid) => statusMap[sid] ?? idle, (sid) => store.messages[sid], getParts)
+
+  // Pull a queued message back to the editor: register a pending pull-back and
+  // post the existing cancelQueued request. Nothing is captured or restored at
+  // click time — the restore fires only on backend-confirmed removal, so a
+  // no-op cancel or an empty capture never touches the composer.
+  function pullBackQueued(sessionID: string, messageID: string) {
+    pullBacks.pending.set(messageID, sessionID)
+    pullBacks.bump()
     vscode.postMessage({ type: "cancelQueued", sessionID, messageID })
   }
 
@@ -3042,7 +3060,7 @@ export const SessionProvider: ParentComponent = (props) => {
     summary,
     revertSession,
     unrevertSession,
-    cancelQueued,
+    pullBackQueued,
     sendMessage,
     sendCommand,
     abort,

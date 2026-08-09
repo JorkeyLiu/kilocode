@@ -160,7 +160,7 @@ export const dict = {
   "ui.message.copyMessage": "คัดลอกข้อความ",
   "ui.message.forkMessage": "แตกแขนงไปยังเซสชันใหม่",
   "ui.message.revertMessage": "รีเซ็ตไปยังจุดนี้",
-  "ui.message.cancelQueued": "ยกเลิกข้อความในคิว", // kilocode_change
+  "ui.message.pullBackQueued": "ดึงกลับมาแก้ไข", // kilocode_change
   "ui.message.copyResponse": "คัดลอกคำตอบ",
   "ui.message.copied": "คัดลอกแล้ว!",
   "ui.message.revert": "Revert to here",

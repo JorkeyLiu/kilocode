@@ -174,7 +174,7 @@ export const dict: Record<string, string> = {
   "ui.message.copied": "Copiato",
   "ui.message.forkMessage": "Forka in una nuova sessione",
   "ui.message.revertMessage": "Ripristina a qui",
-  "ui.message.cancelQueued": "Annulla messaggio in coda",
+  "ui.message.pullBackQueued": "Riporta per modificare",
   "ui.message.revert": "Ripristina a qui",
   "ui.message.interrupted": "Interrotto",
   "ui.message.queued": "In coda",

@@ -159,7 +159,7 @@ export const dict = {
   "ui.message.copyMessage": "메시지 복사",
   "ui.message.forkMessage": "새 세션으로 분기",
   "ui.message.revertMessage": "이 시점으로 초기화",
-  "ui.message.cancelQueued": "대기 중인 메시지 취소", // kilocode_change
+  "ui.message.pullBackQueued": "편집을 위해 되돌리기", // kilocode_change
   "ui.message.copyResponse": "응답 복사",
   "ui.message.copied": "복사됨!",
   "ui.message.revert": "Revert to here",

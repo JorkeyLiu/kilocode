@@ -162,7 +162,7 @@ export const dict: Record<Keys, string> = {
   "ui.message.copyMessage": "Kopier melding",
   "ui.message.forkMessage": "Forgren til ny sesjon",
   "ui.message.revertMessage": "Tilbakestill til dette punktet",
-  "ui.message.cancelQueued": "Avbryt melding i kø", // kilocode_change
+  "ui.message.pullBackQueued": "Trekk tilbake for redigering", // kilocode_change
   "ui.message.copyResponse": "Kopier svar",
   "ui.message.copied": "Kopiert!",
   "ui.message.revert": "Revert to here",

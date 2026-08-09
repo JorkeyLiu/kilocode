@@ -745,7 +745,7 @@ export function UserMessageDisplay(props: {
   header?: JSX.Element
   onFork?: () => void
   onRevert?: () => void
-  onCancel?: () => void
+  onPullBack?: () => void
 }) {
   const data = useData()
   const dialog = useDialog()
@@ -889,18 +889,18 @@ export function UserMessageDisplay(props: {
                   </Show>
                 </span>
               </Show>
-              <Show when={props.queued === true && props.onCancel}>
-                <Tooltip value={i18n.t("ui.message.cancelQueued")} placement="right" gutter={4}>
+              <Show when={props.queued === true && props.onPullBack}>
+                <Tooltip value={i18n.t("ui.message.pullBackQueued")} placement="right" gutter={4}>
                   <IconButton
-                    icon="close"
+                    icon="arrow-left"
                     size="normal"
                     variant="ghost"
                     onMouseDown={(e) => e.preventDefault()}
                     onClick={(event) => {
                       event.stopPropagation()
-                      props.onCancel?.()
+                      props.onPullBack?.()
                     }}
-                    aria-label={i18n.t("ui.message.cancelQueued")}
+                    aria-label={i18n.t("ui.message.pullBackQueued")}
                   />
                 </Tooltip>
               </Show>

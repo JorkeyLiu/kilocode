@@ -5,6 +5,7 @@ import type { SessionMode } from "../../context/worktree-mode"
 import type { MarketplaceItem, MarketplaceInstalledMetadata, MarketplaceRelevanceMetadata } from "../marketplace"
 import type { ConnectionState, ServerInfo, SessionStatus } from "./connection"
 import type { FileAttachment, Part } from "./parts"
+import type { ImageAttachment } from "../../hooks/useImageAttachments"
 import type {
   CloudSessionInfo,
   Message,
@@ -280,6 +281,24 @@ export interface SetChatBoxMessage {
    * mention from a truncated prefix when the real path contains a space.
    */
   paths?: string[]
+  /**
+   * Image attachments to restore into the composer (data-URL FileParts
+   * converted to ImageAttachment), e.g. when pulling a queued message back to
+   * the editor. When present, PromptInput replaces its current image set.
+   */
+  images?: ImageAttachment[]
+  /**
+   * Review comments to restore into the composer, e.g. when pulling a queued
+   * message back to the editor. When present, PromptInput replaces its current
+   * review comment set.
+   */
+  review?: ReviewComment[]
+  /**
+   * When true, PromptInput focuses the textarea after restoring the content
+   * (e.g. pull-back-to-editor). The revert path posts without the flag and
+   * keeps its current non-focus behavior.
+   */
+  focus?: boolean
 }
 
 export interface AppendChatBoxMessage {

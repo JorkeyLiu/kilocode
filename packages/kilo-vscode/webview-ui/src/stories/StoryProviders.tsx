@@ -239,7 +239,7 @@ export function mockSessionValue(overrides?: {
     summary: () => undefined,
     revertSession: noop,
     unrevertSession: noop,
-    cancelQueued: noop,
+    pullBackQueued: noop,
     favoriteModels: () => [],
     toggleFavorite: noop,
     variantList: () => [],

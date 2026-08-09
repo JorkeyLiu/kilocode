@@ -11,7 +11,7 @@ interface VscodeUserMessageProps {
   queued?: boolean
   onFork?: () => void
   onRevert?: () => void
-  onCancel?: () => void
+  onPullBack?: () => void
 }
 
 export const VscodeUserMessage: Component<VscodeUserMessageProps> = (props) => {
@@ -38,7 +38,7 @@ export const VscodeUserMessage: Component<VscodeUserMessageProps> = (props) => {
       queued={props.queued}
       onFork={props.onFork}
       onRevert={props.onRevert}
-      onCancel={props.onCancel}
+      onPullBack={props.onPullBack}
     />
   )
 }

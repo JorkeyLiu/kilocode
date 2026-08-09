@@ -630,14 +630,26 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (message.type === "setChatBoxMessage") {
       setText(message.text)
       // Prefer the exact attachment paths when available (e.g. reverting to a
-      // message with @mentions) — seedFromText re-derives candidate mentions
-      // from raw text via regex, which truncates at the first space in a
-      // filename and cannot be relied on to reconstruct spaced paths correctly.
+      // message with @mentions, or pulling a queued message back to the editor)
+      // — seedFromText re-derives candidate mentions from raw text via regex,
+      // which truncates at the first space in a filename and cannot be relied
+      // on to reconstruct spaced paths correctly.
       if (message.paths?.length) mention.seedFromParts(message.paths, message.text)
       else mention.seedFromText(message.text)
+      // Pull-back-to-editor restores image attachments and review comments.
+      // These replace the current composer content — this is an explicit user
+      // action, so no empty-composer guard is applied (unlike restoreFailed).
+      // Only when present: revertSession keeps posting text+paths only, and must
+      // not clear images/review the user is composing.
+      if (message.images) imageAttach.replace(message.images)
+      if (message.review) replaceReviewComments(message.review)
       if (textareaRef) {
         textareaRef.value = message.text
         adjustHeight()
+        // Pull-back-to-editor requests focus so the user can immediately
+        // re-edit and resend. Revert posts without the flag and keeps its
+        // current non-focus behavior.
+        if (message.focus) textareaRef.focus()
       }
     }
 
