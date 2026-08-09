@@ -17,6 +17,7 @@ import { getScrollAcceleration } from "../../util/scroll"
 import { useTuiConfig } from "../../context/tui-config"
 // kilocode_change start
 import { ConfigProtection } from "@/kilocode/permission/config-paths"
+import { ProtectedFiles } from "@/kilocode/permission/protected-files"
 import { splitDiffHunks } from "@/kilocode/tui/diff"
 import { normalizeUrls } from "@/kilocode/util/url"
 import { MemoryPermissionRegistry } from "@/kilocode/cli/cmd/tui/routes/session/memory-permission"
@@ -137,6 +138,49 @@ function TextBody(props: { title: string; description?: string; icon?: string })
   )
 }
 
+// kilocode_change start - scoped explanation for persistent protected-file approvals.
+// The confirmation enumerates exactly the literal protected paths the backend will
+// persist for "always" (ProtectedFiles.requestPathForms), so a multi-file
+// edit/apply_patch names every path it saves (LOCK-002) and glob-only requests
+// state that no exact path approval is saved.
+function ProtectedAlwaysBody(props: { request: PermissionRequest; agent: string }) {
+  const { theme } = useTheme()
+  const verb = props.request.permission === "edit" ? "edit" : "access"
+  const paths = ProtectedFiles.requestPathForms(props.request)
+  if (paths.length === 0) {
+    return (
+      <TextBody
+        title={`Allow ${props.agent} to ${verb} this request without asking again. Glob or directory patterns cannot be saved as exact path approvals.`}
+      />
+    )
+  }
+  if (paths.length === 1) {
+    return (
+      <TextBody
+        title={`Allow ${props.agent} to ${verb} ${paths[0]} without asking again. This approval is saved for ${props.agent} and this exact path only.`}
+      />
+    )
+  }
+  return (
+    <box paddingLeft={1} gap={1}>
+      <text fg={theme.textMuted}>
+        {`Allow ${props.agent} to ${verb} the following protected paths without asking again. Each approval is saved for ${props.agent} and that exact path only.`}
+      </text>
+      <box>
+        <For each={paths}>
+          {(p) => (
+            <text fg={theme.text}>
+              {"- "}
+              {p}
+            </text>
+          )}
+        </For>
+      </box>
+    </box>
+  )
+}
+// kilocode_change end
+
 export function PermissionPrompt(props: { request: PermissionRequest; directory?: string }) {
   const sdk = useSDK()
   const project = useProject()
@@ -160,6 +204,18 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
     return {}
   })
 
+  // kilocode_change start - protected config approvals persist globally, scoped
+  // to the current agent + exact protected paths; expose that scope in copy and
+  // re-offer "Allow always" for these requests.
+  const protectedRequest = createMemo(() =>
+    Boolean(props.request.metadata?.[ConfigProtection.CONFIG_PROTECTED_KEY]),
+  )
+  const agent = createMemo(() => {
+    const value = props.request.metadata?.[ConfigProtection.AGENT_KEY]
+    return typeof value === "string" && value ? value : "the current agent"
+  })
+  // kilocode_change end
+
   const { theme } = useTheme()
 
   return (
@@ -168,28 +224,37 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
         <Prompt
           title="Always allow"
           body={
-            <Switch>
-              <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
-                {/* kilocode_change */}
-                <TextBody title={"This will allow " + props.request.permission + " permanently."} />
-              </Match>
-              <Match when={true}>
-                <box paddingLeft={1} gap={1}>
-                  {/* kilocode_change */}
-                  <text fg={theme.textMuted}>This will allow the following patterns permanently</text>
-                  <box>
-                    <For each={props.request.always}>
-                      {(pattern) => (
-                        <text fg={theme.text}>
-                          {"- "}
-                          {pattern}
-                        </text>
-                      )}
-                    </For>
-                  </box>
-                </box>
-              </Match>
-            </Switch>
+            // kilocode_change start - protected requests get agent+path scoped copy
+            <Show
+              when={protectedRequest()}
+              fallback={
+                <Switch>
+                  <Match when={props.request.always.length === 1 && props.request.always[0] === "*"}>
+                    {/* kilocode_change */}
+                    <TextBody title={"This will allow " + props.request.permission + " permanently."} />
+                  </Match>
+                  <Match when={true}>
+                    <box paddingLeft={1} gap={1}>
+                      {/* kilocode_change */}
+                      <text fg={theme.textMuted}>This will allow the following patterns permanently</text>
+                      <box>
+                        <For each={props.request.always}>
+                          {(pattern) => (
+                            <text fg={theme.text}>
+                              {"- "}
+                              {pattern}
+                            </text>
+                          )}
+                        </For>
+                      </box>
+                    </box>
+                  </Match>
+                </Switch>
+              }
+            >
+              <ProtectedAlwaysBody request={props.request} agent={agent()} />
+            </Show>
+            // kilocode_change end
           }
           options={{ confirm: "Confirm", cancel: "Cancel" }}
           escapeKey="cancel"
@@ -441,13 +506,21 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 </text>
                 <text fg={theme.text}>{current.title}</text>
               </box>
-              {/* kilocode_change start - explain protected Kilo configuration access */}
-              <Show when={props.request.metadata?.[ConfigProtection.CONFIG_PROTECTED_KEY]}>
+              {/* kilocode_change start - explain protected Kilo configuration access with agent/path scope */}
+              <Show when={protectedRequest()}>
                 <box paddingLeft={4} flexShrink={0}>
                   <text fg={theme.textMuted}>
                     {props.request.permission === "edit"
-                      ? "Config file edits always require approval"
-                      : "Kilo configuration access always requires approval"}
+                      ? `Protected config edit: only ${agent()} can allow ${
+                          ProtectedFiles.requestPathForms(props.request).length > 1
+                            ? "these exact paths"
+                            : "this exact path"
+                        }`
+                      : `Protected Kilo configuration: only ${agent()} can allow ${
+                          ProtectedFiles.requestPathForms(props.request).length > 1
+                            ? "these exact paths"
+                            : "this exact path"
+                        }`}
                   </text>
                 </box>
               </Show>
@@ -455,10 +528,13 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
             </box>
           )
 
-          // kilocode_change start - hide "Always allow" for protected Kilo configuration access
-          const options: Record<string, string> = props.request.metadata?.[ConfigProtection.DISABLE_ALWAYS_KEY]
-            ? { once: "Allow once", reject: "Reject" }
-            : { once: "Allow once", always: "Allow always", reject: "Reject" }
+          // kilocode_change start - protected config requests can receive a
+          // persistent agent+path-scoped approval, so re-offer "Allow always"
+          // for them; disableAlways alone (e.g. memory saves) still hides it.
+          const options: Record<string, string> =
+            props.request.metadata?.[ConfigProtection.DISABLE_ALWAYS_KEY] && !protectedRequest()
+              ? { once: "Allow once", reject: "Reject" }
+              : { once: "Allow once", always: "Allow always", reject: "Reject" }
           // kilocode_change end
 
           const body = (

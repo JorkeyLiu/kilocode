@@ -234,6 +234,16 @@ export const Info = Schema.Struct({
   }),
   layout: Schema.optional(ConfigLayoutV1.Layout).annotate({ description: "@deprecated Always uses stretch layout." }),
   permission: Schema.optional(ConfigPermissionV1.Info),
+  // kilocode_change start - user-persisted explicit approvals for protected config
+  // files (AGENTS.md, kilo.json, .kilo/*). Scoped per agent name + exact path;
+  // only the global config is read for this trust (project config is inert).
+  protected_files: Schema.optional(
+    Schema.Record(Schema.String, Schema.Record(Schema.String, Schema.Literals(["allow", "deny"]))),
+  ).annotate({
+    identifier: "ProtectedFilesConfig",
+    description: "Explicit user approvals for editing protected config files, keyed by agent name then exact path",
+  }),
+  // kilocode_change end
   tools: Schema.optional(Schema.Record(Schema.String, Schema.Boolean)),
   attachment: Schema.optional(ConfigAttachmentV1.Info).annotate({
     description: "Attachment processing configuration, including image size limits and resizing behavior",

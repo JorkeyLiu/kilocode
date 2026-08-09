@@ -116,6 +116,28 @@
     }
   }
 
+  [data-slot="permission-protected"] {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 6px 8px;
+    border: 1px solid
+      color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 40%, var(--vscode-panel-border, transparent));
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--vscode-editorWarning-foreground, #cca700) 10%, transparent);
+  }
+
+  [data-slot="permission-protected-title"] {
+    font-size: var(--kilo-font-size-12);
+    font-weight: 500;
+    color: var(--text-base, var(--vscode-foreground));
+  }
+
+  [data-slot="permission-protected-scope"] {
+    font-size: var(--kilo-font-size-12);
+    color: var(--text-weak, var(--vscode-descriptionForeground));
+  }
+
   [data-slot="permission-patterns"] {
     display: flex;
     flex-direction: column;

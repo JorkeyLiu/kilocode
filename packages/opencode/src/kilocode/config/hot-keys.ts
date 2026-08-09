@@ -38,6 +38,11 @@ const HOT_KEYS = new Set([
   "default_agent", // Agent.state cacheKey includes default_agent
   "mode", // legacy per-agent overrides; Agent.state cacheKey includes mode
   "permission", // LOCK-002: hot permission persistence (updateGlobal dispose:false, cache-key refresh)
+  // LOCK-003: explicit protected-file approvals follow the same in-memory-first
+  // persistence as `permission` (updateGlobal dispose:false) and are read live by
+  // Permission.ask from the global config; a cold rebuild would drain the pending
+  // ask a sibling approval is waiting on.
+  "protected_files",
 ])
 
 /**

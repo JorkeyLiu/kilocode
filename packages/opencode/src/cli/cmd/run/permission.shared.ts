@@ -16,6 +16,8 @@
 import type { PermissionRequest } from "@kilocode/sdk/v2"
 import type { PermissionReply } from "./types"
 import { toolPath, toolPermissionInfo } from "./tool"
+import { ConfigProtection } from "@/kilocode/permission/config-paths" // kilocode_change
+import { ProtectedFiles } from "@/kilocode/permission/protected-files" // kilocode_change
 
 type Dict = Record<string, unknown>
 
@@ -123,7 +125,40 @@ export function permissionInfo(request: PermissionRequest): PermissionInfo {
   }
 }
 
+// kilocode_change start - protected approvals persist globally scoped to the
+// current agent + exact protected path, so the confirmation must not claim they
+// last only until restart. The persisted set is every literal protected path of
+// the request (ProtectedFiles.requestPathForms), so the copy enumerates exactly
+// that set — a multi-file edit/apply_patch names every path it will save
+// (LOCK-002), and glob/directory-only requests state that nothing exact saves.
+function protectedAlwaysLines(request: PermissionRequest): string[] {
+  const agent = text(request.metadata?.[ConfigProtection.AGENT_KEY]) || "this agent"
+  const verb = request.permission === "edit" ? "edit" : "access"
+  const paths = ProtectedFiles.requestPathForms(request)
+  if (paths.length === 0) {
+    return [
+      `Allow ${agent} to ${verb} this request without asking again. Glob or directory patterns cannot be saved as exact path approvals.`,
+    ]
+  }
+  if (paths.length === 1) {
+    return [
+      `Allow ${agent} to ${verb} ${paths[0]} without asking again. This approval is saved for ${agent} and this exact path only.`,
+    ]
+  }
+  return [
+    `Allow ${agent} to ${verb} the following protected paths without asking again. Each approval is saved for ${agent} and that exact path only.`,
+    ...paths.map((item) => `- ${item}`),
+  ]
+}
+// kilocode_change end
+
 export function permissionAlwaysLines(request: PermissionRequest): string[] {
+  // kilocode_change start
+  if (request.metadata?.[ConfigProtection.CONFIG_PROTECTED_KEY]) {
+    return protectedAlwaysLines(request)
+  }
+  // kilocode_change end
+
   if (request.always.length === 1 && request.always[0] === "*") {
     return [`This will allow ${request.permission} until Kilo is restarted.`] // kilocode_change
   }

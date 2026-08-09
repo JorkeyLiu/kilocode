@@ -17,7 +17,15 @@ import { Tooltip } from "@kilocode/kilo-ui/tooltip"
 import { useSession } from "../../context/session"
 import { useLanguage } from "../../context/language"
 import { useConfig } from "../../context/config"
-import { describePatterns, describeRule, savedRuleStates, type RuleDecision } from "./permission-dock-utils"
+import {
+  describePatterns,
+  describeRule,
+  isConfigProtected,
+  protectedAgentName,
+  protectedRequestPaths,
+  savedRuleStates,
+  type RuleDecision,
+} from "./permission-dock-utils"
 import { PermissionCommand } from "./PermissionCommand"
 import { PermissionDiff } from "./PermissionDiff"
 import { permissionDiffs } from "./permission-diff-utils"
@@ -37,6 +45,20 @@ export const PermissionDock: Component<{
   const { config } = useConfig()
 
   const fromChild = () => props.request.sessionID !== session.currentSessionID()
+  // Protected config-file requests (backend metadata): persistence is scoped to
+  // the current agent and exact request paths, never global edit auto-approval.
+  const configProtected = () => isConfigProtected(props.request.args)
+  const protectedAgent = () => protectedAgentName(props.request.args)
+  const protectedScope = () =>
+    language.t("ui.permission.configProtected.scope", {
+      agent: protectedAgent() ?? language.t("ui.permission.configProtected.thisAgent"),
+    })
+  const protectedHeading = () =>
+    language.t(
+      props.request.toolName === "edit"
+        ? "ui.permission.configProtected.edit"
+        : "ui.permission.configProtected.access",
+    )
   // Bash sends fine-grained rules via metadata.rules; other tools use the always array.
   const rules = () => props.request.args?.rules ?? props.request.always ?? []
   // Rules like "git *" or "git log *" — strip the trailing wildcard for display.
@@ -48,7 +70,15 @@ export const PermissionDock: Component<{
     // Normalize IDN/Unicode hostnames to punycode ASCII to prevent homograph attacks.
     return normalizeUrls(cmd)
   }
-  const text = (rule: string) => (command() ? label(rule) : describeRule(props.request.toolName, rule, language.t))
+  const text = (rule: string) => {
+    // Protected config-file requests persist by exact path: translate the UI
+    // "*" wildcard to the real request paths so the row shows the exact scope.
+    if (configProtected() && rule === "*") {
+      const paths = protectedRequestPaths(props.request).join(", ")
+      if (paths) return paths
+    }
+    return command() ? label(rule) : describeRule(props.request.toolName, rule, language.t)
+  }
   const external = () => props.request.toolName === "external_directory"
   const cmdDescription = () => {
     const val = props.request.args?.description
@@ -99,15 +129,27 @@ export const PermissionDock: Component<{
 
   const decision = (index: number): RuleDecision => decisions()[index] ?? "pending"
 
-  const approveTooltip = (index: number) =>
-    decision(index) === "approved"
-      ? language.t("ui.permission.rule.removeFromAllowed")
+  const approveTooltip = (index: number) => {
+    if (decision(index) === "approved") {
+      return configProtected()
+        ? language.t("ui.permission.configProtected.removeFromAllowed")
+        : language.t("ui.permission.rule.removeFromAllowed")
+    }
+    return configProtected()
+      ? language.t("ui.permission.configProtected.addToAllowed")
       : language.t("ui.permission.rule.addToAllowed")
+  }
 
-  const denyTooltip = (index: number) =>
-    decision(index) === "denied"
-      ? language.t("ui.permission.rule.removeFromDenied")
+  const denyTooltip = (index: number) => {
+    if (decision(index) === "denied") {
+      return configProtected()
+        ? language.t("ui.permission.configProtected.removeFromDenied")
+        : language.t("ui.permission.rule.removeFromDenied")
+    }
+    return configProtected()
+      ? language.t("ui.permission.configProtected.addToDenied")
       : language.t("ui.permission.rule.addToDenied")
+  }
 
   const toolDescription = () => {
     const key = `settings.permissions.tool.${props.request.toolName}.description`
@@ -250,7 +292,11 @@ export const PermissionDock: Component<{
                               </button>
                             </Tooltip>
                           </div>
-                          <code data-slot="permission-rule" data-wrap={external() ? "" : undefined} title={text(rule)}>
+                          <code
+                            data-slot="permission-rule"
+                            data-wrap={external() || configProtected() ? "" : undefined}
+                            title={text(rule)}
+                          >
                             <Show when={external() && rule !== "*"} fallback={text(rule)}>
                               <span data-slot="permission-rule-label">
                                 {language.t("ui.permission.toolLabel.externalDirectory")}{" "}
@@ -268,6 +314,12 @@ export const PermissionDock: Component<{
           </Show>
         }
       >
+        <Show when={configProtected()}>
+          <div data-slot="permission-protected">
+            <div data-slot="permission-protected-title">{protectedHeading()}</div>
+            <div data-slot="permission-protected-scope">{protectedScope()}</div>
+          </div>
+        </Show>
         <Show when={cmdDescription()}>{(desc) => <div data-slot="permission-hint">{desc()}</div>}</Show>
         <Show when={command()}>{(cmd) => <PermissionCommand command={cmd()} />}</Show>
 

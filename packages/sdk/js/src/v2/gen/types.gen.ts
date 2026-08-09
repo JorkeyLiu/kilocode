@@ -1502,6 +1502,12 @@ export type McpRemoteConfig = {
  */
 export type LayoutConfig = "auto" | "stretch"
 
+export type ProtectedFilesConfig = {
+  [key: string]: {
+    [key: string]: "allow" | "deny"
+  }
+}
+
 export type ImageAttachmentConfig = {
   auto_resize?: boolean
   max_width?: number
@@ -1671,6 +1677,7 @@ export type Config = {
   instructions?: Array<string>
   layout?: LayoutConfig
   permission?: PermissionConfig
+  protected_files?: ProtectedFilesConfig
   tools?: {
     [key: string]: boolean
   }

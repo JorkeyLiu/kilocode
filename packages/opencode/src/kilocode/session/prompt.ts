@@ -26,6 +26,7 @@ import { MemoryPaths } from "@kilocode/kilo-memory/effect/paths"
 import { MemoryMarker } from "@/kilocode/memory/marker"
 import { KilocodeSystemPrompt } from "@/kilocode/system-prompt"
 import { KiloToolRegistry } from "@/kilocode/tool/registry"
+import { ConfigProtection } from "@/kilocode/permission/config-paths"
 import CODE_SWITCH from "@/session/prompt/code-switch.txt"
 
 export namespace KiloSessionPrompt {
@@ -239,6 +240,12 @@ export namespace KiloSessionPrompt {
       .pipe(Effect.catchCause(() => Effect.succeed(input.session)))
     yield* input.permission.ask({
       ...input.request,
+      // kilocode_change start - LOCK-002: the session layer owns the authoritative
+      // agent identity for protected-file approval scoping. Overwrites any
+      // tool-supplied metadata value; the backend never trusts project-supplied
+      // metadata for protected trust.
+      metadata: { ...input.request.metadata, [ConfigProtection.AGENT_KEY]: input.agent.name },
+      // kilocode_change end
       ruleset: Permission.merge(agent.permission, guardPermissions({ agent, session })),
       hardRuleset: hardPermissions({ agent }),
     })

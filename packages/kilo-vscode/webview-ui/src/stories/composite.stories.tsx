@@ -936,6 +936,84 @@ export const PermissionDockEdit: Story = {
   },
 }
 
+// ---------------------------------------------------------------------------
+// 12b. Permission dock — protected config-file edit (agent-scoped persistence)
+// ---------------------------------------------------------------------------
+
+const protectedEditPermission: PermissionRequest = {
+  id: "perm-protected-001",
+  sessionID: SESSION_ID,
+  toolName: "edit",
+  patterns: [".kilo/kilo.json"],
+  always: ["*"],
+  args: {
+    configProtected: true,
+    protectedAgent: "coder",
+    filepath: "/Users/developer/projects/demo/.kilo/kilo.json",
+    filediff: {
+      file: ".kilo/kilo.json",
+      patch:
+        '===================================================================\n--- .kilo/kilo.json\n+++ .kilo/kilo.json\n@@ -1,3 +1,4 @@\n {\n   "$schema": "https://kilo.dev/schema.json",\n+  "permission": { "bash": "ask" },\n   "model": "claude-sonnet-4-20250514"\n }\n',
+      additions: 1,
+      deletions: 0,
+    },
+  },
+  tool: { messageID: ASST_MSG_ID, callID: "call-protected-001" },
+}
+
+const protectedEditNoAgentPermission: PermissionRequest = {
+  id: "perm-protected-002",
+  sessionID: SESSION_ID,
+  toolName: "edit",
+  patterns: [".kilo/kilo.json"],
+  always: ["*"],
+  args: {
+    configProtected: true,
+    filepath: "/Users/developer/projects/demo/.kilo/kilo.json",
+  },
+  tool: { messageID: ASST_MSG_ID, callID: "call-protected-002" },
+}
+
+export const PermissionDockProtectedEdit: Story = {
+  name: "Permission Dock — protected config edit",
+  render: () => {
+    const perms = [protectedEditPermission]
+    const session = {
+      ...mockSessionValue({ id: SESSION_ID, status: "busy", permissions: perms }),
+      messages: () => [{ id: "msg-001" }] as any[],
+    }
+    return (
+      <StoryProviders permissions={perms} sessionID={SESSION_ID} status="busy" noPadding>
+        <SessionContext.Provider value={session as any}>
+          <div style={{ width: "100%", height: "420px", display: "flex", "flex-direction": "column" }}>
+            <ChatView />
+          </div>
+        </SessionContext.Provider>
+      </StoryProviders>
+    )
+  },
+}
+
+export const PermissionDockProtectedEditNoAgent: Story = {
+  name: "Permission Dock — protected config edit (no agent metadata)",
+  render: () => {
+    const perms = [protectedEditNoAgentPermission]
+    const session = {
+      ...mockSessionValue({ id: SESSION_ID, status: "busy", permissions: perms }),
+      messages: () => [{ id: "msg-001" }] as any[],
+    }
+    return (
+      <StoryProviders permissions={perms} sessionID={SESSION_ID} status="busy" noPadding>
+        <SessionContext.Provider value={session as any}>
+          <div style={{ width: "100%", height: "420px", display: "flex", "flex-direction": "column" }}>
+            <ChatView />
+          </div>
+        </SessionContext.Provider>
+      </StoryProviders>
+    )
+  },
+}
+
 export const PermissionDockApplyPatch: Story = {
   name: "Permission Dock - apply patch",
   render: () => {

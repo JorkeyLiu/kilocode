@@ -29,6 +29,24 @@ export namespace ConfigProtection {
    * "Config file edits always require approval" explanation copy applies. */
   export const CONFIG_PROTECTED_KEY = "configProtected" as const
 
+  /**
+   * Metadata key carrying the authoritative current agent name for protected-file
+   * approval scoping. Set only by the session layer (KiloSessionPrompt.askPermission),
+   * which overwrites any tool-supplied value; the backend never trusts a
+   * project-supplied metadata value for protected trust.
+   */
+  export const AGENT_KEY = "protectedAgent" as const
+
+  /**
+   * Metadata key carrying the exact canonical protected paths the backend will
+   * persist for an "always" approval (LOCK-002). Computed by the permission layer
+   * via ProtectedFiles.requestPaths; clients display this list verbatim so a
+   * confirmation enumerates exactly the set persisted (LOCK-003) — never a
+   * client-side approximation of protected scope. Overwrites any tool-supplied
+   * value the same way the protected flags do.
+   */
+  export const PATHS_KEY = "protectedPaths" as const
+
   function normalize(p: string): string {
     return path.posix.normalize(p.replaceAll("\\", "/"))
   }
@@ -168,6 +186,43 @@ export namespace ConfigProtection {
   /** Check a single path (absolute or relative) against config protection. */
   function protected_(p: string): boolean {
     return path.isAbsolute(p) ? isAbsolute(p) : isRelative(p)
+  }
+
+  /** Export of the single-path protected check used by isRequest. */
+  export function isProtectedPath(p: string): boolean {
+    return protected_(p)
+  }
+
+  /** Export of the posix normalization used for protected-path rule keys. */
+  export function normalizePath(p: string): string {
+    return normalize(p)
+  }
+
+  /**
+   * True when a path carries glob syntax (`* ? [ ] { }`, the same set the
+   * skill-root check uses). A glob/directory pattern is not an exact file
+   * identity (LOCK-002) and can never be a persisted `protected_files` key or a
+   * consulted rule: rejecting these paths keeps approvals scoped to literal
+   * canonical file identities only.
+   */
+  export function hasGlobSyntax(p: string): boolean {
+    return /[*?\[\]{}]/.test(p)
+  }
+
+  /**
+   * Canonical protected-file identity used as the persisted `protected_files`
+   * key (LOCK-002): an absolute, posix-normalized path, resolved through the
+   * nearest existing ancestor so symlinked roots (`/var`, `/tmp`, `~`) converge.
+   *
+   * Relative forms are resolved against `base` (the request project's worktree
+   * root), so every request form — a worktree-relative pattern, an absolute
+   * `metadata.filepath`, an apply_patch `files[].filePath`/`movePath` — maps to
+   * the same identity for the same physical file, while the same relative name
+   * in a different project yields a different identity.
+   */
+  export function canonicalKey(p: string, base: string): string {
+    const abs = path.isAbsolute(p) ? p : path.resolve(base, p)
+    return normalize(physical(abs) ?? abs)
   }
 
   /**

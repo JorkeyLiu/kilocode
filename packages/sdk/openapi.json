@@ -26912,6 +26912,16 @@
         "enum": ["auto", "stretch"],
         "description": "@deprecated Always uses stretch layout."
       },
+      "ProtectedFilesConfig": {
+        "type": "object",
+        "additionalProperties": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string",
+            "enum": ["allow", "deny"]
+          }
+        }
+      },
       "ImageAttachmentConfig": {
         "type": "object",
         "properties": {
@@ -27371,6 +27381,9 @@
           },
           "permission": {
             "$ref": "#/components/schemas/PermissionConfig"
+          },
+          "protected_files": {
+            "$ref": "#/components/schemas/ProtectedFilesConfig"
           },
           "tools": {
             "type": "object",

@@ -9,6 +9,7 @@ import {
   permissionReject,
   permissionRun,
 } from "@/cli/cmd/run/permission.shared"
+import { ConfigProtection } from "@/kilocode/permission/config-paths"
 
 function req(input: Partial<PermissionRequest> = {}): PermissionRequest {
   return {
@@ -139,6 +140,84 @@ describe("run permission shared", () => {
       "This will allow the following patterns until Kilo is restarted.",
       "- src/**/*.ts",
       "- src/**/*.tsx",
+    ])
+  })
+
+  test("formats protected always-allow copy with agent and exact path scope", () => {
+    expect(
+      permissionAlwaysLines(
+        req({
+          permission: "edit",
+          patterns: ["AGENTS.md"],
+          always: ["*"],
+          metadata: {
+            [ConfigProtection.CONFIG_PROTECTED_KEY]: true,
+            [ConfigProtection.AGENT_KEY]: "code",
+            filepath: "AGENTS.md",
+          },
+        }),
+      ),
+    ).toEqual([
+      "Allow code to edit AGENTS.md without asking again. This approval is saved for code and this exact path only.",
+    ])
+
+    // glob/directory patterns are never persisted as exact approvals (LOCK-002)
+    expect(
+      permissionAlwaysLines(
+        req({
+          permission: "external_directory",
+          patterns: ["/Users/x/.config/kilo/skills/**/*"],
+          always: ["/Users/x/.config/kilo/skills/**/*"],
+          metadata: {
+            [ConfigProtection.CONFIG_PROTECTED_KEY]: true,
+            [ConfigProtection.AGENT_KEY]: "code",
+          },
+        }),
+      ),
+    ).toEqual([
+      "Allow code to access this request without asking again. Glob or directory patterns cannot be saved as exact path approvals.",
+    ])
+  })
+
+  test("multi-path protected always approval names every persisted path", () => {
+    expect(
+      permissionAlwaysLines(
+        req({
+          permission: "edit",
+          patterns: ["AGENTS.md", ".kilo/settings.json"],
+          always: ["*"],
+          metadata: {
+            [ConfigProtection.CONFIG_PROTECTED_KEY]: true,
+            [ConfigProtection.AGENT_KEY]: "code",
+          },
+        }),
+      ),
+    ).toEqual([
+      "Allow code to edit the following protected paths without asking again. Each approval is saved for code and that exact path only.",
+      "- AGENTS.md",
+      "- .kilo/settings.json",
+    ])
+
+    // apply_patch shape: comma-joined metadata.filepath + files[] entries, deduped
+    expect(
+      permissionAlwaysLines(
+        req({
+          permission: "edit",
+          patterns: ["AGENTS.md"],
+          always: ["*"],
+          metadata: {
+            [ConfigProtection.CONFIG_PROTECTED_KEY]: true,
+            [ConfigProtection.AGENT_KEY]: "code",
+            filepath: "AGENTS.md, .kilo/commands/build.md",
+            files: [{ movePath: ".kilocode/agents/planner.md" }],
+          },
+        }),
+      ),
+    ).toEqual([
+      "Allow code to edit the following protected paths without asking again. Each approval is saved for code and that exact path only.",
+      "- AGENTS.md",
+      "- .kilo/commands/build.md",
+      "- .kilocode/agents/planner.md",
     ])
   })
 })

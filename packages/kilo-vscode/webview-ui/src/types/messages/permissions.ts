@@ -43,6 +43,8 @@ export interface PermissionRequest {
     filediff?: PermissionFileDiff
     files?: PermissionPatchFile[]
     description?: string
+    /** Backend-computed canonical protected paths persisted for an "always" approval (LOCK-002/003). */
+    protectedPaths?: string[]
   }
   message?: string
   tool?: { messageID: string; callID: string }

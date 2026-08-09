@@ -14,6 +14,7 @@ import { EventV2 } from "@opencode-ai/core/event"
 import { SessionID } from "@/session/schema" // kilocode_change - used by AllowEverythingInput
 // kilocode_change start
 import { ConfigProtection } from "@/kilocode/permission/config-paths"
+import { ProtectedFiles } from "@/kilocode/permission/protected-files" // kilocode_change
 import { KiloHeadless } from "@/kilocode/permission/headless"
 import { drainCovered } from "@/kilocode/permission/drain"
 import { ReadPermission } from "@/kilocode/permission/read"
@@ -213,6 +214,25 @@ export const layer = Layer.effect(
         : false
       // kilocode_change end
 
+      // kilocode_change start - explicit protected-file approvals (LOCK-002):
+      // scoped to the session-layer agent name + exact canonical protected file
+      // identity, read only from global config so project config can never grant
+      // protected trust. Ordinary edit rules, agent permissions, allowEverything
+      // and wildcard rules cannot bypass: this store is the only path that
+      // auto-resolves. The base (project worktree root) resolves every request
+      // path form — patterns, metadata.filepath, files[].filePath/movePath — to
+      // one canonical absolute key, so approvals persist and look up identically.
+      const agentName = isProtected && !trusted ? ProtectedFiles.agent(request) : undefined
+      const base = ProtectedFiles.base(yield* InstanceState.context) // kilocode_change
+      const protectedRules = agentName
+        ? yield* config.getGlobal().pipe(
+            Effect.map((global) => ProtectedFiles.rules(global, agentName)),
+            Effect.catch(() => Effect.succeed<ProtectedFiles.Rules>({})),
+          )
+        : {}
+      const protectedPaths = agentName ? new Set(ProtectedFiles.requestPaths(request, base)) : undefined
+      // kilocode_change end
+
       for (const pattern of request.patterns) {
         const rule = resolve(request.permission, pattern, ruleset, approved, local) // kilocode_change - include session-scoped rules
         log.info("evaluated", { permission: request.permission, pattern, action: rule })
@@ -226,6 +246,20 @@ export const layer = Layer.effect(
             ruleset: subset(request.permission, ruleset), // kilocode_change
           })
         }
+        // kilocode_change start - explicit protected allow/deny wins for protected paths
+        if (isProtected && !trusted && agentName !== undefined && protectedPaths) {
+          const canonical = ConfigProtection.canonicalKey(pattern, base)
+          if (protectedPaths.has(canonical)) {
+            const action = ProtectedFiles.actionFor(protectedRules, canonical)
+            if (action === "deny") {
+              return yield* new DeniedError({
+                ruleset: [{ permission: request.permission, pattern, action: "deny" }],
+              })
+            }
+            if (action === "allow") continue
+          }
+        }
+        // kilocode_change end
         // kilocode_change start - override "allow" to "ask" for protected config paths
         if (rule.action === "allow" && (!isProtected || trusted)) continue
         // kilocode_change end
@@ -251,7 +285,15 @@ export const layer = Layer.effect(
           ...request.metadata,
           ...(skill ? { rules: [skill] } : {}),
           ...(isProtected && skill === undefined
-            ? { [ConfigProtection.DISABLE_ALWAYS_KEY]: true, [ConfigProtection.CONFIG_PROTECTED_KEY]: true }
+            ? {
+                [ConfigProtection.DISABLE_ALWAYS_KEY]: true,
+                [ConfigProtection.CONFIG_PROTECTED_KEY]: true,
+                // LOCK-002/003: carry the exact canonical paths this request would
+                // persist for an "always" approval (same set requestPaths computes
+                // for the reply/saveAlwaysRules handlers), so clients can display
+                // the persisted scope verbatim without re-deriving it client-side.
+                ...(agentName ? { [ConfigProtection.PATHS_KEY]: ProtectedFiles.requestPaths(request, base) } : {}),
+              }
             : {}),
         },
         // kilocode_change end
@@ -307,8 +349,24 @@ export const layer = Layer.effect(
       yield* Deferred.succeed(existing.deferred, undefined)
       if (input.reply === "once") return
 
-      // kilocode_change start - downgrade "always" to "once" for protected config paths
-      if (ConfigProtection.isRequest(existing.info) && !ConfigProtection.isGlobalSkillRequest(existing.info)) return
+      // kilocode_change start - persist explicit protected-file approval instead of
+      // silently discarding it: protected_files[agent][canonicalPath] = "allow" for
+      // the request's protected paths (translating the UI "*" wildcard). Ordinary
+      // rules are never written for protected requests.
+      if (ConfigProtection.isRequest(existing.info) && !ConfigProtection.isGlobalSkillRequest(existing.info)) {
+        if (!existing.saved) {
+          const agentName = ProtectedFiles.agent(existing.info)
+          const base = ProtectedFiles.base(yield* InstanceState.context) // kilocode_change
+          const paths = ProtectedFiles.requestPaths(existing.info, base)
+          if (agentName && paths.length > 0) {
+            yield* config.updateGlobal(
+              { protected_files: ProtectedFiles.forAgent(agentName, paths, "allow") },
+              { dispose: false },
+            )
+          }
+        }
+        return
+      }
       // kilocode_change end
 
       for (const pattern of existing.info.always) {
@@ -352,7 +410,30 @@ export const layer = Layer.effect(
       const existing = s.pending.get(input.requestID)
       if (!existing) return yield* new NotFoundError({ requestID: input.requestID })
 
-      if (ConfigProtection.isRequest(existing.info) && !ConfigProtection.isGlobalSkillRequest(existing.info)) return
+      // kilocode_change start - persist checked protected-file rules under
+      // protected_files[agent][canonicalPath]; the UI "*" wildcard maps to the
+      // actual protected request paths so multi-file requests never broaden approval.
+      if (ConfigProtection.isRequest(existing.info) && !ConfigProtection.isGlobalSkillRequest(existing.info)) {
+        const agentName = ProtectedFiles.agent(existing.info)
+        const base = ProtectedFiles.base(yield* InstanceState.context) // kilocode_change
+        const paths = ProtectedFiles.requestPaths(existing.info, base)
+        if (!agentName || paths.length === 0) return
+        // UI patterns are request forms (relative / "*"); canonicalize them so
+        // they converge with the canonical persisted keys (LOCK-002).
+        const expand = (p: string) => (p === "*" ? p : ConfigProtection.canonicalKey(p, base))
+        const approvedSet = new Set((input.approvedAlways ?? []).map(expand))
+        const deniedSet = new Set((input.deniedAlways ?? []).map(expand))
+        const approve = paths.filter((pattern) => approvedSet.has("*") || approvedSet.has(pattern))
+        const deny = paths.filter((pattern) => deniedSet.has("*") || deniedSet.has(pattern))
+        if (approve.length === 0 && deny.length === 0) return
+        const perPath: Record<string, "allow" | "deny"> = {}
+        for (const pattern of approve) perPath[pattern] = "allow"
+        for (const pattern of deny) perPath[pattern] = "deny"
+        yield* config.updateGlobal({ protected_files: { [agentName]: perPath } }, { dispose: false })
+        existing.saved = true
+        return
+      }
+      // kilocode_change end
 
       const skill = ConfigProtection.globalSkillPattern(existing.info)
       const validRules = new Set(
