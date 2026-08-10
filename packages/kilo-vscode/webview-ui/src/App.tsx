@@ -28,6 +28,7 @@ import { SidebarEmptyState } from "./components/chat/SidebarEmptyState"
 import { registerExpandedTaskTool } from "./components/chat/TaskToolExpanded"
 import { registerVscodeToolOverrides } from "./components/chat/VscodeToolOverrides"
 import { SpeechToTextPrewarm } from "./components/speech-to-text/SpeechToTextPrewarm"
+import { p0WebviewStage } from "./utils/perf"
 
 // Override the upstream "task" tool renderer with the fully-expanded version
 // that shows child session parts inline in the VS Code sidebar.
@@ -127,6 +128,8 @@ const AppContent: Component = () => {
   }
 
   onMount(() => {
+    // P0 perf: first DOM mount of the app content (opt-in KILO_P0_PERF).
+    p0WebviewStage("webview.mount")
     const handler = (event: MessageEvent) => {
       const message = event.data
       if (message?.type === "action" && message.action) {

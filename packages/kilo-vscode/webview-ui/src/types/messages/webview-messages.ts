@@ -1147,6 +1147,17 @@ export interface DismissAgentMigrationBannerMessage {
   type: "dismissAgentMigrationBanner"
 }
 
+/**
+ * Opt-in P0 perf stage forwarded from the webview (only sent when the
+ * extension injected `window.__KILO_P0_PERF__ = true` into the webview HTML).
+ */
+export interface P0PerfMessage {
+  type: "p0Perf"
+  stage: string
+  t: number
+  wd: number
+}
+
 export type WebviewMessage =
   | SendMessageRequest
   | AbortRequest
@@ -1348,6 +1359,7 @@ export type WebviewMessage =
   | AgentManagerTerminalCloseRequest
   | AgentManagerTerminalResizeRequest
   | RequestImageModelsMessage
+  | P0PerfMessage
 
 // ============================================
 // VS Code API type

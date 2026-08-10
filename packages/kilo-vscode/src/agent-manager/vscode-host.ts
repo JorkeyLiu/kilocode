@@ -12,6 +12,7 @@ import { KiloProvider } from "../KiloProvider"
 import { PLATFORM, SNAPSHOT_INITIALIZATION } from "./constants"
 import { DiffVirtualProvider } from "../DiffVirtualProvider"
 import { buildWebviewHtml } from "../utils"
+import { isP0PerfEnabled } from "../perf/perf-instrument"
 import { openFileInEditor, getWorkspaceRoot } from "../review-utils"
 import { TelemetryProxy, type TelemetryEventName } from "../services/telemetry"
 import type { AutoApproveController } from "../commands/toggle-auto-approve"
@@ -89,6 +90,10 @@ export class VscodeHost implements Host {
       workerUri: panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "shiki-worker.js")),
       title: "Agent Manager",
       port,
+      // P0 benchmark webview timing (opt-in KILO_P0_PERF only, same as the
+      // sidebar's webview HTML — the Agent Manager panel must also set
+      // window.__KILO_P0_PERF__ so its load/render/paint/mount stages stream).
+      perfEnabled: isP0PerfEnabled(),
     })
 
     const provider = new KiloProvider(this.extensionUri, this.connectionService, this.context, {

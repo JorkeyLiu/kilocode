@@ -55,6 +55,7 @@ import {
 import { unique } from "remeda"
 // kilocode_change end
 import { withTransientReadRetry } from "@/util/effect-http-client"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 const log = Log.create({ service: "config" })
 
@@ -485,6 +486,8 @@ export const layer = Layer.effect(
 
     const loadInstanceState = Effect.fn("Config.loadInstanceState")(
       function* (ctx: InstanceContext) {
+        // kilocode_change - P0 instrumentation: per-instance config load start/end
+        const timer = P0Perf.span("config_load", { dir: ctx.directory })
         // kilocode_change start - warning accumulator and legacy Kilo config
         const warnings: Warning[] = []
         // Untrusted project config may only read files inside this root (worktree, or directory for non-git projects).
@@ -945,6 +948,7 @@ export const layer = Layer.effect(
         KilocodeDefaultPlugins.apply(result, { disabled: Flag.KILO_DISABLE_DEFAULT_PLUGINS, log })
         // kilocode_change end
 
+        timer.end() // kilocode_change - P0 instrumentation
         return {
           config: result,
           directories,

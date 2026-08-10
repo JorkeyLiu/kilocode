@@ -41,6 +41,8 @@ export function buildWebviewHtml(
     title: string
     port?: number
     extraStyles?: string
+    /** Opt-in P0 perf flag, forwarded to the webview so its render/paint stages can be recorded. */
+    perfEnabled?: boolean
   },
 ): string {
   const nonce = getNonce()
@@ -82,7 +84,7 @@ export function buildWebviewHtml(
 </head>
 <body>
   <div id="root"></div>
-  <script nonce="${nonce}">window.ICONS_BASE_URI = "${opts.iconsBaseUri}"; window.KILO_SHIKI_WORKER_URI = "${opts.workerUri}";</script>
+  <script nonce="${nonce}">window.ICONS_BASE_URI = "${opts.iconsBaseUri}"; window.KILO_SHIKI_WORKER_URI = "${opts.workerUri}"; window.__KILO_P0_PERF__ = ${opts.perfEnabled === true};</script>
   <script nonce="${nonce}" src="${opts.scriptUri}"></script>
 </body>
 </html>`

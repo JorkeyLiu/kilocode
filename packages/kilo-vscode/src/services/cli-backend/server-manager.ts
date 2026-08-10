@@ -7,6 +7,8 @@ import * as vscode from "vscode"
 import { resolveLocalBwrapEnv, resolveTreeSitterEnv } from "./cli-resources"
 import { t } from "./i18n"
 import { parseServerPort } from "./server-utils"
+import { StderrTail } from "./stderr-tail"
+import { p0Stage, isP0PerfEnabled } from "../../perf/perf-instrument"
 
 export interface ServerInstance {
   port: number
@@ -86,6 +88,7 @@ export class ServerManager {
 
     return new Promise((resolve, reject) => {
       console.log("[Kilo New] ServerManager: 🎬 Spawning CLI process:", cliPath, ["serve", "--port", "0"])
+      p0Stage("spawn.start")
       const cfg = vscode.workspace.getConfiguration("kilo-code.new")
       const claudeCompat = cfg.get<boolean>("claudeCodeCompat", false)
       // Pin cwd so the CLI doesn't inherit the extension host's cwd ("/" under F5 debug)
@@ -110,7 +113,13 @@ export class ServerManager {
       // All three are overridable by the user's environment.
       const extraCaCerts = cfg.get<string>("extraCaCerts", "").trim()
       const proxyStrictSSL = vscode.workspace.getConfiguration("http").get<boolean>("proxyStrictSSL", true)
-      const serverProcess = spawn(cliPath, ["serve", "--port", "0"], {
+      // P0 benchmark capture (opt-in KILO_P0_PERF only, test harness flag —
+      // never set in production): ask the CLI to print logs to stderr so the
+      // backend's `service=p0-perf` records stream through this process's
+      // stderr relay and are captured by the P0 harness. Default behavior
+      // (logs to the scratch XDG file) is unchanged when the flag is off.
+      const p0LogArgs = isP0PerfEnabled() ? ["--print-logs"] : []
+      const serverProcess = spawn(cliPath, ["serve", "--port", "0", ...p0LogArgs], {
         cwd: spawnCwd,
         env: {
           NODE_USE_SYSTEM_CA: "1",
@@ -155,9 +164,18 @@ export class ServerManager {
         detached: true,
       })
       console.log("[Kilo New] ServerManager: 📦 Process spawned with PID:", serverProcess.pid)
+      p0Stage("spawn.done", { pid: serverProcess.pid })
 
       let resolved = false
-      const stderrLines: string[] = []
+      // Bounded stderr relay: chunks are reassembled into complete
+      // newline-delimited lines before logging, so a backend log record split
+      // across pipe chunks is still relayed (and parsed by the P0 harness) as
+      // one complete line. Only a bounded tail of the most recent lines is
+      // retained for startup-failure diagnostics (see stderr-tail.ts); the
+      // trailing partial line is flushed at exit/error.
+      const stderrTail = new StderrTail({
+        onLine: (line) => console.error("[Kilo New] ServerManager: ⚠️ CLI Server stderr:", line),
+      })
 
       serverProcess.stdout?.on("data", (data: Buffer) => {
         const output = data.toString()
@@ -167,19 +185,19 @@ export class ServerManager {
         if (port !== null && !resolved) {
           resolved = true
           console.log("[Kilo New] ServerManager: 🎯 Port detected:", port)
+          p0Stage("port.detected", { port })
           resolve({ port, password, process: serverProcess })
         }
       })
 
       serverProcess.stderr?.on("data", (data: Buffer) => {
-        const errorOutput = data.toString()
-        console.error("[Kilo New] ServerManager: ⚠️ CLI Server stderr:", errorOutput)
-        stderrLines.push(errorOutput)
+        stderrTail.write(data)
       })
 
       serverProcess.on("error", (error) => {
         console.error("[Kilo New] ServerManager: ❌ Process error:", error)
         if (!resolved) {
+          stderrTail.flush()
           reject(error)
         }
       })
@@ -191,9 +209,10 @@ export class ServerManager {
           this.onExit?.(code)
         }
         if (!resolved) {
+          stderrTail.flush()
           const { userMessage, userDetails } = toErrorMessage(
             t("server.processExited", { code: code ?? "null" }),
-            stderrLines,
+            stderrTail.tail(),
             cliPath,
           )
           reject(new ServerStartupError(userMessage, userDetails))
@@ -204,9 +223,10 @@ export class ServerManager {
         if (!resolved) {
           console.error(`[Kilo New] ServerManager: ⏰ Server startup timeout (${STARTUP_TIMEOUT_SECONDS}s)`)
           ServerManager.killProcess(serverProcess)
+          stderrTail.flush()
           const { userMessage, userDetails } = toErrorMessage(
             t("server.startupTimeout", { seconds: STARTUP_TIMEOUT_SECONDS }),
-            stderrLines,
+            stderrTail.tail(),
             cliPath,
           )
           reject(new ServerStartupError(userMessage, userDetails))

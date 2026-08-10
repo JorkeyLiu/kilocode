@@ -54,6 +54,7 @@ import { seedSessionStatuses } from "./session-status"
 import { normalizeEnhancePromptErrorMessage } from "./enhance-prompt-error"
 import { retry } from "./services/cli-backend/retry"
 import { normalize, type SSEPayload, type SyncPayload, type WirePayload } from "./services/cli-backend/sdk-sse-adapter"
+import { isP0PerfEnabled, p0Stage, p0Webview } from "./perf/perf-instrument"
 import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
 import { renameSession } from "./kilo-provider/rename-session"
@@ -942,6 +943,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       switch (message.type) {
         case "webviewReady":
           console.log("[Kilo New] KiloProvider: ✅ webviewReady received")
+          p0Stage("webview.ready")
           this.isWebviewReady = true
           this.visibleTaskStreams.clear()
           this.flushPendingKiloModel()
@@ -1362,6 +1364,11 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         case "telemetry":
           TelemetryProxy.capture(message.event, message.properties)
           break
+        case "p0Perf":
+          // Forward webview-recorded perf stages (opt-in KILO_P0_PERF only; the
+          // webview never sends this when the flag is off).
+          p0Webview(message.stage, message.t, message.wd)
+          break
         case "persistVariant": {
           const stored = this.extensionContext?.globalState.get<Record<string, string>>("variantSelections") ?? {}
           stored[message.key] = message.value
@@ -1677,6 +1684,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       this.recoverPendingPrompts()
 
       // Fetch providers, agents, skills, config, and session statuses in parallel
+      p0Stage("dataReady.start")
       await Promise.all([
         this.fetchAndSendProviders(),
         this.fetchAndSendAgents(),
@@ -1692,6 +1700,9 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       this.sendNotificationSettings()
       this.sendTimelineSetting()
       this.postMessage({ type: "extensionDataReady" })
+      // P0 perf: the current global readiness gate (LOCK-012: P0 may measure
+      // the current gate; LOCK-PERF-4 targets action-specific gates instead).
+      p0Stage("dataReady.done")
 
       console.log("[Kilo New] KiloProvider: ✅ initializeConnection completed successfully")
     } catch (error) {
@@ -3489,6 +3500,16 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
         return
       }
 
+      // P0 perf: record the submit after session resolution so new-session
+      // first turns carry the resolved session id; `messageID` (the user
+      // message id) is the join key to `model.firstEvent`'s `parentID`.
+      p0Stage("prompt.submit", {
+        sessionID: sid,
+        messageID,
+        draftID,
+        ...(dir ? { dir } : {}),
+      })
+
       if (messageID) {
         this.connectionService.recordMessageSessionId(messageID, sid)
       }
@@ -3564,6 +3585,17 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       if (sandbox) await sandbox
       const sid = resolved.sid
       const dir = resolved.dir
+
+      // P0 perf: record the submit after session resolution so new-session
+      // first turns carry the resolved session id; `messageID` (the user
+      // message id) is the join key to `model.firstEvent`'s `parentID`.
+      p0Stage("prompt.submit", {
+        sessionID: sid,
+        messageID,
+        draftID,
+        command,
+        ...(dir ? { dir } : {}),
+      })
 
       if (messageID) {
         this.connectionService.recordMessageSessionId(messageID, sid)
@@ -4616,6 +4648,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
       workerUri: webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "shiki-worker.js")),
       title: "Kilo Code",
       port: this.connectionService.getServerInfo()?.port,
+      perfEnabled: isP0PerfEnabled(),
       extraStyles: `.container { height: 100%; display: flex; flex-direction: column; height: 100vh; border-right: 1px solid var(--border-weak-base); }`,
     })
   }

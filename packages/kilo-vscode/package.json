@@ -1076,7 +1076,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
-    "lint": "eslint src webview-ui script/e2e-probe.ts tests/e2e",
+    "lint": "eslint src webview-ui script/e2e-probe.ts script/e2e-p0-bench.ts script/p0-bench tests/e2e",
     "test": "vscode-test",
     "test:unit": "bun test tests/unit/ --dots",
     "rebuild-sdk": "bun run --cwd ../sdk/js build",
@@ -1088,6 +1088,7 @@
     "test:e2e": "node script/e2e-probe-launch.mjs",
     "test:e2e:child-task-order": "KILO_E2E_SCENARIO=child-task-order node script/e2e-probe-launch.mjs",
     "test:e2e:variant-memory": "KILO_E2E_SCENARIO=variant-memory node script/e2e-probe-launch.mjs",
+    "test:p0-bench": "node script/e2e-p0-bench-launch.mjs",
     "snapshot:build": "bun script/dev-snapshot.ts build",
     "snapshot:install": "bun script/dev-snapshot.ts install",
     "extension": "bun script/launch.ts"

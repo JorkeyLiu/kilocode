@@ -5,6 +5,7 @@ import { SdkSSEAdapter, type SSEPayload } from "./sdk-sse-adapter"
 import type { ServerConfig } from "./types"
 import { resolveEventSessionId as resolveEventSessionIdPure } from "./connection-utils"
 import { SandboxPreference } from "../sandbox-preference"
+import { isP0PerfEnabled, p0Stage } from "../../perf/perf-instrument"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
 type SSEEventListener = (event: SSEPayload, directory?: string, transaction?: string) => void
@@ -87,6 +88,15 @@ export class KiloConnectionService {
    */
   private readonly messageSessionIdsByMessageId: Map<string, string> = new Map()
 
+  /**
+   * Assistant message ids whose first `model.firstEvent` record was already
+   * emitted by the P0 perf instrumentation (LOCK-PERF-7: prompt submit ->
+   * first model event). One record per turn, deduplicated by the assistant
+   * message id; user message updates never produce a record. Bounded by turn
+   * count, cleared per connection epoch.
+   */
+  private readonly firstModelEventMessages = new Set<string>()
+
   private readonly viewerId = crypto.randomUUID()
   private active = true
   private windowStateDisposable: vscode.Disposable | null = null
@@ -130,6 +140,7 @@ export class KiloConnectionService {
 
     // Mark as connecting early so concurrent callers won't start another connection attempt.
     this.setState("connecting")
+    p0Stage("connect.start")
 
     this.connectPromise = this.doConnect(workspaceDir)
     try {
@@ -629,6 +640,7 @@ export class KiloConnectionService {
     this.messageSessionIdsByMessageId.clear()
     this.permissionDirectories.clear()
     this.questionDirectories.clear()
+    this.firstModelEventMessages.clear()
     this.questionRevision += 1
     this.seenConfigTransactions.clear()
     this.configRevisionListeners.clear()
@@ -725,6 +737,7 @@ export class KiloConnectionService {
     this.info = null
     this.permissionDirectories.clear()
     this.questionDirectories.clear()
+    this.firstModelEventMessages.clear()
     this.questionRevision += 1
     // New connection epoch: tagged-transaction dedupe state from the previous
     // stream must not leak into the next (LOCK-004 lifecycle cleanup).
@@ -856,6 +869,7 @@ export class KiloConnectionService {
   handleSseEvent(event: SSEPayload, directory?: string, transaction?: string): void {
     this.handlePermissionEvent(event, directory)
     this.handleQuestionEvent(event, directory)
+    this.recordFirstModelEvent(event, directory)
     if (event.type === "global.config.updated") {
       if (transaction) this.advanceOnceForTransaction(transaction)
       else this.advanceConfigRevision()
@@ -865,13 +879,37 @@ export class KiloConnectionService {
     }
   }
 
+  /**
+   * P0 perf: record the first assistant-message `message.updated` per turn —
+   * the model-first event of a turn. User message updates (role "user") never
+   * produce a record; repeated updates of the same assistant message are
+   * deduplicated by message id. `parentID` (the user message id of the turn)
+   * is the join key back to `prompt.submit`'s `messageID`.
+   */
+  private recordFirstModelEvent(event: SSEPayload, directory?: string): void {
+    if (!isP0PerfEnabled()) return
+    if (event.type !== "sync" || event.name !== "message.updated.1") return
+    if (event.data.info.role !== "assistant") return
+    const sessionId = this.resolveEventSessionId(event)
+    if (!sessionId) return
+    const messageId = event.data.info.id
+    if (this.firstModelEventMessages.has(messageId)) return
+    this.firstModelEventMessages.add(messageId)
+    const extra: Record<string, unknown> = { sessionID: sessionId, messageID: messageId }
+    if (event.data.info.parentID) extra.parentID = event.data.info.parentID
+    if (directory) extra.dir = directory
+    p0Stage("model.firstEvent", extra)
+  }
+
   private handlePermissionEvent(event: SSEPayload, directory?: string): void {
     if (event.type === "permission.asked" && directory) {
       this.recordPermissionDirectory(event.properties.id, directory)
+      p0Stage("permission.asked", { id: event.properties.id })
       return
     }
     if (event.type === "permission.replied") {
       this.clearPermissionDirectory(event.properties.requestID)
+      p0Stage("permission.replied", { requestID: event.properties.requestID })
     }
   }
 
@@ -879,10 +917,17 @@ export class KiloConnectionService {
     if (event.type === "question.asked" && directory) {
       this.questionRevision += 1
       this.recordQuestionDirectory(event.properties.id, directory)
+      p0Stage("question.asked", { id: event.properties.id })
       return
     }
-    if (event.type === "question.replied" || event.type === "question.rejected") {
+    if (event.type === "question.replied") {
       this.clearQuestionDirectory(event.properties.requestID)
+      p0Stage("question.replied", { requestID: event.properties.requestID })
+      return
+    }
+    if (event.type === "question.rejected") {
+      this.clearQuestionDirectory(event.properties.requestID)
+      p0Stage("question.rejected", { requestID: event.properties.requestID })
     }
   }
 }

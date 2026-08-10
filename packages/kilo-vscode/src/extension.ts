@@ -24,6 +24,7 @@ import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
 import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
+import { p0Begin, p0Stage } from "./perf/perf-instrument"
 
 let agentManager: AgentManagerProvider | undefined
 let shuttingDown = false
@@ -124,6 +125,10 @@ async function provisionVariantModelFixture(
 export function activate(context: vscode.ExtensionContext) {
   console.log("Kilo Code extension is now active")
   shuttingDown = false
+
+  // P0 perf: fresh correlation per activation, then the activation stage.
+  p0Begin()
+  p0Stage("activate.start")
 
   const telemetry = TelemetryProxy.getInstance()
 
@@ -645,6 +650,10 @@ export function activate(context: vscode.ExtensionContext) {
       connectionService.dispose()
     },
   })
+
+  // P0 perf: activation registration work is done (lazy spawn/connect happens
+  // on first webview or autocomplete prewarm).
+  p0Stage("activate.done")
 }
 
 export async function deactivate() {

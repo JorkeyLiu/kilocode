@@ -90,22 +90,37 @@ Current phase: **P0** (Baseline inventory).
 
 | Phase | Title | Status | Exit evidence recorded | Notes |
 |---|---|---|---|---|
-| P0 | Baseline inventory | Not started | - | Documentation foundation (ADR-0002, ADR-0003, direction spec, runtime spec, tracker) complete; no runnable fixture, inventories, counts, or performance baseline exist yet |
+| P0 | Baseline inventory | Active (2026-08-10) | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md`; test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts`, `packages/opencode/test/kilocode/p0-instrument.test.ts`, `packages/opencode/test/benchmark/`, `packages/kilo-vscode/script/p0-bench/` | Static inventory, H-1..H-13 baseline fixture, opt-in `KILO_P0_PERF` instrumentation, and backend/extension benchmark harnesses exist in the working tree; H-3..H-6 remain explicit fixture gaps, target-surface parity unproven, no performance metric recorded |
 | P1 | Orchestration-first navigation | Not started | - | Gated on P0 |
 | P2 | Harness surface parity | Not started | - | Gated on P1; requires H-1..H-13 criteria and named evidence |
 | P3 | Product removal | Not started | - | Subphases P3.1-P3.4 (sidebar, worktree/diff, cloud/JetBrains/Console/KiloClaw, indexing/memory/context-management/autocomplete) |
 | P4 | Private runtime and configuration | Not started | - | Subphases P4.1-P4.5 (GUI read model, private runtime entrypoint, dual-read, source removal, old CLI/server deletion); owned by runtime spec section 7 |
 | P5 | Startup and selector readiness | Not started | - | Startup acceptance per runtime spec section 6 |
 
-Initial status rationale: the ADRs, both direction specs, and this tracker are
-complete documentation foundation (2026-08-10). All product, runtime/config, and
-performance decisions are recorded (LOCK-001..013, LOCK-PERF-1..7); no
-implementation has started. P0 discovery/baseline has not started: no runnable
-fixture for the named H-1..H-13 flows, no surface/protocol/removal/root-cause
-inventories, and no baseline counts exist, and no issues/PRs/tests are linked
-here. No performance measurements exist on the current branch: all performance
-evidence is Not proven (LOCK-PERF-6). Nothing below claims implementation
-progress.
+P0 activation rationale (2026-08-10): the ADRs, both direction specs, this
+tracker, and all product/runtime/config/performance decisions
+(LOCK-001..013, LOCK-PERF-1..7) were already recorded. P0 work has now
+started and durable artifacts exist in the working tree: the static
+current-state inventory
+([`p0-current-state-inventory.md`](p0-current-state-inventory.md)), the
+runnable H-1..H-13 baseline fixture
+(`packages/opencode/test/kilocode/p0-harness-baseline.test.ts`, executing
+H-1/H-2/H-7/H-8/H-9/H-10/H-11/H-12/H-13 with H-3..H-6 recorded as explicit
+gaps), opt-in `KILO_P0_PERF` instrumentation (extension
+`packages/kilo-vscode/src/perf/perf-instrument.ts`, backend
+`packages/opencode/src/kilocode/perf/instrument.ts`, webview
+`packages/kilo-vscode/webview-ui/src/utils/perf.ts`), the backend benchmark
+harness under `packages/opencode/test/benchmark/` (scenarios 6,7,8,9,11,12,13)
+with runner `packages/opencode/script/p0-benchmark.ts`, and the VS Code
+Extension Host benchmark harness under `packages/kilo-vscode/script/p0-bench/`
+(scenarios 1,2,3,4,5,10) with entry points
+`packages/kilo-vscode/script/e2e-p0-bench.ts` /
+`e2e-p0-bench-launch.mjs` and runner
+`packages/kilo-vscode/tests/e2e/p0-bench-runner.ts`. These are P0 progress
+evidence only: the fixture is not a target-surface parity suite, no H
+criterion is parity-proven, and no performance metric has changed from
+`Not proven` (LOCK-PERF-6). Baseline smoke runs exist but are not durable
+baseline measurements and are not cited as such.
 
 ## 5. Phase Details And Exit Checklists
 
@@ -115,32 +130,28 @@ spec (sections 5-7). Each checkbox is complete only when objective evidence
 
 ### P0 - Baseline inventory
 
-- Status: Not started
+- Status: Active (2026-08-10)
 - Scope: Freeze the surface inventory (direction spec 1.3), message protocol
   inventory, removal inventory (direction spec section 9, tracker section 7), and
   runtime/config root-cause inventory (runtime spec section 2: config sources,
   provider sources/loaders, readiness chain stages, convergence machinery); build
   a runnable baseline fixture/inventory for the named H-1..H-13 flows; resolve the
   bounded implementation decisions required by P0/P1 (runtime spec section 9).
-- Exit checklist:
-  - [ ] Runnable baseline fixture/inventory covering the named H-1..H-13 harness flows
-  - [ ] Reproducible surface inventory (direction spec 1.3)
-  - [ ] Message protocol inventory (used/unused per the P0 protocol inventory)
-  - [ ] Removal inventory for all LOCK-002/003/004/006 removals with source paths (section 7)
-  - [ ] Runtime/config root-cause inventory: enumerated config sources, provider sources/loaders, readiness chain stages, convergence machinery paths (runtime spec section 2)
-  - [ ] Baseline counts recorded in section 8
-  - [ ] Open question 3 resolved (exact baseline metric definitions)
-  - [ ] Bounded implementation decisions required by P0/P1 recorded (runtime spec section 9)
-  - [ ] Performance instrumentation executed at the runtime spec (section 10.8) instrumentation points; per-stage cold/warm timings recorded in section 8
-  - [ ] P0 performance baseline metrics recorded in section 8 with evidence links (all performance evidence Not proven until recorded; LOCK-PERF-6)
-  - [ ] Benchmark scenarios (runtime spec section 10.9) runnable and reproducible
-  - [ ] Static redundancy candidate inventory recorded (module-scope AppRuntime handle + AppLayer graph construction at listener build, per-instance bootstrap, feature-layer startup, removed-feature startup contributions; runtime spec section 10.4)
-  - Evidence: issue: - | PR: - | test: - | doc: -
-- Next actions: produce the runnable fixture; enumerate protocol routes and removal
-  surfaces; enumerate config/provider/readiness root causes; establish baseline
-  counts; instrument startup/request/config stages and record the P0 performance
-  baseline (runtime spec section 10); record bounded decisions; open the baseline
-  issue.
+- Exit checklist (2026-08-10 state):
+  - [ ] Runnable baseline fixture/inventory covering the named H-1..H-13 harness flows — PARTIAL: fixture executes H-1, H-2, H-7, H-8, H-9, H-10, H-11, H-12, H-13 as live tests and records H-3..H-6 as explicit gaps with references (`test: packages/opencode/test/kilocode/p0-harness-baseline.test.ts`); no target-surface fixture covers all 13 and parity remains unproven
+  - [x] Reproducible surface inventory (direction spec 1.3) — `doc: specs/vscode-orchestrator/p0-current-state-inventory.md` (section 3)
+  - [x] Message protocol inventory (used/unused per the P0 protocol inventory) — `doc: specs/vscode-orchestrator/p0-current-state-inventory.md` (section 4; static classification only, runtime dispatch still Unknown, U-1)
+  - [x] Removal inventory for all LOCK-002/003/004/006 removals with source paths (section 7) — `doc: specs/vscode-orchestrator/p0-current-state-inventory.md` (section 5; residual current-state evidence; no removal claimed complete)
+  - [x] Runtime/config root-cause inventory: enumerated config sources, provider sources/loaders, readiness chain stages, convergence machinery paths (runtime spec section 2) — `doc: specs/vscode-orchestrator/p0-current-state-inventory.md` (section 6; 15 merge sources enumerated, readiness chain stages 1-10, convergence machinery file set)
+  - [ ] Baseline counts recorded in section 8 — PARTIAL: reproducible counts recorded in the inventory (section 4.4/9) and reflected in tracker section 8, but Q3 metric definitions remain unapproved (proposal only)
+  - [ ] Open question 3 resolved (exact baseline metric definitions) — still Open (Q3); inventory section 9 records the proposed definitions pending hub approval
+  - [ ] Bounded implementation decisions required by P0/P1 recorded (runtime spec section 9) — still Open (R1, R2, R5, R6, R8)
+  - [ ] Performance instrumentation executed at the runtime spec (section 10.8) instrumentation points; per-stage cold/warm timings recorded in section 8 — PARTIAL: opt-in `KILO_P0_PERF` instrumentation exists for backend/extension/webview (`test: packages/opencode/test/kilocode/p0-instrument.test.ts`, `test: packages/kilo-vscode/tests/unit/p0-perf-instrument.test.ts`); no per-stage timings recorded as durable baseline (section 8 all `Not proven`)
+  - [ ] P0 performance baseline metrics recorded in section 8 with evidence links (all performance evidence Not proven until recorded; LOCK-PERF-6) — not met: all performance metrics remain `Not proven`; smoke runs are evidence only, not baseline
+  - [ ] Benchmark scenarios (runtime spec section 10.9) runnable and reproducible — PARTIAL: backend harness (scenarios 6,7,8,9,11,12,13) under `packages/opencode/test/benchmark/` with runner `packages/opencode/script/p0-benchmark.ts`; Extension Host harness (scenarios 1,2,3,4,5,10) under `packages/kilo-vscode/script/p0-bench/`; both have passing unit/integration tests, but only single smoke runs (and one 5-sample scenario-12 backend run) exist — no full repeated baseline
+  - [x] Static redundancy candidate inventory recorded (module-scope AppRuntime handle + AppLayer graph construction at listener build, per-instance bootstrap, feature-layer startup, removed-feature startup contributions; runtime spec section 10.4) — `doc: specs/vscode-orchestrator/p0-current-state-inventory.md` (section 7, R-1..R-10)
+  - Evidence: issue: - | PR: - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts`, `packages/opencode/test/kilocode/p0-instrument.test.ts`, `packages/opencode/test/benchmark/`, `packages/kilo-vscode/tests/unit/connection-service-model-first.test.ts`, `packages/kilo-vscode/tests/unit/p0-perf-instrument.test.ts`, `packages/kilo-vscode/tests/unit/p0-bench-capture.test.ts`, `packages/kilo-vscode/tests/unit/p0-bench-parse.test.ts`, `packages/kilo-vscode/tests/unit/p0-bench-stats.test.ts`, `packages/kilo-vscode/tests/unit/p0-bench-cleanup.test.ts`, `packages/kilo-vscode/tests/unit/stderr-tail.test.ts` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md`
+- Next actions: close fixture gaps H-3..H-6 with runnable entries or record blockers; establish a repeated baseline from both benchmark harnesses (backend `bun run bench:p0`, extension `bun run test:p0-bench`) with durable recorded samples; record per-stage cold/warm timings at the instrumentation points; resolve Q3 and R1/R2/R5/R6/R8; open the baseline issue.
 
 ### P1 - Orchestration-first navigation
 
@@ -236,46 +247,57 @@ spec (sections 5-7). Each checkbox is complete only when objective evidence
 
 Criterion text is the falsifiable target-surface acceptance criterion from the
 direction spec (section 6). Status is `Not proven` until objective evidence is
-recorded here; no parity suite exists today and no criterion is claimed as
-passing.
+recorded here. The P0 baseline fixture
+(`packages/opencode/test/kilocode/p0-harness-baseline.test.ts`) executes
+H-1, H-2, H-7, H-8, H-9, H-10, H-11, H-12, H-13 against the real harness
+services (CLI-side) and records H-3..H-6 as explicit gaps with references to
+existing coverage; every entry carries `parity: "unproven"`. The fixture is
+baseline evidence, not a target-surface parity suite: no orchestration-panel
+acceptance criterion is claimed as passing. Baseline smoke only; H parity
+remains Not proven for all 13.
 
 | # | Capability | Target-surface acceptance criterion | Status | Issue/PR | Test/Doc |
 |---|---|---|---|---|---|
-| H-1 | Custom agents | From an orchestration panel, a user can spawn a session selecting a user-defined custom agent by name, and the session runs under that agent's config | Not proven | - | - |
-| H-2 | Sub-task delegation | From an orchestration panel, a session can delegate a defined sub-task to a child session and the result flows back to the parent, visible in navigation | Not proven | - | - |
-| H-3 | Extensible tools | A session spawned from a panel exposes the full tool registry, and a user-defined tool is invocable in that session | Not proven | - | - |
-| H-4 | Skills | A skill is loadable and runnable from a panel-hosted session, with selection remaining harness-owned | Not proven | - | - |
-| H-5 | MCP | A session spawned from a panel with MCP configured has its MCP tools available and usable | Not proven | - | - |
-| H-6 | Permission/question flows | A tool permission or question raised by a panel-hosted session resolves inline through the permission flow, and the outcome is applied to that session | Not proven | - | - |
-| H-7 | Parent-child sessions | Topic/session navigation shows parent/child session hierarchy, and relations persist across panel restarts | Not proven | - | - |
-| H-8 | Background/parallel execution | Two or more panel-hosted sessions run concurrently in the background, and each remains controllable, without worktree isolation | Not proven | - | - |
-| H-9 | User-selected custom-provider models | Each panel-hosted session selects its own model and reasoning variant from a user-defined provider independently, and the selection applies | Not proven | - | - |
-| H-10 | Persistence | A panel-hosted session's transcript, events, and artifacts persist across an extension restart and resume in place | Not proven | - | - |
-| H-11 | Lifecycle correctness | Panel-driven create/pause/resume/close drives the harness lifecycle API and releases processes/resources correctly, with no bypass | Not proven | - | - |
-| H-12 | Checkpoint rollback | From a panel-hosted session, withdrawing/reverting a message restores the affected code state, the revert can be un-reverted or cleaned up, and lifecycle stays correct; distinct from ADR-0001 | Not proven | - | - |
-| H-13 | Internal context-overflow safeguard | A long-running panel-hosted session remains functional at context overflow with no user-facing context-management UI, and the safeguard never surfaces as a context-management product | Not proven | - | - |
+| H-1 | Custom agents | From an orchestration panel, a user can spawn a session selecting a user-defined custom agent by name, and the session runs under that agent's config | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-2 | Sub-task delegation | From an orchestration panel, a session can delegate a defined sub-task to a child session and the result flows back to the parent, visible in navigation | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-3 | Extensible tools | A session spawned from a panel exposes the full tool registry, and a user-defined tool is invocable in that session | Gap recorded; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` (gap entry; refs to existing `test/tool/` coverage) |
+| H-4 | Skills | A skill is loadable and runnable from a panel-hosted session, with selection remaining harness-owned | Gap recorded; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` (gap entry; refs to existing `test/skill/` coverage) |
+| H-5 | MCP | A session spawned from a panel with MCP configured has its MCP tools available and usable | Gap recorded; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` (gap entry; refs to existing `test/kilocode/mcp-*.test.ts` coverage) |
+| H-6 | Permission/question flows | A tool permission or question raised by a panel-hosted session resolves inline through the permission flow, and the outcome is applied to that session | Gap recorded; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` (gap entry; refs to existing `test/permission/`, `test/question/` coverage) |
+| H-7 | Parent-child sessions | Topic/session navigation shows parent/child session hierarchy, and relations persist across panel restarts | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-8 | Background/parallel execution | Two or more panel-hosted sessions run concurrently in the background, and each remains controllable, without worktree isolation | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-9 | User-selected custom-provider models | Each panel-hosted session selects its own model and reasoning variant from a user-defined provider independently, and the selection applies | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-10 | Persistence | A panel-hosted session's transcript, events, and artifacts persist across an extension restart and resume in place | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-11 | Lifecycle correctness | Panel-driven create/pause/resume/close drives the harness lifecycle API and releases processes/resources correctly, with no bypass | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-12 | Checkpoint rollback | From a panel-hosted session, withdrawing/reverting a message restores the affected code state, the revert can be un-reverted or cleaned up, and lifecycle stays correct; distinct from ADR-0001 | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-13 | Internal context-overflow safeguard | A long-running panel-hosted session remains functional at context overflow with no user-facing context-management UI, and the safeguard never surfaces as a context-management product | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
 
 ## 7. Removal Inventory Evidence
 
 Each removal row records evidence per category that exists for the item: `source`,
 `tests`, `docs`, `generated SDK`, `config`, `i18n`, `build/package`. A `-` in a
 category means no evidence exists; a removal is complete only when every existing
-category has recorded evidence. No removal is reclassified as deferred.
+category has recorded evidence. No removal is reclassified as deferred. The static
+current-state inventory records the residual evidence for every row below
+([`p0-current-state-inventory.md`](p0-current-state-inventory.md), section 5);
+`doc:` cells cite that artifact, which records current residue only — **no
+removal is claimed complete or executed**. `Unknown` means the category may exist
+but was not verifiable by the static search; those cells stay open.
 
 | Removal (LOCK) | Phase | Source | Tests | Docs | Generated SDK | Config | i18n | Build/package |
 |---|---|---|---|---|---|---|---|---|
-| Ordinary single-chat sidebar (LOCK-001) | P3.1 | - | - | - | - | - | - | - |
-| Worktree infrastructure (LOCK-002) | P3.2 | - | - | - | - | - | - | - |
-| Custom Diff Viewer surfaces (LOCK-002) | P3.2 | - | - | - | - | - | - | - |
-| Cloud sessions (LOCK-003) | P3.3 | - | - | - | - | - | - | - |
-| JetBrains (LOCK-003) | P3.3 | - | - | - | - | - | - | - |
-| Console (LOCK-003) | P3.3 | - | - | - | - | - | - | - |
-| KiloClaw (LOCK-003) | P3.3 | - | - | - | - | - | - | - |
-| Indexing (LOCK-004) | P3.4 | - | - | - | - | - | - | - |
-| Project memory (LOCK-004) | P3.4 | - | - | - | - | - | - | - |
-| User-visible context management/compaction (LOCK-004) | P3.4 | - | - | - | - | - | - | - |
-| Autocomplete (LOCK-004) | P3.4 | - | - | - | - | - | - | - |
-| Preset providers/catalog/onboarding/org sources (LOCK-006) | P4.4 | - | - | - | - | - | - | - |
+| Ordinary single-chat sidebar (LOCK-001) | P3.1 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
+| Worktree infrastructure (LOCK-002) | P3.2 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
+| Custom Diff Viewer surfaces (LOCK-002) | P3.2 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
+| Cloud sessions (LOCK-003) | P3.3 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - |
+| JetBrains (LOCK-003) | P3.3 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - | - | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
+| Console (LOCK-003) | P3.3 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | Unknown | Unknown | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
+| KiloClaw (LOCK-003) | P3.3 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | Unknown | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
+| Indexing (LOCK-004) | P3.4 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
+| Project memory (LOCK-004) | P3.4 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
+| User-visible context management/compaction (LOCK-004) | P3.4 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - |
+| Autocomplete (LOCK-004) | P3.4 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
+| Preset providers/catalog/onboarding/org sources (LOCK-006) | P4.4 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - | - |
 
 ## 8. Baseline / Complexity / Runtime Metrics
 
@@ -285,18 +307,32 @@ evidence.
 
 | Metric | P0 baseline | Delta at P3 | Delta at P4 | Delta at P5 | Measurement source |
 |---|---|---|---|---|---|
-| Webview message types | TBD (open question 3) | TBD | TBD | TBD | P0 protocol inventory |
-| Provider methods | TBD (open question 3) | TBD | TBD | TBD | P0 protocol inventory |
-| Webview entry points | TBD (open question 3) | TBD | TBD | TBD | P0 surface inventory |
-| Config sources merged | TBD (12+ today, runtime spec 2.2) | TBD | TBD | 1 | P0 config root-cause inventory |
-| Provider source kinds (catalog/config/auth/org) | TBD (runtime spec 2.3) | TBD | TBD | 1 (custom records) | P0 provider root-cause inventory |
-| Convergence/cold-rebuild passes | TBD (runtime spec 2.4) | TBD | TBD | 0 | P0 runtime root-cause inventory |
-| Startup readiness stages before UI enable | TBD (runtime spec 2.5) | TBD | TBD | TBD | P0 readiness chain inventory |
-| Removal items with full evidence | TBD | TBD | TBD | TBD | Section 7 |
+| Webview message types | 332 distinct `type` literals (Q3 proposal, unapproved; inventory §4.1/§9) | TBD | TBD | TBD | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§4.4 reproducible count) |
+| Provider methods | 250 v2 SDK public methods (Q3 proposal, unapproved; inventory §4.3/§9) | TBD | TBD | TBD | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§4.4 reproducible count) |
+| Webview entry points | 6 esbuild webview entry points (Q3 proposal, unapproved; inventory §4.4/§9) | TBD | TBD | TBD | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§4.4 reproducible count) |
+| Config sources merged | 15 enumerated sources (12+ floor; runtime-active count still Unknown, inventory §6.1, U-2) | TBD | TBD | 1 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§6.1) |
+| Provider source kinds (catalog/config/auth/org) | Enumerated in inventory §6.2 (runtime-active count Unknown, U-2) | TBD | TBD | 1 (custom records) | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§6.2) |
+| Convergence/cold-rebuild passes | TBD (machinery enumerated in inventory §6.3; pass count unmeasured, U-5) | TBD | TBD | 0 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§6.3) |
+| Startup readiness stages before UI enable | 10 enumerated stages (inventory §6.4; per-stage durations unmeasured) | TBD | TBD | TBD | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§6.4) |
+| Removal items with full evidence | 0 (no removal complete; residue only, inventory §5) | TBD | TBD | TBD | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§5); tracker §7 |
+
+Counts above that derive from the inventory are reproducible (inventory
+section 10 commands); they are proposed P0 baseline definitions pending Q3
+approval and are labeled as such. The exact-count question 3 remains open
+(section 9); the proposal lives in the inventory (section 9).
+
+Smoke artifacts: backend and Extension Host benchmark harnesses have produced
+single-run smoke records (backend: all seven scenarios once plus five measured
+scenario-12 samples; extension: cold-start/warm-view/session-switch smoke), and
+historical `/tmp` JSONL runs contain stale pre-fix artifacts. None of these are
+durable baseline evidence (LOCK-PERF-6): they are not repeated, not versioned,
+and some are pre-fix. All are excluded from the metrics below, which remain
+`Not proven` until a repeated baseline with recorded evidence links exists.
 
 Performance metrics (LOCK-PERF). P0 records the baseline with evidence links; no
 performance metric is proven until then (LOCK-PERF-6). All values are
-`Not proven`/TBD today; no measurements exist on the current branch.
+`Not proven`/TBD today; no durable baseline measurement is recorded on the
+current branch (smoke runs are excluded, see note above).
 
 | Metric | P0 baseline | Delta at P3 | Delta at P4 | Delta at P5 | Measurement source |
 |---|---|---|---|---|---|
@@ -360,6 +396,9 @@ removals themselves are decided (LOCK-001..006) and are not open questions.
 | 2026-08-10 | All | No performance measurements exist; estimates (e.g. 20-40%/30-50%) could become acceptance claims | Unmeasured magnitudes; false performance claims | Evidence-only gates (LOCK-PERF-6); hypotheses flagged; P0 baseline required (section 8) | Manifestor | Monitored |
 | 2026-08-10 | P3-P5 | Removed features might still initialize at worker startup (residual code) | Startup work does not decline despite removal | Measured net startup-work reduction per removal subphase (LOCK-PERF-3, runtime spec section 10) | Manifestor | Monitored |
 | 2026-08-10 | P0-P2 | Transport/event overhead misattributed as the dominant latency | Wrong optimization target | LOCK-PERF-7: measure model/network/tool/approval separately from transport/event overhead | Manifestor | Monitored |
+| 2026-08-10 | P0 | Unbounded benchmark capture could grow process memory without bound during a long/hung sample run | Harness OOM; invalid benchmark run | Bounded capture implemented: raw output retained only as a `capBytes` byte-capped tail with `MAX_SEGMENTS` object bound (`packages/kilo-vscode/script/p0-bench/parse.ts`); covered by `tests/unit/p0-bench-capture.test.ts`, `p0-bench-parse.test.ts`, `p0-bench-cleanup.test.ts`, `p0-bench-stats.test.ts` | Manifestor | Resolved |
+| 2026-08-10 | P0 | Unbounded worker stderr accumulation could grow extension-host memory over the worker lifetime | Extension-host memory growth; lost diagnostics | Bounded diagnostic stderr tail: `MAX_STDERR_TAIL_LINES` (100 lines) and `MAX_STDERR_TAIL_BYTES` (16 KiB) caps with reassembly (`packages/kilo-vscode/src/services/cli-backend/stderr-tail.ts`); covered by `tests/unit/stderr-tail.test.ts` | Manifestor | Resolved |
+| 2026-08-10 | P0 | Environmental esbuild-watcher process attribution (a non-owned process observed during harness runs) could be misread as a harness/benchmark defect | Misattributed performance or resource claims | Left unresolved as an attribution question; it is not a benchmark claim and no metric depends on it (LOCK-PERF-6) | Manifestor | Monitored |
 
 ## 11. Change Log
 
@@ -369,6 +408,11 @@ removals themselves are decided (LOCK-001..006) and are not open questions.
 | 2026-08-10 | Final product boundaries (LOCK-001..008) and runtime/config decisions (LOCK-009..012, ADR-0003 + runtime spec) recorded; tracker revised: new decision locks, phase set P0-P5 with subphases, new H-1..H-13 parity matrix, removal inventory evidence, runtime metrics, updated decisions/risks; all phases still Not started; no implementation evidence | Manifestor execution of final-boundaries documentation task |
 | 2026-08-10 | Performance made first-class: LOCK-PERF-1..7 recorded; performance model, cost attribution, instrumentation plan, benchmark scenarios, and regression gates added to the runtime spec (section 10); performance objective and removed-features-not-startup-dependencies rules added to the direction spec; tracker gained performance metrics (all Not proven), P0 profiling tasks, and P1/P2/P3 performance gates; no measurements exist on the current branch | Manifestor execution of performance-model documentation task |
 | 2026-08-10 | Performance-doc audit corrections applied: TUI lazy rendering vs static CLI/TUI module-graph imports distinguished (magnitude unmeasured); AppLayer described as layer definition + lazy runtime handle with graph construction at server listener build, not at first import; benchmark scenarios mapped to explicit tracker metric rows (warm view, no-provider/custom-provider/many-agent-MCP startup, parallel child sessions, hot config update, cold-update no-interruption, burst coalescing); P4.4 exit evidence requires measured net startup-work reduction and absent removed-feature initialization; ambiguous provider citations qualified to `packages/opencode/src/provider/provider.ts`; worker CLI entry/module-graph load added to instrumentation points; all performance values remain Not proven | Manifestor execution of performance-doc audit-correction task |
+| 2026-08-10 | P0 activated: static current-state inventory (`specs/vscode-orchestrator/p0-current-state-inventory.md`) checked in with surfaces, message/SSE/SDK protocol counts, removal residue, runtime/config root-cause graph, static redundancy candidates R-1..R-10, H-1..H-13 baseline map, proposed baseline-count definitions (Q3), and dynamic unknowns U-1..U-10; tracker P0 phase set Active with inventory/harness evidence; no removal claimed complete; no performance metric changed from Not proven | Manifestor execution of P0-evidence update task |
+| 2026-08-10 | H-1..H-13 baseline fixture added: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` executes H-1, H-2, H-7, H-8, H-9, H-10, H-11, H-12, H-13 against real harness services and records H-3..H-6 as explicit gaps with references; every entry carries `parity: "unproven"`; tracker section 6 statuses updated to baseline-smoke/gap-recorded with parity Not proven; no target-surface criterion claimed passing | Manifestor execution of P0-evidence update task |
+| 2026-08-10 | P0 instrumentation added (opt-in `KILO_P0_PERF`): extension host `packages/kilo-vscode/src/perf/perf-instrument.ts`, backend `packages/opencode/src/kilocode/perf/instrument.ts`, webview `packages/kilo-vscode/webview-ui/src/utils/perf.ts`; covered by `packages/opencode/test/kilocode/p0-instrument.test.ts` and `packages/kilo-vscode/tests/unit/p0-perf-instrument.test.ts`; instrumentation points exist but no durable per-stage timings recorded (section 8 remains Not proven) | Manifestor execution of P0-evidence update task |
+| 2026-08-10 | Benchmark harnesses added: backend under `packages/opencode/test/benchmark/` (scenarios 6,7,8,9,11,12,13; runner `packages/opencode/script/p0-benchmark.ts` via `bun run bench:p0`) and VS Code Extension Host under `packages/kilo-vscode/script/p0-bench/` (scenarios 1,2,3,4,5,10; `packages/kilo-vscode/script/e2e-p0-bench.ts` + `e2e-p0-bench-launch.mjs` via `bun run test:p0-bench`, runner `packages/kilo-vscode/tests/e2e/p0-bench-runner.ts`); both have passing unit/integration tests; only smoke runs so far — no full repeated baseline, so benchmark-runnable criterion is PARTIAL | Manifestor execution of P0-evidence update task |
+| 2026-08-10 | OOM correction: bounded benchmark capture (`capBytes` + `MAX_SEGMENTS` in `packages/kilo-vscode/script/p0-bench/parse.ts`) and bounded worker stderr diagnostic tail (`MAX_STDERR_TAIL_LINES`/`MAX_STDERR_TAIL_BYTES` in `packages/kilo-vscode/src/services/cli-backend/stderr-tail.ts`) added with unit tests; risk rows recorded; environmental non-owned esbuild watcher attribution left unresolved and not a benchmark claim | Manifestor execution of P0-evidence update task |
 
 ## 12. Links
 
@@ -376,4 +420,5 @@ removals themselves are decided (LOCK-001..006) and are not open questions.
 - ADR-0003: [`../adr/0003-replace-cli-configuration-with-private-gui-runtime.md`](../adr/0003-replace-cli-configuration-with-private-gui-runtime.md)
 - Direction spec: [`agent-orchestration-direction.md`](agent-orchestration-direction.md)
 - Runtime/config spec: [`runtime-and-configuration-direction.md`](runtime-and-configuration-direction.md)
+- P0 current-state inventory: [`p0-current-state-inventory.md`](p0-current-state-inventory.md)
 - Canonical architecture docs: unchanged (LOCK-013), `packages/kilo-docs/pages/contributing/architecture/`

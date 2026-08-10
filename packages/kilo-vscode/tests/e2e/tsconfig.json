@@ -13,5 +13,11 @@
     "jsxImportSource": "solid-js",
     "types": ["node", "vscode"]
   },
-  "include": ["runner.ts", "../../script/e2e-probe.ts"]
+  "include": [
+    "runner.ts",
+    "p0-bench-runner.ts",
+    "../../script/e2e-probe.ts",
+    "../../script/e2e-p0-bench.ts",
+    "../../script/p0-bench/*.ts"
+  ]
 }

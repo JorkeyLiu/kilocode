@@ -38,6 +38,7 @@ import * as DateTime from "effect/DateTime"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { toolFileSourceFromUri, Usage, type LLMEvent } from "@opencode-ai/llm"
 import { ToolOutput } from "@opencode-ai/core/tool-output"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
@@ -134,6 +135,19 @@ export const layer = Layer.effect(
     const database = yield* Database.Service
 
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
+      // kilocode_change - P0 instrumentation: processor admission for the turn.
+      // This is processor entry, not first model output; the per-turn key is the
+      // assistant message id (parentID = the user message id joins to the
+      // extension's `prompt.submit` / `model.firstEvent` records).
+      P0Perf.mark("processor_entry", {
+        id: input.sessionID,
+        meta: {
+          messageID: input.assistantMessage.id,
+          parentID: input.assistantMessage.parentID,
+          model: input.model.id,
+          provider: input.model.providerID,
+        },
+      })
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.

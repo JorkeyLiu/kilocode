@@ -4,6 +4,7 @@ import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { InstanceRuntime } from "../../project/instance-runtime" // kilocode_change
 import { startParentWatchdog } from "../../kilocode/parent-watchdog" // kilocode_change
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 export const ServeCommand = effectCmd({
   command: "serve",
@@ -13,6 +14,7 @@ export const ServeCommand = effectCmd({
   // need for an ambient project InstanceContext at startup.
   instance: false, // kilocode_change
   handler: Effect.fn("Cli.serve")(function* (args) {
+    P0Perf.mark("serve_cli_entry", { id: String(process.pid) }) // kilocode_change - P0 instrumentation
     const { Server } = yield* Effect.promise(() => import("../../server/server"))
     if (!Flag.KILO_SERVER_PASSWORD) {
       console.log("Warning: KILO_SERVER_PASSWORD is not set; server is unsecured.")

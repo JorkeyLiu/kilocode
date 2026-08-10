@@ -13,6 +13,7 @@ import { Effect, Layer } from "effect"
 import { Config } from "@/config/config"
 import { Service } from "./bootstrap-service"
 import { Reference } from "@/reference/reference"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 export { Service } from "./bootstrap-service"
 export type { Interface } from "./bootstrap-service"
@@ -38,6 +39,8 @@ export const layer = Layer.effect(
 
     const run = Effect.gen(function* () {
       const ctx = yield* InstanceState.context
+      // kilocode_change - P0 instrumentation: InstanceBootstrap start/end
+      const timer = P0Perf.span("instance_bootstrap", { dir: ctx.directory })
       yield* Effect.logDebug("bootstrapping").pipe(Effect.annotateLogs("directory", ctx.directory)) // kilocode_change - was logInfo; downgraded to avoid printing to TUI on every startup
       // everything depends on config so eager load it for nice traces
       yield* config.get()
@@ -51,6 +54,7 @@ export const layer = Layer.effect(
         (s) => s.init().pipe(Effect.catchCause((cause) => Effect.logWarning("init failed", { cause }))),
         { concurrency: "unbounded", discard: true },
       ).pipe(Effect.withSpan("InstanceBootstrap.init"))
+      timer.end() // kilocode_change - P0 instrumentation
     }).pipe(Effect.withSpan("InstanceBootstrap"))
 
     return Service.of({ run })

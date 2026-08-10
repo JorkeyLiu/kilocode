@@ -1,4 +1,5 @@
 import type { KiloClient, GlobalEvent } from "@kilocode/sdk/v2/client"
+import { p0Stage } from "../../perf/perf-instrument"
 
 export type WirePayload = GlobalEvent["payload"]
 type Flat<T> = T extends {
@@ -78,6 +79,7 @@ export class SdkSSEAdapter {
     }
 
     console.log("[Kilo New] SSE: 🔌 connect() called")
+    p0Stage("sse.connect")
     this.abortController = new AbortController()
     console.log('[Kilo New] SSE: 🔄 Setting state to "connecting"')
     this.notifyState("connecting")
@@ -201,6 +203,7 @@ export class SdkSSEAdapter {
             ready = true
             delay = SdkSSEAdapter.RECONNECT_DELAY_MS
             console.log("[Kilo New] SSE: ✅ Stream opened successfully")
+            p0Stage("sse.connected")
             this.notifyState("connected")
           }
 

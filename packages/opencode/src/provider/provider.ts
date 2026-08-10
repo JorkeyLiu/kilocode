@@ -46,6 +46,7 @@ import {
 import * as ModelsRefresh from "@/kilocode/provider/models-refresh"
 // kilocode_change end
 import { ProviderError } from "./error"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 const log = Log.create({ service: "provider" })
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
@@ -1383,9 +1384,11 @@ export const layer = Layer.effect(
     const modelsDevSvc = yield* ModelsDev.Service
     const runtimeFlags = yield* RuntimeFlags.Service
 
-    const state = yield* InstanceState.make<State>(() =>
+    const state = yield* InstanceState.make<State>((ctx) =>
       Effect.gen(function* () {
         using _ = log.time("state")
+        // kilocode_change - P0 instrumentation: provider state initialization (directory-correlated)
+        const timer = P0Perf.span("provider_state_init", { dir: ctx.directory })
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
         const modelsDev = yield* modelsDevSvc.get()
@@ -1727,6 +1730,7 @@ export const layer = Layer.effect(
           log.info("found", { providerID })
         }
 
+        timer.end() // kilocode_change - P0 instrumentation
         return {
           models: languages,
           providers,

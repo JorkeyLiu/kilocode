@@ -13,6 +13,7 @@ import { AppRuntime } from "@/effect/app-runtime"
 import { ensureProcessMetadata } from "@opencode-ai/core/util/opencode-process"
 import { Effect } from "effect"
 import { disposeAllInstancesAndEmitGlobalDisposed } from "@/server/global-lifecycle"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 ensureProcessMetadata("worker")
 
@@ -26,6 +27,8 @@ await Log.init({
 })
 
 Heap.start()
+
+P0Perf.mark("worker_cli_entry", { id: String(process.pid) }) // kilocode_change - P0 instrumentation
 
 process.on("unhandledRejection", (e) => {
   Log.Default.error("rejection", {

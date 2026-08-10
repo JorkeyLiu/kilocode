@@ -50,8 +50,15 @@ import { ControlLease } from "./control-lease"
 import { trackRebuildCompleted, trackRebuildStarted, logRebuildFailure, recordRebuildFailure } from "./config-rebuild"
 import { emitGlobalDisposed } from "@/server/global-lifecycle"
 import type { InstanceContext } from "@/project/instance-context"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 export type ColdScope = "global" | { readonly directory: string }
+
+/**
+ * P0 correlation fields: directory scopes key on the canonical `dir` field
+ * (same as `config_load` / `instance_bootstrap`); global scope keeps an `id`.
+ */
+const scopeFields = (scope: ColdScope): P0Perf.P0Fields => (scope === "global" ? { id: "global" } : { dir: scope.directory })
 
 /** A raised convergence fence ref plus the run outcome, owned by one save. */
 export type ColdObligation = {
@@ -265,6 +272,8 @@ export const layer = Layer.effect(
             })
             if (seq === 0) return
             yield* pushPending(obligation.scope, obligation)
+            // kilocode_change - P0 instrumentation: cold config mutation recorded
+            P0Perf.mark("config_commit", { ...scopeFields(obligation.scope), meta: { seq } })
             // LOCK-003: synchronous rebuild registration before any ConfigUpdated
             // event can be observed; the fence ref stays held by the pass.
             yield* trackRebuildStarted()
@@ -546,6 +555,11 @@ export const layer = Layer.effect(
                 if (scope === "global") yield* runGlobalPass(captured)
                 else yield* runProjectPass(scope.directory, captured)
                 yield* releaseObligations(captured)
+                // kilocode_change - P0 instrumentation: convergence pass completed
+                P0Perf.mark("convergence_complete", {
+                  ...scopeFields(scope),
+                  meta: { seq: Math.max(...captured.map((item) => item.seq)) },
+                })
               }).pipe(Effect.ensuring(Queue.offer(mutex, void 0))),
             )
           }),

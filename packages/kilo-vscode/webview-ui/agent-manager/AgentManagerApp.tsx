@@ -43,6 +43,7 @@ import { Button } from "@kilocode/kilo-ui/button"
 import { IconButton } from "@kilocode/kilo-ui/icon-button"
 import { Spinner } from "@kilocode/kilo-ui/spinner"
 import { TooltipKeybind } from "@kilocode/kilo-ui/tooltip"
+import { p0WebviewStage } from "../src/utils/perf"
 import { Popover } from "@kilocode/kilo-ui/popover"
 import { VSCodeProvider, useVSCode } from "../src/context/vscode"
 import { ServerProvider } from "../src/context/server"
@@ -1235,6 +1236,10 @@ const AgentManagerContent: Component = () => {
 }
 
 export const AgentManagerApp: Component = () => {
+  onMount(() => {
+    // P0 perf: first DOM mount of the Agent Manager app (opt-in KILO_P0_PERF).
+    p0WebviewStage("webview.mount")
+  })
   return (
     <ThemeProvider defaultTheme="kilo-vscode">
       <DialogProvider>
