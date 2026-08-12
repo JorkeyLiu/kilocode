@@ -186,7 +186,7 @@ two stores, and no store is authoritative for two owners' data.
 |---|---|---|---|
 | Extension application state | Extension host | VS Code storage APIs (workspace/global state) | Product/UI configuration, persisted selector indexes (models, agents), panel layout, UI options |
 | Secrets | Extension host | VS Code SecretStorage | Provider API keys, auth tokens, credentials |
-| Project-versioned harness assets | Extension host (canonical boundary) | One canonical explicit project asset path (exact path: bounded decision, section 9) | Project agent definitions, project-level harness configuration; no multi-source precedence merge |
+| Project-versioned harness assets | Extension host (canonical boundary) | One canonical explicit project asset path — resolved (2026-08-12, R5): first VS Code workspace root, assets only under `<workspaceRoot>/.kilo/` (section 9) | Project agent definitions, project-level harness configuration; no multi-source precedence merge |
 | Session and storage state | Runtime (harness kernel) | Runtime-owned persistence (existing session/storage semantics, ADR-0001 for storage rewriting) | Sessions, events, artifacts, transcript data |
 | Immutable runtime snapshot | Runtime (harness kernel) | Versioned snapshots created atomically on config commit | Effective config + runtime identity consumed by generations |
 | Private worker resources | Private worker (per version, lazy) | Version-scoped resource ownership | Provider/MCP/tool resources; disposed only after owners release them |
@@ -277,7 +277,10 @@ rewrite. Each step is a phase with objective gates (tracked in
    runtime consumes GUI-committed snapshots while the existing `kilo serve`
    HTTP/SSE/SDK path still serves the bridge (LOCK-009 allows this as a migration
    bridge, not a target contract). The window is time-boxed by an explicit
-   deadline (bounded decision, section 9). No permanent dual authority.
+   deadline — resolved (2026-08-12, R6): the deadline is the P4.3 phase boundary
+   itself (opens only during P4.3, shrinks monotonically, no new bridge
+   consumers, fully closed before P4.3 exits / P4.4 begins; section 9). No
+   permanent dual authority.
 4. Private runtime entrypoint: an extension-owned private headless worker process
    outside the Extension Host (LOCK-009) with a snapshot API.
 5. Snapshot API: versioned immutable config/runtime snapshots (section 5) that
@@ -320,20 +323,24 @@ the item has recorded evidence; nothing removed is reclassified as deferred.
 
 ## 9. Bounded Implementation Decisions
 
-These are intentionally not chosen here. They are recorded as implementation
-decisions that P0/P1 must resolve, with objective evidence, before the affected
-phase can exit. They stay open in the tracker (section 9) until resolved.
+These were intentionally not chosen at spec-writing time. They are recorded as
+implementation decisions that P0/P1 must resolve, with objective evidence,
+before the affected phase can exit. As of 2026-08-12, R1/R2/R5/R6/R8 are
+resolved with the decisions below (also recorded in the tracker, section 9);
+R3 (numeric startup SLA) and R4 (adoption thresholds) remain open; R7 remains
+open with required-by clarified (see row). The tracker (section 9) is the
+mutable status source; this table is the durable decision record.
 
-| Decision | Bounded by | Required by |
-|---|---|---|
-| Private transport protocol | Internal implementation choice; not a compatibility contract (LOCK-009) | P4.2 (snapshot API + transport) |
-| Storage engine for extension-owned state | Extension application state with VS Code storage APIs; complex records never in settings.json (LOCK-010) | P4.1 (GUI read model) |
-| Numeric startup SLA | Thresholds are a recorded product decision | P5 (startup acceptance) |
-| Adoption thresholds for removal timing | Evidence-driven product decision | P3 (product removal gates) |
-| Exact project harness-assets path | One canonical explicit project boundary (LOCK-010) | P4.1 |
-| Dual-read window deadline | Explicit deadline; no permanent dual authority (LOCK-009, section 7) | P4.3 |
-| Performance gate thresholds (startup stages, prompt-submit/first-token, stream-render, tool/permission, session-switch, config-update) | Recorded product/engineering decision; no invented numerics (LOCK-PERF-6) | P0 baseline; P3/P4/P5 performance gates |
-| Benchmark tooling/harness choice | Internal implementation choice; not prescribed by this spec | P0 profiling tasks |
+| Decision | Bounded by | Required by | Resolved (2026-08-12) |
+|---|---|---|---|
+| R1 Private transport protocol | Internal implementation choice; not a compatibility contract (LOCK-009) | P4.2 (snapshot API + transport) | Resolved: JSON-RPC 2.0 over child-process stdio with standard Content-Length framing (`vscode-jsonrpc` precedent). One extension-owned worker child; initialize handshake replaces port detection/health; requests carry commands, notifications carry normalized event envelopes; stderr remains bounded diagnostics; EOF/process exit owns lifecycle. HTTP/SSE/generated SDK remains bridge-only and is deleted. No retained-terminal protocol commitment: terminal/worktree surfaces are not LOCK-008 harness invariants and are handled by their removal/migration scope |
+| R2 Storage engine for extension-owned state | Extension application state with VS Code storage APIs; complex records never in settings.json (LOCK-010) | P4.1 (GUI read model) | Resolved: extension-owned product/UI config + persisted selector indexes use VS Code `globalState`; per-workspace runtime-tracking state uses `workspaceState`; all secrets use `SecretStorage`; runtime-owned session/event/artifact persistence remains runtime-owned; immutable worker snapshots are derived versioned values, not a second persisted store |
+| R3 Numeric startup SLA | Thresholds are a recorded product decision | P5 (startup acceptance) | Open |
+| R4 Adoption thresholds for removal timing | Evidence-driven product decision | P3 (product removal gates) | Open |
+| R5 Exact project harness-assets path | One canonical explicit project boundary (LOCK-010) | P4.1 | Resolved: one canonical project boundary = first VS Code workspace root; project-versioned harness assets live only under `<workspaceRoot>/.kilo/`, including `.kilo/kilo.json[c]`, agent/command/rules/skills/workflows/plans/config assets. P4.1 migrates root/legacy sources; P4.4 deletes ancestor walk, `.kilocode`/`.opencode`, global project-asset sources, and primary-worktree mirror reads. No multi-source precedence remains |
+| R6 Dual-read window deadline | Explicit deadline; no permanent dual authority (LOCK-009, section 7) | P4.3 | Resolved: no unsupported calendar date. The explicit deadline is the P4.3 phase boundary: dual-read opens only during P4.3, must shrink monotonically, gains no new bridge consumers, and must be fully closed before P4.3 exits / P4.4 begins. P4.4/P4.5 then delete source/transport/product code; no fallback read survives into P4.4 |
+| R7 Performance gate thresholds (startup stages, prompt-submit/first-token, stream-render, tool/permission, session-switch, config-update) | Recorded product/engineering decision; no invented numerics (LOCK-PERF-6) | Required by = before the first P3/P4/P5 performance gate that uses thresholds (and the P1/P2 no-regression gate if applicable), not the P0 baseline recording; threshold policy must be recorded before each affected phase starts/claims its gate, using comparable same-environment control evidence | Open — not a P0 blocker; P0 satisfies its component by recording descriptive runtime baselines (tracker section 8) |
+| R8 Benchmark tooling/harness choice | Internal implementation choice; not prescribed by this spec | P0 profiling tasks | Resolved: retain the existing two-harness tooling as the P0 and later comparison harness — Extension Host scenarios 1/2/3/4/5/10 under `packages/kilo-vscode/script/p0-bench/` (runner/merge/safety/provenance tools); backend scenarios 6/7/8/9/11/12/13 under `packages/opencode/test/benchmark/` (runner). Limitations recorded: manual-only, platform/environment/provenance scoped, backend in-process `Server.listen`/`AppLayer` only, n=5 descriptive |
 
 ## 10. Performance Model And Regression Gates
 
@@ -341,8 +348,9 @@ Performance is a first-class architectural objective alongside product coherence
 (LOCK-PERF-1). This section records the evidence-based cost attribution for the
 current runtime, the known redundancy candidates, the instrumentation plan, the
 benchmark scenarios, the regression gates, and the runtime-slimming acceptance
-criteria. Magnitudes remain unmeasured on the current branch (section 10.11);
-nothing here claims an implemented improvement (LOCK-PERF-6).
+criteria. P0 recorded descriptive baseline magnitudes in the tracker (section 8)
+from the six accepted campaigns; nothing here claims an implemented improvement
+(LOCK-PERF-6).
 
 ### 10.1 Performance decision locks (LOCK-PERF-1..7)
 
@@ -417,14 +425,18 @@ Evidence-based conclusion:
   - Feature layers include removed-feature services (Worktree, MemoryService,
     Notebook, AgentManager, KiloViewers, ShareNext) that under LOCK-PERF-3 must
     not contribute to startup once removed.
-- Magnitudes remain unmeasured (section 10.11). This paragraph is the
-  evidence-based hypothesis the P0 baseline must confirm or refute; it is not a
-  measured result.
+- Magnitudes for the measured stages are recorded descriptively in the tracker
+  (section 8) from the accepted P0 campaigns. This paragraph is the
+  evidence-based hypothesis the P0 baseline confirmed or refuted; the recorded
+  values are descriptive n=5 sample statistics, not measured improvements.
 
 ### 10.3 Current startup timeline (evidence)
 
-The timeline below is the implemented system today; per-stage durations are Not
-proven until the P0 instrumentation lands (section 10.8, tracker section 8).
+The timeline below is the implemented system today; per-stage durations for the
+measured stages are recorded in the tracker (section 8) from the accepted P0
+campaigns (descriptive n=5 statistics with evidence links, LOCK-PERF-6); stages
+without an accepted campaign or an existing extension-owned index are later-phase
+gates (P2/P3/P4.4/P5), not measured here.
 
 | Stage | Location | Today |
 |---|---|---|
@@ -630,15 +642,29 @@ A phase claims runtime slimming only with all of:
 
 ### 10.11 Evidence status
 
-- No runtime benchmarks or end-to-end latency instrumentation exist on the
-  current branch. All performance evidence is Not proven.
+- P0 baseline recorded (2026-08-12): six accepted repeated campaigns under
+  `specs/vscode-orchestrator/evidence/p0-baseline/` (Extension Host cold-start,
+  many-agent-MCP, historical and current-tier backend in-process
+  `Server.listen`/`AppLayer`, warm-view/no-provider/custom-provider,
+  session-switch) with measured values recorded in the tracker (section 8) as
+  descriptive n=5 sample statistics with evidence links. The backend campaigns
+  are CLI-side in-process harness evidence only — neither target-surface nor
+  private-worker evidence.
+- Target-only metrics without a P0 measurement are later-phase gates, not P0
+  blockers: persisted-selector paint gates at P5 (no extension-owned persisted
+  indexes exist before P4.1); cost attribution (LOCK-PERF-7) and per-event
+  transport/webview render flush gate at P2 (harness-parity/streaming);
+  removed-feature initialization count and startup-work net reduction gate at
+  P3/P4.4 (removal). No performance threshold is claimed (R7 remains Open;
+  required-by clarified in section 9).
 - Existing partial instrumentation - `kilo startup`
   (`packages/opencode/src/cli/cmd/debug/startup.ts`, prints process-start
   `performance.now()`), provider `log.time`, Effect spans, and ACP profiling
   (`packages/opencode/src/acp/profile.ts`) - is not sufficient for extension
   performance acceptance.
-- Every value in the tracker performance metrics table is `Not proven`/TBD until
-  P0 records measurements with evidence links.
+- Every value in the tracker performance metrics table stays `Not proven`/TBD
+  until a measurement with an evidence link is recorded there (LOCK-PERF-6);
+  the tracker (section 8) is the mutable source of truth for metric values.
 
 ## 11. Verification Commands
 

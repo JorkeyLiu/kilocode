@@ -147,6 +147,24 @@ export function raceGuardAbort<T>(action: Promise<T>, abort: Promise<never>): Pr
 }
 
 /**
+ * Fail-fast signal for the VS Code launch promise (runTests): observes the
+ * launch promise at creation so an early rejection (e.g. the extension host
+ * fails to launch because a seeded config is invalid against the production
+ * schema) can never become an unhandled rejection that crashes the process
+ * before the campaign finish and cleanup. The signal never settles on a
+ * successful launch (the drive remains the lifecycle's sole decision-maker)
+ * and rejects with the launch error the moment runTests rejects; racing it
+ * with the drive fails the lifecycle promptly with bounded blocked evidence
+ * instead of waiting out the CDP/ready timeouts.
+ */
+export function launchFailureSignal(launch: Promise<number>): Promise<never> {
+  return launch.then(
+    () => new Promise<never>(() => {}),
+    (err) => Promise.reject(err),
+  )
+}
+
+/**
  * On a memory guard breach: write the done marker (the in-VS-Code runner exits
  * on it) and terminate only exact owned PIDs via the existing cleanup helper,
  * plus the identity-checked backend termination. Bounded evidence is already
@@ -1213,6 +1231,18 @@ export async function runLifecycle(opts: LifecycleOptions): Promise<LifecycleRes
         ],
       })
 
+      // Observe the launch promise IMMEDIATELY at creation: a rejection before
+      // teardown reads it (e.g. the extension host fails to launch because a
+      // seeded config is invalid) must never become an unhandled rejection
+      // that crashes the process before the campaign finish and cleanup. The
+      // derived signal never settles on a successful launch (the drive decides
+      // the lifecycle) and rejects with the launch error on failure, so the
+      // drive race below treats a launch failure as a fail-fast bounded blocked
+      // sample instead of waiting out the CDP/ready waits. Losing async work
+      // (the drive, the abort, the launch signal) stays observed by the race
+      // so no late unhandled rejection is possible.
+      const launchFail = launchFailureSignal(vscodeRun)
+
       const drive = (async () => {
         await waitForCdp(cdpPort, 90_000, abort)
         browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, { timeout: 30_000 })
@@ -1247,17 +1277,15 @@ export async function runLifecycle(opts: LifecycleOptions): Promise<LifecycleRes
         console.error(`[p0-probe] backend identity registration failed: ${backendRegError}`)
         return null
       })
-      await Promise.race([drive, abort])
+      await Promise.race([drive, abort, launchFail])
     } catch (err) {
       failed = true
-      const classification = classifyLifecycleError(err, sample, scenario)
-      blockedReason = classification.blockedReason
-      blockedDetail = classification.blockedDetail
       // Phase follows the sample/warmup rule like every other record: a blocked
       // MEASURED sample stays measured (never hardcoded to warmup).
-      resultSamples.push(
-        blockedSample(scenario, condition, sample, phaseForSample(sample, opts.warmup), started, env, blockedReason, blockedDetail),
-      )
+      const blocked = blockedSampleForFailure(err, sample, scenario, condition, opts.warmup, started, env)
+      blockedReason = blocked.reason
+      blockedDetail = blocked.detail
+      resultSamples.push(blocked.sample)
     }
 
     // Snapshot the spawn evidence BEFORE teardown stops the capture: a spawned
@@ -1593,6 +1621,41 @@ async function awaitExit(vscodeRun: Promise<number>, userData: string, timeoutMs
   }
   console.log(`[p0-probe] VS Code exited (code ${code})`)
   return code === 0
+}
+
+/**
+ * The no-sample fallback for a lifecycle failure: when the drive produced no
+ * normal sample (e.g. a launch failure before any readiness gate), produce at
+ * least one bounded blocked sample so the campaign retains evidence and
+ * finishes with a truthful non-ok status. Classification is shared with every
+ * other failure path (memory-guard-abort, memory-guard-unavailable, generic),
+ * so the blocked reason/detail stay consistent and bounded. Extracted so the
+ * no-sample fallback is deterministically testable without launching VS Code.
+ */
+export function blockedSampleForFailure(
+  err: unknown,
+  sample: number,
+  scenario: ScenarioID,
+  condition: Condition,
+  warmup: number,
+  startedAt: number,
+  env: SampleEnv,
+): { sample: SampleRecord; reason: string; detail: string } {
+  const classification = classifyLifecycleError(err, sample, scenario)
+  return {
+    sample: blockedSample(
+      scenario,
+      condition,
+      sample,
+      phaseForSample(sample, warmup),
+      startedAt,
+      env,
+      classification.blockedReason,
+      classification.blockedDetail,
+    ),
+    reason: classification.blockedReason,
+    detail: classification.blockedDetail,
+  }
 }
 
 /** Dispatch to the scenario-specific lifecycle driver. */

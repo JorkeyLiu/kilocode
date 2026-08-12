@@ -73,7 +73,7 @@ regression gates live in the runtime spec (section 10).
 | Indexing, project memory, user-visible context management/compaction, autocomplete | Residual implementation present; removal decided (LOCK-004); only a minimal internal context-overflow safeguard is retained (LOCK-005) |
 | Preset provider identities/catalogs, models.dev dependency, onboarding/organization sources | Residual implementation present; removal decided (LOCK-006) |
 | Backend-gated selector readiness (`extensionDataReady`) | Current behavior; target is action-specific readiness (LOCK-012), owned by the runtime spec |
-| Performance instrumentation / baseline | No measurements exist; all performance evidence Not proven (LOCK-PERF-6); partial instrumentation (`kilo startup`, provider `log.time`, Effect spans, ACP profiling) is not sufficient for extension acceptance (runtime spec section 10.11) |
+| Performance instrumentation / baseline | P0 baseline recorded (2026-08-12): descriptive n=5 sample statistics with exact evidence paths in the tracker (section 8) from six accepted campaigns; target-surface parity and all numeric thresholds remain Not proven (LOCK-PERF-6); R7 stays Open and is not a P0 blocker (required-by = before the first threshold-using performance gate; runtime spec section 9); existing partial instrumentation (`kilo startup`, provider `log.time`, Effect spans, ACP profiling) is not sufficient for extension acceptance (runtime spec section 10.11) |
 | Topic/session navigation | Not implemented; provisional navigation language |
 | Canonical architecture docs rewrite | Not done; locked out (LOCK-013) |
 
@@ -387,7 +387,13 @@ decisions are listed in `runtime-and-configuration-direction.md` section 9.
 2. When does the sidebar deprecation notice ship relative to P1 navigation?
    (P1/P3.1.)
 3. What exact counts form the P0 complexity baseline (message types, provider
-   methods, webview entry points)? (P0.)
+   methods, webview entry points)? RESOLVED (2026-08-12): 332 distinct webview
+   message `type:` literals (WebviewMessage 189 + ExtensionMessage 143, disjoint
+   sets); 250 generated v2 SDK `KiloClient` public methods (the extension
+   imports `@kilocode/sdk/v2/client`); 6 HTML/webview esbuild entries,
+   excluding the shiki worker asset. Reproducible commands and current counts:
+   `p0-current-state-inventory.md` (sections 4.4/9/10); decision recorded in
+   the migration tracker (section 9).
 4. Sidebar removal timing/order within P3.1 and any adoption thresholds: LOCK-001
    decides removal; numeric thresholds remain a recorded product decision
    (bounded, runtime spec section 9).

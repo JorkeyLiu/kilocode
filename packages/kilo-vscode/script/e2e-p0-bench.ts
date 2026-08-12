@@ -85,6 +85,7 @@ import { gitState } from "./p0-bench/git-env"
 import { parseArgs, USAGE, wantsHelp, type BenchArgs } from "./p0-bench/args"
 import { repoRootFrom } from "./p0-bench/repo-root"
 import { createCliSnapshot, type CliSnapshot } from "./p0-bench/snapshot"
+import { seedConfigFor } from "./p0-bench/seed-config"
 
 if (process.versions.bun) {
   console.error(
@@ -188,45 +189,7 @@ function seedConfig(id: ScenarioID, scratch: string, mcpFixturePath: string, mcp
   mkdirSync(join(scratch, "xdg-cache"), { recursive: true })
   mkdirSync(join(scratch, "xdg-state"), { recursive: true })
 
-  let config: Record<string, unknown> | null = null
-  if (id === "no-provider") {
-    config = { provider: {}, agent: {} }
-  } else if (id === "custom-provider") {
-    config = {
-      provider: {
-        "p0-custom": {
-          npm: "@ai-sdk/openai-compatible",
-          name: "P0 Custom Provider",
-          options: { baseURL: "http://127.0.0.1:9", apiKey: "p0-bench-key" },
-          models: {
-            "p0-custom-model": { name: "P0 Custom Model", limit: { context: 128000 } },
-          },
-        },
-      },
-    }
-  } else if (id === "many-agent-mcp") {
-    const agents: Record<string, unknown> = {}
-    for (let i = 1; i <= mcpAgents; i++) {
-      const key = `p0-agent-${String(i).padStart(2, "0")}`
-      agents[key] = {
-        description: `P0 benchmark agent ${i}`,
-        prompt: `You are P0 benchmark agent ${i}.`,
-        mode: "primary",
-      }
-    }
-    config = {
-      agent: agents,
-      mcp: {
-        "p0-bench-mcp": {
-          type: "local",
-          command: ["node", mcpFixturePath],
-          environment: { P0_MCP_MARKER: join(scratch, "mcp-connected") },
-          enabled: true,
-        },
-      },
-    }
-  }
-
+  const config = seedConfigFor(id, scratch, mcpFixturePath, mcpAgents)
   if (config) {
     writeFileSync(join(configDir, "kilo.json"), JSON.stringify(config, null, 2) + "\n")
     console.log(`[p0-bench] seeded ${id} config at ${join(configDir, "kilo.json")}`)

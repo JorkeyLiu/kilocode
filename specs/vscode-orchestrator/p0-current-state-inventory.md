@@ -17,7 +17,8 @@ re-searching the repository.
   `Unknown` (not resolvable by static analysis), or `Not proven`
   (performance magnitude — LOCK-PERF-6).
 - No performance claim is made anywhere in this file. All magnitudes are
-  `Not proven` until the P0 instrumentation (section 9) records measurements.
+  `Not proven` here; measured values are recorded in the tracker (tracker
+  section 8) with evidence links, not in this artifact.
 - No P0 phase is claimed complete. This artifact is an input to P0 exit, not
   evidence of P0 exit.
 - Counts are reproducible via the commands in section 10. A count that is not
@@ -223,8 +224,10 @@ indexing status, memory fetch, session-status seed — plus
 | Webview entry points (esbuild) | 6 (+1 shiki worker asset) | Yes |
 | SSE `GlobalEvent` union members | 149 | Yes |
 
-The exact baseline-metric definitions are proposed in section 8 and are a
-proposed bounded decision pending hub approval (tracker open question 3).
+The exact baseline-metric definitions are approved (tracker open question 3
+resolved 2026-08-12); section 9 records the approved definitions with the
+reproducible counting commands, and the current counts are reflected in the
+tracker (section 8).
 
 ## 5. Removal Inventory
 
@@ -393,34 +396,37 @@ explicit gap entry with references. No target-surface acceptance criterion is
 proven (tracker section 6 statuses remain `Not proven`); the fixture carries
 `parity: "unproven"` for every entry.
 
-## 9. Baseline Count Definitions — PROPOSED Bounded Decision (Pending Hub Approval)
+## 9. Approved Baseline Count Definitions (Q3 Resolved 2026-08-12)
 
-**This section is a proposal, not a decision.** It proposes the exact
-definitions for tracker open question 3 ("What exact counts form the P0
-complexity baseline: message types, provider methods, webview entry points").
-The hub decides; this artifact only records the proposed definitions with
-reproducible counting commands (tracker Q3, runtime spec section 9).
+**Resolved 2026-08-12.** The hub approved the exact definitions for tracker
+open question 3 ("What exact counts form the P0 complexity baseline: message
+types, provider methods, webview entry points"). These definitions are the P0
+complexity baseline; later-phase delta comparisons (tracker section 8 "Delta at
+P3/P4/P5") must reuse the same definitions and the same reproducible counting
+commands (section 10) for before/after comparison.
 
-| Metric | Proposed definition | Current value (this artifact) | Counting command (section 10) |
+| Metric | Approved definition | Current value (this artifact) | Counting command (section 10) |
 |---|---|---|---|
 | Webview message types | Number of distinct `type:` string literals in the `WebviewMessage` union (webview→extension) plus the `ExtensionMessage` union (extension→webview); disjoint sets so the sum is unambiguous | 332 (189 + 143) | `msg-count.sh` |
 | Provider methods | Number of public methods on the generated v2 SDK client used by the extension (`@kilocode/sdk/v2/client`) | 250 | `awk` over `sdk.gen.ts` |
 | Webview entry points | Number of webview HTML entry points built by `esbuild.js` (excluding the shiki worker asset) | 6 | `esbuild.js` entries |
 
-Alternative definitions noted for the hub's decision:
+Alternatives considered and rejected at approval:
 
 - Message types could instead count union members (199 + 154 = 353) instead of
-  distinct literals (332). Distinct literals are preferred because they count
+  distinct literals (332). Distinct literals were chosen because they count
   the wire discriminator once.
 - Provider methods could count the legacy `src/gen` SDK (78) instead of the
   v2 SDK (250). The v2 SDK is the one actually imported by the extension
   (`connection-service.ts:3`), so it is the faithful protocol surface.
 - Webview entry points could count 7 including the shiki worker asset; the
-  worker asset is not a webview panel, so 6 is proposed.
+  worker asset is not a webview panel, so 6 was chosen.
 
-Risks of the proposal: all counts are current-state snapshots and will change
-as P3/P4 remove surfaces; the delta-tracking semantics (tracker section 8
-"Delta at P3/P4/P5") must use the same definitions for before/after comparison.
+Notes and risks: all counts are current-state snapshots and will change as
+P3/P4 remove surfaces; the delta-tracking semantics (tracker section 8 "Delta
+at P3/P4/P5") must use the same definitions for before/after comparison. The
+decision is recorded in the tracker (section 9); this artifact keeps the
+approved definitions and the reproducible commands.
 
 ## 10. Dynamic Evidence Unknowns
 
@@ -432,8 +438,8 @@ measurement. No claim about any of them is made here.
 | U-1 | Whether the 35 statically-unused message types are ever dispatched at runtime | Dispatch can be string-built, remote-controlled, or via generic handlers not matched by literal search | Runtime probe: instrument webview `postMessage` senders and extension `onDidReceiveMessage` receivers under representative flows (sidebar, Agent Manager, diff, marketplace) |
 | U-2 | Actual per-workspace config source count and merge order | `config.ts` enumerates 15 sources but active sources depend on env, auth records, org membership, and platform (macOS managed prefs) | Runtime log of merged source origins (`instruction_origins`, `skill_path_origins`, config warnings) in a probe workspace |
 | U-3 | Which removed-feature services actually initialize at worker startup | The layer graph (`app-runtime.ts:160-177`) declares services; Effect builds lazily per use, so declaration ≠ construction | P0 instrumentation on `KiloListener.build` / `Layer.buildWithMemoMap` construction (runtime spec 10.8) |
-| U-4 | Per-stage cold/warm startup durations | All instrumentation points exist (extension `perf/perf-instrument.ts`; CLI `kilocode/perf/instrument`; `cli/cmd/debug/startup.ts`) but no measurement has been recorded anywhere (tracker section 8 all `Not proven`) | Execute the P0 instrumentation with `KILO_P0_PERF=1` and record per-stage timings with evidence links (LOCK-PERF-6) |
-| U-5 | Cold-save convergence pass counts and durations | `config-convergence.ts` marks `config_commit`/`convergence_complete` but no timings exist | Instrumented cold saves under the benchmark scenarios (runtime spec 10.9) |
+| U-4 | Per-stage cold/warm startup durations | Instrumentation points exist (extension `perf/perf-instrument.ts`; CLI `kilocode/perf/instrument`; `cli/cmd/debug/startup.ts`); measurements are now recorded for the measured stages in the six accepted P0 campaigns (tracker section 8 performance rows, evidence links under `specs/vscode-orchestrator/evidence/p0-baseline/`) | Executed — per-stage timings recorded in the tracker (section 8) as descriptive n=5 statistics with evidence links (LOCK-PERF-6); stages without an accepted campaign or an existing extension-owned index (e.g. persisted-selector paint) are later-phase gates (P2/P3/P4.4/P5), not inventory claims |
+| U-5 | Cold-save convergence pass counts and durations | `config-convergence.ts` marks `config_commit`/`convergence_complete`; timings are now recorded from the accepted backend campaigns (tracker section 8: `hotPatchMs`, `commitToConvergedMs`, `burstToConvergedMs`, `patchMs`, `heldToReleaseMs`, `releaseToIdleMs`, `convergedToFollowUpMs`, `burstMs`, `convergedToAllModelsMs`; doc: `specs/vscode-orchestrator/evidence/p0-baseline/2026-08-12T06-08-27-792Z/backend.jsonl` and the historical `2026-08-11T04-46-19-926Z/backend.jsonl`) | Executed — instrumented cold saves under backend benchmark scenarios 11/12/13 (runtime spec 10.9), descriptive n=5, not SLA (R7 Open) |
 | U-6 | H-1..H-13 fixture green status | Fixture runs production services; the earlier `Service not found: @opencode/SessionRevert` wiring gap (4 fail / 0 pass) was resolved in this work unit by providing `SessionRevert.defaultLayer` in the fixture layer wiring (fixture `:263`) | RESOLVED — re-run 2026-08-10: `bun test test/kilocode/p0-harness-baseline.test.ts` → 4 pass / 0 fail / 51 expect() calls; H-3..H-6 gap capabilities and target-surface parity remain unproven (section 8) |
 | U-7 | Which SDK methods the extension actually calls (vs. the 250-member surface) | The extension uses a shared `KiloClient`; call sites are spread across many handler files | Runtime or static call-site census of `client.*` usage across `src/` (see section 4.3 for the known fetch chain) |
 | U-8 | Cloud/org provider participation in model fetch for real accounts | Org IDs and well-known remote config depend on live auth records | Probe with a test auth record; do not use real accounts in CI |
@@ -487,9 +493,12 @@ suites.
   challenged. LOCK-013 is respected: this artifact is migration evidence and
   does not edit canonical architecture docs. LOCK-PERF-6 is respected: no
   performance claim appears anywhere in this file.
-- Tracker open question 3 (baseline count definitions) is answered only as a
-  **proposal** in section 9; the decision returns to the hub.
-- Tracker open question 1 (topic meaning) and R1-R8 remain open; this artifact
+- Tracker open question 3 (baseline count definitions) is resolved (2026-08-12):
+  the approved definitions are recorded in section 9; the decision is recorded
+  in the tracker (section 9).
+- Tracker open question 1 (topic meaning), Q4, Q5, and R3/R4/R7 remain open;
+  Q3 and R1/R2/R5/R6/R8 are resolved with decisions recorded in the tracker
+  (section 9) and the runtime spec (section 9) as applicable. This artifact
   introduces no new decisions and does not modify `migration-tracker.md`.
 - The 35 statically-unused message types and the residual surfaces recorded in
   section 3 are current-state facts. P3 removal phases must treat them as
