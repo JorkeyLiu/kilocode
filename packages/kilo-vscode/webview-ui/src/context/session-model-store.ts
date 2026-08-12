@@ -19,8 +19,11 @@ export interface ModelStore {
   agentSelections: Record<string, string>
   /** sessionID -> recovered agent from message history (continuity, not override) */
   sessionRecoveredAgents: Record<string, string>
-  /** sessionID -> recovered variant bound to recovered model (continuity) */
-  sessionRecoveredVariants: Record<string, { variant: string; model: ModelSelection }>
+  /** sessionID -> recovered variant bound to recovered model (continuity).
+   *  `variant` is undefined when the session actually ran with no explicit
+   *  variant (provider default) — the record's existence still blocks
+   *  fall-through to configured/legacy memory (LOCK-003). */
+  sessionRecoveredVariants: Record<string, { variant: string | undefined; model: ModelSelection }>
   recentModels: ModelSelection[]
 }
 
@@ -37,6 +40,7 @@ function resolveModel(
   agentName: string,
   override?: ModelSelection | null,
   recents?: ModelSelection[],
+  memory?: ModelSelection | null,
 ): ModelSelection | null {
   return resolveModelSelection({
     providers: env.providers,
@@ -44,6 +48,7 @@ function resolveModel(
     override,
     mode: env.getModeModel(agentName),
     global: env.getGlobalModel(),
+    memory,
     recent: recents,
     fallback: env.fallback,
   })
@@ -53,12 +58,17 @@ function resolveModel(
  * Returns the model for a specific session, honoring per-session overrides
  * and recovered continuity state.
  *
- * Precedence: explicit sessionOverride > per-agent normal chain (when explicit
- * agent selected) > recovered continuity > config/default.
+ * LOCK-003/LOCK-004 precedence:
+ * explicit sessionOverride > [explicit agent: target agent chain] >
+ * recovered continuity > agent normal chain.
  *
- * When an explicit agent is selected, the agent's configured/default model
- * takes precedence over recovered state — recovery is only continuity for
- * sessions without explicit selections.
+ * LOCK-004: when an explicit agent is selected, the target agent's configured
+ * model (mode then global) resolves first, then that agent's remembered model,
+ * then model memory. Recovered state is only continuity for sessions without
+ * explicit selections.
+ *
+ * LOCK-002: the agent normal chain resolves configured model before per-agent
+ * usage memory, so memory only applies when no configured value is present.
  *
  * Both explicit overrides and recovered state are validated against the
  * current provider catalog. Invalid values fall through to the next
@@ -83,11 +93,11 @@ export function getSessionModel(
       return resolved
     }
   }
-  // When an explicit agent is selected, the agent's configured/default model
-  // takes precedence over recovered state — recovery is only continuity
-  // for sessions without explicit selections.
+  // LOCK-004: explicit agent → the target agent's configured model first,
+  // then its remembered model — recovery is only continuity for sessions
+  // without explicit selections.
   if (hasExplicitAgent) {
-    return resolveModel(env, agentName, store.modelSelections[agentName], store.recentModels)
+    return resolveModel(env, agentName, undefined, store.recentModels, store.modelSelections[agentName])
   }
   // No explicit agent — recovered continuity state may apply
   const recovered = store.sessionRecoveredModels[sessionID]
@@ -99,15 +109,16 @@ export function getSessionModel(
       return resolved
     }
   }
-  // Normal chain: per-agent global > config/default
-  return resolveModel(env, agentName, store.modelSelections[agentName], store.recentModels)
+  // Normal chain (LOCK-002): configured per-agent/global model > usage memory
+  return resolveModel(env, agentName, undefined, store.recentModels, store.modelSelections[agentName])
 }
 
 /**
  * Returns the model for the "current" view (model picker display).
  *
- * Precedence: explicit sessionOverride > recovered continuity >
- *             global modelSelections[agent] > config/default.
+ * LOCK-003/LOCK-002 precedence: explicit sessionOverride > recovered
+ * continuity > configured per-agent/global model > per-agent usage memory >
+ * recent model memory.
  */
 export function getSelected(
   store: ModelStore,
@@ -134,7 +145,8 @@ export function getSelected(
       }
     }
   }
-  return resolveModel(env, agentName, store.modelSelections[agentName], store.recentModels)
+  // LOCK-002: configured model > usage memory > model memory
+  return resolveModel(env, agentName, undefined, store.recentModels, store.modelSelections[agentName])
 }
 
 export interface ApplyResult {

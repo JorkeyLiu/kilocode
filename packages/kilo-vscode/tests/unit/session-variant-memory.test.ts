@@ -49,7 +49,7 @@ const CHILD = `
   }
 
   const noop = () => {}
-  const [config] = createSignal({})
+  const [config, setConfig] = createSignal({})
 
   // Two models, each with the same variant names so a stale value is only
   // invalid when it is absent from the model's variant map (checked at read time).
@@ -236,6 +236,23 @@ const CHILD = `
   ctx.setSessionAgent("s3", "ask")
   if (ctx.currentVariant("s3") !== "high") {
     fail("agent ask must restore high in-session: " + JSON.stringify(ctx.currentVariant("s3")))
+  }
+
+  // LOCK-005: an explicit fresh-composer pick outranks the configured start.
+  // Config now says model_variant "low" for gpt-4.1; the composer pick "high"
+  // must win for the upcoming session while memory tiers stay below config.
+  setConfig({ model_variant: "low", model_variant_overrides: {} })
+  ctx.selectModel("kilo", "gpt-4.1")
+  ctx.selectVariant("high")
+  if (ctx.currentVariant() !== "high") {
+    fail("LOCK-005: fresh-composer pick must outrank the configured variant: " + JSON.stringify(ctx.currentVariant()))
+  }
+  // Switching the composer agent drops the stale pending pick (it belonged to
+  // the previous agent context); the target agent's chain — here the
+  // configured "low" — resolves instead.
+  ctx.selectAgent("build")
+  if (ctx.currentVariant() !== "low") {
+    fail("LOCK-005: agent switch must drop the pending pick and resolve config: got " + JSON.stringify(ctx.currentVariant()) + " config=" + JSON.stringify(config()))
   }
 
   dispose()

@@ -226,17 +226,19 @@ describe("sendMessage / sendCommand draft id contract", () => {
     // Fresh draft IDs are created after ModeSwitcher stored the selected mode in
     // pendingAgentSelection(). The draft scope must inherit that pending agent
     // before promptAgent(scope) runs, otherwise the first send pairs the selected
-    // model with the default agent's system prompt.
+    // model with the default agent's system prompt. The seed block also runs on
+    // reuse of an existing draft (failed/in-flight send) so repicked composer
+    // choices replace the stale first-seed state (LOCK-002).
     const body = extractFunctionBody(source, "sendMessage")
     expect(body).toMatch(
-      /if \(!sid && !draftID && effectiveDraftID\) agentDrafts\.seed\(effectiveDraftID\)[\s\S]*const agent = promptAgent\(scope\)/,
+      /if \(!sid && effectiveDraftID\) \{[\s\S]*agentDrafts\.seed\(effectiveDraftID\)[\s\S]*const agent = promptAgent\(scope\)/,
     )
   })
 
   it("sendCommand seeds the pending agent before resolving the draft-scoped agent", () => {
     const body = extractFunctionBody(source, "sendCommand")
     expect(body).toMatch(
-      /if \(!sid && !draftID && effectiveDraftID\) agentDrafts\.seed\(effectiveDraftID\)[\s\S]*const agent = promptAgent\(scope\)/,
+      /if \(!sid && effectiveDraftID\) \{[\s\S]*agentDrafts\.seed\(effectiveDraftID\)[\s\S]*const agent = promptAgent\(scope\)/,
     )
   })
 
@@ -260,6 +262,30 @@ describe("sendMessage / sendCommand draft id contract", () => {
     expect(failed).toContain("draftSessionID() !== message.draftID")
     expect(failed).toContain("agentDrafts.prune(message.draftID)")
     expect(failed).not.toContain("setDraftSessionID(message.draftID)")
+  })
+})
+
+describe("handleSessionCreated recovery readiness contract", () => {
+  const source = readFile(SESSION_FILE)
+
+  it("marks only draft-backed webview-initiated sessions recovery-ready", () => {
+    // The extension echoes draftID only for sessions created from this
+    // webview's sendMessage/sendCommand (resolveSession). Replayed
+    // session.created events for restored/existing sessions carry no draftID
+    // and must stay memory-gated until recoverPrefs completes — an
+    // unconditional markRecovered would open variant memory before history.
+    const body = extractFunctionBody(source, "handleSessionCreated")
+    expect(body).toMatch(/if \(draftID\) markRecovered\(session\.id\)/)
+    expect(body).not.toMatch(/^\s*markRecovered\(session\.id\)\s*$/m)
+  })
+
+  it("recoverPrefs is the only gate opener for replayed/restored sessions", () => {
+    // Restored sessions become recovery-ready exactly when their message
+    // history is recovered (messagesLoaded/reconcile/revert/cloud paths all
+    // funnel through recoverPrefs). If recoverPrefs ever stops marking the
+    // session, a replayed session could never resolve remembered strength.
+    const body = extractFunctionBody(source, "recoverPrefs")
+    expect(body).toContain("markRecovered(sessionID)")
   })
 })
 
