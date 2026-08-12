@@ -6,7 +6,10 @@
  * snapshot process.env at load time are: `@opencode-ai/core/flag/flag`
  * (KILO_DB, KILO_PURE, ...), `@opencode-ai/core/global` (XDG_* → Path.data/
  * config/log/...), `@opencode-ai/core/database/database` (KILO_DB resolution)
- * and `@/kilocode/perf/instrument` (`KILO_P0_PERF` → enabled once). If any of
+ * and `@/kilocode/perf/instrument` (`KILO_P0_PERF`; the flag is read per
+ * record, so ordering against instrument.ts evaluation is no longer a hazard,
+ * but setting it before any kilo module evaluates keeps the module-load spans
+ * like `app_layer_define` / `app_runtime_make` measured). If any of
  * them evaluates before these variables are set, the benchmark writes to the
  * real user state and measures the wrong (disabled) instrumentation.
  *

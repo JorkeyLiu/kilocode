@@ -10,6 +10,8 @@
 
 import { describe, expect, it } from "bun:test"
 import {
+  SPAN_STAGES,
+  STAGES,
   between,
   countStage,
   extractP0Records,
@@ -19,6 +21,7 @@ import {
   stageDurations,
   stageRecords,
   stageSpans,
+  type P0Record,
 } from "./p0-records"
 
 const MARK_LINE =
@@ -129,5 +132,74 @@ describe("p0 record parser", () => {
   it("stageSpans counts zero for mark stages", () => {
     const records = extractP0Records(`${MARK_LINE}\n`)
     expect(stageSpans(records, "config_commit")).toEqual({ spans: 0, unmatchedStarts: 0 })
+  })
+
+  it("stage lists document the P0 stage/span coverage (tool/permission/question/app-layer)", () => {
+    const stages: string[] = [
+      "app_layer_define",
+      "app_runtime_make",
+      "tool_execute",
+      "tool_execute_plugin",
+      "permission_wait",
+      "question_wait",
+    ]
+    for (const stage of stages) {
+      expect(STAGES.includes(stage as (typeof STAGES)[number])).toBe(true)
+      expect(SPAN_STAGES.includes(stage as (typeof SPAN_STAGES)[number])).toBe(true)
+    }
+  })
+
+  it("parses a tool_execute span with id correlation and tool meta", () => {
+    const start = parseP0Line(
+      "INFO  service=p0-perf event=p0.start stage=tool_execute ts=1754822942001 id=ses_1 meta={\"tool\":\"read\",\"callID\":\"call_1\"} tool_execute",
+    )
+    expect(start).toMatchObject({ event: "p0.start", stage: "tool_execute", id: "ses_1" })
+    expect(start?.meta).toEqual({ tool: "read", callID: "call_1" })
+    const end = parseP0Line(
+      "INFO  service=p0-perf event=p0.end stage=tool_execute ts=1754822942002 duration=7 id=ses_1 meta={\"tool\":\"read\"} tool_execute",
+    )
+    expect(end).toMatchObject({ event: "p0.end", stage: "tool_execute", id: "ses_1", duration: 7 })
+    expect(stageSpans([start!, end!], "tool_execute")).toEqual({ spans: 1, unmatchedStarts: 0 })
+  })
+
+  it("parses the distinct tool_execute_plugin span separately from the outer tool_execute span", () => {
+    const outer = [
+      parseP0Line(
+        "INFO  service=p0-perf event=p0.start stage=tool_execute ts=1754822942001 id=ses_1 meta={\"tool\":\"p0_echo\",\"callID\":\"call_1\"} tool_execute",
+      ),
+      parseP0Line(
+        "INFO  service=p0-perf event=p0.end stage=tool_execute ts=1754822942003 duration=9 id=ses_1 meta={\"tool\":\"p0_echo\"} tool_execute",
+      ),
+    ]
+    const inner = [
+      parseP0Line(
+        "INFO  service=p0-perf event=p0.start stage=tool_execute_plugin ts=1754822942001 id=ses_1 meta={\"tool\":\"p0_echo\",\"callID\":\"call_1\"} tool_execute_plugin",
+      ),
+      parseP0Line(
+        "INFO  service=p0-perf event=p0.end stage=tool_execute_plugin ts=1754822942002 duration=4 id=ses_1 meta={\"tool\":\"p0_echo\"} tool_execute_plugin",
+      ),
+    ]
+    expect(outer.every((rec) => rec?.stage === "tool_execute")).toBe(true)
+    expect(inner.every((rec) => rec?.stage === "tool_execute_plugin")).toBe(true)
+    // One completed pair per stage — the duplicate-pair corruption is gone.
+    expect(stageSpans([...outer, ...inner] as P0Record[], "tool_execute")).toEqual({ spans: 1, unmatchedStarts: 0 })
+    expect(stageSpans([...outer, ...inner] as P0Record[], "tool_execute_plugin")).toEqual({
+      spans: 1,
+      unmatchedStarts: 0,
+    })
+    expect(stageDurations([...outer, ...inner] as P0Record[], "tool_execute_plugin")).toEqual([4])
+  })
+
+  it("permission_wait spans correlate by request id and leave unmatched starts on rejection", () => {
+    const start = parseP0Line(
+      "INFO  service=p0-perf event=p0.start stage=permission_wait ts=1754822942001 id=req_9 meta={\"sessionID\":\"ses_1\",\"permission\":\"read\"} permission_wait",
+    )
+    const end = parseP0Line(
+      "INFO  service=p0-perf event=p0.end stage=permission_wait ts=1754822942002 duration=140 id=req_9 meta={\"sessionID\":\"ses_1\"} permission_wait",
+    )
+    expect(stageSpans([start!, end!], "permission_wait")).toEqual({ spans: 1, unmatchedStarts: 0 })
+    // A rejected ask never reaches end(): lone start is the failure signal.
+    expect(stageSpans([start!], "permission_wait")).toEqual({ spans: 0, unmatchedStarts: 1 })
+    expect(stageDurations([start!, end!], "permission_wait")).toEqual([140])
   })
 })

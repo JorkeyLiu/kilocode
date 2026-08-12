@@ -8,7 +8,10 @@
  *   - summary lines carry truthful per-metric units (ms / bytes/ms / count),
  *   - run status/failure propagation (a failed measured sample → failed run),
  *   - cleanup on failure: the run root is removed after successful runs,
- *     failed runs, and early throws (unknown scenario id).
+ *     failed runs, and early throws (unknown scenario id),
+ *   - git provenance (`gitState`) clean/dirty/commit detection is verified
+ *     against a run-owned temp git repo — never the real worktree — and the
+ *     emitted JSONL carries gitCommit/gitDirty on both sample and run records.
  *
  * The JSONL artifact is written to the real system temp (outside the run-owned
  * root, which is removed by runCampaign) and cleaned up by this file.
@@ -20,8 +23,9 @@ import * as Log from "@opencode-ai/core/util/log"
 import fs from "node:fs"
 import path from "node:path"
 import { run, bootBackend } from "./backend"
-import { runCampaign, runStatus } from "./runner"
+import { runCampaign, runStatus, gitState, sampleEnv, envFor } from "./runner"
 import { registerBenchmarkEnv, runRoot, systemTmp } from "./environment"
+import { tmpdir } from "../fixture/fixture"
 
 await Log.init({ print: true })
 
@@ -51,6 +55,68 @@ describe("runner run status", () => {
   })
 })
 
+describe("runner git provenance", () => {
+  it(
+    "gitState reports commit + short head and clean in a fresh git repo",
+    async () => {
+      await using tmp = await tmpdir({ git: true })
+      const state = gitState(tmp.path)
+      expect(state.gitHead).toBeTruthy()
+      expect(state.gitCommit).toMatch(/^[0-9a-f]{40}$/)
+      expect(state.gitHead).toBe(state.gitCommit!.slice(0, state.gitHead!.length))
+      expect(state.gitDirty).toBe(false)
+    },
+    30_000,
+  )
+
+  it(
+    "gitState reports dirty when the repo has uncommitted/untracked changes",
+    async () => {
+      await using tmp = await tmpdir({ git: true })
+      await Bun.write(path.join(tmp.path, "untracked.txt"), "dirty")
+      expect(gitState(tmp.path).gitDirty).toBe(true)
+    },
+    30_000,
+  )
+
+  it("gitState reports null commit/head and dirty for a non-git directory", async () => {
+    await using tmp = await tmpdir()
+    const state = gitState(tmp.path)
+    expect(state.gitHead).toBeNull()
+    expect(state.gitCommit).toBeNull()
+    expect(state.gitDirty).toBe(true)
+  })
+
+  it("sampleEnv carries the explicit commit alias and dirty flag", () => {
+    const env = sampleEnv()
+    expect(env.gitCommit).toMatch(/^[0-9a-f]{40}$/)
+    expect(env.gitHead).toBeTruthy()
+    expect(typeof env.gitDirty).toBe("boolean")
+    expect(env.os).toBe(process.platform)
+  })
+
+  it(
+    "envFor freezes clean provenance before self-output creation flips the tree",
+    async () => {
+      // The evidence dir is NOT gitignored, so a campaign that writes output
+      // inside the repo makes the tree technically dirty afterwards. The
+      // recorded provenance must be captured BEFORE artifact creation and stay
+      // frozen — a clean campaign records gitDirty=false even though the
+      // artifact is now visible to git.
+      await using repo = await tmpdir({ git: true })
+      const frozen = envFor(repo.path)
+      expect(frozen.gitDirty).toBe(false)
+      expect(frozen.gitCommit).toMatch(/^[0-9a-f]{40}$/)
+      await fs.promises.writeFile(path.join(repo.path, "backend.jsonl"), "x\n")
+      // The physical tree flipped dirty (self-output is visible to git)...
+      expect(gitState(repo.path).gitDirty).toBe(true)
+      // ...but the frozen provenance captured before creation stays clean.
+      expect(frozen.gitDirty).toBe(false)
+    },
+    30_000,
+  )
+})
+
 describe("runner campaign (production seam)", () => {
   it(
     "writes a complete JSONL artifact with warmup exclusion and cleans the run root",
@@ -70,11 +136,25 @@ describe("runner campaign (production seam)", () => {
       expect(lines.at(-1)?.kind).toBe("run")
       expect(lines.at(-1)?.event).toBe("finish")
       expect(lines.at(-1)?.status).toBe("ok")
+      // Both run-envelope records carry campaign provenance (commit/head/dirty).
+      const env = (lines[0]?.env ?? {}) as Record<string, unknown>
+      expect(lines.at(-1)?.env).toEqual(lines[0]?.env)
+      expect(env.gitCommit).toMatch(/^[0-9a-f]{40}$/)
+      expect(env.gitHead).toBeTruthy()
+      expect(typeof env.gitDirty).toBe("boolean")
 
       const samples = lines.filter((line) => line.kind === "sample")
       expect(samples).toHaveLength(2)
       expect(samples.map((line) => line.phase as string).sort()).toEqual(["measured", "warmup"])
       expect(samples.every((line) => line.ok)).toBe(true)
+      // Every measured sample's provenance is unambiguous.
+      for (const sample of samples) {
+        const sampleEnv = (sample.env ?? {}) as Record<string, unknown>
+        expect(sampleEnv.gitCommit).toMatch(/^[0-9a-f]{40}$/)
+        expect(typeof sampleEnv.gitDirty).toBe("boolean")
+        expect(sampleEnv.boot).toContain("Server.listen/AppLayer")
+        expect(Array.isArray(sample.failures)).toBe(true)
+      }
 
       const summaries = lines.filter((line) => line.kind === "summary")
       expect(summaries.length).toBeGreaterThan(0)

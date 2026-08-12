@@ -27,6 +27,7 @@ import { ModelV2 } from "@opencode-ai/core/model"
 // kilocode_change start
 import { SwePruner } from "@/kilocode/swe-pruner"
 import { Config } from "@/config/config"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 // kilocode_change end
 
 const log = Log.create({ service: "session.tools" })
@@ -102,6 +103,13 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
         return run.promise(
           Effect.gen(function* () {
             const ctx = context(args, options)
+            // P0: actual tool execution span. A p0.end is emitted only when the
+            // effect completes normally; a failed/interrupted effect leaves an
+            // unmatched p0.start (the instrument contract's failure signal).
+            const timer = P0Perf.span("tool_execute", {
+              id: ctx.sessionID,
+              meta: { tool: item.id, callID: ctx.callID, messageID: input.processor.message.id },
+            })
             yield* plugin.trigger(
               "tool.execute.before",
               { tool: item.id, sessionID: ctx.sessionID, callID: ctx.callID },
@@ -133,6 +141,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
             if (options.abortSignal?.aborted) {
               yield* input.processor.completeToolCall(options.toolCallId, output)
             }
+            timer.end()
             return output
           }),
         )
@@ -152,6 +161,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
       run.promise(
         Effect.gen(function* () {
           const ctx = context(args, opts)
+          const timer = P0Perf.span("tool_execute", {
+            id: ctx.sessionID,
+            meta: { tool: key, callID: opts.toolCallId, messageID: input.processor.message.id },
+          })
           yield* plugin.trigger(
             "tool.execute.before",
             { tool: key, sessionID: ctx.sessionID, callID: opts.toolCallId },
@@ -228,6 +241,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           if (opts.abortSignal?.aborted) {
             yield* input.processor.completeToolCall(opts.toolCallId, output)
           }
+          timer.end()
           return output
         }),
       )

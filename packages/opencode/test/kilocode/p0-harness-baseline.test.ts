@@ -2,10 +2,10 @@
  * P0 harness baseline fixture (H-1..H-13).
  *
  * A focused, machine-readable baseline entry that exercises the existing
- * production harness wiring with real fixtures and records explicit
- * unsupported gaps. It is NOT a target-surface parity suite: every entry
- * carries `parity: "unproven"` and the CLI tests never claim parity for the
- * orchestration panel target surface (specs/vscode-orchestrator §6).
+ * production harness wiring with real fixtures. It is NOT a target-surface
+ * parity suite: every entry carries `parity: "unproven"` and the CLI tests
+ * never claim parity for the orchestration panel target surface
+ * (specs/vscode-orchestrator §6).
  *
  * Locks respected (no challenge):
  * - LOCK-005: the internal context-overflow safeguard is exercised as an
@@ -13,11 +13,13 @@
  * - LOCK-007: SessionRevert + Snapshot semantics are exercised through the
  *   real revert/unrevert rollback path (H-12); ADR-0001 storage rewriting is
  *   out of scope.
- * - LOCK-008 / LOCK-PERF-5: every core harness capability is either executed
- *   through real production services/fixtures or recorded as an explicit gap
- *   with references to existing coverage. No core service is mocked; only the
- *   established side layers (empty MCP client registry, no-op LSP, no-op
- *   session summary) from the existing session-loop tests are reused.
+ * - LOCK-008 / LOCK-PERF-5: every core harness capability (H-1..H-13) is
+ *   executed through real production services and run-owned fixtures. No core
+ *   service is mocked. Only the established side layers from the existing
+ *   session-loop tests remain: the no-op session summary and the no-op LSP.
+ *   The MCP client registry is the real MCP.Service (H-5 connects a run-owned
+ *   stdio MCP server through the production transport and executes a real MCP
+ *   tool).
  *
  * Output: a structured JSON summary (status + evidence per H id) is printed
  * at the end of the file via afterAll (`bun test --print` or `--verbose`
@@ -31,17 +33,19 @@
  */
 
 import { afterAll, describe, expect } from "bun:test"
-import { Cause, Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer } from "effect"
 import { FetchHttpClient } from "effect/unstable/http"
 import { NodeFileSystem } from "@effect/platform-node"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import * as Log from "@opencode-ai/core/util/log"
 import fs from "fs/promises"
 import path from "path"
+import { fileURLToPath, pathToFileURL } from "url"
 
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
@@ -93,6 +97,7 @@ import type { Provider } from "@/provider/provider"
 import { MemoryService } from "@kilocode/kilo-memory/effect/service"
 
 import { provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
+import { markProjectConfigReady } from "../fixture/plugin"
 import { pollWithTimeout, testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
 
@@ -154,29 +159,10 @@ const summary = Layer.succeed(
   }),
 )
 
-const mcp = Layer.succeed(
-  MCP.Service,
-  MCP.Service.of({
-    status: () => Effect.succeed({}),
-    clients: () => Effect.succeed({}),
-    tools: () => Effect.succeed({}),
-    prompts: () => Effect.succeed({}),
-    resources: () => Effect.succeed({}),
-    add: () => Effect.succeed({ status: { status: "disabled" as const } }),
-    connect: () => Effect.void,
-    disconnect: () => Effect.void,
-    getPrompt: () => Effect.succeed(undefined),
-    readResource: () => Effect.succeed(undefined),
-    startAuth: () => Effect.die("unexpected MCP auth in P0 baseline"),
-    authenticate: () => Effect.die("unexpected MCP auth in P0 baseline"),
-    finishAuth: () => Effect.die("unexpected MCP auth in P0 baseline"),
-    removeAuth: () => Effect.void,
-    supportsOAuth: () => Effect.succeed(false),
-    hasStoredTokens: () => Effect.succeed(false),
-    getAuthStatus: () => Effect.succeed("not_authenticated" as const),
-  }),
-)
-
+// LOCK-008 / LOCK-PERF-5: the MCP client registry is the REAL production
+// MCP.Service. H-5 connects a run-owned stdio MCP server through the
+// production transport and executes a real MCP tool; for configs without an
+// `mcp` block the service is a no-op (empty status/clients/tools).
 const lsp = Layer.succeed(
   LSP.Service,
   LSP.Service.of({
@@ -205,7 +191,9 @@ const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLaye
 // tests (test/session/snapshot-tool-race.test.ts,
 // test/kilocode/session-prompt-compaction-safety.test.ts). Background
 // subagents are enabled so H-8 exercises the real TaskTool + BackgroundJob
-// path instead of a disabled-feature rejection.
+// path instead of a disabled-feature rejection. Skill + Git are provided at
+// the top level so H-4 exercises Skill.Service discovery directly and the
+// ToolRegistry consumes the same instance.
 const flags = RuntimeFlags.layer({ experimentalBackgroundSubagents: true })
 
 function makeHttp() {
@@ -223,7 +211,9 @@ function makeHttp() {
     flags,
     ProviderSvc.defaultLayer,
     lsp,
-    mcp,
+    MCP.defaultLayer,
+    Skill.defaultLayer,
+    Git.defaultLayer,
     FSUtil.defaultLayer,
     Reference.defaultLayer,
     EventV2Bridge.defaultLayer,
@@ -234,13 +224,11 @@ function makeHttp() {
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
   const registry = ToolRegistry.layer.pipe(
-    Layer.provide(Skill.defaultLayer),
     Layer.provide(FetchHttpClient.layer),
     Layer.provide(CrossSpawnSpawner.defaultLayer),
     Layer.provide(RepositoryCache.defaultLayer),
     Layer.provide(Ripgrep.defaultLayer),
     Layer.provide(Format.defaultLayer),
-    Layer.provide(Git.defaultLayer),
     Layer.provide(Reference.defaultLayer),
     Layer.provide(Command.defaultLayer),
     Layer.provide(Auth.defaultLayer),
@@ -448,65 +436,87 @@ const readFile = (file: string) => Effect.promise(() => fs.readFile(file, "utf-8
 const writeFile = (file: string, text: string) => Effect.promise(() => fs.writeFile(file, text))
 
 // ---------------------------------------------------------------------------
-// Gap entries (recorded statically; full flows already covered elsewhere)
+// H-3 / H-4 / H-5 fixtures (run-owned; no shared/external endpoints)
 // ---------------------------------------------------------------------------
 
-const GAPS: Omit<HarnessEntry, "checks">[] = [
-  {
-    id: "H-3",
-    capability: "Extensible tools (user-defined tool invocable in a session)",
-    status: "gap",
-    parity: "unproven",
-    services: [],
-    gapReason:
-      "A user-defined tool requires plugin/tool-file loading; the plugin install path is a network dependency not safely bounded in a baseline fixture. The real ToolRegistry execution path is smoke-covered by H-11's bash tool through the session loop.",
-    references: ["test/tool/registry.test.ts", "test/tool/tool-define.test.ts", "test/tool/truncation.test.ts"],
-  },
-  {
-    id: "H-4",
-    capability: "Skills (load and run per session)",
-    status: "gap",
-    parity: "unproven",
-    services: [],
-    gapReason:
-      "Full skill discovery/load/run with real skill files is covered by the existing skill suites; re-executing it here would duplicate them. No skill fixture is added in P0.",
-    references: [
-      "test/skill/skill.test.ts",
-      "test/tool/skill.test.ts",
-      "test/kilocode/agent-skill-permissions.test.ts",
-    ],
-  },
-  {
-    id: "H-5",
-    capability: "MCP (servers configured and used per session)",
-    status: "gap",
-    parity: "unproven",
-    services: ["MCP.Service"],
-    gapReason:
-      "MCP tool invocation needs a configured MCP server endpoint; the session-loop layer intentionally provides an empty MCP client registry (established convention in the existing session-loop tests). Full MCP config/migration/auth coverage exists separately.",
-    references: [
-      "test/kilocode/mcp-migrator.test.ts",
-      "test/kilocode/mcp-oauth-callback.test.ts",
-      "test/kilocode/server/mcp-auth-write-intent.test.ts",
-      "test/kilocode/cli/cmd/mcp.test.ts",
-    ],
-  },
-  {
-    id: "H-6",
-    capability: "Permission/question flows resolve through the permission flow",
-    status: "gap",
-    parity: "unproven",
-    services: ["Permission.Service", "Question.Service"],
-    gapReason:
-      "The full ask -> user reply -> tool-continue chain through a live session loop is covered by the existing permission/question suites; the baseline does not re-drive interactive permission prompts to keep the run deterministic and bounded.",
-    references: [
-      "test/permission/next.test.ts",
-      "test/question/question.test.ts",
-      "test/kilocode/session-prompt-permission-refresh.test.ts",
-      "test/kilocode/question-cancel.test.ts",
-    ],
-  },
-]
+/** Real Tool.Context whose ask goes through the real Permission.Service. */
+const toolCtx = Effect.fn("p0.toolCtx")(function* (sessionID: SessionID, ruleset: Permission.Ruleset) {
+  const permission = yield* Permission.Service
+  return {
+    sessionID,
+    messageID: MessageID.ascending(),
+    agent: "myagent",
+    abort: new AbortController().signal,
+    messages: [],
+    metadata: () => Effect.void,
+    ask: (req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">) =>
+      permission.ask({ ...req, sessionID, ruleset }).pipe(Effect.orDie),
+  }
+})
+
+/**
+ * H-5: the run-owned MCP stdio server fixture. The script lives in the test's
+ * temp dir (`mcp-fixture/server.js`) and is spawned by the production
+ * MCP.Service `StdioClientTransport` with cwd = the active instance directory.
+ * It imports the already-installed MCP SDK by absolute file URL (resolved from
+ * the same workspace store the client uses), declares the `tools` capability,
+ * and serves one real tool (`p0_echo`) that writes the received arguments to
+ * a run-owned log file before answering — proof the child process executed.
+ */
+const sdkEsmDir = path.dirname(fileURLToPath(import.meta.resolve("@modelcontextprotocol/sdk/client/index.js")))
+const mcpSdkEntry = (rel: string) => pathToFileURL(path.join(sdkEsmDir, rel)).href
+
+const MCP_FIXTURE_SERVER = [
+  `import { Server } from ${JSON.stringify(mcpSdkEntry("../server/index.js"))}`,
+  `import { StdioServerTransport } from ${JSON.stringify(mcpSdkEntry("../server/stdio.js"))}`,
+  `import { ListToolsRequestSchema, CallToolRequestSchema } from ${JSON.stringify(mcpSdkEntry("../types.js"))}`,
+  `import { appendFileSync } from "node:fs"`,
+  ``,
+  `const server = new Server({ name: "p0-fixture", version: "1.0.0" }, { capabilities: { tools: {} } })`,
+  `server.setRequestHandler(ListToolsRequestSchema, async () => ({`,
+  `  tools: [`,
+  `    {`,
+  `      name: "p0_echo",`,
+  `      description: "Echo a message back",`,
+  `      inputSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"] },`,
+  `    },`,
+  `  ],`,
+  `}))`,
+  `server.setRequestHandler(CallToolRequestSchema, async (request) => {`,
+  `  const args = request.params.arguments ?? {}`,
+  `  const message = String(args.message ?? "")`,
+  `  appendFileSync(process.env.P0_MCP_LOG ?? "mcp-fixture/calls.log", "echo:" + message + "\\n")`,
+  `  return { content: [{ type: "text", text: "echo:" + message }] }`,
+  `})`,
+  `const transport = new StdioServerTransport()`,
+  `await server.connect(transport)`,
+  ``,
+].join("\n")
+
+/** H-5 config: the fixture server is declared in the project mcp config. */
+function mcpConfig(url: string) {
+  return {
+    ...config(url),
+    mcp: {
+      "p0-fixture": {
+        type: "local" as const,
+        command: ["bun", "mcp-fixture/server.js"],
+        environment: { P0_MCP_LOG: "mcp-fixture/calls.log" },
+        enabled: true,
+      },
+    },
+  }
+}
+
+/** The stdio child PID of a connected MCP client, when it uses stdio. */
+const stdioChildPid = (client: { transport?: unknown } | undefined) => {
+  const t = client?.transport
+  if (t && typeof t === "object" && "pid" in t) {
+    const pid = t.pid
+    return typeof pid === "number" ? pid : undefined
+  }
+  return undefined
+}
 
 // ---------------------------------------------------------------------------
 // H-1 / H-9 / H-10 / H-11: lifecycle + persistence + custom agent/provider
@@ -1199,6 +1209,496 @@ describe("P0 harness baseline", () => {
     // session-prompt-queue.test.ts).
     { timeout: 30_000 },
   )
+
+  // -------------------------------------------------------------------------
+  // H-3: extensible tools — user-defined tool through the real ToolRegistry
+  // -------------------------------------------------------------------------
+
+  it.live("H-3 user-defined tool loads and executes through the real ToolRegistry", () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ dir }) {
+        const checks: Check[] = []
+        // The plugin-deps stubs (LOCK-003/004 pattern) make the registry's
+        // `config.waitForDependencies()` join a no-op install fiber instead of
+        // firing a detached network install when tool files are discovered.
+        yield* Effect.promise(() => markProjectConfigReady(dir))
+        yield* Effect.promise(() => fs.mkdir(path.join(dir, ".kilo", "tool"), { recursive: true }))
+        const pluginTool = pathToFileURL(path.resolve(import.meta.dir, "../../../plugin/src/tool.ts")).href
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(dir, ".kilo", "tool", "p0_echo.ts"),
+            [
+              `import { tool } from ${JSON.stringify(pluginTool)}`,
+              `import { writeFileSync } from "node:fs"`,
+              `export default tool({`,
+              `  description: "Echo a message back",`,
+              `  args: { message: tool.schema.string().describe("message to echo") },`,
+              `  execute: async ({ message }, ctx) => {`,
+              `    writeFileSync(ctx.directory + "/p0-custom-called.txt", "echo:" + message)`,
+              `    return "echo:" + message`,
+              `  },`,
+              `})`,
+              "",
+            ].join("\n"),
+          ),
+        )
+
+        const registry = yield* ToolRegistry.Service
+        const sessions = yield* Session.Service
+        const agents = yield* AgentSvc.Service
+
+        checks.push(
+          yield* run("H-3 custom tool is discovered by the real ToolRegistry", () =>
+            Effect.gen(function* () {
+              const loaded = (yield* registry.all()).find((t) => t.id === "p0_echo")
+              if (!loaded) throw new Error("custom p0_echo tool was not loaded")
+              expect(loaded.description).toContain("Echo a message back")
+            }),
+          ),
+        )
+
+        checks.push(
+          yield* run("H-3 custom tool executes through the registry-returned tool", () =>
+            Effect.gen(function* () {
+              const loaded = (yield* registry.all()).find((t) => t.id === "p0_echo")
+              if (!loaded) throw new Error("custom p0_echo tool was not loaded")
+              const session = yield* sessions.create({
+                title: "P0 custom tool",
+                permission: [{ permission: "*", pattern: "*", action: "allow" }],
+              })
+              const ctx = yield* toolCtx(session.id, [{ permission: "*", pattern: "*", action: "allow" }])
+              const result = yield* loaded.execute({ message: "hello" }, ctx)
+              expect(result.output).toBe("echo:hello")
+              // The tool's own execute wrote this file via the plugin bridge's
+              // `directory` — proof of real execution, not just discovery.
+              const artifact = yield* readFile(path.join(dir, "p0-custom-called.txt"))
+              expect(artifact).toBe("echo:hello")
+              yield* sessions.remove(session.id)
+            }),
+          ),
+        )
+
+        checks.push(
+          yield* run("H-3 custom tool is advertised to the model with the other prompt tools", () =>
+            Effect.gen(function* () {
+              const agent = yield* agents.get("myagent")
+              if (!agent) throw new Error("missing myagent")
+              const listed = yield* registry.tools({ providerID: ref.providerID, modelID: ref.modelID, agent })
+              const tool = listed.find((t) => t.id === "p0_echo")
+              if (!tool) throw new Error("custom p0_echo tool was not advertised for prompts")
+              expect(tool.jsonSchema).toMatchObject({
+                type: "object",
+                properties: { message: { type: "string" } },
+                required: ["message"],
+              })
+            }),
+          ),
+        )
+
+        record({
+          id: "H-3",
+          capability: "Extensible tools (user-defined tool invocable in a session)",
+          status: "executed",
+          parity: "unproven",
+          checks,
+          services: ["ToolRegistry", "Config.Service", "Session.Service", "Permission.Service", "@kilocode/plugin"],
+          evidence: [
+            `fixture dir: ${dir}`,
+            ".kilo/tool/p0_echo.ts (user-defined tool file, plugin-deps stubbed via markProjectConfigReady)",
+            "registry.all() + registry.tools() expose p0_echo with JSON Schema",
+            "execute returns echo:hello and the tool wrote p0-custom-called.txt via ctx.directory",
+          ],
+          references: ["test/tool/registry.test.ts", "test/tool/tool-define.test.ts"],
+        })
+
+        assertChecks(checks)
+      }),
+      { git: true, config: config },
+    ),
+    // Tool discovery + dynamic import of the user-defined .ts file.
+    { timeout: 30_000 },
+  )
+
+  // -------------------------------------------------------------------------
+  // H-4: skills — run-owned SKILL.md loaded and executed through the real
+  // skill/tool path
+  // -------------------------------------------------------------------------
+
+  it.live("H-4 run-owned SKILL.md discovered and executed through Skill.Service + SkillTool", () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ dir }) {
+        const checks: Check[] = []
+        yield* Effect.promise(() => markProjectConfigReady(dir))
+        yield* Effect.promise(() =>
+          fs.mkdir(path.join(dir, ".kilo", "skills", "p0-baseline-skill"), { recursive: true }),
+        )
+        yield* Effect.promise(() =>
+          Bun.write(
+            path.join(dir, ".kilo", "skills", "p0-baseline-skill", "SKILL.md"),
+            [
+              "---",
+              "name: p0-baseline-skill",
+              "description: P0 baseline skill fixture",
+              "---",
+              "",
+              "# P0 Baseline Skill",
+              "",
+              "P0_BASELINE_SKILL_MARKER",
+              "",
+            ].join("\n"),
+          ),
+        )
+
+        const skill = yield* Skill.Service
+        const registry = yield* ToolRegistry.Service
+        const sessions = yield* Session.Service
+        const agents = yield* AgentSvc.Service
+
+        checks.push(
+          yield* run("H-4 SKILL.md is discovered by the real Skill.Service", () =>
+            Effect.gen(function* () {
+              const info = yield* skill.get("p0-baseline-skill")
+              if (!info) throw new Error("p0-baseline-skill was not discovered")
+              expect(info.content).toContain("P0_BASELINE_SKILL_MARKER")
+              expect(info.location).toContain(path.join(".kilo", "skills", "p0-baseline-skill"))
+            }),
+          ),
+        )
+
+        checks.push(
+          yield* run("H-4 the skill tool advertises the run-owned skill to the model", () =>
+            Effect.gen(function* () {
+              const agent = yield* agents.get("myagent")
+              if (!agent) throw new Error("missing myagent")
+              const listed = yield* registry.tools({ providerID: ref.providerID, modelID: ref.modelID, agent })
+              const tool = listed.find((t) => t.id === "skill")
+              if (!tool) throw new Error("skill tool was not advertised")
+              expect(tool.description).toContain("p0-baseline-skill")
+            }),
+          ),
+        )
+
+        checks.push(
+          yield* run("H-4 SkillTool loads and returns the skill content through the real ask path", () =>
+            Effect.gen(function* () {
+              const agent = yield* agents.get("myagent")
+              if (!agent) throw new Error("missing myagent")
+              const listed = yield* registry.tools({ providerID: ref.providerID, modelID: ref.modelID, agent })
+              const tool = listed.find((t) => t.id === "skill")
+              if (!tool) throw new Error("skill tool was not advertised")
+              const session = yield* sessions.create({
+                title: "P0 skill",
+                permission: [{ permission: "*", pattern: "*", action: "allow" }],
+              })
+              const ctx = yield* toolCtx(session.id, [{ permission: "*", pattern: "*", action: "allow" }])
+              const out = yield* tool.execute({ name: "p0-baseline-skill" }, ctx)
+              expect(out.title).toBe("Loaded skill: p0-baseline-skill")
+              expect(out.output).toContain('<skill_content name="p0-baseline-skill">')
+              expect(out.output).toContain("P0_BASELINE_SKILL_MARKER")
+              expect(out.metadata.dir).toBe(path.join(dir, ".kilo", "skills", "p0-baseline-skill"))
+              yield* sessions.remove(session.id)
+            }),
+          ),
+        )
+
+        record({
+          id: "H-4",
+          capability: "Skills (load and run per session)",
+          status: "executed",
+          parity: "unproven",
+          checks,
+          services: ["Skill.Service", "SkillTool", "ToolRegistry", "Permission.Service", "Ripgrep"],
+          evidence: [
+            `fixture dir: ${dir}`,
+            ".kilo/skills/p0-baseline-skill/SKILL.md (run-owned, frontmatter name/description)",
+            "Skill.Service.get returns the parsed content; skill tool description lists it",
+            'SkillTool.execute returns <skill_content name="p0-baseline-skill"> with the marker body',
+          ],
+          references: ["test/skill/skill.test.ts", "test/tool/skill.test.ts"],
+        })
+
+        assertChecks(checks)
+      }),
+      { git: true, config: config },
+    ),
+    { timeout: 30_000 },
+  )
+
+  // -------------------------------------------------------------------------
+  // H-5: MCP — run-owned stdio server through the production MCP transport
+  // -------------------------------------------------------------------------
+
+  it.live("H-5 run-owned MCP stdio server connects, executes a real MCP tool in the loop, and is cleaned by exact PID", () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ dir, llm }) {
+        const checks: Check[] = []
+        yield* Effect.promise(() => fs.mkdir(path.join(dir, "mcp-fixture"), { recursive: true }))
+        yield* Effect.promise(() => Bun.write(path.join(dir, "mcp-fixture", "server.js"), MCP_FIXTURE_SERVER))
+
+        const mcp = yield* MCP.Service
+        const sessions = yield* Session.Service
+        const prompt = yield* SessionPrompt.Service
+        let childPID: number | undefined
+
+        // Failure-path safety net: the scope finalizer disconnects the client
+        // (killing the stdio child) if any check aborts the test; the MCP
+        // InstanceState finalizer is the process-level backstop.
+        yield* Effect.addFinalizer(() => mcp.disconnect("p0-fixture").pipe(Effect.ignore))
+
+        checks.push(
+          yield* run("H-5 production MCP transport connects the run-owned stdio server", () =>
+            Effect.gen(function* () {
+              const connected = yield* pollWithTimeout(
+                Effect.gen(function* () {
+                  const st = yield* mcp.status()
+                  if (st["p0-fixture"]?.status === "failed") {
+                    return yield* Effect.fail(new Error(`mcp connect failed: ${JSON.stringify(st)}`))
+                  }
+                  return st["p0-fixture"]?.status === "connected" ? (true as const) : undefined
+                }),
+                "p0-fixture mcp server never connected",
+                "30 seconds",
+              )
+              expect(connected).toBe(true)
+              const tools = yield* mcp.tools()
+              expect(Object.keys(tools)).toContain("p0-fixture_p0_echo")
+              const client = (yield* mcp.clients())["p0-fixture"]
+              childPID = stdioChildPid(client)
+              const pid = childPID
+              expect(typeof pid).toBe("number")
+              // The child process is alive while connected.
+              if (typeof pid === "number") expect(() => process.kill(pid, 0)).not.toThrow()
+            }),
+          ),
+        )
+
+        checks.push(
+          yield* run("H-5 the MCP tool executes inside the real session loop", () =>
+            Effect.gen(function* () {
+              const session = yield* sessions.create({
+                title: "P0 mcp",
+                permission: [{ permission: "*", pattern: "*", action: "allow" }],
+              })
+              yield* llm.toolMatch(
+                (hit) => JSON.stringify(hit.body).includes("p0-fixture_p0_echo"),
+                "p0-fixture_p0_echo",
+                { message: "hello" },
+              )
+              yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("p0-fixture_p0_echo"), "done")
+              yield* prompt.prompt({
+                sessionID: session.id,
+                agent: "myagent",
+                noReply: true,
+                parts: [{ type: "text", text: "call the echo tool" }],
+              })
+              const result = yield* prompt.loop({ sessionID: session.id })
+              const allMsgs = yield* MessageV2.filterCompactedEffect(session.id)
+              const tool = allMsgs
+                .flatMap((m) => m.parts)
+                .find((p): p is MessageV2.ToolPart => p.type === "tool" && p.tool === "p0-fixture_p0_echo")
+              if (!tool) throw new Error("mcp tool part was never written")
+              expect(tool.state.status).toBe("completed")
+              if (tool.state.status === "completed") expect(tool.state.output).toContain("echo:hello")
+              expect(result.parts.some((p) => p.type === "text" && p.text === "done")).toBe(true)
+              // The server-side fixture wrote the call to a run-owned log.
+              const log = yield* readFile(path.join(dir, "mcp-fixture", "calls.log"))
+              expect(log).toContain("echo:hello")
+              yield* sessions.remove(session.id)
+            }),
+          ),
+        )
+
+        checks.push(
+          yield* run("H-5 the stdio child is cleaned by exact PID on disconnect", () =>
+            Effect.gen(function* () {
+              const pid = childPID
+              if (typeof pid !== "number") throw new Error("missing mcp child pid")
+              yield* mcp.disconnect("p0-fixture")
+              const gone = yield* pollWithTimeout(
+                Effect.sync(() => {
+                  try {
+                    process.kill(pid, 0)
+                    return undefined
+                  } catch {
+                    return true as const
+                  }
+                }),
+                "mcp stdio child pid never exited",
+                "10 seconds",
+              )
+              expect(gone).toBe(true)
+              expect((yield* mcp.status())["p0-fixture"]?.status).toBe("disabled")
+              expect(yield* mcp.clients()).not.toHaveProperty("p0-fixture")
+            }),
+          ),
+        )
+
+        record({
+          id: "H-5",
+          capability: "MCP (servers configured and used per session)",
+          status: "executed",
+          parity: "unproven",
+          checks,
+          services: ["MCP.Service", "MCP stdio transport (production)", "SessionPrompt.Service", "Session.Service"],
+          evidence: [
+            `fixture dir: ${dir}`,
+            "mcp-fixture/server.js: run-owned stdio MCP server (MCP SDK Server + StdioServerTransport) with one tool (p0_echo)",
+            "config mcp.p0-fixture -> MCP.Service state connects via StdioClientTransport",
+            "loop: LLM calls p0-fixture_p0_echo; completed tool part output echo:hello; server-side calls.log written",
+            `exact PID ${childPID ? String(childPID) : "(unknown)"} captured from client.transport.pid, verified alive while connected and dead after disconnect`,
+            "scope finalizer + MCP InstanceState finalizer guarantee cleanup on failure paths",
+          ],
+          references: ["test/mcp/lifecycle.test.ts", "test/kilocode/server/httpapi-mcp.test.ts"],
+        })
+
+        assertChecks(checks)
+      }),
+      { git: true, config: mcpConfig },
+    ),
+    // Stdio spawn + handshake + loop execution; allow headroom for the
+    // connect poll and PID reaping.
+    { timeout: 60_000 },
+  )
+
+  // -------------------------------------------------------------------------
+  // H-6: permission/question flows — real ask -> reply with pending-state
+  // observation and deterministic completion
+  // -------------------------------------------------------------------------
+
+  it.live("H-6 real Permission and Question ask -> reply flows with pending-state observation", () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ dir, llm }) {
+        const checks: Check[] = []
+        const sessions = yield* Session.Service
+        const prompt = yield* SessionPrompt.Service
+        const permission = yield* Permission.Service
+        const question = yield* Question.Service
+
+        checks.push(
+          yield* run("H-6 permission ask is observable as pending and resolves on reply", () =>
+            Effect.gen(function* () {
+              yield* writeFile(path.join(dir, "ask.txt"), "P0_PERMISSION_SENTINEL")
+              const session = yield* sessions.create({})
+              // The read tool's ask runs through the real Permission.Service.
+              const fiber = yield* prompt
+                .prompt({
+                  sessionID: session.id,
+                  noReply: true,
+                  parts: yield* prompt.resolvePromptParts("Read @ask.txt"),
+                })
+                .pipe(Effect.forkScoped)
+              const pending = yield* pollWithTimeout(
+                Effect.gen(function* () {
+                  const requests = yield* permission.list()
+                  return requests.find((r) => r.sessionID === session.id && r.permission === "read")
+                }),
+                "read permission was never requested",
+                "15 seconds",
+              )
+              expect(pending.patterns).toEqual(["ask.txt"])
+              expect((yield* permission.list()).length).toBeGreaterThan(0)
+              yield* permission.reply({ requestID: pending.id, reply: "once" })
+              const exit = yield* Fiber.await(fiber)
+              expect(Exit.isSuccess(exit)).toBe(true)
+              if (Exit.isSuccess(exit)) {
+                const text = exit.value.parts
+                  .filter((p) => p.type === "text")
+                  .map((p) => p.text)
+                  .join("\n")
+                expect(text).toContain("P0_PERMISSION_SENTINEL")
+              }
+              expect(yield* permission.list()).toEqual([])
+              yield* sessions.remove(session.id)
+            }),
+          ),
+        )
+
+        checks.push(
+          yield* run("H-6 question ask is observable as pending and resolves on reply", () =>
+            Effect.gen(function* () {
+              const session = yield* sessions.create({
+                title: "P0 question",
+                permission: [{ permission: "*", pattern: "*", action: "allow" }],
+              })
+              // The QuestionTool runs inside the real session loop.
+              yield* llm.toolMatch((hit) => JSON.stringify(hit.body).includes("question"), "question", {
+                questions: [
+                  {
+                    question: "Pick an option",
+                    header: "Pick",
+                    options: [
+                      { label: "A", description: "first" },
+                      { label: "B", description: "second" },
+                    ],
+                  },
+                ],
+              })
+              yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("question"), "final")
+              yield* prompt.prompt({
+                sessionID: session.id,
+                agent: "myagent",
+                noReply: true,
+                parts: [{ type: "text", text: "ask me a question" }],
+              })
+              const fiber = yield* prompt.loop({ sessionID: session.id }).pipe(Effect.forkScoped)
+              const pending = yield* pollWithTimeout(
+                Effect.gen(function* () {
+                  const requests = yield* question.list()
+                  return requests.find((r) => r.sessionID === session.id)
+                }),
+                "question was never asked",
+                "15 seconds",
+              )
+              expect(pending.questions[0].question).toBe("Pick an option")
+              expect((yield* question.list()).length).toBeGreaterThan(0)
+              yield* question.reply({ requestID: pending.id, answers: [["B"]] })
+              const exit = yield* Fiber.await(fiber)
+              expect(Exit.isSuccess(exit)).toBe(true)
+              if (Exit.isSuccess(exit)) {
+                const allMsgs = yield* MessageV2.filterCompactedEffect(session.id)
+                const qtool = allMsgs
+                  .flatMap((m) => m.parts)
+                  .find((p): p is MessageV2.ToolPart => p.type === "tool" && p.tool === "question")
+                if (!qtool) throw new Error("question tool part was never written")
+                expect(qtool.state.status).toBe("completed")
+                if (qtool.state.status === "completed") {
+                  expect(qtool.state.output).toContain('"Pick an option"="B"')
+                }
+              }
+              expect(yield* question.list()).toEqual([])
+              yield* sessions.remove(session.id)
+            }),
+          ),
+        )
+
+        record({
+          id: "H-6",
+          capability: "Permission/question flows resolve through the permission flow",
+          status: "executed",
+          parity: "unproven",
+          checks,
+          services: [
+            "Permission.Service",
+            "Question.Service",
+            "SessionPrompt.Service",
+            "QuestionTool",
+            "Session.Service",
+          ],
+          evidence: [
+            `fixture dir: ${dir}`,
+            "permission: prompt.resolvePromptParts(Read @ask.txt) -> Permission.list() pending read request -> reply once -> read tool content flows",
+            "question: loop LLM calls the question tool -> Question.list() pending request -> reply [B] -> completed tool part output",
+            "pending states observed via Permission.list() / Question.list() before deterministic replies",
+          ],
+          references: ["test/permission/next.test.ts", "test/question/question.test.ts"],
+        })
+
+        assertChecks(checks)
+      }),
+      { git: true, config: (url) => ({ ...config(url), permission: { read: { "*": "allow", "ask.txt": "ask" } } }) },
+    ),
+    { timeout: 30_000 },
+  )
 })
 
 // ---------------------------------------------------------------------------
@@ -1236,16 +1736,16 @@ afterAll(() => {
         id: "LOCK-008",
         respected,
         evidence:
-          "All harness capabilities are either executed (H-1, H-2, H-7, H-8, H-9, H-10, H-11, H-12, H-13) or recorded as explicit gaps with references (H-3, H-4, H-5, H-6).",
+          "All harness capabilities are executed (H-1..H-13) through real production services and run-owned fixtures; no gap records remain.",
       },
       {
         id: "LOCK-PERF-5",
         respected,
         evidence:
-          "Real production services/fixtures only; no core-service mocks, no network dependency, deterministic cleanup.",
+          "Real production services/fixtures only (real MCP.Service + stdio fixture for H-5); no core-service mocks, no network dependency, exact PID-scoped cleanup.",
       },
     ],
-    entries: [...GAPS.map((g) => ({ ...g, checks: [] })), ...entries],
+    entries,
   }
   console.log("\n--- P0_HARNESS_BASELINE_JSON ---")
   console.log(JSON.stringify(report, null, 2))

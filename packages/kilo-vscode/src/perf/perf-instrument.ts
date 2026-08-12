@@ -70,6 +70,35 @@ export function p0Stage(stage: string, extra?: Record<string, unknown>): void {
 }
 
 /**
+ * Span record on the extension-host timeline: emits a `span: "start"` record
+ * now and a `span: "end"` record (with `dur` = elapsed ms) when `end()` runs.
+ * When disabled both calls are no-ops. `end()` is only emitted on the normal
+ * completion path; a caller that fails or is interrupted before calling
+ * `end()` leaves an unmatched `span: "start"` record as the failure signal —
+ * mirroring the backend `p0.start`/`p0.end` contract.
+ */
+export function p0Span(
+  stage: string,
+  extra?: Record<string, unknown>,
+): { end: (extra?: Record<string, unknown>) => void } {
+  if (!isP0PerfEnabled()) return { end() {} }
+  const t0 = Date.now()
+  emit(stage, "extension", t0, { span: "start", ...(extra ?? {}) })
+  return {
+    end(endExtra?: Record<string, unknown>) {
+      emit(stage, "extension", Date.now(), {
+        span: "end",
+        dur: Math.round((Date.now() - t0) * 100) / 100,
+        // Carry the start metadata forward so each record is self-describing
+        // (bounded: only the caller-provided extra fields, never payloads).
+        ...(extra ?? {}),
+        ...(endExtra ?? {}),
+      })
+    },
+  }
+}
+
+/**
  * Forward a webview-recorded point into the extension timeline. `t` is the
  * webview's wall-clock epoch ms, `wd` the webview-internal delta since its own
  * module load.

@@ -4,6 +4,7 @@ import { withNetworkOptions, resolveNetworkOptions } from "../network"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { InstanceRuntime } from "../../project/instance-runtime" // kilocode_change
 import { startParentWatchdog } from "../../kilocode/parent-watchdog" // kilocode_change
+import { createShutdownCoordinator, startSignalShutdown } from "../../kilocode/shutdown-coordinator" // kilocode_change
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 export const ServeCommand = effectCmd({
@@ -36,19 +37,36 @@ export const ServeCommand = effectCmd({
       () =>
         new Promise<void>((resolve) => {
           // Exit if the editor client that spawned us is hard-killed (no signal reaches us).
-          const stopWatchdog = startParentWatchdog(() => process.kill(process.pid, "SIGTERM"))
-          const shutdown = async () => {
-            stopWatchdog()
-            try {
+          // The coordinator is constructed before the watchdog and signal
+          // handlers are started so no callback captures an uninitialized
+          // binding — the orphan and signal callbacks close over `coordinator`
+          // only after it exists, and both disposers start as no-ops and are
+          // assigned before any signal, interval tick, or shutdown completion
+          // can reach them.
+          let stopWatchdog: () => void = () => {}
+          let stopSignals: () => void = () => {}
+          const coordinator = createShutdownCoordinator({
+            shutdown: async () => {
               await InstanceRuntime.disposeAllInstances()
               await server.stop(true)
-            } finally {
+            },
+            onComplete: () => {
+              stopWatchdog()
+              stopSignals()
               resolve()
-            }
-          }
-          process.once("SIGTERM", shutdown)
-          process.once("SIGINT", shutdown)
-          process.once("SIGHUP", shutdown)
+            },
+          })
+          // The watchdog stays active until shutdown settles, so an orphaned
+          // backend cannot outlive disposal; the coordinator's referenced
+          // hard-stop timer then bounds shutdown to the extension-side 5s grace.
+          // The hard-stop is a JS timer: it bounds async disposal hangs (a
+          // pending promise that never settles) but cannot preempt a synchronous
+          // event-loop stall, which blocks the timer from ever firing.
+          stopWatchdog = startParentWatchdog(() => coordinator.begin())
+          // Signals funnel into the same idempotent coordinator as the watchdog;
+          // completion removes the listeners so the process carries no signal
+          // listener residue into its final teardown.
+          stopSignals = startSignalShutdown(() => coordinator.begin())
         }),
     )
     // kilocode_change end

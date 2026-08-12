@@ -527,7 +527,7 @@ The Today column shows existing partial instrumentation; "-" means none.
 | Worker CLI entry / module-graph load | `packages/opencode/src/index.ts` static imports (run/attach/thread commands, `cli/ui.ts` logo, TUI config/keymap via `cli/cmd/tui/thread.ts` -> `KiloTuiThreadDaemon` (`kilocode/cli/cmd/tui/thread.ts`) -> `TuiConfig`/`TuiKeybind` (`cli/cmd/tui/config/tui.ts`) -> `@opentui/keymap/extras`) | - |
 | Worker spawn | `server-manager.ts` spawn | Console log |
 | Port detected | `server-manager.ts` stdout parse | Console log |
-| AppLayer graph construction | `effect/app-runtime.ts:207-210` (layer definition + lazy runtime handle); `server.ts` `Server.listen` -> `KiloListener.build` (`listener.ts` `Layer.buildWithMemoMap`) | - |
+| AppLayer graph construction | `effect/app-runtime.ts:207-210` (layer definition + lazy runtime handle); `server.ts` `Server.listen` -> `KiloListener.build` (`listener.ts` `Layer.buildWithMemoMap`) | P0 spans `app_layer_define` / `app_runtime_make` (module-load) |
 | Server listening | `server.ts` `Server.listen` | Console line |
 | SSE connected | `sdk-sse-adapter.ts` / `KiloProvider.onStateChange` | Console log |
 | Instance bootstrap | `project/bootstrap.ts` `InstanceBootstrap` | Effect span |
@@ -537,13 +537,15 @@ The Today column shows existing partial instrumentation; "-" means none.
 | Global readiness barrier | `KiloProvider.ts:1694` `extensionDataReady` | Console log; replaced by action-specific gates (LOCK-PERF-4) |
 | Persisted-selector paint | Target webview render of persisted indexes | - |
 | Prompt sent | Extension prompt submit path | - |
-| First model event/token | SSE event handling | - |
-| Per-event transport handling | `sdk-sse-adapter.ts` -> `handleEvent` | - |
-| Webview render flush | Webview render path | - |
-| Tool start/end | `Tool.execute` | Effect span |
-| Permission asked/replied | Permission/question flow | - |
+| First model event (first assistant-message update, never "first token" — LOCK-PERF-7) | SSE event handling | `model.firstEvent` |
+| Per-event transport handling | `connection-service.ts` `handleSseEvent` (the SSE adapter's `onEvent` dispatch; not `sdk-sse-adapter.ts` and not the per-provider `KiloProvider.handleEvent`) | Extension `sse.event` span (bounded eventType/dir/transaction metadata; `dir` is the per-event instance-directory envelope on the shared connection — it varies per event across sidebar/tabs/Agent Manager worktrees and is never the panel's workspace root) |
+| Webview render flush | Webview render path | Generic `webview.load`/`render`/`mount`/`paint` records — NOT persisted-selector paint (no extension-owned persisted indexes exist) |
+| Tool start/end | `Tool.execute` | Effect span + P0 `tool_execute` span (session-id correlated, bounded tool/call/message metadata, one pair per session call) + distinct inner `tool_execute_plugin` stage for plugin/custom tool bodies |
+| Permission asked/replied | Permission/question flow | Extension `permission.asked`/`replied`, `question.asked`/`replied`/`rejected` marks + backend `permission_wait` / `question_wait` spans (request-id correlated; rejection = unmatched start). Asked/replied marks are keyed by permission/question id and carry NO directory — the shared connection's directory context only routes the reply back to its panel |
 | Config commit | `config-convergence.ts` commit | Rebuild tracking |
 | Convergence complete | `config-convergence.ts` release | `trackRebuildCompleted` |
+| Run-owned process-tree memory guard (P0 safety infrastructure, not a latency point) | `script/p0-bench/memory-guard.ts` + `script/p0-bench/sample.ts` lifecycle | Per-lifecycle bounded `memoryGuard` result on every sample: configured engineering safety rails (RSS/VSZ/aggregate, default any-owned-RSS ≥ 4 GiB, aggregate-RSS ≥ 6 GiB, VSZ ≥ 64 GiB; env-tunable via `KILO_P0_MEMORY_GUARD_*`), poll count/overhead, max aggregate RSS, max owned count, max process RSS/VSZ identity, breach or null, capped time series. A guard breach aborts the lifecycle with `ok:false`, `blocked.reason="memory-guard-abort"` and exact-owned cleanup still runs. Rails are engineering safety limits, never performance thresholds (LOCK-PERF-7) — see 10.9 | - |
+| Immutable per-campaign CLI snapshot (P0 provenance safety, not a latency point) | `script/p0-bench/snapshot.ts` + `server-manager.ts` `resolveCliPath` (`KILO_P0_BACKEND_CLI`) | Run-owned temp copy of `bin/kilo` pinned through a benchmark-only override so the non-owned dev CLI watcher cannot change the measured binary mid-campaign; original + snapshot SHA/path recorded on run/sample records; snapshot deleted after the campaign; production fallback unchanged | - |
 
 ### 10.9 Benchmark scenarios and regression gates
 
@@ -578,6 +580,34 @@ Gate rules:
   initialization (LOCK-PERF-1, LOCK-PERF-3) before a removal phase exits.
 - Estimates such as 20-40% or 30-50% startup reduction are hypotheses only and
   must not be used as acceptance claims (LOCK-PERF-6).
+
+Safety infrastructure (not gates, not thresholds, not claims):
+
+- P0 runs carry a run-owned process-tree memory guard (10.8). Ownership is
+  seeded only from processes whose args contain the exact unique lifecycle
+  userData path, then expanded recursively to descendants by PPID; ancestors
+  and name-matched unrelated processes (e.g. the user's production VS Code) are
+  never monitored or touched. On a safety-rail breach the lifecycle/sample
+  becomes `ok:false`, `blocked.reason="memory-guard-abort"`, the done marker is
+  written, only exact owned userData PIDs are terminated via the existing
+  cleanup helpers, and teardown still verifies port/scratch cleanup.
+  Guard-aborted samples are failures, never baselines. Rails are engineering
+  safety limits — not performance thresholds and not an SLA (LOCK-PERF-7 stays
+  Open); no performance result derives from them.
+- The measured CLI binary is immutable per campaign: `bin/kilo` is snapshotted
+  to a run-owned temp path before samples and pinned through the
+  benchmark-only `KILO_P0_BACKEND_CLI` override, so the non-owned dev watcher
+  cannot change binary provenance mid-campaign. Production fallback is
+  unchanged when the override is absent.
+- Platform note: macOS `ps` reports a fixed ~400 GB address-space baseline for
+  every process, so the VSZ rail is inert-by-construction there (RSS rails are
+  the effective abort gates; VSZ is still recorded for RSS-vs-VSZ
+  distinction); on Linux all three rails are active. Unsupported platforms fail
+  the benchmark safely before launch rather than running unguarded.
+- The prior interrupted campaign's evidence is ineligible: no live RSS/VSZ time
+  series existed, so root cause of the observed system freeze is UNKNOWN. This
+  section documents the guard only; it claims no root cause and no performance
+  result.
 
 ### 10.10 Runtime slimming acceptance criteria
 

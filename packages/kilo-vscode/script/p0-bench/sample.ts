@@ -21,9 +21,13 @@
  *     latency per switch (Playwright-visible UI state).
  *
  * Cleanup is exact and identical to the existing probe: every owned process is
- * terminated by exact PID (matched to the unique user-data dir, plus the
- * run-owned MCP fixture PID), the CDP port is verified released, and the
- * scratch dir is deleted only afterwards.
+ * terminated by exact PID (matched to the unique user-data dir), the backend by
+ * exact identity (PID + raw start + pinned CLI path), and the run-owned MCP
+ * fixture by exact identity too (PID + raw start + exact fixture script path,
+ * re-verified before each signal — never a bare PID). The CDP port is verified
+ * released, and the scratch dir is deleted only afterwards. A fixture identity
+ * that cannot be verified fails closed (no signal); a fixture survivor or
+ * mismatch fails the sample/run and blocks scratch deletion.
  *
  * MUST run under Node (Playwright CDP under Bun hangs — see e2e-probe.ts).
  */
@@ -39,8 +43,12 @@ import { basename, dirname, join, resolve } from "node:path"
 import { createHash } from "node:crypto"
 import type {
   BackendProvenance,
+  CliSnapshotInfo,
   Condition,
+  GuardBreach,
   KeyLatencies,
+  McpFixtureEvidence,
+  MemoryGuardResult,
   SampleEnv,
   SampleRecord,
   ScenarioID,
@@ -59,6 +67,22 @@ import {
   runCleanupSteps,
   sliceStages,
 } from "./parse"
+import { phaseForSample } from "./phase"
+import {
+  MemoryGuardUnavailableError,
+  exactTerminateBackend,
+  memoryGuardConfig,
+  parseLstartLine,
+  realGuardDeps,
+  startMemoryGuard,
+  verifyBackendRow,
+  verifyProcessRow,
+  type BackendCleanupOutcome,
+  type BackendRoot,
+  type BackendVerification,
+  type MemoryGuard,
+  type ProcessRoot,
+} from "./memory-guard"
 
 export interface LifecycleOptions {
   root: string
@@ -75,9 +99,17 @@ export interface LifecycleOptions {
   extensionVersion: string
   vscodeVersion: string
   gitHead: string | null
+  /** Full 40-char HEAD commit, derived once at campaign start. */
+  gitCommit: string | null
+  /** Worktree dirty state, derived once at campaign start. */
+  gitDirty: boolean
   backendCli: string | null
-  /** Set when a prior sample in the campaign failed; phases shift to warmup. */
-  shiftToWarmup?: boolean
+  /** Immutable per-campaign CLI snapshot provenance (additive). */
+  cliSnapshot?: CliSnapshotInfo
+  /** Exact absolute path of the run-owned MCP fixture script
+   * (script/p0-bench/mcp-fixture.mjs), verified in the fixture's process args
+   * as part of its exact identity (many-agent-mcp scenario). */
+  mcpFixturePath: string
 }
 
 export interface LifecycleResult {
@@ -89,6 +121,75 @@ export interface LifecycleResult {
 }
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+
+// ---------------------------------------------------------------------------
+// Memory guard abort (bounded evidence; see script/p0-bench/memory-guard.ts)
+// ---------------------------------------------------------------------------
+
+/** Thrown when the run-owned memory guard breaches an engineering safety rail. */
+class GuardAbortError extends Error {
+  constructor(readonly breach: GuardBreach) {
+    super("memory-guard-abort")
+    this.name = "GuardAbortError"
+  }
+}
+
+/**
+ * Race a promise (a Playwright wait/click or any other drive step) against the
+ * memory-guard abort promise so a breach or a guard poll failure surfaces as
+ * soon as the guard resolves/rejects it — never after the action's own
+ * timeout. The abort promise only settles by rejecting with GuardAbortError
+ * (breach) or MemoryGuardUnavailableError (ps poll failed; fail closed), so
+ * the action's normal result/timeout is otherwise unaffected.
+ */
+export function raceGuardAbort<T>(action: Promise<T>, abort: Promise<never>): Promise<T> {
+  return Promise.race([action, abort])
+}
+
+/**
+ * On a memory guard breach: write the done marker (the in-VS-Code runner exits
+ * on it) and terminate only exact owned PIDs via the existing cleanup helper,
+ * plus the identity-checked backend termination. Bounded evidence is already
+ * captured on the breach object; this is prompt mitigation so a runaway cannot
+ * freeze the machine while teardown proceeds. The teardown's own cleanup steps
+ * (settle → exact PID → exact backend identity → port release → scratch
+ * delete) still run afterwards and remain authoritative.
+ */
+async function onGuardBreach(
+  b: GuardBreach,
+  doneFile: string,
+  userData: string,
+  backendOf: () => MemoryGuard | null,
+): Promise<void> {
+  const gb = (n: number) => `${Math.round(n / 1024 / 1024)} MiB`
+  console.error(
+    `[p0-probe] MEMORY GUARD ABORT (${b.reason}): aggregateRss=${gb(b.aggregateRss)} ` +
+      `maxProcessRss=${gb(b.maxProcessRss)} maxProcessVsz=${gb(b.maxProcessVsz)} ` +
+      `pid=${b.pid} ppid=${b.ppid} owned=${b.ownedCount} command=${b.command}`,
+  )
+  try {
+    writeFileSync(doneFile, "done")
+  } catch (err) {
+    console.error(
+      `[p0-probe] memory guard: done marker write failed: ${err instanceof Error ? err.message : String(err)}`,
+    )
+  }
+  const remaining = await terminateOwned(userData, 3_000)
+  if (remaining > 0) {
+    console.error(`[p0-probe] memory guard: ${remaining} owned VS Code processes survived termination`)
+  }
+  const identity = backendOf()?.backendIdentity()
+  if (identity) {
+    const outcome = await terminateBackendWithPs(identity, 3_000)
+    if (!outcome.terminated) {
+      console.error(
+        `[p0-probe] memory guard: backend PID ${identity.pid} not cleanly terminated (${outcome.status}: ${outcome.detail ?? "unknown"})`,
+      )
+    } else {
+      console.log(`[p0-probe] memory guard: backend PID ${identity.pid} terminated by exact identity`)
+    }
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Process / scratch ownership (same semantics as script/e2e-probe.ts)
@@ -113,12 +214,13 @@ async function portFree(port: number): Promise<boolean> {
   })
 }
 
-function processesWithUserData(userData: string): Array<{ pid: number; args: string }> {
+/** Every process whose args contain `needle` (exact substring, never a name match). */
+function processesMatching(needle: string): Array<{ pid: number; args: string }> {
   const proc = spawnSync("ps", ["-axo", "pid=,args="], { encoding: "utf8" })
   const out = proc.stdout ?? ""
   return out
     .split("\n")
-    .filter((line) => line.includes(userData))
+    .filter((line) => line.includes(needle))
     .map((line) => line.trim())
     .map((line) => {
       const space = line.indexOf(" ")
@@ -127,35 +229,315 @@ function processesWithUserData(userData: string): Array<{ pid: number; args: str
     .filter((p) => Number.isFinite(p.pid) && p.pid > 0)
 }
 
-function processArgs(pid: number): string | null {
-  const proc = spawnSync("ps", ["-p", String(pid), "-o", "args="], { encoding: "utf8" })
-  const out = (proc.stdout ?? "").trim()
-  return out.length > 0 ? out : null
+function processesWithUserData(userData: string): Array<{ pid: number; args: string }> {
+  return processesMatching(userData)
 }
 
-async function terminatePids(pids: number[], graceMs: number): Promise<number> {
-  const signal = async (sig: NodeJS.Signals) => {
-    for (const pid of pids) {
-      try {
-        process.kill(pid, sig)
-      } catch {
-        // already exited
-      }
-    }
-    if (pids.length > 0) await sleep(graceMs)
-    return pids.filter((pid) => {
-      try {
-        process.kill(pid, 0)
-        return true
-      } catch {
-        return false
-      }
-    })
+/** Every live process whose args still run from the exact CLI snapshot path. */
+export function processesWithPath(path: string): Array<{ pid: number; args: string }> {
+  return processesMatching(path)
+}
+
+/**
+ * Live identity of one process: PID + raw `lstart` start string + args, read
+ * atomically from a single `ps -p <pid> -o lstart=,args=` call. Returns null
+ * when the process is not in the table (exited) or the line is unparsable.
+ */
+function processIdentity(pid: number): { pid: number; start: string; args: string } | null {
+  const proc = spawnSync("ps", ["-p", String(pid), "-o", "lstart=,args="], { encoding: "utf8" })
+  const out = (proc.stdout ?? "").trim()
+  if (!out) return null
+  const parsed = parseLstartLine(out)
+  if (!parsed) return null
+  return { pid, start: parsed.start, args: parsed.rest }
+}
+
+/**
+ * Verify a backend identity (PID + pinned CLI path + raw start) against the
+ * live process table. Used before accepting a registration and immediately
+ * before each termination signal. A mismatch (start or path changed) means the
+ * PID was reused — never signal it.
+ */
+function verifyBackendIdentityPs(identity: BackendRoot): BackendVerification {
+  const row = processIdentity(identity.pid)
+  if (!row) {
+    return { status: "missing", detail: "backend process not found in ps" }
   }
-  let remaining = await signal("SIGTERM")
-  if (remaining.length === 0) return 0
-  remaining = await signal("SIGKILL")
-  return remaining.length
+  return verifyBackendRow(identity, { pid: row.pid, ppid: 0, rssKb: 0, vszKb: 0, start: row.start, args: row.args })
+}
+
+/**
+ * Build and accept the backend identity from the extension's own records: the
+ * `spawn.done` PID plus the logged CLI path, verified against the live process
+ * (args contain the exact pinned CLI path + `serve`, raw start captured).
+ * Returns null when the live process does not verify (e.g. already exited).
+ */
+function verifiedBackendIdentity(pid: number, cliPath: string): BackendRoot | null {
+  const row = processIdentity(pid)
+  if (!row) return null
+  if (!row.args.includes(resolve(cliPath)) || !row.args.includes("serve")) return null
+  return { pid, cliPath, start: row.start, registeredAt: Date.now() }
+}
+
+/**
+ * Poll the parsed records until `spawn.done` PID + CLI path are observable,
+ * then return the verified backend identity (the caller registers it with the
+ * guard). Best-effort: returns the identity or null on timeout/cancellation.
+ * Races the abort promise so a guard breach or poll failure stops the wait
+ * promptly. `regSignal.cancelled` stops the loop (teardown settle bound) so no
+ * late registration can mutate guard state mid-teardown.
+ */
+export async function awaitBackendIdentity(
+  records: () => ParsedRecords,
+  abort: Promise<never>,
+  timeoutMs: number,
+  regSignal?: { cancelled: boolean },
+): Promise<BackendRoot | null> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    if (regSignal?.cancelled) return null
+    const peek = records()
+    if (peek.spawnedPid !== null && peek.cliPath) {
+      const identity = verifiedBackendIdentity(peek.spawnedPid, peek.cliPath)
+      if (identity) return identity
+    }
+    if (Date.now() > deadline) return null
+    await Promise.race([sleep(100), abort])
+  }
+}
+
+/**
+ * Bounded settle for the backend registration before teardown reads the
+ * guard's backend identity: await the pending registration, but cap the wait
+ * at `settleMs`. On window expiry the registration loop is cancelled (via
+ * `regSignal`) so a late registration can never register the backend after
+ * cleanup already read the identity. The identity is null when the window
+ * expired; `timedOut` distinguishes that from a registration that genuinely
+ * resolved with null.
+ */
+export async function settleBackendRegistration(
+  reg: Promise<BackendRoot | null>,
+  regSignal: { cancelled: boolean },
+  settleMs: number,
+): Promise<{ identity: BackendRoot | null; timedOut: boolean }> {
+  return Promise.race([
+    reg.then((identity) => ({ identity, timedOut: false })),
+    sleep(settleMs).then(() => {
+      regSignal.cancelled = true
+      return { identity: null, timedOut: true }
+    }),
+  ])
+}
+
+/**
+ * Exact identity-checked backend termination: re-verify PID + start + pinned
+ * CLI path immediately before each SIGTERM/SIGKILL via the live process table
+ * (never signal a missing/mismatch identity). Returns the cleanup outcome.
+ */
+export async function terminateBackendWithPs(identity: BackendRoot, graceMs: number): Promise<BackendCleanupOutcome> {
+  return exactTerminateBackend(
+    () => verifyBackendIdentityPs(identity),
+    (sig) => {
+      try {
+        process.kill(identity.pid, sig)
+      } catch {
+        // already exited — the final verification reports the truth
+      }
+    },
+    graceMs,
+    sleep,
+  )
+}
+
+/**
+ * Discover and verify the run-owned MCP fixture identity right after the
+ * handshake marker appears: PID from the marker, raw `lstart` start string +
+ * args from the live process table. Returns null when the process is not in
+ * the table (already exited) or its args no longer contain the exact fixture
+ * script path (exited/reused) — the caller then fails closed and never signals
+ * (a bare PID is never trusted).
+ */
+export function verifiedFixtureIdentity(pid: number, scriptPath: string): ProcessRoot | null {
+  const row = processIdentity(pid)
+  if (!row) return null
+  if (!row.args.includes(scriptPath)) return null
+  return { pid, start: row.start, path: scriptPath }
+}
+
+/**
+ * Verify a run-owned MCP fixture identity (PID + raw start + exact fixture
+ * script path) against the live process table. Used immediately before each
+ * cleanup signal: a mismatch means the PID was reused — never signal it.
+ */
+export function verifyFixturePs(identity: ProcessRoot): BackendVerification {
+  const row = processIdentity(identity.pid)
+  if (!row) {
+    return { status: "missing", detail: "MCP fixture process not found in ps" }
+  }
+  return verifyProcessRow(
+    identity,
+    { pid: row.pid, ppid: 0, rssKb: 0, vszKb: 0, start: row.start, args: row.args },
+    "fixture script path",
+  )
+}
+
+/**
+ * Exact identity-checked termination for the run-owned MCP fixture:
+ * re-verifies PID + raw start + exact fixture script path immediately before
+ * each SIGTERM/SIGKILL via the live process table (never signals a
+ * missing/mismatch identity — a reused PID is never killed). SIGTERM → grace →
+ * re-verify → SIGKILL → grace → final verify. Clean only when the identity is
+ * finally missing.
+ */
+export function terminateFixtureWithPs(identity: ProcessRoot, graceMs: number): Promise<BackendCleanupOutcome> {
+  return exactTerminateBackend(
+    () => verifyFixturePs(identity),
+    (sig) => {
+      try {
+        process.kill(identity.pid, sig)
+      } catch {
+        // already exited — the final verification reports the truth
+      }
+    },
+    graceMs,
+    sleep,
+  )
+}
+
+/** Mutable MCP fixture evidence for one lifecycle (discovery + cleanup outcome). */
+export function emptyMcpFixtureEvidence(): McpFixtureEvidence {
+  return { handshake: null, identity: null, discoveryError: null, cleanup: { status: "not-attempted", detail: null } }
+}
+
+/**
+ * Exact identity-checked MCP fixture cleanup (many-agent-mcp). Fail-closed:
+ * with the marker present but the identity never discovered/verified, no signal
+ * is ever sent and the outcome is `failed` (the caller throws → sample/run
+ * non-success, scratch retained). With no marker there is no fixture to clean.
+ * Otherwise the fixture is terminated by exact identity (PID + raw start +
+ * fixture script path, re-verified before each signal) and the outcome records
+ * the cleanup status as evidence. `terminate` is injectable for tests; the
+ * production default re-verifies against the live process table.
+ */
+export async function cleanupMcpFixture(
+  markerPath: string,
+  state: McpFixtureEvidence,
+  graceMs: number,
+  terminate: (identity: ProcessRoot, graceMs: number) => Promise<BackendCleanupOutcome> = terminateFixtureWithPs,
+): Promise<McpFixtureEvidence["cleanup"]> {
+  if (!existsSync(markerPath)) {
+    state.cleanup = { status: "not-attempted", detail: "no MCP fixture marker (fixture never connected)" }
+    return state.cleanup
+  }
+  const identity = state.identity
+  if (!identity) {
+    const why = state.discoveryError !== null ? ` (${state.discoveryError})` : ""
+    state.cleanup = {
+      status: "failed",
+      detail:
+        `MCP fixture identity never verified (pid=${state.handshake?.pid ?? "unknown"})${why}; ` +
+        `refusing to signal a possibly reused PID`,
+    }
+    return state.cleanup
+  }
+  const outcome = await terminate(identity, graceMs)
+  if (!outcome.terminated) {
+    state.cleanup = {
+      status: "failed",
+      detail: `MCP fixture PID ${identity.pid} not cleanly terminated (${outcome.status}: ${outcome.detail ?? "unknown"})`,
+    }
+    return state.cleanup
+  }
+  state.cleanup = {
+    status: "clean",
+    detail: `MCP fixture PID ${identity.pid} cleaned by exact identity (PID + raw start + fixture script path re-verified before each signal)`,
+  }
+  return state.cleanup
+}
+
+/**
+ * Attach the run-owned MCP fixture evidence (handshake + identity + cleanup
+ * status) to every many-agent-mcp sample. A failed cleanup already failed the
+ * samples through the teardown-evidence path (applyTeardownNotes); this only
+ * records the evidence truthfully on the emitted records.
+ */
+export function applyMcpFixtureEvidence(
+  samples: SampleRecord[],
+  scenario: ScenarioID,
+  evidence: McpFixtureEvidence,
+): void {
+  if (scenario !== "many-agent-mcp") return
+  for (const s of samples) s.mcpFixture = evidence
+}
+
+/**
+ * Fail-closed late identity discovery for an observed backend PID: read the
+ * live process table and accept the identity only when the exact CLI path
+ * (snapshot or bundled) + `serve` still appear in the process args, capturing
+ * the raw `lstart` start string. Used after a best-effort registration did not
+ * settle, BEFORE final cleanup, so a reparented backend can still be claimed
+ * by exact identity and terminated. Returns null when not verifiable (process
+ * gone, ps unavailable, or PID reused by a process not running from the exact
+ * path) — the PID is never signaled on that basis (LOCK-PERF: never signal
+ * without PID + start + exact snapshot path match).
+ */
+export function discoverBackendIdentity(pid: number, cliPath: string | null): BackendRoot | null {
+  if (!cliPath) return null
+  return verifiedBackendIdentity(pid, cliPath)
+}
+
+/**
+ * A spawned backend PID that was observed (spawn.done) but whose stable
+ * identity could never be verified. Named safely: the PID is the extension's
+ * own record and the path is the run-owned snapshot/bundled CLI path.
+ */
+export interface UnverifiedBackend {
+  /** PID observed from the extension's spawn.done record. */
+  pid: number
+  /** Expected CLI path (run-owned snapshot or bundled fallback) to investigate. */
+  cliPath: string
+}
+
+/**
+ * Campaign-finally survivor cleanup for the immutable CLI snapshot. Any live
+ * process still running from the exact snapshot path is first claimed by exact
+ * identity (PID + snapshot path + raw `lstart` from the live process table,
+ * re-verified before each signal) and terminated; a survivor that cannot be
+ * verified is NEVER signaled — the snapshot is preserved (the cleanup callback
+ * is NOT invoked) and the campaign fails with bounded evidence naming the
+ * PID/path. With no survivors the snapshot cleanup runs.
+ */
+export async function snapshotSurvivorCleanup(
+  snapshotPath: string,
+  cleanup: () => void,
+  graceMs = 3_000,
+): Promise<void> {
+  for (const survivor of processesWithPath(snapshotPath)) {
+    const identity = discoverBackendIdentity(survivor.pid, snapshotPath)
+    if (!identity) continue // unverifiable now — the final scan below reports it
+    const outcome = await terminateBackendWithPs(identity, graceMs)
+    if (!outcome.terminated) {
+      throw new Error(
+        `backend survivor PID ${identity.pid} not cleanly terminated from CLI snapshot ${snapshotPath} ` +
+          `(${outcome.status}: ${outcome.detail ?? "unknown"}); snapshot NOT deleted`,
+      )
+    }
+    console.log(`[p0-bench] campaign cleanup: survivor PID ${identity.pid} terminated by exact snapshot-path identity`)
+  }
+  const remaining = processesWithPath(snapshotPath)
+  if (remaining.length > 0) {
+    throw new Error(
+      `backend survivor(s) still running from CLI snapshot ${snapshotPath}: ` +
+        remaining
+          .map((p) => {
+            const c = p.args.length > 120 ? `${p.args.slice(0, 120)}…` : p.args
+            return `PID ${p.pid} (${c})`
+          })
+          .join(", ") +
+        `; identity could not be verified — no signal sent; snapshot NOT deleted`,
+    )
+  }
+  cleanup()
 }
 
 async function terminateOwned(userData: string, graceMs: number): Promise<number> {
@@ -247,6 +629,16 @@ function cleanEnv() {
 /** Max raw stdout/stderr bytes retained per lifecycle (documented bound). */
 const CAPTURE_BYTES = 5 * 1024 * 1024
 
+/**
+ * Bounded settle window for the backend registration before teardown reads the
+ * guard's backend identity: the registration runs concurrently with the drive
+ * (it seeds the owned root as early as possible), so after the drive settles we
+ * give it at most this long to land. A still-pending registration at the
+ * deadline is cancelled (no mid-teardown mutation) and recorded as missing
+ * evidence rather than silently skipped.
+ */
+const BACKEND_REG_SETTLE_MS = 15_000
+
 let captureState: CaptureState | null = null
 
 const EMPTY_RECORDS: ParsedRecords = { stages: [], cliPath: null, spawnedPid: null }
@@ -301,7 +693,7 @@ function markCaptureTruncated(samples: SampleRecord[], truncated: boolean): void
 // CDP helpers
 // ---------------------------------------------------------------------------
 
-async function waitForCdp(port: number, timeoutMs: number): Promise<void> {
+async function waitForCdp(port: number, timeoutMs: number, abort?: Promise<never>): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     try {
@@ -311,16 +703,18 @@ async function waitForCdp(port: number, timeoutMs: number): Promise<void> {
       // not up yet
     }
     if (Date.now() > deadline) throw new Error("p0 probe: CDP endpoint did not come up in time")
-    await sleep(250)
+    if (abort) await Promise.race([sleep(250), abort])
+    else await sleep(250)
   }
 }
 
-async function waitForFile(file: string, timeoutMs: number, label: string): Promise<void> {
+async function waitForFile(file: string, timeoutMs: number, label: string, abort?: Promise<never>): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     if (existsSync(file)) return
     if (Date.now() > deadline) throw new Error(`p0 probe: timeout waiting for ${label}`)
-    await sleep(200)
+    if (abort) await Promise.race([sleep(200), abort])
+    else await sleep(200)
   }
 }
 
@@ -336,18 +730,23 @@ async function webviewFrame(browser: Browser): Promise<{ page: Page; frame: Fram
   return undefined
 }
 
-async function waitForWebviewFrame(browser: Browser, timeoutMs: number): Promise<{ page: Page; frame: Frame }> {
+async function waitForWebviewFrame(browser: Browser, timeoutMs: number, abort?: Promise<never>): Promise<{ page: Page; frame: Frame }> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const found = await webviewFrame(browser)
     if (found) return found
     if (Date.now() > deadline) throw new Error("p0 probe: no webview frame visible via CDP")
-    await sleep(250)
+    if (abort) await Promise.race([sleep(250), abort])
+    else await sleep(250)
   }
 }
 
 /** The Agent Manager tab strip frame, anchored on any sortable session tab. */
-async function waitForAgentManagerFrame(browser: Browser, timeoutMs: number): Promise<{ page: Page; frame: Frame }> {
+async function waitForAgentManagerFrame(
+  browser: Browser,
+  timeoutMs: number,
+  abort?: Promise<never>,
+): Promise<{ page: Page; frame: Frame }> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     for (const ctx of browser.contexts()) {
@@ -365,7 +764,8 @@ async function waitForAgentManagerFrame(browser: Browser, timeoutMs: number): Pr
       }
     }
     if (Date.now() > deadline) throw new Error("p0 probe: Agent Manager tab strip frame not found via CDP")
-    await sleep(250)
+    if (abort) await Promise.race([sleep(250), abort])
+    else await sleep(250)
   }
 }
 
@@ -380,13 +780,15 @@ async function waitForRecord(
   afterT: number,
   timeoutMs: number,
   label: string,
+  abort?: Promise<never>,
 ): Promise<StageRecord> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const found = records().stages.find((s) => s.surface === surface && s.stage === stage && s.t > afterT)
     if (found) return found
     if (Date.now() > deadline) throw new Error(`p0 probe: timeout waiting for ${label}`)
-    await sleep(100)
+    if (abort) await Promise.race([sleep(100), abort])
+    else await sleep(100)
   }
 }
 
@@ -398,13 +800,15 @@ async function waitForCount(
   minCount: number,
   timeoutMs: number,
   label: string,
+  abort?: Promise<never>,
 ): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const count = records().stages.filter((s) => s.surface === surface && s.stage === stage).length
     if (count >= minCount) return
     if (Date.now() > deadline) throw new Error(`p0 probe: timeout waiting for ${label} (count ${count}/${minCount})`)
-    await sleep(100)
+    if (abort) await Promise.race([sleep(100), abort])
+    else await sleep(100)
   }
 }
 
@@ -454,11 +858,13 @@ function provenanceFromRecords(stages: StageRecord[], cliPath: string | null, ro
   const cliExists = cliPath ? existsSync(cliPath) : false
   const cliPathInWorkspace = cliPath ? resolve(cliPath).startsWith(resolve(root) + "/") : false
   let spawnedArgsMatch = false
+  let spawnedStart: string | null = null
   if (pid) {
-    const args = processArgs(pid)
-    if (args) {
+    const identity = processIdentity(pid)
+    if (identity) {
+      spawnedStart = identity.start
       const relCli = cliPath ? resolve(cliPath) : join(root, "bin", "kilo")
-      spawnedArgsMatch = args.includes(relCli) && args.includes("serve")
+      spawnedArgsMatch = identity.args.includes(relCli) && identity.args.includes("serve")
     }
   }
   return {
@@ -476,6 +882,7 @@ function provenanceFromRecords(stages: StageRecord[], cliPath: string | null, ro
     })(),
     spawnedPid: pid,
     spawnedArgsMatch,
+    spawnedStart,
   }
 }
 
@@ -541,6 +948,147 @@ async function compileRunner(root: string, scratch: string): Promise<string> {
   return runnerOut
 }
 
+/**
+ * Settle the backend registration before teardown reads the guard's backend
+ * identity: await it within a bounded window (see settleBackendRegistration,
+ * which cancels the poll loop on expiry so no late registration can mutate
+ * guard state mid-teardown). Returns the settled identity — or null — plus a
+ * missing-registration error string when the window expired.
+ */
+async function settleBackendIdentity(
+  backendReg: Promise<BackendRoot | null>,
+  regSignal: { cancelled: boolean },
+  guard: MemoryGuard | null,
+): Promise<{ identity: BackendRoot | null; error: string | null }> {
+  const settled = await settleBackendRegistration(backendReg, regSignal, BACKEND_REG_SETTLE_MS)
+  const identity = settled.identity ?? guard?.backendIdentity() ?? null
+  if (settled.timedOut) {
+    console.error(`[p0-probe] backend identity registration unsettled after ${BACKEND_REG_SETTLE_MS}ms`)
+    return { identity, error: "backend identity registration did not settle within the bounded window" }
+  }
+  return { identity, error: null }
+}
+
+/**
+ * Merge ordered-teardown failure notes into the blocked record evidence and
+ * every sample: a teardown failure always fails the lifecycle. Notes are
+ * byte-bounded in blocked.detail and in the failures[] entries; the later
+ * cleanup evidence stays visible without suppressing the original failure.
+ */
+function applyTeardownNotes(
+  samples: SampleRecord[],
+  notes: string[],
+  blockedReason: string | null,
+  blockedDetail: string,
+): { failed: boolean; blockedReason: string | null; blockedDetail: string } {
+  if (notes.length === 0) return { failed: false, blockedReason, blockedDetail }
+  const detail = notes.join("; ")
+  console.error(`[p0-probe] FAIL teardown: ${detail}`)
+  const mergedDetail = boundBlockedDetail(blockedDetail ? `${blockedDetail}\n${detail}` : detail)
+  const reason = blockedReason ?? "teardown-failed"
+  for (const sampleRecord of samples) {
+    const original = sampleRecord.blocked
+    sampleRecord.ok = false
+    sampleRecord.failures.push(boundFailure(`cleanup-failed: ${detail}`))
+    sampleRecord.blocked = {
+      reason: "cleanup-failed",
+      detail: boundBlockedDetail(original ? `${original.reason}: ${original.detail}\n${detail}` : detail),
+    }
+  }
+  return { failed: true, blockedReason: reason, blockedDetail: mergedDetail }
+}
+
+/**
+ * Hard fail-closed gate for missing backend ownership evidence (LOCK-PERF:
+ * missing ownership evidence is failure, never baseline). When a spawned
+ * backend PID was observed (spawn.done) but the stable identity never settled
+ * during the lifecycle (registration timeout, ps failure, mismatch/reused PID,
+ * or late discovery could not verify), every sample of the lifecycle is forced
+ * to `ok:false` with blocked reason `backend-identity-unavailable` and bounded
+ * evidence — a spawned-but-unregistered backend must never yield an ok
+ * sample/run. A sample legitimately blocked BEFORE any spawn (no PID observed)
+ * is never a false positive. Late discovery that verifies the identity only
+ * prevents a leak (cleanup then terminates by exact identity); it does NOT
+ * rescue the sample — the registration was still missing for stable ownership
+ * during the lifecycle. The guard result merge runs after this gate so a
+ * memory-guard abort still dominates.
+ */
+export function applyBackendIdentityGate(
+  samples: SampleRecord[],
+  launched: boolean,
+  spawnObserved: boolean,
+  registrationMissing: boolean,
+  error: string | null,
+  priorReason: string | null,
+  priorDetail: string,
+): { failed: boolean; blockedReason: string | null; blockedDetail: string } {
+  if (!launched || !spawnObserved || !registrationMissing) {
+    return { failed: false, blockedReason: priorReason, blockedDetail: priorDetail }
+  }
+  const detail =
+    error !== null
+      ? `backend identity registration failed: ${error}`
+      : "backend identity was never verified from the spawn.done PID + CLI path records"
+  for (const s of samples) {
+    const original = s.blocked
+    s.ok = false
+    s.failures.push(boundFailure(`backend-identity-unavailable: ${error ?? "identity never verified"}`))
+    s.blocked = {
+      reason: "backend-identity-unavailable",
+      detail: boundBlockedDetail(original ? `${original.reason}: ${original.detail}\n${detail}` : detail),
+    }
+  }
+  console.error(`[p0-probe] FAIL backend-identity-unavailable: ${detail}`)
+  return {
+    failed: true,
+    blockedReason: "backend-identity-unavailable",
+    blockedDetail: boundBlockedDetail(priorDetail ? `${priorDetail}\n${detail}` : detail),
+  }
+}
+
+/**
+ * Fail-closed late identity discovery for a spawned backend PID whose
+ * registration never settled (run BEFORE final cleanup): re-check PID + exact
+ * snapshot/bundled CLI path + raw lstart against the live process table. When
+ * verified, the exact identity is returned (the caller registers it with the
+ * guard and cleanup terminates it by exact identity — no leak). When not
+ * verifiable, an UnverifiedBackend is returned; no signal is ever sent,
+ * cleanup reports the blocker, and the snapshot/scratch evidence is retained.
+ * Either way the registration was missing during the lifecycle (the
+ * applyBackendIdentityGate call in runLifecycle fails the sample) — late
+ * discovery never rescues the sample, only prevents a leak.
+ */
+function recoverBackendByLateDiscovery(
+  observedPid: number,
+  observedCliPath: string | null,
+  fallbackCli: string | null,
+  root: string,
+  guard: MemoryGuard | null,
+  error: string | null,
+): { identity: BackendRoot | null; unverified: UnverifiedBackend | null; error: string | null } {
+  const discovered = discoverBackendIdentity(observedPid, observedCliPath ?? fallbackCli)
+  if (discovered) {
+    guard?.registerBackend(discovered)
+    const err =
+      "identity only verifiable by late discovery after the registration window (registration missing during the lifecycle)"
+    console.log(
+      `[p0-probe] backend identity verified by late discovery: pid=${discovered.pid} start=${discovered.start} cli=${discovered.cliPath}`,
+    )
+    return { identity: discovered, unverified: null, error: err }
+  }
+  const unverified: UnverifiedBackend = {
+    pid: observedPid,
+    cliPath: observedCliPath ?? fallbackCli ?? join(root, "bin", "kilo"),
+  }
+  const err =
+    (error !== null ? `${error}; ` : "") +
+    `late discovery could not verify PID ${observedPid} against the live process table`
+  console.error(
+    `[p0-probe] backend identity NOT verifiable by late discovery (pid=${observedPid}) — no signal; snapshot/scratch evidence retained`,
+  )
+  return { identity: null, unverified, error: err }
+}
+
 export async function runLifecycle(opts: LifecycleOptions): Promise<LifecycleResult> {
   const started = Date.now()
   const { root, scenario, condition, scratch, fixtureId, sample, cycles, logDir } = opts
@@ -550,6 +1098,13 @@ export async function runLifecycle(opts: LifecycleOptions): Promise<LifecycleRes
   let failed = false
   let blockedReason: string | null = null
   let blockedDetail = ""
+  // Backend identity registration state: settled before teardown reads the
+  // guard's backend identity. A failed/missing registration is recorded as
+  // evidence (never hidden); `regSignal.cancelled` bounds the settle so no
+  // late registration can mutate guard state mid-teardown.
+  let backendReg: Promise<BackendRoot | null> = Promise.resolve(null)
+  let backendRegError: string | null = null
+  const regSignal = { cancelled: false }
   const resultSamples: SampleRecord[] = []
   const doneFile = join(scratch, "done")
   const env: SampleEnv = {
@@ -559,7 +1114,10 @@ export async function runLifecycle(opts: LifecycleOptions): Promise<LifecycleRes
     vscode: opts.vscodeVersion,
     extension: opts.extensionVersion,
     gitHead: opts.gitHead,
+    gitCommit: opts.gitCommit,
+    gitDirty: opts.gitDirty,
     backendCli: opts.backendCli,
+    ...(opts.cliSnapshot ? { cliSnapshot: opts.cliSnapshot } : {}),
   }
 
   const cdpPort = await freePort()
@@ -571,116 +1129,261 @@ export async function runLifecycle(opts: LifecycleOptions): Promise<LifecycleRes
   const rawLogPath = join(logDir, `sample-${sample}-${scenario}.log`)
   const stopCapture = startCapture()
 
+  // Run-owned process-tree memory guard, seeded on the exact unique lifecycle
+  // userData path (script/p0-bench/memory-guard.ts). Started BEFORE anything
+  // launches; covers readiness/drive/teardown and is stopped in the finally.
+  // A start failure (unsupported platform / invalid env rails) becomes a
+  // blocked sample — VS Code is never launched unguarded.
+  let guard: MemoryGuard | null = null
+  // Settled backend identity, captured before teardown (see the settle block
+  // inside the try) and read by the cleanup step and the evidence merge below.
+  let registeredIdentity: BackendRoot | null = null
+  // Spawn evidence, snapshotted from the capture BEFORE teardown stops it: a
+  // spawned backend PID (spawn.done) whose registration never settled is a hard
+  // fail-closed failure (never ok), while a sample blocked before any spawn is
+  // not a false positive.
+  let observedPid: number | null = null
+  let observedCliPath: string | null = null
+  // True when the registration settled WITHOUT an identity (even if late
+  // discovery later recovers one for cleanup) — the gate keys on this so a
+  // late-verified survivor is still cleaned but never rescues the sample.
+  let registrationMissing = false
+  // A spawned backend PID that could not be verified even by late discovery:
+  // cleanup must never signal it and must retain the snapshot/scratch evidence.
+  let unverifiedBackend: UnverifiedBackend | null = null
+  // Run-owned MCP fixture evidence (many-agent-mcp): the exact identity is
+  // discovered right after the handshake marker appears (drive) and retained
+  // through teardown, re-verified immediately before each cleanup signal, and
+  // attached to every emitted sample as evidence.
+  const mcp = emptyMcpFixtureEvidence()
+
   try {
-    const runnerOut = await compileRunner(root, scratch)
-    const executable = detectExecutable(root)
-    const vscodeVersion = executable ? vscodeVersionFromExecutable(executable) : "auto-download"
-    env.vscode = vscodeVersion
-    console.log(
-      `[p0-probe] sample ${sample} scenario=${scenario} fixture=${fixtureId} cdp=${cdpPort} scratch=${scratch}`,
-    )
-    if (executable) console.log(`[p0-probe] VS Code executable: ${executable} (${vscodeVersion})`)
+    try {
+      guard = startMemoryGuard(userData, memoryGuardConfig(process.env), {
+        ...realGuardDeps(),
+        onBreach: (b) => onGuardBreach(b, doneFile, userData, () => guard),
+      })
+      // Abort signal: rejects with GuardAbortError on breach, never settles
+      // otherwise (a disabled guard has no breach). Raced against the drive so
+      // a runaway aborts the lifecycle promptly; also threaded into the drive's
+      // wait loops so background waits stop within one poll tick.
+      const abort: Promise<never> = guard.breached.then((b) => {
+        if (b) throw new GuardAbortError(b)
+        return new Promise<never>(() => {})
+      })
 
-    vscodeRun = runTests({
-      ...(executable ? { vscodeExecutablePath: executable } : {}),
-      extensionDevelopmentPath: root,
-      extensionTestsPath: runnerOut,
-      extensionTestsEnv: {
-        KILO_E2E_FIXTURE: "1",
-        KILO_P0_PERF: "1",
-        KILO_P0_SCRATCH: scratch,
-        KILO_P0_FIXTURE_ID: fixtureId,
-        KILO_P0_SCENARIO: scenario,
-        KILO_P0_CYCLES: String(cycles),
-        ...(scenario === "session-switch"
-          ? { KILO_P0_SWITCH_SESSIONS: process.env.KILO_P0_SWITCH_SESSIONS ?? "5" }
-          : {}),
-        XDG_CONFIG_HOME: join(scratch, "xdg-config"),
-        XDG_DATA_HOME: join(scratch, "xdg-data"),
-        XDG_CACHE_HOME: join(scratch, "xdg-cache"),
-        XDG_STATE_HOME: join(scratch, "xdg-state"),
-      },
-      launchArgs: [
-        workspace,
-        `--user-data-dir=${userData}`,
-        `--extensions-dir=${extensions}`,
-        `--remote-debugging-port=${cdpPort}`,
-        // Loopback-only, ephemeral test profile — see script/e2e-probe.ts.
-        `--remote-allow-origins=*`,
-      ],
-    })
+      const runnerOut = await compileRunner(root, scratch)
+      const executable = detectExecutable(root)
+      const vscodeVersion = executable ? vscodeVersionFromExecutable(executable) : "auto-download"
+      env.vscode = vscodeVersion
+      console.log(
+        `[p0-probe] sample ${sample} scenario=${scenario} fixture=${fixtureId} cdp=${cdpPort} scratch=${scratch}`,
+      )
+      if (executable) console.log(`[p0-probe] VS Code executable: ${executable} (${vscodeVersion})`)
 
-    await waitForCdp(cdpPort, 90_000)
-    browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, { timeout: 30_000 })
-    await waitForFile(join(scratch, "ready"), 120_000, "runner ready marker")
-    console.log(`[p0-probe] runner ready (${scenario})`)
+      vscodeRun = runTests({
+        ...(executable ? { vscodeExecutablePath: executable } : {}),
+        extensionDevelopmentPath: root,
+        extensionTestsPath: runnerOut,
+        extensionTestsEnv: {
+          KILO_E2E_FIXTURE: "1",
+          KILO_P0_PERF: "1",
+          KILO_P0_SCRATCH: scratch,
+          KILO_P0_FIXTURE_ID: fixtureId,
+          KILO_P0_SCENARIO: scenario,
+          KILO_P0_CYCLES: String(cycles),
+          ...(scenario === "session-switch"
+            ? { KILO_P0_SWITCH_SESSIONS: process.env.KILO_P0_SWITCH_SESSIONS ?? "5" }
+            : {}),
+          // Benchmark-only CLI snapshot pinning: the extension host spawns the
+          // run-owned snapshot path, never the watcher-mutable bin/kilo.
+          ...(opts.backendCli ? { KILO_P0_BACKEND_CLI: opts.backendCli } : {}),
+          XDG_CONFIG_HOME: join(scratch, "xdg-config"),
+          XDG_DATA_HOME: join(scratch, "xdg-data"),
+          XDG_CACHE_HOME: join(scratch, "xdg-cache"),
+          XDG_STATE_HOME: join(scratch, "xdg-state"),
+        },
+        launchArgs: [
+          workspace,
+          `--user-data-dir=${userData}`,
+          `--extensions-dir=${extensions}`,
+          `--remote-debugging-port=${cdpPort}`,
+          // Loopback-only, ephemeral test profile — see script/e2e-probe.ts.
+          `--remote-allow-origins=*`,
+        ],
+      })
 
-    await driveScenario(opts, browser, scratch, env, resultSamples)
-  } catch (err) {
-    failed = true
-    blockedReason = err instanceof Error ? err.message : String(err)
-    blockedDetail = err instanceof Error ? (err.stack ?? "") : ""
-    console.error(`[p0-probe] FAIL (sample ${sample} ${scenario}): ${blockedReason}`)
-    resultSamples.push(blockedSample(scenario, condition, sample, started, env, blockedReason, blockedDetail))
-  }
-
-  // -------------------------------------------------------------------------
-  // Ordered teardown. lifecycleTeardownSteps assembles the exact-ordered plan
-  // (done marker → browser close → capture stop → raw log write → VS Code exit
-  // → exact-owned cleanup); runCleanupSteps executes every step and collects
-  // each failure instead of throwing, so a done-marker or browser-close failure
-  // can never skip writer restoration, the raw log flush, the VS Code exit
-  // watchdog, or the exact-owned cleanup (settle → exact PID → port release →
-  // scratch deletion). A failed raw-log write surfaces as a labeled teardown
-  // note (evidence loss is visible), while the later steps still run. Failures
-  // surface in blockedDetail and on the samples below without suppressing the
-  // original failure evidence.
-  // -------------------------------------------------------------------------
-  const teardownNotes = await runCleanupSteps(
-    lifecycleTeardownSteps({
-      writeDone: () => writeFileSync(doneFile, "done"),
-      closeBrowser: async () => {
-        await browser?.close()
-      },
-      stopCapture,
-      markTruncated: (truncated) => markCaptureTruncated(resultSamples, truncated),
-      // Evidence-write failures must stay visible: throw so runCleanupSteps
-      // records a labeled note; the later teardown steps still run.
-      writeRawLog: (text) => {
-        try {
-          writeFileSync(rawLogPath, text)
-        } catch (err) {
-          throw new Error(
-            `raw log write failed for ${rawLogPath}: ${err instanceof Error ? err.message : String(err)}`,
+      const drive = (async () => {
+        await waitForCdp(cdpPort, 90_000, abort)
+        browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, { timeout: 30_000 })
+        await waitForFile(join(scratch, "ready"), 120_000, "runner ready marker", abort)
+        console.log(`[p0-probe] runner ready (${scenario})`)
+        await driveScenario(opts, browser, scratch, env, resultSamples, abort, mcp)
+      })()
+      // Register the exact backend identity with the guard as soon as
+      // spawn.done + CLI path are observable — DURING readiness, never only at
+      // sample finalization — so the run-owned backend is an owned root (and
+      // its descendants stay monitored) even if the Extension Host later
+      // reparents it to PID 1. Best-effort: a timeout/mismatch is recorded as
+      // evidence, never fatal by itself (userData seeding still applies). The
+      // settled promise (null on failure) is awaited/bounded before teardown.
+      backendReg = (async () => {
+        const identity = await awaitBackendIdentity(() => capturePeek(), abort, 120_000, regSignal)
+        if (identity) {
+          guard?.registerBackend(identity)
+          console.log(`[p0-probe] backend identity registered: pid=${identity.pid} start=${identity.start} cli=${identity.cliPath}`)
+        } else {
+          console.error(
+            `[p0-probe] backend identity NOT registered (spawn.done/CLI path never verified within 120s) — ` +
+              `reparented backend would only be covered by userData seeding`,
           )
         }
-      },
-      waitExit: async () => {
-        if (!vscodeRun) return true
-        return awaitExit(vscodeRun, userData, timeoutMs)
-      },
-      onExitResult: (exited) => {
-        if (!exited) failed = true
-      },
-      cleanup: () => verifyCleanup(userData, cdpPort, scratch, scenario),
-    }),
-  )
-
-  if (teardownNotes.length > 0) {
-    failed = true
-    const detail = teardownNotes.join("; ")
-    console.error(`[p0-probe] FAIL (sample ${sample} ${scenario}) teardown: ${detail}`)
-    blockedDetail = blockedDetail ? `${blockedDetail}\n${detail}` : detail
-    if (!blockedReason) blockedReason = "teardown-failed"
-    for (const sampleRecord of resultSamples) {
-      const original = sampleRecord.blocked
-      sampleRecord.ok = false
-      sampleRecord.blocked = {
-        reason: "cleanup-failed",
-        detail: original ? `${original.reason}: ${original.detail}\n${detail}` : detail,
-      }
+        return identity
+      })().catch((err) => {
+        // A guard breach/poll failure aborts the wait; the drive already
+        // surfaces that cause. Keep the registration settled-with-null so
+        // teardown proceeds, with the failure recorded as evidence.
+        backendRegError = err instanceof Error ? err.message : String(err)
+        console.error(`[p0-probe] backend identity registration failed: ${backendRegError}`)
+        return null
+      })
+      await Promise.race([drive, abort])
+    } catch (err) {
+      failed = true
+      const classification = classifyLifecycleError(err, sample, scenario)
+      blockedReason = classification.blockedReason
+      blockedDetail = classification.blockedDetail
+      // Phase follows the sample/warmup rule like every other record: a blocked
+      // MEASURED sample stays measured (never hardcoded to warmup).
+      resultSamples.push(
+        blockedSample(scenario, condition, sample, phaseForSample(sample, opts.warmup), started, env, blockedReason, blockedDetail),
+      )
     }
+
+    // Snapshot the spawn evidence BEFORE teardown stops the capture: a spawned
+    // backend PID observed without a settled identity is a hard fail-closed
+    // failure; a sample blocked before any spawn is not a false positive.
+    const observed = capturePeek()
+    observedPid = observed.spawnedPid
+    observedCliPath = observed.cliPath
+
+    // The registration runs concurrently with the drive; before teardown reads
+    // the guard's backend identity, settle it within a bounded window so
+    // cleanup sees a settled registration state (awaited, or bounded + loop
+    // cancelled — never read while still in flight). A missing registration is
+    // a hard failure on the samples below.
+    const settled = await settleBackendIdentity(backendReg, regSignal, guard)
+    registeredIdentity = settled.identity
+    registrationMissing = registeredIdentity === null
+    if (settled.error) backendRegError = settled.error
+
+    // Fail-closed late identity discovery, BEFORE final cleanup: when a spawned
+    // backend PID was observed but the registration never settled, attempt one
+    // bounded re-check of PID + exact snapshot path + raw lstart against the
+    // live process table. If verified, the exact identity is registered with
+    // the guard and cleanup terminates it by exact identity (no leak). If not
+    // verifiable, no signal is ever sent; cleanup returns a blocker naming the
+    // PID/path and the snapshot/scratch evidence is retained. The gate below
+    // still fails the sample either way — the registration was missing for
+    // stable ownership during the lifecycle (LOCK-PERF).
+    if (registrationMissing && observedPid !== null) {
+      const recovered = recoverBackendByLateDiscovery(
+        observedPid,
+        observedCliPath,
+        opts.backendCli,
+        opts.root,
+        guard,
+        backendRegError,
+      )
+      registeredIdentity = recovered.identity
+      unverifiedBackend = recovered.unverified
+      backendRegError = recovered.error
+    }
+
+    // -----------------------------------------------------------------------
+    // Ordered teardown. lifecycleTeardownSteps assembles the exact-ordered plan
+    // (done marker → browser close → capture stop → raw log write → VS Code exit
+    // → exact-owned cleanup); runCleanupSteps executes every step and collects
+    // each failure instead of throwing, so a done-marker or browser-close failure
+    // can never skip writer restoration, the raw log flush, the VS Code exit
+    // watchdog, or the exact-owned cleanup (settle → exact PID → port release →
+    // scratch deletion). A failed raw-log write surfaces as a labeled teardown
+    // note (evidence loss is visible), while the later steps still run. Failures
+    // surface in blockedDetail and on the samples below without suppressing the
+    // original failure evidence.
+    // -----------------------------------------------------------------------
+    const teardownNotes = await runCleanupSteps(
+      lifecycleTeardownSteps({
+        writeDone: () => writeFileSync(doneFile, "done"),
+        closeBrowser: async () => {
+          await browser?.close()
+        },
+        stopCapture,
+        markTruncated: (truncated) => markCaptureTruncated(resultSamples, truncated),
+        // Evidence-write failures must stay visible: throw so runCleanupSteps
+        // records a labeled note; the later teardown steps still run.
+        writeRawLog: (text) => {
+          try {
+            writeFileSync(rawLogPath, text)
+          } catch (err) {
+            throw new Error(
+              `raw log write failed for ${rawLogPath}: ${err instanceof Error ? err.message : String(err)}`,
+            )
+          }
+        },
+        waitExit: async () => {
+          if (!vscodeRun) return true
+          return awaitExit(vscodeRun, userData, timeoutMs)
+        },
+        onExitResult: (exited) => {
+          if (!exited) failed = true
+        },
+        cleanup: () => verifyCleanup(userData, cdpPort, scratch, scenario, registeredIdentity, unverifiedBackend, mcp),
+      }),
+    )
+
+    const teardownOutcome = applyTeardownNotes(resultSamples, teardownNotes, blockedReason, blockedDetail)
+    failed = failed || teardownOutcome.failed
+    blockedReason = teardownOutcome.blockedReason
+    blockedDetail = teardownOutcome.blockedDetail
+    // MCP fixture evidence (handshake + exact identity + cleanup status)
+    // attaches to every many-agent-mcp sample; a failed cleanup already failed
+    // the samples via the teardown notes above — this only records the
+    // evidence truthfully.
+    applyMcpFixtureEvidence(resultSamples, scenario, mcp)
+  } finally {
+    // Stop the guard LAST — after teardown — so readiness/drive/teardown are
+    // all covered; never leaves a poll timer behind.
+    guard?.stop()
   }
+
+  // -------------------------------------------------------------------------
+  // A spawned backend PID observed without a settled identity is a hard
+  // failure — never an ok sample/run (LOCK-PERF: missing ownership evidence is
+  // failure). Late discovery that verified the identity for cleanup does not
+  // rescue the sample; the registration was still missing during the lifecycle.
+  // -------------------------------------------------------------------------
+  const identityOutcome = applyBackendIdentityGate(
+    resultSamples,
+    vscodeRun !== undefined,
+    observedPid !== null,
+    registrationMissing,
+    backendRegError,
+    blockedReason,
+    blockedDetail,
+  )
+  failed = failed || identityOutcome.failed
+  blockedReason = identityOutcome.blockedReason
+  blockedDetail = identityOutcome.blockedDetail
+
+  // -------------------------------------------------------------------------
+  // Attach the bounded memory guard result to every emitted sample and force
+  // the whole lifecycle to a failure when a safety rail was breached.
+  // -------------------------------------------------------------------------
+  const guardOutcome = applyGuardResult(resultSamples, guard?.result(), blockedReason, blockedDetail)
+  failed = failed || guardOutcome.failed
+  blockedReason = guardOutcome.blockedReason
+  blockedDetail = guardOutcome.blockedDetail
 
   const elapsedMs = Date.now() - started
   for (const sampleRecord of resultSamples) {
@@ -690,16 +1393,155 @@ export async function runLifecycle(opts: LifecycleOptions): Promise<LifecycleRes
   return {
     samples: resultSamples,
     ok: !failed,
-    blockedReason,
-    blockedDetail: blockedDetail.slice(0, 2000),
+    blockedReason: blockedReason ? boundBlockedReason(blockedReason) : null,
+    blockedDetail: boundBlockedDetail(blockedDetail),
     elapsedMs,
   }
+}
+
+/**
+ * Classify a lifecycle failure into the blocked record's reason/detail. A
+ * memory guard breach is `memory-guard-abort` with bounded JSON evidence; a
+ * guard that cannot start (unsupported platform / invalid rails) is
+ * `memory-guard-unavailable`; anything else keeps its original message/stack.
+ */
+function classifyLifecycleError(
+  err: unknown,
+  sample: number,
+  scenario: ScenarioID,
+): { blockedReason: string; blockedDetail: string } {
+  if (err instanceof GuardAbortError) {
+    const detail = JSON.stringify(err.breach)
+    console.error(
+      `[p0-probe] MEMORY GUARD ABORT (sample ${sample} ${scenario}): ${err.breach.reason} ` +
+        `aggregateRss=${err.breach.aggregateRss} maxProcessRss=${err.breach.maxProcessRss} pid=${err.breach.pid}`,
+    )
+    return { blockedReason: "memory-guard-abort", blockedDetail: detail }
+  }
+  if (err instanceof MemoryGuardUnavailableError) {
+    console.error(`[p0-probe] FAIL (sample ${sample} ${scenario}): memory-guard-unavailable — ${err.message}`)
+    return { blockedReason: "memory-guard-unavailable", blockedDetail: err.message }
+  }
+  const reason = err instanceof Error ? err.message : String(err)
+  const detail = err instanceof Error ? (err.stack ?? "") : ""
+  console.error(`[p0-probe] FAIL (sample ${sample} ${scenario}): ${reason}`)
+  return { blockedReason: reason, blockedDetail: detail }
+}
+
+/**
+ * Attach the bounded memory guard result to every emitted sample and force the
+ * whole lifecycle to a failure when a safety rail was breached OR a poll
+ * failed (the guard cannot monitor, so the lifecycle fails closed). A
+ * guard-aborted or guard-unavailable sample is a failure, never a baseline
+ * (LOCK-PERF: partial/guard-aborted samples are never baselines).
+ */
+function applyGuardResult(
+  samples: SampleRecord[],
+  guardResult: MemoryGuardResult | undefined,
+  priorReason: string | null,
+  priorDetail: string,
+): { failed: boolean; blockedReason: string | null; blockedDetail: string } {
+  if (!guardResult) return { failed: false, blockedReason: priorReason, blockedDetail: priorDetail }
+  for (const s of samples) s.memoryGuard = guardResult
+  if (guardResult.failure) {
+    // A ps poll failed after start: the guard cannot monitor, so the lifecycle
+    // must fail closed. The failure was already surfaced through the abort
+    // promise when it happened mid-drive; this merge guarantees the sample
+    // record carries it even when the failure landed after the drive settled.
+    const detail = JSON.stringify(guardResult.failure)
+    for (const s of samples) {
+      const original = s.blocked
+      s.ok = false
+      s.failures.push(boundFailure(`memory-guard-unavailable: ${guardResult.failure.reason}`))
+      s.blocked = {
+        reason: "memory-guard-unavailable",
+        detail: boundBlockedDetail(original ? `${original.reason}: ${original.detail}\n${detail}` : detail),
+      }
+    }
+    return {
+      failed: true,
+      blockedReason: "memory-guard-unavailable",
+      blockedDetail: boundBlockedDetail(priorDetail ? `${priorDetail}\n${detail}` : detail),
+    }
+  }
+  if (!guardResult.breach) return { failed: false, blockedReason: priorReason, blockedDetail: priorDetail }
+  const detail = JSON.stringify(guardResult.breach)
+  for (const s of samples) {
+    const original = s.blocked
+    s.ok = false
+    s.failures.push(boundFailure(`memory-guard-abort: ${guardResult.breach.reason}`))
+    s.blocked = {
+      reason: "memory-guard-abort",
+      detail: boundBlockedDetail(original ? `${original.reason}: ${original.detail}\n${detail}` : detail),
+    }
+  }
+  return {
+    failed: true,
+    blockedReason: "memory-guard-abort",
+    blockedDetail: boundBlockedDetail(priorDetail ? `${priorDetail}\n${detail}` : detail),
+  }
+}
+
+/** Hard byte cap on blocked-record evidence detail strings (bounded evidence). */
+const MAX_BLOCKED_DETAIL_BYTES = 2000
+
+/** Hard byte cap on blocked-record reason strings (clear short reason). */
+const MAX_BLOCKED_REASON_BYTES = 200
+
+/** Hard byte cap on explicit failures[] entries (bounded evidence). */
+const MAX_FAILURE_BYTES = 200
+
+/**
+ * Byte-cap an evidence string to `maxBytes` bytes without splitting a UTF-8
+ * sequence (the tail is replaced by the U+2026 ellipsis). Every bounded string
+ * producer — blocked reason/detail and explicit failure entries — routes
+ * through this single helper so no path can grow a bounded field without
+ * bound.
+ */
+export function boundEvidence(text: string, maxBytes: number): string {
+  if (Buffer.byteLength(text, "utf8") <= maxBytes) return text
+  let cut = 0
+  let bytes = 0
+  while (cut < text.length) {
+    const c = text.charCodeAt(cut)
+    const low = text.charCodeAt(cut + 1)
+    const pair = c >= 0xd800 && c <= 0xdbff && low >= 0xdc00 && low <= 0xdfff
+    const n = pair ? 4 : c < 0x80 ? 1 : c < 0x800 ? 2 : 3
+    if (bytes + n > maxBytes) break
+    bytes += n
+    cut += pair ? 2 : 1
+  }
+  return text.slice(0, cut) + "…"
+}
+
+/**
+ * Bound a blocked-record detail string to its byte cap. Every blocked.detail
+ * producer — blockedSample, the teardown failure merge, and the applyGuardResult
+ * merge — routes through this single helper so no path can grow the bounded
+ * field without bound.
+ */
+export function boundBlockedDetail(detail: string): string {
+  return boundEvidence(detail, MAX_BLOCKED_DETAIL_BYTES)
+}
+
+/**
+ * Bound a blocked-record reason string to its byte cap (clear short reason
+ * semantics: a bounded reason, with the full evidence in blocked.detail).
+ */
+export function boundBlockedReason(reason: string): string {
+  return boundEvidence(reason, MAX_BLOCKED_REASON_BYTES)
+}
+
+/** Bound an explicit failures[] entry to its byte cap. */
+export function boundFailure(failure: string): string {
+  return boundEvidence(failure, MAX_FAILURE_BYTES)
 }
 
 function blockedSample(
   scenario: ScenarioID,
   condition: Condition,
   sample: number,
+  phase: "warmup" | "measured",
   startedAt: number,
   env: SampleEnv,
   reason: string,
@@ -712,7 +1554,7 @@ function blockedSample(
     condition,
     sample,
     cycle: 0,
-    phase: "warmup",
+    phase,
     lifecycle: 1,
     startedAt,
     elapsedMs: 0,
@@ -720,7 +1562,8 @@ function blockedSample(
     provenance: EMPTY_PROVENANCE,
     key: {},
     stages: [],
-    blocked: { reason, detail: detail.slice(0, 2000) },
+    failures: [boundFailure(reason)],
+    blocked: { reason: boundBlockedReason(reason), detail: boundBlockedDetail(detail) },
     ok: false,
   }
 }
@@ -759,18 +1602,20 @@ async function driveScenario(
   scratch: string,
   env: SampleEnv,
   out: SampleRecord[],
+  abort: Promise<never>,
+  mcp: McpFixtureEvidence,
 ): Promise<void> {
   if (COLD_SCENARIOS.has(opts.scenario)) {
-    await driveColdScenario(opts, browser, scratch, env, out)
+    await driveColdScenario(opts, browser, scratch, env, out, abort, mcp)
     return
   }
   if (opts.scenario === "warm-view") {
-    await waitForWebviewFrame(browser, 30_000)
-    await handleWarmViewCycles(opts, browser, scratch, out, env)
+    await waitForWebviewFrame(browser, 30_000, abort)
+    await handleWarmViewCycles(opts, browser, scratch, out, env, abort)
     return
   }
   if (opts.scenario === "session-switch") {
-    await handleSessionSwitches(opts, browser, scratch, out, env)
+    await handleSessionSwitches(opts, browser, scratch, out, env, abort)
     return
   }
   throw new Error(`unsupported scenario: ${opts.scenario}`)
@@ -782,6 +1627,8 @@ async function driveColdScenario(
   scratch: string,
   env: SampleEnv,
   out: SampleRecord[],
+  abort: Promise<never>,
+  mcp: McpFixtureEvidence,
 ): Promise<void> {
   // LOCK-012: wait for the current extensionDataReady gate to fire.
   const dataReady = await waitForRecord(
@@ -791,13 +1638,47 @@ async function driveColdScenario(
     0,
     180_000,
     "dataReady.done gate",
+    abort,
   )
   console.log(`[p0-probe] dataReady.done at t=${dataReady.t}`)
-  await waitForWebviewFrame(browser, 30_000)
+  await waitForWebviewFrame(browser, 30_000, abort)
   if (opts.scenario === "many-agent-mcp") {
     const mcpMarker = join(scratch, "mcp-connected")
-    await waitForFile(mcpMarker, 90_000, "MCP fixture connect marker")
-    console.log(`[p0-probe] MCP fixture connected (${readFileSync(mcpMarker, "utf8").trim()})`)
+    await waitForFile(mcpMarker, 90_000, "MCP fixture connect marker", abort)
+    // The marker is written by the fixture only after the REAL MCP handshake
+    // (initialize → tools/list) succeeded. Discover the exact-owned identity
+    // (PID + raw lstart + fixture script path in args) while the fixture is
+    // known alive; it is retained through teardown and re-verified immediately
+    // before each cleanup signal. A marker we cannot verify fails closed at
+    // cleanup (never signal a bare/unverified PID).
+    let handshake: { pid: number; connectedAt: number } | null = null
+    const rawMarker = readFileSync(mcpMarker, "utf8").trim()
+    try {
+      const parsed = JSON.parse(rawMarker) as { pid?: unknown; connectedAt?: unknown }
+      if (typeof parsed.pid === "number" && parsed.pid > 0 && typeof parsed.connectedAt === "number") {
+        handshake = { pid: parsed.pid, connectedAt: parsed.connectedAt }
+      } else {
+        mcp.discoveryError = "marker JSON missing pid/connectedAt"
+      }
+    } catch {
+      mcp.discoveryError = `marker unparsable: ${boundEvidence(rawMarker, MAX_FAILURE_BYTES)}`
+    }
+    if (handshake) {
+      mcp.handshake = handshake
+      const identity = verifiedFixtureIdentity(handshake.pid, opts.mcpFixturePath)
+      if (identity) {
+        mcp.identity = identity
+        console.log(
+          `[p0-probe] MCP fixture identity verified: pid=${identity.pid} start=${identity.start} path=${identity.path}`,
+        )
+      } else {
+        mcp.discoveryError =
+          `PID ${handshake.pid} did not verify against the live process table ` +
+          `(exited, reused, or args no longer contain the exact fixture script path ${opts.mcpFixturePath})`
+        console.error(`[p0-probe] MCP fixture identity NOT verified: ${mcp.discoveryError}`)
+      }
+    }
+    console.log(`[p0-probe] MCP fixture connected (handshake=${JSON.stringify(mcp.handshake)})`)
   }
   // Prove the backend belongs to the current workspace while it is live.
   // Brief settle so trailing webview/webview.ready records land before the
@@ -808,25 +1689,20 @@ async function driveColdScenario(
   console.log(
     `[p0-probe] provenance: cli=${provenance.cliPath} inWorkspace=${provenance.cliPathInWorkspace} pid=${provenance.spawnedPid} argsMatch=${provenance.spawnedArgsMatch}`,
   )
-  out.push(await buildColdSample(opts, env, provenance))
+  out.push(await buildColdSample(opts, env, provenance, mcp))
 }
 
 async function buildColdSample(
   opts: LifecycleOptions,
   env: SampleEnv,
   provenance: BackendProvenance,
+  mcp: McpFixtureEvidence,
 ): Promise<SampleRecord> {
   const stages = sortedStages(capturePeek().stages)
   const key: KeyLatencies = keyForStages(stages)
-  if (opts.scenario === "many-agent-mcp") {
-    const mcpMarker = join(opts.scratch, "mcp-connected")
-    try {
-      const marker = JSON.parse(readFileSync(mcpMarker, "utf8")) as { connectedAt: number }
-      const serveEntry = findStage(stages, "backend", "serve_cli_entry")
-      if (serveEntry) key.mcpConnectMs = Math.round((marker.connectedAt - serveEntry.t) * 100) / 100
-    } catch {
-      // marker absent or unparsable — the sample stays truthful without the metric
-    }
+  if (opts.scenario === "many-agent-mcp" && mcp.handshake) {
+    const serveEntry = findStage(stages, "backend", "serve_cli_entry")
+    if (serveEntry) key.mcpConnectMs = Math.round((mcp.handshake.connectedAt - serveEntry.t) * 100) / 100
   }
   return {
     v: 1,
@@ -835,7 +1711,7 @@ async function buildColdSample(
     condition: opts.condition,
     sample: opts.sample,
     cycle: 0,
-    phase: opts.sample <= opts.warmup ? "warmup" : "measured",
+    phase: phaseForSample(opts.sample, opts.warmup),
     lifecycle: 1,
     startedAt: Date.now(),
     elapsedMs: 0,
@@ -843,6 +1719,7 @@ async function buildColdSample(
     provenance,
     key,
     stages,
+    failures: [],
     blocked: null,
     ok: true,
   }
@@ -854,9 +1731,10 @@ async function handleWarmViewCycles(
   scratch: string,
   out: SampleRecord[],
   env: SampleEnv,
+  abort: Promise<never>,
 ): Promise<void> {
   // Cycle 0 = the initial open (includes spawn/connect) — always warmup.
-  await waitForRecord(() => capturePeek(), "extension", "dataReady.done", 0, 180_000, "initial dataReady.done")
+  await waitForRecord(() => capturePeek(), "extension", "dataReady.done", 0, 180_000, "initial dataReady.done", abort)
   const cycleStages = (startT: number, endT: number): StageRecord[] =>
     sliceStages(capturePeek().stages, startT, endT)
   out.push({
@@ -874,6 +1752,7 @@ async function handleWarmViewCycles(
     provenance: EMPTY_PROVENANCE,
     key: keyForStages(cycleStages(0, Number.MAX_SAFE_INTEGER)),
     stages: sortedStages(cycleStages(0, Number.MAX_SAFE_INTEGER)),
+    failures: [],
     blocked: null,
     ok: true,
   })
@@ -881,9 +1760,9 @@ async function handleWarmViewCycles(
   const total = opts.cycles + 1
   for (let cycle = 1; cycle < total; cycle++) {
     writeFileSync(join(scratch, `cycle-${cycle}-close`), "go")
-    await waitForFile(join(scratch, `cycle-${cycle}-closed`), 60_000, `cycle-${cycle} closed marker`)
+    await waitForFile(join(scratch, `cycle-${cycle}-closed`), 60_000, `cycle-${cycle} closed marker`, abort)
     writeFileSync(join(scratch, `cycle-${cycle}-open`), "go")
-    await waitForFile(join(scratch, `cycle-${cycle}-opened`), 60_000, `cycle-${cycle} opened marker`)
+    await waitForFile(join(scratch, `cycle-${cycle}-opened`), 60_000, `cycle-${cycle} opened marker`, abort)
     // The reopened panel's webview.load/dataReady.done records were emitted
     // before the `opened` marker (agentManagerReady resolves after webviewReady),
     // so wait by occurrence count, not by timestamp.
@@ -896,7 +1775,7 @@ async function handleWarmViewCycles(
       }
     }
     console.log(`[p0-probe] cycle ${cycle} opened; counts=${JSON.stringify(countsBefore())}`)
-    await waitForCount(() => capturePeek(), "webview", "webview.load", cycle + 1, 120_000, `cycle ${cycle} webview.load`)
+    await waitForCount(() => capturePeek(), "webview", "webview.load", cycle + 1, 120_000, `cycle ${cycle} webview.load`, abort)
     await waitForCount(
       () => capturePeek(),
       "extension",
@@ -904,8 +1783,9 @@ async function handleWarmViewCycles(
       cycle + 1,
       180_000,
       `cycle ${cycle} dataReady.done`,
+      abort,
     )
-    await waitForWebviewFrame(browser, 30_000)
+    await waitForWebviewFrame(browser, 30_000, abort)
     // Slice cycle N's records as everything after cycle N-1's dataReady.done.
     const dones = findStages(capturePeek().stages, "extension", "dataReady.done")
     const previousDone = dones[cycle - 1]!.t
@@ -927,6 +1807,7 @@ async function handleWarmViewCycles(
       provenance: EMPTY_PROVENANCE,
       key: keyForStages(stages),
       stages: sortedStages(stages),
+      failures: [],
       blocked: null,
       ok: true,
     })
@@ -948,6 +1829,7 @@ const EMPTY_PROVENANCE: BackendProvenance = {
   cliVersionHash: null,
   spawnedPid: null,
   spawnedArgsMatch: false,
+  spawnedStart: null,
 }
 
 async function handleSessionSwitches(
@@ -956,13 +1838,14 @@ async function handleSessionSwitches(
   scratch: string,
   out: SampleRecord[],
   env: SampleEnv,
+  abort: Promise<never>,
 ): Promise<void> {
   const plan = JSON.parse(readFileSync(join(scratch, "plan.json"), "utf8")) as { sessions: SwitchSession[] }
   const sessions = plan.sessions
   if (!Array.isArray(sessions) || sessions.length < 2) {
     throw new Error(`session-switch: expected >= 2 seeded sessions, got ${sessions?.length ?? 0}`)
   }
-  const { frame } = await waitForAgentManagerFrame(browser, 60_000)
+  const { frame } = await waitForAgentManagerFrame(browser, 60_000, abort)
   const totalSwitches = opts.cycles
 
   // Seed target order: the initial active tab is sessions[0], so cycle through
@@ -975,9 +1858,11 @@ async function handleSessionSwitches(
   for (let i = 0; i < totalSwitches; i++) {
     const target = targets[i]!
     const tab = frame.locator(`.am-tab-sortable[data-tab-id="${target.id}"]`).first()
-    await tab.waitFor({ state: "visible", timeout: 10_000 })
+    // Race the Playwright waits against the guard abort so a breach aborts the
+    // switch within the guard's own resolution instead of after these timeouts.
+    await raceGuardAbort(tab.waitFor({ state: "visible", timeout: 10_000 }), abort)
     const t0 = Date.now()
-    await tab.click({ timeout: 5_000 })
+    await raceGuardAbort(tab.click({ timeout: 5_000 }), abort)
     let settled = false
     const settleDeadline = Date.now() + 15_000
     for (;;) {
@@ -986,7 +1871,8 @@ async function handleSessionSwitches(
         break
       }
       if (Date.now() > settleDeadline) break
-      await sleep(50)
+      if (abort) await Promise.race([sleep(50), abort])
+      else await sleep(50)
     }
     const settleMs = Date.now() - t0
     if (!settled) {
@@ -1013,6 +1899,7 @@ async function handleSessionSwitches(
         { surface: "probe", stage: "switch.click", t: t0, extra: { target: target.id } },
         { surface: "probe", stage: "switch.settled", t: t0 + settleMs, extra: { target: target.id } },
       ],
+      failures: [],
       blocked: null,
       ok: true,
     })
@@ -1022,9 +1909,18 @@ async function handleSessionSwitches(
   }
 }
 
-async function verifyCleanup(userData: string, cdpPort: number, scratch: string, scenario: ScenarioID): Promise<void> {
+export async function verifyCleanup(
+  userData: string,
+  cdpPort: number,
+  scratch: string,
+  scenario: ScenarioID,
+  backend: BackendRoot | null,
+  unverified: UnverifiedBackend | null,
+  mcp: McpFixtureEvidence,
+  terminateBackend: (identity: BackendRoot, graceMs: number) => Promise<BackendCleanupOutcome> = terminateBackendWithPs,
+  terminateFixture: (identity: ProcessRoot, graceMs: number) => Promise<BackendCleanupOutcome> = terminateFixtureWithPs,
+): Promise<void> {
   // 1. Let owned VS Code processes exit on their own, then terminate every
-  //    survivor by exact PID (SIGTERM → SIGKILL).
   //    survivor by exact PID (SIGTERM → SIGKILL).
   const settleDeadline = Date.now() + 15_000
   let owned = processesWithUserData(userData)
@@ -1043,23 +1939,62 @@ async function verifyCleanup(userData: string, cdpPort: number, scratch: string,
   }
   console.log("[p0-probe] cleanup: no owned VS Code process remains")
 
-  // 2. The run-owned MCP fixture (many-agent-mcp) must be gone; the backend
-  //    kills it on exit, but the harness terminates it by exact PID too.
-  if (scenario === "many-agent-mcp") {
-    const pidFile = join(scratch, "mcp-connected.pid")
-    if (existsSync(pidFile)) {
-      const pid = Number(readFileSync(pidFile, "utf8").trim())
-      if (Number.isFinite(pid) && pid > 0) {
-        const alive = await terminatePids([pid], 2_000)
-        if (alive > 0) {
-          throw new Error(`cleanup: MCP fixture PID ${pid} survived SIGKILL`)
-        }
-        console.log(`[p0-probe] cleanup: MCP fixture PID ${pid} terminated by exact PID`)
-      }
+  // 2. The run-owned backend must be gone too. The backend may have been
+  //    reparented to PID 1 after the Extension Host exited, so it is
+  //    terminated ONLY on exact identity (PID + raw start + pinned CLI path),
+  //    re-verified immediately before each SIGTERM/SIGKILL — a reused PID is
+  //    never signaled, and a survivor/mismatch is cleanup evidence that fails
+  //    the sample/run. A termination failure (verified backend that could not
+  //    be killed) is DEFERRED as a blocker instead of throwing here, so the
+  //    run-owned MCP fixture is still cleaned in step 3 — an unkillable
+  //    backend can never leak the fixture. The snapshot is only deleted
+  //    (campaign side) after this returns clean.
+  let backendBlocker: string | null = null
+  if (backend) {
+    const outcome = await terminateBackend(backend, 3_000)
+    if (!outcome.terminated) {
+      backendBlocker =
+        `cleanup: backend PID ${backend.pid} not cleanly terminated (${outcome.status}: ${outcome.detail ?? "unknown"})`
+    } else {
+      console.log(`[p0-probe] cleanup: backend PID ${backend.pid} terminated by exact identity`)
     }
+  } else if (unverified) {
+    // A spawned backend PID was observed but its identity could never be
+    // verified (registration missing + late discovery failed). Never signal an
+    // unverified process (LOCK-PERF: no PID+start+exact-path match, no
+    // signal); the blocker is deferred until after the MCP fixture is still
+    // terminated by exact PID, and the snapshot/scratch evidence is retained.
+    backendBlocker =
+      `cleanup: backend PID ${unverified.pid} observed spawned from ${unverified.cliPath} ` +
+      `but its identity was never verified — no signal sent; snapshot/scratch evidence retained`
   }
 
-  // 3. Only delete paths after zero owned processes remain and the CDP port is
+  // 3. The run-owned MCP fixture (many-agent-mcp) must be gone; the backend
+  //    kills it on exit, but the harness terminates it by exact identity too.
+  //    This ALWAYS runs — even when the backend termination failed (blocker
+  //    above) or the backend identity was unverifiable — so a backend that
+  //    cannot be terminated or verified can never leak the fixture. Exact
+  //    ownership only: the fixture is cleaned ONLY when its identity (PID +
+  //    raw start + args containing the exact fixture script path) verifies,
+  //    and that identity is re-verified immediately before each SIGTERM/
+  //    SIGKILL — a reused PID is never signaled, a missing/unverifiable
+  //    identity fails closed (no signal), and a survivor/mismatch is cleanup
+  //    evidence that fails the sample/run and blocks scratch deletion (step 5).
+  if (scenario === "many-agent-mcp") {
+    const outcome = await cleanupMcpFixture(join(scratch, "mcp-connected"), mcp, 3_000, terminateFixture)
+    if (outcome.status === "failed") {
+      throw new Error(`cleanup: ${outcome.detail}`)
+    }
+    console.log(`[p0-probe] cleanup: ${outcome.detail}`)
+  }
+
+  // 4. The deferred backend blocker (verified-backend termination failure or
+  //    unverifiable identity) fires only after the MCP fixture was still
+  //    cleaned: fail closed with the snapshot/scratch evidence retained
+  //    (rmSync below never runs) and a blocker naming the PID/path.
+  if (backendBlocker) throw new Error(backendBlocker)
+
+  // 5. Only delete paths after zero owned processes remain and the CDP port is
   //    verifiably released.
   const free = await portFree(cdpPort)
   console.log(`[p0-probe] cleanup: CDP port ${cdpPort} ${free ? "released" : "STILL BOUND"}`)

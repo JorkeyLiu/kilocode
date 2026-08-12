@@ -40,6 +40,32 @@ describe("p0 benchmark parser", () => {
     expect(parseExtensionPerfLine("[Kilo New][P0-Perf] {not json")).toBeUndefined()
   })
 
+  it("parses sse.event span records with bounded metadata into extra", () => {
+    const start =
+      '[Kilo New][P0-Perf] {"corr":"c","stage":"sse.event","t":1000,"d":0,"surface":"extension","span":"start","eventType":"session.idle","dir":"/w","transaction":"tx-1"}'
+    const end =
+      '[Kilo New][P0-Perf] {"corr":"c","stage":"sse.event","t":1001,"d":1,"surface":"extension","span":"end","dur":0.5,"eventType":"session.idle","dir":"/w","transaction":"tx-1"}'
+    const startRec = parseExtensionPerfLine(start)
+    expect(startRec).toMatchObject({
+      surface: "extension",
+      stage: "sse.event",
+      t: 1000,
+      extra: { span: "start", eventType: "session.idle", dir: "/w", transaction: "tx-1" },
+    })
+    const endRec = parseExtensionPerfLine(end)
+    expect(endRec?.extra).toEqual({
+      span: "end",
+      dur: 0.5,
+      eventType: "session.idle",
+      dir: "/w",
+      transaction: "tx-1",
+    })
+    // Unknown/arbitrary extras are never copied (bounded capture).
+    const noisy =
+      '[Kilo New][P0-Perf] {"corr":"c","stage":"sse.event","t":1000,"d":0,"surface":"extension","eventType":"session.idle","data":{"secret":"x"}}'
+    expect(parseExtensionPerfLine(noisy)?.extra).toEqual({ eventType: "session.idle" })
+  })
+
   it("parses a backend p0 record relayed through the ServerManager stderr wrapper", () => {
     const line =
       "[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-10T15:00:00 +5ms service=p0-perf event=p0.start stage=listener ts=1750000000000 id=127.0.0.1:0 listener"

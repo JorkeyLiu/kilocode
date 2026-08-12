@@ -6,6 +6,7 @@ import { QuestionID } from "./schema"
 import { KiloQuestion } from "@/kilocode/question" // kilocode_change
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 const log = Log.create({ service: "question" })
 
@@ -208,8 +209,20 @@ export const layer = Layer.effect(
       pending.set(id, { info, deferred })
       yield* events.publish(Event.Asked, info)
 
+      // P0: wait span from asked to replied. A p0.end is emitted only when the
+      // ask resolves normally; a reject, dismissal, or interruption leaves an
+      // unmatched p0.start (instrument contract).
+      const timer = P0Perf.span("question_wait", {
+        id: String(id),
+        meta: { sessionID: info.sessionID },
+      })
+
       return yield* Effect.ensuring(
-        Deferred.await(deferred),
+        Effect.gen(function* () {
+          const answers = yield* Deferred.await(deferred)
+          timer.end()
+          return answers
+        }),
         // kilocode_change start - every asked question gets a terminal event when its waiter is interrupted
         KiloQuestion.finalize({
           pending,

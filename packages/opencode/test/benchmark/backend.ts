@@ -25,6 +25,7 @@ import { TestLLMServer } from "../lib/llm-server"
 import { Server } from "@/server/server"
 import { awaitRebuilds } from "@/kilocode/server/config-rebuild"
 import * as P0 from "./p0-records"
+import { captured, installCapture } from "./capture"
 
 /** Run an Effect to completion (Effects in this build are not thenable). */
 export const run = <A>(effect: Effect.Effect<A>): Promise<A> => Effect.runPromise(effect)
@@ -42,39 +43,29 @@ export type P0Capture = {
   readonly slice: (from: number) => P0.P0Record[]
 }
 
-let captureLines: string[] = []
-let teeInstalled = false
-
 /**
  * Install the stderr tee that extracts `service=p0-perf` lines. Each Log
  * record is written as one complete line, so chunk splitting is not a concern
- * for p0 records. Installed once per process and intentionally never
- * uninstalled: the capture is append-only, `stop()` closes the listener/LLM
- * scope but does NOT unwrap stderr, and the harness owns the whole process.
+ * for p0 records. The tee itself is installed at `./capture` module scope
+ * (before any kilo module evaluates, so module-load marks are captured);
+ * `startCapture()` re-arms it idempotently and returns the append-only
+ * handle. Installed once per process and intentionally never uninstalled: the
+ * capture is append-only, `stop()` closes the listener/LLM scope but does NOT
+ * unwrap stderr, and the harness owns the whole process.
  */
 export function startCapture(): P0Capture {
-  if (!teeInstalled) {
-    const original = process.stderr.write
-    process.stderr.write = ((chunk: string | Uint8Array) => {
-      original.call(process.stderr, chunk)
-      const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8")
-      if (text.includes("service=p0-perf")) captureLines.push(text)
-      return true
-    }) as typeof process.stderr.write
-    teeInstalled = true
-  }
+  installCapture()
   return {
     records: [],
-    mark: () => captureLines.length,
+    mark: () => captured().length,
     slice: (from) => extractSlice(from),
   }
 }
 
 /** Parse records appended since index `from` (lazily — records parse on demand). */
 function extractSlice(from: number): P0.P0Record[] {
-  const lines = captureLines.slice(from)
   const out: P0.P0Record[] = []
-  for (const line of lines) {
+  for (const line of captured().slice(from)) {
     const rec = P0.parseP0Line(line)
     if (rec) out.push(rec)
   }
@@ -83,7 +74,7 @@ function extractSlice(from: number): P0.P0Record[] {
 
 /** Parse the full captured text (used by tests). */
 export function capturedText(): string {
-  return captureLines.join("")
+  return captured().join("")
 }
 
 // ---------------------------------------------------------------------------

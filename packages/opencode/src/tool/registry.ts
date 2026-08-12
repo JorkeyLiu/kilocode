@@ -36,6 +36,7 @@ import { Auth } from "@/auth" // kilocode_change
 import * as Log from "@opencode-ai/core/util/log"
 import { LspTool } from "./lsp"
 import * as Truncate from "./truncate"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 import { ApplyPatchTool } from "./apply_patch"
 import { Glob } from "@opencode-ai/core/util/glob"
 import path from "path"
@@ -204,12 +205,25 @@ export const layer: Layer.Layer<
                   directory: ctx.directory,
                   worktree: ctx.worktree,
                 }
+                // P0: the plugin body span. Distinct from the session-loop
+                // `tool_execute` span (session/tools.ts) so a custom tool call
+                // never emits two `tool_execute` pairs with identical keys;
+                // this inner stage measures the WHOLE plugin invocation path —
+                // `def.execute`, result normalization, and output truncation
+                // (the timer ends after `truncate.output`, not at
+                // `def.execute` resolution). Failure/interruption leaves an
+                // unmatched p0.start (instrument contract).
+                const timer = P0Perf.span("tool_execute_plugin", {
+                  id: toolCtx.sessionID,
+                  meta: { tool: id, callID: toolCtx.callID, messageID: toolCtx.messageID },
+                })
                 const result = yield* Effect.promise(() => def.execute(args as any, pluginCtx))
                 const output = typeof result === "string" ? result : result.output
                 const metadata = typeof result === "string" ? {} : (result.metadata ?? {})
                 const attachments = typeof result === "string" ? undefined : result.attachments
                 const info = yield* agent.get(toolCtx.agent)
                 const out = yield* truncate.output(output, {}, info)
+                timer.end()
                 return {
                   title: typeof result === "string" ? "" : (result.title ?? ""),
                   output: out.truncated ? out.content : output,

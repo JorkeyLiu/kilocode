@@ -32,11 +32,26 @@
  * (--print-logs appended to the serve args only when the flag is set).
  *
  * Output: JSONL at <out>/benchmark.jsonl with stable records:
- *   {v:1, kind:"run",   event:"start"|"finish", ...}
+ *   {v:1, kind:"run",   event:"start"|"finish", ..., env:{gitCommit,gitDirty,...}}
  *   {v:1, kind:"sample", scenario, condition, sample, phase, env, provenance,
- *          key, stages, blocked, ...}
+ *          key, stages, failures, blocked, ...}
  *   {v:1, kind:"summary", scenario, metric, n, min, median, p95, max, mean}
  * Per-sample raw capture logs land in <out>/logs/.
+ *
+ * Durable output convention: the default `--out` is the repo-relative,
+ * durable evidence dir
+ *   <repo>/specs/vscode-orchestrator/evidence/p0-baseline/<ts>/
+ * (the backend CLI uses the same convention with backend.jsonl). The
+ * machine-readable JSONL and run metadata are durable, VERSIONABLE tracker
+ * evidence and are NOT gitignored; only bulky per-run raw capture logs under
+ * <out>/logs/ may remain local/ignored (the root `logs/` pattern). Git
+ * provenance (commit/head/dirty) is derived ONCE at campaign start — BEFORE
+ * the output artifact is created — and propagated frozen into every record,
+ * so creating evidence inside the repo never flips the recorded dirty state.
+ *
+ * Stats note: with the default n=5, nearest-rank p95 equals max — descriptive
+ * sample statistics only, not a tail-latency SLA (LOCK-PERF-7 thresholds
+ * remain Open).
  *
  * Usage (package script `bun run test:p0-bench` — Node-only, mirrors
  * script/e2e-probe-launch.mjs):
@@ -61,10 +76,15 @@ import {
 } from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
-import { runLifecycle, type LifecycleOptions } from "./p0-bench/sample"
-import type { Condition, RunRecord, SampleRecord, ScenarioID, SummaryRecord } from "./p0-bench/types"
-import { COLD_SCENARIOS, SCENARIO_NUMBERS, SCENARIOS } from "./p0-bench/types"
+import { runLifecycle, snapshotSurvivorCleanup, type LifecycleOptions } from "./p0-bench/sample"
+import type { Condition, RunEnv, RunRecord, SampleRecord, ScenarioID, SummaryRecord } from "./p0-bench/types"
+import { COLD_SCENARIOS } from "./p0-bench/types"
 import { summarize } from "./p0-bench/stats"
+import { campaignStatus } from "./p0-bench/status"
+import { gitState } from "./p0-bench/git-env"
+import { parseArgs, USAGE, wantsHelp, type BenchArgs } from "./p0-bench/args"
+import { repoRootFrom } from "./p0-bench/repo-root"
+import { createCliSnapshot, type CliSnapshot } from "./p0-bench/snapshot"
 
 if (process.versions.bun) {
   console.error(
@@ -77,58 +97,16 @@ if (process.versions.bun) {
 
 // Set by script/e2e-p0-bench-launch.mjs; falls back to the current working dir.
 const root = process.env.KILO_E2E_ROOT ? resolve(process.env.KILO_E2E_ROOT) : resolve(process.cwd())
+const repoRoot = repoRootFrom(root)
 const shouldBuild = !process.argv.includes("--no-build")
 
 // ---------------------------------------------------------------------------
 // CLI
 // ---------------------------------------------------------------------------
 
-interface BenchArgs {
-  scenarios: ScenarioID[]
-  samples: number
-  warmup: number
-  outDir: string
-  switchSessions: number
-  mcpAgents: number
-}
-
-function parseScenarios(value: string): ScenarioID[] {
-  const parts = value
-    .split(",")
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0)
-  if (parts.length === 0) throw new Error(`[p0-bench] --scenarios requires at least one value`)
-  const out: ScenarioID[] = []
-  for (const part of parts) {
-    const byNumber = SCENARIO_NUMBERS[part]
-    const id = byNumber ?? (SCENARIOS as readonly string[]).find((s) => s === part)
-    if (!id) {
-      throw new Error(
-        `[p0-bench] unknown scenario "${part}". Supported: ${Object.entries(SCENARIO_NUMBERS)
-          .map(([n, name]) => `${n}=${name}`)
-          .join(", ")} (default: 1,2,3,4,5,10).`,
-      )
-    }
-    if (!out.includes(id as ScenarioID)) out.push(id as ScenarioID)
-  }
-  return out
-}
-
-function parseArgs(argv: string[]): BenchArgs {
-  const get = (name: string): string | undefined => {
-    const idx = argv.indexOf(name)
-    return idx >= 0 && idx + 1 < argv.length ? argv[idx + 1] : undefined
-  }
-  const scenariosValue = get("--scenarios") ?? process.env.KILO_P0_SCENARIOS ?? "1,2,3,4,5,10"
-  const samples = Number(get("--samples") ?? process.env.KILO_P0_SAMPLES ?? "5")
-  const warmup = Number(get("--warmup") ?? process.env.KILO_P0_WARMUP ?? "1")
-  const outDir = get("--out") ?? join(root, "out", "p0-bench", new Date().toISOString().replace(/[:.]/g, "-"))
-  const switchSessions = Number(get("--switch-sessions") ?? process.env.KILO_P0_SWITCH_SESSIONS ?? "5")
-  const mcpAgents = Number(get("--mcp-agents") ?? process.env.KILO_P0_MCP_AGENTS ?? "20")
-  if (!Number.isFinite(samples) || samples < 1) throw new Error(`[p0-bench] --samples must be >= 1 (got ${samples})`)
-  if (!Number.isFinite(warmup) || warmup < 0) throw new Error(`[p0-bench] --warmup must be >= 0 (got ${warmup})`)
-  return { scenarios: parseScenarios(scenariosValue), samples, warmup, outDir, switchSessions, mcpAgents }
-}
+// Argument parsing, help detection, and the usage text live in ./p0-bench/args
+// (pure module) so `--help` is honored and the defaults are unit-testable
+// before any build or VS Code launch.
 
 // ---------------------------------------------------------------------------
 // Build / environment
@@ -149,12 +127,6 @@ function backendCliPath(): string | null {
   const binName = process.platform === "win32" ? "kilo.exe" : "kilo"
   const candidate = join(root, "bin", binName)
   return existsSync(candidate) ? candidate : null
-}
-
-function gitHead(): string | null {
-  const proc = spawnSync("git", ["rev-parse", "--short", "HEAD"], { cwd: root, encoding: "utf8" })
-  const head = (proc.stdout ?? "").trim()
-  return head.length > 0 ? head : null
 }
 
 function extensionVersion(): string {
@@ -293,23 +265,20 @@ interface CampaignResult {
   blockedScenarios: string[]
 }
 
-interface BenchEnv {
-  os: string
-  arch: string
-  node: string
-  extension: string
-  gitHead: string | null
-  backendCli: string
-}
+interface BenchEnv extends RunEnv {}
 
-function benchEnvInfo(backendCli: string): BenchEnv {
+function benchEnvInfo(snapshot: CliSnapshot): BenchEnv {
+  const git = gitState(root)
   return {
     os: process.platform,
     arch: process.arch,
     node: process.version,
     extension: extensionVersion(),
-    gitHead: gitHead(),
-    backendCli,
+    gitHead: git.gitHead,
+    gitCommit: git.gitCommit,
+    gitDirty: git.gitDirty,
+    backendCli: snapshot.info.snapshotPath,
+    cliSnapshot: snapshot.info,
   }
 }
 
@@ -355,7 +324,11 @@ async function runColdCampaign(
       extensionVersion: envInfo.extension,
       vscodeVersion: "unknown",
       gitHead: envInfo.gitHead,
+      gitCommit: envInfo.gitCommit,
+      gitDirty: envInfo.gitDirty,
       backendCli: envInfo.backendCli,
+      cliSnapshot: envInfo.cliSnapshot,
+      mcpFixturePath,
     }
     const result = await runLifecycle(opts)
     emitResult(result, tracked)
@@ -387,14 +360,17 @@ async function runLifecycleCampaign(
     extensionVersion: envInfo.extension,
     vscodeVersion: "unknown",
     gitHead: envInfo.gitHead,
+    gitCommit: envInfo.gitCommit,
+    gitDirty: envInfo.gitDirty,
     backendCli: envInfo.backendCli,
+    cliSnapshot: envInfo.cliSnapshot,
+    mcpFixturePath,
   }
   const result = await runLifecycle(opts)
   emitResult(result, tracked)
 }
 
 async function runCampaign(args: BenchArgs, outFile: string): Promise<CampaignResult> {
-  const writer = new JsonlWriter(outFile)
   const mcpFixturePath = join(root, "script", "p0-bench", "mcp-fixture.mjs")
   const backendCli = backendCliPath()
   if (!backendCli) {
@@ -406,62 +382,96 @@ async function runCampaign(args: BenchArgs, outFile: string): Promise<CampaignRe
     )
     process.exit(1)
   }
-  const envInfo = benchEnvInfo(backendCli)
-  const startRecord: RunRecord = {
-    v: 1,
-    kind: "run",
-    event: "start",
-    startedAt: Date.now(),
-    scenarios: args.scenarios,
-    samples: args.samples,
-    warmup: args.warmup,
-    outDir: args.outDir,
-  }
-  writer.write(startRecord)
-  console.log(`[p0-bench] campaign start: ${args.scenarios.join(", ")} samples=${args.samples} warmup=${args.warmup}`)
-  console.log(`[p0-bench] output: ${outFile}`)
-
-  mkdirSync(join(args.outDir, "logs"), { recursive: true })
-  const samplesByScenario = new Map<ScenarioID, SampleRecord[]>()
-  const tracked: Tracked = { writer, samplesForScenario: [], anyOkMeasured: false, anyBlocked: false }
-
-  for (const scenario of args.scenarios) {
-    console.log(`\n[p0-bench] === scenario ${scenario} ===`)
-    tracked.samplesForScenario = []
-    samplesByScenario.set(scenario, tracked.samplesForScenario)
-    const fixtureId = `p0-${scenario}-${randomBytes(4).toString("hex")}`
-    const total = args.samples + args.warmup
-
-    if (COLD_SCENARIOS.has(scenario)) {
-      await runColdCampaign(args, scenario, fixtureId, total, mcpFixturePath, envInfo, tracked)
-    } else {
-      await runLifecycleCampaign(args, scenario, fixtureId, total, mcpFixturePath, envInfo, tracked)
+  // Immutable per-campaign CLI snapshot: copy bin/kilo to a run-owned temp path
+  // (os.tmpdir — never the versioned evidence dir) and pin that exact path
+  // through the benchmark-only KILO_P0_BACKEND_CLI override. The non-owned dev
+  // watcher (script/watch-cli.ts) may keep rebuilding bin/kilo, but it can no
+  // longer change the binary this campaign measures. The snapshot is deleted
+  // only after the campaign finishes or fails (finally below). Fails before any
+  // sample launches when the source is missing, not executable, or changed
+  // while it was being copied (post-copy provenance mismatch).
+  const snapshot = createCliSnapshot(backendCli, tmpdir())
+  console.log(
+    `[p0-bench] CLI snapshot: ${snapshot.info.sourcePath} → ${snapshot.info.snapshotPath} ` +
+      `sha256=${(snapshot.info.snapshotSha256 ?? "unreadable").slice(0, 12)}…`,
+  )
+  try {
+    // Freeze provenance BEFORE the output artifact is created: the evidence dir
+    // is not gitignored, so creating benchmark.jsonl must never flip the
+    // recorded dirty state. This frozen value is reused on every record.
+    const envInfo = benchEnvInfo(snapshot)
+    const writer = new JsonlWriter(outFile)
+    const startRecord: RunRecord = {
+      v: 1,
+      kind: "run",
+      event: "start",
+      startedAt: Date.now(),
+      scenarios: args.scenarios,
+      samples: args.samples,
+      warmup: args.warmup,
+      outDir: args.outDir,
+      env: envInfo,
     }
-  }
+    writer.write(startRecord)
+    console.log(`[p0-bench] campaign start: ${args.scenarios.join(", ")} samples=${args.samples} warmup=${args.warmup}`)
+    console.log(`[p0-bench] output: ${outFile}`)
 
-  writeSummaries(writer, samplesByScenario)
+    mkdirSync(join(args.outDir, "logs"), { recursive: true })
+    const samplesByScenario = new Map<ScenarioID, SampleRecord[]>()
+    const tracked: Tracked = { writer, samplesForScenario: [], anyOkMeasured: false, anyBlocked: false }
 
-  const blockedScenarios = [...samplesByScenario.entries()]
-    .filter(([, samples]) => samples.some((s) => s.blocked))
-    .map(([scenario]) => scenario)
-  const finishRecord: RunRecord = {
-    v: 1,
-    kind: "run",
-    event: "finish",
-    finishedAt: Date.now(),
-    elapsedMs: Date.now() - (startRecord.startedAt ?? 0),
-    scenarios: args.scenarios,
-    samples: args.samples,
-    warmup: args.warmup,
-    status: tracked.anyBlocked ? "partial" : tracked.anyOkMeasured ? "ok" : "failed",
+    for (const scenario of args.scenarios) {
+      console.log(`\n[p0-bench] === scenario ${scenario} ===`)
+      tracked.samplesForScenario = []
+      samplesByScenario.set(scenario, tracked.samplesForScenario)
+      const fixtureId = `p0-${scenario}-${randomBytes(4).toString("hex")}`
+      const total = args.samples + args.warmup
+
+      if (COLD_SCENARIOS.has(scenario)) {
+        await runColdCampaign(args, scenario, fixtureId, total, mcpFixturePath, envInfo, tracked)
+      } else {
+        await runLifecycleCampaign(args, scenario, fixtureId, total, mcpFixturePath, envInfo, tracked)
+      }
+    }
+
+    writeSummaries(writer, samplesByScenario)
+
+    const blockedScenarios = [...samplesByScenario.entries()]
+      .filter(([, samples]) => samples.some((s) => s.blocked))
+      .map(([scenario]) => scenario)
+    const finishRecord: RunRecord = {
+      v: 1,
+      kind: "run",
+      event: "finish",
+      finishedAt: Date.now(),
+      elapsedMs: Date.now() - (startRecord.startedAt ?? 0),
+      scenarios: args.scenarios,
+      samples: args.samples,
+      warmup: args.warmup,
+      // Truthful finish status: failed when no ok measured sample exists (an
+      // all-blocked campaign has no baseline evidence — never "partial");
+      // partial only when both ok measured AND blocked samples exist.
+      status: campaignStatus(tracked.anyOkMeasured, tracked.anyBlocked),
+      env: envInfo,
+    }
+    writer.write(finishRecord)
+    await writer.close()
+    console.log(`\n[p0-bench] campaign finish: ${finishRecord.status}`)
+    if (blockedScenarios.length > 0) {
+      console.log(`[p0-bench] blocked scenarios: ${blockedScenarios.join(", ")}`)
+    }
+    return { status: finishRecord.status!, blockedScenarios }
+  } finally {
+    // The run-owned CLI snapshot is deleted only after the campaign finishes or
+    // fails — AND only once no process still runs from the snapshot path. Any
+    // survivor is FIRST claimed by exact snapshot-path identity (PID + raw
+    // lstart + exact path, re-verified before each signal) and terminated; an
+    // unverifiable survivor is never signaled (a reused PID is never killed),
+    // so the snapshot is left on disk and the campaign fails with bounded
+    // evidence naming the surviving PID/path. Deleting the snapshot under a
+    // live process would hide the leak — this never does.
+    await snapshotSurvivorCleanup(snapshot.info.snapshotPath, snapshot.cleanup)
   }
-  writer.write(finishRecord)
-  await writer.close()
-  console.log(`\n[p0-bench] campaign finish: ${finishRecord.status}`)
-  if (blockedScenarios.length > 0) {
-    console.log(`[p0-bench] blocked scenarios: ${blockedScenarios.join(", ")}`)
-  }
-  return { status: finishRecord.status!, blockedScenarios }
 }
 
 /** Per-scenario per-metric summaries over measured (non-warmup, ok) samples. */
@@ -491,7 +501,14 @@ function writeSummaries(writer: JsonlWriter, samplesByScenario: Map<ScenarioID, 
 // ---------------------------------------------------------------------------
 
 async function main() {
-  const args = parseArgs(process.argv.slice(2))
+  const argv = process.argv.slice(2)
+  if (wantsHelp(argv)) {
+    // Usage and exit BEFORE any build, env cleanup, or VS Code launch — a help
+    // invocation never boots VS Code and never creates evidence.
+    console.log(USAGE)
+    return
+  }
+  const args = parseArgs(argv, repoRoot)
   console.log(`[p0-bench] scenarios: ${args.scenarios.join(", ")}`)
   console.log(`[p0-bench] samples: ${args.samples}, warmup: ${args.warmup}`)
   cleanEnv()

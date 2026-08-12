@@ -35,20 +35,19 @@ import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@opencode-ai/core/util/opencode-process"
 import { isRecord } from "@/util/record"
 import { KiloCli } from "@/kilocode/cli/setup" // kilocode_change
+import { installFatalHandlers } from "@/kilocode/fatal-handler" // kilocode_change
 
 const processMetadata = ensureProcessMetadata("main")
 
-process.on("unhandledRejection", (e) => {
-  Log.Default.error("rejection", {
-    e: errorMessage(e),
-  })
-})
-
-process.on("uncaughtException", (e) => {
-  Log.Default.error("exception", {
-    e: errorMessage(e),
-  })
-})
+// kilocode_change start - non-reentrant, EPIPE-safe fatal handlers
+// A broken stderr pipe (embedded client parent died) makes every log write
+// surface as an EPIPE uncaughtException. The old handlers logged again into
+// the same broken pipe, recursing until the process spun at ~100% CPU and
+// grew RSS without bound while orphan shutdown was starved. installFatalHandlers
+// logs once, then exits on fatal errors; on EPIPE/re-entry it exits without
+// touching the broken stream.
+installFatalHandlers()
+// kilocode_change end
 
 const args = hideBin(process.argv)
 

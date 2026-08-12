@@ -96,4 +96,57 @@ describe("p0 perf instrumentation helper", () => {
     expect(parsed[1]!.wd).toBe(12.5)
     expect(parsed[1]!.corr).toBe(parsed[0]!.corr)
   })
+
+  it("p0Span emits span start/end records with duration and merges extras on end", async () => {
+    process.env.KILO_P0_PERF = "1"
+    const { logs, restore } = capture()
+    try {
+      const { p0Begin, p0Span } = await import("../../src/perf/perf-instrument")
+      p0Begin()
+      const timer = p0Span("sse.event", { eventType: "session.idle" })
+      timer.end({ dir: "/w" })
+    } finally {
+      restore()
+    }
+    const parsed = records(logs)
+    expect(parsed).toHaveLength(2)
+    expect(parsed[0]!.stage).toBe("sse.event")
+    expect(parsed[0]!.span).toBe("start")
+    expect(parsed[0]!.eventType).toBe("session.idle")
+    expect(parsed[0]!.dur).toBeUndefined()
+    expect(parsed[1]!.stage).toBe("sse.event")
+    expect(parsed[1]!.span).toBe("end")
+    expect(parsed[1]!.dir).toBe("/w")
+    expect(typeof parsed[1]!.dur).toBe("number")
+    expect(parsed[1]!.corr).toBe(parsed[0]!.corr)
+  })
+
+  it("p0Span start without end leaves an unmatched start (no fabricated end)", async () => {
+    process.env.KILO_P0_PERF = "1"
+    const { logs, restore } = capture()
+    try {
+      const { p0Begin, p0Span } = await import("../../src/perf/perf-instrument")
+      p0Begin()
+      p0Span("sse.event", { eventType: "message.updated" })
+      // end() intentionally never called — interruption/failure path.
+    } finally {
+      restore()
+    }
+    const parsed = records(logs)
+    expect(parsed).toHaveLength(1)
+    expect(parsed[0]!.span).toBe("start")
+  })
+
+  it("p0Span emits nothing when the flag is off", async () => {
+    delete process.env.KILO_P0_PERF
+    const { logs, restore } = capture()
+    try {
+      const { p0Span } = await import("../../src/perf/perf-instrument")
+      const timer = p0Span("sse.event", { eventType: "session.idle" })
+      timer.end()
+    } finally {
+      restore()
+    }
+    expect(logs).toEqual([])
+  })
 })

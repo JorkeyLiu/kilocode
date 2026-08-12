@@ -5,7 +5,7 @@ import { SdkSSEAdapter, type SSEPayload } from "./sdk-sse-adapter"
 import type { ServerConfig } from "./types"
 import { resolveEventSessionId as resolveEventSessionIdPure } from "./connection-utils"
 import { SandboxPreference } from "../sandbox-preference"
-import { isP0PerfEnabled, p0Stage } from "../../perf/perf-instrument"
+import { isP0PerfEnabled, p0Span, p0Stage } from "../../perf/perf-instrument"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
 type SSEEventListener = (event: SSEPayload, directory?: string, transaction?: string) => void
@@ -867,6 +867,13 @@ export class KiloConnectionService {
    * untagged edits.
    */
   handleSseEvent(event: SSEPayload, directory?: string, transaction?: string): void {
+    // P0 (opt-in): per-event dispatch span at the extension boundary. Metadata
+    // is bounded — event type, directory, transaction id — never payloads.
+    const timer = p0Span("sse.event", {
+      eventType: event.type === "sync" ? event.name : event.type,
+      ...(directory ? { dir: directory } : {}),
+      ...(transaction ? { transaction } : {}),
+    })
     this.handlePermissionEvent(event, directory)
     this.handleQuestionEvent(event, directory)
     this.recordFirstModelEvent(event, directory)
@@ -877,6 +884,7 @@ export class KiloConnectionService {
     for (const listener of this.eventListeners) {
       listener(event, directory, transaction)
     }
+    timer.end()
   }
 
   /**

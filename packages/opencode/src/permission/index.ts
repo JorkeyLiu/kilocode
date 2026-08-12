@@ -20,6 +20,7 @@ import { drainCovered } from "@/kilocode/permission/drain"
 import { ReadPermission } from "@/kilocode/permission/read"
 import { AgentManagerPermission } from "@/kilocode/permission/agent-manager" // kilocode_change
 import { ExternalDirectoryPermission } from "@/kilocode/permission/external-directory"
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 // kilocode_change end
 
 const log = Log.create({ service: "permission" })
@@ -305,8 +306,18 @@ export const layer = Layer.effect(
       const deferred = yield* Deferred.make<void, RejectedError | CorrectedError>()
       pending.set(id, { info, ruleset, hardRuleset, deferred }) // kilocode_change
       yield* events.publish(Event.Asked, info) // kilocode_change - was bus.publish
+      // P0: wait span from asked to replied. A p0.end is emitted only when the
+      // ask resolves normally (allow/once); a reject, corrected retry, or
+      // interruption leaves an unmatched p0.start (instrument contract).
+      const timer = P0Perf.span("permission_wait", {
+        id: String(id),
+        meta: { sessionID: info.sessionID, permission: info.permission },
+      })
       return yield* Effect.ensuring(
-        Deferred.await(deferred),
+        Effect.gen(function* () {
+          yield* Deferred.await(deferred)
+          timer.end()
+        }),
         Effect.sync(() => {
           pending.delete(id)
         }),

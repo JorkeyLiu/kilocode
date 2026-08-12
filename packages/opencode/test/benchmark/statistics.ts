@@ -6,6 +6,12 @@
  * series. p95 of 20 samples is therefore the 19th value (0.95*20 = 19).
  * The schema follows the extension-tier p0-bench stats for cross-tier
  * comparability (n/min/median/p95/max/mean).
+ *
+ * Descriptive-only tail note: with the default n=5 the p95 index is
+ * ceil(0.95*5)-1 = 4, so p95 EQUALS max for every metric. These summaries are
+ * descriptive sample statistics only — they are NOT a tail-latency SLA and no
+ * threshold or service-level claim derives from them (LOCK-PERF-7 thresholds
+ * remain Open; no numeric SLA exists).
  */
 
 export type Stats = {

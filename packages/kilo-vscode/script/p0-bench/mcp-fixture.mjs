@@ -10,28 +10,55 @@
  * startup. The fixture speaks the MCP stdio transport (newline-delimited
  * JSON-RPC 2.0) using no dependencies.
  *
+ * Supported protocol methods: initialize, notifications/initialized (silent),
+ * ping, tools/list, prompts/list, tools/call. prompts/list answers with a
+ * valid empty prompt list so the backend's startup `MCP.prompts` query
+ * resolves immediately instead of hitting the SDK's default 60s request
+ * timeout; it must never be an error/timeout proxy for startup readiness.
+ *
  * Truthfulness markers (written into the run-owned scratch dir, whose absolute
  * path is passed via P0_MCP_MARKER):
- *   <marker>       — written after the first `tools/list` request, which the
- *                    backend only issues after `initialize` succeeds. Content:
- *                    JSON {"pid":<this pid>,"connectedAt":<epoch ms>}.
- *   <marker>.pid   — this process's PID (for exact-owned cleanup).
+ *   <marker>  — written after the first `tools/list` request, which the
+ *               backend only issues after `initialize` succeeds. Content:
+ *               JSON {"pid":<this pid>,"connectedAt":<epoch ms>} (small,
+ *               bounded payload). The write is ATOMIC and content-complete
+ *               (temp file + renameSync): the probe polls on file existence
+ *               and parses immediately, so the marker path either does not
+ *               exist or already holds the full payload — an async
+ *               createWriteStream open/write (or even a bare writeFileSync's
+ *               open→write window) could expose an exists-but-empty file
+ *               (marker read race). Once this marker appears, the probe
+ *               discovers the full exact-owned identity (PID + raw ps `lstart`
+ *               start string + args containing the exact fixture script path)
+ *               from the live process table and re-verifies it immediately
+ *               before every cleanup signal — PID-reuse-safe, never a bare-PID
+ *               kill.
  *
  * Lifecycle ownership: the backend kills this child (StdioClientTransport
- * close + descendant SIGTERM) when it exits; the harness additionally records
- * the PID and terminates it by exact PID during cleanup, verifying it is gone
- * before deleting scratch. When stdin closes (transport closed), this process
- * exits itself.
+ * close + descendant SIGTERM) when it exits; when the backend is hard-killed
+ * the OS closes this process's stdin and it exits itself. The harness
+ * additionally retains the verified identity and terminates it by exact
+ * identity (PID + start + script path re-verified before each SIGTERM/SIGKILL)
+ * during cleanup, verifying it is gone before deleting scratch. When stdin
+ * closes (transport closed), this process exits itself.
  */
-import { createWriteStream } from "node:fs"
+import { renameSync, writeFileSync } from "node:fs"
 
 const marker = process.env.P0_MCP_MARKER
 
 function writeMarker(payload) {
   if (!marker) return
   try {
-    createWriteStream(marker, { flags: "a" }).end(JSON.stringify(payload) + "\n")
-    createWriteStream(marker + ".pid", { flags: "w" }).end(String(process.pid) + "\n")
+    // Atomic content-complete marker write: the full payload is written to a
+    // sibling temp file, then renameSync over the marker path. rename is
+    // atomic on POSIX, so the probe's poll-on-existence → parse-immediately
+    // read can never observe an empty/partial marker — the path either does
+    // not exist or already holds the complete payload (a bare writeFileSync
+    // still has an open→write window another process can observe). The payload
+    // stays small and bounded ({pid, connectedAt}).
+    const tmp = marker + ".tmp"
+    writeFileSync(tmp, JSON.stringify(payload) + "\n")
+    renameSync(tmp, marker)
   } catch {
     // Marker writes are best-effort evidence; a failed write must not crash
     // the MCP server (the backend would see a connection failure and mark the
@@ -88,6 +115,15 @@ process.stdin.on("data", (chunk) => {
     }
     if (msg.method === "tools/call") {
       respond(msg.id, { content: [{ type: "text", text: "p0-bench-fixture" }] })
+      continue
+    }
+    if (msg.method === "prompts/list") {
+      // Valid spec-compliant empty prompt list. The backend issues this during
+      // startup dataReady (MCP.prompts); answering it keeps startup bounded to
+      // the real tools/list handshake instead of the SDK's 60s request timeout.
+      // This deliberately does NOT write the truthfulness marker — the marker
+      // writes only after the tools/list handshake below.
+      respond(msg.id, { prompts: [] })
       continue
     }
     // Notifications (e.g. notifications/initialized) and unknown methods get

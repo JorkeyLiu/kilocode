@@ -41,6 +41,15 @@ export function parseExtensionPerfLine(line: string): StageRecord | undefined {
   if (typeof raw.d === "number") rec.d = raw.d
   if (typeof raw.wd === "number") rec.wd = raw.wd
   if (typeof raw.pid === "number" && raw.pid > 0) rec.pid = raw.pid
+  // Bounded span/metadata extras (p0Span records + sse.event dispatch): only
+  // the known keys are copied, never arbitrary payload data.
+  const extra: Record<string, unknown> = {}
+  if (raw.span === "start" || raw.span === "end") extra.span = raw.span
+  if (typeof raw.dur === "number") extra.dur = raw.dur
+  if (typeof raw.eventType === "string") extra.eventType = raw.eventType
+  if (typeof raw.dir === "string") extra.dir = raw.dir
+  if (typeof raw.transaction === "string") extra.transaction = raw.transaction
+  if (Object.keys(extra).length > 0) rec.extra = extra
   return rec
 }
 

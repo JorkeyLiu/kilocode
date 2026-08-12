@@ -24,8 +24,13 @@ export function startParentWatchdog(onOrphan: () => void, intervalMs = 1000): ()
   const timer = setInterval(() => {
     if (!orphaned(configured, initial)) return
     clearInterval(timer)
-    log.info("parent process gone — shutting down server", { parent: configured })
+    // Orphan shutdown must begin before any best-effort logging: a log write
+    // against a broken stderr pipe can itself fail (EPIPE) and, without this
+    // ordering, the failed write would prevent the orphan callback from ever
+    // running. The diagnostic after the callback is best-effort — the fatal
+    // handlers bound any failure it triggers.
     onOrphan()
+    log.info("parent process gone — shutting down server", { parent: configured })
   }, intervalMs)
   timer.unref()
   return () => clearInterval(timer)

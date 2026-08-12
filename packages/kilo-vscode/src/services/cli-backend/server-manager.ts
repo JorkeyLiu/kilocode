@@ -34,6 +34,28 @@ export function resolveManagedServerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessE
   return { ...env, KILO_DISABLE_CHANNEL_DB: "true" }
 }
 
+/**
+ * Resolve the CLI binary path to spawn.
+ *
+ * Production always returns the bundled binary under the extension dir. The
+ * benchmark-only `KILO_P0_BACKEND_CLI` env override (opt-in KILO_P0_* flag,
+ * same trust level as KILO_P0_PERF; never set in production) is honored ONLY
+ * when explicitly set: the P0 harness copies `bin/kilo` to a run-owned temp
+ * snapshot path before the campaign and pins it here so the non-owned dev
+ * watcher (script/watch-cli.ts) cannot change the measured binary
+ * mid-campaign. When the override is absent or empty the bundled fallback is
+ * unchanged — disabled product behavior is identical.
+ */
+export function resolveCliPath(extensionPath: string, env?: NodeJS.ProcessEnv): string {
+  const override = env?.KILO_P0_BACKEND_CLI
+  if (override && override.trim() !== "") {
+    console.log("[Kilo New] ServerManager: 📦 Using benchmark CLI snapshot:", override)
+    return override
+  }
+  const binName = process.platform === "win32" ? "kilo.exe" : "kilo"
+  return path.join(extensionPath, "bin", binName)
+}
+
 export class ServerManager {
   private instance: ServerInstance | null = null
   private startupPromise: Promise<ServerInstance> | null = null
@@ -236,9 +258,10 @@ export class ServerManager {
   }
 
   private getCliPath(): string {
-    // Always use the bundled binary from the extension directory
-    const binName = process.platform === "win32" ? "kilo.exe" : "kilo"
-    const cliPath = path.join(this.context.extensionPath, "bin", binName)
+    // Always use the bundled binary from the extension directory, unless the
+    // benchmark-only KILO_P0_BACKEND_CLI override is explicitly set (see
+    // resolveCliPath — P0 harness CLI snapshot pinning).
+    const cliPath = resolveCliPath(this.context.extensionPath, process.env)
     console.log("[Kilo New] ServerManager: 📦 Using CLI path:", cliPath)
     return cliPath
   }

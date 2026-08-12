@@ -25,14 +25,22 @@
 // service, no persistent storage, no public API, no detached work, and no
 // timing claims. Records are evidence only — nothing downstream reads them.
 // Keep the flag and event shape local to this module.
+//
+// Enablement is DYNAMIC: the flag is read on every call, not latched at
+// module load. Bun runs every test file in one process, so a module-load
+// latch would make scoped benchmark assertions depend on which file imported
+// this module first; per-call evaluation keeps opt-in enablement truthful no
+// matter the import order (a span created while disabled but ended after the
+// flag turns on is skipped entirely, and a p0.end without a p0.start is
+// ignored by span matching — the contract is unchanged).
 
 import * as Log from "@opencode-ai/core/util/log"
 import { truthy } from "@opencode-ai/core/flag/flag"
 
 const log = Log.create({ service: "p0-perf" })
 
-/** Opt-in activation, evaluated once at module load. */
-export const enabled = truthy("KILO_P0_PERF")
+/** Opt-in activation, evaluated per record (dynamic, not a module-load latch). */
+export const isEnabled = () => truthy("KILO_P0_PERF")
 
 export type P0Fields = {
   id?: string
@@ -43,19 +51,19 @@ export type P0Fields = {
 type P0Event = "p0.mark" | "p0.start" | "p0.end"
 
 function emit(event: P0Event, stage: string, fields: P0Fields | undefined, ts: number, duration?: number) {
-  if (!enabled) return
+  if (!isEnabled()) return
   log.info(stage, { event, stage, ts, duration, ...fields })
 }
 
 /** Point-in-time record for a stage (no duration). */
 export function mark(stage: string, fields?: P0Fields): void {
-  if (!enabled) return
+  if (!isEnabled()) return
   emit("p0.mark", stage, fields, Date.now())
 }
 
 /** Span record: emit `p0.start` now; `end()` emits `p0.end` with duration. */
 export function span(stage: string, fields?: P0Fields): { end: (extra?: P0Fields) => void } {
-  if (!enabled) return { end() {} }
+  if (!isEnabled()) return { end() {} }
   const wall = Date.now()
   const mono = performance.now()
   emit("p0.start", stage, fields, wall)

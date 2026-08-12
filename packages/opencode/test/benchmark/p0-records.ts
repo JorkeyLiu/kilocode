@@ -36,10 +36,16 @@ export type P0Record = {
 export const STAGES = [
   "serve_cli_entry",
   "listener",
+  "app_layer_define",
+  "app_runtime_make",
   "config_load",
   "instance_bootstrap",
   "provider_state_init",
   "processor_entry",
+  "tool_execute",
+  "tool_execute_plugin",
+  "permission_wait",
+  "question_wait",
   "config_commit",
   "convergence_complete",
 ] as const
@@ -47,11 +53,28 @@ export const STAGES = [
 /**
  * Stages emitted as p0.start/p0.end span pairs (every other stage is a single
  * p0.mark point). Verified against the emit sites in src/kilocode/perf/
- * instrument.ts consumers: server.ts (listener), config.ts (config_load),
+ * instrument.ts consumers: server.ts (listener), effect/app-runtime.ts
+ * (app_layer_define, app_runtime_make), config.ts (config_load),
  * project/bootstrap.ts (instance_bootstrap), provider/provider.ts
- * (provider_state_init).
+ * (provider_state_init), session/tools.ts (tool_execute — the outer session-
+ * loop span, one pair per tool call), tool/registry.ts (tool_execute_plugin —
+ * the distinct plugin-body span nested under the outer pair, covering
+ * def.execute + result normalization + output truncation, so a custom tool
+ * call never emits two identical tool_execute pairs), permission/index.ts
+ * (permission_wait), question/index.ts (question_wait).
  */
-export const SPAN_STAGES = ["listener", "config_load", "instance_bootstrap", "provider_state_init"] as const
+export const SPAN_STAGES = [
+  "listener",
+  "app_layer_define",
+  "app_runtime_make",
+  "config_load",
+  "instance_bootstrap",
+  "provider_state_init",
+  "tool_execute",
+  "tool_execute_plugin",
+  "permission_wait",
+  "question_wait",
+] as const
 
 const FIELD_RE = /\b(event=p0\.(?:mark|start|end)|stage=(\S+)|ts=(\d+)|duration=(\d+)|id=(\S+)|dir=(\S+)|meta=(\{.*\}))/
 

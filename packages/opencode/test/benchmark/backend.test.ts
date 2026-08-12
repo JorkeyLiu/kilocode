@@ -18,18 +18,28 @@
  * benchmark file finishes (bun test runs all files in one process).
  */
 
+import "./capture"
 import "./environment"
 import { afterAll, describe, expect, it } from "bun:test"
 import * as Log from "@opencode-ai/core/util/log"
+import path from "node:path"
+import { pathToFileURL } from "node:url"
 import { tmpdir } from "../fixture/fixture"
 import { markProjectConfigReady } from "../fixture/plugin"
 import { testProviderConfig } from "../lib/test-provider"
-import type { BackendHandle, SseSubscription } from "./backend"
-import { api, bootBackend, disposeInstance, json, run, subscribe } from "./backend"
 import { registerBenchmarkEnv } from "./environment"
 import * as P0 from "./p0-records"
 
+// The harness module statically imports the server graph; loading it here via
+// a top-level dynamic import — AFTER the log stream is switched to stderr and
+// `./environment` has set KILO_P0_PERF — guarantees `effect/app-runtime.ts`
+// evaluates with the flag enabled and its module-load `app_layer_define` /
+// `app_runtime_make` spans are captured. (A static import lets Bun evaluate
+// the heavy server graph ahead of `./environment`, and a TLA-imported module
+// beside the graph triggers the same ordering race.)
 await Log.init({ print: true })
+const { api, bootBackend, disposeInstance, json, run, subscribe } = await import("./backend")
+import type { BackendHandle, SseSubscription } from "./backend"
 
 const modelDef = (id: string) => ({
   id,
@@ -153,7 +163,8 @@ describe("backend p0 harness (production Server.listen/AppLayer)", () => {
       backend = await bootBackend()
       // The listener span is process-level (one per Server.listen); assert it
       // against the full capture, not the per-sample slice.
-      expect(backend.capture.slice(0).map((rec) => rec.stage)).toContain("listener")
+      const stages = backend.capture.slice(0).map((rec) => rec.stage)
+      expect(stages).toContain("listener")
       const recordStart = backend.capture.mark()
       const tmp = await makeDir()
       let sub: SseSubscription | undefined
@@ -181,6 +192,124 @@ describe("backend p0 harness (production Server.listen/AppLayer)", () => {
           expect(P0.stageDurations(slice, stage).length).toBeGreaterThan(0)
         }
         expect(P0.countStage(slice, "processor_entry")).toBeGreaterThanOrEqual(1)
+      } finally {
+        sub?.close()
+        await disposeInstance(backend.base, tmp.path)
+        await tmp[Symbol.asyncDispose]().catch(() => undefined)
+      }
+    },
+    30_000,
+  )
+
+  it(
+    "records tool_execute spans across a real tool-calling prompt round trip",
+    async () => {
+      if (!backend) backend = await bootBackend()
+      const recordStart = backend.capture.mark()
+      const tmp = await makeDir()
+      const probe = path.join(tmp.path, "probe.txt")
+      await Bun.write(probe, "p0 probe")
+      let sub: SseSubscription | undefined
+      try {
+        // Turn: LLM tool call (read — allowed under the build agent, no
+        // permission round trip) then a text finish back to idle.
+        await run(backend.llm.tool("read", { filePath: probe }))
+        await run(backend.llm.text("read done"))
+        sub = subscribe(backend.base, tmp.path)
+        const session = await createSession(tmp.path)
+        const res = await promptAsync(tmp.path, session.id, "read the probe file")
+        expect(res.status).toBeGreaterThanOrEqual(200)
+        expect(res.status).toBeLessThan(300)
+        await sub.waitFor(
+          (event) => event.type === "session.idle" && event.properties.sessionID === session.id,
+          15_000,
+        )
+        sub.close()
+        sub = undefined
+
+        const slice = backend.capture.slice(recordStart)
+        // tool_execute: a completed start/end span pair correlated by session
+        // id, with the tool name in meta (bounded — no payloads).
+        const toolStart = P0.stageRecords(slice, "tool_execute").find(
+          (rec) => rec.event === "p0.start" && rec.id === session.id,
+        )
+        const toolEnd = P0.stageRecords(slice, "tool_execute").find(
+          (rec) => rec.event === "p0.end" && rec.id === session.id,
+        )
+        expect(toolStart).toBeDefined()
+        expect(toolStart!.meta?.tool).toBe("read")
+        expect(toolEnd).toBeDefined()
+        expect(toolEnd!.meta?.tool).toBe("read")
+        expect(toolEnd!.duration).toBeGreaterThanOrEqual(0)
+        expect(P0.stageSpans(slice, "tool_execute").spans).toBeGreaterThanOrEqual(1)
+      } finally {
+        sub?.close()
+        await disposeInstance(backend.base, tmp.path)
+        await tmp[Symbol.asyncDispose]().catch(() => undefined)
+      }
+    },
+    30_000,
+  )
+
+  it(
+    "records exactly one tool_execute pair plus one distinct tool_execute_plugin pair for a custom tool through the session loop",
+    async () => {
+      if (!backend) backend = await bootBackend()
+      const recordStart = backend.capture.mark()
+      const tmp = await makeDir()
+      // Register the custom tool BEFORE the first prompt of this directory so
+      // the instance's ToolRegistry state discovers it (real user-defined
+      // tool file through the production discovery glob).
+      const pluginTool = pathToFileURL(path.resolve(import.meta.dir, "../../../plugin/src/tool.ts")).href
+      await Bun.write(
+        path.join(tmp.path, ".kilo", "tool", "p0_echo.ts"),
+        [
+          `import { tool } from ${JSON.stringify(pluginTool)}`,
+          `import { appendFileSync } from "node:fs"`,
+          `export default tool({`,
+          `  description: "Echo a message back",`,
+          `  args: { message: tool.schema.string().describe("message to echo") },`,
+          `  execute: async ({ message }, ctx) => {`,
+          `    appendFileSync(ctx.directory + "/p0-bench-echo.txt", "echo:" + message + "\\n")`,
+          `    return "echo:" + message`,
+          `  },`,
+          `})`,
+          "",
+        ].join("\n"),
+      )
+      let sub: SseSubscription | undefined
+      try {
+        // Turn: LLM tool call (custom p0_echo) then a text finish back to idle.
+        await run(backend.llm.tool("p0_echo", { message: "hello" }))
+        await run(backend.llm.text("echo done"))
+        sub = subscribe(backend.base, tmp.path)
+        const session = await createSession(tmp.path)
+        const res = await promptAsync(tmp.path, session.id, "echo hello")
+        expect(res.status).toBeGreaterThanOrEqual(200)
+        expect(res.status).toBeLessThan(300)
+        await sub.waitFor(
+          (event) => event.type === "session.idle" && event.properties.sessionID === session.id,
+          15_000,
+        )
+        sub.close()
+        sub = undefined
+
+        // The plugin wrote the call through the real ctx.directory bridge.
+        const artifact = await Bun.file(path.join(tmp.path, "p0-bench-echo.txt")).text()
+        expect(artifact).toContain("echo:hello")
+
+        const slice = backend.capture.slice(recordStart)
+        const outer = P0.stageSpans(slice, "tool_execute")
+        const inner = P0.stageSpans(slice, "tool_execute_plugin")
+        // Exactly ONE completed outer span for this session call (the previous
+        // duplicate inner `tool_execute` pair is gone) and exactly ONE distinct
+        // plugin-body span nested under it.
+        expect(outer).toEqual({ spans: 1, unmatchedStarts: 0 })
+        expect(inner).toEqual({ spans: 1, unmatchedStarts: 0 })
+        const outerRecs = P0.stageRecords(slice, "tool_execute").filter((rec) => rec.id === session.id)
+        expect(outerRecs.some((rec) => rec.meta?.tool === "p0_echo")).toBe(true)
+        const innerRecs = P0.stageRecords(slice, "tool_execute_plugin").filter((rec) => rec.id === session.id)
+        expect(innerRecs.some((rec) => rec.meta?.tool === "p0_echo")).toBe(true)
       } finally {
         sub?.close()
         await disposeInstance(backend.base, tmp.path)

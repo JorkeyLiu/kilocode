@@ -16,6 +16,22 @@
  * counted in the run status; a failed warmup sample is still recorded in the
  * JSONL with `ok: false` and reported as `warmupFailures` on the finish line.
  *
+ * Provenance: every sample carries `env` (os/arch/node/bun + gitHead/
+ * gitCommit/gitDirty + boot description) and both `kind: "run"` envelope
+ * records carry the same `env`, so a campaign's exact CLI/backend commit and
+ * dirty state is unambiguous even if the artifact is later separated from the
+ * checkout that produced it. Git detection is read-only, derived from the
+ * repo root, and frozen ONCE at campaign start BEFORE any output artifact is
+ * created — the evidence dir is not gitignored, so creating output inside the
+ * repo must never flip the recorded dirty state (a clean campaign records
+ * gitDirty=false even though the artifact leaves the tree technically dirty
+ * afterwards).
+ *
+ * Stats note: with the default n=5 the nearest-rank p95 index is
+ * ceil(0.95*5)-1 = 4, so p95 EQUALS max — a descriptive sample statistic,
+ * not a tail-latency SLA. No threshold or service-level claim is derived from
+ * these numbers (LOCK-PERF-7 thresholds remain Open).
+ *
  * Cleanup: the run-owned root (XDG/DB/tmp + every sample dir) and the
  * listener/LLM are ALWAYS removed — on success, on failed samples, on early
  * seed/boot failure, and on thrown errors (e.g. unknown scenario id). The
@@ -34,6 +50,7 @@ import { bootBackend, disposeInstance } from "./backend"
 import { dirs, runRoot } from "./environment"
 import type { P0Record } from "./p0-records"
 import { byID, type Scenario, type ScenarioCtx, type ScenarioResult } from "./scenarios"
+import { resolveRepoRoot } from "./repo-root"
 import { summarizeSamples, type SampleSummary } from "./statistics"
 
 export type RunOptions = {
@@ -52,7 +69,11 @@ export type SampleEnv = {
   arch: string
   node: string
   bun: string
+  /** Current workspace git HEAD (short). */
   gitHead: string | null
+  /** Full 40-char HEAD commit (explicit commit alias; unambiguous provenance). */
+  gitCommit: string | null
+  /** True when `git status --porcelain` is non-empty (or git is unavailable). */
   gitDirty: boolean
   /** Truthful description of the boot model measured by this harness. */
   boot: string
@@ -109,38 +130,69 @@ export type RunLine = {
   /** Failed warmup samples (recorded, do not affect the status). */
   warmupFailures?: number
   outDir?: string
+  /** Campaign provenance (commit/head/dirty + runtime versions), both events. */
+  env?: SampleEnv
 }
 
 // ---------------------------------------------------------------------------
 // Environment + git (read-only; never mutates git)
 // ---------------------------------------------------------------------------
 
-const repoRoot = path.resolve(import.meta.dir, "../../..")
+const repoRoot = resolveRepoRoot()
 
-function gitOut(args: string[]): string | null {
-  const proc = Bun.spawnSync(["git", "-C", repoRoot, ...args], { stdout: "pipe", stderr: "pipe" })
+function gitOut(dir: string, args: string[]): string | null {
+  const proc = Bun.spawnSync(["git", "-C", dir, ...args], { stdout: "pipe", stderr: "pipe" })
   if (proc.exitCode !== 0) return null
   return proc.stdout.toString().trim()
 }
 
-let cachedEnv: SampleEnv | undefined
+export type GitState = {
+  /** Short HEAD (backward-compatible alias). */
+  gitHead: string | null
+  /** Full 40-char HEAD commit (explicit commit alias). */
+  gitCommit: string | null
+  /** True when `git status --porcelain` is non-empty; non-git dirs are dirty. */
+  gitDirty: boolean
+}
 
-export function sampleEnv(): SampleEnv {
-  if (cachedEnv) return cachedEnv
-  const head = gitOut(["rev-parse", "--short", "HEAD"])
-  const dirty = (gitOut(["status", "--porcelain"]) ?? "dirty").length > 0
-  cachedEnv = {
+/**
+ * Read-only git provenance for a directory. A non-git or failed directory
+ * reports null head/commit and dirty=true (unknown state is treated as dirty
+ * rather than silently clean).
+ */
+export function gitState(dir: string): GitState {
+  const head = gitOut(dir, ["rev-parse", "--short", "HEAD"])
+  const commit = gitOut(dir, ["rev-parse", "HEAD"])
+  const dirty = (gitOut(dir, ["status", "--porcelain"]) ?? "dirty").length > 0
+  return { gitHead: head, gitCommit: commit, gitDirty: dirty }
+}
+
+/**
+ * Capture the full sample environment (runtime versions + git provenance) for
+ * a directory. Pure and uncached: the CALLER decides when to freeze it. The
+ * campaign captures it once, BEFORE creating any output artifact, and reuses
+ * the frozen value on every record so a campaign's provenance is unambiguous
+ * and self-output never flips the recorded dirty state.
+ */
+export function envFor(dir: string): SampleEnv {
+  const git = gitState(dir)
+  return {
     os: process.platform,
     arch: process.arch,
     node: process.versions.node,
     bun: Bun.version,
-    gitHead: head,
-    gitDirty: dirty,
+    gitHead: git.gitHead,
+    gitCommit: git.gitCommit,
+    gitDirty: git.gitDirty,
     boot:
       "in-process production Server.listen/AppLayer HTTP/SSE path (same as kilo serve); " +
       "process-level stages (listener) emit once per process; serve_cli_entry is CLI-process-tier and not emitted here",
   }
-  return cachedEnv
+}
+
+/** Sample environment for the resolved repo root (convenience; uncached). */
+export function sampleEnv(): SampleEnv {
+  return envFor(repoRoot)
 }
 
 // ---------------------------------------------------------------------------
@@ -173,6 +225,10 @@ export function runStatus(failures: number, total: number): "ok" | "partial" | "
 export async function runCampaign(opts: RunOptions): Promise<RunResult> {
   let backend: BackendHandle | undefined
   const startedAt = Date.now()
+  // Freeze provenance BEFORE any artifact is created: the evidence dir is not
+  // gitignored, so creating the output file inside the repo must never flip
+  // the recorded dirty state. This frozen value is reused on every record.
+  const env = envFor(repoRoot)
   const emit = async (line: unknown) => {
     await fs.promises.appendFile(opts.out, JSON.stringify(line) + "\n")
   }
@@ -196,6 +252,7 @@ export async function runCampaign(opts: RunOptions): Promise<RunResult> {
       samples: opts.samples,
       warmup: opts.warmup,
       outDir: path.dirname(opts.out),
+      env,
     } satisfies RunLine)
 
     let failures = 0
@@ -211,7 +268,7 @@ export async function runCampaign(opts: RunOptions): Promise<RunResult> {
       ]
       for (const { phase, count } of phases) {
         for (let i = 1; i <= count; i++) {
-          const line = await runOneSample(booted, scenario, i, phase)
+          const line = await runOneSample(booted, scenario, i, phase, env)
           await emit(line)
           if (line.ok) {
             if (phase === "measured") measured.push({ scenario: id, phase, metrics: line.metrics, counts: line.counts })
@@ -250,6 +307,7 @@ export async function runCampaign(opts: RunOptions): Promise<RunResult> {
       failures,
       warmupFailures,
       outDir: path.dirname(opts.out),
+      env,
     } satisfies RunLine)
     return { status, out: opts.out, samples: total, failures, warmupFailures }
   } finally {
@@ -267,6 +325,7 @@ async function runOneSample(
   scenario: Scenario,
   sampleNo: number,
   phase: "warmup" | "measured",
+  env: SampleEnv,
 ): Promise<SampleLine> {
   const recordStart = backend.capture.mark()
   const tmp = await tmpdir({ git: true, config: testProviderConfig(backend.llm.url) })
@@ -298,7 +357,7 @@ async function runOneSample(
     condition: { id: scenario.id, note: scenario.name },
     startedAt,
     elapsedMs: Date.now() - startedAt,
-    env: sampleEnv(),
+    env,
     metrics: result.metrics,
     counts: result.counts,
     evidence: result.evidence,

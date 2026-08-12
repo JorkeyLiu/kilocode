@@ -66,6 +66,7 @@ import { PtyTicket } from "@opencode-ai/core/pty/ticket" // kilocode_change - li
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
 import { ControlLease } from "@/kilocode/server/control-lease" // kilocode_change
 import { ConfigConvergence } from "@/kilocode/server/config-convergence" // kilocode_change - canonical cold-mutation coordinator
+import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 // kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers
 type ModelsLayer = Layer.Layer<CoreModelsDev.Service | KiloModelsDev.Service, never, never>
@@ -204,10 +205,24 @@ export function makeAppLayer(
   return buildAppLayer(models, provider, modelCache)
 }
 
-export const AppLayer = makeAppLayer() // kilocode_change
+/**
+ * P0 span around a synchronous AppLayer/runtime construction step. The build
+ * runs once at module load (`makeAppLayer()` / `ManagedRuntime.make`), so the
+ * records are module-load-time spans: p0.start/p0.end with the synchronous
+ * wall-clock duration. When `KILO_P0_PERF` is off `span()` is a no-op.
+ */
+function measure<T>(stage: string, build: () => T): T {
+  const timer = P0Perf.span(stage)
+  const out = build()
+  timer.end()
+  return out
+}
+
+// kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair
+export const AppLayer = measure("app_layer_define", makeAppLayer) // kilocode_change
 export type AppLayer = ReturnType<typeof makeAppLayer> // kilocode_change
 
-const rt = ManagedRuntime.make(AppLayer, { memoMap })
+const rt = measure("app_runtime_make", () => ManagedRuntime.make(AppLayer, { memoMap }))
 type Runtime = Pick<typeof rt, "runSync" | "runPromise" | "runPromiseExit" | "runFork" | "runCallback" | "dispose">
 
 /** Services provided by AppRuntime — i.e. what an Effect run via AppRuntime.runPromise can yield. */

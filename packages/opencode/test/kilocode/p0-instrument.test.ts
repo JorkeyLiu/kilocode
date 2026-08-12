@@ -4,10 +4,14 @@
  * enabled path emits the documented record shapes (`p0.mark` / `p0.start` /
  * `p0.end`) with stage, ts, correlation keys, duration, and merged extras.
  *
- * The helper's `enabled` flag is evaluated once at module load, so each test
- * state imports the module through a cache-busting query string after setting
- * the env. The log stream is redirected to stderr (`Log.init({ print: true })`)
- * and captured synchronously for deterministic assertion.
+ * Enablement is dynamic (read per record, never latched at module load), so
+ * the same module instance serves every test: each state sets the env before
+ * the call and the per-record check picks it up. A dedicated same-process
+ * toggle test proves `off -> on -> off` works from ONE import — the suite-
+ * order dependence a module-load latch would create.
+ *
+ * The log stream is redirected to stderr (`Log.init({ print: true })`) and
+ * captured synchronously for deterministic assertion.
  */
 
 import { describe, expect, it } from "bun:test"
@@ -41,24 +45,12 @@ function p0Records(lines: string[]): Array<Record<string, string>> {
   return lines.map(parseRecord).filter((r): r is Record<string, string> => r !== undefined)
 }
 
-/**
- * Import a fresh module instance for the given flag state. The `enabled` flag
- * is read once at module load, so each state needs its own module instance;
- * the cache-busting query string would be statically unresolvable to tsgo, so
- * the specifier is built via template literal and the result cast to the
- * module's static type.
- */
-async function loadInstrument(state: string) {
-  const mod = await import(`../../src/kilocode/perf/instrument.ts?p0=${state}`)
-  return mod as typeof import("../../src/kilocode/perf/instrument")
-}
-
 describe("backend P0 instrumentation helper", () => {
   it("emits nothing when the flag is off (disabled path is silent)", async () => {
     delete process.env.KILO_P0_PERF
     const { lines, restore } = capture()
     try {
-      const mod = await loadInstrument("disabled")
+      const mod = await import("../../src/kilocode/perf/instrument")
       mod.mark("processor_entry", { id: "s1", meta: { messageID: "m1" } })
       const timer = mod.span("config_load", { dir: "/tmp/x" })
       timer.end()
@@ -68,11 +60,37 @@ describe("backend P0 instrumentation helper", () => {
     expect(p0Records(lines)).toEqual([])
   })
 
+  it("enablement is dynamic in one process: off -> on -> off from the SAME module instance", async () => {
+    delete process.env.KILO_P0_PERF
+    // The plain (cache-busted-free) import is the instance production code
+    // shares; importing it while the flag is off must not latch it off for the
+    // rest of the process.
+    const mod = await import("../../src/kilocode/perf/instrument")
+    const { lines, restore } = capture()
+    try {
+      mod.mark("processor_entry", { id: "s1" })
+      process.env.KILO_P0_PERF = "1"
+      mod.span("config_load", { dir: "/tmp/x" }).end()
+      process.env.KILO_P0_PERF = ""
+      mod.mark("config_commit", { dir: "/tmp/x" })
+    } finally {
+      restore()
+      delete process.env.KILO_P0_PERF
+    }
+    const records = p0Records(lines)
+    // Only the records emitted while the flag was on exist; the off-phase
+    // calls (before and after) are silent on the same module instance.
+    expect(records.map((r) => r.stage)).toEqual(["config_load", "config_load"])
+    expect(records[0]!.event).toBe("p0.start")
+    expect(records[1]!.event).toBe("p0.end")
+    expect(records[1]!.duration).toBeDefined()
+  })
+
   it("mark emits a single p0.mark record with stage, ts, and correlation fields", async () => {
     process.env.KILO_P0_PERF = "1"
     const { lines, restore } = capture()
     try {
-      const mod = await loadInstrument("mark-enabled")
+      const mod = await import("../../src/kilocode/perf/instrument")
       mod.mark("processor_entry", {
         id: "s1",
         meta: { messageID: "m1", parentID: "u1", model: "m", provider: "p" },
@@ -102,7 +120,7 @@ describe("backend P0 instrumentation helper", () => {
     process.env.KILO_P0_PERF = "1"
     const { lines, restore } = capture()
     try {
-      const mod = await loadInstrument("span-enabled")
+      const mod = await import("../../src/kilocode/perf/instrument")
       const timer = mod.span("provider_state_init", { dir: "/tmp/proj" })
       timer.end({ meta: { hostname: "localhost", port: 1234 } })
     } finally {
