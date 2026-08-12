@@ -9,6 +9,7 @@ import { MessageV2 } from "../session/message-v2"
 import { Agent } from "../agent/agent"
 import { deriveSubagentSessionPermission } from "../agent/subagent-permissions"
 import type { SessionPrompt } from "../session/prompt"
+import { taskReport } from "../session/prompt/auto-continue" // kilocode_change - full logical child report across auto-continuation
 import { Config } from "@/config/config"
 import { Provider } from "@/provider/provider" // kilocode_change
 import { KiloTask } from "../kilocode/tool/task" // kilocode_change
@@ -286,10 +287,13 @@ export const TaskTool = Tool.define(
           if (final.info.role === "assistant" && final.info.error) {
             return yield* Effect.fail(new Error(`${errorMessage(final.info.error)}\n${resumeHint(nextSession.id)}`))
           }
-          return final.parts.findLast((item) => item.type === "text")?.text ?? ""
+          // kilocode_change - LOCK-004: surface the full logical report (partial
+          // pre-truncation text followed by the auto-continuation text) when the
+          // final child assistant continues a truncated unknown-finish turn.
+          return yield* taskReport({ sessions, sessionID: nextSession.id, final })
         }
         // kilocode_change end
-        return result.parts.findLast((item) => item.type === "text")?.text ?? ""
+        return yield* taskReport({ sessions, sessionID: nextSession.id, final: result })
       }, Effect.ensuring(KiloTaskBackgroundProcess.finish(nextSession.id))) // kilocode_change - transfer inherited processes when the child run ends
 
       // kilocode_change start - inject completed background task results into the parent session

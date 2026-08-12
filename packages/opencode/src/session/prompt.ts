@@ -86,6 +86,12 @@ import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
 import { LLMEvent } from "@opencode-ai/llm"
 import { withGenerationAdmission } from "@/kilocode/session/generation-admission" // kilocode_change
+import {
+  CONTINUE_FROM_KEY,
+  hasUnsafeTool,
+  isAutoContinueMarker,
+  UNKNOWN_FINISH_CONTINUE_INSTRUCTION,
+} from "./prompt/auto-continue" // kilocode_change - shared leaf for bounded auto-continuation
 
 // @ts-ignore
 globalThis.AI_SDK_LOG_WARNINGS = false
@@ -117,6 +123,13 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
   // They are not pending work and must not trigger an assistant-prefill request.
   return part.state.status === "error" && part.state.metadata?.interrupted === true
 }
+
+// kilocode_change start - bounded auto-continuation for truncated responses:
+// the continuation instruction, the LOCK-005 correlation marker, and the
+// LOCK-003 unsafe-tool predicate live in the leaf module shared with the task
+// tool report helper.
+export { UNKNOWN_FINISH_CONTINUE_INSTRUCTION } // kilocode_change - retained for the prompt loop tests
+// kilocode_change end
 
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
@@ -1507,6 +1520,12 @@ export const layer = Layer.effect(
       const memoryCache = KiloSessionPrompt.memoryCache() // kilocode_change
       closeReasons.delete(sessionID) // kilocode_change
       let compactionAttempts = 0 // kilocode_change - cap compaction attempts per turn to avoid infinite loops
+      // kilocode_change start - LOCK-002: at most one automatic continuation per
+      // original user turn. The set holds the IDs of the injected continuation
+      // user messages; a second unknown finish whose turn anchor is an injected
+      // message breaks normally and preserves the existing warning/report.
+      const autoContinued = new Set<MessageID>()
+      // kilocode_change end
       const ctx = yield* InstanceState.context
       const slog = elog.with({ sessionID })
       let structured: unknown
@@ -1579,6 +1598,69 @@ export const layer = Layer.effect(
           lastAssistant.parentID === lastUser.id && // kilocode_change - unrelated later assistants do not answer this turn
           userBeforeAssistant // kilocode_change - compare chronology, not generated IDs
         ) {
+          // kilocode_change start - LOCK-001/002/003: bounded auto-continuation
+          // when the trailing assistant ended with finish="unknown" after partial
+          // output. Eligibility: no assistant error, no unresolved/errored tool
+          // parts (pending/running/error), and this turn has not already been
+          // auto-continued. The continuation is a synthetic user message that the
+          // next loop iteration processes like any prompt; the partial text stays
+          // in history so the model continues from the last point. Any other
+          // finish (length, content-filter, error, ...), an errored assistant, or
+          // a repeated unknown finish breaks normally and preserves existing
+          // behavior.
+          if (
+            lastAssistant.finish === "unknown" &&
+            !lastAssistant.error &&
+            !autoContinued.has(lastUser.id) &&
+            // LOCK-007: the persisted marker is the durable one-continuation
+            // bound. A fresh runLoop after an interrupt has an empty in-memory
+            // set, but the continuation user message (with its LOCK-005 marker)
+            // survives in history, so an unknown assistant parented to it must
+            // not inject a second continuation.
+            !isAutoContinueMarker(latest.userMessage) &&
+            // LOCK-008: a newer user prompt already queued for this session
+            // supersedes the truncated response. Break here and let the
+            // existing queue/adoption semantics process that prompt without an
+            // extra LLM round-trip for the old turn.
+            !KiloSessionPromptQueue.hasFollowup(sessionID) &&
+            !hasUnsafeTool(lastAssistantMsg?.parts)
+          ) {
+            const continueMsg = yield* sessions.updateMessage({
+              id: MessageID.ascending(),
+              role: "user",
+              sessionID,
+              time: { created: Date.now() },
+              agent: lastUser.agent,
+              model: lastUser.model,
+              // kilocode_change - keep the original request's structured-output
+              // format and editor context so the continuation honors the same
+              // turn contract the truncated step was under.
+              ...(lastUser.format ? { format: lastUser.format } : {}),
+              ...(lastUser.editorContext ? { editorContext: lastUser.editorContext } : {}),
+            })
+            yield* sessions.updatePart({
+              id: PartID.ascending(),
+              messageID: continueMsg.id,
+              sessionID,
+              type: "text",
+              synthetic: true,
+              text: UNKNOWN_FINISH_CONTINUE_INSTRUCTION,
+              // kilocode_change - LOCK-005: correlate the continuation to the
+              // exact truncated source assistant so the task tool report can
+              // fetch and prepend the pre-truncation text.
+              metadata: { [CONTINUE_FROM_KEY]: lastAssistant.id },
+            })
+            // kilocode_change - LOCK-007: persist the marker before exposing
+            // the continuation to scope() so an interrupt between the two
+            // writes cannot surface a marker-less continuation message to a
+            // fresh runLoop (which would bypass the durable one-continuation
+            // bound and inject a second continuation).
+            KiloSessionPromptQueue.retarget(sessionID, continueMsg.id) // kilocode_change - expose auto-continuation to scope()
+            autoContinued.add(continueMsg.id)
+            yield* slog.info("auto-continuing truncated response", { messageID: lastAssistant.id })
+            continue
+          }
+          // kilocode_change end
           const orphan = lastAssistantMsg?.parts.find(
             (part): part is MessageV2.ToolPart => part.type === "tool" && isOrphanedInterruptedTool(part),
           )
