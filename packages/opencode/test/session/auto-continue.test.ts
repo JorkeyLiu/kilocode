@@ -175,7 +175,7 @@ describe("lastText", () => {
     expect(lastText([tool(MessageID.ascending("msg_a1"), "completed")])).toBe("")
   })
 
-  // kilocode_change start - LOCK-001: non-report assistant text classes must
+  // kilocode_change start - non-report assistant text classes must
   // never replace the real report in task results.
   test("skips trailing synthetic snapshot progress when cleanup races", () => {
     const progress = text(MessageID.ascending("msg_a1"), "{spinner} Initializing snapshot…", {
@@ -326,7 +326,7 @@ describe("composeTaskReport", () => {
     expect(composeTaskReport({ final: silent, parent: u2, source: a1 })).toBe("")
   })
 
-  // kilocode_change start - LOCK-001: non-report assistant text classes trail
+  // kilocode_change start - non-report assistant text classes trail
   // the real report and must not replace it when snapshot progress cleanup
   // races or fails.
   test("composes the real report when trailing synthetic progress survives cleanup", () => {
@@ -394,7 +394,7 @@ describe("taskReport", () => {
     }).pipe(Effect.provide(stubSessions([u1, a1, u2, a2]))),
   )
 
-  // kilocode_change start - LOCK-001: a trailing synthetic transient progress
+  // kilocode_change start - a trailing synthetic transient progress
   // part on the final child assistant must not replace the real report.
   it.effect("returns the real report when trailing synthetic progress survives cleanup", () =>
     Effect.gen(function* () {

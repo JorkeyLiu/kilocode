@@ -27,7 +27,7 @@ export function hasUnsafeTool(parts: SessionV1.Part[] | undefined) {
   return parts?.some((part) => part.type === "tool" && part.state.status !== "completed") ?? false
 }
 
-// LOCK-001: report selection only accepts assistant text parts that are
+// report selection only accepts assistant text parts that are
 // neither synthetic nor ignored. Synthetic text covers transient snapshot
 // progress (fire-and-forget cleanup may leave it on the final message) and
 // other UI-only injections; ignored text covers the memory marker and the

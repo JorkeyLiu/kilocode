@@ -261,7 +261,7 @@ export const TaskTool = Tool.define(
           },
           variant,
           agent: next.name,
-          // kilocode_change - LOCK-002: nested task sessions wait silently on
+          // kilocode_change - nested task sessions wait silently on
           // slow snapshot initialization instead of raising the project-level
           // interactive snapshot prompt. The existing 120s protection budget
           // remains authoritative.
