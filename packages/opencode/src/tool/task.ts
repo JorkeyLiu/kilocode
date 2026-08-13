@@ -261,6 +261,11 @@ export const TaskTool = Tool.define(
           },
           variant,
           agent: next.name,
+          // kilocode_change - LOCK-002: nested task sessions wait silently on
+          // slow snapshot initialization instead of raising the project-level
+          // interactive snapshot prompt. The existing 120s protection budget
+          // remains authoritative.
+          snapshotInitialization: "wait",
           tools: {
             question: false, // subagents cannot prompt the user directly
             interactive_terminal: false, // subagents cannot take over the user's terminal

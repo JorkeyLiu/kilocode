@@ -25,7 +25,7 @@ const model = {
 function text(
   messageID: MessageID,
   text: string,
-  opts?: { synthetic?: boolean; metadata?: Record<string, unknown> },
+  opts?: { synthetic?: boolean; ignored?: boolean; metadata?: Record<string, unknown> },
 ): SessionV1.TextPart {
   return {
     id: PartID.ascending(`prt_text_${messageID}`),
@@ -34,6 +34,7 @@ function text(
     type: "text",
     text,
     ...(opts?.synthetic ? { synthetic: true } : {}),
+    ...(opts?.ignored ? { ignored: true } : {}),
     ...(opts?.metadata ? { metadata: opts.metadata } : {}),
   }
 }
@@ -173,6 +174,43 @@ describe("lastText", () => {
     expect(lastText([])).toBe("")
     expect(lastText([tool(MessageID.ascending("msg_a1"), "completed")])).toBe("")
   })
+
+  // kilocode_change start - LOCK-001: non-report assistant text classes must
+  // never replace the real report in task results.
+  test("skips trailing synthetic snapshot progress when cleanup races", () => {
+    const progress = text(MessageID.ascending("msg_a1"), "{spinner} Initializing snapshot…", {
+      synthetic: true,
+      metadata: { "kilocode.lifecycle": "transient" },
+    })
+    expect(lastText([text(MessageID.ascending("msg_a1"), "real report"), progress])).toBe("real report")
+  })
+
+  test("skips a trailing synthetic+ignored memory marker", () => {
+    const marker = text(MessageID.ascending("msg_a1"), "", { synthetic: true, ignored: true })
+    expect(lastText([text(MessageID.ascending("msg_a1"), "real report"), marker])).toBe("real report")
+  })
+
+  test("skips a trailing ignored output-length warning", () => {
+    const warning = text(MessageID.ascending("msg_a1"), "output truncated to 10000 tokens", { ignored: true })
+    expect(lastText([text(MessageID.ascending("msg_a1"), "real report"), warning])).toBe("real report")
+  })
+
+  test("skips synthetic progress between real text parts", () => {
+    const progress = text(MessageID.ascending("msg_a1"), "Initializing snapshot…", { synthetic: true })
+    expect(
+      lastText([text(MessageID.ascending("msg_a1"), "first"), progress, text(MessageID.ascending("msg_a1"), "last")]),
+    ).toBe("last")
+  })
+
+  test("returns empty string when only non-report text remains", () => {
+    const progress = text(MessageID.ascending("msg_a1"), "Initializing snapshot…", {
+      synthetic: true,
+      metadata: { "kilocode.lifecycle": "transient" },
+    })
+    const warning = text(MessageID.ascending("msg_a1"), "output truncated", { ignored: true })
+    expect(lastText([progress, warning])).toBe("")
+  })
+  // kilocode_change end
 })
 
 describe("isAutoContinueMarker", () => {
@@ -287,6 +325,48 @@ describe("composeTaskReport", () => {
     const silent = assistant("a2", MessageID.ascending("msg_u2"), { finish: "stop" })
     expect(composeTaskReport({ final: silent, parent: u2, source: a1 })).toBe("")
   })
+
+  // kilocode_change start - LOCK-001: non-report assistant text classes trail
+  // the real report and must not replace it when snapshot progress cleanup
+  // races or fails.
+  test("composes the real report when trailing synthetic progress survives cleanup", () => {
+    const progress = text(MessageID.ascending("msg_a2"), "{spinner} Initializing snapshot…", {
+      synthetic: true,
+      metadata: { "kilocode.lifecycle": "transient" },
+    })
+    const final = { ...a2, parts: [...a2.parts, progress] }
+    expect(composeTaskReport({ final: final, parent: u2, source: a1 })).toBe(
+      "child partial\nchild completed report",
+    )
+  })
+
+  test("returns the real final text when a trailing ignored warning remains", () => {
+    const warning = text(MessageID.ascending("msg_a2"), "output truncated to 10000 tokens", { ignored: true })
+    const final = { ...a2, parts: [...a2.parts, warning] }
+    expect(composeTaskReport({ final: final, parent: u2, source: a1 })).toBe(
+      "child partial\nchild completed report",
+    )
+  })
+
+  test("returns the real final text when a trailing synthetic+ignored marker remains", () => {
+    const marker = text(MessageID.ascending("msg_a2"), "", { synthetic: true, ignored: true })
+    const final = { ...a2, parts: [...a2.parts, marker] }
+    expect(composeTaskReport({ final: final, parent: u2, source: a1 })).toBe(
+      "child partial\nchild completed report",
+    )
+  })
+
+  test("fails closed to empty when only synthetic progress remains", () => {
+    const onlyProgress = assistant("a2", MessageID.ascending("msg_u2"), { finish: "stop" })
+    onlyProgress.parts = [
+      text(MessageID.ascending("msg_a2"), "{spinner} Initializing snapshot…", {
+        synthetic: true,
+        metadata: { "kilocode.lifecycle": "transient" },
+      }),
+    ]
+    expect(composeTaskReport({ final: onlyProgress, parent: u2, source: a1 })).toBe("")
+  })
+  // kilocode_change end
 })
 
 describe("taskReport", () => {
@@ -313,4 +393,20 @@ describe("taskReport", () => {
       expect(report).toBe("original turn")
     }).pipe(Effect.provide(stubSessions([u1, a1, u2, a2]))),
   )
+
+  // kilocode_change start - LOCK-001: a trailing synthetic transient progress
+  // part on the final child assistant must not replace the real report.
+  it.effect("returns the real report when trailing synthetic progress survives cleanup", () =>
+    Effect.gen(function* () {
+      const sessions = yield* Session.Service
+      const progress = text(MessageID.ascending("msg_a2"), "{spinner} Initializing snapshot…", {
+        synthetic: true,
+        metadata: { "kilocode.lifecycle": "transient" },
+      })
+      const final = { ...a2, parts: [...a2.parts, progress] }
+      const report = yield* taskReport({ sessions, sessionID: sid, final: final })
+      expect(report).toBe("child partial\nchild completed report")
+    }).pipe(Effect.provide(stubSessions([u1, a1, u2, a2]))),
+  )
+  // kilocode_change end
 })

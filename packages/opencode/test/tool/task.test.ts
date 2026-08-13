@@ -427,6 +427,9 @@ describe("tool.task", () => {
       expect(result.metadata.sessionId).not.toBe("ses_missing")
       expect(result.output).toContain(`<task id="${result.metadata.sessionId}" state="completed">`)
       expect(seen?.sessionID).toBe(result.metadata.sessionId)
+      // kilocode_change - LOCK-002: nested task prompts wait silently on slow
+      // snapshot initialization instead of raising the interactive prompt.
+      expect(seen?.snapshotInitialization).toBe("wait")
     }),
   )
 

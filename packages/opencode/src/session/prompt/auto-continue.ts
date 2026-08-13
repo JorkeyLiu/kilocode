@@ -27,8 +27,18 @@ export function hasUnsafeTool(parts: SessionV1.Part[] | undefined) {
   return parts?.some((part) => part.type === "tool" && part.state.status !== "completed") ?? false
 }
 
+// LOCK-001: report selection only accepts assistant text parts that are
+// neither synthetic nor ignored. Synthetic text covers transient snapshot
+// progress (fire-and-forget cleanup may leave it on the final message) and
+// other UI-only injections; ignored text covers the memory marker and the
+// output-length warning. Legitimate child report text is never flagged either
+// way, so skipping both classes cannot drop a real report.
 export function lastText(parts: SessionV1.Part[]) {
-  return parts.findLast((part): part is MessageV2.TextPart => part.type === "text")?.text ?? ""
+  return (
+    parts.findLast(
+      (part): part is MessageV2.TextPart => part.type === "text" && part.synthetic !== true && part.ignored !== true,
+    )?.text ?? ""
+  )
 }
 
 // LOCK-005: the exact auto-continuation marker is a synthetic text part on the
