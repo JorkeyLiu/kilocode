@@ -1363,27 +1363,14 @@ export const SessionProvider: ParentComponent = (props) => {
       if (draftID) {
         transferDraftState(draftID, session.id)
         agentDrafts.promote(draftID)
-      } else {
-        const pendingAgent = pendingAgentSelection()
-        if (pendingAgent && !store.agentSelections[session.id]) {
-          setStore("agentSelections", session.id, pendingAgent)
-          setPendingAgentSelection(null)
-        }
-        // LOCK-005: no draft involved — promote fresh-composer picks directly.
-        const seeds = seedPendingChoices(
-          session.id,
-          store.agentSelections[session.id] ?? defaultAgent(),
-          { model: pendingModelSelection(), variant: pendingVariantSelection() },
-          store.sessionOverrides,
-          store.variantSelections,
-        )
-        setStore("sessionOverrides", seeds.overrides)
-        setStore("variantSelections", seeds.variants)
+        // A webview-initiated session attaches pending composer picks only
+        // when its correlated draft lands. A no-draft sessionCreated is a
+        // replayed/backend/delegated session whose history is authoritative:
+        // it must never seed agent/model/variant state, and pending picks
+        // stay available for the next fresh composer send.
+        setPendingModelSelection(null)
+        setPendingVariantSelection(null)
       }
-      // LOCK-005: the picks are consumed by the upcoming session — a later
-      // fresh session starts from configured values again.
-      setPendingModelSelection(null)
-      setPendingVariantSelection(null)
 
       const active = currentSessionID()
       const draft = draftSessionID()
@@ -1482,6 +1469,22 @@ export const SessionProvider: ParentComponent = (props) => {
       "variantSelections",
       produce((variants) => {
         for (const key of sessionVariantKeys(variants, draftID)) delete variants[key]
+      }),
+    )
+  }
+
+  /** Release the full owned state of an abandoned draft (mirror of
+   * transferDraftState): its agent, model override, and session variants. */
+  function pruneDraftState(draftID: string) {
+    agentDrafts.prune(draftID)
+    setStore(
+      produce((s) => {
+        delete s.agentSelections[draftID]
+        delete s.sessionOverrides[draftID]
+        delete s.sessionRecoveredModels[draftID]
+        delete s.sessionRecoveredAgents[draftID]
+        delete s.sessionRecoveredVariants[draftID]
+        for (const key of sessionVariantKeys(s.variantSelections, draftID)) delete s.variantSelections[key]
       }),
     )
   }
@@ -2009,7 +2012,11 @@ export const SessionProvider: ParentComponent = (props) => {
     })
 
     if (!message.sessionID && message.draftID) {
-      if (draftSessionID() !== message.draftID) agentDrafts.prune(message.draftID)
+      // An abandoned draft releases its full owned state; the active draft
+      // and a draft with another submission still in flight keep their picks
+      // (the helper's deletes are not active-guarded like agentDrafts.prune).
+      // finishSubmission above removed the failed submission already.
+      if (draftSessionID() !== message.draftID && !isSubmitting(message.draftID)) pruneDraftState(message.draftID)
     }
   }
 
