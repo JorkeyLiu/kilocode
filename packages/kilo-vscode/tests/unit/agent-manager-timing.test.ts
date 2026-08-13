@@ -95,6 +95,67 @@ function createDisposeManager(): DisposeManager {
   return manager
 }
 
+type LifecycleManager = {
+  connectionService: { getClient: () => unknown }
+  managedSessions: Map<string, { id: string }>
+  panelSessions: Set<string>
+  timing: SessionTiming
+  getRoot: () => string | undefined
+  pushState: () => void
+  log: (...args: unknown[]) => void
+  onCloseSession: (sessionId: string) => Promise<void>
+  onRequestState: () => void
+  onSessionStatus: (event: unknown) => void
+  panel: { postMessage: (msg: unknown) => void; sessions: { refreshSessions: () => Promise<void> } }
+  stateReady: Promise<void>
+  cachedLocalStats?: unknown
+  tabOrder: Record<string, string[]>
+  sessionsCollapsed: boolean
+  sidebarCollapsed: boolean
+  run: { state: () => Record<string, unknown> }
+  statsPoller: { setEnabled: (enabled: boolean) => void }
+}
+
+/**
+ * Provider seam with a real SessionTiming (injected clock/store) and the real
+ * prototype onCloseSession/onRequestState/pushState, so close/reopen lifecycle
+ * tests exercise the actual provider behavior instead of re-implementing it.
+ */
+function createLifecycleManager() {
+  const { store, data } = fakeStore()
+  const clock = { value: 20_000_000 }
+  const timing = new SessionTiming(store, () => clock.value)
+  const captured: unknown[] = []
+  const client = {
+    backgroundProcess: {
+      stopSession: mock(async () => ({ data: {} })),
+    },
+  }
+  const manager = Object.create(AgentManagerProvider.prototype) as LifecycleManager
+  manager.connectionService = { getClient: () => client }
+  manager.managedSessions = new Map()
+  manager.panelSessions = new Set()
+  manager.timing = timing
+  manager.getRoot = () => "/repo"
+  manager.panel = {
+    postMessage: (msg) => captured.push(msg),
+    sessions: { refreshSessions: mock(async () => undefined) },
+  }
+  manager.stateReady = Promise.resolve()
+  manager.cachedLocalStats = undefined
+  manager.tabOrder = {}
+  manager.sessionsCollapsed = false
+  manager.sidebarCollapsed = false
+  manager.run = { state: () => ({}) }
+  manager.statsPoller = { setEnabled: mock(() => undefined) }
+  manager.pushState = () => {
+    const proto = AgentManagerProvider.prototype as unknown as { pushState: (this: LifecycleManager) => void }
+    proto.pushState.call(manager)
+  }
+  manager.log = mock(() => undefined)
+  return { manager, timing, clock, captured, store, data }
+}
+
 describe("AgentManagerProvider timing wiring", () => {
   it("applies session.status events and pushes fresh state", () => {
     const manager = createManager()
@@ -169,25 +230,133 @@ describe("AgentManagerProvider timing wiring", () => {
     manager.onSessionDeleted({ type: "session.deleted", properties: { sessionID: "s1" } })
     await manager.timing.wait()
     expect(manager.timing.snapshot()).toEqual({ s2: { elapsedMs: 0, activeStart: 1_000_000 } })
+    // The pruned map is durably persisted, so the deletion survives restarts.
+    expect(store.data.get(TIMING_KEY)).toEqual({ s2: { elapsedMs: 0, activeStart: 1_000_000 } })
   })
 
-  it("prunes timing when a session is forgotten", () => {
+  it("prunes timing when a session is explicitly forgotten", () => {
+    // forgetSession is the explicit permanent-forget counterpart of
+    // persistSession (the session leaves the manager's persisted registry),
+    // not the tab-close path, so its timing entry goes with it.
     const manager = createManager()
     manager.onSessionMessage({ type: "agentManager.forgetSession", sessionId: "s1" }, {})
     expect(manager.managedSessions.has("s1")).toBe(false)
     expect(manager.timing.forget).toHaveBeenCalledWith("s1")
   })
 
-  it("prunes timing when a session is closed", async () => {
-    const manager = createManager()
-    manager.onCloseSession = async (sessionId: string) => {
-      manager.managedSessions.delete(sessionId)
-      manager.timing.forget(sessionId)
-      manager.pushState()
-    }
+  it("elapsed survives the real close handler; reopening pushes the retained snapshot", async () => {
+    const { manager, timing, clock, captured } = createLifecycleManager()
+    manager.managedSessions.set("s1", { id: "s1" })
+    manager.panelSessions.add("s1")
+
+    // busy → idle accumulates settled time for the real session.
+    timing.onStatus("s1", "busy")
+    clock.value = 20_000_100
+    timing.onStatus("s1", "idle")
+    expect(timing.snapshot().s1).toEqual({ elapsedMs: 100 })
+
+    // Tab close: stops processes and removes the managed entry, but the
+    // backend session persists, so the timing entry must survive.
     await manager.onCloseSession("s1")
     expect(manager.managedSessions.has("s1")).toBe(false)
-    expect(manager.timing.forget).toHaveBeenCalledWith("s1")
+    expect(timing.snapshot()).toEqual({ s1: { elapsedMs: 100 } })
+
+    // Reopen: the state push carries the retained extension snapshot so the
+    // webview never falls back to a local busySince anchor.
+    manager.managedSessions.set("s1", { id: "s1" })
+    manager.pushState()
+    const msg = captured[captured.length - 1] as { type: string; timing?: Record<string, { elapsedMs: number }> }
+    expect(msg.type).toBe("agentManager.state")
+    expect(msg.timing).toEqual({ s1: { elapsedMs: 100 } })
+  })
+
+  it("keeps the active busy anchor across close/reopen without restarting it", async () => {
+    const { manager, timing, clock } = createLifecycleManager()
+    manager.managedSessions.set("s1", { id: "s1" })
+    manager.panelSessions.add("s1")
+
+    timing.onStatus("s1", "busy")
+    expect(timing.snapshot().s1).toEqual({ elapsedMs: 0, activeStart: 20_000_000 })
+
+    await manager.onCloseSession("s1")
+    // Reopen later while the backend session is still busy.
+    clock.value = 20_000_200
+    manager.managedSessions.set("s1", { id: "s1" })
+    manager.pushState()
+
+    // A duplicate busy at reopen is idempotent: the anchor is untouched, so
+    // the running segment keeps counting from the original start, not the
+    // view-open time.
+    expect(timing.onStatus("s1", "busy")).toBe(false)
+    expect(timing.snapshot().s1).toEqual({ elapsedMs: 0, activeStart: 20_000_000 })
+
+    clock.value = 20_000_500
+    timing.onStatus("s1", "idle")
+    expect(timing.snapshot().s1).toEqual({ elapsedMs: 500 })
+  })
+
+  it("isolates elapsed values across A/B switch and close sequences", async () => {
+    const { manager, timing, clock } = createLifecycleManager()
+    manager.managedSessions.set("s1", { id: "s1" })
+    manager.managedSessions.set("s2", { id: "s2" })
+    manager.panelSessions.add("s1")
+    manager.panelSessions.add("s2")
+
+    // A runs 0→100, then B runs 100→300.
+    timing.onStatus("s1", "busy")
+    clock.value = 20_000_100
+    timing.onStatus("s1", "idle")
+    timing.onStatus("s2", "busy")
+    clock.value = 20_000_300
+    timing.onStatus("s2", "idle")
+
+    // Close and reopen A; A accumulates a further 0→50. B is untouched.
+    await manager.onCloseSession("s1")
+    manager.managedSessions.set("s1", { id: "s1" })
+    clock.value = 20_000_400
+    timing.onStatus("s1", "busy")
+    clock.value = 20_000_450
+    timing.onStatus("s1", "idle")
+
+    expect(timing.snapshot()).toEqual({
+      s1: { elapsedMs: 150 },
+      s2: { elapsedMs: 200 },
+    })
+  })
+
+  it("recovers the extension timing snapshot after a reload request", async () => {
+    const { manager, timing, clock, captured } = createLifecycleManager()
+    manager.managedSessions.set("s1", { id: "s1" })
+    manager.panelSessions.add("s1")
+
+    timing.onStatus("s1", "busy")
+    clock.value = 20_000_100
+    timing.onStatus("s1", "idle")
+    await manager.onCloseSession("s1")
+
+    // Webview reload: the panel requests state and the push must carry the
+    // retained snapshot. Without it the webview would anchor at local
+    // busySince/open time and lose the cumulative total.
+    captured.length = 0
+    manager.onRequestState()
+    await Promise.resolve()
+    await Promise.resolve()
+    const msg = captured[captured.length - 1] as { type: string; timing?: Record<string, { elapsedMs: number }> }
+    expect(msg.type).toBe("agentManager.state")
+    expect(msg.timing).toEqual({ s1: { elapsedMs: 100 } })
+  })
+
+  it("duplicate busy after reopen pushes no redundant state", async () => {
+    const { manager, timing } = createLifecycleManager()
+    manager.managedSessions.set("s1", { id: "s1" })
+    manager.panelSessions.add("s1")
+    timing.onStatus("s1", "busy")
+    await manager.onCloseSession("s1")
+    manager.managedSessions.set("s1", { id: "s1" })
+    manager.pushState()
+    manager.pushState = mock(() => undefined)
+    manager.onSessionStatus({ properties: { sessionID: "s1", status: { type: "busy" } } })
+    expect(manager.pushState).not.toHaveBeenCalled()
   })
 
   it("settles timing during the real extension-shutdown dispose path", async () => {

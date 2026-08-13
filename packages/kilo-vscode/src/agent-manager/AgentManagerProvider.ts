@@ -114,8 +114,8 @@ export class AgentManagerProvider implements Disposable {
       (event) => this.onSessionStatus(event),
     )
     // Prune timing state when the backend deletes a session (external delete,
-    // sidebar delete, or CLI/TUI cascade). Sessions forgotten/closed in the
-    // Agent Manager prune via forgetSession/onCloseSession instead.
+    // sidebar delete, or CLI/TUI cascade). Tab close is view lifecycle only
+    // and retains timing; an explicit Agent Manager forgetSession prunes.
     this.unsubDeleted = this.connectionService.onEventFiltered(
       (event) => (event as { type?: string }).type === "session.deleted",
       (event) => this.onSessionDeleted(event),
@@ -140,8 +140,10 @@ export class AgentManagerProvider implements Disposable {
 
   /**
    * Prune timing state when the backend deletes a session (external delete,
-   * sidebar delete, or CLI/TUI cascade). Sessions forgotten/closed in the
-   * Agent Manager prune via forgetSession/onCloseSession instead.
+   * sidebar delete, or CLI/TUI cascade). This is the reliable permanent
+   * deletion boundary: the entry must survive view lifecycle (tab close,
+   * panel hide, reload), so only this path forgets on a backend deletion.
+   * An explicit Agent Manager forgetSession prunes directly instead.
    */
   private onSessionDeleted(event: unknown): void {
     const sid = (event as { properties?: { sessionID?: string } }).properties?.sessionID
@@ -292,6 +294,9 @@ export class AgentManagerProvider implements Disposable {
       if (persist) {
         if (!this.managedSessions.has(m.sessionId)) this.addSession(m.sessionId)
       } else {
+        // Explicit permanent forget (counterpart of persistSession): the
+        // session leaves the manager's persisted registry, so its timing
+        // entry goes with it. This is not the tab-close path.
         this.managedSessions.delete(m.sessionId)
         this.timing.forget(m.sessionId)
       }
@@ -536,7 +541,12 @@ export class AgentManagerProvider implements Disposable {
 
   // Session actions
 
-  /** Close a session: stop backend processes and remove from managed state. */
+  /**
+   * Close a session: stop backend processes and remove from managed state.
+   * View lifecycle only — the backend session persists, so the cumulative
+   * runtime is deliberately retained across tab close and pruned only on a
+   * real backend session.deleted (or an explicit forgetSession).
+   */
   private async onCloseSession(sessionId: string): Promise<void> {
     this.panelSessions.delete(sessionId)
     const root = this.getRoot() ?? ""
@@ -547,7 +557,6 @@ export class AgentManagerProvider implements Disposable {
       this.log(`Failed to stop session processes for ${sessionId}:`, err)
     }
     this.managedSessions.delete(sessionId)
-    this.timing.forget(sessionId)
     this.pushState()
   }
 

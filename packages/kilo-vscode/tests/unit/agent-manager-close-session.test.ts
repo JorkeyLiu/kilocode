@@ -48,6 +48,9 @@ describe("AgentManagerProvider closeSession", () => {
     expect(manager.managedSessions.has("s1")).toBe(false)
     expect(manager.panelSessions.has("s1")).toBe(false)
     expect(manager.pushState).toHaveBeenCalled()
+    // Tab close is view lifecycle: the backend session persists, so timing
+    // must be retained. Only backend session.deleted or explicit forget prunes.
+    expect(manager.timing.forget).not.toHaveBeenCalled()
   })
 
   it("handles stopSessionProcesses failure gracefully", async () => {
@@ -75,5 +78,6 @@ describe("AgentManagerProvider closeSession", () => {
     expect(manager.managedSessions.has("s1")).toBe(false)
     expect(manager.panelSessions.has("s1")).toBe(false)
     expect(manager.pushState).toHaveBeenCalled()
+    expect(manager.timing.forget).not.toHaveBeenCalled()
   })
 })
