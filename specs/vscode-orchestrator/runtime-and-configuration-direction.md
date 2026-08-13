@@ -3,14 +3,15 @@
 ## Goal
 
 Internal technical specification for replacing the CLI-owned configuration and
-runtime authority with an extension-owned private runtime and GUI-owned
-configuration for the VS Code Agent Orchestrator. It explains why the current
-architecture produces the observed startup and config problems, defines the target
-ownership domains so every datum has one owner and one persistence path, defines
-the custom-provider-only boundary, the config update semantics, the startup
-acceptance criteria, and a no-big-bang migration strategy with an explicit
-deadline. A fresh session must be able to read this file and continue the work
-without rediscovering the decisions, root causes, ownership domains, or phases.
+runtime authority with an extension-owned private runtime and file-authoritative
+GUI-managed configuration for the VS Code Agent Orchestrator. It explains why
+the current architecture produces the observed startup and config problems,
+defines the target ownership domains so every datum has one owner and one
+persistence path, defines the custom-provider-only boundary, the config update
+semantics, the startup acceptance criteria, and a no-big-bang migration strategy
+with an atomic legacy-reader cutover at P4.3 (no dual-read window, no import). A
+fresh session must be able to read this file and continue the work without
+rediscovering the decisions, root causes, ownership domains, or phases.
 
 The durable decisions are recorded in
 [ADR-0003: Replace CLI Configuration with Private GUI Runtime](../adr/0003-replace-cli-configuration-with-private-gui-runtime.md)
@@ -36,11 +37,22 @@ This spec owns:
   They are distinct and neither side claims the other.
 - Target ownership domains: every datum has one owner and one persistence path
   (section 3).
+- The legal source taxonomy and field registry: the closed set of authored
+  inputs that may contribute to effective config — the file-authoritative hybrid
+  with exactly two canonical authored scopes (one global config root and
+  `<workspaceRoot>/.kilo/`) — and the registry that assigns every configurable
+  field class one owner, one persistence path, one composition operator, and one
+  removal disposition (sections 3.1, 3.2).
 - The provider target: custom provider records only (section 4).
 - Configuration update semantics and lifecycle: atomic version creation,
   generation snapshot pinning, action-specific readiness, resource version
   ownership/disposal, rollback/error behavior, validation before commit, and no
   active-generation interruption (section 5).
+- The config authority and materialization contract: canonical file/asset
+  authority (file-authoritative hybrid), typed composition, deterministic
+  materialization, provenance, agent-manifest role, restrictive permission
+  composition, the bidirectional file-editing/WYSIWYG contract, and
+  effective-config source removal disposition (sections 5.1-5.4, 8.1).
 - Startup acceptance: persisted selectors before worker readiness, no global
   disable, visible reconciliation, cold/warm instrumentation, no autocomplete
   prewarm dependency (section 6).
@@ -48,7 +60,12 @@ This spec owns:
   rewrite (section 7).
 - The removal checklist for all LOCK-002/003/004/006 removals with evidence
   categories (section 8).
-- Bounded implementation decisions that P0/P1 must resolve (section 9).
+- Bounded implementation decisions, resolved with objective evidence before the
+  affected phase can exit (section 9).
+- The observation/hydration contract: runtime sole authority for operational
+  facts; extension/webview state is derived presentation/read-model state;
+  snapshot/revision/event convergence across transport reconnect and worker
+  restart (section 7.1).
 - The performance model: cost attribution, redundancy candidates, latency
   attribution, instrumentation plan, benchmark scenarios, regression gates, and
   runtime-slimming acceptance criteria (section 10).
@@ -103,6 +120,18 @@ Evidence:
 
 - `packages/opencode/src/config/config.ts` - `mergeConfig`, `mergeConfigConcatArrays`,
   `loadFile`, per-source merge steps.
+- `packages/opencode/src/config/agent.ts` - agent markdown is scanned from
+  `{agent,agents}/**/*.md` (`Glob.scan`, line 30), parsed through the shared
+  config-object schema (`ConfigMarkdown.parse`), and merged per-field with
+  config-defined agents; per-agent permissions are merged onto defaults via
+  `Permission.merge` (`packages/opencode/src/agent/agent.ts:330,351`).
+- `packages/opencode/src/permission/index.ts` - `evaluate` picks the last
+  matching rule with `findLast` (lines 107-113): last-match-wins within the
+  flattened rulesets; `resolve` layers base/session/saved overrides.
+- `packages/opencode/src/agent/subagent-permissions.ts` - a subagent's session
+  inherits the parent agent's `deny` edit rules and default-denies
+  `task`/`todowrite` when absent (lines 23-33), while session restrictions are
+  session-scoped.
 - `packages/kilo-docs/pages/contributing/architecture/cli-runtime.md` - "Config
   precedence" table (12 rows) and "Config update lifecycle".
 
@@ -171,36 +200,102 @@ Evidence:
 
 | Topic | Current (evidence, section 2) | Target (decision, ADR-0003 + this spec) |
 |---|---|---|
-| Config authority | CLI backend merges 12+ sources (2.2) | GUI-owned configuration, one canonical project boundary (section 3) |
-| Config application | Cold saves rebuild directory-keyed identities through convergence (2.4) | Immutable versioned snapshots; atomic version creation; no active-generation interruption (section 5) |
+| Config authority | CLI backend merges 12+ sources (2.2) | File-authoritative hybrid: canonical config files/assets under one global config root and `<workspaceRoot>/.kilo/`; the GUI is a bidirectional editor/read model over them (sections 3-3.2, 5.1, 5.4) |
+| Config application | Cold saves rebuild directory-keyed identities through convergence (2.4) | Deterministic materialization to immutable versioned snapshots; typed composition; no active-generation interruption (sections 5, 5.1) |
+| Effective-config input | Right-biased deep merge; global/project file load order conflicts with the write-target preference; root-file and config-dir loaders disagree; overlay provenance collapses many sources to `system` (2.2) | Closed legal source taxonomy; schema-declared composition operators replace generic merge/last-writer-wins (sections 3.1, 5.1) |
 | Providers | Preset catalogs + config + auth + organization sources (2.3) | User-defined/custom provider records only (section 4) |
 | Selector readiness | Backend spawn -> SSE -> HTTP fetch -> UI enable (2.5) | Persisted indexes before worker readiness; action-specific gates (section 6) |
 | Runtime process | General `kilo serve` child with public HTTP/SSE/SDK surface (2.1) | Extension-owned private headless worker; private transport (section 7) |
+| Agent definitions | Agent markdown shares the config-object schema and merges per-field with config-defined agents; per-agent permission currently overrides global user policy (2.2) | Typed canonical agent manifests: agent markdown retained as a canonical project/global asset, one manifest per ID; duplicate/conflict fails validation, never widens enclosing policy (section 5.2) |
+| Permission evaluation | Last-match-wins within flattened layers; session tool toggles can weaken non-mode agent denies; `question` and legacy `mcp` rules have enforcement ambiguity (2.2) | Restrictive policy stack with monotonic deny/ask/allow composition; provenance identifies contributing policies and the decisive rule (section 5.3) |
 
 ## 3. Target State Ownership Domains
 
 Every datum has exactly one owner and one persistence path. No datum is owned by
-two stores, and no store is authoritative for two owners' data.
+two stores, and no store is authoritative for two owners' data. The model is a
+file-authoritative hybrid (LOCK-010): all user-authored effective configuration is
+file-authoritative and WYSIWYG through the UI, under exactly two canonical
+authored scopes.
 
-| Domain | Owner | Persistence path | Examples |
+Canonical scopes and legal inputs (effective-config inputs):
+
+| Domain | Owner | Persistence path | Legal contents |
 |---|---|---|---|
-| Extension application state | Extension host | VS Code storage APIs (workspace/global state) | Product/UI configuration, persisted selector indexes (models, agents), panel layout, UI options |
-| Secrets | Extension host | VS Code SecretStorage | Provider API keys, auth tokens, credentials |
-| Project-versioned harness assets | Extension host (canonical boundary) | One canonical explicit project asset path — resolved (2026-08-12, R5): first VS Code workspace root, assets only under `<workspaceRoot>/.kilo/` (section 9) | Project agent definitions, project-level harness configuration; no multi-source precedence merge |
-| Session and storage state | Runtime (harness kernel) | Runtime-owned persistence (existing session/storage semantics, ADR-0001 for storage rewriting) | Sessions, events, artifacts, transcript data |
-| Immutable runtime snapshot | Runtime (harness kernel) | Versioned snapshots created atomically on config commit | Effective config + runtime identity consumed by generations |
+| Canonical global config files/assets | User authoring; extension host (GUI) reads/writes on the user's behalf | One canonical global config root (file system) | Global-effective config fields and global typed assets (for example global agent markdown, commands, rules, skills) per the field registry |
+| Canonical project config files/assets | User authoring; extension host (canonical boundary) | First VS Code workspace root, assets only under `<workspaceRoot>/.kilo/` (R5) | Project-effective config fields and project typed assets (for example agent markdown, commands, skills, project MCP/tool declarations) per the field registry |
+| Secrets | Extension host | VS Code SecretStorage | Credentials only, referenced by opaque IDs |
+| Runtime defaults and safety invariants | Versioned runtime schema | Schema (versioned) | Defaults and safety invariants, never user-authored overlays |
+
+Documented separately — not effective-config inputs:
+
+| Domain | Owner | Persistence path | Legal contents |
+|---|---|---|---|
+| VS Code application state | Extension host | VS Code `globalState` / `workspaceState` | UI-only layout/churn, dismissed state, derived selector/read-model indexes; never effective-config authority |
+| Session and storage state | Runtime (harness kernel) | Runtime-owned persistence (existing session/storage semantics, ADR-0001 for storage rewriting) | Sessions, events, artifacts, transcript data, operational facts |
+| Permission approval records | Runtime (per-session) | Runtime-owned per-session records | Explicit operation approvals with bounded scope/lifetime (section 5.3); never authored config |
+| Immutable runtime snapshot | Runtime (harness kernel) | Derived versioned value, created atomically on config commit | Effective config + runtime identity consumed by generations; derived, not a second persisted store (R2) |
 | Private worker resources | Private worker (per version, lazy) | Version-scoped resource ownership | Provider/MCP/tool resources; disposed only after owners release them |
 
 Rules:
 
-- GUI-owned means extension application state with appropriate VS Code storage
-  APIs, not necessarily VS Code settings.json; complex records and secrets never
-  live in settings.json (ADR-0003, LOCK-010).
-- The runtime never merges project assets with other sources; it consumes the
-  immutable snapshot built from the canonical boundary.
+- File-authoritative hybrid: every effective setting has canonical file/asset
+  provenance; the UI is a bidirectional editor/read model over canonical
+  files/assets, not a separate config store (section 5.4). Complex records and
+  secrets never live in VS Code settings.json; `globalState`/`workspaceState`
+  are UI-local/derived only and are never effective-config authority (ADR-0003,
+  LOCK-010).
+- The runtime never merges canonical files with other sources; it consumes the
+  immutable snapshot built from the canonical inputs of the two authored scopes
+  plus schema defaults and opaque secret references.
 - Resource lifecycle follows version ownership: replacement is version-scoped and
   lazy, and old resources are disposed only after their owners release them
   (LOCK-011).
+- Derived snapshots are versioned values, not a second persisted store; their
+  identity includes canonical file content, the schema version, and opaque
+  secret references — never UI state (sections 5.1, 9 R2).
+
+### 3.1 Legal source taxonomy
+
+The set of authored inputs that may contribute to effective config is closed and
+typed. Every datum belongs to exactly one category below; a datum that is not
+assigned to one of them is invalid until its ownership is decided.
+
+| # | Source class | Owner | Persistence | Legal contents |
+|---|---|---|---|---|
+| 1 | Canonical global config files/assets | User authoring; extension host (GUI) reads/writes on the user's behalf | One canonical global config root | Global-effective config fields and global typed assets (for example global agent markdown, commands, rules, skills) per the field registry (section 3.2) |
+| 2 | Canonical project config files/assets | User authoring; extension host (canonical boundary) | `<workspaceRoot>/.kilo/` (R5) | Project-effective config fields and project typed assets (for example agent markdown, commands, skills, project MCP/tool declarations) per the field registry (section 3.2) |
+| 3 | SecretStorage credentials | Extension host | VS Code SecretStorage | Credentials only, referenced by opaque IDs |
+| 4 | Runtime defaults and safety invariants | Versioned runtime schema | Schema (versioned) | Defaults and safety invariants, never user-authored overlays |
+
+The two authored scopes (rows 1-2) are the only canonical authored scopes:
+global-only, project-only, or both-with-typed-composition per field is decided by
+the field registry (section 3.2); agent markdown is retained as a typed
+canonical project/global asset with one manifest per ID (section 5.2).
+
+Not effective-config inputs (documented separately in section 3): VS
+Code `globalState`/`workspaceState` (UI-only layout/churn, dismissed state,
+derived selector/read-model indexes), runtime/session storage (operational facts
+and session state), and bounded permission approval records (explicit operation
+records). There is no arbitrary external path or ancestor source: generic
+compatibility readers/overlays, `KILO_CONFIG*`/`KILO_PERMISSION` overrides,
+`.opencode`/`.kilocode` locations, ancestor directory walks, cloud/org/managed
+config, legacy global config filenames/readers, top-level `mode`/`tools`
+conversions, and arbitrary CLI/env override layers are removed as sources
+(sections 5.1, 8.1). Explicit session/request intent is an operation against a
+materialized snapshot, not another config source (section 5.1).
+
+### 3.2 Field registry
+
+Every configurable field class has a registry entry before P4.1 exits (R10,
+section 9): canonical schema path, owner/storage, legal scope (global-only,
+project-only, or both-with-typed-composition), composition operator, validation,
+secret handling, generation-snapshot inclusion, provenance, and removal
+disposition (deletion at the P4.3 cutover with no target reader — there is no
+migration/import disposition). The registry is the enforcement surface for one
+datum/one owner/one persistence path and for file/asset provenance: no
+unregistered or deprecated key is silently accepted, no field class reads from
+more than one legal source class (section 3.1), and every effective setting
+resolves to canonical file/asset provenance (section 5.1).
 
 ## 4. Provider Target
 
@@ -215,17 +310,23 @@ Rules:
   provider; they are not preset providers and carry no bundled identity, catalog,
   onboarding, or organization data.
 - Persisted selector indexes (models and agents, LOCK-012) are derived from
-  user-defined provider records and agent definitions owned by the extension
-  (section 3), so selection does not depend on the worker being ready.
+  user-defined provider records and agent manifests in the canonical files/assets
+  (section 3.1), so selection does not depend on the worker being ready; the
+  indexes are UI-local/derived state, never effective-config authority (section
+  3, R2).
 - Runtime connection and validation of a user-defined provider is a separate,
   action-specific readiness concern (section 5 and 6); it never globally disables
   selection.
 
 ## 5. Configuration Update Semantics And Lifecycle
 
-- Validation before commit: an update is validated against the schema and, where
-  meaningful, against the resources it targets before a new version is committed.
-  A failed validation aborts the update; the prior version stays authoritative.
+- Validation before commit: an update is validated against the versioned runtime
+  schema (section 5.1) and, where meaningful, against the resources it targets
+  before a new version is committed. A failed validation aborts the update; the
+  prior version stays authoritative.
+- Typed composition: field values compose only through the schema-declared
+  operator for that field (section 5.1); generic deep merge and last-writer-wins
+  are not the target model.
 - Atomic version creation: every committed update creates a new immutable version
   with a monotonic sequence. Versions are never mutated in place.
 - Generation snapshot pinning: a generation keeps the exact version it started
@@ -244,6 +345,157 @@ Rules:
   instrumentation (section 6) without erasing user choice.
 - Action-specific readiness: a feature gates on the specific version and resources
   it needs, not on a global readiness event (LOCK-012).
+
+### 5.1 Config authority and deterministic materialization
+
+- Canonical schema authority: one versioned runtime schema is the single
+  authority for field identity, validation, defaults, safety invariants, and
+  per-field composition operators. The schema version participates in every
+  materialization: the same canonical inputs at the same schema version produce
+  the same snapshot identity/hash. Snapshot identity comprises canonical file
+  content, the schema version, and opaque secret identity/references as
+  appropriate — never UI state (LOCK-010). Every effective setting has canonical
+  file/asset provenance.
+- Deterministic materialization, not a runtime merge: all canonical records and
+  assets (section 3.1) are validated together and one immutable, versioned
+  generation snapshot is emitted, or the update is rejected. The snapshot
+  includes the resolved agent manifest/prompt, effective permission policy,
+  tool/skill/MCP availability and declarations, custom-provider/model references,
+  and the runtime options a generation needs. Secrets remain opaque references
+  resolved through SecretStorage ownership as appropriate. After a failure there
+  is no partial fallback to stale or legacy values.
+- Typed composition: composition never uses generic deep merge or last-writer-wins
+  (LOCK-011 target model). Each field composes only through its schema-declared
+  operator, which is one of: single value (duplicate/conflict is a validation
+  error), keyed collection by stable ID (duplicate-ID conflict is an error unless
+  the schema explicitly defines replacement), ordered list (ordering defined by
+  the schema), or restrictive policy composition (section 5.3). There is no
+  generic fallback precedence.
+- Provenance and explainability: effective-config and permission decisions are
+  explainable. Machine-inspectable provenance identifies the schema version, the
+  canonical owner/input (file/asset), explicit vs default status, the composition
+  operator, and the decisive conflict or policy rule. Validation/conflict and
+  diagnostic surfaces are acceptance requirements, not later UI options.
+- Env/CLI disposition: no generic compatibility reader or overlay is an
+  effective-config source: `KILO_CONFIG`, `KILO_CONFIG_DIR`,
+  `KILO_CONFIG_CONTENT`, `KILO_PERMISSION`, legacy `opencode.*` keys,
+  `.kilocode`/`.opencode` locations, ancestor directory walks, cloud/org/managed
+  config sources, legacy global config filenames/readers, top-level `mode`/`tools`
+  conversions, and arbitrary CLI/env override layers are removed as sources
+  (section 8.1). There is no migration/import tool and no dual-read compatibility
+  window: before the P4.3 cutover the current implementation may still read
+  legacy sources; at the cutover all legacy readers are deleted together and
+  cannot affect effective config (sections 7, 8.1; R6 revised 2026-08-13). The
+  sole user manually recreates any desired current configuration in the
+  canonical files before the cutover. Private-worker bootstrap/diagnostic
+  process parameters are not configuration sources.
+
+### 5.2 Agent manifests
+
+- Agent markdown is retained as a typed canonical project/global asset (section
+  3.1), not a second general config source: a schema-defined manifest with one
+  manifest per agent ID; duplicate IDs or conflicting definitions fail
+  validation. GUI-authored agents write these canonical manifests, so GUI edits
+  never bypass file provenance (section 5.4).
+- A manifest may define the agent prompt and schema-approved agent
+  specialization/defaults (for example model or tool defaults). It cannot own
+  provider credentials, product/global selector state, or weaken the enclosing
+  permission/safety policy (section 5.3).
+- Legacy mode/agent config keys and alternate agent directories have no target
+  reader: they are deleted at the P4.3 cutover, and any desired agents are
+  recreated manually as canonical manifests (no import; section 8.1). The exact
+  canonical asset path and schema for each agent field class are assigned in the
+  field registry (section 3.2, R10).
+
+### 5.3 Permission composition
+
+- Permission targets compose as a restrictive policy stack: runtime hard safety
+  ceilings, enclosing global/workspace policy, the selected agent manifest's
+  policy, and session restrictions compose monotonically. Deny at any applicable
+  enclosing layer wins; otherwise ask wins over allow when any applicable layer
+  requires confirmation; allow requires every applicable layer to permit the
+  action.
+- Agent manifests and session tool toggles may narrow permissions but never widen
+  enclosing restrictions. An explicit user approval may resolve an ask for its
+  bounded scope/lifetime but never overrides a deny or a hard safety ceiling.
+- Wildcard/rule ordering may exist within one owned policy document where the
+  schema defines it; later sources never override other policy layers.
+- MCP/skill/tool enablement is availability/capability discovery, not permission
+  authorization. Provenance for a permission decision identifies every
+  contributing policy and the decisive rule (section 5.1).
+
+Child sessions and inheritance:
+
+- Parent denies and session restrictions are enclosing for child sessions; a
+  parent's allow is not inherited by children. A child evaluates against the
+  enclosing global/project policy, its selected agent manifest, and its own
+  session restrictions (current baseline behavior already defaults a subagent to
+  denied `task`/`todowrite` and inherits the parent agent's `deny` edit rules —
+  `packages/opencode/src/agent/subagent-permissions.ts`).
+
+Question flow and tool distinction:
+
+- The free-form question flow (a runtime ask rendered to the user) and the
+  `question` tool (a harness tool a session invokes) are distinct targets:
+  permission evaluation treats them as separate permission strings with their own
+  registry entries (section 3.2), removing the current enforcement ambiguity
+  between `question` and legacy `mcp` rules.
+
+Approval records:
+
+- Explicit approvals are runtime-owned per-session operation records with bounded
+  scope/lifetime, by default not persisted beyond the session. A durable policy
+  change is authored config and is written to canonical files only through a
+  separate UI/file edit (section 5.4) — never as a side effect of answering an
+  ask. "Allow everything" is a per-session approval that resolves asks only; it
+  never overrides a deny or a hard safety ceiling.
+- No-rule default is ask. A session tool toggle-on changes availability only (it
+  creates no permission grant); toggle-off adds a session restriction.
+- Generated availability defaults (tool/skill/MCP availability inferred for the
+  selected agent) live at the selected-agent layer, below the enclosing
+  global/project policies.
+
+### 5.4 Bidirectional file editing and WYSIWYG acceptance
+
+The UI is a bidirectional editor/read model over canonical files/assets, not a
+separate config store (LOCK-010). There is exactly one effective-config
+representation: the canonical files/assets of section 3.1 plus schema defaults
+and opaque secret references. The UI never holds a second authoritative copy.
+
+- UI commits: a UI edit validates against the schema (section 5.1) and atomically
+  writes the canonical file(s); the deterministic materializer emits a new
+  version (section 5.1). A failed validation aborts the write and reports
+  file/field provenance; the prior valid snapshot stays authoritative.
+- External edits: canonical files are watched. An external file change is
+  validated, materialized into a new version, and reconciled visibly into the UI
+  without a manual reload. Active generations remain pinned to the snapshot they
+  started with; new readers/generations use the new valid snapshot (LOCK-011).
+- Draft conflicts: stale drafts are detected with content/version stamps. A stale
+  draft plus an external edit surfaces a visible conflict and never silently
+  overwrites the file.
+- Invalid external edits: an invalid external edit does not partially apply and
+  does not fall back to legacy values; it reports file/field provenance and
+  preserves the prior valid snapshot until corrected.
+- File deletion/unset: deletion of a canonical file or field maps to the
+  schema-defined unset/default handling (section 5.1), predictably and visibly.
+
+WYSIWYG acceptance semantics (gated at P4.1). These behavioral semantics
+are decided here; the exact UI presentation (dialogs, diff surfaces, notification
+wording, where each is shown) is a product decision under direction spec open
+question 5:
+
+- File-to-UI: external edits to canonical files are observed without manual
+  reload and rendered in the UI.
+- UI-to-file: UI writes preserve JSONC/markdown formatting where possible and are
+  atomic and validated.
+- Conflict: a stale draft plus an external edit gives a visible conflict, never a
+  silent overwrite.
+- Invalid external edits: never partially apply and never fall back to legacy
+  values; the prior valid snapshot is preserved.
+- Deletion/unset: file deletion and field unset map predictably to
+  schema-defined defaults.
+- Generation pinning: active generations retain the old snapshot; new
+  readers/generations use the new valid snapshot.
 
 ## 6. Startup Acceptance
 
@@ -270,35 +522,87 @@ rewrite. Each step is a phase with objective gates (tracked in
 
 1. Inventory: enumerate config sources (section 2.2), provider sources and loaders
    (2.3), readiness chain stages (2.5), and the removal surface list (section 8).
-   Baseline counts are recorded in the tracker.
-2. Local GUI read model: the extension owns persisted config and selector indexes
-   (section 3). The extension becomes the read-model authority for UI state.
-3. Dual-read with an explicit deadline: during the migration bridge the private
-   runtime consumes GUI-committed snapshots while the existing `kilo serve`
-   HTTP/SSE/SDK path still serves the bridge (LOCK-009 allows this as a migration
-   bridge, not a target contract). The window is time-boxed by an explicit
-   deadline — resolved (2026-08-12, R6): the deadline is the P4.3 phase boundary
-   itself (opens only during P4.3, shrinks monotonically, no new bridge
-   consumers, fully closed before P4.3 exits / P4.4 begins; section 9). No
-   permanent dual authority.
+   Baseline counts are recorded in the tracker. Enumerated sources are classified
+    against the legal source taxonomy (section 3.1) as legal or removed; there is
+    no migration-input class, and classification drives the removal
+    inventory (section 8.1).
+2. File-authoritative GUI read/write model: the extension owns the bidirectional
+   editor over canonical config files/assets (section 5.4) and the persisted
+   selector indexes derived from them (section 3). The extension becomes the
+   read-model authority for UI state, guided by the field registry (section 3.2)
+   so every field class has one owner and one persistence path before P4.1 exits.
+3. Legacy-reader cutover (no dual-read): there is no dual-read compatibility
+   window and no import tool. Until the P4.3 cutover the current implementation
+   may use the legacy sources it reads today; at the P4.3 phase boundary all
+   legacy readers are deleted together and can no longer influence effective
+   config (R6, revised 2026-08-13; sections 8.1, 9). The sole user manually
+   reconciles any desired current configuration into the canonical files before
+   the cutover; the extension provides no automatic migration.
 4. Private runtime entrypoint: an extension-owned private headless worker process
    outside the Extension Host (LOCK-009) with a snapshot API.
 5. Snapshot API: versioned immutable config/runtime snapshots (section 5) that
    generations consume; generated-SDK/public HTTP calls cease to be the
-   consumption path.
-6. Source removal: remove the 12-source merge, preset provider loaders and
-   catalog, and the convergence/rebuild machinery (sections 2.2-2.4); remove the
-   extension's wait-on-backend fetch chain (2.5).
-7. Transport narrowing: replace the HTTP/SSE/SDK surface with the private
+   consumption path. Snapshots are produced by the deterministic materializer
+   (section 5.1) from the canonical records/assets of section 3.1; snapshot
+   identity includes canonical file content, the schema version, and opaque
+   secret references — never UI state.
+6. Source removal (P4.4): remove the 12-source merge, preset provider loaders
+   and catalog, and the convergence/rebuild machinery (sections 2.2-2.4); remove
+   the extension's wait-on-backend fetch chain (2.5). The legacy readers
+   themselves were deleted together at the P4.3 cutover (step 3); P4.4 records
+   and verifies per-row inactive/removal evidence for every legacy
+   effective-config source class (section 8.1) — including legacy global config
+   filenames/readers and legacy migration readers — with disposition deletion
+   and no target reader; no generic compatibility reader survives.
+7. Transport narrowing (P4.4): replace the HTTP/SSE/SDK surface with the private
    transport; the generated SDK and public server surface stop being public
    interfaces. The private transport protocol is an internal implementation choice
    (bounded decision, section 9), not a compatibility contract.
-8. Old CLI/server deletion: delete the CLI/TUI/Console product surfaces and public
-   interfaces (LOCK-009) after the bridge deadline closes.
+8. Old CLI/server deletion (P4.5): delete the CLI/TUI/Console product surfaces and
+   public interfaces (LOCK-009) after the P4.3 cutover and the P4.4 transport
+   narrowing.
 
-Constraints: no permanent dual authority; the old path is deleted, not retained;
-every step has objective exit evidence in the tracker; canonical architecture docs
-change only when implementation lands (LOCK-013).
+Constraints: no dual-read window and no import; the old path is deleted, not
+retained; every step has objective exit evidence in the tracker; canonical
+architecture docs change only when implementation lands (LOCK-013). After the
+P4.3 cutover no generic compatibility reader or overlay is an effective-config
+source (sections 5.1, 8.1) — all legacy readers are deleted together — and P4.4
+records per-source removal evidence in the tracker. Operational facts about
+sessions/worker state are observed through the runtime observation and hydration
+contract (section 7.1) — distinct from the immutable config snapshot consumption
+path (step 5) — and the observation surface rides the private transport (R1)
+after the P4.4 transport narrowing.
+
+### 7.1 Runtime observation and hydration contract
+
+The runtime is the sole authority for operational facts about sessions and the
+worker: session existence and lifecycle state, message presence and ordering,
+state-transition timing, and resource ownership. Extension and webview state is
+derived presentation/read-model state: the UI renders and routes runtime
+operational facts and never invents, revises, or independently persists them.
+This is a one-owner constraint on the same basis as the section 3 ownership
+domains; it does not create a new persisted store.
+
+- Observation shape: operational facts are exposed to the extension/webview as
+  observational snapshots plus revisions/events. "Snapshot" here is an
+  observation of runtime state, distinct from the immutable config-generation
+  snapshots of section 5. Revisions/events are deltas over the same facts.
+- Occurrence vs receipt time: when semantics depend on it, a fact's occurrence
+  time is runtime-owned and distinguished from receipt/transport time; the
+  presentation side never reports transport time as the fact's own time.
+- Convergence: on transport reconnect and worker restart (and on panel
+  close/reopen, reload, and session switch, which are extension-owned view
+  lifecycle), the extension/webview read model converges to the runtime's current
+  operational facts via snapshot/revision/event resynchronization — no stale,
+  duplicated, or lost presentation state, and no UI-held fact surviving a view
+  lifecycle boundary.
+- Bounded, not prescriptive: this contract does not mandate event sourcing,
+  durable retention of every ephemeral fact, polling, a timer subsystem, or a
+  specific wire schema. The snapshot/event handshake, revision
+  scope/ordering/idempotency, and retention policy sufficient to meet
+  convergence are bounded implementation decisions (R9, section 9). The private
+  transport (R1) is the carrier after the P4.4 transport narrowing, but its wire
+  shape for observation is part of R9, not fixed here.
 
 ## 8. Removal Checklist
 
@@ -321,26 +625,71 @@ the item has recorded evidence; nothing removed is reclassified as deferred.
 | Autocomplete (LOCK-004) | Inline completions and commit-message generation | Present in repo | P3.4 |
 | Preset providers/catalog/onboarding/org sources (LOCK-006) | Preset provider identities, models.dev catalog, bundled gateway onboarding/auth, organization/cloud provider sources | Present in repo | P4.4 |
 
+### 8.1 Effective-config source removal
+
+Each row is a legacy effective-config source class (section 5.1) whose target
+disposition is deletion at the P4.3 cutover with no target reader: no import
+tool, no compatibility reader, and no dual-read window exists or will be created.
+Legacy readers are deleted together at the P4.3 cutover (section 7); the P4.4
+evidence phase records and verifies per-row inactive/removal evidence for all 13
+classes below. Any desired current values are manually recreated in the canonical
+files/assets of section 3.1 before the cutover (R6, revised 2026-08-13; section
+9). A row is complete only when every existing evidence category for the item
+records evidence (tracker section 7 rules) and the source is proven inactive — no
+read of that source affects effective config after the cutover, because its
+reader is deleted. The P0 baseline enumerates 15 current merge sources
+(inventory §6.1); each maps onto a retained legal source class (section 3.1) or
+exactly one of the 13 removal classes below, so no baseline source remains
+unclassified after P4.4. The tracker records per-row evidence and the P4.4
+counting method.
+
+| Source class | Disposition | Evidence phase |
+|---|---|---|
+| `KILO_CONFIG` env override | Delete; no target reader; desired values recreated in canonical files | P4.4 |
+| `KILO_CONFIG_DIR` env override | Delete; no target reader | P4.4 |
+| `KILO_CONFIG_CONTENT` env override | Delete; no target reader | P4.4 |
+| `KILO_PERMISSION` env override | Delete; no target reader; desired policy written to canonical policy files | P4.4 |
+| Legacy `opencode.*` keys, `.opencode` / `.kilocode` locations | Delete; no target reader | P4.4 |
+| Global project-asset sources | Delete; no target reader; project-versioned harness assets live only under `<workspaceRoot>/.kilo/` (R5) | P4.4 |
+| Ancestor directory walks | Delete; no target reader; the canonical project boundary is `<workspaceRoot>/.kilo/` (R5) | P4.4 |
+| Primary-worktree mirror reads | Delete; no target reader; effective config reads the first VS Code workspace root, never a primary-worktree mirror (R5) | P4.4 |
+| Cloud/org/managed config sources | Delete; no target reader | P4.4 |
+| Top-level `mode`/`tools` conversions | Delete; no target reader; desired agents/tools recreated as canonical typed assets | P4.4 |
+| Arbitrary CLI/env override layers | Delete; no target reader; private-worker bootstrap/diagnostic process parameters are not configuration sources | P4.4 |
+| Legacy global config filenames/readers | Delete; no target reader; the only global authored scope is the canonical global config root (section 3.1) | P4.4 |
+| Legacy migration readers/import tooling | Delete; no target reader; no migration tool exists or will be created | P4.4 |
+
 ## 9. Bounded Implementation Decisions
 
 These were intentionally not chosen at spec-writing time. They are recorded as
-implementation decisions that P0/P1 must resolve, with objective evidence,
-before the affected phase can exit. As of 2026-08-12, R1/R2/R5/R6/R8 are
-resolved with the decisions below (also recorded in the tracker, section 9);
-R3 (numeric startup SLA) and R4 (adoption thresholds) remain open; R7 remains
-open with required-by clarified (see row). The tracker (section 9) is the
-mutable status source; this table is the durable decision record.
+implementation decisions with objective evidence, before the affected phase can
+exit. As of 2026-08-12, R1/R2/R5/R6/R8 are resolved with the decisions below
+(also recorded in the tracker, section 9); R3 (numeric startup SLA) and R4
+(adoption thresholds) remain open; R7 remains open with required-by clarified
+(see row). R9 (observation/hydration implementation details) is added open on
+2026-08-13, required by P4.2 (see row). R10 (canonical schema/field-registry
+layout and exact persistence assignment) is added open on 2026-08-13, required
+by P4.1 (see row). The tracker (section 9) is the mutable
+status source; this table is the durable decision record.
+
+On 2026-08-13 R2 and R6 were revised by a post-P0 user clarification
+(file-authoritative hybrid configuration; atomic cutover instead of dual-read).
+The revised texts below are current; the original 2026-08-12 wording is
+preserved as historical evidence in the tracker (section 9) and in the P0
+checklist. P0 remains Complete; its recorded evidence is unchanged.
 
 | Decision | Bounded by | Required by | Resolved (2026-08-12) |
 |---|---|---|---|
 | R1 Private transport protocol | Internal implementation choice; not a compatibility contract (LOCK-009) | P4.2 (snapshot API + transport) | Resolved: JSON-RPC 2.0 over child-process stdio with standard Content-Length framing (`vscode-jsonrpc` precedent). One extension-owned worker child; initialize handshake replaces port detection/health; requests carry commands, notifications carry normalized event envelopes; stderr remains bounded diagnostics; EOF/process exit owns lifecycle. HTTP/SSE/generated SDK remains bridge-only and is deleted. No retained-terminal protocol commitment: terminal/worktree surfaces are not LOCK-008 harness invariants and are handled by their removal/migration scope |
-| R2 Storage engine for extension-owned state | Extension application state with VS Code storage APIs; complex records never in settings.json (LOCK-010) | P4.1 (GUI read model) | Resolved: extension-owned product/UI config + persisted selector indexes use VS Code `globalState`; per-workspace runtime-tracking state uses `workspaceState`; all secrets use `SecretStorage`; runtime-owned session/event/artifact persistence remains runtime-owned; immutable worker snapshots are derived versioned values, not a second persisted store |
+| R2 Storage engine for extension-owned state | Extension application state with VS Code storage APIs; complex records never in settings.json (LOCK-010) | P4.1 (file-authoritative read/write model) | Resolved (2026-08-12; **revised 2026-08-13**): canonical files/assets own effective config (one global config root and `<workspaceRoot>/.kilo/`, section 3.1); VS Code `globalState`/`workspaceState` own only UI-local/derived state (layout/churn, dismissed state, derived selector/read-model indexes); all secrets use `SecretStorage`; runtime-owned session/event/artifact persistence remains runtime-owned; immutable worker snapshots are derived versioned values — not a second persisted store — identified by canonical file content + schema version + opaque secret references, never by UI state. The original 2026-08-12 wording (product/UI config in `globalState`) is preserved as historical evidence in the tracker |
 | R3 Numeric startup SLA | Thresholds are a recorded product decision | P5 (startup acceptance) | Open |
 | R4 Adoption thresholds for removal timing | Evidence-driven product decision | P3 (product removal gates) | Open |
-| R5 Exact project harness-assets path | One canonical explicit project boundary (LOCK-010) | P4.1 | Resolved: one canonical project boundary = first VS Code workspace root; project-versioned harness assets live only under `<workspaceRoot>/.kilo/`, including `.kilo/kilo.json[c]`, agent/command/rules/skills/workflows/plans/config assets. P4.1 migrates root/legacy sources; P4.4 deletes ancestor walk, `.kilocode`/`.opencode`, global project-asset sources, and primary-worktree mirror reads. No multi-source precedence remains |
-| R6 Dual-read window deadline | Explicit deadline; no permanent dual authority (LOCK-009, section 7) | P4.3 | Resolved: no unsupported calendar date. The explicit deadline is the P4.3 phase boundary: dual-read opens only during P4.3, must shrink monotonically, gains no new bridge consumers, and must be fully closed before P4.3 exits / P4.4 begins. P4.4/P4.5 then delete source/transport/product code; no fallback read survives into P4.4 |
+| R5 Exact project harness-assets path | One canonical explicit project boundary (LOCK-010) | P4.1 | Resolved (2026-08-12): one canonical project boundary = first VS Code workspace root; project-versioned harness assets live only under `<workspaceRoot>/.kilo/`, including `.kilo/kilo.json[c]`, agent/command/rules/skills/workflows/plans/config assets. P4.1 establishes the canonical project files and field registry; the ancestor walk, `.kilocode`/`.opencode`, global project-asset sources, and primary-worktree mirror reads are deleted together at the P4.3 cutover, with per-row removal evidence recorded at P4.4. No multi-source precedence remains; no migration/import tool exists |
+| R6 Legacy-reader cutover (formerly: dual-read window deadline) | No dual authority and no compatibility window (LOCK-009; section 7) | P4.3 | Resolved (2026-08-12; **revised 2026-08-13**): there is no dual-read compatibility window and no import tool. P4.3 is the last legacy-reader phase boundary: the current implementation may use old sources only before the cutover; at the P4.3 boundary all legacy readers are deleted together and cannot influence effective config. The sole user manually reconciles any desired current configuration into canonical files before the cutover. The original 2026-08-12 decision (dual-read opens only during P4.3, shrinks monotonically, no new bridge consumers) is preserved as historical evidence in the tracker |
 | R7 Performance gate thresholds (startup stages, prompt-submit/first-token, stream-render, tool/permission, session-switch, config-update) | Recorded product/engineering decision; no invented numerics (LOCK-PERF-6) | Required by = before the first P3/P4/P5 performance gate that uses thresholds (and the P1/P2 no-regression gate if applicable), not the P0 baseline recording; threshold policy must be recorded before each affected phase starts/claims its gate, using comparable same-environment control evidence | Open — not a P0 blocker; P0 satisfies its component by recording descriptive runtime baselines (tracker section 8) |
 | R8 Benchmark tooling/harness choice | Internal implementation choice; not prescribed by this spec | P0 profiling tasks | Resolved: retain the existing two-harness tooling as the P0 and later comparison harness — Extension Host scenarios 1/2/3/4/5/10 under `packages/kilo-vscode/script/p0-bench/` (runner/merge/safety/provenance tools); backend scenarios 6/7/8/9/11/12/13 under `packages/opencode/test/benchmark/` (runner). Limitations recorded: manual-only, platform/environment/provenance scoped, backend in-process `Server.listen`/`AppLayer` only, n=5 descriptive |
+| R9 Observation/hydration implementation details (snapshot/event handshake; revision scope/ordering/idempotency; ephemeral-fact retention) | Bounded implementation decision; the normative contract (section 7.1) fixes the one-owner and lifecycle-convergence constraints but not the wire schema, event sourcing, polling, timer subsystems, or retention | P4.2 (the private-worker observation surface must not ship without it). Not a P0 blocker | Open — added 2026-08-13 |
+| R10 Canonical schema/field-registry layout and exact persistence assignment | The normative rules are fixed by this spec — legal source taxonomy (section 3.1), field-registry content (section 3.2), typed composition/materialization/provenance (section 5.1), agent-manifest role (section 5.2), permission composition (section 5.3), and the bidirectional file-editing/WYSIWYG contract (section 5.4). File/asset authority is fixed by R2 (revised 2026-08-13), and R10 is bounded within that topology: exact canonical filenames/layout, the registry entry per remaining field class, legal scope/operator per field, and watcher owner/stamping/conflict implementation details (section 5.4). It does not reopen file authority, the two-level authored scope set, the SecretStorage exception, or the no-migration decision | P4.1 (P4.1 is not verifiable until the registry covers every configurable field class and the schema/provenance/WYSIWYG contract is evidenced). Not a P0 blocker | Open — added 2026-08-13 |
 
 ## 10. Performance Model And Regression Gates
 
@@ -590,6 +939,28 @@ Gate rules:
   stay intact on every measured path.
 - Measurable net reduction in startup work, loaded services, and removed-feature
   initialization (LOCK-PERF-1, LOCK-PERF-3) before a removal phase exits.
+- Config-source removal evidence gate: P4.1 does not exit until the field
+  registry covers every configurable field class (section 3.2) and the
+  schema/provenance contract is evidenced (R10); P4.4 does not exit until each
+  legacy effective-config source (section 8.1, including legacy global config
+  filenames/readers and legacy migration readers) records per-row removal
+  evidence and is proven inactive, leaving the closed legal source taxonomy
+  (section 3.1) as the only input set.
+- WYSIWYG acceptance gate: P4.1 does not exit until the section 5.4 behavioral
+  semantics are evidenced — file-to-UI observation without manual reload; atomic,
+  validated UI-to-file writes preserving JSONC/markdown formatting where
+  possible; visible stale-draft conflicts (never silent overwrite); no partial
+  apply or legacy fallback on invalid external edits; predictable
+  deletion/unset; and generation pinning with new readers using the new valid
+  snapshot (LOCK-011).
+- Permission-evaluator gate: P4 does not exit until the permission evaluator
+  implements the section 5.3 restrictive policy stack — monotonic deny/ask/allow
+  composition, no widening, enclosing parent denies/session restrictions for
+  children with no parent-allow inheritance, runtime-owned per-session approval
+  records, and the question-flow vs `question`-tool distinction — and target
+  semantics are evidenced by a permission-evaluator test surface. P2's H-6
+  criterion proves current behavior/capability only (direction spec section 6)
+  and does not gate on section 5.3 semantics.
 - Estimates such as 20-40% or 30-50% startup reduction are hypotheses only and
   must not be used as acceptance claims (LOCK-PERF-6).
 
@@ -630,7 +1001,10 @@ A phase claims runtime slimming only with all of:
   section 6); no global `extensionDataReady` barrier; AppLayer/process-graph
   construction cost is measurably reduced against the P0 baseline.
 - Config: cold saves commit without process-global rebuild/convergence (target 0
-  passes) and never interrupt active generations (section 5, LOCK-011).
+  passes) and never interrupt active generations (section 5, LOCK-011); effective
+  config composes only from the closed legal source taxonomy (sections 3.1, 5.1),
+  every legacy effective-config source (section 8.1) is proven inactive, and the
+  section 5.4 WYSIWYG behavioral semantics are evidenced.
 - Harness: H-1..H-13 invariants and performance correctness preserved
   (LOCK-PERF-5) - delegation, tools, skills, MCP, permissions,
   parent-child/background/parallel sessions, persistence, SessionRevert+Snapshot,

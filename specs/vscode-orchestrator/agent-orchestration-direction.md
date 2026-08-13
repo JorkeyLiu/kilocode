@@ -17,8 +17,8 @@ The durable architecture decisions are recorded separately in
 (Status: Active). This document is the implementation source of truth for product
 direction, target surfaces, capability matrix, bounded target architecture,
 product migration phases, acceptance gates, compatibility policy, risks, and open
-questions. Runtime/config migration (private worker, GUI-owned configuration,
-immutable snapshots, startup readiness) is owned by
+questions. Runtime/config migration (private worker, file-authoritative
+GUI-managed configuration, immutable snapshots, startup readiness) is owned by
 [`runtime-and-configuration-direction.md`](runtime-and-configuration-direction.md)
 under ADR-0003.
 
@@ -45,7 +45,7 @@ project.
 | LOCK-007 | Retain checkpoint behavior defined as SessionRevert + Snapshot semantics: withdrawing/reverting a message restores affected code, with unrevert/cleanup and lifecycle correctness. Do not conflate this with ADR-0001 storage checkpoint/resync. |
 | LOCK-008 | Preserve core harness capabilities: custom agents, sub-task delegation, extensible tools, skills, MCP, permissions/questions, parent-child sessions, background/parallel execution, user-selected custom-provider models, persistence, lifecycle correctness, checkpoint rollback, and internal context-overflow reliability. Worktrees are not a harness invariant. |
 | LOCK-009 | Eliminate CLI/TUI/Console as products and public interfaces. Keep the agent runtime out of the VS Code Extension Host as an extension-owned private headless worker process for crash/resource/lifecycle isolation. The existing `kilo serve` HTTP/SSE/generated-SDK path may be a migration bridge, but it is not a target compatibility contract. The private transport remains an internal implementation choice. |
-| LOCK-010 | GUI-owned configuration is authoritative. Product/UI configuration and persisted selector indexes are extension-owned; secrets use VS Code SecretStorage; project-versioned harness assets use one canonical explicit project boundary and no multi-source precedence merge; the runtime consumes immutable versioned snapshots. |
+| LOCK-010 | GUI-managed file authority is authoritative (revised 2026-08-13: file-authoritative hybrid). All user-authored effective configuration is file-authoritative and WYSIWYG through the UI under exactly two canonical authored scopes — one global config root and `<workspaceRoot>/.kilo/` — with the field registry deciding global-only/project-only/both-with-typed-composition; the UI is a bidirectional editor/read model over canonical files/assets, not a separate config store. Product/UI configuration and persisted selector indexes are extension-owned (VS Code state is UI-local/derived only, never effective-config authority); secrets use VS Code SecretStorage; project-versioned harness assets use the one canonical explicit project boundary with no multi-source precedence merge; the runtime consumes immutable versioned snapshots. No migration/import tool and no dual-read compatibility window (runtime spec sections 3, 5.4, 7, 9). |
 | LOCK-011 | A generation keeps the exact config/runtime snapshot it starts with. A configuration update atomically creates a new version for later generations and must not interrupt active generations. Resource replacement (provider/MCP/tool resources) is version-scoped/lazy and old resources are disposed only after owners release them; avoid process-global rebuild/convergence as the target model. |
 | LOCK-012 | Model and agent selectors render from extension-owned persisted indexes before the private worker is ready. Runtime connection/validation is separate readiness and must not globally disable selection. Startup gates are action-specific, not one global `extensionDataReady` barrier. |
 | LOCK-013 | Canonical architecture docs continue to describe implemented reality and are updated only as implementation lands. The mutable tracker records current migration evidence truthfully. |
@@ -96,7 +96,7 @@ Grounded in the canonical architecture docs (`vscode-extension.md`) and
 | KiloClaw | Webview | Additional assistant surface | Removed (LOCK-003) |
 | Cloud session surfaces | Panels/routes | Cloud sessions | Removed (LOCK-003) |
 | JetBrains / Console | Separate products | Editor product, browser console | Removed (LOCK-003) |
-| Settings / profile / marketplace | Panels | Configuration and accounts | Consolidate into GUI-owned configuration (ADR-0003) |
+| Settings / profile / marketplace | Panels | Configuration and accounts | Consolidate into the file-authoritative configuration surface — a bidirectional editor/read model over canonical config files/assets (ADR-0003, runtime spec section 5.4) |
 | Autocomplete | Editor assistance | Inline completions + commit messages | Removed (LOCK-004) |
 | Indexing / memory / context management | Backend + UI | Semantic search, memory, compaction | Removed (LOCK-004); internal overflow safeguard retained (LOCK-005) |
 
@@ -163,6 +163,12 @@ affordances, not by a forced break (section 10).
 | Ordinary single-chat sidebar | The deprecated chat surface, distinct from topic/session navigation | On the deprecation/removal path (LOCK-001) |
 | Custom provider | A user-defined provider record: endpoint, protocol, model definitions, or supported discovery | Only provider kind retained (LOCK-006) |
 | Checkpoint rollback | SessionRevert + Snapshot semantics for withdrawing/reverting messages | Harness capability, distinct from ADR-0001 storage rewriting (LOCK-007) |
+| Operational fact | A runtime-owned fact about runtime/session state: session existence, lifecycle state, message presence/ordering, state-transition timing | Sole runtime authority; the UI renders it, never invents or revises it (runtime spec section 7.1) |
+| Presentation state | Extension/webview state derived from runtime operational facts (read-model state) | Derived only; never authoritative for operational facts (runtime spec section 7.1) |
+| Agent manifest | The typed, schema-validated canonical asset defining an agent's prompt and schema-approved specialization/defaults | Canonical typed asset (project or global); one manifest per agent ID; never widens enclosing policy (runtime spec section 5.2) |
+| Permission policy stack | The restrictive composition of runtime hard safety ceilings, global/workspace policy, agent manifest policy, and session restrictions | Monotonic deny/ask/allow composition; provenance per decision (runtime spec section 5.3) |
+| Effective configuration | Every user-authored datum that can affect a materialized generation snapshot | File-authoritative with canonical file/asset provenance; the UI and files are WYSIWYG (runtime spec sections 3.1, 5.1, 5.4) |
+| Canonical config files/assets | The only two authored scopes: one global config root and `<workspaceRoot>/.kilo/` | The only effective-config inputs; no other authored scope, external path, or ancestor source (runtime spec section 3.1) |
 
 ## 5. Target Product Surfaces
 
@@ -172,7 +178,7 @@ affordances, not by a forced break (section 10).
 | Session editor panels | Open sessions in editor tabs for focused single-session work | Replaces the ordinary single-chat sidebar habit via migration affordances |
 | Topic/session navigation | Main navigation: switch between topics and sessions | Provisional language; derived from session metadata until specified |
 | Checkpoint review | Native VS Code diff APIs for reviewing a revert/withdraw | Not a custom Diff Viewer surface (LOCK-002) |
-| Configuration surface | GUI-owned product/UI configuration and custom provider records | Extension application state + SecretStorage (ADR-0003, LOCK-010) |
+| Configuration surface | File-authoritative configuration: a bidirectional editor/read model over canonical config files and typed assets | Canonical files under one global config root and `<workspaceRoot>/.kilo/`; secrets via SecretStorage; VS Code state is UI-local/derived only (ADR-0003, runtime spec sections 3, 5.4) |
 
 Not target surfaces: worktrees, custom Diff Viewer webviews, cloud sessions,
 JetBrains, Console, KiloClaw, indexing, project memory, user-visible context
@@ -189,17 +195,17 @@ criterion already passes.
 
 | # | Capability | Invariant | Target-surface acceptance criterion | Current status | Orchestrator relation |
 |---|---|---|---|---|---|
-| H-1 | Custom agents | Users can define and select custom agents per session; agent config is honored by the harness | From an orchestration panel, a user can spawn a session selecting a user-defined custom agent by name, and the session runs under that agent's config | Implemented in CLI harness (agent config, per-session selector); target-surface parity unproven | Per-session agent selector in orchestration panel |
+| H-1 | Custom agents | Users can define and select custom agents per session; the session runs under the selected agent's typed manifest (one manifest per agent ID; duplicate/conflicting definitions fail validation; manifests never widen the enclosing permission/safety policy) | From an orchestration panel, a user can spawn a session selecting a user-defined custom agent by name, and the session runs under that agent's manifest (P2 proves this current capability). The typed-manifest contract — one canonical manifest per ID, duplicate/conflict validation, canonical file/asset provenance — is proven at P4 via the field-registry/schema gate (runtime spec sections 3.2, 5.2), not at P2 | Implemented in CLI harness (agent config, per-session selector); target-surface parity unproven | Per-session agent selector in orchestration panel |
 | H-2 | Sub-task delegation | Sessions can delegate to child agents/sessions with defined tasks and result flow-back | From an orchestration panel, a session can delegate a defined sub-task to a child session and the result flows back to the parent, visible in navigation | Implemented in CLI harness (child sessions, delegated subagent) | Primary orchestration gesture; must be surfaced in panels |
 | H-3 | Extensible tools | Tool registry is extensible (builtin + plugin + user tools) and per-session | A session spawned from a panel exposes the full tool registry, and a user-defined tool is invocable in that session | Implemented in CLI harness | Exposed per session; UI never hard-codes a fixed tool set |
 | H-4 | Skills | Skills load and run per session | A skill is loadable and runnable from a panel-hosted session, with selection remaining harness-owned | Implemented in CLI harness | Invocable from panels; selection stays harness-owned |
-| H-5 | MCP | MCP servers are configured and used per session | A session spawned from a panel with MCP configured has its MCP tools available and usable | Implemented in CLI harness | Per-session tool source; configuration GUI-owned (LOCK-010) |
-| H-6 | Permission/question flows | Every tool permission and question resolves through the permission flow | A tool permission or question raised by a panel-hosted session resolves inline through the permission flow, and the outcome is applied to that session | Implemented in CLI harness | Rendered inline in panels |
+| H-5 | MCP | MCP servers are configured and used per session | A session spawned from a panel with MCP configured has its MCP tools available and usable | Implemented in CLI harness | Per-session tool source; configuration file-authoritative (LOCK-010, runtime spec section 5.4) |
+| H-6 | Permission/question flows | Every tool permission and question resolves through the permission flow under the restrictive policy stack: deny at any applicable layer wins, ask wins over allow when any layer requires confirmation, allow requires all applicable layers to permit; agent/session restrictions narrow but never widen enclosing policy; an explicit approval never overrides a deny | A tool permission or question raised by a panel-hosted session resolves inline through the permission flow, and the outcome is applied to that session (P2 proves this current behavior/capability). The restrictive-policy-stack semantics — monotonic deny/ask/allow composition, no widening, enclosing parent denies/session restrictions for children, bounded per-session approval records (runtime spec section 5.3) — are proven at P4 via the permission-evaluator gate, not at P2 | Implemented in CLI harness | Rendered inline in panels |
 | H-7 | Parent-child sessions | Parent/child session relations are first-class and preserved | Topic/session navigation shows parent/child session hierarchy, and relations persist across panel restarts | Implemented in CLI harness | Navigation must show hierarchy |
 | H-8 | Background/parallel execution | Sessions run in background and in parallel, without worktree isolation as a requirement | Two or more panel-hosted sessions run concurrently in the background, and each remains controllable | Implemented in CLI harness (Agent Manager) | Core orchestration behavior; worktrees are not a harness invariant (LOCK-008) |
 | H-9 | User-selected custom-provider models | Per-session model and reasoning-variant selection, restricted to models offered by user-defined/custom providers | Each panel-hosted session selects its own model and reasoning variant from a user-defined provider independently, and the selection applies | Implemented in CLI harness (agent/model selectors); preset-provider removal not done (LOCK-006) | Per-session selector in panels |
 | H-10 | Persistence | Sessions, events, and artifacts persist and resume across extension restarts | A panel-hosted session's transcript, events, and artifacts persist across an extension restart and resume in place | Implemented (existing storage behavior); ADR-0001 checkpoint/resync rewriting is a separate, unimplemented direction and is not evidence of current behavior | Unchanged by this direction; UI does not own state |
-| H-11 | Lifecycle correctness | Session create/pause/resume/close/cleanup, process ownership, and resource release are correct | Panel-driven create/pause/resume/close drives the harness lifecycle API and releases processes/resources correctly, with no bypass | Implemented in CLI harness | UI must drive lifecycle through harness APIs, never bypass them |
+| H-11 | Lifecycle correctness | Session create/pause/resume/close/cleanup, process ownership, and resource release are correct; the extension-owned view lifecycle boundaries (panel close/reopen, reload, session switch) and the runtime boundaries (transport reconnect, worker restart) never corrupt runtime operational facts or leave orphaned processes/resources | Panel-driven create/pause/resume/close drives the harness lifecycle API and releases processes/resources correctly, with no bypass, and presentation state converges to runtime operational facts across panel close/reopen, reload, session switch, transport reconnect, and worker restart (runtime spec section 7.1) | Implemented in CLI harness | UI must drive lifecycle through harness APIs, never bypass them; presentation state derives from runtime facts (runtime spec section 7.1) |
 | H-12 | Checkpoint rollback | SessionRevert + Snapshot semantics: withdrawing/reverting a message restores affected code, with unrevert/cleanup and lifecycle correctness; distinct from ADR-0001 storage checkpoint/resync | From a panel-hosted session, withdrawing/reverting a message restores the affected code state, the revert can be un-reverted or cleaned up, and lifecycle stays correct | Implemented (SessionRevert + Snapshot in CLI harness); not conflated with ADR-0001 | Review via native VS Code diff APIs (LOCK-002) |
 | H-13 | Internal context-overflow safeguard | Long-running agents keep functioning past context limits through a minimal internal safeguard; it is an invisible harness reliability mechanism, not a user-facing context-management product | A long-running panel-hosted session remains functional at context overflow with no user-facing context-management UI, and the safeguard never surfaces as a context-management product | Existing compaction machinery present; no requirement to preserve it (LOCK-005) | Invisible; no UI surface |
 
@@ -208,11 +214,23 @@ unproven until each phase records objective evidence (issue/PR/test/doc links) i
 the migration tracker's capability evidence table. The "current status" column
 describes the CLI harness today, not target-surface parity.
 
+Target-contract split (avoids P2 deadlock): P2 proves the current
+behavior/capability behind each criterion (a session runs under the selected
+agent; a permission/question resolves inline and the outcome applies). The
+target contracts that the harness does not implement today — the typed-manifest
+validation and canonical provenance of runtime spec section 5.2, the restrictive
+policy-stack semantics of section 5.3, and the file-authoritative WYSIWYG
+editing of section 5.4 — are proven at P4 through the field-registry/schema gate,
+the permission-evaluator gate, and the WYSIWYG acceptance gate (section 11),
+never at P2.
+
 ## 7. Ownership Principles
 
 - Orchestrator UI/product owns: panels, navigation, topic labels, panel
-  lifecycle, message routing within the extension, and GUI-owned configuration and
-  persisted selector indexes (ADR-0003, LOCK-010).
+  lifecycle, message routing within the extension, and file-authoritative
+  configuration — canonical config files/assets with the UI as a bidirectional
+  editor/read model — plus persisted selector indexes derived from them
+  (ADR-0003, LOCK-010; runtime spec sections 3, 5.4).
 - Harness kernel (private runtime) owns: agents, tools, permissions, session
   model, storage, lifecycle, execution, checkpoint rollback, and the internal
   context-overflow safeguard. The runtime is an extension-owned private headless
@@ -220,6 +238,14 @@ describes the CLI harness today, not target-surface parity.
 - The existing `kilo serve` HTTP/SSE/generated-SDK path is a migration bridge, not
   a target compatibility contract (LOCK-009); the private transport is an internal
   implementation choice.
+- Operational facts are runtime-owned: the runtime is the sole authority for
+  session/worker state (existence, lifecycle state, message presence/ordering,
+  timing); extension/webview state is derived presentation/read-model state and
+  is never an independent authority (runtime spec section 7.1).
+- View/session lifecycle isolation: the extension owns panel/editor lifecycle
+  (open, close/reopen, reload, session switch); view lifecycle never mutates
+  runtime operational facts, and transport reconnect and worker restart converge
+  presentation state to runtime truth (runtime spec section 7.1).
 - No rewrite: migration proceeds by consolidation and removal phases, not by
   rebuilding the extension or the backend.
 - Only user-defined/custom providers are retained (LOCK-006); preset provider
@@ -235,16 +261,26 @@ The target shape, bounded to avoid scope creep:
 
 - One extension host and one extension-owned private headless worker (LOCK-009).
   All sessions, panels, and orchestration views ride it; no second runtime.
+- One authoritative runtime fact owner: the runtime is the sole authority for
+  operational facts; extension/webview state is derived presentation/read-model
+  state (runtime spec section 7.1).
+- View/session lifecycle isolation: panel close/reopen, reload, and session
+  switch never mutate runtime facts; transport reconnect and worker restart
+  converge presentation state through the runtime observation/hydration contract
+  (runtime spec section 7.1).
 - Orchestration panel as the primary surface with topic/session navigation as the
   main view; session editor panels for focused work.
 - A reduced webview set: orchestration panel + session panels + configuration
   surface. Removed surfaces (sidebar at P3.1, diff viewer/diff virtual at P3.2,
   KiloClaw at P3.3, autocomplete at P3.4) retire their message types and entry
   points.
-- GUI-owned configuration and persisted selector indexes (LOCK-010); custom
-  provider records only (LOCK-006); immutable versioned runtime snapshots
-  (LOCK-011). Detailed ownership, provider, config, and startup semantics are
-  owned by `runtime-and-configuration-direction.md`.
+- File-authoritative configuration and persisted selector indexes (LOCK-010;
+  canonical config files/assets under one global config root and
+  `<workspaceRoot>/.kilo/` with the UI as a bidirectional editor/read model —
+  runtime spec sections 3, 5.4); custom provider records only (LOCK-006);
+  immutable versioned runtime snapshots (LOCK-011). Detailed ownership,
+  provider, config, and startup semantics are owned by
+  `runtime-and-configuration-direction.md`.
 - No new persisted domain model for 'topic' in this direction; navigation derives
   grouping from existing session metadata until open question 1 is decided.
 - No worktree execution, no custom diff surfaces, no cloud/Console/JetBrains
@@ -324,8 +360,24 @@ feature-flag subsystem.
   feature-flag subsystem.
 - Runtime/config gates: snapshot pinning per generation, no active-generation
   interruption, atomic version creation, action-specific readiness, and the
-  dual-read deadline (runtime spec sections 5-7) gate P4; startup acceptance
-  criteria (runtime spec section 6) gate P5.
+  P4.3 legacy-reader cutover — no dual-read window and no import tool (runtime
+  spec sections 5, 7, 9 R6) — gate P4; the field-registry/schema/provenance
+  contract (runtime spec sections 3.2, 5.1) and the WYSIWYG acceptance semantics
+  (runtime spec section 5.4) gate P4.1; the cutover itself gates P4.3;
+  per-source effective-config removal evidence (runtime spec section 8.1) gates
+  P4.4; the permission evaluator implements the section 5.3 restrictive policy
+  stack before P4 exits (permission-evaluator gate); startup acceptance criteria
+  (runtime spec section 6) gate P5.
+- Observation/hydration convergence gate: per phase, lifecycle-boundary
+  convergence evidence is recorded in the tracker against the runtime
+  observation and hydration contract (runtime spec section 7.1). P1 records the
+  extension-owned view boundaries only (panel close/reopen, reload, session
+  switch) on the migration bridge; P2 records the complete five-boundary
+  behavior (the three view boundaries plus transport reconnect and worker
+  restart) on harness-parity flows over the current bridge; P4 records all five
+  again against the private-worker observation surface, showing presentation
+  state converges to runtime operational facts with no loss, duplication, or
+  stale authority.
 - Performance gate: no performance claim without runtime evidence (LOCK-PERF-6);
   every phase compares against the P0 performance baseline recorded in the
   tracker; removals yield a measurable net startup-work reduction and no
@@ -342,14 +394,15 @@ feature-flag subsystem.
 
 - The extension is a client of the harness kernel; the private runtime relation is
   owned by ADR-0003 and the runtime spec. The existing `kilo serve` SDK surface is
-  a migration bridge with an explicit dual-read deadline, never a permanent target
-  contract (LOCK-009).
+  a migration bridge with an atomic cutover at P4.3 — no dual-read compatibility
+  window and no import tool — never a permanent target contract (LOCK-009).
 - One runtime model (extension host + one private worker) is the target;
   consolidation never spawns per-panel runtimes.
-- User state stays with its current owners during migration; the target ownership
-  domains (runtime spec section 3) assign one owner and one persistence path per
-  datum. No state migration is proposed by this document beyond the runtime spec's
-  phased read model.
+- User state stays with its current owners during the migration; the target
+  ownership domains (runtime spec section 3) assign one owner and one persistence
+  path per datum. No state migration or import is proposed: the sole user
+  manually reconciles any desired current configuration into the canonical files
+  before the P4.3 cutover (runtime spec section 7).
 - No changes to public product docs or canonical architecture docs until
   implementation lands (LOCK-013).
 - Any removal keeps the harness reachable; removing a capability without a
@@ -369,12 +422,14 @@ feature-flag subsystem.
 | Removal drops a needed harness capability | Capability parity gate (H-1..H-13) before any surface removal |
 | Worktree removal breaks parallel-work expectations | Parallel execution is preserved without worktree isolation (H-8); worktrees are not a harness invariant (LOCK-008) |
 | Context overflow without user-facing management regresses long agents | Internal safeguard retained (H-13, LOCK-005) |
-| Runtime/config migration stalls or dual authority persists | Bounded dual-read with explicit deadline; P4/P5 gates owned by the runtime spec |
+| Runtime/config migration stalls or dual authority persists | Atomic legacy-reader cutover at P4.3 — no dual-read window, no import; all legacy readers deleted together and cannot influence effective config; P4/P5 gates owned by the runtime spec |
+| Config files and the UI diverge (external edits, stale drafts, invalid external edits, deletion/unset) | Bidirectional file-editing contract with watched external edits, visible conflict detection, validation-before-write, and reconciliation (runtime spec section 5.4); WYSIWYG acceptance gate at P4.1 (section 11) |
 | Preset provider removal fragments model availability | Custom-provider-only boundary with generic protocol adapters (LOCK-006) |
 | Canonical docs drift from implemented reality | LOCK-013: docs updated only when implementation lands |
 | Budgets treated as goals instead of gates | Complexity budget enforced as counts in each consolidation phase (section 11) |
 | Performance claims based on estimates (e.g. 20-40%/30-50%) become acceptance claims | Evidence-only gates (LOCK-PERF-6); hypotheses explicitly flagged; thresholds recorded by product/engineering decision (runtime spec section 10) |
-| Removed features still initialize during worker startup | Startup work does not decline despite removal | Measured net startup-work reduction per removal subphase (LOCK-PERF-3, runtime spec section 10) |
+| Removed features still initialize during worker startup, so startup work does not decline despite removal | Measured net startup-work reduction per removal subphase (LOCK-PERF-3, runtime spec section 10) |
+| The lifecycle boundaries — extension-owned view boundaries (panel close/reopen, reload, session switch) and runtime boundaries (transport reconnect, worker restart) — diverge from runtime operational truth, leaving stale or duplicated presentation state, UI-held facts surviving a boundary, or orphaned processes/resources | Sole runtime authority for operational facts with derived presentation state (runtime spec section 7.1); lifecycle-boundary convergence evidence per phase (section 11); R9 bounds the implementation decision (runtime spec section 9) |
 
 ## 14. Open Questions
 
@@ -398,7 +453,10 @@ decisions are listed in `runtime-and-configuration-direction.md` section 9.
    decides removal; numeric thresholds remain a recorded product decision
    (bounded, runtime spec section 9).
 5. Which consolidated configuration surface replaces settings/profile/marketplace
-   panels, and how does it present custom provider records? (P3/P4.1.)
+   panels, how does it present custom provider records, and what is the exact
+   WYSIWYG presentation of draft conflicts, invalid-edit reporting, and
+   file/UI reconciliation? (P3/P4.1. The behavioral WYSIWYG semantics are
+   decided in runtime spec section 5.4; only the presentation is open here.)
 
 ## 15. Current Status Summary
 
@@ -408,7 +466,8 @@ decisions are listed in `runtime-and-configuration-direction.md` section 9.
   autocomplete; preset provider catalogs. These are residual implementation, not
   retained capabilities where removal is decided (LOCK-002/003/004/006).
 - Not implemented: topic/session navigation, orchestration-first main view,
-  product removals, private runtime, GUI-owned configuration, action-specific
+  product removals, private runtime, file-authoritative configuration (canonical
+  config files/assets with a bidirectional UI editor), action-specific
   readiness. This direction is the design target, not shipped behavior.
 - ADR-0002 records the durable product decision; ADR-0003 records the durable
   runtime/config decision; this document owns the product migration design; the

@@ -10,6 +10,37 @@ and configuration target and acceptance semantics stay in
 This tracker owns changing phase status, evidence, blockers, issue/PR links, and
 next actions.
 
+## Session Bootstrap
+
+A fresh session on this work continues from the durable artifacts, not from this
+tracker alone: read [ADR-0002](../adr/0002-focus-vscode-on-agent-orchestration.md)
+and [ADR-0003](../adr/0003-replace-cli-configuration-with-private-gui-runtime.md)
+for the locked decisions, the
+[direction spec](agent-orchestration-direction.md) for product target,
+ownership, and acceptance semantics, and the
+[runtime spec](runtime-and-configuration-direction.md) for runtime/config
+semantics including the file-authoritative hybrid — the legal source taxonomy
+(two canonical authored scopes: one global config root and
+`<workspaceRoot>/.kilo/`), field registry, typed composition, materialization,
+the bidirectional file-editing/WYSIWYG contract, permission composition, and
+source-removal disposition (runtime spec sections 3, 5.1-5.4, 8.1) — plus the
+runtime observation and hydration contract (runtime spec section 7.1) and the
+atomic legacy-reader cutover at P4.3 (no dual-read window, no import; runtime
+spec sections 7, 9 R6). This tracker then supplies current progress truth: P0 is
+Complete (2026-08-12) with recorded evidence; R2 and R6 were revised by a
+post-P0 user clarification on 2026-08-13 (section 9); P1-P5 are Not started. No
+phase claims completion without objective evidence recorded in the sections
+below.
+Lifecycle-boundary convergence evidence is a per-phase acceptance input
+(direction spec section 11), observed under the runtime observation contract
+(runtime spec section 7.1): P1 records the extension-owned view boundaries
+(panel close/reopen, reload, session switch) on the migration bridge; P2
+records the complete five-boundary behavior (those three plus transport
+reconnect and worker restart) on harness-parity flows; P4 records all five
+against the private-worker observation surface. R9 (runtime spec section 9) is
+the open bounded implementation decision required by P4.2; testing current
+behavior at P1/P2 does not require deciding future private handshake mechanics.
+
 ## 1. Purpose And Maintenance Rules
 
 Purpose:
@@ -44,6 +75,9 @@ Maintenance rules:
   are recorded here. Estimates are hypotheses, never acceptance claims.
 - Removed features are never reclassified as deferred; a removal row's evidence
   categories must be filled for every category that exists for the item.
+- This tracker records progress and evidence; it does not restate spec content.
+  Exit checklists link to their owning spec sections (direction spec, runtime
+  spec) for criterion text and acceptance semantics.
 
 ## 2. Status Vocabulary
 
@@ -72,7 +106,7 @@ ADR-0002/0003).
 | LOCK-007 | Retain checkpoint behavior defined as SessionRevert + Snapshot semantics: withdrawing/reverting a message restores affected code, with unrevert/cleanup and lifecycle correctness. Do not conflate this with ADR-0001 storage checkpoint/resync. |
 | LOCK-008 | Preserve core harness capabilities: custom agents, sub-task delegation, extensible tools, skills, MCP, permissions/questions, parent-child sessions, background/parallel execution, user-selected custom-provider models, persistence, lifecycle correctness, checkpoint rollback, and internal context-overflow reliability. Worktrees are not a harness invariant. |
 | LOCK-009 | Eliminate CLI/TUI/Console as products and public interfaces. Keep the agent runtime out of the VS Code Extension Host as an extension-owned private headless worker process for crash/resource/lifecycle isolation. The existing `kilo serve` HTTP/SSE/generated-SDK path may be a migration bridge, but it is not a target compatibility contract. The private transport remains an internal implementation choice. |
-| LOCK-010 | GUI-owned configuration is authoritative. Product/UI configuration and persisted selector indexes are extension-owned; secrets use VS Code SecretStorage; project-versioned harness assets use one canonical explicit project boundary and no multi-source precedence merge; the runtime consumes immutable versioned snapshots. |
+| LOCK-010 | GUI-managed file authority is authoritative (revised 2026-08-13: file-authoritative hybrid). All user-authored effective configuration is file-authoritative and WYSIWYG through the UI under exactly two canonical authored scopes — one global config root and `<workspaceRoot>/.kilo/` — with the field registry deciding global-only/project-only/both-with-typed-composition; the UI is a bidirectional editor/read model over canonical files/assets, not a separate config store. Product/UI configuration and persisted selector indexes are extension-owned (VS Code state is UI-local/derived only, never effective-config authority); secrets use VS Code SecretStorage; project-versioned harness assets use the one canonical explicit project boundary with no multi-source precedence merge; the runtime consumes immutable versioned snapshots. No migration/import tool and no dual-read compatibility window (runtime spec sections 3, 5.4, 7, 9). |
 | LOCK-011 | A generation keeps the exact config/runtime snapshot it starts with. A configuration update atomically creates a new version for later generations and must not interrupt active generations. Resource replacement (provider/MCP/tool resources) is version-scoped/lazy and old resources are disposed only after owners release them; avoid process-global rebuild/convergence as the target model. |
 | LOCK-012 | Model and agent selectors render from extension-owned persisted indexes before the private worker is ready. Runtime connection/validation is separate readiness and must not globally disable selection. Startup gates are action-specific, not one global `extensionDataReady` barrier. |
 | LOCK-013 | Canonical architecture docs continue to describe implemented reality and are updated only as implementation lands. The mutable tracker records current migration evidence truthfully. |
@@ -94,7 +128,7 @@ Current phase: **P0 Complete (2026-08-12)**; **P1 Not started** (final state per
 | P1 | Orchestration-first navigation | Not started | - | Gated on P0 |
 | P2 | Harness surface parity | Not started | - | Gated on P1; requires H-1..H-13 criteria and named evidence |
 | P3 | Product removal | Not started | - | Subphases P3.1-P3.4 (sidebar, worktree/diff, cloud/JetBrains/Console/KiloClaw, indexing/memory/context-management/autocomplete) |
-| P4 | Private runtime and configuration | Not started | - | Subphases P4.1-P4.5 (GUI read model, private runtime entrypoint, dual-read, source removal, old CLI/server deletion); owned by runtime spec section 7 |
+| P4 | Private runtime and configuration | Not started | - | Subphases P4.1-P4.5 (file-authoritative read/write model, private runtime entrypoint, legacy-reader cutover, removal evidence + transport narrowing, old CLI/server deletion); owned by runtime spec section 7 |
 | P5 | Startup and selector readiness | Not started | - | Startup acceptance per runtime spec section 6 |
 
 P0 activation rationale (2026-08-10): the ADRs, both direction specs, this
@@ -235,7 +269,7 @@ spec (sections 5-7). Each checkbox is complete only when objective evidence
   - [x] Runtime/config root-cause inventory: enumerated config sources, provider sources/loaders, readiness chain stages, convergence machinery paths (runtime spec section 2) — `doc: specs/vscode-orchestrator/p0-current-state-inventory.md` (section 6; 15 merge sources enumerated, readiness chain stages 1-10, convergence machinery file set)
   - [x] Baseline counts recorded in section 8 — MET (2026-08-12): Q3 approved; counts recorded in inventory (sections 4.4/9, reproducible commands in section 10) and reflected in tracker section 8 (webview message types 332, provider methods 250, webview entry points 6)
   - [x] Open question 3 resolved (exact baseline metric definitions) — MET (2026-08-12): Q3 resolved — 332 distinct webview message `type:` literals (WebviewMessage 189 + ExtensionMessage 143, disjoint sets); 250 generated v2 SDK `KiloClient` public methods (the extension imports `@kilocode/sdk/v2/client`); 6 HTML/webview esbuild entries, excluding the shiki worker asset (section 9)
-  - [x] Bounded implementation decisions required by P0/P1 recorded (runtime spec section 9) — MET (2026-08-12): R1 (private transport = JSON-RPC 2.0 over child-process stdio, Content-Length framing, `vscode-jsonrpc` precedent; one extension-owned worker child; initialize handshake replaces port detection/health; requests carry commands, notifications carry normalized event envelopes; stderr bounded diagnostics; EOF/process exit owns lifecycle; HTTP/SSE/generated SDK remains bridge-only and is deleted; no retained-terminal protocol commitment), R2 (extension-owned product/UI config + persisted selector indexes in VS Code `globalState`; per-workspace runtime-tracking state in `workspaceState`; secrets in `SecretStorage`; runtime-owned session/event/artifact persistence remains runtime-owned; immutable worker snapshots are derived versioned values, not a second persisted store), R5 (one canonical project boundary = first VS Code workspace root; project-versioned harness assets only under `<workspaceRoot>/.kilo/`; P4.1 migrates root/legacy sources; P4.4 deletes ancestor walk, `.kilocode`/`.opencode`, global project-asset sources, primary-worktree mirror reads; no multi-source precedence remains), R6 (explicit deadline = the P4.3 phase boundary: dual-read opens only during P4.3, shrinks monotonically, gains no new bridge consumers, fully closed before P4.3 exits / P4.4 begins; P4.4/P4.5 delete source/transport/product code; no fallback read survives into P4.4), R8 (retain the existing two-harness tooling as the P0 and later comparison harness: Extension Host scenarios 1/2/3/4/5/10 under `packages/kilo-vscode/script/p0-bench/` + runner/merge/safety/provenance tools, backend scenarios 6/7/8/9/11/12/13 under `packages/opencode/test/benchmark/` + runner; limitations recorded: manual-only, platform/environment/provenance scoped, backend in-process `Server.listen`/`AppLayer` only, n=5 descriptive); R7 stays Open but is not a P0 blocker (required-by clarified, section 9)
+  - [x] Bounded implementation decisions required by P0/P1 recorded (runtime spec section 9) — MET (2026-08-12): R1 (private transport = JSON-RPC 2.0 over child-process stdio, Content-Length framing, `vscode-jsonrpc` precedent; one extension-owned worker child; initialize handshake replaces port detection/health; requests carry commands, notifications carry normalized event envelopes; stderr bounded diagnostics; EOF/process exit owns lifecycle; HTTP/SSE/generated SDK remains bridge-only and is deleted; no retained-terminal protocol commitment), R2 (extension-owned product/UI config + persisted selector indexes in VS Code `globalState`; per-workspace runtime-tracking state in `workspaceState`; secrets in `SecretStorage`; runtime-owned session/event/artifact persistence remains runtime-owned; immutable worker snapshots are derived versioned values, not a second persisted store), R5 (one canonical project boundary = first VS Code workspace root; project-versioned harness assets only under `<workspaceRoot>/.kilo/`; P4.1 migrates root/legacy sources; P4.4 deletes ancestor walk, `.kilocode`/`.opencode`, global project-asset sources, primary-worktree mirror reads; no multi-source precedence remains), R6 (explicit deadline = the P4.3 phase boundary: dual-read opens only during P4.3, shrinks monotonically, gains no new bridge consumers, fully closed before P4.3 exits / P4.4 begins; P4.4/P4.5 delete source/transport/product code; no fallback read survives into P4.4), R8 (retain the existing two-harness tooling as the P0 and later comparison harness: Extension Host scenarios 1/2/3/4/5/10 under `packages/kilo-vscode/script/p0-bench/` + runner/merge/safety/provenance tools, backend scenarios 6/7/8/9/11/12/13 under `packages/opencode/test/benchmark/` + runner; limitations recorded: manual-only, platform/environment/provenance scoped, backend in-process `Server.listen`/`AppLayer` only, n=5 descriptive); R7 stays Open but is not a P0 blocker (required-by clarified, section 9). **Post-P0 decision revision (2026-08-13):** R2 and R6 were revised by a durable user clarification — file-authoritative hybrid configuration (canonical files/assets own effective config; `globalState`/`workspaceState` own only UI-local/derived state) and an atomic legacy-reader cutover at P4.3 (no dual-read window, no import tool). The original 2026-08-12 wording above remains the historical P0 record; the revised texts are current in section 9 and the runtime spec. P0 stays Complete; its recorded evidence is unchanged
   - [x] Performance instrumentation executed at the runtime spec (section 10.8) instrumentation points; per-stage cold/warm timings recorded in section 8 — MET (2026-08-12): opt-in `KILO_P0_PERF` instrumentation exists for backend/extension/webview (`test: packages/opencode/test/kilocode/p0-instrument.test.ts`, `test: packages/kilo-vscode/tests/unit/p0-perf-instrument.test.ts`); per-stage cold/warm timings are recorded in section 8 from the formal cold-start, many-agent-MCP, warm-view/no-provider/custom-provider, session-switch, and backend campaigns; target-only stages without an accepted campaign or an existing extension-owned index are re-scoped to later-phase gates (persisted-selector paint → P5; attribution + per-event transport/webview flush → P2; removed-feature init count + startup-work reduction → P3/P4.4)
   - [x] P0 performance baseline metrics recorded in section 8 with evidence links (all performance evidence Not proven until recorded; LOCK-PERF-6) — MET (2026-08-12): rows for worker cold start, server->SSE connect, UI fetch chain -> data ready, warm view, no-provider startup (fresh no-seed and seeded-empty persisted conditions), custom-provider startup, many-agent/MCP startup, backend prompt-submit, tool/permission round-trip, parallel sessions, hot/cold/burst config updates, and session switch now record measured n=5 values with evidence links and explicit scope (descriptive p95=max at n=5, not SLA/threshold); the five remaining `Not proven` rows are re-scoped later-phase gates, not P0 blockers (persisted-selector paint → P5; attribution + per-event transport/webview flush → P2; removed-feature init count + startup-work reduction → P3/P4.4)
   - [x] Benchmark scenarios (runtime spec section 10.9) runnable and reproducible — MET (2026-08-12): backend harness (scenarios 6,7,8,9,11,12,13) under `packages/opencode/test/benchmark/` with runner `packages/opencode/script/p0-benchmark.ts`; Extension Host harness (scenarios 1,2,3,4,5,10) under `packages/kilo-vscode/script/p0-bench/`; both have passing unit/integration tests, including harness-fix tests (`test: packages/kilo-vscode/tests/unit/p0-bench-launch-failure.test.ts`, `test: packages/opencode/test/kilocode/p0-bench-seed-config-schema.test.ts`). Full repeated baselines now recorded for all 13 defined scenarios: backend all seven scenarios (1 warmup + 5 measured each, 42/42 ok) in the historical `2026-08-11T04-46-19-926Z/backend.jsonl` and the current-tier rerun `2026-08-12T06-08-27-792Z/backend.jsonl`; Extension Host cold-start (`2026-08-11T11-51-16-883Z`); Extension Host many-agent-MCP (`many-agent-mcp-merged-2026-08-12T00-27-49-435Z`, baselineComplete); Extension Host warm-view/no-provider/custom-provider (`2026-08-12T05-52-07-672Z`, 19 samples, 27 n=5 summaries); Extension Host session-switch (`2026-08-12T07-21-22-201Z`, 1 warmup + 5 measured, one n=5 summary, status ok). Two pre-fix partial artifacts are retained but excluded and never cited as baseline: `2026-08-12T04-30-39-069Z/benchmark.jsonl` (no run finish, no custom-provider samples) and `2026-08-12T06-05-12-356Z/backend.jsonl` (no run finish, scenarios 6/7/8 only)
@@ -253,6 +287,7 @@ spec (sections 5-7). Each checkbox is complete only when objective evidence
   - [ ] No ordinary single-chat sidebar capability change
   - [ ] Open question 1 (topic meaning) decided
   - [ ] No performance regression on the navigation/session-switch path against the P0 baseline (measured; runtime spec section 10.9)
+  - [ ] Lifecycle-boundary convergence evidence recorded for the extension-owned view boundaries — panel close/reopen, reload, session switch/navigation — on the migration bridge (direction spec section 11; runtime spec section 7.1)
   - Evidence: issue: - | PR: - | test: - | doc: -
 - Next actions: none until P0 exits.
 
@@ -266,6 +301,7 @@ spec (sections 5-7). Each checkbox is complete only when objective evidence
   - [ ] Every H-1..H-13 target-surface acceptance criterion (direction spec section 6) passes from the target surface
   - [ ] Named evidence inventory for each H-1..H-13 criterion recorded in section 6
   - [ ] No performance regression on harness-parity flows (prompt submit, streaming, tool/permission) against the P0 baseline (measured; runtime spec section 10.9)
+  - [ ] Lifecycle-boundary convergence evidence recorded for all five boundaries — panel close/reopen, reload, session switch (view) plus transport reconnect and worker restart (runtime) — on harness-parity flows over the current bridge (direction spec section 11; runtime spec section 7.1)
   - Evidence: issue: - | PR: - | test: - | doc: -
 - Next actions: none until P1 exits.
 
@@ -292,27 +328,49 @@ spec (sections 5-7). Each checkbox is complete only when objective evidence
 
 - Status: Not started
 - Scope (owned by runtime spec sections 3-7):
-  - P4.1: local GUI read model and config authority (extension-owned persisted
-    config + selector indexes; SecretStorage for secrets; one canonical project
-    harness-assets boundary; no multi-source precedence merge)
+  - P4.1: file-authoritative GUI read/write model (bidirectional editor over
+    canonical config files/assets — one global config root and
+    `<workspaceRoot>/.kilo/`; SecretStorage for secrets; canonical two-level
+    authored scopes; VS Code state is UI-local/derived only; no migration);
+    canonical schema, field registry covering every configurable field class,
+    and the deterministic materializer (runtime spec sections 3.2, 5.1);
+    WYSIWYG acceptance semantics (runtime spec section 5.4); R10 resolved
   - P4.2: private runtime entrypoint and snapshot API (extension-owned headless
-    worker; immutable versioned snapshots; generation pinning)
-  - P4.3: dual-read window over the existing HTTP/SSE/SDK bridge with an explicit
-    deadline; no permanent dual authority
-  - P4.4: source removal (12-source merge, preset provider loaders/catalog,
-    convergence machinery, backend-gated fetch chain) and transport narrowing
-    (private transport; SDK/public server surface ceases to be public); removal
-    exits only on a measured net startup-work reduction against the P0 baseline
-    and confirmation that removed-feature initialization is absent (LOCK-PERF-3,
-    runtime spec section 10.9-10.10)
+    worker; immutable versioned snapshots; generation pinning; observation
+    surface per runtime spec section 7.1)
+  - P4.3: legacy-reader cutover — no dual-read compatibility window and no
+    import tool; old sources may be used only by the current implementation
+    before the cutover; at the P4.3 boundary all legacy readers are deleted
+    together and cannot influence effective config; the sole user manually
+    reconciles any desired current configuration into canonical files before
+    the cutover, evidenced by a pre-cutover reconciliation checklist (manual
+    only; no migration tooling), and an explicit mapping records each of the 15
+    P0 enumerated sources onto a retained legal class or one of the 13 removal
+    classes (runtime spec sections 5.1, 7, 8.1; R6 revised 2026-08-13)
+  - P4.4: evidence and transport narrowing — records and verifies per-row
+    inactive/removal evidence for all 13 legacy effective-config source classes
+    per runtime spec section 8.1 (including legacy global config
+    filenames/readers and legacy migration readers; the legacy readers were
+    deleted together at the P4.3 cutover, each with no target reader), removes
+    the residual legacy machinery (12-source merge, preset provider
+    loaders/catalog, convergence machinery, backend-gated fetch chain), and
+    narrows the public transport (private transport; SDK/public server surface
+    ceases to be public); removal exits only on a measured net startup-work
+    reduction against the P0 baseline and confirmation that removed-feature
+    initialization is absent (LOCK-PERF-3, runtime spec section 10.9-10.10)
   - P4.5: old CLI/server product deletion (CLI/TUI/Console products and public
     interfaces)
 - Exit checklist:
   - [ ] Every datum has one owner and one persistence path (runtime spec section 3 table)
+  - [ ] Field registry covers every configurable field class — canonical schema path, owner/storage, legal scope (global-only/project-only/both-with-typed-composition), composition operator, validation, secret handling, generation-snapshot inclusion, provenance, removal disposition (runtime spec section 3.2); R10 resolved with the schema layout and exact persistence assignments recorded in section 9; effective config composes only through schema-declared operators (runtime spec section 5.1)
   - [ ] Custom-provider-only boundary enforced (runtime spec section 4)
   - [ ] Config update semantics verified: atomic version creation, generation snapshot pinning, no active-generation interruption, resource version ownership/disposal, validation before commit, rollback/error behavior (runtime spec section 5)
+  - [ ] WYSIWYG acceptance semantics evidenced (runtime spec section 5.4): file-to-UI external edits observed without manual reload; atomic validated UI-to-file writes preserving JSONC/markdown formatting where possible; visible stale-draft conflicts (never silent overwrite); invalid external edits never partially apply and never fall back to legacy values; predictable deletion/unset; active generations pinned while new readers use the new valid snapshot (LOCK-011)
+  - [ ] Permission evaluator implements the restrictive policy stack (runtime spec section 5.3): monotonic deny/ask/allow composition, no widening, enclosing parent denies/session restrictions for children with no parent-allow inheritance, runtime-owned per-session approval records, question-flow vs `question`-tool distinction; target semantics evidenced by a permission-evaluator test surface (permission-evaluator gate)
   - [ ] P4.4 source removal records a measured net startup-work reduction against the P0 baseline and confirms removed-feature initialization is absent from worker startup (LOCK-PERF-1, LOCK-PERF-3; runtime spec section 10.9-10.10)
-  - [ ] Dual-read window closed by the recorded deadline; old path deleted (runtime spec section 7)
+  - [ ] Each legacy effective-config source (runtime spec section 8.1, including legacy global config filenames/readers and legacy migration readers) records per-row removal evidence and is proven inactive; the active effective-config source set is the closed legal taxonomy only (tracker section 8 counting method; runtime spec sections 3.1, 5.1)
+  - [ ] Legacy-reader cutover completed at P4.3: no dual-read window and no import; after the cutover legacy sources cannot affect effective config because their readers are deleted together; old path deleted (runtime spec sections 5.1, 7; R6 revised 2026-08-13)
+  - [ ] Lifecycle-boundary convergence evidence recorded for all five boundaries against the private-worker observation surface (runtime spec section 7.1); R9 resolved with the handshake/revision decision recorded in section 9
   - [ ] CLI/TUI/Console products and public interfaces deleted (LOCK-009)
   - Evidence: issue: - | PR: - | test: - | doc: -
 - Next actions: none until P3 exits.
@@ -347,20 +405,36 @@ observation); no gap records remain, and every entry carries
 `parity: "unproven"`. The fixture is baseline evidence, not a target-surface
 parity suite: no orchestration-panel acceptance criterion is claimed as
 passing. Baseline smoke only; H parity remains Not proven for all 13.
+H-11 lifecycle evidence additionally spans the extension-owned view boundaries
+(panel close/reopen, reload, session switch) and the runtime boundaries
+(transport reconnect, worker restart) per the direction spec (section 6, H-11)
+and the runtime observation and hydration contract (runtime spec section 7.1);
+H-11 parity stays Not proven until that boundary evidence is recorded.
+
+Target-contract split (avoids a P2 deadlock): P2 proves the current
+behavior/capability behind each criterion (a session runs under the selected
+agent; a permission/question resolves inline and the outcome applies). The
+target contracts the harness does not implement today — typed-manifest
+validation and canonical provenance (runtime spec section 5.2), the restrictive
+policy-stack semantics (runtime spec section 5.3), and file-authoritative WYSIWYG
+editing (runtime spec section 5.4) — are proven at P4 through the
+field-registry/schema gate, the permission-evaluator gate, and the WYSIWYG
+acceptance gate (runtime spec section 10.9; direction spec section 11), never at
+P2.
 
 | # | Capability | Target-surface acceptance criterion | Status | Issue/PR | Test/Doc |
 |---|---|---|---|---|---|
-| H-1 | Custom agents | From an orchestration panel, a user can spawn a session selecting a user-defined custom agent by name, and the session runs under that agent's config | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-1 | Custom agents | From an orchestration panel, a user can spawn a session selecting a user-defined custom agent by name, and the session runs under that agent's manifest (P2 proves this current capability). The typed-manifest contract — one canonical manifest per ID, duplicate/conflict validation, canonical file/asset provenance — is proven at P4 via the field-registry/schema gate (runtime spec sections 3.2, 5.2), not at P2 | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
 | H-2 | Sub-task delegation | From an orchestration panel, a session can delegate a defined sub-task to a child session and the result flows back to the parent, visible in navigation | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
 | H-3 | Extensible tools | A session spawned from a panel exposes the full tool registry, and a user-defined tool is invocable in that session | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` (live: user-defined tool loaded/executed through the real ToolRegistry; no core-service mocks) |
 | H-4 | Skills | A skill is loadable and runnable from a panel-hosted session, with selection remaining harness-owned | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` (live: run-owned SKILL.md discovered and executed through Skill.Service + SkillTool) |
 | H-5 | MCP | A session spawned from a panel with MCP configured has its MCP tools available and usable | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` (live: production MCP transport connects a run-owned stdio server, tool executes in the real session loop, child cleaned by exact PID); Extension Host many-agent-MCP repeated campaign exercises real MCP at startup (doc: `specs/vscode-orchestrator/evidence/p0-baseline/many-agent-mcp-merged-2026-08-12T00-27-49-435Z/benchmark.jsonl`) |
-| H-6 | Permission/question flows | A tool permission or question raised by a panel-hosted session resolves inline through the permission flow, and the outcome is applied to that session | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` (live: real Permission and Question ask -> reply flows with pending-state observation) |
+| H-6 | Permission/question flows | A tool permission or question raised by a panel-hosted session resolves inline through the permission flow, and the outcome is applied to that session (P2 proves this current behavior/capability). The restrictive-policy-stack semantics — monotonic deny/ask/allow composition, no widening, enclosing parent denies/session restrictions for children, bounded per-session approval records (runtime spec section 5.3) — are proven at P4 via the permission-evaluator gate, not at P2 | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` (live: real Permission and Question ask -> reply flows with pending-state observation) |
 | H-7 | Parent-child sessions | Topic/session navigation shows parent/child session hierarchy, and relations persist across panel restarts | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
 | H-8 | Background/parallel execution | Two or more panel-hosted sessions run concurrently in the background, and each remains controllable, without worktree isolation | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
 | H-9 | User-selected custom-provider models | Each panel-hosted session selects its own model and reasoning variant from a user-defined provider independently, and the selection applies | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
 | H-10 | Persistence | A panel-hosted session's transcript, events, and artifacts persist across an extension restart and resume in place | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
-| H-11 | Lifecycle correctness | Panel-driven create/pause/resume/close drives the harness lifecycle API and releases processes/resources correctly, with no bypass | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
+| H-11 | Lifecycle correctness | Panel-driven create/pause/resume/close drives the harness lifecycle API and releases processes/resources correctly, with no bypass, and presentation state converges to runtime operational facts across panel close/reopen, reload, session switch, transport reconnect, and worker restart (runtime spec section 7.1) | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
 | H-12 | Checkpoint rollback | From a panel-hosted session, withdrawing/reverting a message restores the affected code state, the revert can be un-reverted or cleaned up, and lifecycle stays correct; distinct from ADR-0001 | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
 | H-13 | Internal context-overflow safeguard | A long-running panel-hosted session remains functional at context overflow with no user-facing context-management UI, and the safeguard never surfaces as a context-management product | Baseline smoke only; parity Not proven | - | test: `packages/opencode/test/kilocode/p0-harness-baseline.test.ts` |
 
@@ -391,6 +465,40 @@ but was not verifiable by the static search; those cells stay open.
 | Autocomplete (LOCK-004) | P3.4 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` |
 | Preset providers/catalog/onboarding/org sources (LOCK-006) | P4.4 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` | - | - |
 
+### Effective-config source removal evidence
+
+Per runtime spec section 8.1, each of the 13 legacy effective-config source
+classes below records removal evidence per category that exists for the item
+(same `source`/`tests`/`docs`/`generated SDK`/`config`/`i18n`/`build/package`
+rules as the product removals above) plus an **inactive proof**: no read of that
+source affects effective config after the P4.3 cutover, because its reader is
+deleted together at the cutover. There is no import tool and no dual-read
+compatibility window; the sole user manually recreates any desired current
+configuration in the canonical files before the cutover. A row is complete only
+when every existing category records evidence and the inactive proof is
+recorded. The P0 baseline enumerates 15 current merge sources (inventory §6.1);
+each maps onto a retained legal source class (runtime spec section 3.1) or
+exactly one of the 13 removal classes below, so no baseline source remains
+unclassified after P4.4. The P4.4 evidence phase (runtime spec section 8.1;
+tracker section 8) counts each row as one source class and verifies per-row
+inactive/removal evidence; P4.4 exits with zero rows active.
+
+| Source class (runtime spec section 8.1) | Evidence phase | Source | Tests | Docs | Generated SDK | Config | i18n | Build/package | Inactive proof |
+|---|---|---|---|---|---|---|---|---|---|
+| `KILO_CONFIG` env override | P4.4 | - | - | - | - | - | - | - | - |
+| `KILO_CONFIG_DIR` env override | P4.4 | - | - | - | - | - | - | - | - |
+| `KILO_CONFIG_CONTENT` env override | P4.4 | - | - | - | - | - | - | - | - |
+| `KILO_PERMISSION` env override | P4.4 | - | - | - | - | - | - | - | - |
+| Legacy `opencode.*` keys, `.opencode` / `.kilocode` locations | P4.4 | - | - | - | - | - | - | - | - |
+| Global project-asset sources | P4.4 | - | - | - | - | - | - | - | - |
+| Ancestor directory walks | P4.4 | - | - | - | - | - | - | - | - |
+| Primary-worktree mirror reads | P4.4 | - | - | - | - | - | - | - | - |
+| Cloud/org/managed config sources | P4.4 | - | - | - | - | - | - | - | - |
+| Top-level `mode`/`tools` conversions | P4.4 | - | - | - | - | - | - | - | - |
+| Arbitrary CLI/env override layers | P4.4 | - | - | - | - | - | - | - | - |
+| Legacy global config filenames/readers | P4.4 | - | - | - | - | - | - | - | - |
+| Legacy migration readers/import tooling | P4.4 | - | - | - | - | - | - | - | - |
+
 ## 8. Baseline / Complexity / Runtime Metrics
 
 P0 establishes the baselines; later phases record measured deltas. Counts are
@@ -402,7 +510,7 @@ evidence.
 | Webview message types | 332 distinct `type` literals (Q3 approved 2026-08-12; inventory §4.4/§9) | TBD | TBD | TBD | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§4.4 reproducible count) |
 | Provider methods | 250 v2 SDK public methods (Q3 approved 2026-08-12; inventory §4.3/§9) | TBD | TBD | TBD | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§4.4 reproducible count) |
 | Webview entry points | 6 esbuild webview entry points (Q3 approved 2026-08-12; inventory §4.4/§9) | TBD | TBD | TBD | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§4.4 reproducible count) |
-| Config sources merged | 15 enumerated sources (12+ floor; runtime-active count still Unknown, inventory §6.1, U-2) | TBD | TBD | 1 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§6.1) |
+| Config sources merged | 15 enumerated sources (12+ floor; runtime-active count still Unknown, inventory §6.1, U-2) | TBD | 0 legacy classes active (each of the 13 tracker section 7 removal rows, mirroring runtime spec section 8.1, proven inactive; counting method = one row per source class, with each of the 15 P0 enumerated sources mapped to a retained legal class or exactly one removal row) | Closed legal taxonomy only (runtime spec section 3.1: the two canonical authored scopes — one global config root and `<workspaceRoot>/.kilo/` — plus SecretStorage credentials and schema defaults; every section 8.1 row removed) | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§6.1); tracker §7 (effective-config source removal evidence) |
 | Provider source kinds (catalog/config/auth/org) | Enumerated in inventory §6.2 (runtime-active count Unknown, U-2) | TBD | TBD | 1 (custom records) | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§6.2) |
 | Convergence/cold-rebuild passes | TBD (machinery enumerated in inventory §6.3; per-save durations measured in the performance rows below — `commitToConvergedMs`/`burstToConvergedMs` from backend scenarios 11/12/13; pass count per save not separately counted, U-5) | TBD | TBD | 0 | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§6.3) |
 | Startup readiness stages before UI enable | 10 enumerated stages (inventory §6.4; per-stage durations for the measured stages recorded in the performance rows below) | TBD | TBD | TBD | doc: `specs/vscode-orchestrator/p0-current-state-inventory.md` (§6.4) |
@@ -521,7 +629,18 @@ removals themselves are decided (LOCK-001..006) and are not open questions.
 Resolved rows (Q3, R1, R2, R5, R6, R8, resolved 2026-08-12) record the durable
 decision in this tracker and in the owning artifact (inventory section 9 for
 Q3; runtime spec section 9 for R1/R2/R5/R6/R8); they are closed and no longer
-gate P0.
+gate P0. On 2026-08-13 R2 and R6 were revised by a post-P0 user clarification —
+file-authoritative hybrid configuration and an atomic legacy-reader cutover
+instead of dual-read; the revised texts below are current, the original
+2026-08-12 wording is preserved as historical evidence in this section and the
+P0 checklist, and P0 stays Complete with its recorded evidence
+unchanged. R9 (observation/hydration implementation details) is open as of
+2026-08-13 (see row); required by P4.2, it does not gate P0 (Complete) and does
+not gate P1. R10 (canonical schema/field-registry layout and exact persistence
+assignment) is open as of 2026-08-13 (see row), bounded within the
+now-resolved file/SecretStorage topology; required by P4.1, it does not
+gate P0 (Complete), and P4.1 cannot exit until the registry/schema/provenance
+contract is evidenced.
 
 | # | Question | Decision | Owner | Required by | Status |
 |---|---|---|---|---|---|
@@ -531,20 +650,22 @@ gate P0.
 | 4 | Sidebar removal timing/order within P3.1 and adoption thresholds | Removal decided (LOCK-001); numeric thresholds TBD | Hub | P3.1 | Partial |
 | 5 | Which consolidated configuration surface replaces settings/profile/marketplace panels, and how does it present custom provider records? | TBD | Hub | P3/P4.1 | Open |
 | R1 | Private transport protocol | Resolved (2026-08-12): JSON-RPC 2.0 over child-process stdio with standard Content-Length framing (`vscode-jsonrpc` precedent). One extension-owned worker child; initialize handshake replaces port detection/health; requests carry commands, notifications carry normalized event envelopes; stderr remains bounded diagnostics; EOF/process exit owns lifecycle. HTTP/SSE/generated SDK remains bridge-only and is deleted. No retained-terminal protocol commitment: terminal/worktree surfaces are not LOCK-008 harness invariants and are handled by their removal/migration scope | Implementation | P4.2 | Resolved |
-| R2 | Storage engine for extension-owned state | Resolved (2026-08-12): extension-owned product/UI config + persisted selector indexes use VS Code `globalState`; per-workspace runtime-tracking state uses `workspaceState`; all secrets use `SecretStorage`; runtime-owned session/event/artifact persistence remains runtime-owned; immutable worker snapshots are derived versioned values, not a second persisted store | Implementation | P4.1 | Resolved |
+| R2 | Storage engine for extension-owned state | Resolved (2026-08-12; **revised 2026-08-13**): canonical files/assets own effective config — one global config root and `<workspaceRoot>/.kilo/` (runtime spec section 3.1); VS Code `globalState`/`workspaceState` own only UI-local/derived state (layout/churn, dismissed state, derived selector/read-model indexes); all secrets use `SecretStorage`; runtime-owned session/event/artifact persistence remains runtime-owned; immutable worker snapshots are derived versioned values — not a second persisted store — identified by canonical file content + schema version + opaque secret references, never by UI state. Original 2026-08-12 wording (product/UI config + selector indexes in `globalState`) preserved as historical evidence | Implementation | P4.1 | Resolved (revised 2026-08-13) |
 | R3 | Numeric startup SLA | Bounded product decision | Hub | P5 | Open |
 | R4 | Adoption thresholds for removal timing | Bounded product decision | Hub | P3 | Open |
-| R5 | Exact project harness-assets path | Resolved (2026-08-12): one canonical project boundary = first VS Code workspace root; project-versioned harness assets live only under `<workspaceRoot>/.kilo/`, including `.kilo/kilo.json[c]`, agent/command/rules/skills/workflows/plans/config assets. P4.1 migrates root/legacy sources; P4.4 deletes ancestor walk, `.kilocode`/`.opencode`, global project-asset sources, and primary-worktree mirror reads. No multi-source precedence remains | Implementation | P4.1 | Resolved |
-| R6 | Dual-read window deadline date | Resolved (2026-08-12): no unsupported calendar date. The explicit deadline is the P4.3 phase boundary: dual-read opens only during P4.3, must shrink monotonically, gains no new bridge consumers, and must be fully closed before P4.3 exits / P4.4 begins. P4.4/P4.5 then delete source/transport/product code; no fallback read survives into P4.4 | Implementation | P4.3 | Resolved |
+| R5 | Exact project harness-assets path | Resolved (2026-08-12): one canonical project boundary = first VS Code workspace root; project-versioned harness assets live only under `<workspaceRoot>/.kilo/`, including `.kilo/kilo.json[c]`, agent/command/rules/skills/workflows/plans/config assets. P4.1 establishes the canonical project files and field registry; the ancestor walk, `.kilocode`/`.opencode`, global project-asset sources, and primary-worktree mirror reads are deleted together at the P4.3 cutover, with per-row removal evidence recorded at P4.4. No multi-source precedence remains; no migration/import tool exists | Implementation | P4.1 | Resolved |
+| R6 | Legacy-reader cutover (formerly: dual-read window deadline) | Resolved (2026-08-12; **revised 2026-08-13**): there is no dual-read compatibility window and no import tool. P4.3 is the last legacy-reader phase boundary: the current implementation may use old sources only before the cutover; at the P4.3 boundary all legacy readers are deleted together and cannot influence effective config. The sole user manually reconciles any desired current configuration into canonical files before the cutover. Original 2026-08-12 decision (dual-read opens only during P4.3, shrinks monotonically, no new bridge consumers, fully closed before P4.3 exits / P4.4 begins) preserved as historical evidence | Implementation | P4.3 | Resolved (revised 2026-08-13) |
 | R7 | Performance gate thresholds (startup stages, prompt-submit/first-token, stream-render, tool/permission, session-switch, config-update, removal reduction) | Open — not a P0 blocker. Required by = before the first P3/P4/P5 performance gate that uses thresholds (and the P1/P2 no-regression gate if applicable), not the P0 baseline recording; P0 satisfies its component by recording descriptive runtime baselines. Threshold policy must be recorded before each affected phase starts/claims its gate, using comparable same-environment control evidence. No invented numerics (LOCK-PERF-6): current underpowered/noisy evidence cannot set thresholds | Hub/Engineering | Before the first threshold-using performance gate (P1/P2 no-regression gate if applicable; P3/P4/P5 gates); not P0 | Open |
 | R8 | Benchmark tooling/harness choice | Resolved (2026-08-12): retain the existing two-harness tooling as the P0 and later comparison harness — Extension Host scenarios 1/2/3/4/5/10 under `packages/kilo-vscode/script/p0-bench/` + runner/merge/safety/provenance tools; backend scenarios 6/7/8/9/11/12/13 under `packages/opencode/test/benchmark/` + runner. Limitations recorded: manual-only, platform/environment/provenance scoped, backend in-process `Server.listen`/`AppLayer` only, n=5 descriptive | Implementation | P0 | Resolved |
+| R9 | Observation/hydration implementation details (snapshot/event handshake; revision scope/ordering/idempotency; ephemeral-fact retention) | Open — bounded implementation decision under the normative observation contract (runtime spec section 7.1); the contract fixes the one-owner and lifecycle-convergence constraints, not the wire schema, event sourcing, polling, timer subsystems, or retention. Required by P4.2: the private-worker observation surface must not ship without it. Not a P0 blocker; P1/P2 record current-behavior convergence evidence without deciding future private handshake mechanics | Implementation | P4.2 | Open |
+| R10 | Canonical schema/field-registry layout and exact persistence assignment | Open — the normative rules are fixed by the runtime spec: legal source taxonomy (section 3.1), field-registry content (section 3.2), typed composition/materialization/provenance (section 5.1), agent-manifest role (section 5.2), permission composition (section 5.3), and the bidirectional file-editing/WYSIWYG contract (section 5.4). File/asset authority is fixed by R2 (revised 2026-08-13) and R10 is bounded within that topology: exact canonical filenames/layout, registry entry per remaining field class, legal scope/operator per field, and watcher owner/stamping/conflict implementation details (runtime spec section 5.4). It does not reopen file authority, the two-level authored scope set, the SecretStorage exception, or the no-migration decision. P4.1 is not verifiable until the registry covers every configurable field class and the schema/provenance/WYSIWYG contract is evidenced | Implementation | P4.1 | Open |
 
 ## 10. Risk / Blocker Log
 
 | Date | Phase | Risk / Blocker | Impact | Mitigation | Owner | Status |
 |---|---|---|---|---|---|---|
 | 2026-08-10 | All | Residual worktree/Diff Viewer and other removed features remain implemented in the current branch | Removal phases must treat them as cleanup scope, never as retained capabilities | Removal inventory (section 7) and P3 gates; truthful current-state claims (LOCK-013) | Manifestor | Monitored |
-| 2026-08-10 | P4 | Dual authority could outlive the migration bridge | Old path retained indefinitely; contract drift | Explicit dual-read deadline (R6); old CLI/server deletion (P4.5) | Manifestor | Monitored |
+| 2026-08-10 | P4 | Dual authority could outlive the migration bridge | Old path retained indefinitely; contract drift | Atomic legacy-reader cutover at P4.3 under revised R6; old CLI/server deletion (P4.5) | Manifestor | Monitored |
 | 2026-08-10 | P4 | Config authority change could interrupt active generations | Generation snapshot instability | Atomic version creation + snapshot pinning (LOCK-011, runtime spec section 5) | Manifestor | Monitored |
 | 2026-08-10 | P5 | Selector availability gated on backend state could regress during migration | Startup degraded until backend ready | Persisted indexes before worker readiness; action-specific gates (LOCK-012) | Manifestor | Monitored |
 | 2026-08-10 | All | Performance claims based on estimates (e.g. 20-40%/30-50%) could become acceptance claims | Unmeasured magnitudes; false performance claims | Evidence-only gates (LOCK-PERF-6); hypotheses flagged; P0 descriptive n=5 baselines recorded with evidence links (section 8, six accepted campaigns); threshold policy required before threshold-using gates (R7, section 9) | Manifestor | Resolved (2026-08-12) |
@@ -555,6 +676,11 @@ gate P0.
 | 2026-08-10 | P0 | Environmental esbuild-watcher process attribution (a non-owned process observed during harness runs) could be misread as a harness/benchmark defect | Misattributed performance or resource claims | Left unresolved as an attribution question; it is not a benchmark claim and no metric depends on it (LOCK-PERF-6) | Manifestor | Monitored |
 | 2026-08-12 | P0 | Merged many-agent-MCP campaign segments ran with different `backendCli` temp paths (`environmentDrift` in `merge-manifest.json`) | Cross-segment timing comparability | Drift recorded and limited to temp paths; all segments share one `cliSnapshotSha256`; values stay descriptive n=5, not SLA (R7 Open) | Manifestor | Monitored |
 | 2026-08-12 | P0 | CLI process-tier files changed after the 2026-08-11 backend campaign ran | Backend campaign numbers describe an older CLI process tier if re-used for later-phase comparison | Current-tier rerun completed 2026-08-12 (`specs/vscode-orchestrator/evidence/p0-baseline/2026-08-12T06-08-27-792Z/backend.jsonl`, git 7a768502dd, 42/42 ok, 79 n=5 summaries); the environmental first-attempt partial (`2026-08-12T06-05-12-356Z/backend.jsonl`, no run finish, scenarios 6/7/8 only) is retained as excluded evidence; the 2026-08-11 campaign remains historical tier evidence only (section 8) | Manifestor | Resolved |
+| 2026-08-13 | P1-P5 | Presentation state can diverge from runtime operational facts across lifecycle boundaries — extension-owned view boundaries (panel close/reopen, reload, session switch) and runtime boundaries (transport reconnect, worker restart). Current-state motivation: the extension derives and persists per-session status/timing read-model state from `session.status` events (`packages/kilo-vscode/src/agent-manager/session-timing.ts`, `packages/kilo-vscode/src/agent-manager/AgentManagerProvider.ts`), while the runtime owns session status (`packages/opencode/src/session/status.ts`); derived state is not revalidated against the runtime at every boundary | Stale or duplicated presentation state; UI-held facts surviving a lifecycle boundary; orphaned processes/resources; lost updates | Sole runtime authority for operational facts with derived presentation state (runtime spec section 7.1); lifecycle-boundary convergence evidence recorded per phase (direction spec section 11); R9 records the bounded implementation decision (section 9) | Manifestor | Monitored |
+| 2026-08-13 | P4 | The config refactor relocates storage but keeps source competition: generic compatibility readers/overlays still contribute to effective config after migration, or dual-read becomes permanent | Effective config keeps merging from competing sources; the removal gates become unverifiable | Closed legal source taxonomy and field registry (runtime spec sections 3.1-3.2); deterministic materialization with typed composition and provenance (runtime spec section 5.1); per-source removal evidence with inactive proof (runtime spec section 8.1; tracker section 7); P4.1/P4.3/P4.4 exit gates (section 5); R10 open and required by P4.1 (section 9) | Manifestor | Monitored |
+| 2026-08-13 | P4 | File and UI effective configuration diverge — external edits, stale drafts, invalid external edits, or deletion/unset produce silent overwrites, partial applies, or legacy fallback | Users lose edits; effective config no longer matches the canonical files; WYSIWYG guarantee broken | Bidirectional file-editing contract with watched external edits, content/version-stamp conflict detection, validation-before-write, and visible reconciliation (runtime spec section 5.4); WYSIWYG acceptance gate at P4.1 (runtime spec section 10.9; direction spec section 11); exact presentation under direction spec Q5 | Manifestor | Monitored |
+| 2026-08-13 | P0-P4 | The 2026-08-13 post-P0 decision revision (file-authoritative hybrid; atomic cutover instead of dual-read) is misread as retroactively changing P0 evidence or as a new ADR | Historical P0 evidence distorted; decision authority confusion | Revision recorded as a durable clarification/revision dated 2026-08-13: ADR-0003 amended in place (not a new ADR), ADR-0002 unchanged, `p0-current-state-inventory.md` unchanged, P0 stays Complete with original R2/R6 wording preserved as historical evidence (runtime spec section 9; tracker section 9) | Manifestor | Monitored |
+| 2026-08-13 | P4 | P4.3 cutover proceeds without a pre-cutover manual reconciliation checklist/evidence for the sole user, or without an explicit mapping of the 15 P0 enumerated sources onto the 13 removal classes / retained legal classes | Desired current configuration lost at the cutover; unclassified baseline sources survive | Pre-cutover reconciliation checklist/evidence recorded for the sole user (manual only; no migration tooling); explicit P0 15-source to 13-removal-class mapping recorded before P4.3 (runtime spec section 8.1; tracker section 7); no-migration decision unchanged | Manifestor | Monitored |
 
 ## 11. Change Log
 
@@ -574,6 +700,11 @@ gate P0.
 | 2026-08-12 | P0 baseline issue requirement removed: P0 closure no longer references or requires a planned baseline GitHub issue; closure uses tracker-local objective test/doc evidence and recorded decisions. Tracker schema (generic `issue: -` / PR/test/doc evidence fields), metrics, campaigns, locks, statuses, and other decisions unchanged. | Manifestor execution of baseline-issue-removal task |
 | 2026-08-12 | P0 session-switch evidence update: accepted the sixth formal repeated baseline campaign — Extension Host session switch (`2026-08-12T07-21-22-201Z/benchmark.jsonl`, git 7a768502dd, gitDirty true, run status ok; one lifecycle, 5 seeded deterministic sessions, real Playwright tab-strip clicks, settled when the active tab id and header title match; 1 warmup + 5 measured, all ok, one n=5 summary); section 8 Session switch row changed from Not proven to Measured (`switchSettleMs` med 195 / p95=max 282 ms, min 115, max 282, mean 201.6; descriptive n=5 only, not SLA/threshold, no P1 navigation parity claim, R7 Open); benchmark-scenarios exit checklist marked MET — full repeated baselines now recorded for all 13 defined scenarios (runtime spec 10.9); session-switch removed from the unmeasured P0 rows and next actions; P0 stays Active; no removal claimed complete | Manifestor execution of P0-evidence update task |
 | 2026-08-12 | P0 decisions finalized and P0 marked Complete: Q3 and R1/R2/R5/R6/R8 resolved and recorded (tracker section 9; inventory section 9 for Q3; runtime spec section 9 for R1/R2/R5/R6/R8) under the locked decision text; R7 stays Open with required-by clarified to "before the first P3/P4/P5 performance gate that uses thresholds (and the P1/P2 no-regression gate if applicable), not the P0 baseline recording"; five `Not proven` metric rows re-scoped to later-phase gates (persisted-selector paint → P5; attribution + per-event transport/webview flush → P2; removed-feature init count + startup-work net reduction → P3/P4.4) and removed from P0 blockers/next actions; P0 exit checklist marked MET for baseline counts, Q3, bounded decisions, instrumentation/baselines, and benchmark reproducibility; P0 status set Complete (2026-08-12) with the recorded objective evidence; P1 left Not started explicitly; risk row for "no performance measurements exist" resolved; no GitHub issue, no target-surface parity, no SLA, no removal completion claimed; canonical architecture docs unchanged (LOCK-013); no commit or push | Manifestor execution of P0 decision-finalization task |
+| 2026-08-13 | Documentation reinforcement: lifecycle-boundary observation generalized into architecture obligations — runtime sole authority for operational facts, presentation derivation, view/session lifecycle isolation, hydration/reconnect convergence, and lifecycle-boundary acceptance evidence. Direction spec: terminology rows (section 4), H-11 (section 6), ownership (section 7), bounded architecture (section 8), acceptance gates (section 11), risks (section 13). Runtime spec: scope cross-reference (section 1), observation/hydration contract (section 7.1), constraints pointer (section 7), R9 added open (section 9). Tracker: Session Bootstrap section, lifecycle-boundary evidence checkboxes in P1/P2/P4, H-11 criterion synced with the direction spec, R9 row, risk and change-log entries. No ADR, inventory, canonical-doc, code, or evidence-file changes; P0 stays Complete; all resolved decision texts unchanged; no commit or push | Manifestor execution of documentation-reinforcement task |
+| 2026-08-13 | Audit corrections accepted: lifecycle-boundary phase mapping aligned — P1 records only the extension-owned view boundaries (panel close/reopen, reload, session switch) on the migration bridge; P2 records all five boundaries (view boundaries plus transport reconnect and worker restart) on harness-parity flows over the current bridge; P4 records all five against the private-worker observation surface. R9 required by P4.2 only (tracker and runtime spec section 9); P1/P2 test current behavior without deciding future private handshake mechanics. Tracker exit checkboxes link to spec sections instead of restating runtime spec 7.1 outcome language; tracker section 6 H-11 note and risk row distinguish view boundaries from runtime boundaries; risk-row provenance replaced with repository evidence (`packages/kilo-vscode/src/agent-manager/session-timing.ts`, `packages/kilo-vscode/src/agent-manager/AgentManagerProvider.ts`, `packages/opencode/src/session/status.ts`); direction spec section 13 risk-table rows corrected to two columns; direction spec section 11 gate and H-11 invariant distinguish boundary classes. P0 stays Complete; all resolved decision texts unchanged; no commit or push | Manifestor execution of audit-correction task |
+| 2026-08-13 | Config-refactor contract strengthened: bounded target configuration model defined in the runtime spec — legal source taxonomy and field registry (sections 3.1-3.2), config authority and deterministic materialization with typed composition, provenance, and env/CLI disposition (section 5.1), typed agent manifests (section 5.2), restrictive permission composition (section 5.3), and effective-config source removal inventory (section 8.1); evidence-vs-target rows added (section 2.6); R10 added open, required by P4.1 (runtime spec and tracker section 9); P4 exit checklist gained field-registry/schema/provenance, dual-read cutoff, and per-source inactive-evidence gates; effective-config source removal evidence table added (tracker section 7) with a counting obligation in section 8 (9 source classes; P4.4 exits with zero rows active); risk and change-log entries added. Direction spec: H-1/H-6 updated to typed agent manifests and restrictive policy composition, preserving capabilities. No ADR, inventory, canonical-doc, code, or evidence-file changes; P0 stays Complete; all resolved decision texts unchanged; no commit or push | Manifestor execution of config-refactor documentation task |
+| 2026-08-13 | File-authoritative hybrid decision revision: durable user decision — all user-authored effective configuration is file-authoritative and WYSIWYG through the UI under exactly two canonical authored scopes (one global config root; `<workspaceRoot>/.kilo/`); no migration/import tool and no dual-read compatibility window (atomic legacy-reader cutover at P4.3; sole user manually reconciles desired configuration before cutover). ADR-0003 amended in place (Decision, LOCK-010/I-2, alternatives, consequences, follow-up; revision dated 2026-08-13; not a new ADR); ADR-0002 unchanged. Runtime spec: ownership domains and legal source taxonomy rewritten (sections 3-3.2), snapshot identity includes canonical file content + schema version + opaque secret references (section 5.1), agent markdown retained as a typed canonical project/global asset (section 5.2), permission contract expanded — child inheritance, question-flow vs `question`-tool distinction, per-session approval records, no-rule=ask, toggle semantics, generated availability defaults (section 5.3) — new bidirectional file-editing/WYSIWYG contract (section 5.4), migration strategy revised to legacy-reader cutover with no dual-read/import (section 7), removal disposition changed to delete with no target reader for 13 source classes including legacy global config filenames/readers and legacy migration readers (section 8.1), R2/R6 revised with original wording preserved as historical evidence and R10 bounded within the resolved topology (section 9), WYSIWYG and permission-evaluator gates added (section 10.9), agent/permission code evidence added (section 2.2). Direction spec: LOCK-010, terminology, surfaces, H-1/H-6 target-contract split (P2 proves current capability; §5.2/§5.3/§5.4 contracts gate at P4), ownership, bounded architecture, gates, compatibility, risks, Q5 (WYSIWYG presentation open; semantics decided). Tracker: Session Bootstrap, phase overview, P0 checklist revision note, P4 scope/exit checklist (cutover, WYSIWYG, permission-evaluator), H-1/H-6 synced, section 7 removal table now 13 rows with delete disposition, section 8 source-count wording fixed, R2/R6/R10 rows, risks and this change-log entry. `p0-current-state-inventory.md` unchanged; P0 stays Complete; canonical architecture docs unchanged (LOCK-013); no commit or push | Manifestor execution of file-authoritative hybrid revision task |
+| 2026-08-13 | Final audit corrections accepted: internal lettered orchestration labels removed from all artifacts and replaced with direct product-language statements or durable IDs (LOCK-010, LOCK-011, R2/R6); runtime spec section 8.1 and tracker section 7 effective-config removal tables completed to 13 source classes with `Evidence phase` columns — adding global project-asset sources and primary-worktree mirror reads — plus the P0 15-source to 13-removal-class mapping obligation and pre-cutover manual reconciliation evidence; phase semantics clarified everywhere — P4.3 performs the atomic legacy-reader cutover/deletion, P4.4 records and verifies per-row inactive/removal evidence and narrows the public transport, P4.5 deletes old CLI/server/product/public interfaces (ADR-0003 consequence corrected; obsolete deadline phrasing removed); runtime spec section 3 table header renamed to `Canonical scopes and legal inputs`. ADR-0002, inventory, and code untouched; P0 stays Complete; no commit or push | Manifestor execution of final-audit-correction task |
 
 ## 12. Links
 
