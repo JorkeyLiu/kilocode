@@ -260,15 +260,15 @@ export function createTerminalHandlers(deps: TerminalHandlerDeps) {
     deps.onRemove?.()
     const ids = deps.tabIds()
     const idx = ids.indexOf(terminalId)
-    // Pick the tab to focus after closing: prefer the next tab, fall
-    // back to the previous one when we just closed the rightmost tab,
+    // Pick the tab to focus after closing: prefer the previous tab, fall
+    // back to the next one when we just closed the leftmost tab,
     // or keep focus unset if this was the only tab in the bar.
     const nextId = ((): string | undefined => {
       if (idx < 0) return undefined
-      const hasNext = idx + 1 < ids.length
-      if (hasNext) return ids[idx + 1]
       const hasPrev = idx > 0
       if (hasPrev) return ids[idx - 1]
+      const hasNext = idx + 1 < ids.length
+      if (hasNext) return ids[idx + 1]
       return undefined
     })()
     const wasActive = deps.state.activeId() === terminalId

@@ -8,12 +8,13 @@
  *
  * Usage:
  *   node script/e2e-probe-launch.mjs [--no-build]      (all scenarios)
- *   KILO_E2E_SCENARIO=child-task-order node script/e2e-probe-launch.mjs
- *   KILO_E2E_SCENARIO=variant-memory   node script/e2e-probe-launch.mjs
+ *   KILO_E2E_SCENARIO=tab-close         node script/e2e-probe-launch.mjs
+ *   KILO_E2E_SCENARIO=child-task-order  node script/e2e-probe-launch.mjs
+ *   KILO_E2E_SCENARIO=variant-memory    node script/e2e-probe-launch.mjs
  *
- * KILO_E2E_SCENARIO (all | child-task-order | variant-memory, default all) is
- * forwarded to the probe and the extension-host runner via the environment;
- * the probe validates it before VS Code launches.
+ * KILO_E2E_SCENARIO (all | tab-close | child-task-order | variant-memory,
+ * default all) is forwarded to the probe and the extension-host runner via the
+ * environment; the probe validates it before VS Code launches.
  */
 import { build } from "esbuild"
 import { spawnSync } from "node:child_process"

@@ -138,11 +138,15 @@ describe("selectTab", () => {
 })
 
 describe("closeTab", () => {
-  it("removes the closed tab and activates the next adjacent tab", () => {
-    expect(closeTab(s(["a", "b", "c"], "b"), "b")).toEqual({ ids: ["a", "c"], active: "c" })
+  it("removes the closed tab and activates the previous adjacent tab", () => {
+    expect(closeTab(s(["a", "b", "c"], "b"), "b")).toEqual({ ids: ["a", "c"], active: "a" })
   })
 
-  it("falls back to previous tab when closing the last one", () => {
+  it("falls back to the next tab when closing the first one", () => {
+    expect(closeTab(s(["a", "b", "c"], "a"), "a")).toEqual({ ids: ["b", "c"], active: "b" })
+  })
+
+  it("prefers the previous tab when closing the last one", () => {
     expect(closeTab(s(["a", "b", "c"], "c"), "c")).toEqual({ ids: ["a", "b"], active: "b" })
   })
 
@@ -167,21 +171,21 @@ describe("closeTab", () => {
     const state = s([ROOT_A, CHILD_A, GRANDCHILD], CHILD_A)
     const result = closeTab(state, CHILD_A)
     expect(result.ids).toEqual([ROOT_A, GRANDCHILD])
-    expect(result.active).toBe(GRANDCHILD)
+    expect(result.active).toBe(ROOT_A)
   })
 
   it("handles closing the active root-looking tab with child-looking neighbors", () => {
     const state = s([CHILD_A, ROOT_A, CHILD_B], ROOT_A)
     const result = closeTab(state, ROOT_A)
     expect(result.ids).toEqual([CHILD_A, CHILD_B])
-    expect(result.active).toBe(CHILD_B)
+    expect(result.active).toBe(CHILD_A)
   })
 
   it("handles closing the active tab with worktree-looking neighbors", () => {
     const state = s([WORKTREE_X, ROOT_A, WORKTREE_Y], ROOT_A)
     const result = closeTab(state, ROOT_A)
     expect(result.ids).toEqual([WORKTREE_X, WORKTREE_Y])
-    expect(result.active).toBe(WORKTREE_Y)
+    expect(result.active).toBe(WORKTREE_X)
   })
 })
 
@@ -370,7 +374,7 @@ describe("removeTab", () => {
     const state = s([ROOT_A, CHILD_A, CHILD_B], CHILD_A)
     const result = removeTab(state, CHILD_A)
     expect(result.ids).toEqual([ROOT_A, CHILD_B])
-    expect(result.active).toBe(CHILD_B)
+    expect(result.active).toBe(ROOT_A)
   })
 
   it("removes a root-looking tab without affecting child-looking tabs", () => {

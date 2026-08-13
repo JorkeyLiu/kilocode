@@ -112,9 +112,23 @@ describe("local session tabs", () => {
     })
   })
 
-  it("selects the neighboring tab after closing the active one", () => {
+  it("selects the previous tab after closing the active one", () => {
     expect(closeTab(state(["s1", "s2", "s3"], "s2"), "s2", makePending())).toEqual({
       ids: ["s1", "s3"],
+      active: "s1",
+    })
+  })
+
+  it("selects the next tab when closing the first tab", () => {
+    expect(closeTab(state(["s1", "s2", "s3"], "s1"), "s1", makePending())).toEqual({
+      ids: ["s2", "s3"],
+      active: "s2",
+    })
+  })
+
+  it("preserves the active tab when closing a non-active one", () => {
+    expect(closeTab(state(["s1", "s2", "s3"], "s3"), "s1", makePending())).toEqual({
+      ids: ["s2", "s3"],
       active: "s3",
     })
   })
@@ -188,12 +202,16 @@ describe("local session tabs", () => {
 })
 
 describe("shared close selection", () => {
-  it("prefers the next tab when closing a middle tab", () => {
-    expect(nextTabAfterClose(["s1", "s2", "s3"], "s2")).toBe("s3")
+  it("prefers the previous tab when closing a middle tab", () => {
+    expect(nextTabAfterClose(["s1", "s2", "s3"], "s2")).toBe("s1")
   })
 
-  it("falls back to the previous tab when closing the tail", () => {
+  it("prefers the previous tab when closing the tail", () => {
     expect(nextTabAfterClose(["s1", "s2", "s3"], "s3")).toBe("s2")
+  })
+
+  it("falls back to the next tab when closing the first tab", () => {
+    expect(nextTabAfterClose(["s1", "s2", "s3"], "s1")).toBe("s2")
   })
 
   it("returns undefined for a final or missing tab", () => {

@@ -1086,6 +1086,7 @@
     "test:visual": "playwright test",
     "test:visual:update": "playwright test --update-snapshots",
     "test:e2e": "node script/e2e-probe-launch.mjs",
+    "test:e2e:tab-close": "KILO_E2E_SCENARIO=tab-close node script/e2e-probe-launch.mjs",
     "test:e2e:child-task-order": "KILO_E2E_SCENARIO=child-task-order node script/e2e-probe-launch.mjs",
     "test:e2e:variant-memory": "KILO_E2E_SCENARIO=variant-memory node script/e2e-probe-launch.mjs",
     "snapshot:build": "bun script/dev-snapshot.ts build",

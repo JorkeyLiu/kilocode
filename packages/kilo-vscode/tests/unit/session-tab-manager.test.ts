@@ -133,12 +133,12 @@ describe("session-tab-manager — openAfter (source-relative child open)", () =>
 })
 
 describe("session-tab-manager — close and deletion fallback", () => {
-  it("close removes ID and returns adjacent fallback", () =>
+  it("close removes ID and returns the previous adjacent fallback", () =>
     withManager((mgr) => {
       mgr.seed(LOCAL, [ROOT_A, CHILD_A, ROOT_B], CHILD_A)
       const next = mgr.close(LOCAL, CHILD_A)
       expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B])
-      expect(next).toBe(ROOT_B) // adjacent (same index)
+      expect(next).toBe(ROOT_A) // prefer the previous tab
     }))
 
   it("close non-active tab preserves active", () =>
@@ -162,7 +162,7 @@ describe("session-tab-manager — close and deletion fallback", () => {
       mgr.seed(LOCAL, [ROOT_A, CHILD_A, ROOT_B], CHILD_A)
       const next = mgr.remove(LOCAL, CHILD_A)
       expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B])
-      expect(next).toBe(ROOT_B)
+      expect(next).toBe(ROOT_A)
     }))
 
   it("close on absent ID is a no-op", () =>
@@ -318,8 +318,8 @@ describe("session-tab-manager — full lifecycle contract", () => {
       mgr.seed(LOCAL, [ROOT_A, CHILD_A, ROOT_B], CHILD_A)
       const next = mgr.remove(LOCAL, CHILD_A)
       expect(mgr.ids(LOCAL)).toEqual([ROOT_A, ROOT_B])
-      // Adjacent fallback: ROOT_B (same index as CHILD_A was)
-      expect(next).toBe(ROOT_B)
+      // Adjacent fallback: ROOT_A (prefer the previous tab)
+      expect(next).toBe(ROOT_A)
     }))
 })
 
@@ -388,14 +388,14 @@ describe("session-tab-manager — deterministic fallback on deletion", () => {
       expect(next).toBe(ROOT_B)
     }))
 
-  it("active middle tab → fallback to next adjacent tab", () =>
+  it("active middle tab → prefer previous adjacent tab", () =>
     withManager((mgr) => {
       mgr.seed(LOCAL, [ROOT_A, ROOT_B, ROOT_C], ROOT_B)
       const next = mgr.remove(LOCAL, ROOT_B)
-      expect(next).toBe(ROOT_C)
+      expect(next).toBe(ROOT_A)
     }))
 
-  it("active last tab → fallback to previous tab", () =>
+  it("active last tab → prefer previous tab", () =>
     withManager((mgr) => {
       mgr.seed(LOCAL, [ROOT_A, ROOT_B, ROOT_C], ROOT_C)
       const next = mgr.remove(LOCAL, ROOT_C)
@@ -438,7 +438,7 @@ describe("session-tab-manager — deterministic fallback on deletion", () => {
       for (const c of mgr.contexts()) mgr.remove(c, sid)
 
       // Fallback is deterministic from registry
-      expect(mgr.active(ctx)).toBe(ROOT_B)
+      expect(mgr.active(ctx)).toBe(ROOT_A)
       // Worktree context unaffected
       expect(mgr.active(WT_X)).toBe(ROOT_B)
     }))
