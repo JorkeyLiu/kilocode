@@ -960,3 +960,150 @@ describe("canonical production resolution — getSelected path", () => {
     expect(getSelected(store, env(), "session-a", "code")).toEqual(gpt)
   })
 })
+
+// ---------------------------------------------------------------------------
+// LOCK-002/003/004/005: lifecycle precedence for configured / recovered /
+// remembered / manual state
+// ---------------------------------------------------------------------------
+
+describe("LOCK-002 — new session starts from configured model over memory", () => {
+  it("configured per-agent model beats remembered model for a fresh session", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      modelSelections: { code: gpt }, // remembered usage memory
+    }
+    const configured: ResolveEnv = {
+      ...env(),
+      getModeModel: (name) => (name === "code" ? claude : null),
+    }
+
+    expect(getSessionModel(store, configured, "session-new", "code")).toEqual(claude)
+  })
+
+  it("configured global model beats remembered model for a fresh session", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      modelSelections: { code: gpt }, // remembered usage memory
+    }
+    const configured: ResolveEnv = {
+      ...env(),
+      getGlobalModel: () => claude,
+    }
+
+    expect(getSessionModel(store, configured, "session-new", "code")).toEqual(claude)
+  })
+
+  it("remembered model applies when no configured value exists", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      modelSelections: { code: gpt },
+    }
+
+    expect(getSessionModel(store, env(), "session-new", "code")).toEqual(gpt)
+  })
+})
+
+describe("LOCK-003 — restored session keeps its actual model over config and memory", () => {
+  it("recovered model beats configured and remembered values", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": claude },
+      modelSelections: { code: gpt }, // remembered
+    }
+    const configured: ResolveEnv = {
+      ...env(),
+      getModeModel: () => gpt, // configured per-agent model
+    }
+
+    expect(getSessionModel(store, configured, "session-a", "code")).toEqual(claude)
+  })
+
+  it("recovered model survives per-agent memory and config global", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionRecoveredModels: { "session-a": claude },
+      modelSelections: { code: gpt },
+    }
+    const configured: ResolveEnv = {
+      ...env(),
+      getGlobalModel: () => gpt,
+    }
+
+    expect(getSessionModel(store, configured, "session-a", "code")).toEqual(claude)
+  })
+})
+
+describe("LOCK-004 — switching agent resolves configured then remembered model", () => {
+  it("explicit agent switch uses the target agent's configured model first", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      agentSelections: { "session-a": "ask" },
+      modelSelections: { ask: gpt }, // remembered for ask
+    }
+    const configured: ResolveEnv = {
+      ...env(),
+      getModeModel: (name) => (name === "ask" ? claude : null),
+    }
+
+    // Target agent ask has a configured model → it wins over ask's memory.
+    expect(getSessionModel(store, configured, "session-a", "code")).toEqual(claude)
+  })
+
+  it("explicit agent switch uses the target agent's remembered model when no config", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      agentSelections: { "session-a": "ask" },
+      modelSelections: { ask: gpt },
+    }
+
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+
+  it("switching agent does not resurrect the old agent's recovered model", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      agentSelections: { "session-a": "ask" }, // user switched to ask
+      sessionRecoveredAgents: { "session-a": "code" },
+      sessionRecoveredModels: { "session-a": claude }, // used under code
+      modelSelections: { ask: gpt },
+    }
+
+    // Recovered claude belonged to code; the explicit ask resolves ask's chain.
+    expect(getSessionModel(store, env(), "session-a", "code")).toEqual(gpt)
+  })
+})
+
+describe("LOCK-005 — manual session choice persists memory but not the next configured start", () => {
+  it("manual in-session choice wins for the current session and stays a session override", () => {
+    const store: ModelStore = {
+      ...emptyStore(),
+      sessionOverrides: { "session-a": gpt },
+      modelSelections: { code: claude },
+    }
+    const configured: ResolveEnv = {
+      ...env(),
+      getModeModel: () => claude,
+    }
+
+    // Current session shows the manual choice.
+    expect(getSessionModel(store, configured, "session-a", "code")).toEqual(gpt)
+    // The override is session-scoped; nothing rewrote the configured tier.
+    expect(configured.getModeModel("code")).toEqual(claude)
+  })
+
+  it("a later new session still starts from configured values, ignoring the manual memory", () => {
+    let store: ModelStore = emptyStore()
+    const configured: ResolveEnv = {
+      ...env(),
+      getModeModel: (name) => (name === "code" ? claude : null),
+    }
+
+    // Manual in-session pick (current session).
+    let result = applyModel(store, "code", gpt, "session-a")
+    store = { ...store, ...result }
+    expect(getSessionModel(store, configured, "session-a", "code")).toEqual(gpt)
+
+    // A later new session (no override, no recovery) starts from config claude.
+    expect(getSessionModel(store, configured, "session-b", "code")).toEqual(claude)
+  })
+})

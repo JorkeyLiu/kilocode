@@ -117,7 +117,7 @@ export class SessionTiming {
     return true
   }
 
-  /** Remove a session's timing state (forget/close/delete). */
+  /** Remove a session's timing state (explicit forget or backend delete). */
   forget(sid: string): void {
     if (!this.map.delete(sid)) return
     this.persist()

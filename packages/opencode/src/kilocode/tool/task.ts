@@ -93,8 +93,12 @@ export namespace KiloTask {
   }
 
   type Model = { providerID: ProviderV2.ID; modelID: ModelV2.ID }
-  type Saved = Model & { variant?: string }
-  type Choice = { model: Model; variant?: string; sticky?: boolean; direct?: boolean }
+  type Saved = {
+    model?: Model
+    /** Usage-memory variant for an exact agent+model: agent+model key first, then the model-only legacy key. */
+    variantFor: (model: Model) => string | undefined
+  }
+  type Choice = { model: Model; explicit?: string; sticky?: boolean }
 
   function key(model: Model) {
     return `${model.providerID}/${model.modelID}`
@@ -110,7 +114,10 @@ export namespace KiloTask {
   }
 
   const saved = Effect.fn("KiloTask.savedModel")(function* (name: string) {
-    if (Flag.KILO_CLIENT !== "cli") return undefined
+    // Shared state file is read by clients that run the same backend binary
+    // against the same state dir: the CLI TUI and the VS Code-spawned backend
+    // (KILO_CLIENT=vscode). Unknown clients stay out.
+    if (Flag.KILO_CLIENT !== "cli" && Flag.KILO_CLIENT !== "vscode") return undefined
     const file = path.join(Global.Path.state, "model.json")
     const state = yield* Effect.tryPromise({
       try: () =>
@@ -121,11 +128,14 @@ export namespace KiloTask {
           .catch(() => undefined),
       catch: () => undefined,
     })
-    const model = state?.model?.[name]
-    if (!model) return undefined
+    if (!state) return undefined
     return {
-      ...model,
-      variant: state?.variant?.[`${model.providerID}/${model.modelID}`],
+      model: state.model?.[name],
+      // Variant usage memory is looked up per exact (agent, model) pair and
+      // does not require the agent to have a saved model entry: a legacy
+      // model-only variant applies to the finally selected model even when
+      // that model came from configured or parent fallback.
+      variantFor: (model: Model) => state.variant?.[`agent/${name}/${key(model)}`] ?? state.variant?.[key(model)],
     }
   })
 
@@ -141,31 +151,19 @@ export namespace KiloTask {
     const state = yield* saved(input.name)
     const cfg = parse(input.config.subagent_model)
     const override = (model: Model) => input.config.subagent_variant_overrides?.[key(model)] ?? undefined
-    const choices: Array<Choice | undefined> = [
-      state
-        ? {
-            model: { providerID: state.providerID, modelID: state.modelID },
-            variant: state.variant,
-            sticky: true,
-          }
-        : undefined,
-      input.agent.model ? { model: input.agent.model, variant: input.agent.variant, direct: true } : undefined,
-      cfg ? { model: cfg, variant: input.config.subagent_variant ?? undefined } : undefined,
+    // Model candidates in precedence order: exact agent configured model →
+    // configured subagent default → saved usage-memory model → parent.
+    const candidates: Array<Choice | undefined> = [
+      input.agent.model ? { model: input.agent.model, explicit: input.agent.variant } : undefined,
+      cfg ? { model: cfg, explicit: input.config.subagent_variant ?? undefined } : undefined,
+      state?.model ? { model: state.model, sticky: true } : undefined,
     ]
 
-    for (const choice of choices) {
+    // Resolve the final model first; the variant is resolved for that exact
+    // agent+model afterwards (see below).
+    let winner: Choice | undefined
+    for (const choice of candidates) {
       if (!choice) continue
-      if (choice.direct) {
-        const full = yield* input.provider.getModel(choice.model.providerID, choice.model.modelID).pipe(
-          Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
-        )
-        if (!full) continue
-        const value = override(choice.model)
-        const validOverride = value && full.variants?.[value] ? value : undefined
-        const validVariant = choice.variant && full.variants?.[choice.variant] ? choice.variant : undefined
-        const variant = validOverride ?? validVariant
-        return { model: choice.model, variant }
-      }
       const full = yield* input.provider.getModel(choice.model.providerID, choice.model.modelID).pipe(
         Effect.catchTag("ProviderModelNotFoundError", (err) =>
           Effect.sync(() => {
@@ -179,22 +177,30 @@ export namespace KiloTask {
         ),
       )
       if (!full) continue
-      const fallback = choice.variant && full.variants?.[choice.variant] ? choice.variant : undefined
-      const value = override(choice.model)
-      const variant = value && full.variants?.[value] ? value : fallback
-      return {
-        model: choice.sticky && variant ? { ...choice.model, variant } : choice.model,
-        variant,
-      }
+      winner = choice
+      break
     }
+    const model = winner?.model ?? input.parent
+    const full = yield* input.provider.getModel(model.providerID, model.modelID).pipe(
+      Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)),
+    )
+    const usable = (value?: string) => (value && full?.variants?.[value] ? value : undefined)
+    const withSticky = (variant?: string) =>
+      winner?.sticky && variant ? { ...model, variant } : model
 
-    const value = override(input.parent)
-    const full = yield* input.provider
-      .getModel(input.parent.providerID, input.parent.modelID)
-      .pipe(Effect.catchTag("ProviderModelNotFoundError", () => Effect.succeed(undefined)))
-    const validOverride = value && full?.variants?.[value] ? value : undefined
-    const validInherited = input.variant && full?.variants?.[input.variant] ? input.variant : undefined
-    const variant = validOverride ?? validInherited
-    return { model: input.parent, variant }
+    // Resolve the variant for that exact agent+model: per-model configured
+    // override → explicit/configured strength from the winning start →
+    // agent+model usage memory → model-only usage memory → applicable parent
+    // fallback. Exact-agent/global configured starts beat memory; memory
+    // applies even when the agent has no saved model entry.
+    const overrideV = usable(override(model))
+    if (overrideV) return { model: withSticky(overrideV), variant: overrideV }
+    const explicitV = usable(winner?.explicit)
+    if (explicitV) return { model, variant: explicitV }
+    const memoryV = state ? usable(state.variantFor(model)) : undefined
+    if (memoryV) return { model: withSticky(memoryV), variant: memoryV }
+    const inheritedV = !winner ? usable(input.variant) : undefined
+    if (inheritedV) return { model, variant: inheritedV }
+    return { model, variant: undefined }
   })
 }

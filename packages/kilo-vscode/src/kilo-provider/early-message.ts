@@ -13,11 +13,13 @@ type Ctx = {
   post: (msg: unknown) => void
   exportTranscript: (sessionID: string) => Promise<void>
   openSessions: (ids: string[]) => void
+  /** VS Code globalState variantSelections adapter (cache + migration source). */
+  variantCache?: ModelState.VariantCache
 }
 
 export async function routeEarlyMessage(message: { type: string }, ctx: Ctx): Promise<boolean> {
   await routeSuggestionWebviewMessage(ctx.question, message)
-  if (await ModelState.handleMessage(message.type, message, ctx.client, ctx.post)) return true
+  if (await ModelState.handleMessage(message.type, message, ctx.client, ctx.post, ctx.variantCache)) return true
   if (message.type === "exportSessionTranscript") {
     const input = message as { sessionID?: unknown }
     if (typeof input.sessionID === "string") await ctx.exportTranscript(input.sessionID)

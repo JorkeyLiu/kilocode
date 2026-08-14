@@ -922,6 +922,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
           post: (msg) => this.postMessage(msg),
           exportTranscript: (sessionID) => this.handleExportSessionTranscript(sessionID),
           openSessions: (ids) => this.trackOpenSessions(ids),
+          variantCache: this.variantCache(),
         })
       ) {
         return
@@ -1369,17 +1370,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
           // webview never sends this when the flag is off).
           p0Webview(message.stage, message.t, message.wd)
           break
-        case "persistVariant": {
-          const stored = this.extensionContext?.globalState.get<Record<string, string>>("variantSelections") ?? {}
-          stored[message.key] = message.value
-          await this.extensionContext?.globalState.update("variantSelections", stored)
-          break
-        }
-        case "requestVariants": {
-          const variants = this.extensionContext?.globalState.get<Record<string, string>>("variantSelections") ?? {}
-          this.postMessage({ type: "variantsLoaded", variants })
-          break
-        }
         case "persistRecents":
           await this.extensionContext?.globalState.update("recentModels", validateRecents(message.recents))
           break
@@ -3904,6 +3894,19 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   }
 
   /**
+   * VS Code globalState `variantSelections` adapter used as the model.json
+   * variant-memory migration source / synchronized compatibility cache.
+   */
+  private variantCache(): ModelState.VariantCache {
+    return {
+      read: () => this.extensionContext?.globalState.get<Record<string, string>>("variantSelections") ?? {},
+      write: async (value) => {
+        await this.extensionContext?.globalState.update("variantSelections", value)
+      },
+    }
+  }
+
+  /**
    * Reset all "kilo-code.new.*" extension settings to their defaults by reading
    * contributes.configuration from the extension's package.json at runtime.
    * Only resets settings under the "kilo-code.new." namespace to avoid touching
@@ -3933,7 +3936,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     }
 
     // Clear globalState items that are not part of the configuration
-    await this.extensionContext?.globalState.update("variantSelections", undefined)
     await this.extensionContext?.globalState.update("recentModels", undefined)
     await this.extensionContext?.globalState.update("kilo.agentMigrationBannerDismissed", undefined)
     await this.extensionContext?.globalState.update("kilo.marketplace.dismissedSuggestions", undefined)
@@ -3945,10 +3947,9 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.sendNotificationSettings()
     this.sendTimelineSetting()
     this.sendWorkStyle()
-    await ModelState.reset(this.client, (msg) => this.postMessage(msg))
+    await ModelState.reset(this.client, (msg) => this.postMessage(msg), this.variantCache())
 
     // Re-send globalState items to the webview
-    this.postMessage({ type: "variantsLoaded", variants: {} })
     this.postMessage({ type: "recentsLoaded", recents: [] })
 
     vscode.window.showInformationMessage("Kilo Code settings have been reset to defaults.")

@@ -226,25 +226,55 @@ describe("sendMessage / sendCommand draft id contract", () => {
     // Fresh draft IDs are created after ModeSwitcher stored the selected mode in
     // pendingAgentSelection(). The draft scope must inherit that pending agent
     // before promptAgent(scope) runs, otherwise the first send pairs the selected
-    // model with the default agent's system prompt.
+    // model with the default agent's system prompt. The seed block also runs on
+    // reuse of an existing draft (failed/in-flight send) so repicked composer
+    // choices replace the stale first-seed state (LOCK-002).
     const body = extractFunctionBody(source, "sendMessage")
     expect(body).toMatch(
-      /if \(!sid && !draftID && effectiveDraftID\) agentDrafts\.seed\(effectiveDraftID\)[\s\S]*const agent = promptAgent\(scope\)/,
+      /if \(!sid && effectiveDraftID\) \{[\s\S]*agentDrafts\.seed\(effectiveDraftID\)[\s\S]*const agent = promptAgent\(scope\)/,
     )
   })
 
   it("sendCommand seeds the pending agent before resolving the draft-scoped agent", () => {
     const body = extractFunctionBody(source, "sendCommand")
     expect(body).toMatch(
-      /if \(!sid && !draftID && effectiveDraftID\) agentDrafts\.seed\(effectiveDraftID\)[\s\S]*const agent = promptAgent\(scope\)/,
+      /if \(!sid && effectiveDraftID\) \{[\s\S]*agentDrafts\.seed\(effectiveDraftID\)[\s\S]*const agent = promptAgent\(scope\)/,
     )
   })
 
   it("does not clear a newer pending agent when a seeded draft is promoted", () => {
+    // The pending agent belongs to the composer and stays untouched when a
+    // seeded draft is promoted — the composer may already hold a newer pick
+    // for the next send. handleSessionCreated must never write it.
     const body = extractFunctionBody(source, "handleSessionCreated")
-    const draftBlock = body.match(/if \(draftID\) \{([\s\S]*?)\} else if/)
+    expect(body).not.toContain("setPendingAgentSelection")
+  })
+
+  it("no-draft sessionCreated never seeds pending composer choices", () => {
+    // A replayed/backend/delegated sessionCreated carries no draftID and must
+    // never consume pending agent/model/variant state (the reported
+    // nexus/inspector + nexus/manifestor corruption where a no-draft replay
+    // exposed legacy model-only high). Nothing outside the draft-correlated
+    // branch may touch pending choices.
+    const body = extractFunctionBody(source, "handleSessionCreated")
+    expect(body).not.toContain("seedPendingChoices")
+    expect(body).not.toContain("pendingAgentSelection()")
+    expect(body).not.toContain("pendingModelSelection()")
+    expect(body).not.toContain("pendingVariantSelection()")
+    expect(body).not.toMatch(/if \(draftID\) \{[\s\S]*?\} else/)
+  })
+
+  it("consumes pending picks only when the correlated draft session lands", () => {
+    // The clearing must live inside the draft branch: a no-draft session must
+    // not clear picks the user is still composing with.
+    const body = extractFunctionBody(source, "handleSessionCreated")
+    const draftBlock = body.match(/if \(draftID\) \{([\s\S]*?)\n      \}/)
     expect(draftBlock).not.toBeNull()
-    expect(draftBlock![1]).not.toContain("setPendingAgentSelection(null)")
+    expect(draftBlock![1]).toContain("setPendingModelSelection(null)")
+    expect(draftBlock![1]).toContain("setPendingVariantSelection(null)")
+    const after = body.slice((draftBlock!.index ?? 0) + draftBlock![0].length)
+    expect(after).not.toContain("setPendingModelSelection")
+    expect(after).not.toContain("setPendingVariantSelection")
   })
 
   it("only selects a created session when its explicit draft is still active", () => {
@@ -253,13 +283,71 @@ describe("sendMessage / sendCommand draft id contract", () => {
     expect(body).not.toMatch(/if \(!draftID \|\|/)
   })
 
-  it("prunes seeded draft agents only after the draft is abandoned", () => {
+  it("prunes an abandoned draft's full owned state via pruneDraftState", () => {
     const failed = extractFunctionBody(source, "handleSendMessageFailed")
     expect(source).toMatch(/const agentDrafts = createDraftAgentSeed/)
     expect(source).toContain("active: (draft) => !!submissionMap[draft]")
+    // Send failure pruned only the seeded agent. The bounded pruneDraftState
+    // helper must release agent + model override + recovered entries +
+    // session-scoped variant keys, and only for an abandoned draft (the
+    // active draft keeps its picks for the composer's retry).
     expect(failed).toContain("draftSessionID() !== message.draftID")
-    expect(failed).toContain("agentDrafts.prune(message.draftID)")
+    expect(failed).toContain("pruneDraftState(message.draftID)")
     expect(failed).not.toContain("setDraftSessionID(message.draftID)")
+  })
+
+  it("does not prune a draft while another submission on it remains in flight", () => {
+    // One failed submission must not release the draft's owned state when a
+    // second submission on the same draft is still active (e.g. after
+    // navigation changed draftSessionID). agentDrafts.prune is internally
+    // active-guarded, but pruneDraftState's model/recovered/variant deletes
+    // are not, so the whole helper call needs the submission guard. The guard
+    // must sit at the prune decision point, after finishSubmission removed the
+    // failed submission, so isSubmitting reflects remaining in-flight sends.
+    const failed = extractFunctionBody(source, "handleSendMessageFailed")
+    expect(failed).toContain("finishSubmission(message.messageID)")
+    expect(failed).toMatch(
+      /if \(draftSessionID\(\) !== message\.draftID && !isSubmitting\(message\.draftID\)\) pruneDraftState\(message\.draftID\)/,
+    )
+  })
+
+  it("pruneDraftState releases exactly the draft's agent, override, recovered, and variant keys", () => {
+    // Mirrors transferDraftState's delete half: every draft-keyed
+    // agent/model/variant entry is dropped together so an abandoned draft can
+    // never strand state that later drafts or memory tiers could observe.
+    const helper = source.match(/function pruneDraftState\(draftID: string\) \{([\s\S]*?)\n  \}/)
+    expect(helper).not.toBeNull()
+    expect(helper![1]).toContain("agentDrafts.prune(draftID)")
+    expect(helper![1]).toMatch(/delete s\.agentSelections\[draftID\]/)
+    expect(helper![1]).toMatch(/delete s\.sessionOverrides\[draftID\]/)
+    expect(helper![1]).toMatch(/delete s\.sessionRecoveredModels\[draftID\]/)
+    expect(helper![1]).toMatch(/delete s\.sessionRecoveredAgents\[draftID\]/)
+    expect(helper![1]).toMatch(/delete s\.sessionRecoveredVariants\[draftID\]/)
+    expect(helper![1]).toMatch(/sessionVariantKeys\(s\.variantSelections, draftID\)/)
+  })
+})
+
+describe("handleSessionCreated recovery readiness contract", () => {
+  const source = readFile(SESSION_FILE)
+
+  it("marks only draft-backed webview-initiated sessions recovery-ready", () => {
+    // The extension echoes draftID only for sessions created from this
+    // webview's sendMessage/sendCommand (resolveSession). Replayed
+    // session.created events for restored/existing sessions carry no draftID
+    // and must stay memory-gated until recoverPrefs completes — an
+    // unconditional markRecovered would open variant memory before history.
+    const body = extractFunctionBody(source, "handleSessionCreated")
+    expect(body).toMatch(/if \(draftID\) markRecovered\(session\.id\)/)
+    expect(body).not.toMatch(/^\s*markRecovered\(session\.id\)\s*$/m)
+  })
+
+  it("recoverPrefs is the only gate opener for replayed/restored sessions", () => {
+    // Restored sessions become recovery-ready exactly when their message
+    // history is recovered (messagesLoaded/reconcile/revert/cloud paths all
+    // funnel through recoverPrefs). If recoverPrefs ever stops marking the
+    // session, a replayed session could never resolve remembered strength.
+    const body = extractFunctionBody(source, "recoverPrefs")
+    expect(body).toContain("markRecovered(sessionID)")
   })
 })
 

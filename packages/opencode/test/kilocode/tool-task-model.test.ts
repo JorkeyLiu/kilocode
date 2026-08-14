@@ -258,17 +258,17 @@ function run(input: {
 }
 
 describe("tool.task model resolution", () => {
-  it.live("saved model beats agent config for pinned", () =>
+  it.live("configured agent model and variant beat saved memory for pinned", () =>
     run({
       agent: "pinned",
       state: { model: { pinned: saved }, variant: { "saved-provider/saved-model": savedVariant } },
     }).pipe(
       Effect.tap((result) =>
         Effect.sync(() => {
-          expect(result.prompt).toEqual(saved)
-          expect(result.variant).toEqual(savedVariant)
-          expect(result.model).toMatchObject({ ...saved, variant: savedVariant })
-          expect(result.metadataVariant).toEqual(savedVariant)
+          expect(result.prompt).toEqual(cfg)
+          expect(result.variant).toEqual(cfgVariant)
+          expect(result.model).toEqual(cfg)
+          expect(result.metadataVariant).toEqual(cfgVariant)
         }),
       ),
     ),
@@ -564,10 +564,27 @@ describe("tool.task model resolution", () => {
     ),
   )
 
-  it.live("non-CLI client gate ignores saved worker model and uses parent", () =>
+  it.live("VS Code backend reads the shared saved worker model and variant", () =>
     run({
       agent: "worker",
       client: "vscode",
+      state: { model: { worker: saved }, variant: { "saved-provider/saved-model": savedVariant } },
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(result.prompt).toEqual(saved)
+          expect(result.variant).toEqual(savedVariant)
+          expect(result.model).toMatchObject({ ...saved, variant: savedVariant })
+          expect(result.metadataVariant).toEqual(savedVariant)
+        }),
+      ),
+    ),
+  )
+
+  it.live("unknown client gate ignores saved worker model and uses parent", () =>
+    run({
+      agent: "worker",
+      client: "jetbrains",
       state: { model: { worker: saved }, variant: { "saved-provider/saved-model": savedVariant } },
     }).pipe(
       Effect.tap((result) =>
@@ -576,6 +593,84 @@ describe("tool.task model resolution", () => {
           expect(result.variant).toBeUndefined()
           expect(result.model).toEqual(parent)
           expect(result.metadataVariant).toBeUndefined()
+        }),
+      ),
+    ),
+  )
+
+  it.live("exact agent+model variant memory beats model-only memory", () =>
+    run({
+      agent: "worker",
+      state: {
+        model: { worker: saved },
+        variant: {
+          "saved-provider/saved-model": savedVariant,
+          [`agent/worker/saved-provider/saved-model`]: overrideVariant,
+        },
+      },
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(result.prompt).toEqual(saved)
+          expect(result.variant).toEqual(overrideVariant)
+          expect(result.model).toMatchObject({ ...saved, variant: overrideVariant })
+          expect(result.metadataVariant).toEqual(overrideVariant)
+        }),
+      ),
+    ),
+  )
+
+  it.live("legacy model-only variant applies to the configured model with no saved model entry (vscode)", () =>
+    run({
+      agent: "worker",
+      client: "vscode",
+      state: { variant: { "saved-provider/saved-model": savedVariant } },
+      config: { subagent_model: "saved-provider/saved-model" },
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          // The final model comes from the configured subagent start; the
+          // agent has no saved model entry, yet its legacy model-only memory
+          // must still drive the variant.
+          expect(result.prompt).toEqual(saved)
+          expect(result.variant).toEqual(savedVariant)
+          expect(result.model).toEqual(saved)
+          expect(result.metadataVariant).toEqual(savedVariant)
+        }),
+      ),
+    ),
+  )
+
+  it.live("legacy model-only variant applies to the parent-fallback model with no saved model entry", () =>
+    run({
+      agent: "worker",
+      state: { variant: { "parent-provider/parent-model": overrideVariant } },
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          // No agent config, no subagent config, no saved model — the final
+          // model is the parent; the model-only memory for it still applies.
+          expect(result.prompt).toEqual(parent)
+          expect(result.variant).toEqual(overrideVariant)
+          expect(result.model).toEqual(parent)
+          expect(result.metadataVariant).toEqual(overrideVariant)
+        }),
+      ),
+    ),
+  )
+
+  it.live("configured strength beats model-only memory for a configured start", () =>
+    run({
+      agent: "worker",
+      state: { variant: { "config-provider/config-model": savedVariant } },
+      config: { subagent_model: "config-provider/config-model", subagent_variant: cfgVariant },
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(result.prompt).toEqual(cfg)
+          expect(result.variant).toEqual(cfgVariant)
+          expect(result.model).toEqual(cfg)
+          expect(result.metadataVariant).toEqual(cfgVariant)
         }),
       ),
     ),

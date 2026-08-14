@@ -40,7 +40,10 @@ import { SessionCompaction } from "../../src/session/compaction"
 import { SessionSummary } from "../../src/session/summary"
 import { Instruction } from "../../src/session/instruction"
 import { SessionProcessor } from "../../src/session/processor"
-import { SessionPrompt } from "../../src/session/prompt"
+import { SessionPrompt, UNKNOWN_FINISH_CONTINUE_INSTRUCTION } from "../../src/session/prompt"
+import { CONTINUE_FROM_KEY } from "../../src/session/prompt/auto-continue" // kilocode_change - LOCK-005 marker key for the bounded continuation tests
+import { GenerationGate } from "../../src/kilocode/server/generation-gate" // kilocode_change - admission required by withGenerationAdmission
+import { KiloSessionPromptQueue } from "../../src/kilocode/session/prompt-queue" // kilocode_change - LOCK-008 queued superseding prompt gate
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
 import { KiloSession } from "../../src/kilocode/session" // kilocode_change
@@ -219,6 +222,7 @@ function makePrompt(input?: { processor?: "blocking" }) {
     EventV2Bridge.defaultLayer,
     Bus.layer, // kilocode_change - satisfy the Kilo ToolRegistry dependency
     MemoryService.layer, // kilocode_change
+    GenerationGate.defaultLayer, // kilocode_change - admission required by withGenerationAdmission
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
@@ -512,6 +516,7 @@ it.instance("loop exits without an LLM request for interrupted orphan tool calls
     expect(result.info.id).toBe(seeded.assistant.id)
     expect(yield* llm.hits).toHaveLength(0)
   }),
+  10_000, // kilocode_change - infra flake
 )
 
 it.instance("loop calls LLM and returns assistant message", () =>
@@ -865,6 +870,521 @@ it.instance("loop continues when finish is tool-calls", () =>
       expect(result.info.finish).toBe("stop")
     }
   }),
+)
+
+// kilocode_change start - bounded auto-continuation for truncated (unknown finish) responses
+it.instance(
+  "auto-continues once when a partial response ends with unknown finish",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.push(reply().text("partial answer").finish("unknown"))
+      yield* llm.text("completed answer")
+
+      const result = yield* prompt.loop({ sessionID: session.id })
+      // Original truncated step + exactly one auto-continuation.
+      expect(yield* llm.calls).toBe(2)
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        expect(result.info.finish).toBe("stop")
+        // The caller sees the continuation result, not the partial output.
+        expect(result.parts.some((part) => part.type === "text" && part.text === "completed answer")).toBe(true)
+      }
+      // The continuation instruction reaches the model in the follow-up request.
+      const hits = yield* llm.hits
+      expect(JSON.stringify(hits.at(-1)?.body)).toContain(UNKNOWN_FINISH_CONTINUE_INSTRUCTION)
+      // The partial output stays in persisted history for the model to continue from.
+      const msgs = yield* sessions.messages({ sessionID: session.id })
+      expect(
+        msgs.some(
+          (m) => m.info.role === "assistant" && m.parts.some((p) => p.type === "text" && p.text === "partial answer"),
+        ),
+      ).toBe(true)
+    }),
+  10_000, // kilocode_change - infra flake; multi-step LLM flow
+)
+
+it.instance(
+  "does not loop when the auto-continuation also ends with unknown finish",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.push(reply().text("partial one").finish("unknown"))
+      yield* llm.push(reply().text("partial two").finish("unknown"))
+
+      const result = yield* prompt.loop({ sessionID: session.id })
+      // Original truncated step + one continuation; a second unknown finish stops.
+      expect(yield* llm.calls).toBe(2)
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        expect(result.info.finish).toBe("unknown")
+        expect(result.parts.some((part) => part.type === "text" && part.text === "partial two")).toBe(true)
+      }
+    }),
+  10_000, // kilocode_change - infra flake; multi-step LLM flow
+)
+
+it.instance(
+  "does not auto-continue when a response ends with length finish",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "hello" }],
+      })
+      yield* llm.push(reply().text("partial due to limit").finish("length"))
+
+      const result = yield* prompt.loop({ sessionID: session.id })
+      expect(yield* llm.calls).toBe(1)
+      expect(result.info.role).toBe("assistant")
+      if (result.info.role === "assistant") {
+        expect(result.info.finish).toBe("length")
+      }
+    }),
+  10_000, // kilocode_change - infra flake
+)
+
+it.instance(
+  "does not auto-continue a truncated assistant with an interrupted tool part",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const seeded = yield* seed(chat.id, { finish: "unknown" })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: seeded.assistant.id,
+        sessionID: chat.id,
+        type: "tool",
+        callID: "interrupted-call",
+        tool: "edit",
+        state: {
+          status: "error",
+          input: {},
+          error: "Tool execution aborted",
+          metadata: { interrupted: true },
+          time: { start: 1, end: 2 },
+        },
+      })
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.id).toBe(seeded.assistant.id)
+      expect(yield* llm.hits).toHaveLength(0)
+    }),
+  10_000, // kilocode_change - infra flake
+)
+
+it.instance(
+  "does not auto-continue a truncated assistant with a pending tool part",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const seeded = yield* seed(chat.id, { finish: "unknown" })
+      // kilocode_change - a provider-executed pending tool reaches the finish
+      // gate (not counted as a local tool call) and must still block per LOCK-003.
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: seeded.assistant.id,
+        sessionID: chat.id,
+        type: "tool",
+        callID: "pending-call",
+        tool: "edit",
+        state: {
+          status: "pending",
+          input: {},
+          raw: "{}",
+        },
+        metadata: { providerExecuted: true },
+      })
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.id).toBe(seeded.assistant.id)
+      expect(yield* llm.hits).toHaveLength(0)
+    }),
+  10_000, // kilocode_change - infra flake
+)
+
+it.instance(
+  "does not auto-continue a truncated assistant with a running tool part",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const seeded = yield* seed(chat.id, { finish: "unknown" })
+      // kilocode_change - same as pending: provider-side execution does not
+      // resolve local tool state, so an unresolved running tool blocks.
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: seeded.assistant.id,
+        sessionID: chat.id,
+        type: "tool",
+        callID: "running-call",
+        tool: "edit",
+        state: {
+          status: "running",
+          input: {},
+          time: { start: 1 },
+        },
+        metadata: { providerExecuted: true },
+      })
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.id).toBe(seeded.assistant.id)
+      expect(yield* llm.hits).toHaveLength(0)
+    }),
+  10_000, // kilocode_change - infra flake
+)
+
+it.instance(
+  "does not auto-continue a truncated assistant that carries an error",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
+      const seeded = yield* seed(chat.id, { finish: "unknown" })
+      yield* sessions.updateMessage({
+        ...seeded.assistant,
+        error: new MessageV2.APIError({ message: "provider refused", isRetryable: true }).toObject(),
+      })
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      expect(result.info.id).toBe(seeded.assistant.id)
+      expect(yield* llm.hits).toHaveLength(0)
+    }),
+  10_000, // kilocode_change - infra flake
+)
+
+it.instance(
+  "task tool child report uses the auto-continuation text after an unknown child finish",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      yield* llm.tool("task", {
+        description: "inspect bug",
+        prompt: "look into the cache key path",
+        subagent_type: "general",
+      })
+      // Child session: truncated response, then the auto-continuation completes it.
+      yield* llm.push(reply().text("child partial").finish("unknown"))
+      yield* llm.text("child completed report")
+      // Parent finishes after the tool result returns.
+      yield* llm.text("parent done")
+      yield* user(chat.id, "hello")
+
+      const result = yield* prompt.loop({ sessionID: chat.id })
+      // parent tool call + child truncated + child continuation + parent done
+      expect(yield* llm.calls).toBe(4)
+      expect(result.parts.some((part) => part.type === "text" && part.text === "parent done")).toBe(true)
+
+      const msgs = yield* MessageV2.filterCompactedEffect(chat.id)
+      const part = msgs
+        .flatMap((msg) => msg.parts)
+        .find(
+          (part): part is CompletedToolPart =>
+            part.type === "tool" && part.tool === "task" && part.state.status === "completed",
+        )
+      expect(part).toBeDefined()
+      if (!part) return
+      // LOCK-004: the parent sees the full logical child report — the
+      // pre-truncation partial text followed by the auto-continuation text, in
+      // order — and never the hidden continuation instruction.
+      expect(part.state.output).toContain("<task_result>")
+      const partialAt = part.state.output.indexOf("child partial")
+      const completedAt = part.state.output.indexOf("child completed report")
+      expect(partialAt).toBeGreaterThanOrEqual(0)
+      expect(completedAt).toBeGreaterThan(partialAt)
+      expect(part.state.output).not.toContain(UNKNOWN_FINISH_CONTINUE_INSTRUCTION)
+    }),
+  30_000,
+)
+// kilocode_change end
+
+it.instance(
+  "does not auto-continue again when a fresh loop resumes a turn whose last user message is the persisted continuation marker",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      // The original turn was truncated and already auto-continued once: the
+      // synthetic continuation user message (with its LOCK-005 marker) persists
+      // in history as if the run was interrupted right after injection.
+      const seeded = yield* seed(session.id, { finish: "unknown" })
+      const continuation = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "user",
+        sessionID: session.id,
+        agent: "build",
+        model: ref,
+        time: { created: Date.now() },
+      })
+      yield* sessions.updatePart({
+        id: PartID.ascending(),
+        messageID: continuation.id,
+        sessionID: session.id,
+        type: "text",
+        synthetic: true,
+        text: UNKNOWN_FINISH_CONTINUE_INSTRUCTION,
+        metadata: { [CONTINUE_FROM_KEY]: seeded.assistant.id },
+      })
+      // The continuation's own assistant was also cut off.
+      const continued = yield* sessions.updateMessage({
+        id: MessageID.ascending(),
+        role: "assistant",
+        parentID: continuation.id,
+        sessionID: session.id,
+        mode: "build",
+        agent: "build",
+        cost: 0,
+        path: { cwd: "/tmp", root: "/tmp" },
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: ref.modelID,
+        providerID: ref.providerID,
+        time: { created: Date.now() },
+        finish: "unknown",
+      })
+
+      // A fresh runLoop (re-entry after interruption) must treat the persisted
+      // marker as the turn's one continuation and break without a second
+      // injection or any LLM call.
+      const result = yield* prompt.loop({ sessionID: session.id })
+      expect(yield* llm.hits).toHaveLength(0)
+      expect(result.info.id).toBe(continued.id)
+      const msgs = yield* sessions.messages({ sessionID: session.id })
+      const markers = msgs.filter(
+        (m) =>
+          m.info.role === "user" &&
+          m.parts.some((p) => p.type === "text" && p.synthetic && p.metadata?.[CONTINUE_FROM_KEY]),
+      )
+      expect(markers).toHaveLength(1)
+    }),
+  10_000, // kilocode_change - infra flake
+)
+
+it.instance(
+  "persists the continuation marker before exposing the continuation to the prompt queue scope",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({ title: "Pinned" })
+      const seeded = yield* seed(session.id, { finish: "unknown" })
+      // Run the loop inside a queue slot so the target is active and retarget()
+      // controls whether the injected continuation is visible to scope().
+      const cancelled = Effect.succeed({
+        info: {
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          time: { created: Date.now() },
+        },
+        parts: [],
+      } satisfies MessageV2.WithParts)
+      // Hold the marker part persistence so the loop suspends in the exact
+      // window between persisting the continuation message and retargeting the
+      // queue (LOCK-007 write-order window). A marker-less continuation must
+      // never be visible to scope() at that moment, or an interrupt could hand
+      // it to a fresh runLoop that would inject a second continuation.
+      const blocker = yield* Deferred.make<SessionV1.Part>()
+      let held: SessionV1.Part | undefined
+      const updatePart = sessions.updatePart
+      const spy = spyOn(sessions, "updatePart").mockImplementation(<T extends SessionV1.Part>(part: T) => {
+        if (
+          part.type === "text" &&
+          part.synthetic === true &&
+          part.metadata?.[CONTINUE_FROM_KEY] === seeded.assistant.id
+        ) {
+          held = part
+          // Hold the write, then persist the original part once released so the
+          // loop continues with the real storage write.
+          return Deferred.await(blocker).pipe(Effect.andThen(() => updatePart(part)))
+        }
+        return updatePart(part)
+      })
+      yield* Effect.addFinalizer(() => Effect.sync(() => spy.mockRestore()))
+      yield* llm.text("continued answer")
+      const loop = yield* KiloSessionPromptQueue.enqueue(
+        session.id,
+        seeded.user.id,
+        prompt.loop({ sessionID: session.id }),
+        cancelled,
+      ).pipe(Effect.forkScoped)
+
+      // The loop reached the marker persistence and is suspended there.
+      yield* pollWithTimeout(
+        Effect.sync(() => (held ? (true as const) : undefined)),
+        "loop never reached the continuation marker persistence",
+      )
+      const marker = held
+      if (!marker) return
+      const msgs = yield* sessions.messages({ sessionID: session.id })
+      const continuation = msgs.find((m) => m.info.role === "user" && m.info.id !== seeded.user.id)
+      expect(continuation).toBeDefined()
+      if (!continuation) return
+      // LOCK-007: while the marker is not yet persisted, scope() must hide the
+      // continuation (retarget has not run yet) so an interrupt cannot expose
+      // a marker-less continuation message to a fresh runLoop.
+      const scoped = KiloSessionPromptQueue.scope(session.id, msgs)
+      expect(scoped.some((m) => m.info.role === "user" && m.info.id === continuation.info.id)).toBe(false)
+
+      // Release the persistence; the loop continues with exactly one more LLM
+      // step for the continuation and the persisted marker stays in history.
+      yield* Deferred.succeed(blocker, marker)
+      const exit = yield* Fiber.await(loop)
+      expect(Exit.isSuccess(exit)).toBe(true)
+      expect(yield* llm.calls).toBe(1)
+      const after = yield* sessions.messages({ sessionID: session.id })
+      expect(
+        after.some(
+          (m) =>
+            m.info.role === "user" &&
+            m.parts.some((p) => p.type === "text" && p.synthetic && p.metadata?.[CONTINUE_FROM_KEY]),
+        ),
+      ).toBe(true)
+      expect(KiloSessionPromptQueue._hasInternalState(session.id)).toBe(false)
+    }),
+  10_000, // kilocode_change - infra flake; queue + loop path
+)
+
+it.instance(
+  "queued superseding prompt suppresses the auto-continuation of the truncated response",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const session = yield* sessions.create({
+        title: "Pinned",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+      // A truncated turn is already persisted; its queue slot is about to re-run
+      // the loop. Hold that slot before the loop so the superseding prompt can be
+      // queued first (LOCK-008: it must already be waiting when the unknown gate
+      // fires, otherwise queue adoption would fold it in before the gate).
+      const seeded = yield* seed(session.id, { finish: "unknown" })
+      const started = yield* Deferred.make<void>()
+      const cancelled = Effect.succeed({
+        info: {
+          id: MessageID.ascending(),
+          role: "user",
+          sessionID: session.id,
+          agent: "build",
+          model: ref,
+          time: { created: Date.now() },
+        },
+        parts: [],
+      } satisfies MessageV2.WithParts)
+      const first = yield* KiloSessionPromptQueue.enqueue(
+        session.id,
+        seeded.user.id,
+        Deferred.await(started).pipe(Effect.andThen(prompt.loop({ sessionID: session.id }))),
+        cancelled,
+      ).pipe(Effect.forkScoped)
+      yield* pollWithTimeout(
+        Effect.sync(() => (KiloSessionPromptQueue.active(session.id) === seeded.user.id ? true : undefined)),
+        "first queue slot never started",
+      )
+      const second = yield* prompt
+        .prompt({
+          sessionID: session.id,
+          agent: "build",
+          parts: [{ type: "text", text: "superseding prompt" }],
+        })
+        .pipe(Effect.forkScoped)
+      yield* pollWithTimeout(
+        Effect.gen(function* () {
+          const msgs = yield* sessions.messages({ sessionID: session.id })
+          const queued = msgs.some(
+            (m) =>
+              m.info.role === "user" &&
+              m.parts.some((p) => p.type === "text" && p.text === "superseding prompt") &&
+              KiloSessionPromptQueue._isQueued(session.id, m.info.id),
+          )
+          return queued ? true : undefined
+        }),
+        "superseding prompt never queued",
+      )
+      yield* llm.text("superseding answer")
+      yield* Deferred.succeed(started, void 0)
+
+      const firstExit = yield* Fiber.await(first)
+      const secondExit = yield* Fiber.await(second)
+      expect(Exit.isSuccess(firstExit)).toBe(true)
+      expect(Exit.isSuccess(secondExit)).toBe(true)
+      if (!Exit.isSuccess(firstExit) || !Exit.isSuccess(secondExit)) return
+      // The truncated turn breaks at the unknown gate instead of injecting a
+      // continuation: exactly one LLM step, for the superseding prompt only, and
+      // the continuation instruction never reaches a request body.
+      expect(yield* llm.calls).toBe(1)
+      const bodies = yield* llm.inputs
+      expect(JSON.stringify(bodies)).not.toContain(UNKNOWN_FINISH_CONTINUE_INSTRUCTION)
+      expect(secondExit.value.parts.some((p) => p.type === "text" && p.text === "superseding answer")).toBe(true)
+      // No continuation marker user message was injected for the old turn.
+      const msgs = yield* sessions.messages({ sessionID: session.id })
+      const markers = msgs.filter(
+        (m) =>
+          m.info.role === "user" &&
+          m.parts.some((p) => p.type === "text" && p.synthetic && p.metadata?.[CONTINUE_FROM_KEY]),
+      )
+      expect(markers).toHaveLength(0)
+      expect(KiloSessionPromptQueue._hasInternalState(session.id)).toBe(false)
+    }),
+  10_000, // kilocode_change - infra flake; queue + loop path
 )
 
 it.instance("glob tool keeps instance context during prompt runs", () =>

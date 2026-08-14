@@ -147,23 +147,36 @@ const CHILD = `
     fail("agent switch cleared sessionOverrides: got " + JSON.stringify(overrideModel))
   }
 
-  // LOCK-001 (agent-scoped): switching the agent must not clear the explicit
-  // per-agent model choice (modelSelections + userSetAgents).
+  // LOCK-004 (agent-scoped): switching the agent resolves the target agent's
+  // CONFIGURED model first (ask is configured to claude-sonnet-4-6 in this
+  // fixture), so the remembered per-agent pick must not shadow it.
   ctx.selectAgent("ask")
   ctx.selectModel("kilo", "gpt-4o")
   ctx.selectAgent("code")
   ctx.selectAgent("ask")
   const chosen = ctx.selected()
-  if (!chosen || chosen.modelID !== "gpt-4o") {
-    fail("agent switch cleared per-agent model choice: got " + JSON.stringify(chosen))
+  if (!chosen || chosen.modelID !== "anthropic/claude-sonnet-4-6") {
+    fail("agent switch must resolve the target agent's configured model first: got " + JSON.stringify(chosen))
+  }
+
+  // LOCK-005: the manual per-agent pick stays usable as usage memory — an
+  // agent without a configured model resolves its remembered model even after
+  // switching away and back.
+  ctx.selectAgent("build")
+  ctx.selectModel("kilo", "gpt-4o")
+  ctx.selectAgent("ask")
+  ctx.selectAgent("build")
+  const remembered = ctx.selected()
+  if (!remembered || remembered.modelID !== "gpt-4o") {
+    fail("agent without config must restore its remembered model: got " + JSON.stringify(remembered))
   }
 
   dispose()
   console.log("${PASS}")
 `
 
-describe("selectAgent model-state preservation (LOCK-001)", () => {
-  it("keeps sessionOverrides and per-agent model choices across agent switches", async () => {
+describe("selectAgent model-state preservation (LOCK-001/004/005)", () => {
+  it("keeps session overrides and resolves configured-before-remembered agent models across agent switches", async () => {
     // Entry and output live at the webview-ui root so the child's relative
     // `./src/context/...` imports resolve, and so the bundled output can still
     // resolve the external `happy-dom` package from webview-ui's node_modules.

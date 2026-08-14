@@ -75,7 +75,15 @@ import { errorIDs } from "./session-errors"
 import { PartStash } from "./part-stash"
 import { mergeParts, sameParts } from "./session-parts"
 import { state as todoState } from "./todo-revert"
-import { getVariant, legacyVariantKey, resolveSessionVariant, sessionVariantKeys, transferVariants, variantKey } from "./session-variant-store"
+import {
+  getVariant,
+  legacyVariantKey,
+  mergeLoadedVariants,
+  resolveSessionVariant,
+  sessionVariantKeys,
+  transferVariants,
+  variantKey,
+} from "./session-variant-store"
 import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "../../../src/shared/provider-model"
 import { reviewMetadata, type ReviewMessageData } from "../../../src/shared/review-comments"
 import { visibleMessages as filterVisibleMessages } from "./session-queue"
@@ -86,6 +94,7 @@ import { createAbortState } from "./abort-state"
 import { clearIfOn, createCloudPrune } from "./session-cloud-prune"
 import { isSameSessionTree } from "./model-usage"
 import { createDraftAgentSeed } from "./session-agent"
+import { seedPendingChoices } from "./session-pending"
 
 const RECENT_LIMIT = 5
 const MESSAGE_PAGE_LIMIT = 80
@@ -126,7 +135,7 @@ interface SessionStore {
   sessionOverrides: Record<string, ModelSelection> // sessionID -> explicit per-session model override
   sessionRecoveredModels: Record<string, ModelSelection> // sessionID -> recovered model from message history (continuity)
   sessionRecoveredAgents: Record<string, string> // sessionID -> recovered agent from message history (continuity)
-  sessionRecoveredVariants: Record<string, { variant: string; model: ModelSelection }> // sessionID -> recovered variant bound to recovered model (continuity)
+  sessionRecoveredVariants: Record<string, { variant: string | undefined; model: ModelSelection }> // sessionID -> recovered variant bound to recovered model (continuity)
   agentSelections: Record<string, string> // sessionID -> agent name
   variantSelections: Record<string, string> // session/agent scoped variant key -> variant name
   recentModels: ModelSelection[]
@@ -487,6 +496,21 @@ export const SessionProvider: ParentComponent = (props) => {
 
   // Pending agent selection for before a session exists
   const [pendingAgentSelection, setPendingAgentSelection] = createSignal<string | null>(null)
+  // LOCK-005: explicit fresh-composer model/variant picks outrank configured
+  // starts for the upcoming session and are promoted via the draft lifecycle.
+  const [pendingModelSelection, setPendingModelSelection] = createSignal<ModelSelection | null>(null)
+  const [pendingVariantSelection, setPendingVariantSelection] = createSignal<{
+    value: string
+    model: ModelSelection
+  } | null>(null)
+
+  // Recovery-readiness gate: restored sessions must not resolve remembered
+  // strength before their history is recovered.
+  const [recoveryReadySessions, setRecoveryReadySessions] = createSignal<Set<string>>(new Set())
+
+  function markRecovered(sessionID: string) {
+    setRecoveryReadySessions((prev) => (prev.has(sessionID) ? prev : new Set(prev).add(sessionID)))
+  }
 
   // Cloud session preview state
   const [cloudPreviewId, setCloudPreviewId] = createSignal<string | null>(null)
@@ -584,7 +608,12 @@ export const SessionProvider: ParentComponent = (props) => {
   // agent falls through to defaultAgent (old behavior, no lockout); subagent
   // sessions still resolve to their delegated subagent (disabled fixed selector).
   const allAgentNames = createMemo(
-    () => new Set(allAgents().filter((agent) => agent.mode === "subagent" || !agent.hidden).map((agent) => agent.name)),
+    () =>
+      new Set(
+        allAgents()
+          .filter((agent) => agent.mode === "subagent" || !agent.hidden)
+          .map((agent) => agent.name),
+      ),
   )
 
   // Per-session agent selection
@@ -624,15 +653,31 @@ export const SessionProvider: ParentComponent = (props) => {
     return parseModelString(config().model)
   }
 
-  function resolveModel(agentName: string, override?: ModelSelection | null): ModelSelection | null {
+  /**
+   * Configured new-session default (VS Code `kilo-code.new.model.*` via
+   * provider.defaultSelection): customizes the fallback tier below config and
+   * memory, validated against the catalog so stale values fall to KILO_AUTO.
+   */
+  function configuredFallback(): ModelSelection {
+    const sel = provider.defaultSelection()
+    if (Object.keys(provider.providers()).length === 0) return KILO_AUTO
+    return provider.isModelValid(sel) ? sel : KILO_AUTO
+  }
+
+  function resolveModel(
+    agentName: string,
+    override?: ModelSelection | null,
+    memory?: ModelSelection | null,
+  ): ModelSelection | null {
     return resolveModelSelection({
       providers: provider.providers(),
       connected: provider.connected(),
       override,
       mode: getModeModel(agentName),
       global: getGlobalModel(),
+      memory,
       recent: store.recentModels,
-      fallback: KILO_AUTO,
+      fallback: configuredFallback(),
     })
   }
 
@@ -666,7 +711,7 @@ export const SessionProvider: ParentComponent = (props) => {
       {
         providers: provider.providers(),
         connected: provider.connected(),
-        fallback: KILO_AUTO,
+        fallback: configuredFallback(),
         getModeModel,
         getGlobalModel,
       },
@@ -686,7 +731,12 @@ export const SessionProvider: ParentComponent = (props) => {
 
   const currentSelected = createMemo<ModelSelection | null>(() => {
     const sid = currentSessionID()
-    return sid ? resolveSessionModel(sid) : resolveModel(selectedAgentName(), store.modelSelections[selectedAgentName()])
+    if (sid) return resolveSessionModel(sid)
+    // LOCK-005: an explicit fresh-composer pick outranks configured starts.
+    const pending = pendingModelSelection()
+    if (pending && provider.isModelValid(pending)) return pending
+    // LOCK-002: configured model resolves before per-agent remembered model.
+    return resolveModel(selectedAgentName(), undefined, store.modelSelections[selectedAgentName()])
   })
 
   // Precedence: valid explicit > valid recovered > per-agent global/default > config/default.
@@ -708,8 +758,10 @@ export const SessionProvider: ParentComponent = (props) => {
       setStore("sessionOverrides", sessionID, selection)
       return
     }
-    // Always remember the per-mode model choice so switching modes restores
-    // the last-used model (mirrors CLI TUI's model.json behavior).
+    // LOCK-005: fresh-composer pick is explicit for the upcoming session.
+    setPendingModelSelection(selection)
+    setPendingVariantSelection(null)
+    // Remember the per-mode model choice so switching modes restores it.
     setUserSetAgents((prev) => ({ ...prev, [agentName]: true }))
     setStore("modelSelections", agentName, selection)
     // Persist to model.json via the extension host
@@ -828,7 +880,12 @@ export const SessionProvider: ParentComponent = (props) => {
       clearModeModelSelection(selectedAgentName(), true)
       return
     }
-    setStore("sessionOverrides", produce((overrides) => { delete overrides[sid] }))
+    setStore(
+      "sessionOverrides",
+      produce((overrides) => {
+        delete overrides[sid]
+      }),
+    )
     hideErrors(sid)
   }
 
@@ -955,12 +1012,40 @@ export const SessionProvider: ParentComponent = (props) => {
     if (!sel) return undefined
     const list = variantList(sid)
     if (list.length === 0) return undefined
+    // LOCK-005: an explicit fresh-composer pick outranks configured starts.
+    if (!sid) {
+      const pending = pendingVariantSelection()
+      if (
+        pending &&
+        pending.model.providerID === sel.providerID &&
+        pending.model.modelID === sel.modelID &&
+        list.includes(pending.value)
+      ) {
+        return pending.value
+      }
+    }
     const cfg = config()
     const key = `${sel.providerID}/${sel.modelID}`
     const overrideVariant = cfg.model_variant_overrides?.[key] ?? undefined
     const globalVariant = cfg.model_variant ?? undefined
     const recovered = sid ? store.sessionRecoveredVariants[sid] : undefined
-    return resolveSessionVariant(store.variantSelections, sel, list, agentForScope(sid), sid, overrideVariant, globalVariant, recovered).variant
+    // LOCK-004: explicit agent selection resolves the target agent's chain —
+    // the previous agent's recovered strength must not apply.
+    const explicitAgent = sid ? !!store.agentSelections[sid] : false
+    // Restored sessions must not resolve remembered strength before their history is recovered.
+    const memoryAllowed = sid ? recoveryReadySessions().has(sid) || !store.sessions[sid] : true
+    return resolveSessionVariant(
+      store.variantSelections,
+      sel,
+      list,
+      agentForScope(sid),
+      sid,
+      overrideVariant,
+      globalVariant,
+      recovered,
+      explicitAgent,
+      memoryAllowed,
+    ).variant
   }
 
   const selectVariant = (value: string, sessionID?: string) => {
@@ -970,24 +1055,24 @@ export const SessionProvider: ParentComponent = (props) => {
     const agent = agentForScope(sid)
     // Session-scoped key stays ephemeral (never persisted).
     if (sid) setStore("variantSelections", variantKey(sel, agent, sid), value)
-    // Agent+model memory (LOCK-002): remembered per (agent, model) pair, so the
-    // same model keeps an independent variant under each agent. Persisted always
-    // so it survives extension reloads.
+    // LOCK-005: a fresh-composer pick is explicit for the upcoming session.
+    if (!sid) setPendingVariantSelection({ value, model: sel })
+    // Agent+model memory (LOCK-002): remembered per (agent, model) pair.
     const agentKey = variantKey(sel, agent)
     setStore("variantSelections", agentKey, value)
     vscode.postMessage({ type: "persistVariant", key: agentKey, value })
-    // Model-only memory: keyed by providerID/modelID only. Persisted always.
+    // Model-only memory: keyed by providerID/modelID only.
     setStore("variantSelections", legacyVariantKey(sel), value)
     vscode.postMessage({ type: "persistVariant", key: legacyVariantKey(sel), value })
   }
 
-  // Load persisted variants from extension globalState
+  // Load persisted variants from the extension's canonical model.json.
+  // Replace semantics for persistent memory (LOCK-004): reset's empty payload
+  // clears remembered agent/model + legacy keys from the live store without a
+  // reload; session-scoped picks are ephemeral live state and stay untouched.
   const unsubVariants = vscode.onMessage((message: ExtensionMessage) => {
     if (message.type !== "variantsLoaded") return
-    for (const [k, v] of Object.entries(message.variants)) {
-      if (k.startsWith("session/")) continue
-      setStore("variantSelections", k, v)
-    }
+    setStore("variantSelections", mergeLoadedVariants(store.variantSelections, message.variants))
   })
 
   vscode.postMessage({ type: "requestVariants" })
@@ -1254,6 +1339,12 @@ export const SessionProvider: ParentComponent = (props) => {
   // Event handlers
   function handleSessionCreated(session: SessionInfo, draftID?: string) {
     freshSessions.add(session.id)
+    // Only a genuinely webview-initiated new session — identified by the
+    // draftID the extension echoes back for this webview's sendMessage/
+    // sendCommand — is recovery-ready before message history. Replayed
+    // session.created events for restored/existing sessions carry no draftID
+    // and stay memory-gated until recoverPrefs completes.
+    if (draftID) markRecovered(session.id)
     if (draftID) aborts.move(draftID, session.id)
     batch(() => {
       setStore("sessions", session.id, session)
@@ -1272,12 +1363,13 @@ export const SessionProvider: ParentComponent = (props) => {
       if (draftID) {
         transferDraftState(draftID, session.id)
         agentDrafts.promote(draftID)
-      } else {
-        const pendingAgent = pendingAgentSelection()
-        if (pendingAgent && !store.agentSelections[session.id]) {
-          setStore("agentSelections", session.id, pendingAgent)
-          setPendingAgentSelection(null)
-        }
+        // A webview-initiated session attaches pending composer picks only
+        // when its correlated draft lands. A no-draft sessionCreated is a
+        // replayed/backend/delegated session whose history is authoritative:
+        // it must never seed agent/model/variant state, and pending picks
+        // stay available for the next fresh composer send.
+        setPendingModelSelection(null)
+        setPendingVariantSelection(null)
       }
 
       const active = currentSessionID()
@@ -1296,9 +1388,17 @@ export const SessionProvider: ParentComponent = (props) => {
       if (scope === draftID) pendingSubmissions.set(id, sessionID)
     }
     setSubmissionMap(sessionID, (count = 0) => count + submissions)
-    setSubmissionMap(produce((map) => { delete map[draftID] }))
+    setSubmissionMap(
+      produce((map) => {
+        delete map[draftID]
+      }),
+    )
     if (busySinceMap[draftID] && !busySinceMap[sessionID]) setBusySinceMap(sessionID, busySinceMap[draftID])
-    setBusySinceMap(produce((map) => { delete map[draftID] }))
+    setBusySinceMap(
+      produce((map) => {
+        delete map[draftID]
+      }),
+    )
   }
 
   function promoteDraftMessages(draftID: string, sessionID: string) {
@@ -1308,7 +1408,12 @@ export const SessionProvider: ParentComponent = (props) => {
     const ids = new Set(current.map((m) => m.id))
     const promoted = drafts.filter((m) => !ids.has(m.id)).map((m) => ({ ...m, sessionID }))
     setStore("messages", sessionID, [...current, ...promoted])
-    setStore("messages", produce((messages) => { delete messages[draftID] }))
+    setStore(
+      "messages",
+      produce((messages) => {
+        delete messages[draftID]
+      }),
+    )
     const pending = pendingOptimistic.get(draftID)
     if (pending) {
       const merged = pendingOptimistic.get(sessionID) ?? new Set<string>()
@@ -1323,7 +1428,11 @@ export const SessionProvider: ParentComponent = (props) => {
       return next
     })
     patchPage(sessionID, { initialLoaded: true, lastMutation: "append" })
-    setPages(produce((state) => { delete state[draftID] }))
+    setPages(
+      produce((state) => {
+        delete state[draftID]
+      }),
+    )
   }
 
   function transferDraftState(draftID: string, sessionID: string) {
@@ -1342,12 +1451,42 @@ export const SessionProvider: ParentComponent = (props) => {
     if (pendingRecovered) setStore("sessionRecoveredModels", sessionID, pendingRecovered)
     if (pendingRecoveredAgent) setStore("sessionRecoveredAgents", sessionID, pendingRecoveredAgent)
     if (pendingRecoveredVariant) setStore("sessionRecoveredVariants", sessionID, pendingRecoveredVariant)
-    for (const key of ["agentSelections", "sessionOverrides", "sessionRecoveredModels", "sessionRecoveredAgents", "sessionRecoveredVariants"] as const) {
-      setStore(key, produce((m) => { delete m[draftID] }))
+    for (const key of [
+      "agentSelections",
+      "sessionOverrides",
+      "sessionRecoveredModels",
+      "sessionRecoveredAgents",
+      "sessionRecoveredVariants",
+    ] as const) {
+      setStore(
+        key,
+        produce((m) => {
+          delete m[draftID]
+        }),
+      )
     }
-    setStore("variantSelections", produce((variants) => {
-      for (const key of sessionVariantKeys(variants, draftID)) delete variants[key]
-    }))
+    setStore(
+      "variantSelections",
+      produce((variants) => {
+        for (const key of sessionVariantKeys(variants, draftID)) delete variants[key]
+      }),
+    )
+  }
+
+  /** Release the full owned state of an abandoned draft (mirror of
+   * transferDraftState): its agent, model override, and session variants. */
+  function pruneDraftState(draftID: string) {
+    agentDrafts.prune(draftID)
+    setStore(
+      produce((s) => {
+        delete s.agentSelections[draftID]
+        delete s.sessionOverrides[draftID]
+        delete s.sessionRecoveredModels[draftID]
+        delete s.sessionRecoveredAgents[draftID]
+        delete s.sessionRecoveredVariants[draftID]
+        for (const key of sessionVariantKeys(s.variantSelections, draftID)) delete s.variantSelections[key]
+      }),
+    )
   }
 
   function patchPage(sessionID: string, patch: Partial<MessagePageState>) {
@@ -1377,22 +1516,35 @@ export const SessionProvider: ParentComponent = (props) => {
   }
 
   function recoverPrefs(sessionID: string, messages: Message[], names = agentNames()) {
+    markRecovered(sessionID)
     const prefs = recomputeRecovered(messages, store.sessions[sessionID]?.revert, names)
     // LOCK-002: always update recovered model regardless of explicit override.
     if (prefs.model) {
       setStore("sessionRecoveredModels", sessionID, prefs.model)
     } else {
-      setStore("sessionRecoveredModels", produce((m) => { delete m[sessionID] }))
+      setStore(
+        "sessionRecoveredModels",
+        produce((m) => {
+          delete m[sessionID]
+        }),
+      )
     }
     // LOCK-001: write recovered agent as continuity state (never to agentSelections).
-    setStore("sessionRecoveredAgents", applyRecoverAgent(store.sessionRecoveredAgents, sessionID, prefs.agent, store.agentSelections))
-    // LOCK-001: always replace recovered variant — no write-once guard.
-    // LOCK-001: recovered variant provenance includes provider/model identity.
-    // It is eligible only when effective selected model exactly matches.
-    if (prefs.model && prefs.variant) {
+    setStore(
+      "sessionRecoveredAgents",
+      applyRecoverAgent(store.sessionRecoveredAgents, sessionID, prefs.agent, store.agentSelections),
+    )
+    // LOCK-003: keep the recovered record even when the session actually ran
+    // with no explicit variant — its existence blocks config/legacy fall-through.
+    if (prefs.model) {
       setStore("sessionRecoveredVariants", sessionID, { variant: prefs.variant, model: prefs.model })
     } else {
-      setStore("sessionRecoveredVariants", produce((v) => { delete v[sessionID] }))
+      setStore(
+        "sessionRecoveredVariants",
+        produce((v) => {
+          delete v[sessionID]
+        }),
+      )
     }
   }
 
@@ -1860,7 +2012,11 @@ export const SessionProvider: ParentComponent = (props) => {
     })
 
     if (!message.sessionID && message.draftID) {
-      if (draftSessionID() !== message.draftID) agentDrafts.prune(message.draftID)
+      // An abandoned draft releases its full owned state; the active draft
+      // and a draft with another submission still in flight keep their picks
+      // (the helper's deletes are not active-guarded like agentDrafts.prune).
+      // finishSubmission above removed the failed submission already.
+      if (draftSessionID() !== message.draftID && !isSubmitting(message.draftID)) pruneDraftState(message.draftID)
     }
   }
 
@@ -2172,17 +2328,33 @@ export const SessionProvider: ParentComponent = (props) => {
       setStore("sessions", session.id, session)
 
       // LOCK-004: transfer explicit cloud agent selection
-      if (cloudExplicitAgent && !store.agentSelections[session.id]) setStore("agentSelections", session.id, cloudExplicitAgent)
+      if (cloudExplicitAgent && !store.agentSelections[session.id])
+        setStore("agentSelections", session.id, cloudExplicitAgent)
       const pendingAgent = pendingAgentSelection()
       if (pendingAgent && !store.agentSelections[session.id]) setStore("agentSelections", session.id, pendingAgent)
       // LOCK-004: transfer explicit cloud model override
-      if (cloudExplicitModel && !store.sessionOverrides[session.id]) setStore("sessionOverrides", session.id, cloudExplicitModel)
+      if (cloudExplicitModel && !store.sessionOverrides[session.id])
+        setStore("sessionOverrides", session.id, cloudExplicitModel)
+      // LOCK-005: promote explicit fresh-composer picks into the converted
+      // local session, then consume them.
+      const seeds = seedPendingChoices(
+        session.id,
+        store.agentSelections[session.id] ?? defaultAgent(),
+        { model: pendingModelSelection(), variant: pendingVariantSelection() },
+        store.sessionOverrides,
+        store.variantSelections,
+      )
+      setStore("sessionOverrides", seeds.overrides)
+      setStore("variantSelections", seeds.variants)
+      setPendingModelSelection(null)
+      setPendingVariantSelection(null)
       // Carry over cloud messages so there's no loading flash
       setStore("messages", session.id, cloudMessages)
       rebuildToolParts(session.id, cloudMessages)
 
       // LOCK-004: transfer recovered agent/model/variant from cloud session
-      if (cloudRecoveredAgent && !store.agentSelections[session.id]) setStore("sessionRecoveredAgents", session.id, cloudRecoveredAgent)
+      if (cloudRecoveredAgent && !store.agentSelections[session.id])
+        setStore("sessionRecoveredAgents", session.id, cloudRecoveredAgent)
       if (cloudRecoveredModel) setStore("sessionRecoveredModels", session.id, cloudRecoveredModel)
       if (cloudRecoveredVariant) setStore("sessionRecoveredVariants", session.id, cloudRecoveredVariant)
       // LOCK-004: transfer all session-scoped explicit variant entries
@@ -2200,17 +2372,60 @@ export const SessionProvider: ParentComponent = (props) => {
       }
 
       // LOCK-005: clean up ALL cloud-key state after transfer
-      setStore("sessions", produce((s) => { delete s[cloudKey] }))
-      setStore("messages", produce((m) => { delete m[cloudKey] }))
-      setStore("toolParts", produce((p) => { delete p[cloudKey] }))
-      setStore("agentSelections", produce((a) => { delete a[cloudKey] }))
-      setStore("sessionOverrides", produce((o) => { delete o[cloudKey] }))
-      setStore("sessionRecoveredAgents", produce((a) => { delete a[cloudKey] }))
-      setStore("sessionRecoveredModels", produce((m) => { delete m[cloudKey] }))
-      setStore("sessionRecoveredVariants", produce((v) => { delete v[cloudKey] }))
-      setStore("variantSelections", produce((variants) => {
-        for (const k of sessionVariantKeys(variants, cloudKey)) delete variants[k]
-      }))
+      setStore(
+        "sessions",
+        produce((s) => {
+          delete s[cloudKey]
+        }),
+      )
+      setStore(
+        "messages",
+        produce((m) => {
+          delete m[cloudKey]
+        }),
+      )
+      setStore(
+        "toolParts",
+        produce((p) => {
+          delete p[cloudKey]
+        }),
+      )
+      setStore(
+        "agentSelections",
+        produce((a) => {
+          delete a[cloudKey]
+        }),
+      )
+      setStore(
+        "sessionOverrides",
+        produce((o) => {
+          delete o[cloudKey]
+        }),
+      )
+      setStore(
+        "sessionRecoveredAgents",
+        produce((a) => {
+          delete a[cloudKey]
+        }),
+      )
+      setStore(
+        "sessionRecoveredModels",
+        produce((m) => {
+          delete m[cloudKey]
+        }),
+      )
+      setStore(
+        "sessionRecoveredVariants",
+        produce((v) => {
+          delete v[cloudKey]
+        }),
+      )
+      setStore(
+        "variantSelections",
+        produce((variants) => {
+          for (const k of sessionVariantKeys(variants, cloudKey)) delete variants[k]
+        }),
+      )
     })
     const cloudPruneIDs = pendingCloudPrune.get(cloudKey)
     if (cloudPruneIDs) {
@@ -2230,6 +2445,10 @@ export const SessionProvider: ParentComponent = (props) => {
       setStore("agentSelections", id, name)
     } else {
       setPendingAgentSelection(name)
+      // LOCK-005: composer picks belonged to the previous agent context —
+      // switching agents resolves the target agent's own chain (memory stays).
+      setPendingModelSelection(null)
+      setPendingVariantSelection(null)
       // When switching mode, initialize model for the new mode if the user
       // hasn't explicitly set one for it
       if (!userSetAgents()[name] && !store.modelSelections[name]) {
@@ -2335,7 +2554,20 @@ export const SessionProvider: ParentComponent = (props) => {
 
     const effectiveDraftID = !sid && !draftID ? crypto.randomUUID() : draftID
     const scope = effectiveDraftID ?? sid
-    if (!sid && !draftID && effectiveDraftID) agentDrafts.seed(effectiveDraftID)
+    // LOCK-002: explicit picks win on every send, including reuse of an
+    // existing draft after a failed/in-flight send (stale seeds replaced).
+    if (!sid && effectiveDraftID) {
+      agentDrafts.seed(effectiveDraftID)
+      const seeds = seedPendingChoices(
+        effectiveDraftID,
+        store.agentSelections[effectiveDraftID] ?? selectedAgentName(),
+        { model: pendingModelSelection(), variant: pendingVariantSelection() },
+        store.sessionOverrides,
+        store.variantSelections,
+      )
+      setStore("sessionOverrides", seeds.overrides)
+      setStore("variantSelections", seeds.variants)
+    }
     if (scope) {
       clearClose(scope)
       addOptimistic(scope, messageID, text, files, review)
@@ -2413,7 +2645,19 @@ export const SessionProvider: ParentComponent = (props) => {
 
     const effectiveDraftID = !sid && !draftID ? crypto.randomUUID() : draftID
     const scope = effectiveDraftID ?? sid
-    if (!sid && !draftID && effectiveDraftID) agentDrafts.seed(effectiveDraftID)
+    // LOCK-002: reseed explicit picks on every send, including draft reuse.
+    if (!sid && effectiveDraftID) {
+      agentDrafts.seed(effectiveDraftID)
+      const seeds = seedPendingChoices(
+        effectiveDraftID,
+        store.agentSelections[effectiveDraftID] ?? selectedAgentName(),
+        { model: pendingModelSelection(), variant: pendingVariantSelection() },
+        store.sessionOverrides,
+        store.variantSelections,
+      )
+      setStore("sessionOverrides", seeds.overrides)
+      setStore("variantSelections", seeds.variants)
+    }
     if (scope) {
       clearClose(scope)
       addOptimistic(scope, messageID, `/${command} ${args}`.trim(), files)
@@ -2859,7 +3103,11 @@ export const SessionProvider: ParentComponent = (props) => {
 
   // Pending pull-back requests (messageID → sessionID): restore fires only on
   // backend-confirmed removal; no-op cancels are pruned by the helper.
-  const pullBacks = createPendingPullBacks((sid) => statusMap[sid] ?? idle, (sid) => store.messages[sid], getParts)
+  const pullBacks = createPendingPullBacks(
+    (sid) => statusMap[sid] ?? idle,
+    (sid) => store.messages[sid],
+    getParts,
+  )
 
   // Pull a queued message back to the editor: register a pending pull-back and
   // post the existing cancelQueued request. Nothing is captured or restored at
@@ -3027,7 +3275,8 @@ export const SessionProvider: ParentComponent = (props) => {
     refreshMcpStatus,
     selectedAgent: agentForScope,
     selectAgent,
-    getSessionAgent: (sessionID: string) => resolveAgent(store, sessionID, defaultAgent(), agentNames(), allAgentNames()),
+    getSessionAgent: (sessionID: string) =>
+      resolveAgent(store, sessionID, defaultAgent(), agentNames(), allAgentNames()),
     getSessionModel: (sessionID: string) => resolveSessionModel(sessionID),
     setSessionModel: (sessionID: string, providerID: string, modelID: string) => {
       // Only write per-session override — do NOT touch global modelSelections or

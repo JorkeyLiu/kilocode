@@ -158,3 +158,76 @@ describe("resolveModelSelection", () => {
     expect(result).toEqual({ providerID: "openai", modelID: "gpt-4.1" })
   })
 })
+
+// ---------------------------------------------------------------------------
+// LOCK-002/LOCK-004: configured model resolves before usage memory
+// ---------------------------------------------------------------------------
+
+describe("resolveModelSelection — configured before memory (LOCK-002/004)", () => {
+  it("per-agent memory only applies when no configured model exists", () => {
+    const result = resolveModelSelection({
+      providers,
+      connected: ["anthropic", "openai"],
+      memory: { providerID: "openai", modelID: "gpt-4.1" },
+      recent: [{ providerID: "anthropic", modelID: "claude-sonnet-4" }],
+      fallback: KILO_AUTO,
+    })
+    expect(result).toEqual({ providerID: "openai", modelID: "gpt-4.1" })
+  })
+
+  it("configured per-agent model beats remembered memory (LOCK-004)", () => {
+    const result = resolveModelSelection({
+      providers,
+      connected: ["anthropic", "openai"],
+      mode: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      memory: { providerID: "openai", modelID: "gpt-4.1" },
+      fallback: KILO_AUTO,
+    })
+    expect(result).toEqual({ providerID: "anthropic", modelID: "claude-sonnet-4" })
+  })
+
+  it("configured global model beats remembered memory (LOCK-002)", () => {
+    const result = resolveModelSelection({
+      providers,
+      connected: ["anthropic", "openai"],
+      global: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      memory: { providerID: "openai", modelID: "gpt-4.1" },
+      fallback: KILO_AUTO,
+    })
+    expect(result).toEqual({ providerID: "anthropic", modelID: "claude-sonnet-4" })
+  })
+
+  it("explicit override still beats configured model and memory", () => {
+    const result = resolveModelSelection({
+      providers,
+      connected: ["anthropic", "openai"],
+      override: { providerID: "openai", modelID: "gpt-4.1" },
+      mode: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      memory: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      fallback: KILO_AUTO,
+    })
+    expect(result).toEqual({ providerID: "openai", modelID: "gpt-4.1" })
+  })
+
+  it("remembered memory beats recent model memory (LOCK-004)", () => {
+    const result = resolveModelSelection({
+      providers,
+      connected: ["anthropic", "openai"],
+      memory: { providerID: "openai", modelID: "gpt-4.1" },
+      recent: [{ providerID: "anthropic", modelID: "claude-sonnet-4" }],
+      fallback: KILO_AUTO,
+    })
+    expect(result).toEqual({ providerID: "openai", modelID: "gpt-4.1" })
+  })
+
+  it("invalid remembered memory falls through to recent and fallback", () => {
+    const result = resolveModelSelection({
+      providers,
+      connected: ["openai"],
+      memory: { providerID: "anthropic", modelID: "claude-sonnet-4" },
+      recent: [{ providerID: "openai", modelID: "gpt-4.1" }],
+      fallback: KILO_AUTO,
+    })
+    expect(result).toEqual({ providerID: "openai", modelID: "gpt-4.1" })
+  })
+})

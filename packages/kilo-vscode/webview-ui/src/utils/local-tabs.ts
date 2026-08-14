@@ -115,7 +115,7 @@ export function nextTabAfterClose(ids: readonly string[], id: string): string | 
   const index = ids.indexOf(id)
   if (index === -1) return undefined
   const tabs = ids.filter((tab) => tab !== id)
-  return tabs[Math.min(index, tabs.length - 1)]
+  return tabs[Math.max(0, index - 1)]
 }
 
 export function closeTab(state: LocalTabState, id: string, pending: PendingTabFactory): LocalTabState {

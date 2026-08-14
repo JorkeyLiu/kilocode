@@ -14,19 +14,26 @@
  *
  * Scenario selection (KILO_E2E_SCENARIO, forwarded to the extension-host
  * runner so it seeds only the selected scenario's fixtures):
- *   - (unset) | all      => child-task-order AND variant-memory in one VS Code
- *                           lifecycle (the delivery gate),
+ *   - (unset) | all      => tab-close, child-task-order AND variant-memory in
+ *                           one VS Code lifecycle (the delivery gate),
+ *   - tab-close          => only the tab-close-successor scenario + fixtures,
  *   - child-task-order   => only the child-task scenario + its fixtures,
  *   - variant-memory     => only the variant-memory scenario + its fixtures.
  *   Any other value fails fast before VS Code launches. Focused runs:
- *     KILO_E2E_SCENARIO=child-task-order node script/e2e-probe-launch.mjs
- *     KILO_E2E_SCENARIO=variant-memory   node script/e2e-probe-launch.mjs
- *   (package shortcuts: `bun run test:e2e:child-task-order`,
+ *     KILO_E2E_SCENARIO=tab-close         node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=child-task-order  node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=variant-memory    node script/e2e-probe-launch.mjs
+ *   (package shortcuts: `bun run test:e2e:tab-close`,
+ *   `bun run test:e2e:child-task-order`,
  *   `bun run test:e2e:variant-memory`.)
  *
  * Scenarios are independent: each seeds only its own fixtures and coordinates
- * through scenario-specific markers (child-phase1-done / child-phase2-ready /
- * child-phase2-done, variant-ready). No scenario waits on another's markers.
+ * through scenario-specific markers (tab-close-done, child-phase1-done /
+ * child-phase2-ready / child-phase2-done, variant-ready). No scenario waits on
+ * another's markers. The tab-close scenario runs first in the `all`
+ * composition and closes all its own tabs before finishing, so the strip it
+ * hands to the child scenario is exactly the startup state (one pending tab +
+ * bottom page) the child seeding already expects.
  *
  * MUST run under Node, not Bun: Playwright's CDP WebSocket transport hangs
  * under Bun's runtime against VS Code's Electron CDP endpoint (verified:
@@ -83,10 +90,10 @@ const timeoutMs = Number(process.env.KILO_E2E_TIMEOUT ?? 300_000)
 // LOCK-002: scenario selection. `all` (default) runs every scenario in one VS
 // Code lifecycle; a focused value runs exactly that scenario. Unknown values
 // fail fast BEFORE VS Code launches (see main()).
-const SCENARIO_VALUES = ["all", "child-task-order", "variant-memory"] as const
+const SCENARIO_VALUES = ["all", "tab-close", "child-task-order", "variant-memory"] as const
 function parseScenarios(value: string): Set<string> {
-  if (value === "all") return new Set(["child-task-order", "variant-memory"])
-  if (value === "child-task-order" || value === "variant-memory") return new Set([value])
+  if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
+  if (value === "tab-close" || value === "child-task-order" || value === "variant-memory") return new Set([value])
   throw new Error(
     `[probe] unknown KILO_E2E_SCENARIO "${value}". ` +
       `Supported values: ${SCENARIO_VALUES.join(" | ")} (default: all).`,
@@ -216,10 +223,16 @@ interface E2EPlan {
   siblingId: string
   childId: string
   variantId: string
+  tabAId: string
+  tabBId: string
+  tabCId: string
   sourceTitle: string
   siblingTitle: string
   childTitle: string
   variantTitle: string
+  tabATitle: string
+  tabBTitle: string
+  tabCTitle: string
 }
 
 /**
@@ -474,6 +487,118 @@ async function assertChildTaskOrder(browser: Browser, plan: E2EPlan, scratch: st
 }
 
 // ---------------------------------------------------------------------------
+// Tab-close successor — real webview DOM, real close button
+// ---------------------------------------------------------------------------
+
+/**
+ * Real-webview E2E for the active-tab close successor contract:
+ *   1. the runner seeds three session tabs [tabA, tabB, tabC] (first / middle
+ *      / last) with tabA active,
+ *   2. select the MIDDLE tab (tabB) and close it via the real `.am-tab-close`
+ *      button → the LEFT neighbor (tabA) becomes active, order [tabA, tabC],
+ *   3. close the now-first active tab (tabA) → the RIGHT-neighbor fallback
+ *      (tabC, former next tab, now first) becomes active, order [tabC],
+ *   4. close the last tab → no session tab remains (only-tab close has no
+ *      successor; the production handler falls back to the empty state).
+ *
+ * The frame anchor used by findAgentManagerFrame is re-resolved after every
+ * close that removes the anchor tab, using a surviving tab's title, so the
+ * finder never depends on a closed tab.
+ */
+async function assertTabCloseSuccessor(browser: Browser, plan: E2EPlan, scratch: string): Promise<void> {
+  const timeout = 30_000
+  // Anchor on the middle tab — the first tab this scenario closes — so the
+  // re-anchor path is exercised on each subsequent close.
+  let found = await findAgentManagerFrame(browser, plan, plan.tabBTitle, 60_000)
+  let frame = found.frame
+
+  // Phase 0: seeded order [tabA, tabB, tabC] with tabA active.
+  await expectTabOrder(
+    frame,
+    [plan.tabAId, plan.tabBId, plan.tabCId],
+    [plan.tabATitle, plan.tabBTitle, plan.tabCTitle],
+    plan.tabAId,
+    plan.tabATitle,
+    timeout,
+    "seeded order",
+  )
+
+  // Phase 1 (branch a): select the middle tab, then close it via the real
+  // close button → the LEFT neighbor (tabA) becomes active, order [tabA, tabC].
+  await clickTab(frame, plan.tabBId, timeout)
+  await expectTabOrder(
+    frame,
+    [plan.tabAId, plan.tabBId, plan.tabCId],
+    [plan.tabATitle, plan.tabBTitle, plan.tabCTitle],
+    plan.tabBId,
+    plan.tabBTitle,
+    timeout,
+    "middle tab selected",
+  )
+  await clickTabClose(frame, plan.tabBId, timeout)
+  // The anchor tab (tabB) is gone — re-anchor on a surviving tab's title.
+  found = await findAgentManagerFrame(browser, plan, plan.tabATitle, 60_000)
+  frame = found.frame
+  await expectTabOrder(
+    frame,
+    [plan.tabAId, plan.tabCId],
+    [plan.tabATitle, plan.tabCTitle],
+    plan.tabAId,
+    plan.tabATitle,
+    timeout,
+    "close middle selects left neighbor",
+  )
+
+  // Phase 2 (branch b): the first tab (tabA) is active; close it → the
+  // right-neighbor fallback (tabC, former next tab, now first) becomes active,
+  // order [tabC].
+  await clickTab(frame, plan.tabAId, timeout)
+  await expectTabOrder(
+    frame,
+    [plan.tabAId, plan.tabCId],
+    [plan.tabATitle, plan.tabCTitle],
+    plan.tabAId,
+    plan.tabATitle,
+    timeout,
+    "first tab active before close",
+  )
+  await clickTabClose(frame, plan.tabAId, timeout)
+  // The re-anchor tab (tabA) is gone — re-anchor on the surviving tab.
+  found = await findAgentManagerFrame(browser, plan, plan.tabCTitle, 60_000)
+  frame = found.frame
+  await expectTabOrder(
+    frame,
+    [plan.tabCId],
+    [plan.tabCTitle],
+    plan.tabCId,
+    plan.tabCTitle,
+    timeout,
+    "close first falls back to right neighbor",
+  )
+
+  // Phase 3 (only-tab path): close the last tab → no session tab remains. This
+  // also resets the strip to the startup state (one pending tab + bottom page)
+  // so the next scenario in the `all` composition seeds from a clean base.
+  await clickTabClose(frame, plan.tabCId, timeout)
+  await waitForNoSessionTabs(frame, timeout, "last tab closed leaves no session tab")
+
+  writeFileSync(
+    join(scratch, "tab-close-dom-evidence"),
+    JSON.stringify(
+      {
+        url: frame.url(),
+        plan,
+        finalTabs: await tabStates(frame),
+      },
+      null,
+      2,
+    ),
+  )
+  // Scenario complete — the runner may seed the next scenario.
+  writeFileSync(join(scratch, "tab-close-done"), "ok")
+}
+
+// ---------------------------------------------------------------------------
 // Variant memory across agents (LOCK-001) — real webview DOM
 // ---------------------------------------------------------------------------
 
@@ -527,6 +652,39 @@ async function clickTab(frame: Frame, tabId: string, timeoutMs: number): Promise
   const tab = frame.locator(`.am-tab-sortable[data-tab-id="${tabId}"]`).first()
   await tab.waitFor({ state: "visible", timeout: timeoutMs })
   await tab.click({ timeout: timeoutMs })
+}
+
+/**
+ * Click the real production close button of one session tab. The button is
+ * the `.am-tab-close` rendered by the production SessionTab component inside
+ * that tab's `.am-tab-sortable` container — the exact DOM element a user
+ * clicks. Scoping by the tab's data-tab-id never depends on a locale-dependent
+ * aria-label or title string.
+ */
+async function clickTabClose(frame: Frame, tabId: string, timeoutMs: number): Promise<void> {
+  const btn = frame.locator(`.am-tab-sortable[data-tab-id="${tabId}"] .am-tab-close`).first()
+  await btn.waitFor({ state: "visible", timeout: timeoutMs })
+  await btn.click({ timeout: timeoutMs })
+  console.log(`[probe] clicked .am-tab-close for tab ${tabId}`)
+}
+
+/** Poll until no `.am-tab-sortable` session tab remains (only-tab close path). */
+async function waitForNoSessionTabs(frame: Frame, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const states = await tabStates(frame)
+    if (states.length === 0) {
+      console.log(`[probe] PASS ${label}: no session tabs remain`)
+      return
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `probe: ${label} failed: ${states.length} session tab(s) remain: ` +
+          states.map((s) => `${s.id}="${s.label}"`).join(", "),
+      )
+    }
+    await sleep(250)
+  }
 }
 
 /**
@@ -929,8 +1087,13 @@ async function main() {
       await waitForFile(join(scratch, "plan.json"), 30_000, "runner plan marker")
       const plan = JSON.parse(readFileSync(join(scratch, "plan.json"), "utf8")) as E2EPlan
       console.log(
-        `[probe] runner ready, plan: source=${plan.sourceId} sibling=${plan.siblingId} child=${plan.childId} variant=${plan.variantId}`,
+        `[probe] runner ready, plan: source=${plan.sourceId} sibling=${plan.siblingId} child=${plan.childId} ` +
+          `variant=${plan.variantId} tabA=${plan.tabAId} tabB=${plan.tabBId} tabC=${plan.tabCId}`,
       )
+      if (scenarios.has("tab-close")) {
+        await assertTabCloseSuccessor(browser, plan, scratch)
+        console.log("[probe] tab-close successor assertion passed")
+      }
       if (scenarios.has("child-task-order")) {
         await assertChildTaskOrder(browser, plan, scratch)
         console.log("[probe] child-task tab-order assertion passed")

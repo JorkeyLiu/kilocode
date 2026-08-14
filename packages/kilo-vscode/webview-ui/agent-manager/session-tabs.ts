@@ -53,7 +53,7 @@ export function selectTab(state: SessionTabState, id: string): SessionTabState {
 /** Compute the next active ID after closing `id` at `index`. */
 function adjacentFallback(ids: readonly string[], index: number): string | undefined {
   const remaining = ids.filter((_, i) => i !== index)
-  return remaining.length > 0 ? remaining[Math.min(index, remaining.length - 1)] : undefined
+  return remaining.length > 0 ? remaining[Math.max(0, index - 1)] : undefined
 }
 
 /**
