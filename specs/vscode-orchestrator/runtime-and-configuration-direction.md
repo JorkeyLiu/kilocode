@@ -17,7 +17,11 @@ The durable decisions are recorded in
 [ADR-0003: Replace CLI Configuration with Private GUI Runtime](../adr/0003-replace-cli-configuration-with-private-gui-runtime.md)
 (Status: Active) and
 [ADR-0002: Focus VS Code on Agent Orchestration](../adr/0002-focus-vscode-on-agent-orchestration.md)
-(Status: Active). This document is the implementation source of truth for the
+(Status: Active). The just-in-time direct-reconstruction policy is recorded in
+[ADR-0004: Architecture-First Direct Reconstruction](../adr/0004-architecture-first-direct-reconstruction.md)
+(Status: Active); this document owns its bounded Failure/Outcome/Recovery target
+(section 7.2) and the R11-R14 bounded implementation decisions (section 9).
+This document is the implementation source of truth for the
 runtime/config migration; the product direction spec
 [`agent-orchestration-direction.md`](agent-orchestration-direction.md) owns the
 product surface and harness matrix. Mutable phase status and exit evidence are
@@ -66,6 +70,14 @@ This spec owns:
   facts; extension/webview state is derived presentation/read-model state;
   snapshot/revision/event convergence across transport reconnect and worker
   restart (section 7.1).
+- The bounded Failure/Outcome/Recovery target: an independently valuable
+  runtime-owned foundation — one normalization boundary, minimal Failure/Outcome
+  schema without taxonomy freeze, operation identity/outcome facts, minimal field
+  tiers, runtime-side redaction, structured redacted panel projection,
+  cancellation provenance, schema ownership, and the private runtime as sole
+  semantic recovery authority — with post-reconstruction maturity separately
+  scoped and the four bounded implementation decisions R11-R14 required by P4.2
+  (sections 7.2, 7.3, 9).
 - The performance model: cost attribution, redundancy candidates, latency
   attribution, instrumentation plan, benchmark scenarios, regression gates, and
   runtime-slimming acceptance criteria (section 10).
@@ -208,6 +220,54 @@ Evidence:
 | Runtime process | General `kilo serve` child with public HTTP/SSE/SDK surface (2.1) | Extension-owned private headless worker; private transport (section 7) |
 | Agent definitions | Agent markdown shares the config-object schema and merges per-field with config-defined agents; per-agent permission currently overrides global user policy (2.2) | Typed canonical agent manifests: agent markdown retained as a canonical project/global asset, one manifest per ID; duplicate/conflict fails validation, never widens enclosing policy (section 5.2) |
 | Permission evaluation | Last-match-wins within flattened layers; session tool toggles can weaken non-mode agent denies; `question` and legacy `mcp` rules have enforcement ambiguity (2.2) | Restrictive policy stack with monotonic deny/ask/allow composition; provenance identifies contributing policies and the decisive rule (section 5.3) |
+
+### 2.7 Error, retry, and recovery ownership (evidence)
+
+Failure/outcome/recovery handling today is spread across multiple owners with no
+single authority over what an operation's outcome is, who may retry it, and when
+recovery is complete:
+
+- The session prompt loop owns retry scheduling and classification:
+  `SessionRetry.policy` / `SessionRetry.retryable`
+  (`packages/opencode/src/session/retry.ts`) classify errors and schedule
+  exponential backoff (2000 ms initial delay, 30000 ms local cap) or a
+  server-provided `Retry-After`/`retry-after-ms` value capped only by the 32-bit
+  `setTimeout` maximum, publishing `retry` status events
+  (`packages/opencode/src/session/processor.ts`,
+  `KiloSessionProcessor.retryOpts`).
+- The LLM executor owns a separate retry input: `maxRetries: input.retries ?? 0`
+  at the AI-SDK call layer (`packages/opencode/src/session/llm.ts`).
+- Child/incomplete-session loops own their own bounded same-session retries:
+  transient provider failures on child task sessions
+  (`packages/opencode/src/tool/task.ts`,
+  `packages/opencode/src/kilocode/tool/task-retry.ts`) and retry of terminally
+  incomplete attempts before settlement (`packages/opencode/src/session/processor.ts`).
+- The extension owns retry on its side too: an exponential-backoff ladder
+  (5s/10s/30s/60s/300s) with `Retry-After`/`Retry-After-MS` extraction and
+  per-session abort controllers (`packages/kilo-vscode/src/util/retry.ts`,
+  `packages/kilo-vscode/src/KiloProvider.ts` `withRetry`), a generic 3-attempt
+  `retry()` (`packages/kilo-vscode/src/services/cli-backend/retry.ts`), and SSE
+  reconnect retry (`packages/kilo-vscode/src/services/cli-backend/sdk-sse-adapter.ts`).
+- The retry limit is an environment flag (`Flag.KILO_SESSION_RETRY_LIMIT`,
+  `packages/opencode/src/kilocode/session/processor.ts`), not a runtime policy.
+- There is no unified operation/outcome identity: no runtime-owned record says
+  whether a submitted prompt, a tool call, or a child task reached a terminal or
+  intermediate outcome, who owns its retry budget and provenance, or how a
+  worker crash disposes an in-flight operation.
+- The paused `jorkey/feature/error-system` branch is design/input evidence only
+  (ADR-0004): it intentionally did not change retry policy, and its
+  compatibility/versioning/client scope is discarded under the current product
+  removals.
+
+None of this binds the target: the Failure/Outcome/Recovery target (section
+7.2) does not preserve these implementation shapes, the current error
+taxonomy, delay ladders, the environment retry flag, or the auto-continue
+implementation (ADR-0004). The target is not merely retry support: one
+runtime-owned normalization boundary, minimal schema without taxonomy freeze,
+field tiers, redaction, persistence/projection, cancellation provenance, and
+schema ownership each earn independent rationale across provider/session/tool/
+permission/worker/UI errors, with recovery as one consumer of those facts
+(section 7.2).
 
 ## 3. Target State Ownership Domains
 
@@ -571,7 +631,9 @@ records per-source removal evidence in the tracker. Operational facts about
 sessions/worker state are observed through the runtime observation and hydration
 contract (section 7.1) — distinct from the immutable config snapshot consumption
 path (step 5) — and the observation surface rides the private transport (R1)
-after the P4.4 transport narrowing.
+after the P4.4 transport narrowing. Failure/outcome/recovery behavior follows
+the section 7.2 target on the private runtime; the current retry/error stack
+(section 2.7) is implementation history, not a target contract (ADR-0004).
 
 ### 7.1 Runtime observation and hydration contract
 
@@ -603,6 +665,108 @@ domains; it does not create a new persisted store.
   convergence are bounded implementation decisions (R9, section 9). The private
   transport (R1) is the carrier after the P4.4 transport narrowing, but its wire
   shape for observation is part of R9, not fixed here.
+
+### 7.2 Failure/Outcome/Recovery
+
+A bounded target foundation for failure, outcome, and recovery, owned here
+(ADR-0004). It addresses the root causes of section 2.7 without preserving the
+current retry/error implementation shapes, the existing error taxonomy, delay
+ladders, the environment retry flag, the auto-continue implementation, or any
+SDK/cloud/JetBrains/TUI projection of errors.
+
+The foundation is independently valuable, not merely retry support: one
+runtime-owned normalization boundary, a minimal Failure/Outcome schema without
+taxonomy freeze, operation identity/outcome facts, minimal field tiers,
+runtime-side redaction, structured redacted panel projection, cancellation
+provenance, and schema ownership each earn their place across provider/session/
+tool/permission/worker/UI errors; recovery is one consumer of these facts, not
+the only purpose.
+
+Normative target (P4.2 foundation):
+
+- Runtime-owned normalization boundary: exactly one place converts
+  provider/session/tool/permission/worker/transport errors into a runtime
+  Failure record. Classification labels a failed operation and is separate from
+  recovery: classifying an error never by itself schedules a retry.
+- Minimal private-runtime Failure/Outcome schema without taxonomy freeze: the
+  minimum fields needed to record an operation's outcome and its failure facts;
+  no complete taxonomy is decided now.
+- Operation identity and outcome are runtime-owned operational facts under the
+  observation contract of section 7.1. Every accepted semantic operation on the
+  generation path — prompt/generation, provider attempt, tool call,
+  permission/question wait, child/background task — has a runtime-owned
+  identity; its terminal or intermediate outcome (succeeded, failed, ambiguous,
+  in-flight, superseded, abandoned) is a runtime fact, never invented or revised
+  by the extension or webview. Config commit outcomes are owned by section 5 and
+  section 5.4 and are not operations of this model.
+- Minimal field tiers: each Failure/Outcome field is classified as durable,
+  diagnostic, or panel-visible, so persistence, diagnostics, and projection each
+  keep only what they need.
+- Runtime-side redaction before persistence/projection: secrets and bounded
+  detail are removed by the runtime before anything is persisted or projected.
+- Structured redacted panel projection: the panel renders the runtime's
+  outcome/recovery facts through a versioned private envelope, never a
+  client-side re-derivation of failure.
+- Cancellation provenance: a cancelled operation records why it was cancelled,
+  distinguishing at least user stop, steering, timeout, network disconnect, and
+  unknown.
+- The private runtime is the sole semantic recovery authority. A client
+  (extension/webview) may reconnect transport and re-observe state, but it may
+  never replay or re-dispatch an accepted semantic operation; replay of an
+  accepted operation is a runtime decision.
+- Recovery policy has explicit owner/scope, budget consumed and termination,
+  next-at occurrence time (when the next attempt may occur versus when the
+  failure occurred), provenance (who requested it), and side-effect/replay-safety
+  inputs (why it is safe: no committed side effect replayed, no ambiguous history
+  re-driven).
+- Nested low-level retries are not invisible to the owning operation's
+  accounting: a low-level retry inside a provider/SDK/transport layer is visible
+  to and consumes the owning operation's budget and provenance; it never loops
+  outside the operation's accounting.
+- A worker crash yields an explicit in-flight disposition: every accepted
+  operation in flight at the crash converges to a recorded terminal/intermediate
+  disposition under section 7.1 resynchronization, with no orphaned resource
+  ownership and no silent replay.
+- Schema/envelope ownership: the private error envelope's version/compatibility
+  is owned by R1/R9/R12 as appropriate, never by a client projection.
+- No requirement to preserve old retry/error behavior: section 2.7's multiple
+  retry owners, Retry-After-driven first waits, and projection-specific error
+  shapes are implementation history, not target contracts.
+
+Not required by the P4.2 foundation (deferred to post-reconstruction maturity,
+section 7.3): a complete taxonomy; a complete byte/depth sanitizer contract; rich
+causal-chain diagnostics; telemetry/logging redesign; a user-facing action
+catalog or notification UX; config-validation error unification;
+SDK/cloud/JetBrains/TUI/public transport compatibility; the current delay
+ladders and environment retry flag; auto-continue preservation.
+
+The minimum private-runtime Failure/Outcome schema, normalization boundary,
+field tiers, runtime redaction, cancellation provenance, versioned panel
+envelope, recovery accounting/coordination, and worker-crash in-flight
+disposition are bounded implementation decisions R11-R14 (section 9), required
+by P4.2; a 14-variant taxonomy or a frozen algorithm set is not decided now
+(ADR-0004).
+
+### 7.3 Post-reconstruction error maturity
+
+Separately planned work after core reconstruction (2026-08-14 decision). These
+items are NOT reconstruction candidates: they are not displaced legacy
+behaviors, they never create just-in-time registry entries, and they do not
+block P4/P5 unless separately promoted:
+
+- Taxonomy refinement — a complete error taxonomy; no freeze at P4.2.
+- Diagnostic retention/sanitizer hardening — e.g. the paused error-system
+  branch's byte/depth sanitizer contract is not a P4.2 requirement.
+- Logs/telemetry keep-lists — which fields diagnostics/logs/telemetry retain.
+- Rich error actions/notification routing — a user-facing action catalog and
+  notification UX are not P4.2 requirements.
+- Domain-specific error integrations — per provider/session/tool/permission/
+  worker/UI domain, reusing the foundation's normalization boundary and schema.
+
+Each item is promoted to scoped work by a recorded decision after core
+reconstruction; promotion does not reopen the P4.2 foundation scope. The
+tracker holds the named backlog/decision note (tracker section 7), deliberately
+outside the just-in-time reconstruction candidate registry.
 
 ## 8. Removal Checklist
 
@@ -665,11 +829,18 @@ These were intentionally not chosen at spec-writing time. They are recorded as
 implementation decisions with objective evidence, before the affected phase can
 exit. As of 2026-08-12, R1/R2/R5/R6/R8 are resolved with the decisions below
 (also recorded in the tracker, section 9); R3 (numeric startup SLA) and R4
-(adoption thresholds) remain open; R7 remains open with required-by clarified
-(see row). R9 (observation/hydration implementation details) is added open on
+(adoption thresholds) remain open; R7 (performance gate thresholds) is resolved
+2026-08-14 — performance gates use no numeric pass/fail thresholds (see row).
+R9 (observation/hydration implementation details) is added open on
 2026-08-13, required by P4.2 (see row). R10 (canonical schema/field-registry
 layout and exact persistence assignment) is added open on 2026-08-13, required
-by P4.1 (see row). The tracker (section 9) is the mutable
+by P4.1 (see row). R11-R14 (Failure/Outcome/Recovery bounds: operation/outcome
+identity, record location, and retention; minimum private-runtime
+Failure/Outcome schema, normalization boundary, field tiers, runtime redaction,
+cancellation provenance, and versioned panel envelope; recovery
+accounting/coordination; worker-crash in-flight disposition) are added open on
+2026-08-14, all required by P4.2 (see
+rows; ADR-0004). The tracker (section 9) is the mutable
 status source; this table is the durable decision record.
 
 On 2026-08-13 R2 and R6 were revised by a post-P0 user clarification
@@ -686,10 +857,14 @@ checklist. P0 remains Complete; its recorded evidence is unchanged.
 | R4 Adoption thresholds for removal timing | Evidence-driven product decision | P3 (product removal gates) | Open |
 | R5 Exact project harness-assets path | One canonical explicit project boundary (LOCK-010) | P4.1 | Resolved (2026-08-12): one canonical project boundary = first VS Code workspace root; project-versioned harness assets live only under `<workspaceRoot>/.kilo/`, including `.kilo/kilo.json[c]`, agent/command/rules/skills/workflows/plans/config assets. P4.1 establishes the canonical project files and field registry; the ancestor walk, `.kilocode`/`.opencode`, global project-asset sources, and primary-worktree mirror reads are deleted together at the P4.3 cutover, with per-row removal evidence recorded at P4.4. No multi-source precedence remains; no migration/import tool exists |
 | R6 Legacy-reader cutover (formerly: dual-read window deadline) | No dual authority and no compatibility window (LOCK-009; section 7) | P4.3 | Resolved (2026-08-12; **revised 2026-08-13**): there is no dual-read compatibility window and no import tool. P4.3 is the last legacy-reader phase boundary: the current implementation may use old sources only before the cutover; at the P4.3 boundary all legacy readers are deleted together and cannot influence effective config. The sole user manually reconciles any desired current configuration into canonical files before the cutover. The original 2026-08-12 decision (dual-read opens only during P4.3, shrinks monotonically, no new bridge consumers) is preserved as historical evidence in the tracker |
-| R7 Performance gate thresholds (startup stages, prompt-submit/first-token, stream-render, tool/permission, session-switch, config-update) | Recorded product/engineering decision; no invented numerics (LOCK-PERF-6) | Required by = before the first P3/P4/P5 performance gate that uses thresholds (and the P1/P2 no-regression gate if applicable), not the P0 baseline recording; threshold policy must be recorded before each affected phase starts/claims its gate, using comparable same-environment control evidence | Open — not a P0 blocker; P0 satisfies its component by recording descriptive runtime baselines (tracker section 8) |
+| R7 Performance gate thresholds (startup stages, prompt-submit/first-token, stream-render, tool/permission, session-switch, config-update, removal reduction) | Resolved (2026-08-14): gates use no numeric pass/fail thresholds. P1/P2 compare descriptive, affected-path, same-environment measurements against the P0 baseline — record med/p95/sample/provenance and investigate obvious structural anomalies; measurement noise alone does not block and there is no requirement to improve. P3/P4 removal phases prove removed-feature initialization/readers/listeners/resources are absent and record affected startup/session-switch/memory/worker-lifecycle deltas; zero or positive noisy delta is allowed if no removed work remains and no structurally unbounded growth/resource leak appears; only affected measured rows are rerun per phase. Complexity budgets record deltas; zero reduction in a dimension is allowed with a stated phase-boundary reason; permanent-removal completeness remains required. `Same environment/comparable` means same benchmark scripts/scenario, machine/OS class, VS Code profile type, seeded/provider conditions, instrumentation mode, and recorded git SHA/dirty/environment drift; non-comparable runs are recorded but cannot support gate claims. Numeric product SLA is R3, resolved separately at P5 | Resolved (2026-08-14) | Resolved — no threshold-using gate remains; P1 can start without an undefined threshold gate (LOCK-PERF-6) |
 | R8 Benchmark tooling/harness choice | Internal implementation choice; not prescribed by this spec | P0 profiling tasks | Resolved: retain the existing two-harness tooling as the P0 and later comparison harness — Extension Host scenarios 1/2/3/4/5/10 under `packages/kilo-vscode/script/p0-bench/` (runner/merge/safety/provenance tools); backend scenarios 6/7/8/9/11/12/13 under `packages/opencode/test/benchmark/` (runner). Limitations recorded: manual-only, platform/environment/provenance scoped, backend in-process `Server.listen`/`AppLayer` only, n=5 descriptive |
 | R9 Observation/hydration implementation details (snapshot/event handshake; revision scope/ordering/idempotency; ephemeral-fact retention) | Bounded implementation decision; the normative contract (section 7.1) fixes the one-owner and lifecycle-convergence constraints but not the wire schema, event sourcing, polling, timer subsystems, or retention | P4.2 (the private-worker observation surface must not ship without it). Not a P0 blocker | Open — added 2026-08-13 |
 | R10 Canonical schema/field-registry layout and exact persistence assignment | The normative rules are fixed by this spec — legal source taxonomy (section 3.1), field-registry content (section 3.2), typed composition/materialization/provenance (section 5.1), agent-manifest role (section 5.2), permission composition (section 5.3), and the bidirectional file-editing/WYSIWYG contract (section 5.4). File/asset authority is fixed by R2 (revised 2026-08-13), and R10 is bounded within that topology: exact canonical filenames/layout, the registry entry per remaining field class, legal scope/operator per field, and watcher owner/stamping/conflict implementation details (section 5.4). It does not reopen file authority, the two-level authored scope set, the SecretStorage exception, or the no-migration decision | P4.1 (P4.1 is not verifiable until the registry covers every configurable field class and the schema/provenance/WYSIWYG contract is evidenced). Not a P0 blocker | Open — added 2026-08-13 |
+| R11 Operation/outcome identity and record location/retention | Bounded implementation decision under the normative Failure/Outcome/Recovery target (section 7.2) and the observation contract (section 7.1): what an accepted semantic operation's identity is, where the canonical Failure/Outcome records live, and their minimal retention under existing storage — no new store mandate. Generation-path operations only (prompt/generation, provider attempt, tool call, permission/question wait, child/background task); config commit outcomes are owned by sections 5/5.4 and are not R11 operations. It does not reopen runtime sole authority for operational facts or the client replay prohibition | P4.2 (the private-runtime Failure/Outcome foundation must not ship without it). Not a P0-P1 blocker | Open — added 2026-08-14 |
+| R12 Minimum private-runtime Failure/Outcome schema + panel projection/redaction | Bounded implementation decision under section 7.2: the minimum Failure/Outcome schema, the runtime-owned normalization boundary, minimal field tiers (durable vs diagnostic vs panel-visible), runtime-side redaction before persistence/projection, cancellation provenance (at least user stop/steering/timeout/network disconnect/unknown), and a versioned private panel envelope/projection. No complete taxonomy and no byte/depth sanitizer contract freeze. The private error envelope's version/compatibility is owned by R1/R9/R12 as appropriate | P4.2. Not a P0-P1 blocker | Open — added 2026-08-14 |
+| R13 Recovery accounting/coordination and low-level retry visibility | Bounded implementation decision under section 7.2 — P4.2 is accounting/coordination only: owner/scope, budget consumed/termination, next-at occurrence time, provenance, and visibility of nested low-level attempts within the owning operation. It may reuse current bounded behavior. Retryability algorithms, delay shapes, and future recovery features are post-foundation (section 7.3). It does not preserve old retry shapes, delay ladders, the environment retry flag, or the auto-continue implementation | P4.2. Not a P0-P1 blocker | Open — added 2026-08-14 |
+| R14 Worker-crash in-flight disposition | Bounded implementation decision under sections 7.2 and 7.1: how an accepted in-flight operation at a worker crash converges to a recorded disposition with resource cleanup and no silent client replay — without requiring resumability and without a new persistent operation ledger | P4.2. Not a P0-P1 blocker | Open — added 2026-08-14 |
 
 ## 10. Performance Model And Regression Gates
 
@@ -705,7 +880,7 @@ from the six accepted campaigns; nothing here claims an implemented improvement
 
 | ID | Decision |
 |---|---|
-| LOCK-PERF-1 | Performance simplification is a primary objective alongside product coherence. Remove redundant architecture from the hot path. |
+| LOCK-PERF-1 | Performance simplification is a primary objective alongside product coherence. Remove redundant architecture from the hot path as a structural objective — eliminating redundant architecture, not per-phase optimization or a numeric improvement demand. |
 | LOCK-PERF-2 | CLI/TUI/Console are not products. A private headless worker may remain for isolation; its startup and runtime costs must be measured. |
 | LOCK-PERF-3 | Removed features must not contribute to startup/readiness: worktree/Diff Viewer, cloud sessions, JetBrains, Console, KiloClaw, indexing, memory, user-visible context management, autocomplete, preset provider catalog/onboarding. |
 | LOCK-PERF-4 | Persisted custom-provider/model/agent choices must be renderable before worker readiness; action-specific readiness replaces global `extensionDataReady` gating. |
@@ -860,7 +1035,9 @@ classes below must be measured separately, never summed into one number.
 
 - Performance simplification is a primary objective alongside product coherence
   (LOCK-PERF-1). The hot path is extension -> private worker -> harness
-  generation path; redundant architecture on that path is removal scope.
+  generation path; redundant architecture on that path is removal scope. This is
+  a structural objective — removing redundant architecture — not per-phase
+  optimization.
 - CLI/TUI/Console are not products (LOCK-009). A private headless worker may
   remain for isolation, but its startup and runtime costs are measured
   (LOCK-PERF-2).
@@ -871,8 +1048,10 @@ classes below must be measured separately, never summed into one number.
 - Harness semantics and performance correctness are preserved (LOCK-PERF-5): no
   regression in transport/event handling, generation pinning, rollback, or the
   overflow safeguard.
-- No performance claim without runtime evidence (LOCK-PERF-6). Thresholds are
-  recorded product/engineering decisions (section 9), never invented here.
+- No performance claim without runtime evidence (LOCK-PERF-6). There are no
+  numeric pass/fail performance thresholds (R7 resolved 2026-08-14, section 9):
+  P1/P2 compare descriptively on affected paths in a same environment; P3/P4
+  prove structural absence of removed work and record affected-path deltas.
 - Localhost transport is not presumed dominant (LOCK-PERF-7); attribution is
   measured per cost class (10.5).
 
@@ -905,7 +1084,7 @@ The Today column shows existing partial instrumentation; "-" means none.
 | Permission asked/replied | Permission/question flow | Extension `permission.asked`/`replied`, `question.asked`/`replied`/`rejected` marks + backend `permission_wait` / `question_wait` spans (request-id correlated; rejection = unmatched start). Asked/replied marks are keyed by permission/question id and carry NO directory — the shared connection's directory context only routes the reply back to its panel |
 | Config commit | `config-convergence.ts` commit | Rebuild tracking |
 | Convergence complete | `config-convergence.ts` release | `trackRebuildCompleted` |
-| Run-owned process-tree memory guard (P0 safety infrastructure, not a latency point) | `script/p0-bench/memory-guard.ts` + `script/p0-bench/sample.ts` lifecycle | Per-lifecycle bounded `memoryGuard` result on every sample: configured engineering safety rails (RSS/VSZ/aggregate, default any-owned-RSS ≥ 4 GiB, aggregate-RSS ≥ 6 GiB, VSZ ≥ 64 GiB; env-tunable via `KILO_P0_MEMORY_GUARD_*`), poll count/overhead, max aggregate RSS, max owned count, max process RSS/VSZ identity, breach or null, capped time series. A guard breach aborts the lifecycle with `ok:false`, `blocked.reason="memory-guard-abort"` and exact-owned cleanup still runs. Rails are engineering safety limits, never performance thresholds (LOCK-PERF-7) — see 10.9 | - |
+| Run-owned process-tree memory guard (P0 safety infrastructure, not a latency point) | `script/p0-bench/memory-guard.ts` + `script/p0-bench/sample.ts` lifecycle | Per-lifecycle bounded `memoryGuard` result on every sample: configured engineering safety rails (RSS/VSZ/aggregate, default any-owned-RSS ≥ 4 GiB, aggregate-RSS ≥ 6 GiB, VSZ ≥ 64 GiB; env-tunable via `KILO_P0_MEMORY_GUARD_*`), poll count/overhead, max aggregate RSS, max owned count, max process RSS/VSZ identity, breach or null, capped time series. A guard breach aborts the lifecycle with `ok:false`, `blocked.reason="memory-guard-abort"` and exact-owned cleanup still runs. Rails are engineering safety limits, never performance thresholds (R7 resolved 2026-08-14: no numeric thresholds) — see 10.9 | - |
 | Immutable per-campaign CLI snapshot (P0 provenance safety, not a latency point) | `script/p0-bench/snapshot.ts` + `server-manager.ts` `resolveCliPath` (`KILO_P0_BACKEND_CLI`) | Run-owned temp copy of `bin/kilo` pinned through a benchmark-only override so the non-owned dev CLI watcher cannot change the measured binary mid-campaign; original + snapshot SHA/path recorded on run/sample records; snapshot deleted after the campaign; production fallback unchanged | - |
 
 ### 10.9 Benchmark scenarios and regression gates
@@ -931,14 +1110,26 @@ section 8):
 
 Gate rules:
 
-- Gates are comparisons against the P0 baseline recorded in the tracker
-  (section 8); numeric thresholds are recorded product/engineering decisions
-  (section 9), never invented here.
+- Gates are descriptive comparisons against the P0 baseline recorded in the
+  tracker (section 8): same-environment, affected-path runs record
+  med/p95/sample/provenance. There are no numeric pass/fail thresholds (R7
+  resolved 2026-08-14, section 9).
+- `Same environment/comparable` means the same benchmark scripts/scenario,
+  machine/OS class, VS Code profile type, seeded/provider conditions,
+  instrumentation mode, and recorded git SHA/dirty/environment drift.
+  Non-comparable runs are recorded but cannot support gate claims.
 - No regression in harness semantics or performance correctness (LOCK-PERF-5):
   the H-1..H-13 flows, generation pinning, rollback, and the overflow safeguard
   stay intact on every measured path.
-- Measurable net reduction in startup work, loaded services, and removed-feature
-  initialization (LOCK-PERF-1, LOCK-PERF-3) before a removal phase exits.
+- Removal phases prove removed-feature initialization/readers/listeners/
+  resources are absent and record affected startup/session-switch/memory/worker
+  lifecycle deltas; zero or positive noisy delta is allowed if no removed work
+  remains and no structurally unbounded growth/resource leak appears
+  (LOCK-PERF-1, LOCK-PERF-3). Only the affected measured rows are rerun per
+  phase — not the entire P0 campaign.
+- Complexity budgets record deltas; zero reduction in a dimension is allowed
+  with a stated phase-boundary reason; permanent-removal completeness remains
+  required (direction spec section 11).
 - Config-source removal evidence gate: P4.1 does not exit until the field
   registry covers every configurable field class (section 3.2) and the
   schema/provenance contract is evidenced (R10); P4.4 does not exit until each
@@ -975,8 +1166,8 @@ Safety infrastructure (not gates, not thresholds, not claims):
   written, only exact owned userData PIDs are terminated via the existing
   cleanup helpers, and teardown still verifies port/scratch cleanup.
   Guard-aborted samples are failures, never baselines. Rails are engineering
-  safety limits — not performance thresholds and not an SLA (LOCK-PERF-7 stays
-  Open); no performance result derives from them.
+  safety limits — not performance thresholds and not an SLA; no performance
+  result derives from them (R7 resolved 2026-08-14, section 9).
 - The measured CLI binary is immutable per campaign: `bin/kilo` is snapshotted
   to a run-owned temp path before samples and pinned through the
   benchmark-only `KILO_P0_BACKEND_CLI` override, so the non-owned dev watcher
@@ -998,8 +1189,11 @@ A phase claims runtime slimming only with all of:
 
 - Startup: the worker reaches readiness without initializing removed features
   (LOCK-PERF-3); persisted selectors render before worker readiness (LOCK-PERF-4,
-  section 6); no global `extensionDataReady` barrier; AppLayer/process-graph
-  construction cost is measurably reduced against the P0 baseline.
+  section 6); no global `extensionDataReady` barrier; the AppLayer/process-graph
+  is structurally absent of removed features, with affected startup deltas
+  recorded against the P0 baseline (zero or positive noisy delta is allowed if
+  no removed work remains and no structurally unbounded growth/resource leak
+  appears).
 - Config: cold saves commit without process-global rebuild/convergence (target 0
   passes) and never interrupt active generations (section 5, LOCK-011); effective
   config composes only from the closed legal source taxonomy (sections 3.1, 5.1),
@@ -1010,9 +1204,11 @@ A phase claims runtime slimming only with all of:
   parent-child/background/parallel sessions, persistence, SessionRevert+Snapshot,
   overflow safeguard - with no regression in transport/event handling or prompt
   latency attribution.
-- Evidence: before/after metrics recorded in the tracker (section 8) against the
-  recorded thresholds (section 9); issue/PR/test/doc evidence per phase; nothing
-  claimed without measurement (LOCK-PERF-6).
+- Evidence: only the affected measured rows are rerun per phase and recorded in
+  the tracker (section 8) with med/p95/sample/provenance (descriptive,
+  same-environment); issue/PR/test/doc evidence per phase; nothing claimed
+  without measurement (LOCK-PERF-6). No numeric pass/fail threshold applies
+  (R7 resolved 2026-08-14, section 9).
 
 ### 10.11 Evidence status
 
@@ -1024,13 +1220,14 @@ A phase claims runtime slimming only with all of:
   descriptive n=5 sample statistics with evidence links. The backend campaigns
   are CLI-side in-process harness evidence only — neither target-surface nor
   private-worker evidence.
-- Target-only metrics without a P0 measurement are later-phase gates, not P0
+- Target-only metrics without a P0 measurement are later-phase evidence, not P0
   blockers: persisted-selector paint gates at P5 (no extension-owned persisted
   indexes exist before P4.1); cost attribution (LOCK-PERF-7) and per-event
-  transport/webview render flush gate at P2 (harness-parity/streaming);
-  removed-feature initialization count and startup-work net reduction gate at
-  P3/P4.4 (removal). No performance threshold is claimed (R7 remains Open;
-  required-by clarified in section 9).
+  transport/webview render flush are descriptive evidence at P2
+  (harness-parity/streaming) — recorded with med/p95/sample/provenance, not an
+  independent P2 exit blocker; removed-feature initialization absence and
+  affected-path deltas gate at P3/P4.4 (removal). No numeric performance
+  threshold exists (R7 resolved 2026-08-14, section 9).
 - Existing partial instrumentation - `kilo startup`
   (`packages/opencode/src/cli/cmd/debug/startup.ts`, prints process-start
   `performance.now()`), provider `log.time`, Effect spans, and ACP profiling
@@ -1044,7 +1241,7 @@ A phase claims runtime slimming only with all of:
 
 Markdown/table check for the spec files (must pass without modifying anything):
 
-- `bun run script/check-md-table-padding.ts specs/adr/0002-focus-vscode-on-agent-orchestration.md specs/adr/0003-replace-cli-configuration-with-private-gui-runtime.md specs/vscode-orchestrator/agent-orchestration-direction.md specs/vscode-orchestrator/runtime-and-configuration-direction.md specs/vscode-orchestrator/migration-tracker.md`
+- `bun run script/check-md-table-padding.ts specs/adr/0002-focus-vscode-on-agent-orchestration.md specs/adr/0003-replace-cli-configuration-with-private-gui-runtime.md specs/adr/0004-architecture-first-direct-reconstruction.md specs/vscode-orchestrator/agent-orchestration-direction.md specs/vscode-orchestrator/runtime-and-configuration-direction.md specs/vscode-orchestrator/migration-tracker.md`
 
 Architecture impact check (run from repo root; report the outcome):
 
