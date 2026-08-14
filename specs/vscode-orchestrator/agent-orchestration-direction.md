@@ -88,7 +88,7 @@ optimization demand; there are no numeric pass/fail performance thresholds
 | Preset provider identities/catalogs, models.dev dependency, onboarding/organization sources | Residual implementation present; removal decided (LOCK-006) |
 | Backend-gated selector readiness (`extensionDataReady`) | Current behavior; target is action-specific readiness (LOCK-012), owned by the runtime spec |
 | Performance instrumentation / baseline | P0 baseline recorded (2026-08-12): descriptive n=5 sample statistics with exact evidence paths in the tracker (section 8) from six accepted campaigns; target-surface parity remains Not proven; R7 resolved 2026-08-14 — no numeric pass/fail performance thresholds, P1/P2 compare descriptively on affected paths in a same environment, P3/P4 prove structural absence of removed work and record deltas (runtime spec sections 9-10); existing partial instrumentation (`kilo startup`, provider `log.time`, Effect spans, ACP profiling) is not sufficient for extension acceptance (runtime spec section 10.11) |
-| Topic/session navigation | Not implemented; provisional navigation language |
+| Topic/session navigation | Not implemented; Topic decided as a derived navigation concept (Q1 resolved 2026-08-14, section 14) |
 | Canonical architecture docs rewrite | Not done; locked out (LOCK-013) |
 
 This table is a point-in-time snapshot; mutable phase status, exit evidence,
@@ -170,7 +170,7 @@ affordances, not by a forced break (section 10).
 |---|---|---|
 | Agent | A session's runtime persona configured by agent files (harness concept) | Harness kernel; the UI selects it, never redefines it |
 | Session | One agent run instance with a transcript; may have parent/child relations | Harness kernel; the UI navigates and controls it |
-| Topic | Provisional navigation label for grouping sessions | NOT a persisted domain model until specified (open question 1) |
+| Topic | Derived navigation concept: each root session defines one Topic; root session ID is stable Topic identity; root title is the label; descendants belong through parentID; activity is max member updatedAt; order descending with deterministic ID tie-break; orphan/missing-parent/cycle components degrade to independent Topics | NOT a persisted domain model — no independent Topic persistence/API/config/schema/metadata; selection/expansion is presentation state only (Q1 resolved 2026-08-14) |
 | Orchestrator UI | The product surface: panels, navigation, controls, panel lifecycle | Extension product ownership (section 7) |
 | Harness kernel | Runtime: agents, tools, permissions, session model, storage, lifecycle, execution, checkpoint rollback, context-overflow safeguard | Private runtime ownership (ADR-0003, runtime spec) |
 | Private runtime | Extension-owned headless worker process, outside the Extension Host | Runtime ownership (ADR-0003) |
@@ -199,7 +199,7 @@ snapshot is an observation of runtime operational facts (runtime spec section
 |---|---|---|
 | Orchestration panel (editor tab) | Primary surface: session grid/list grouped by topic, spawn/stop/pause, agent + model selection, delegation | Reuses the Agent Manager pattern; worktree controls removed (LOCK-002) |
 | Session editor panels | Open sessions in editor tabs for focused single-session work | Replaces the ordinary single-chat sidebar habit via migration affordances |
-| Topic/session navigation | Main navigation: switch between topics and sessions | Provisional language; derived from session metadata until specified |
+| Topic/session navigation | Main navigation: switch between topics and sessions | Derived from root sessions (Q1 resolved 2026-08-14): identity = root session ID, label = root title, membership = parentID, activity = max member updatedAt, descending order with deterministic ID tie-break; selection/expansion is presentation state only |
 | Checkpoint review | Native VS Code diff APIs for reviewing a revert/withdraw | Not a custom Diff Viewer surface (LOCK-002) |
 | Configuration surface | File-authoritative configuration: a bidirectional editor/read model over canonical config files and typed assets | Canonical files under one global config root and `<workspaceRoot>/.kilo/`; secrets via SecretStorage; VS Code state is UI-local/derived only (ADR-0003, runtime spec sections 3, 5.4) |
 
@@ -287,8 +287,10 @@ never at P2.
   identities/catalogs are removed.
 - Canonical architecture docs are updated only when implementation changes reality
   (LOCK-013).
-- 'topic' is provisional navigation language; deciding its persisted meaning is a
-  product decision returned to the hub, not made here.
+- 'topic' is a derived navigation concept (Q1 resolved 2026-08-14): the UI derives
+  Topic grouping from root sessions and their parentID membership; no independent
+  Topic persistence, API, config, schema, or metadata exists, and selection/
+  expansion is presentation state only.
 
 ## 8. Bounded Target Architecture
 
@@ -316,8 +318,11 @@ The target shape, bounded to avoid scope creep:
   immutable versioned runtime snapshots (LOCK-011). Detailed ownership,
   provider, config, and startup semantics are owned by
   `runtime-and-configuration-direction.md`.
-- No new persisted domain model for 'topic' in this direction; navigation derives
-  grouping from existing session metadata until open question 1 is decided.
+- No new persisted domain model for 'topic': Q1 resolved 2026-08-14 — Topic is a
+  derived navigation concept (root-session identity, root-title label, parentID
+  membership, max-member-updatedAt activity, descending order with deterministic
+  ID tie-break; orphan/missing-parent/cycle components degrade to independent
+  Topics); no independent Topic persistence/API/config/schema/metadata.
 - One private runtime owns all session/event/artifact persistence and
   maintenance: canonical aggregate storage with transactionally maintained
   normalized aggregates/read models plus explicitly registered artifacts,
@@ -505,7 +510,7 @@ feature-flag subsystem.
 | Risk | Mitigation |
 |---|---|
 | Sidebar migration churn for existing users | Directional deprecation, migration affordances, gated removal (P3.1) |
-| 'topic' semantics undefined | Provisional language only; no persisted model; decided via open question 1 |
+| Topic scope creep toward a persisted grouping model | Q1 resolved 2026-08-14: Topic is a derived navigation concept only — no independent Topic persistence/API/config/schema/metadata (section 14) |
 | Removal drops a needed harness capability | Capability parity gate (H-1..H-13) before any surface removal |
 | Worktree removal breaks parallel-work expectations | Parallel execution is preserved without worktree isolation (H-8); worktrees are not a harness invariant (LOCK-008) |
 | Context overflow without user-facing management regresses long agents | Internal safeguard retained (H-13, LOCK-005) |
@@ -530,7 +535,14 @@ to the hub rather than decided here. Runtime/config bounded implementation
 decisions are listed in `runtime-and-configuration-direction.md` section 9.
 
 1. Final meaning of 'topic': derived navigation label, session-metadata facet, or
-   a new persisted grouping model? (Affects P1 navigation and section 8.)
+   a new persisted grouping model? RESOLVED (2026-08-14): a derived navigation
+   concept — in P1, each root session defines one Topic; root session ID is stable
+   Topic identity; root title is the label; descendants belong through parentID;
+   activity is the max member updatedAt; order is descending with a deterministic
+   ID tie-break; orphan/missing-parent/cycle components degrade to independent
+   Topics; Topic selection/expansion is presentation state only; no
+   independent Topic persistence/API/config/schema/metadata. (Affects P1
+   navigation and section 8; recorded in the migration tracker section 9.)
 2. When does the sidebar deprecation notice ship relative to P1 navigation?
    (P1/P3.1.)
 3. What exact counts form the P0 complexity baseline (message types, provider

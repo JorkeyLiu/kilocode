@@ -13,6 +13,8 @@ export const dict = {
   "agentManager.tab.close": "Kapat",
   "agentManager.tab.closeOthers": "Diğerlerini kapat",
   "agentManager.tab.closeTab": "Sekmeyi kapat",
+  "agentManager.topic.expand": "Konuyu genişlet",
+  "agentManager.topic.collapse": "Konuyu daralt",
   "agentManager.tab.forkSession": "Oturumu Fork'la",
   "agentManager.tab.terminal": "Terminal",
   "agentManager.tab.openTerminal": "Terminali Aç",

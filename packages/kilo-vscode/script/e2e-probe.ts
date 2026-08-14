@@ -15,25 +15,35 @@
  * Scenario selection (KILO_E2E_SCENARIO, forwarded to the extension-host
  * runner so it seeds only the selected scenario's fixtures):
  *   - (unset) | all      => tab-close, child-task-order AND variant-memory in
- *                           one VS Code lifecycle (the delivery gate),
+ *                           one VS Code lifecycle (the delivery gate —
+ *                           deliberately NOT extended with topic-navigation,
+ *                           which closes/reopens the Agent Manager panel
+ *                           mid-run),
  *   - tab-close          => only the tab-close-successor scenario + fixtures,
  *   - child-task-order   => only the child-task scenario + its fixtures,
  *   - variant-memory     => only the variant-memory scenario + its fixtures.
+ *   - topic-navigation   => only the derived-Topic lifecycle-convergence
+ *                           scenario (navigation, panel close/reopen, webview
+ *                           reload) + its fixtures.
  *   Any other value fails fast before VS Code launches. Focused runs:
  *     KILO_E2E_SCENARIO=tab-close         node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=child-task-order  node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=variant-memory    node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=topic-navigation  node script/e2e-probe-launch.mjs
  *   (package shortcuts: `bun run test:e2e:tab-close`,
  *   `bun run test:e2e:child-task-order`,
- *   `bun run test:e2e:variant-memory`.)
+ *   `bun run test:e2e:variant-memory`,
+ *   `bun run test:e2e:topic-navigation`.)
  *
  * Scenarios are independent: each seeds only its own fixtures and coordinates
  * through scenario-specific markers (tab-close-done, child-phase1-done /
- * child-phase2-ready / child-phase2-done, variant-ready). No scenario waits on
- * another's markers. The tab-close scenario runs first in the `all`
- * composition and closes all its own tabs before finishing, so the strip it
- * hands to the child scenario is exactly the startup state (one pending tab +
- * bottom page) the child seeding already expects.
+ * child-phase2-ready / child-phase2-done, variant-ready, topic-nav-done /
+ * topic-reopen-ready / topic-reopen-done / topic-reload-frame /
+ * topic-reload-ready / topic-reload-done). No scenario waits on another's
+ * markers. The tab-close scenario runs first in the `all` composition and
+ * closes all its own tabs before finishing, so the strip it hands to the child
+ * scenario is exactly the startup state (one pending tab + bottom page) the
+ * child seeding already expects.
  *
  * MUST run under Node, not Bun: Playwright's CDP WebSocket transport hangs
  * under Bun's runtime against VS Code's Electron CDP endpoint (verified:
@@ -89,11 +99,17 @@ const timeoutMs = Number(process.env.KILO_E2E_TIMEOUT ?? 300_000)
 
 // LOCK-002: scenario selection. `all` (default) runs every scenario in one VS
 // Code lifecycle; a focused value runs exactly that scenario. Unknown values
-// fail fast BEFORE VS Code launches (see main()).
-const SCENARIO_VALUES = ["all", "tab-close", "child-task-order", "variant-memory"] as const
+// fail fast BEFORE VS Code launches (see main()). topic-navigation is
+// focused-only by design (not part of `all`): it closes/reopens the Agent
+// Manager panel mid-run, which would dispose the tab strip the other `all`
+// scenarios coordinate on, so the delivery-gate composition stays deliberate
+// and unchanged.
+const SCENARIO_VALUES = ["all", "tab-close", "child-task-order", "variant-memory", "topic-navigation"] as const
 function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
-  if (value === "tab-close" || value === "child-task-order" || value === "variant-memory") return new Set([value])
+  if (value === "tab-close" || value === "child-task-order" || value === "variant-memory" || value === "topic-navigation") {
+    return new Set([value])
+  }
   throw new Error(
     `[probe] unknown KILO_E2E_SCENARIO "${value}". ` +
       `Supported values: ${SCENARIO_VALUES.join(" | ")} (default: all).`,
@@ -233,6 +249,12 @@ interface E2EPlan {
   tabATitle: string
   tabBTitle: string
   tabCTitle: string
+  topicRootId: string
+  topicChildId: string
+  topicSiblingId: string
+  topicRootTitle: string
+  topicChildTitle: string
+  topicSiblingTitle: string
 }
 
 /**
@@ -687,6 +709,246 @@ async function waitForNoSessionTabs(frame: Frame, timeoutMs: number, label: stri
   }
 }
 
+// ---------------------------------------------------------------------------
+// Derived Topic navigation — real webview sidebar
+// ---------------------------------------------------------------------------
+
+interface SidebarChildState {
+  id: string
+  label: string
+  active: boolean
+}
+
+interface SidebarTopicState {
+  id: string
+  label: string
+  active: boolean
+  /** Ordered child rows rendered under the expanded topic (`#topic-children-{id}`). */
+  children: SidebarChildState[]
+}
+
+/**
+ * Read the runtime-derived Topic hierarchy from the real Agent Manager
+ * sidebar: topic root rows (`.am-item.am-topic-root[data-topic-id]`, label
+ * from `.am-item-title-text`) with their rendered child rows under
+ * `#topic-children-{id}`. DOM order is the derivation order (activity
+ * descending, deterministic ID tie-break) — same order the runtime derived.
+ */
+async function sidebarTopicStates(frame: Frame): Promise<SidebarTopicState[]> {
+  return frame
+    .evaluate(() => {
+      const out: SidebarTopicState[] = []
+      const roots = Array.from(document.querySelectorAll<HTMLElement>(".am-list .am-topic-root[data-topic-id]"))
+      for (const root of roots) {
+        const id = root.getAttribute("data-topic-id") ?? ""
+        const children: SidebarChildState[] = []
+        const box = document.getElementById(`topic-children-${id}`)
+        if (box) {
+          for (const child of Array.from(box.querySelectorAll<HTMLElement>(":scope > .am-item"))) {
+            children.push({
+              id: child.getAttribute("data-sidebar-id") ?? "",
+              label: child.querySelector(".am-item-title-text")?.textContent?.trim() ?? "",
+              active: child.classList.contains("am-item-active"),
+            })
+          }
+        }
+        out.push({
+          id,
+          label: root.querySelector(".am-item-title-text")?.textContent?.trim() ?? "",
+          active: root.classList.contains("am-item-active"),
+          children,
+        })
+      }
+      return out
+    })
+    .catch(() => [])
+}
+
+/**
+ * Assert the runtime-derived Topic hierarchy: ordered topic roots with
+ * labels, active-topic highlight, and rendered child membership. Children are
+ * only rendered when the topic is expanded; the active session's topic
+ * auto-expands and the default-expand effect opens the most active topic with
+ * children, so the seeded root topic's child row is expected visible.
+ */
+async function expectTopicHierarchy(
+  frame: Frame,
+  expected: SidebarTopicState[],
+  timeoutMs: number,
+  label: string,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const topics = await sidebarTopicStates(frame)
+    const same = (a: SidebarTopicState, b: SidebarTopicState) =>
+      a.id === b.id &&
+      a.label === b.label &&
+      a.active === b.active &&
+      a.children.length === b.children.length &&
+      a.children.every((c, i) => {
+        const d = b.children[i]
+        return d && c.id === d.id && c.label === d.label && c.active === d.active
+      })
+    const match = topics.length === expected.length && topics.every((t, i) => same(t, expected[i]!))
+    if (match) {
+      console.log(
+        `[probe] PASS ${label}: ${topics.map((t) => `${t.id}="${t.label}"${t.active ? "(active)" : ""}[${t.children.map((c) => `${c.id}${c.active ? "(active)" : ""}`).join(",")}]`).join(" ")}`,
+      )
+      return
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        `probe: ${label} failed.\n` +
+          `  expected=${JSON.stringify(expected)}\n` +
+          `  actual  =${JSON.stringify(topics)}`,
+      )
+    }
+    await sleep(250)
+  }
+}
+
+/** Current title of the real TaskHeader (`[data-slot="task-header-title-label"]`). */
+async function headerTitle(frame: Frame): Promise<string | undefined> {
+  return frame
+    .locator('[data-slot="task-header-title-label"]')
+    .first()
+    .textContent({ timeout: 2_000 })
+    .then((s) => s?.trim())
+    .catch(() => undefined)
+}
+
+/** Poll until the chat header title equals the expected session title. */
+async function expectHeaderTitle(frame: Frame, expected: string, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const title = await headerTitle(frame)
+    if (title === expected) {
+      console.log(`[probe] PASS ${label}: "${title}"`)
+      return
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`probe: ${label} failed: expected "${expected}", got "${title ?? "<none>"}"`)
+    }
+    await sleep(250)
+  }
+}
+
+/** Click a Topic root row in the real sidebar (clicks the title, bubbles to the row's onSelectSession). */
+async function clickSidebarTopic(frame: Frame, topicId: string, timeoutMs: number): Promise<void> {
+  const row = frame.locator(`.am-item.am-topic-root[data-topic-id="${topicId}"]`).first()
+  await row.waitFor({ state: "visible", timeout: timeoutMs })
+  await row.locator(".am-item-title-text").first().click({ timeout: timeoutMs })
+  console.log(`[probe] clicked sidebar topic row ${topicId}`)
+}
+
+/** Click a child session row under its expanded Topic in the real sidebar. */
+async function clickSidebarChild(frame: Frame, sessionId: string, timeoutMs: number): Promise<void> {
+  const row = frame.locator(`.am-topic-children [data-sidebar-id="${sessionId}"]`).first()
+  await row.waitFor({ state: "visible", timeout: timeoutMs })
+  await row.locator(".am-item-title-text").first().click({ timeout: timeoutMs })
+  console.log(`[probe] clicked sidebar child row ${sessionId}`)
+}
+
+/**
+ * The Topic hierarchy must derive purely from runtime session facts (parentID
+ * edges) with no worktree dependency — the derived-Topic model is a
+ * navigation view, not a persisted domain model. Asserts the sidebar renders
+ * exactly the derived topic rows (no worktree cards, no data-worktree-id, no
+ * stray `.am-item` outside the topic hierarchy).
+ */
+async function assertNoWorktree(frame: Frame, label: string): Promise<void> {
+  const stats = await frame
+    .evaluate(() => {
+      const list = document.querySelector(".am-list")
+      if (!list) {
+        return { list: false, worktreeIds: 0, cards: 0, topicRoots: 0, children: 0, items: 0 }
+      }
+      const topicRoots = list.querySelectorAll(".am-topic-root[data-topic-id]").length
+      const children = list.querySelectorAll(".am-topic-children .am-item").length
+      return {
+        list: true,
+        worktreeIds: list.querySelectorAll("[data-worktree-id]").length,
+        cards: list.querySelectorAll(".am-worktree-card, .am-worktree-group, .am-group-card").length,
+        topicRoots,
+        children,
+        items: list.querySelectorAll(".am-item").length,
+      }
+    })
+    .catch(() => ({ list: false, worktreeIds: -1, cards: -1, topicRoots: 0, children: 0, items: 0 }))
+  const noWorktree = stats.list && stats.worktreeIds === 0 && stats.cards === 0
+  const exactHierarchy = stats.topicRoots > 0 && stats.items === stats.topicRoots + stats.children
+  if (!noWorktree || !exactHierarchy) {
+    throw new Error(`probe: ${label} failed: ${JSON.stringify(stats)}`)
+  }
+  console.log(
+    `[probe] PASS ${label}: no worktree markers; ${stats.topicRoots} topic root(s) + ${stats.children} child row(s)`,
+  )
+}
+
+/**
+ * Reload the Agent Manager webview through the VS Code host's own webview
+ * reload action, executed by the extension-host runner.
+ *
+ * Frame-level CDP reloads cannot reload a VS Code webview: a bare
+ * `location.reload()` and an explicit `frame.goto(indexUrl)` are both
+ * intercepted by the webview host and land on its `fake.html` placeholder
+ * (verified against the real harness — the app never remounts). The host's
+ * `workbench.action.webview.reloadWebviewAction` ("Developer: Reload
+ * Webviews") re-navigates the webview iframe to its real content, which is the
+ * smallest verified reload mechanism. It reloads every open webview (only the
+ * Agent Manager exists in the hermetic test profile); no production fixture
+ * command changes, no full window reload.
+ *
+ * The harness sets a probe mark in the pre-reload document so the fresh
+ * document (which cannot carry the mark) is findable deterministically.
+ */
+async function reloadAgentManagerFrame(frame: Frame, scratch: string): Promise<void> {
+  // Mark the pre-reload document so the fresh post-reload document is
+  // distinguishable from the old one (a reload destroys the old document). A
+  // failure to set the mark must abort the boundary: if the mark-set was
+  // silently swallowed, findReloadedFrame could match the still-present old
+  // document as "fresh" (it never received the mark) — a false pass.
+  await frame.evaluate(() => {
+    ;(window as unknown as { __amProbeMark?: string }).__amProbeMark = "pre-reload"
+  })
+  writeFileSync(join(scratch, "topic-reload-start"), "ok")
+  console.log("[probe] marked pre-reload webview document; reload in progress")
+}
+
+/**
+ * Find the Agent Manager webview frame whose document is FRESH — i.e. does
+ * not carry the pre-reload probe mark set by reloadAgentManagerFrame and has
+ * mounted the app (`.am-layout`). The reload destroys the marked document, so
+ * only the new document can match.
+ */
+async function findReloadedFrame(
+  browser: Browser,
+  timeoutMs: number,
+): Promise<{ page: Page; frame: Frame; url: string }> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    for (const ctx of browser.contexts()) {
+      for (const page of ctx.pages()) {
+        for (const frame of page.frames()) {
+          const url = frame.url()
+          if (!url.includes("vscode-webview")) continue
+          const fresh = await frame
+            .evaluate(() => {
+              const marked = (window as unknown as { __amProbeMark?: string }).__amProbeMark === "pre-reload"
+              return !marked && document.querySelector(".am-layout") !== null
+            })
+            .catch(() => false)
+          if (fresh) return { page, frame, url }
+        }
+      }
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`probe: reloaded Agent Manager webview frame not found.\n${await describeTargets(browser)}`)
+    }
+    await sleep(250)
+  }
+}
+
 /**
  * Close an open popover list if one exists. Counts first so an absent list
  * never blocks on Playwright's default 30s action timeout (an unconditional
@@ -905,6 +1167,205 @@ async function assertVariantMemoryAcrossAgents(browser: Browser, plan: E2EPlan, 
   console.log("[probe] variant memory across agents passed")
 }
 
+// ---------------------------------------------------------------------------
+// Derived Topic navigation lifecycle convergence — real webview
+// ---------------------------------------------------------------------------
+
+/**
+ * Real-webview E2E for derived Topic navigation over the migration bridge.
+ * Proves the real AgentManagerApp re-derives and converges Topic/session
+ * presentation across all three extension-owned view boundaries:
+ *
+ *   1. Session navigation: the seeded parentID hierarchy [root T1 → child T1C]
+ *      + sibling root T2 renders as two Topics (T1 with member T1C, T2), with
+ *      no worktree dependency; clicking the sibling Topic row opens its
+ *      session and converges the active tab + header + active-Topic highlight;
+ *      clicking the child row converges to the child with the Topic highlight
+ *      back on its root.
+ *   2. Panel close/reopen: the runner closes the Agent Manager editor tab,
+ *      reopens it, and rehydrates the fixture state; the fresh webview
+ *      re-derives the same Topic hierarchy and converges to the same active
+ *      state (active tab + header + active-Topic highlight).
+ *   3. Webview reload: the harness reloads the Agent Manager OOPIF frame and
+ *      re-finds it; after the runner rehydrates, the new document re-derives
+ *      the same hierarchy and converges to the same active state.
+ *
+ * All interaction is with the real production DOM: sidebar topic/child rows,
+ * tab strip, and TaskHeader. The child row is asserted under the expanded
+ * root Topic (auto-expand on active Topic) and both Topic-root and child-row
+ * highlight classes are asserted.
+ */
+async function assertTopicNavigation(browser: Browser, plan: E2EPlan, scratch: string): Promise<void> {
+  const timeout = 30_000
+
+  // Anchor on the seeded root tab title (T1 is the only open tab initially).
+  const found = await findAgentManagerFrame(browser, plan, plan.topicRootTitle, 60_000)
+  const frame = found.frame
+
+  // Phase 1: seeded runtime-derived hierarchy, active tab, header, no worktree.
+  const seededTopics: SidebarTopicState[] = [
+    {
+      id: plan.topicRootId,
+      label: plan.topicRootTitle,
+      active: true,
+      children: [{ id: plan.topicChildId, label: plan.topicChildTitle, active: false }],
+    },
+    { id: plan.topicSiblingId, label: plan.topicSiblingTitle, active: false, children: [] },
+  ]
+  await expectTopicHierarchy(frame, seededTopics, timeout, "seeded topic hierarchy (parentID-derived)")
+  await assertNoWorktree(frame, "seeded sidebar has no worktree dependency")
+  await expectTabOrder(
+    frame,
+    [plan.topicRootId],
+    [plan.topicRootTitle],
+    plan.topicRootId,
+    plan.topicRootTitle,
+    timeout,
+    "seeded tab order",
+  )
+  await expectHeaderTitle(frame, plan.topicRootTitle, timeout, "seeded header converges to root title")
+
+  // Phase 2: Topic-click navigation — the sibling root is NOT an open tab, so
+  // clicking its Topic row exercises the production open-session path.
+  await clickSidebarTopic(frame, plan.topicSiblingId, timeout)
+  await expectTabOrder(
+    frame,
+    [plan.topicRootId, plan.topicSiblingId],
+    [plan.topicRootTitle, plan.topicSiblingTitle],
+    plan.topicSiblingId,
+    plan.topicSiblingTitle,
+    timeout,
+    "topic click opens sibling root tab",
+  )
+  await expectHeaderTitle(frame, plan.topicSiblingTitle, timeout, "header converges to sibling root title")
+  await expectTopicHierarchy(
+    frame,
+    [
+      {
+        id: plan.topicRootId,
+        label: plan.topicRootTitle,
+        active: false,
+        children: [{ id: plan.topicChildId, label: plan.topicChildTitle, active: false }],
+      },
+      { id: plan.topicSiblingId, label: plan.topicSiblingTitle, active: true, children: [] },
+    ],
+    timeout,
+    "active topic highlight moves to sibling root",
+  )
+
+  // Phase 3: child-click navigation — the child row under the expanded root
+  // Topic. Clicking it focuses the child; the active-Topic highlight returns
+  // to the root Topic and the child row itself highlights.
+  await clickSidebarChild(frame, plan.topicChildId, timeout)
+  await expectTabOrder(
+    frame,
+    [plan.topicRootId, plan.topicSiblingId, plan.topicChildId],
+    [plan.topicRootTitle, plan.topicSiblingTitle, plan.topicChildTitle],
+    plan.topicChildId,
+    plan.topicChildTitle,
+    timeout,
+    "child click opens child tab",
+  )
+  await expectHeaderTitle(frame, plan.topicChildTitle, timeout, "header converges to child title")
+  await expectTopicHierarchy(
+    frame,
+    [
+      {
+        id: plan.topicRootId,
+        label: plan.topicRootTitle,
+        active: true,
+        children: [{ id: plan.topicChildId, label: plan.topicChildTitle, active: true }],
+      },
+      { id: plan.topicSiblingId, label: plan.topicSiblingTitle, active: false, children: [] },
+    ],
+    timeout,
+    "active topic returns to root with active child",
+  )
+  console.log("[probe] topic navigation convergence passed")
+  // Navigation boundary complete — the runner closes/reopens the panel.
+  writeFileSync(join(scratch, "topic-nav-done"), "ok")
+
+  // Phase 4: panel close/reopen. The runner closed the editor tab, reopened
+  // the panel, and rehydrated the canonical state (all tabs, child active).
+  // Re-find the frame (the seeded root tab title anchors the new webview) and
+  // assert the SAME runtime-derived hierarchy + active state.
+  await waitForFile(join(scratch, "topic-reopen-ready"), 120_000, "topic-reopen-ready marker")
+  const reopened = await findAgentManagerFrame(browser, plan, plan.topicRootTitle, 60_000)
+  const reopenedFrame = reopened.frame
+  const convergedTopics: SidebarTopicState[] = [
+    {
+      id: plan.topicRootId,
+      label: plan.topicRootTitle,
+      active: true,
+      children: [{ id: plan.topicChildId, label: plan.topicChildTitle, active: true }],
+    },
+    { id: plan.topicSiblingId, label: plan.topicSiblingTitle, active: false, children: [] },
+  ]
+  await expectTopicHierarchy(reopenedFrame, convergedTopics, timeout, "reopen re-derives topic hierarchy")
+  await assertNoWorktree(reopenedFrame, "reopened sidebar has no worktree dependency")
+  await expectTabOrder(
+    reopenedFrame,
+    [plan.topicRootId, plan.topicChildId, plan.topicSiblingId],
+    [plan.topicRootTitle, plan.topicChildTitle, plan.topicSiblingTitle],
+    plan.topicChildId,
+    plan.topicChildTitle,
+    timeout,
+    "reopen active tab converges to child",
+  )
+  await expectHeaderTitle(reopenedFrame, plan.topicChildTitle, timeout, "reopen header converges to child title")
+  console.log("[probe] panel close/reopen convergence passed")
+  writeFileSync(join(scratch, "topic-reopen-done"), "ok")
+
+  // Phase 5: webview reload. Frame-level CDP reloads cannot reload a VS Code
+  // webview (both location.reload() and frame.goto() land on the host's
+  // fake.html placeholder — verified against the real harness), so the harness
+  // marks the pre-reload document, asks the runner to execute the host's
+  // webview reload action, re-finds the FRESH (unmarked) document, signals the
+  // runner to rehydrate, then asserts the same converged hierarchy + active
+  // state in the new document. The webview persists its tab strip via the VS
+  // Code webview state API (300ms debounce), so give it a beat before marking:
+  // the fresh document then restores the open tabs/active tab natively and the
+  // runner's rehydrate re-derives the topic inventory on top of that restored
+  // state (the production convergence path). If the debounce had not fired,
+  // the runner's rehydrate rebuilds the tabs instead — the assertion converges
+  // either way.
+  await sleep(1_000)
+  await reloadAgentManagerFrame(reopenedFrame, scratch)
+  const reloaded = await findReloadedFrame(browser, 60_000)
+  const reloadedFrame = reloaded.frame
+  writeFileSync(join(scratch, "topic-reload-frame"), "ok")
+  await waitForFile(join(scratch, "topic-reload-ready"), 60_000, "topic-reload-ready marker")
+  await expectTopicHierarchy(reloadedFrame, convergedTopics, timeout, "reload re-derives topic hierarchy")
+  await assertNoWorktree(reloadedFrame, "reloaded sidebar has no worktree dependency")
+  await expectTabOrder(
+    reloadedFrame,
+    [plan.topicRootId, plan.topicChildId, plan.topicSiblingId],
+    [plan.topicRootTitle, plan.topicChildTitle, plan.topicSiblingTitle],
+    plan.topicChildId,
+    plan.topicChildTitle,
+    timeout,
+    "reload active tab converges to child",
+  )
+  await expectHeaderTitle(reloadedFrame, plan.topicChildTitle, timeout, "reload header converges to child title")
+  console.log("[probe] webview reload convergence passed")
+
+  writeFileSync(
+    join(scratch, "topic-dom-evidence"),
+    JSON.stringify(
+      {
+        url: reloadedFrame.url(),
+        plan,
+        topics: await sidebarTopicStates(reloadedFrame),
+        tabs: await tabStates(reloadedFrame),
+        header: await headerTitle(reloadedFrame),
+      },
+      null,
+      2,
+    ),
+  )
+  writeFileSync(join(scratch, "topic-reload-done"), "ok")
+}
+
 async function describeTargets(browser: Browser): Promise<string> {
   const lines: string[] = []
   for (const ctx of browser.contexts()) {
@@ -1088,7 +1549,8 @@ async function main() {
       const plan = JSON.parse(readFileSync(join(scratch, "plan.json"), "utf8")) as E2EPlan
       console.log(
         `[probe] runner ready, plan: source=${plan.sourceId} sibling=${plan.siblingId} child=${plan.childId} ` +
-          `variant=${plan.variantId} tabA=${plan.tabAId} tabB=${plan.tabBId} tabC=${plan.tabCId}`,
+          `variant=${plan.variantId} tabA=${plan.tabAId} tabB=${plan.tabBId} tabC=${plan.tabCId} ` +
+          `topicRoot=${plan.topicRootId} topicChild=${plan.topicChildId} topicSibling=${plan.topicSiblingId}`,
       )
       if (scenarios.has("tab-close")) {
         await assertTabCloseSuccessor(browser, plan, scratch)
@@ -1101,6 +1563,10 @@ async function main() {
       if (scenarios.has("variant-memory")) {
         await assertVariantMemoryAcrossAgents(browser, plan, scratch)
         console.log("[probe] variant-memory assertion passed")
+      }
+      if (scenarios.has("topic-navigation")) {
+        await assertTopicNavigation(browser, plan, scratch)
+        console.log("[probe] topic-navigation assertion passed")
       }
     } finally {
       // Unblock the extension-host runner on success AND failure so VS Code

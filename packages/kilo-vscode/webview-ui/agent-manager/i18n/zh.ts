@@ -11,6 +11,8 @@ export const dict = {
   "agentManager.tab.close": "关闭",
   "agentManager.tab.closeOthers": "关闭其他标签页",
   "agentManager.tab.closeTab": "关闭标签页",
+  "agentManager.topic.expand": "展开主题",
+  "agentManager.topic.collapse": "折叠主题",
   "agentManager.tab.forkSession": "复制会话",
   "agentManager.tab.terminal": "终端",
   "agentManager.tab.openTerminal": "打开终端",

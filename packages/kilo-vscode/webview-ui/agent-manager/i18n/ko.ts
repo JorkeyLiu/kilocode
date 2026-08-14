@@ -11,6 +11,8 @@ export const dict = {
   "agentManager.tab.close": "닫기",
   "agentManager.tab.closeOthers": "다른 탭 닫기",
   "agentManager.tab.closeTab": "탭 닫기",
+  "agentManager.topic.expand": "토픽 펼치기",
+  "agentManager.topic.collapse": "토픽 접기",
   "agentManager.tab.forkSession": "세션 포크",
   "agentManager.tab.terminal": "터미널",
   "agentManager.tab.openTerminal": "터미널 열기",

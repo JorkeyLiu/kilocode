@@ -1089,6 +1089,7 @@
     "test:e2e:tab-close": "KILO_E2E_SCENARIO=tab-close node script/e2e-probe-launch.mjs",
     "test:e2e:child-task-order": "KILO_E2E_SCENARIO=child-task-order node script/e2e-probe-launch.mjs",
     "test:e2e:variant-memory": "KILO_E2E_SCENARIO=variant-memory node script/e2e-probe-launch.mjs",
+    "test:e2e:topic-navigation": "KILO_E2E_SCENARIO=topic-navigation node script/e2e-probe-launch.mjs",
     "test:p0-bench": "node script/e2e-p0-bench-launch.mjs",
     "test:p0-bench:merge": "node script/p0-bench-merge-launch.mjs",
     "snapshot:build": "bun script/dev-snapshot.ts build",

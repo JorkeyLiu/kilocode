@@ -451,6 +451,19 @@ button.am-section-toggle:hover .am-section-label {
   min-width: 0;
 }
 
+/* Topic-first navigation (P1): Topic rows are root sessions rendered as the
+   primary sidebar unit. Slightly stronger title weight sets them apart from
+   child rows while sharing the .am-item grid layout. */
+.am-topic-root .am-item-title-text {
+  font-weight: 600;
+}
+
+/* Child session hierarchy of an expanded Topic. Children keep .am-item rows
+   with their own indent; the wrapper groups them under the Topic row. */
+.am-topic-children {
+  display: contents;
+}
+
 /* Create worktree button (empty state) */
 
 /* Detail pane */

@@ -13,6 +13,8 @@ export const dict = {
   "agentManager.tab.close": "Закрити",
   "agentManager.tab.closeOthers": "Закрити інші",
   "agentManager.tab.closeTab": "Закрити вкладку",
+  "agentManager.topic.expand": "Розгорнути тему",
+  "agentManager.topic.collapse": "Згорнути тему",
   "agentManager.tab.forkSession": "Розгалужити сесію",
   "agentManager.tab.terminal": "Термінал",
   "agentManager.tab.openTerminal": "Відкрити термінал",

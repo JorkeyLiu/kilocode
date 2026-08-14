@@ -13,6 +13,8 @@ export const dict = {
   "agentManager.tab.close": "Chiudi",
   "agentManager.tab.closeOthers": "Chiudi le altre",
   "agentManager.tab.closeTab": "Chiudi scheda",
+  "agentManager.topic.expand": "Espandi argomento",
+  "agentManager.topic.collapse": "Comprimi argomento",
   "agentManager.tab.forkSession": "Forka sessione",
   "agentManager.tab.terminal": "Terminale",
   "agentManager.tab.openTerminal": "Apri terminale",

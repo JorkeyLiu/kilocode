@@ -890,3 +890,74 @@ describe("Agent Manager — continueInWorktree prop contract", () => {
     expect(source).not.toContain("continueInWorktree")
   })
 })
+
+// ---------------------------------------------------------------------------
+// Agent Manager — P1 derived Topic navigation invariants (Q1-LOCK)
+//
+// Topic/session navigation is derived at render time from runtime session
+// facts only: no Topic persistence, no new extension message types, no
+// session mutation. The sidebar derives Topics via the pure module and
+// routes selection through the existing onSelectSession → openSession
+// transaction.
+// ---------------------------------------------------------------------------
+
+describe("Agent Manager — P1 derived Topic navigation", () => {
+  const SIDEBAR_FILE = path.join(ROOT, "webview-ui/agent-manager/SidebarSessionList.tsx")
+  const TOPICS_FILE = path.join(ROOT, "webview-ui/agent-manager/topics.ts")
+
+  it("SidebarSessionList derives Topics from the pure topic module", () => {
+    const source = fs.readFileSync(SIDEBAR_FILE, "utf-8")
+    expect(source).toContain('from "./topics"')
+    expect(source).toContain("deriveTopics(")
+    expect(source).toContain("activeTopicID(")
+  })
+
+  it("SidebarSessionList auto-expands only when the active session or Topic changes", () => {
+    // The auto-expand effect tracks only the active session ID and the derived
+    // active Topic ID. An unrelated inventory update (same active session and
+    // Topic, e.g. an updatedAt bump) recomputes to identical values, so `on`
+    // does not re-fire and a manual collapse survives the update (P1 finding 1).
+    const source = fs.readFileSync(SIDEBAR_FILE, "utf-8")
+    expect(source).toContain("[() => session.currentSessionID(), activeTopic]")
+  })
+
+  it("removed the dead presentation-only Topic filter", () => {
+    const source = fs.readFileSync(SIDEBAR_FILE, "utf-8")
+    expect(source).not.toContain("filterQuery")
+    expect(source).not.toContain("filterTopics")
+    const topics = fs.readFileSync(TOPICS_FILE, "utf-8")
+    expect(topics).not.toContain("filterTopics")
+  })
+
+  it("Topic disclosure aria labels are localized", () => {
+    const source = fs.readFileSync(SIDEBAR_FILE, "utf-8")
+    expect(source).toContain('lang.t("agentManager.topic.collapse")')
+    expect(source).toContain('lang.t("agentManager.topic.expand")')
+  })
+
+  it("Topic selection routes through the existing openSession transaction", () => {
+    // The sidebar only calls props.onSelectSession; the app wires that to the
+    // canonical openSession transaction — no bypass, no new message type.
+    const source = fs.readFileSync(SIDEBAR_FILE, "utf-8")
+    expect(source).toContain("props.onSelectSession(")
+    expect(source).not.toContain("postMessage")
+    const app = fs.readFileSync(AGENT_MANAGER_APP_FILE, "utf-8")
+    // Whitespace-insensitive: collapse whitespace runs so formatter-driven
+    // indentation changes cannot break the wiring assertion.
+    const compact = app.replace(/\s+/g, " ")
+    expect(compact).toContain("onSelectSession={(id) => { handleOpenSession(id)")
+  })
+
+  it("topic derivation is pure — no mutation, no persistence, no message sends", () => {
+    const source = fs.readFileSync(TOPICS_FILE, "utf-8")
+    expect(source).not.toContain("postMessage")
+    expect(source).not.toContain("localStorage")
+    expect(source).not.toContain("vscode")
+    expect(source).toContain("export function deriveTopics")
+  })
+
+  it("AgentManagerApp still uses SidebarSessionList unchanged as the sidebar", () => {
+    const app = fs.readFileSync(AGENT_MANAGER_APP_FILE, "utf-8")
+    expect(app).toContain("<SidebarSessionList")
+  })
+})

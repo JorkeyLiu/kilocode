@@ -11,6 +11,8 @@ export const dict = {
   "agentManager.tab.close": "Luk",
   "agentManager.tab.closeOthers": "Luk andre",
   "agentManager.tab.closeTab": "Luk fane",
+  "agentManager.topic.expand": "Udvid emne",
+  "agentManager.topic.collapse": "Skjul emne",
   "agentManager.tab.forkSession": "Forgren session",
   "agentManager.tab.terminal": "Terminal",
   "agentManager.tab.openTerminal": "Åbn Terminal",

@@ -25,6 +25,8 @@ import { ThinkingSelectorBase } from "../components/shared/ThinkingSelector"
 import { createSignal, onCleanup, onMount, type JSX } from "solid-js"
 import type { WorktreeFileDiff } from "../types/messages"
 import type { ReviewComment } from "../../diff-viewer/review-comments"
+import { SidebarSessionList } from "../../agent-manager/SidebarSessionList"
+import type { SessionInfo } from "../types/messages"
 import "../../agent-manager/agent-manager.css"
 import "../../agent-manager/agent-manager-review.css"
 
@@ -707,6 +709,201 @@ export const SidebarSearchOpen: Story = {
           <textarea ref={prompt} class="sr-only" aria-label="Story prompt" />
         </div>
       </StoryProviders>
+    )
+  },
+}
+
+// ---------------------------------------------------------------------------
+// P1 derived Topic navigation — SidebarSessionList
+//
+// Topics are derived at render time from runtime session facts only (roots
+// define Topics, descendants belong via parentID, activity = max member
+// updatedAt, activity-descending with ID tie-break). These stories exercise
+// the hierarchy, orphan/cycle fallback, active-Topic derivation, rename/
+// delete interactions, and the auto-expand-on-active-change rule. Selection
+// is reported via data-testid so Playwright can assert the click routes
+// through onSelectSession (which the app wires to the existing openSession
+// transaction).
+// ---------------------------------------------------------------------------
+
+const storyT = (key: string): string =>
+  ({
+    "time.today": "Today",
+    "time.yesterday": "Yesterday",
+    "time.thisWeek": "This Week",
+    "time.thisMonth": "This Month",
+    "time.older": "Older",
+  })[key] ?? key
+
+const now = Date.now()
+const agoMin = (n: number) => new Date(now - n * 60_000).toISOString()
+const agoHours = (n: number) => new Date(now - n * 3_600_000).toISOString()
+
+/** Roots with a child hierarchy, an orphan, and a cycle — the full fallback set. */
+const topicFixtureSessions: SessionInfo[] = [
+  { id: "topic-active", title: "Refactor agent manager sidebar", createdAt: agoMin(300), updatedAt: agoMin(1) },
+  {
+    id: "topic-active-child",
+    parentID: "topic-active",
+    title: "Extract topic derivation",
+    createdAt: agoMin(200),
+    updatedAt: agoMin(2),
+  },
+  {
+    id: "topic-active-grandchild",
+    parentID: "topic-active-child",
+    title: "Fix orphan fallback",
+    createdAt: agoMin(100),
+    updatedAt: agoMin(3),
+  },
+  { id: "topic-stale", title: "Investigate provider routing", createdAt: agoHours(5), updatedAt: agoMin(30) },
+  {
+    id: "topic-stale-child",
+    parentID: "topic-stale",
+    title: "Trace SSE events",
+    createdAt: agoHours(4),
+    updatedAt: agoMin(40),
+  },
+  { id: "topic-old", title: "Write P1 acceptance docs", createdAt: agoHours(30), updatedAt: agoHours(26) },
+  {
+    id: "orphan",
+    parentID: "missing-parent",
+    title: "Orphaned session",
+    createdAt: agoMin(600),
+    updatedAt: agoMin(10),
+  },
+  { id: "orphan-child", parentID: "orphan", title: "Orphan child", createdAt: agoMin(590), updatedAt: agoMin(12) },
+  { id: "cycle-a", parentID: "cycle-b", title: "Cycle member A", createdAt: agoMin(700), updatedAt: agoMin(20) },
+  { id: "cycle-b", parentID: "cycle-a", title: "Cycle member B", createdAt: agoMin(690), updatedAt: agoMin(21) },
+]
+
+/** Actions stories can drive through the fixture's internal state. */
+interface TopicFixtureActions {
+  setSessions: (fn: (prev: SessionInfo[]) => SessionInfo[]) => void
+  setActiveId: (id: string | undefined) => void
+}
+
+interface TopicListFixtureProps {
+  sessions: SessionInfo[]
+  activeId?: string
+  /** Escapes the fixture's session/active signals so stories can simulate inventory updates. */
+  controller?: (actions: TopicFixtureActions) => void
+}
+
+function TopicListFixture(props: TopicListFixtureProps) {
+  const [sessions, setSessions] = createSignal<SessionInfo[]>(props.sessions)
+  const [activeId, setActiveId] = createSignal<string | undefined>(props.activeId)
+  props.controller?.({ setSessions, setActiveId })
+  const session = {
+    ...mockSessionValue(),
+    sessions: () => sessions(),
+    currentSessionID: () => activeId(),
+    sessionsHasMore: () => false,
+    loadMoreSessions: () => {},
+    renameSession: (id: string, title: string) => {
+      setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title } : s)))
+    },
+    deleteSession: (id: string) => {
+      setSessions((prev) => prev.filter((s) => s.id !== id))
+    },
+  }
+  let listEl: HTMLDivElement | undefined
+  return (
+    <StoryProviders noPadding>
+      <SessionContext.Provider value={session as any}>
+        <div style={{ display: "flex", height: "640px", width: "340px", background: "var(--surface-base)" }}>
+          <div class="am-list" ref={listEl}>
+            <SidebarSessionList
+              listContainer={() => listEl}
+              sessions={sessions()}
+              sessionsLoaded
+              currentSelection={activeId() ?? null}
+              onSelectSession={(id) => {
+                const out = document.querySelector<HTMLElement>('[data-testid="topic-selection"]')
+                if (out) out.textContent = id
+              }}
+              untitledLabel="Untitled"
+              t={storyT}
+            />
+          </div>
+        </div>
+      </SessionContext.Provider>
+    </StoryProviders>
+  )
+}
+
+const TopicSelectionOutput = () => (
+  <output class="sr-only" data-testid="topic-selection" aria-label="Selected session" />
+)
+
+export const TopicListHierarchy: Story = {
+  name: "Topic list — hierarchy with active topic",
+  parameters: { layout: "fullscreen" },
+  render: () => (
+    <>
+      <TopicSelectionOutput />
+      <TopicListFixture sessions={topicFixtureSessions} activeId="topic-active-child" />
+    </>
+  ),
+}
+
+export const TopicListOrphanCycle: Story = {
+  name: "Topic list — orphan and cycle fallback",
+  parameters: { layout: "fullscreen" },
+  render: () => (
+    <>
+      <TopicSelectionOutput />
+      <TopicListFixture
+        sessions={topicFixtureSessions.filter(
+          (s) => s.id === "topic-active" || s.id.startsWith("orphan") || s.id.startsWith("cycle"),
+        )}
+        activeId="orphan"
+      />
+    </>
+  ),
+}
+
+export const TopicListInteractions: Story = {
+  name: "Topic list — rename and delete interactions",
+  parameters: { layout: "fullscreen" },
+  render: () => (
+    <>
+      <TopicSelectionOutput />
+      <TopicListFixture sessions={topicFixtureSessions} activeId="topic-active-child" />
+    </>
+  ),
+}
+
+export const TopicListAutoExpand: Story = {
+  name: "Topic list — auto-expand only on active change",
+  parameters: { layout: "fullscreen" },
+  render: () => {
+    let actions: TopicFixtureActions | undefined
+    return (
+      <>
+        <div style={{ position: "fixed", bottom: "4px", left: "4px", "z-index": 10, display: "flex", gap: "8px" }}>
+          <button
+            data-testid="refresh-inventory"
+            type="button"
+            onClick={() =>
+              actions?.setSessions((prev) =>
+                prev.map((s) => (s.id === "topic-active-child" ? { ...s, updatedAt: agoMin(1) } : s)),
+              )
+            }
+          >
+            Refresh inventory
+          </button>
+          <button data-testid="activate-stale" type="button" onClick={() => actions?.setActiveId("topic-stale-child")}>
+            Activate stale topic
+          </button>
+        </div>
+        <TopicSelectionOutput />
+        <TopicListFixture
+          sessions={topicFixtureSessions}
+          activeId="topic-active-child"
+          controller={(a) => (actions = a)}
+        />
+      </>
     )
   },
 }

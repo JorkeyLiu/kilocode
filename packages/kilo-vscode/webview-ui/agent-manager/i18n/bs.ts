@@ -11,6 +11,8 @@ export const dict = {
   "agentManager.tab.close": "Zatvori",
   "agentManager.tab.closeOthers": "Zatvori ostale",
   "agentManager.tab.closeTab": "Zatvori karticu",
+  "agentManager.topic.expand": "Proširi temu",
+  "agentManager.topic.collapse": "Sažmi temu",
   "agentManager.tab.forkSession": "Razdvoji sesiju",
   "agentManager.tab.terminal": "Terminal",
   "agentManager.tab.openTerminal": "Otvori Terminal",
