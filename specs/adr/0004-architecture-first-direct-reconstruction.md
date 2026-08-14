@@ -68,6 +68,15 @@ just-in-time reconstruction candidate registry (I-12).
 Status Active means this is the current chosen direction: not completed
 implementation and not formal external approval.
 
+Direct reconstruction also applies to storage (2026-08-14): the P4.2 storage
+cutover is a clean cutover — offline archive of the legacy DB and session-owned
+sidecars, fresh canonical DB boot — with no migration/import, no dual-reader,
+and no runtime archive reader (ADR-0005). The legacy event-log sync/warp
+surfaces, old-peer capability negotiation, and released-client storage
+compatibility have no default compatibility entitlement under the two closed
+sets; they are removed like any other legacy implementation, and no
+old-history storage compatibility is a final H parity requirement.
+
 ## Invariants / constraints
 
 - I-1 (LOCK-014): the migration is principle-first, not inventory-first. No
@@ -218,7 +227,13 @@ Negative:
   observed-candidates note, and the post-reconstruction error maturity backlog
   (sections 1, 7).
 - Related decisions: ADR-0002 (product direction and removals) and ADR-0003
-  (runtime/config ownership) are unchanged; this ADR complements them.
+  (runtime/config ownership) are unchanged; this ADR complements them, and
+  ADR-0005 (`../adr/0005-bounded-private-runtime-storage.md`, 2026-08-14)
+  records the bounded private-runtime canonical storage foundation and the
+  offline archive cutover, complementing this ADR's direct-reconstruction
+  policy for storage — the clean P4.2 storage cutover carries no
+  migration/import, no dual-reader, no archive reader, and no old-history
+  compatibility entitlement.
 - Canonical architecture docs: none yet. The implemented system is unchanged
   until implementation lands (LOCK-013).
 

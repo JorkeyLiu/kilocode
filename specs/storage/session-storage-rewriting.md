@@ -1,77 +1,124 @@
-# Session Storage Rewriting (Lossless)
+# Bounded Private-Runtime Storage (Canonical Storage Foundation)
 
 ## Goal
 
-Internal technical specification for the multi-phase project that rewrites how Kilo retains
-sessions on disk so storage stops growing without bound, while preserving complete logical
-session content and lossless continuation behavior. This document is the durable cross-session
-context: a fresh session must be able to read this file and continue the work without
-rediscovering the problem, the measurements, the locked decisions, or the architecture.
+Internal technical specification for the storage foundation that replaces the
+obsolete multi-client checkpoint/resync target with a bounded private-runtime
+canonical storage foundation: canonical aggregate storage with invisible
+automatic byte-budget retention, an artifact field/owner/retention registry,
+and an offline archive cutover at P4.2. This document is the durable
+cross-session context: a fresh session must be able to read this file and
+continue the work without rediscovering the problem, the measurements, the
+locked decisions, or the architecture.
 
-The durable architecture decision behind this project is recorded separately in
+The durable architecture decision is recorded in
+[ADR-0005: Bounded Private-Runtime Storage](../adr/0005-bounded-private-runtime-storage.md)
+(Status: Active), which supersedes
 [ADR-0001: Lossless Session Storage Rewriting](../adr/0001-lossless-session-storage-rewriting.md)
-(Status: Active). This document is the implementation source of truth: it owns the design,
-migration, phased roadmap, tests, and open questions. ADR-0001 owns the chosen direction
-(rewrite only while preserving complete logical content and lossless continuation; checkpoint +
-resync selected) and does not duplicate this document's implementation detail.
+(checkpoint + resync / multi-client transport target; Status: Superseded) for
+the final product. This document is the implementation source of truth: it owns
+current state, operational containment, the target model, the cutover, storage
+work units, gates/tests, and open decisions. ADR-0005 owns the durable decision;
+ADR-0001's historical decision body is preserved unchanged.
 
-This is an internal specification under the existing `specs/storage/` convention (same as
-`remove-opencode-db.md` and `effect-sqlite-package.md`). It is not itself an ADR and is not a
-public feature proposal. It does not change any source code, docs/nav, or generated artifacts.
+This is an internal specification under the existing `specs/storage/`
+convention (same as `remove-opencode-db.md` and `effect-sqlite-package.md`). It
+is not itself an ADR and is not a public feature proposal. It does not change
+any source code, docs/nav, or generated artifacts.
 
-## 1. Status And Decisions
+## 1. Document Status And Durable Decisions
 
-### 1.1 Locked decisions
+### 1.1 Document status
 
-These decisions are already made and are non-negotiable for every phase of this project.
+Rewritten 2026-08-14. The previous checkpoint + resync design (ADR-0001) is
+superseded by ADR-0005; this rewrite is the implementation source of truth for
+the new target and does not append contradictions to the old direction. The
+current-state evidence below (sections 2-3) is preserved because it still
+describes the implemented system; the target (sections 5-7) is new.
+
+### 1.2 Durable decisions
 
 | ID | Decision |
 |---|---|
-| LOCK-001 | Kilo may rewrite the physical representation of retained sessions, but must preserve complete logical session content and lossless continuation behavior. |
-| LOCK-002 | No lossy message/part cleanup is approved. Compaction/context management is a separate future concern and is out of scope. |
-| LOCK-003 | Direct deletion of partial event/message/part rows is prohibited. Deletion is by complete session only, unless a future checkpoint/resync protocol explicitly makes historical event deletion safe. |
-| LOCK-004 | The dominant problem is append-only repeated full snapshots in event storage. `session_diff` orphan accumulation is a separately fixed lifecycle issue, not part of this design. |
-| LOCK-005 | The implementation must preserve workspace sync, session warp, historical session streaming, exports/shares, and cross-client compatibility, or provide an explicit migration/capability plan. |
-| LOCK-006 | This is an internal technical specification under the existing `specs/storage/` convention; it is not itself an ADR (the durable decision is recorded in ADR-0001) and is not a public feature proposal. |
+| LOCK-016 | Canonical bounded storage: the private runtime is the sole owner of session/event/artifact persistence and maintenance; canonical durable truth is transactionally maintained normalized session aggregates/read models plus explicitly registered artifacts, with every mutation committing canonical state and a monotonic aggregate/session revision atomically; R9 may use a bounded derived changefeed/outbox for reconnect deltas (not authoritative history, not required for reconstruction, truncatable after authoritative hydration state); no permanent duplicate full-payload event snapshots, generic full-object update history, multi-client sync/warp replay protocol, old-peer capability negotiation, or removed-client compatibility; R11 Failure/Outcome durable fields live in the canonical aggregate storage/registered artifact model (diagnostic and panel projections do not create competing stores); automatic retention is invisible private-runtime maintenance under internal byte-budget high/low watermarks with hysteresis (ADR-0005 I-1..I-7, section 5 below) |
+| LOCK-017 | Legacy archive/cutover: at the P4.2 storage cutover, stop the sole runtime, verify and archive the legacy DB plus session-owned sidecars as an opaque offline artifact with checksum/integrity evidence, boot a fresh canonical DB, and retain rollback authority until archive deletion is separately authorized; no old-session migration/import, no dual-reader, no runtime archive reader (ADR-0005 I-8, section 6 below) |
 
-### 1.2 Implementation status (current)
+### 1.3 Retained ADR-0001 principles and explicit rejections
 
-| Area | Status |
-|---|---|
-| Complete-session deletion cleans `session_diff` / `session_diff_base` artifacts | Implemented (commit `8034c970dd`) |
-| Append-only event log with full-content snapshot events | Current behavior, unchanged |
-| Canonical session checkpoint / canonical state write | Not implemented |
-| Event retention after checkpoint | Not implemented |
-| Gap detection and snapshot resync | Not implemented |
-| Workspace sync / warp over the full event log | Current behavior, unchanged |
-| Lossy compaction of messages/parts | Not approved, out of scope (LOCK-002) |
+Retained (still valid for the target), scoped to canonical-era sessions
+(sessions created or retained by the fresh canonical runtime after the P4.2
+cutover): lossless logical content and continuation for runtime-retained
+sessions; monotonic integrity; crash-safe maintenance; complete-session/family
+deletion; no silent lossy compaction. The temporary last-week containment set
+(section 4) is legacy-archive retention only, not runtime-retained sessions,
+and is not usable by the runtime after the cutover.
 
-## 2. Problem Statement And Measured Evidence
+Explicitly rejected (ADR-0005 I-4): building `/sync/checkpoint`; sync/warp
+peer resync; released-client capability negotiation; the former cross-client
+storage verification phase (old spec P6); any permanent duplicate full-payload
+event snapshot or generic full-object update history; any multi-client
+sync/warp replay protocol.
+
+### 1.4 Bounded decisions (open)
+
+| ID | Bounded by | Required by | Status |
+|---|---|---|---|
+| R15 | Automatic retention bounds: byte-budget high/low watermarks with hysteresis, recent-retention floor, family eligibility/ordering, diagnostics | P4.2 (P4.2a). Not a P1-P3 blocker | Open — added 2026-08-14 |
+| R16 | Canonical aggregate schema/revision model and bounded outbox/changefeed disposition; artifact ownership/retention registry | P4.2 (P4.2a). Not a P1-P3 blocker | Open — added 2026-08-14 |
+| R17 | Offline archive format/location/integrity/checksum; fresh-DB cutover identity; rollback and archive-deletion authority | P4.2 (P4.2a). Not a P1-P3 blocker | Open — added 2026-08-14 |
+
+No numeric budget is invented now (R15-R17). R15-R17 are recorded in the
+runtime spec (section 9) and the migration tracker (section 9).
+
+### 1.5 Relationship to orchestrator phases
+
+- Storage is not a P1-P3 code prerequisite after operational containment
+  (section 4); P1-P3 may proceed on the legacy store.
+- Within P4.2, the storage foundation and cutover is the first sub-boundary:
+  **P4.2a storage** (this spec, work units S0..S5 in section 7) lands before
+  the **P4.2b** private-wire/schema freeze for R9 and R11-R14 (runtime spec
+  sections 7.1-7.2, 9). The S0..S5 labels are namespaced under orchestrator
+  P4.2 and collide with no orchestrator phase.
+- P4.2 cannot exit until the canonical schema/revision model, automatic
+  retention, artifact registry, R15-R17, clean-DB cutover, and H-10/H-11
+  persistence/lifecycle evidence pass (section 8).
+- P4.4/P4.5 remove old sync/warp/event replay/public server surfaces and
+  legacy storage writers/readers (runtime spec section 8.2).
+
+## 2. Current State And Measured Evidence
+
+All statements in this section describe the implemented system today, grounded
+in repository evidence and read-only measurement. None of them claim the target
+architecture exists.
 
 ### 2.1 Logical content vs physical event log
 
 Kilo keeps two representations of a session:
 
-- **Logical content**: the final-state read models. `session` rows, `message` rows, `part` rows,
-  V2 projections (`session_message`, `session_input`, `session_context_epoch`, `todo`), and
-  file-backed artifacts (`session_diff`, `session_diff_base`, snapshot references). This is what
-  the user sees and what continuation needs.
-- **Physical event log**: the `event` table. Every synchronized update is appended as a new row
-  carrying the full payload of what changed. The `event` table is append-only: rows are written
-  once and never rewritten. A message that is updated ten times produces ten `message.updated`
-  rows, each a complete copy of the message at that moment.
+- **Logical content**: the final-state read models. `session` rows, `message`
+  rows, `part` rows, V2 projections (`session_message`, `session_input`,
+  `session_context_epoch`, `todo`), and file-backed artifacts (`session_diff`,
+  `session_diff_base`, snapshot references). This is what the user sees and what
+  continuation needs.
+- **Physical event log**: the `event` table. Every synchronized update is
+  appended as a new row carrying the full payload of what changed. The `event`
+  table is append-only: rows are written once and never rewritten. A message
+  that is updated ten times produces ten `message.updated` rows, each a
+  complete copy of the message at that moment.
 
-The read models are maintained by projectors that upsert on every event, so the `message` and
-`part` tables hold the *latest* version while the event log holds *every* version. The event log
-is therefore physically redundant with the read models for final-state content, yet it is the
-only place that records per-aggregate sequence, and it is the transport for workspace sync and
-session warp. That tension is the core of this project: the event log must shrink, but the
-sequence semantics and the sync/warp transport must survive.
+The read models are maintained by projectors that upsert on every event, so the
+`message` and `part` tables hold the *latest* version while the event log holds
+*every* version. The event log is therefore physically redundant with the read
+models for final-state content, yet it is the only place that records
+per-aggregate sequence, and it is the transport for workspace sync and session
+warp today. In the target, that transport role disappears: the final product is
+one private runtime with no multi-client sync/warp, so the event log's
+authoritative-history and transport roles are both obsolete (sections 5.1, 5.5).
 
 ### 2.2 Measured evidence
 
-Measured on one local installation (2026-08-07, `~/.local/share/kilo/kilo.db`, read-only
-queries; file-backed dirs via `du`).
+Measured on one local installation (2026-08-07, `~/.local/share/kilo/kilo.db`,
+read-only queries; file-backed dirs via `du`).
 
 | Store | Rows | Payload | Share of growth |
 |---|---|---|---|
@@ -82,8 +129,30 @@ queries; file-backed dirs via `du`).
 | `storage/session_diff_base` files | - | 37 MB | lifecycle bug, fixed at deletion |
 | `session` table (all text columns) | 5,978 | ~1 MB | negligible |
 
-The `kilo.db` file itself is ~16.9 GB including free pages; the payload numbers above are the
-logical `length(data)` sums.
+The `kilo.db` file itself was ~16.9 GB including free pages on 2026-08-07; the
+payload numbers above are the logical `length(data)` sums.
+
+Read-only aggregate update (2026-08-14, same installation, `~/.local/share/kilo/kilo.db`,
+metadata/length-sum queries only; **no content was read**):
+
+| Metric | 2026-08-14 value |
+|---|---|
+| `kilo.db` file size | ~24.56 GB |
+| `event` rows | 2,290,000 (~2.29M) |
+| Event payload (logical `length(data)` sum) | ~17.96 GB |
+| Full message/part update snapshots share of event payload | ~99.2% |
+| `message` + `part` payload | ~4 GB |
+| SQLite freelist | 0 |
+| WAL | negligible (~2 MB) |
+| Disk usage | ~91-92% |
+| Growth | ~7.5 GB / 7 days (derived: 24.56 GB on 2026-08-14 minus 16.9 GB on 2026-08-07 ≈ 7.7 GB over seven days); ~1 MB/min from a separate short active sample, not a sustained rate |
+
+Two extension-owned backends currently write the DB. A 2026-08-14
+current-state probe (experimental flags disabled on a local install) observed
+growth continuing; recorded as probe evidence with date/method, not a
+repo-cited proof. The 2026-08-14 numbers are an aggregate update of the
+2026-08-07 evidence, not a replacement of it; both dates remain on record, and
+the derived interval/rate method is stated in the Growth row above.
 
 ### 2.3 Where the growth comes from
 
@@ -96,35 +165,46 @@ The event payloads are dominated by two event types:
 | `session.updated.1` | 101,582 | 90 MB | 0.9 KB | full session info per update |
 | `session.created.1` | 3,033 | 2 MB | 0.8 KB | full session info at creation |
 
-`message.updated` carries `info: Info` (the complete message: role metadata, summary/diffs,
-editor context, tokens, cost, time). `message.part.updated` carries `part: Part` (complete part
-content). Every mutation during a run - each streamed part settlement, each usage/cost update,
-each summary recompute - publishes one of these events with a full copy of the current value,
-and the projector then upserts the same value into the read model. The event log keeps every
-version forever.
+`message.updated` carries `info: Info` (the complete message: role metadata,
+summary/diffs, editor context, tokens, cost, time). `message.part.updated`
+carries `part: Part` (complete part content). Every mutation during a run —
+each streamed part settlement, each usage/cost update, each summary recompute —
+publishes one of these events with a full copy of the current value, and the
+projector then upserts the same value into the read model. The event log keeps
+every version forever.
 
 Writer locations (current behavior, not a design change):
 
-- `packages/opencode/src/session/session.ts` `updateMessage` publishes `SessionV1.Event.MessageUpdated` with the full message.
-- Same module `updatePart` publishes `SessionV1.Event.PartUpdated` with a structured clone of the full part.
-- `packages/core/src/session/context-epoch.ts` publishes `session.next.context.updated` carrying the full rendered context `text` per context change (part of the V2 family; bounded by context size but still a repeated full snapshot).
-- Projectors in `packages/core/src/session/projector.ts` upsert these events into `message` / `part` / `session`.
+- `packages/opencode/src/session/session.ts` `updateMessage` publishes
+  `SessionV1.Event.MessageUpdated` with the full message.
+- Same module `updatePart` publishes `SessionV1.Event.PartUpdated` with a
+  structured clone of the full part.
+- `packages/core/src/session/context-epoch.ts` publishes
+  `session.next.context.updated` carrying the full rendered context `text` per
+  context change (part of the V2 family; bounded by context size but still a
+  repeated full snapshot).
+- Projectors in `packages/core/src/session/projector.ts` upsert these events
+  into `message` / `part` / `session`.
 
-The V2 `session.next.*` durable events (`Step`, `Text`, `Reasoning`, `Tool`, `Compaction`, etc.)
-are append-only too, but their payloads are mostly small; the full-content `text` fields
-(`session.next.text.ended`, `session.next.reasoning.ended`, `session.next.context.updated`) and
-tool output (`session.next.tool.progress`, `session.next.tool.success`) grow with content size
-and repetition. Ephemeral deltas (`Text.Delta`, `Reasoning.Delta`, `Tool.Input.Delta`) are
-live-only and already excluded from durable storage.
+The V2 `session.next.*` durable events (`Step`, `Text`, `Reasoning`, `Tool`,
+`Compaction`, etc.) are append-only too, but their payloads are mostly small;
+the full-content `text` fields (`session.next.text.ended`,
+`session.next.reasoning.ended`, `session.next.context.updated`) and tool output
+(`session.next.tool.progress`, `session.next.tool.success`) grow with content
+size and repetition. Ephemeral deltas (`Text.Delta`, `Reasoning.Delta`,
+`Tool.Input.Delta`) are live-only and already excluded from durable storage.
 
 ### 2.4 Growth mechanics summary
 
-- One logical update = one appended event row = one full-content payload = one projector upsert.
-- The read model converges to final state; the event log monotonically accumulates.
-- Nothing rewrites, compacts, or prunes the event log today. Complete-session deletion
-  (`events.remove`) is the only path that removes event rows, and it removes an entire aggregate.
+- One logical update = one appended event row = one full-content payload = one
+  projector upsert.
+- The read model converges to final state; the event log monotonically
+  accumulates.
+- Nothing rewrites, compacts, or prunes the event log today. Complete-session
+  deletion (`events.remove`) is the only path that removes event rows, and it
+  removes an entire aggregate.
 
-## 3. Storage Inventory And Ownership Boundaries
+## 3. Storage Inventory And Ownership Boundaries (current state)
 
 ### 3.1 SQLite database (`~/.local/share/kilo/kilo.db`)
 
@@ -145,13 +225,15 @@ Schema ownership lives in `packages/core/src/**/sql.ts`; migrations in
 | `session_share` | share URL/secret registry (in `packages/core/src/share/sql.ts`) | share service | share service |
 
 All `session.*`, `message.*`, `part.*`, `session_message`, `session_input`,
-`session_context_epoch`, and `todo` rows cascade on `session` deletion. The `event` and
-`event_sequence` tables cascade on aggregate deletion through `events.remove`.
+`session_context_epoch`, and `todo` rows cascade on `session` deletion. The
+`event` and `event_sequence` tables cascade on aggregate deletion through
+`events.remove`.
 
 ### 3.2 File storage (`~/.local/share/kilo/storage/`)
 
-Key-value JSON files addressed by path arrays via `packages/opencode/src/storage/storage.ts`
-(per-key `TxReentrantLock`, ENOENT treated as NotFound).
+Key-value JSON files addressed by path arrays via
+`packages/opencode/src/storage/storage.ts` (per-key `TxReentrantLock`, ENOENT
+treated as NotFound).
 
 | Key prefix | Role | Owner |
 |---|---|---|
@@ -163,303 +245,290 @@ Key-value JSON files addressed by path arrays via `packages/opencode/src/storage
 | `session_share/<sessionID>.json` | share state cache | share service |
 | `migration` | storage migration marker | `Storage` layer |
 
-Current code no longer writes the `session/`, `message/`, or `part/` file prefixes: session,
-message, and part state lives in the SQLite read models (section 3.1), and these JSON files are
-legacy lineage only. `Storage.migration.1` copies the older `storage/session/info|message|part`
-layout into these prefixes and `Storage.migration.2` rewrites `session/<projectID>/<sessionID>.json`
-with a `summary`; after migration they are retained but not maintained. Live `Storage` writes
-are limited to `session_diff`, `session_diff_base`, and `session_share`.
+Current code no longer writes the `session/`, `message/`, or `part/` file
+prefixes: session, message, and part state lives in the SQLite read models
+(section 3.1), and these JSON files are legacy lineage only. `Storage.migration.1`
+copies the older `storage/session/info|message|part` layout into these prefixes
+and `Storage.migration.2` rewrites `session/<projectID>/<sessionID>.json` with a
+`summary`; after migration they are retained but not maintained. Live `Storage`
+writes are limited to `session_diff`, `session_diff_base`, and `session_share`.
 
 Commit `8034c970dd` added removal of `session_diff` / `session_diff_base` in
-`Session.remove` (with `Storage.remove` idempotency for missing files), closing the orphan
-lifecycle issue. `session_diff` still accumulates for retained sessions by design (it is
-cumulative logical content, see `packages/opencode/src/kilocode/session-portability/`), so its
-1.1 GB footprint on this machine is expected retained content, not orphans.
+`Session.remove` (with `Storage.remove` idempotency for missing files), closing
+the orphan lifecycle issue. `session_diff` still accumulates for retained
+sessions by design (it is cumulative logical content, see
+`packages/opencode/src/kilocode/session-portability/`), so its 1.1 GB footprint
+on this machine is expected retained content, not orphans.
 
 ### 3.3 Other data stores
 
 | Store | Role |
 |---|---|
-| `~/.local/share/kilo/snapshot/` | git repos per project/worktree holding filesystem snapshots for revert/undo (`packages/opencode/src/snapshot/`). Parts reference snapshots by git commit string. Distinct from the event log; not part of this project's scope. |
+| `~/.local/share/kilo/snapshot/` | git repos per project/worktree holding filesystem snapshots for revert/undo (`packages/opencode/src/snapshot/`). Parts reference snapshots by git commit string. Distinct from the event log; in the target these are revert-snapshot storage used by SessionRevert + Snapshot (section 9 terminology) and are part of the artifact registry scope (section 5.4). They are project-scoped/shared, not owned by one session family: ownership/GC (project-level reachability/refcount) is assigned separately from session-family deletion (section 5.4), so no silent orphaning occurs. |
 | `~/.local/share/kilo/log/` | CLI/server logs. Out of scope. |
-| `~/.local/share/kilo/session-export.db` | export/share bookkeeping (`SessionExport`). Out of scope unless exports are affected by compaction. |
+| `~/.local/share/kilo/session-export.db` | export/share bookkeeping (`SessionExport`). Inert at the P4.2 cutover (no export reader is retained after the cutover); its cutover disposition — included in the cutover archive or excluded by recorded decision — is an R17 item (section 6.4); it is never silently deleted. |
 | `~/.local/share/kilo/kilo-local.db` | local/instance database. Out of scope. |
 
-### 3.4 Consumers that depend on the event log
+### 3.4 Consumers that depend on the event log (legacy surfaces)
 
-These are the surfaces LOCK-005 protects; any compaction must keep them correct or ship a
-capability plan (see sections 5, 6, 8).
+These surfaces exist today and depend on the event log. In the target they are
+removed (ADR-0005 I-4; runtime spec section 8.2; P4.4/P4.5), not preserved:
+the final product is one private runtime with no multi-client sync/warp, no
+old-peer capability negotiation, and no released-client compatibility.
 
-| Consumer | Mechanism | Dependency |
-|---|---|---|
-| Historical session streaming | `EventV2.aggregateEvents(aggregateID, after)` reads `event` rows with `seq > after`, ordered by `seq` | seq continuity, full event payloads |
-| Workspace sync (history) | `POST /sync/history` returns all `event` rows outside the requester's known `(aggregate, seq)` ranges; requester replays with `ownerID` | per-aggregate seq as cursor, full event payloads |
-| Workspace sync (live) | SSE `sync` events replayed via `events.replay(..., { publish: true, ownerID })` | versioned event types + registry decode |
-| Session warp | reads ALL `event` rows for a session, posts batches of 10 to `POST /sync/replay` (`replayAll` with `strictOwner`), then `POST /sync/steal` | full event log from seq 1, contiguous seq |
-| Share/export | `share-next` watches `Session.Updated`, `MessageUpdated`, `PartUpdated`, `Diff`, `Deleted` events; `SessionExport` on close | event notification, message/part content |
-| Event bridge to clients | `EventV2Bridge` re-publishes events on `GlobalBus` + SSE; SDK consumers (CLI run, VS Code, JetBrains, TUI, ACP, claw) decode `message.updated.1`, `message.part.updated.1`, etc. | versioned event types, payload shapes |
-| Replay owner checks | `event_sequence.owner_id` + `claim` semantics: warp claims a session so the old workspace's later events are ignored | `owner_id` column semantics |
-
-## 4. Invariants And Acceptance Criteria
-
-Every phase must preserve these. They are acceptance criteria, not aspirations.
-
-| # | Invariant | Acceptance criterion |
-|---|---|---|
-| I-1 | Lossless logical content | After any storage rewrite, a session's `session` + `message` + `part` + `session_message` + `session_input` + `session_context_epoch` + `todo` rows and file artifacts (`session_diff`, `session_diff_base`, snapshot refs) are byte-equivalent (after schema normalization) to what they were before, for every retained session. |
-| I-2 | Lossless continuation | Continuing a session after a rewrite (new turn, retry, revert, fork, warp, share, export) behaves identically to continuation before the rewrite. Test: run a scripted multi-turn session, rewrite storage, continue, and diff the resulting read models and emitted events. |
-| I-3 | Event sequence integrity | For every retained aggregate, `event_sequence.seq` is monotonic and equals the highest retained `event.seq`; where no tail events are retained (purged below the checkpoint, or empty-tail restore), it equals the last verified checkpoint seq. Any checkpoint records the seq it covers; events above the checkpoint remain contiguous and gapless. |
-| I-4 | Historical streaming survives | `aggregateEvents(aggregateID, after)` returns the same sequence of events as before for any `after` that a client can hold, or the client is explicitly told to resync via the new capability path. No silent truncation. Explicit failure/resync is guaranteed only for reads served by checkpoint-aware (new) code: a new-code read that needs events below the checkpoint must fail loudly, never return a truncated stream as if it were complete. An old build that directly opens an already-compacted DB has no such mechanism; it sees only the retained tail, which is the accepted, documented mixed-version capability boundary (section 8.3), not a path that can fail loudly without an additional mechanism. |
-| I-5 | Sync/warp survive | `/sync/history`, `/sync/replay`, `/sync/steal`, live SSE sync, and warp move a session between workspaces with identical final read models and no divergent replay errors, including peers running pre-compaction builds (see section 8). |
-| I-6 | Failure recovery | A crash at any point (mid-event append, mid-checkpoint, mid-purge, mid-warp) leaves the database usable: no partial rows, no checkpoint pointing past retained events, and the next start either repairs or refuses loudly. WAL + `behavior: "immediate"` transactions are the baseline. |
-| I-7 | Deletion semantics | Only complete-session deletion removes rows. `Session.remove` removes the aggregate's events, sequence, cascaded rows, and `session_diff`/`session_diff_base` artifacts. Nothing else deletes. |
-| I-8 | No unapproved lossy behavior | No phase may drop or rewrite `message`/`part`/`session` logical content, and no phase may delete event rows unless the checkpoint/resync protocol has been approved and verified per LOCK-003. |
-
-## 5. Target Architecture (Decision Level)
-
-The selected direction is **checkpoint + resync** (see section 6 for the comparison). The
-architecture below is the target shape. Anything that names concrete new schema fields is a
-proposal and is marked as such; do not treat proposed field names as committed.
-
-### 5.1 Canonical session checkpoint
-
-A checkpoint is a self-contained, verifiable capture of one aggregate's (session's) full logical
-state at a specific event sequence. It must be reconstructable into the exact projector state
-the session had at that sequence, so that replaying events *after* the checkpoint onto the
-checkpoint reproduces the current state.
-
-- **Content (proposal)**: the `session` row, all `message` rows, all `part` rows, `session_message`,
-  `session_input`, `session_context_epoch`, `todo` rows, plus the cumulative `session_diff` value
-  and a reference to the current filesystem snapshot string if one is active. Cost/token counters
-  are included because the projector maintains them as absolute session-level totals (each
-  `session.updated` event carries the full running total, see section 2.3) plus incremental
-  removal adjustments when messages/parts are removed; they are not recomputable from a tail
-  alone, because the events are cumulative totals rather than deltas and the removal adjustments
-  are non-monotonic, so replaying only the tail would double-count or miss removals.
-- **Artifact consistency**: `session_diff` / `session_diff_base` are file-backed cumulative
-  artifacts maintained independently of the event log (see section 3.2); they are not
-  reconstructable by replaying events. A checkpoint's consistency for them is therefore an
-  independent artifact snapshot/version (its own version + checksum captured at checkpoint
-  time), not something assumed reproducible from the event seq. If an artifact changes after a
-  checkpoint without a new checkpoint, the checkpoint's artifact reference is stale and must be
-  detected, not silently trusted; restore/warp copies each artifact as its own unit (see open
-  question 4).
-- **Location (proposal, undecided)**: a new `session_checkpoint` table keyed by aggregate id, or
-  file-backed storage, or a dedicated checkpoint event. The table is the leading candidate
-  because it can be written in the same SQLite transaction model as the event log.
-- **Recorded position**: `(aggregate_id, seq)` of the last event the checkpoint covers, plus a
-  checksum/hash of the serialized state (proposal) for corruption detection.
-- **Write cadence (undecided)**: every N events, every M bytes, on session close, or on demand.
-  Default proposal: write idempotently at a bounded cadence during active runs and once on
-  session close, plus on-demand before destructive maintenance.
-- **Consistency**: the checkpoint write must be atomic with respect to readers (single
-  transaction or write-temp-then-rename), and must never claim a seq higher than the highest
-  committed event. A checkpoint covering seq N is only valid if every event up to N is retained
-  at the time the checkpoint is written, or the checkpoint itself is the source of truth for
-  "state at N" and events below N may be purged only after verification.
-
-### 5.2 Event retention after checkpoint
-
-- Events at or below the last verified checkpoint seq become recoverable-from-checkpoint: the
-  logical content they carried lives in the checkpoint + read models, and their remaining value
-  is sequence continuity for sync cursors and warp transport.
-- **Retention policy (undecided)**: keep the last N events below the checkpoint, or zero events
-  below the checkpoint (mirrors open question 3). The window preserves cheap
-  `aggregateEvents(after)` for recent cursors and cheap re-warp; the zero option maximizes
-  savings. Decision required before implementation.
-- **Purge boundary**: purging event rows below a checkpoint is only safe after the checkpoint
-  is verified (checksum passes) and after LOCK-003's "checkpoint/resync protocol explicitly
-  makes historical event deletion safe" condition is met by this spec's approval. Purge runs as
-  explicit maintenance, never inline with a user-visible request, and only after the P4
-  sync/warp resync + capability negotiation protocol is available (roadmap section 7); before
-  P4 ships, no event row below a checkpoint may be deleted.
-
-### 5.3 Gap detection
-
-- Every event append already computes `seq = latest + 1` under an immediate transaction; that
-  invariant stays. Gap detection is about *reads and resyncs*:
-  - `aggregateEvents(aggregateID, after)`: if the first row found has `seq > after + 1`, the
-    reader must not silently continue; it must either (a) read from the checkpoint and then the
-    tail, or (b) fail with an explicit "events missing, resync required" error.
-  - Checkpoint validation: a checkpoint whose covered seq is beyond the lowest retained event
-    seq and below the highest is the only legitimate gap source; any other gap (missing seq
-    inside the retained tail) is corruption and must be reported, not patched.
-- **Resync trigger (proposal)**: when a reader or sync peer hits a gap it cannot bridge from
-  retained events, it requests the checkpoint for the aggregate plus all events above the
-  checkpoint seq. This is the "snapshot resync" path.
-
-### 5.4 Snapshot resync
-
-- New internal API (proposal): `checkpoint(aggregateID)` returning `{ state, seq, checksum }`
-  and `tail(aggregateID, after)` returning events `> after`. Historical streaming and warp use
-  checkpoint + tail when events below the checkpoint are gone.
-- New sync surface (proposal): `/sync/checkpoint` (serve a checkpoint for an aggregate) and an
-  extended `/sync/replay` that accepts a checkpoint prefix, or a versioned replay payload
-  (proposal: add a `checkpoint` field to the existing `ReplayPayload` and keep the old payload
-  for pre-compaction peers).
-- **Restore materialization**: a checkpoint+tail restore must materialize `event_sequence` for
-  the aggregate with `seq` = the checkpoint's covered seq, so invariant I-3 holds and the next
-  event append continues at `checkpoint_seq + 1` with no gap. This applies even when the tail is
-  empty (no events above the checkpoint) and when the target is fresh (no prior rows for the
-  aggregate): the checkpoint is the bootstrap for the full state, and `event_sequence` is
-  created (or overwritten) at the checkpoint seq, never left missing or at a stale seq.
-- Owner semantics stay: warp claims the aggregate via `claim`/`owner_id` after a successful
-  checkpoint+tail restore, exactly as it does today after full replay. A restore that does not
-  claim does not steal the aggregate, so non-warp sync restores remain non-destructive.
-
-### 5.5 Safe database maintenance
-
-- `VACUUM`/`incremental_vacuum` after large purges to reclaim free pages; never while a sync or
-  warp batch is in flight (see section 9).
-- Maintenance is a single-owner background job gated on idle aggregates and on no active
-  sync/warp/streaming for the affected aggregates (mirror the existing generation-admission
-  fence pattern used by config cold saves in `packages/opencode/src/server/shared/fence.ts`).
-- Every maintenance pass is idempotent, resumable, and reports bytes reclaimed + rows removed.
-
-## 6. Option Comparison And Selected Direction
-
-| Option | What it means | Verdict | Rationale |
+| Consumer | Mechanism | Dependency | Target disposition |
 |---|---|---|---|
-| Full event retention (status quo) | Keep appending every full-content event forever | Rejected as target | Measured 11 GB and growing; no bound without user action |
-| Lossy compaction | Drop old messages/parts or truncate them; keep summaries | Rejected | Violates LOCK-001/002; changes user-visible history semantics |
-| Checkpoint + resync | Canonical state at seq N; retain events after N; gap detection; resync via checkpoint | Selected | Preserves full logical content and seq semantics, bounds event growth, keeps sync/warp correct with a capability path |
-| Content deduplication / compression | Store identical payloads once, or compress event JSON | Deferred (complementary) | Reduces bytes but does not bound growth; may be layered onto checkpoint + resync later; not a substitute |
-| Complete-session deletion / management | Delete whole sessions; clean per-session artifacts | Partially implemented, tooling deferred | `events.remove` + artifact cleanup exist (LOCK-003, commit `8034c970dd`); broader archive/stats tooling is a separate concern and does not fix retained-session growth |
+| Historical session streaming | `EventV2.aggregateEvents(aggregateID, after)` reads `event` rows with `seq > after`, ordered by `seq` | seq continuity, full event payloads | Removed at P4.4/P4.5; reads go through the canonical aggregate model after P4.2a |
+| Workspace sync (history) | `POST /sync/history` returns all `event` rows outside the requester's known `(aggregate, seq)` ranges; requester replays with `ownerID` | per-aggregate seq as cursor, full event payloads | Removed (no multi-client sync); P4.4/P4.5 |
+| Workspace sync (live) | SSE `sync` events replayed via `events.replay(..., { publish: true, ownerID })` | versioned event types + registry decode | Removed (no multi-client sync); P4.4/P4.5; R9's bounded changefeed/outbox is the only reconnect-delta path in the target |
+| Session warp | reads ALL `event` rows for a session, posts batches of 10 to `POST /sync/replay` (`replayAll` with `strictOwner`), then `POST /sync/steal` | full event log from seq 1, contiguous seq | Removed (no warp in a single private runtime); P4.4/P4.5 |
+| Share/export | `share-next` watches `Session.Updated`, `MessageUpdated`, `PartUpdated`, `Diff`, `Deleted` events; `SessionExport` on close | event notification, message/part content | Retargeted at P4.2 to canonical aggregates + registered artifacts; share state remains registered (section 5.4) |
+| Event bridge to clients | `EventV2Bridge` re-publishes events on `GlobalBus` + SSE; SDK consumers decode `message.updated.1`, `message.part.updated.1`, etc. | versioned event types, payload shapes | Removed with the public server surface at P4.4/P4.5; the private transport (R1) and R9 carry observation |
+| Replay owner checks | `event_sequence.owner_id` + `claim` semantics: warp claims a session so the old workspace's later events are ignored | `owner_id` column semantics | Removed (no multi-owner warp); P4.4/P4.5 |
 
-Selected direction: **checkpoint + resync** with trailing-event retention (window size
-undecided, see section 5.2), deletion strictly by complete session, and deduplication/compression
-explicitly deferred to a later phase that layers on top. Lossy compaction stays out of scope
-per LOCK-002.
+## 4. Operational Containment (pre-P4 manual, bounded)
 
-## 7. Phased Implementation Roadmap
+### 4.1 Policy
 
-Dependencies run top to bottom. Each phase must satisfy the invariants in section 4 and ship
-its exit criteria; a phase does not start until the previous phase's exit criteria pass.
+Before the P4.2 cutover, the legacy store keeps growing (section 2.2: ~24.56 GB
+DB, ~91-92% disk, ~7.5 GB/7 days derived from the two dated observations). The
+user selected a bounded manual
+containment operation to buy time: **full archive of the legacy data plus
+keeping last-week-active sessions in the current legacy DB**. The mechanism,
+cadence, and tooling for this operation are the user's manual choice; this spec
+records the policy and its evidence slots only. The kept last-week-active set
+exists only in the legacy store before the cutover and in the offline legacy
+archive afterward; it is not migrated into or read by the fresh canonical
+runtime (section 6.2).
 
-Ordering guarantee: P4 (sync/warp resync protocol + capability negotiation) must ship and pass
-before P5 (event retention) may purge any event row. No event purge occurs before
-checkpoint-serving/resync and capability negotiation are available; P5 is the first phase that
-may delete event rows below a checkpoint.
+### 4.2 Evidence slots (pending)
 
-| Phase | Scope | Exit criteria | Test / verification |
-|---|---|---|---|
-| P0 Baseline harness | Freeze measurement queries and a lossless-continuation fixture harness (scripted session, storage snapshot, rewrite, continuation diff) | Reproducible baseline numbers and a failing-until-P5 test that asserts event rows below a checkpoint can be purged without changing read models | `bun test` focused tests in `packages/opencode`; measurement queries from section 10 |
-| P1 Diff lifecycle completion | Confirm `session_diff`/`session_diff_base` cleanup on deletion (done in `8034c970dd`); add orphan detection + stats visibility | No orphans remain after deletion in the test suite; `session_diff` size is attributable to retained sessions | `test/session/session-remove-storage.test.ts`; `test/storage/storage.test.ts` |
-| P2 Checkpoint writer | Define checkpoint format (5.1 proposal), write idempotently at bounded cadence + on close + on demand, behind a runtime flag | Checkpoint matches projector state at its seq; checksum verifies; crash mid-write leaves no bad checkpoint | Focused tests: checkpoint round-trip, crash injection, idempotent rewrite |
-| P3 Gap-aware reads | `aggregateEvents` and replay bridge checkpoint+tail; explicit resync error when events are missing and no checkpoint exists | Reads return identical event streams for retained windows; missing-event error is explicit and actionable | `packages/core` event tests; `packages/opencode` session streaming tests |
-| P4 Sync/warp resync protocol | `/sync/checkpoint` + extended replay (5.4); capability negotiation with pre-compaction peers (8.3); old-peer fallback; checkpoint+tail restore materializes `event_sequence` (5.4) | Warp and history sync produce identical read models whether source is compacted or not; old-peer fallback works; capability negotiation is live and gates the purge phase (P5) | Workspace sync tests (existing `control-plane/workspace.ts` paths), warp E2E-style test |
-| P5 Event retention (purge) | Explicit maintenance purge of events below verified checkpoints; trailing window policy from 5.2; runs only after P4 protocol readiness + capability negotiation are available | P4 exit criteria met (protocol + capability negotiation live); P0 lossless-continuation test passes with purged history; seq integrity holds; bytes reclaimed reported | P0 harness + projector-replay equivalence tests; corruption-detection test |
-| P6 Cross-client + migration | Verify VS Code, JetBrains, TUI, ACP, claw, share/export against compacted stores; additive schema migrations; docs | All cross-client surfaces from section 8 pass; no released-client DB incompatibility | SDK/SSE consumers; `bun run typecheck`; `bun test` in `packages/opencode`; JetBrains/VS Code smoke runs |
-
-## 8. Migration And Compatibility Strategy
-
-### 8.1 Old clients and cross-client surfaces
-
-| Surface | Compatibility requirement | Plan |
+| Evidence | Slot | Status |
 |---|---|---|
-| CLI `run` / `session-replay` / `event.ts` | Decodes `message.updated.1` and `message.part.updated.1` from SSE/SDK; reads historical events | Events above checkpoint still emitted via bridge; checkpoint restore synthesizes nothing new for live streams because live updates continue to be published normally. Historical read paths must accept the resync error and use the checkpoint path when available. |
-| VS Code extension | Consumes events via SDK + SSE; Agent Manager uses shared backend | Backend-only change; extension sees unchanged event shapes. Verify webview renders after compaction. |
-| JetBrains plugin | Uses SDK against a `kilo serve` backend | Same as VS Code; SDK types unchanged unless new endpoints are added (then regen via `script/generate.ts`). |
-| TUI / ACP / claw | Consume `message.updated`, `message.part.updated` streams | Live streams unchanged; historical fetch must handle the resync error. |
-| Workspace sync peers (older CLI) | `/sync/history` + `/sync/replay` payloads | Keep old replay payload working; serve checkpoint only to peers that advertise support (capability negotiation, section 8.3). |
-| Share / export | `share-next` watches events; `SessionExport` snapshots on close | Unchanged: events continue to be published live; exports read the read models, not the event log. Verify share round-trip after compaction. |
-| Released clients sharing a DB file | `session_message.seq` is already nullable to let released clients share newer schemas | All new columns must be additive (nullable or defaulted) and all new tables must not be touched by old code paths. |
+| Full legacy archive location and size | TBD | Pending manual execution |
+| Archive integrity/checksum | TBD | Pending manual execution |
+| Last-week-active session set | TBD | Pending manual execution |
+| Disk headroom after containment | TBD | Pending manual execution |
+| Post-containment growth rate | TBD | Pending manual execution |
 
-### 8.2 DB schema rules for this project
+### 4.3 Bounds
 
-- New tables and columns are additive only. No ALTER that breaks a released client's reads.
-- The event table's versioned `type` and encoded payload shape is a public contract (the
-  `syncRegistry` encode/decode boundary). Checkpoint transport introduces new shapes as new
-  endpoints/payload fields, never by reinterpreting existing rows.
-- If a checkpoint is stored in a new table, old builds ignore it; the event log remains the
-  source of truth until the first compaction, and compaction only happens under the new code
-  (so old builds never see a compacted log unless they open a DB compacted by a newer build -
-  that is the documented capability boundary).
+- Operational containment is **not target behavior** (the target is the
+  canonical model with automatic retention, section 5) and **not a phase gate**:
+  no P1-P3 phase waits on it, and no phase claims completion from it.
+- It does not change the P4.2 cutover: the legacy DB is still archived offline
+  and a fresh canonical DB is booted empty (section 6). The operational
+  containment archive is distinct from the P4.2 cutover archive; the cutover
+  archive is the rollback authority (section 6.3; R17).
+- It is a bounded manual operation: no new product surface, no settings, no UI,
+  no migration tooling, and no automatic mechanism is added for it (LOCK-016).
+- Completion is not claimed until the evidence slots above record execution
+  evidence (LOCK-013).
 
-### 8.3 Capability negotiation (proposal)
+## 5. Target Model (LOCK-016)
 
-- Peers advertise checkpoint support (new endpoint or an explicit field in `/sync/start` or the
-  replay payload). A peer that does not advertise support always receives full event history;
-  the source keeps enough retained events to serve it, or refuses compaction for aggregates that
-  an active old peer is syncing (pragmatic default until all peers upgrade).
-- Mixed-version DB sharing: a compacted DB opened by an old build must still boot; old build
-  reads of the event log return the retained tail only, and the read models remain intact, so
-  the old build continues to function for live work even though historical replay below the
-  checkpoint is unavailable until the new build's resync path is used. This is the accepted,
-  documented capability boundary, not a path that fails loudly on its own: an old build has no
-  gap-detection or resync mechanism, so it cannot emit the explicit resync error - it simply
-  sees the retained tail. The failure/resync guarantee applies only where checkpoint-aware (new)
-  code serves the read.
-- **I-4 carve-out (explicit failure/resync is a new-code guarantee)**: the explicit resync
-  error is guaranteed only for reads served by checkpoint-aware (new) code. A new-code
-  historical read (`aggregateEvents` / `/sync/history` / warp) that needs events below the
-  checkpoint must fail loudly, never return a truncated stream as if it were complete. An old
-  build that directly opens a compacted DB has no such mechanism and is not expected to have
-  one: it can only see the retained tail (the capability boundary above), and restoring history
-  below the checkpoint requires the new build's checkpoint path. New code must never rely on an
-  old build failing loudly to protect it - the operational gate below is what protects old
-  peers.
-- **Operational gate for old peers**: compaction of an aggregate is permitted only when no
-  active pre-capability peer depends on serving its full history. The source must either retain
-  enough events below the checkpoint to serve an active old peer, or refuse compaction for
-  aggregates an old peer is actively syncing (pragmatic default until all peers upgrade); it
-  must never serve a partial stream silently. Compaction is a maintenance-time decision
-  evaluated per aggregate, never a silent background rewrite of an aggregate with an active old
-  peer.
+### 5.1 Canonical aggregate storage
 
-## 9. Operational Safety
+- **Canonical durable truth** is transactionally maintained normalized session
+  aggregates/read models plus explicitly registered artifacts — not an
+  unbounded replay log. The `session`, `message`, `part`, V2 projections, and
+  their file-backed artifacts (section 3) are the canonical state; the
+  full-payload append-only event log is not a target mechanism for history.
+- **Atomic revision commits**: every mutation commits canonical state and a
+  monotonic aggregate/session revision atomically in one transaction, so
+  readers observe either the old revision or the new one, never a torn state
+  (crash-safe maintenance; ADR-0001's monotonic-integrity principle retained).
+- **Lossless logical content and continuation** for runtime-retained
+  canonical-era sessions (ADR-0001 principle retained, scoped per section 1.3):
+  continuing a retained session after the rewrite (new turn, retry, revert,
+  share, export) behaves identically to continuation before the rewrite;
+  runtime-retained sessions' read models and file artifacts stay
+  byte-equivalent (after schema normalization). This applies only to sessions
+  retained by the fresh canonical runtime after the cutover — not to the
+  archived legacy set, which is not migrated into or read by the new runtime.
+- **R11 Failure/Outcome durable fields** live in the canonical aggregate
+  storage / registered artifact model; diagnostic and panel projections are
+  derived and never create competing stores (ADR-0005 I-5; runtime spec
+  sections 7.2, 9).
+- The exact canonical schema and revision model are R16 (bounded decision,
+  open; no exact schema is invented here).
 
-| Concern | Rule |
-|---|---|
-| Crash consistency | All event appends keep the existing `behavior: "immediate"` transaction. Checkpoint writes are single transactions (or temp-write-then-rename for file storage). A crash before checkpoint commit leaves no checkpoint (safe); a crash after event append but before checkpoint means the checkpoint lags, never exceeds, the event seq. |
-| Concurrent readers/writers | Checkpoint reads take the same per-key lock discipline used by `Storage`; DB reads/writes stay in the Effect/Drizzle transaction model. Maintenance must not interleave with event appends for the same aggregate; use per-aggregate fencing. |
-| Maintenance ownership | One owner (background job or explicit CLI maintenance command). No two maintenance passes run concurrently; passes are resumable and idempotent. |
-| WAL / VACUUM boundaries | `VACUUM` and `incremental_vacuum` run only when no sync/warp/streaming is active for the affected aggregates and no writer is mid-commit. Do not VACUUM inside a user-visible request. |
-| Rollback / abort | An aborted purge leaves the checkpoint in place and all events retained; next pass retries. An aborted warp replay leaves the target DB unchanged (transactional replay). `Session.remove` stays the only destructive operation and remains all-or-nothing per aggregate. |
-| Failure reporting | Every maintenance pass and resync logs rows removed, bytes reclaimed, seq ranges covered, and any corruption detection (checksum mismatch, seq gap) as errors with the aggregate id. |
+### 5.2 Bounded changefeed/outbox (R9)
 
-## 10. Open Questions And Required Decisions
+- A **bounded derived changefeed/outbox** may serve reconnect deltas for the
+  runtime observation and hydration contract (runtime spec section 7.1, R9).
+- It is **not authoritative history**, is **not required for reconstruction**
+  (reconstruction reads the canonical aggregates), and is **eligible for
+  automatic truncation** after the consumer holds an authoritative hydration
+  state (an observation snapshot, section 9 terminology).
+- Its disposition — retention bounds, truncation triggers, ordering/idempotency
+  — is part of R16 (outbox/changefeed disposition) and R9.
 
-These must be decided before implementation of the affected phase. Unknown protocol/schema
-details are deliberately left open rather than silently decided.
+### 5.3 Automatic retention
 
-1. Checkpoint storage: new `session_checkpoint` table vs file-backed storage vs a special
-   checkpoint event? (Phase P2)
-2. Checkpoint write cadence: every N events, byte threshold, on close, on demand, or a
-   combination? (Phase P2)
-3. Trailing-event retention window: keep the last N events below the checkpoint, or zero events
-   below it? What is the default for sync peers that have not re-synced? (Phase P5)
-4. Does the checkpoint include `session_diff`/`session_diff_base` content, or are those left in
-   file storage and copied by warp separately? In either case they need an independent artifact
-   snapshot/version (own version + checksum, per section 5.1), since they are not reproducible
-   from the event seq. (Phase P2, warp)
-5. Are `session_context_epoch` snapshots part of the checkpoint? They are required for context
-   continuation, so the default is yes, but the format is unresolved. (Phase P2)
-6. Capability negotiation shape: new endpoint, new payload field, or versioned replay protocol?
-   How does an active old-peer sync inhibit compaction for an aggregate? (Phase P4)
-7. Does any released client read the `event` table directly (not via server endpoints)? If yes,
-   compaction is only safe behind the additive-table boundary. Needs a consumer audit of
-   `packages/sdk/js` and `packages/kilo-vscode` before Phase P5. (Phase P5)
-8. Cost/token counters live on `session` and are maintained incrementally; confirm checkpoint
-   inclusion is the only safe reconstruction (it is the working assumption, section 5.1). (P2)
-9. Should legacy aggregates with no checkpoint ever be backfilled, or is checkpoint creation
-   forward-only (new writes only, legacy data left un-compacted)? (Phase P5)
-10. Does the ephemeral-delta exclusion (Text/Reasoning/Tool.Input deltas already live-only)
-    extend to a policy of not durably storing any stream-fragment boundary? Default: no change,
-    fragments stay live-only. (Phase P0, no action expected)
+- **Invisible private-runtime maintenance**, not a product/UI/config surface:
+  no user-visible setting, no per-session pin UI, no storage dashboard, and no
+  manual cleanup product.
+- **Byte-budget policy**: internal byte-budget high/low watermarks with
+  hysteresis. When the high watermark is crossed, the runtime prunes the
+  oldest inactive root-session families atomically until the low watermark is
+  reached. Exact values and the recent-retention floor are R15; no numeric
+  budget is invented now.
+- **Family = root + descendants + owned messages/parts/outcomes/events/diffs/
+  shares/registered artifacts**; pruning is complete-family deletion.
+  Project-scoped/shared revert snapshots (section 3.3 `snapshot/`) are not
+  owned by one session family and are never deleted as part of family
+  pruning; their ownership/GC (project-level reachability/refcount) is
+  assigned in the artifact registry separately (section 5.4), with no silent
+  orphaning.
+- **Protections**: active/in-flight families and maintenance-leased/read
+  families cannot be pruned. No partial transcript/tool/output truncation, no
+  logical loss inside runtime-retained sessions, no deletion inline with a
+  user-visible request, and no silent orphaning (ADR-0001's
+  complete-session/family deletion and no-silent-lossy-compaction principles
+  retained).
+- **Diagnostics**: the runtime records aggregate rows/bytes reclaimed and
+  failures diagnostically; these are descriptive maintenance facts, never a
+  user-facing surface and never a numeric performance gate (runtime spec
+  section 10).
 
-## 11. Current Status Summary
+### 5.4 Artifact field/owner/retention registry
 
-- Implemented: complete-session deletion cleans `session_diff`/`session_diff_base` artifacts
-  (commit `8034c970dd`, covered by `test/session/session-remove-storage.test.ts`).
-- Current behavior (unchanged by this project): append-only `event` log with full-content
-  `message.updated` / `message.part.updated` snapshots; projector-upserted read models; sync,
-  warp, historical streaming, share/export all over the full event log.
-- Not implemented: canonical checkpoint, event retention below checkpoint, gap detection,
-  snapshot resync, `/sync/checkpoint`, capability negotiation. None of these exist yet; the
-  target architecture in section 5 is the design direction, not shipped behavior.
+- Every session-owned sidecar/artifact — `session_diff`, `session_diff_base`,
+  `session_share`, share state, and any registered artifact — has a registry
+  entry with owner and retention disposition, analogous to the config field
+  registry (runtime spec section 3.2); session-family deletion removes exactly
+  the session-owned artifacts of the deleted family, nothing else.
+- Project-scoped/shared artifacts — revert snapshot storage
+  (`~/.local/share/kilo/snapshot/`, section 3.3) — are registered with
+  project-level ownership: they are not deleted as part of one session family;
+  the registry assigns their GC/ownership via project-level reachability or
+  reference counting, separate from session-family deletion, with no silent
+  orphaning.
+- Unregistered session-owned artifacts **block the storage phase exit** (R16;
+  section 8 gate).
+- The registry covers artifacts that survive the cutover (section 6) and the
+  canonical model's new artifact surface.
 
-## Verification Commands
+### 5.5 Explicitly rejected mechanisms
+
+Rejected in the target (ADR-0005 I-4): `/sync/checkpoint`; sync/warp peer
+resync; released-client capability negotiation; the former cross-client storage
+verification phase (old spec P6); permanent duplicate full-payload event
+snapshots; generic full-object update history; any multi-client sync/warp
+replay protocol; and any removed-client compatibility boundary.
+
+## 6. Cutover (LOCK-017)
+
+### 6.1 Offline archive procedure
+
+At the P4.2 storage cutover (P4.2a, work unit S5):
+
+1. Stop the sole runtime cleanly (no active generations, no in-flight
+   maintenance).
+2. Verify the legacy DB and the session-owned sidecars (integrity checks).
+3. Archive an explicit, fixed set as an **opaque offline artifact** with
+   checksum/integrity evidence: the legacy `kilo.db` (including the `event`
+   and `event_sequence` tables) and the three session-owned sidecar
+   directories (`storage/session_diff`, `storage/session_diff_base`,
+   `storage/session_share`). Nothing else is archived. Inert
+   `session-export.db` (section 3.3) is not part of the fixed set; its
+   disposition — included in the cutover archive or excluded by recorded
+   decision — is an R17 item, never a silent deletion. The archive is opaque:
+   no runtime archive reader exists or will be created (no migration/import,
+   no dual-reader).
+4. Boot a fresh canonical DB, empty, and continue on the canonical model
+   (section 5).
+5. Retain **rollback authority** until archive deletion is separately
+   authorized; the archive is not deleted by the cutover itself.
+
+### 6.2 Fresh canonical DB boot
+
+The fresh canonical DB starts **empty** — from the canonical schema/revision
+model (R16) with the artifact registry (R16) and automatic retention (R15)
+active — and contains no pre-cutover sessions. The last-week containment set
+kept by operational containment (section 4) remains only in the offline legacy
+archive; it is not migrated into, read by, or usable from the fresh canonical
+runtime. No old-session migration or import occurs at boot.
+
+### 6.3 Rollback authority and archive deletion
+
+- Rollback authority: while the offline cutover archive exists, the cutover
+  can be rolled back by stopping the runtime, restoring the legacy DB and
+  sidecars from the archive, and verifying integrity — without any dual-read
+  path. The rollback authority is the P4.2 cutover archive, distinct from the
+  pre-P4 operational containment archive (section 4); R17 records the
+  distinction and the exact rollback procedure.
+- Archive deletion is a separate authorization, never a side effect of the
+  cutover; after deletion, rollback to the legacy store is no longer possible.
+
+### 6.4 R17 decisions
+
+Exact archive format/location, the explicit archive member set (section 6.1,
+including `event_sequence` and the disposition of inert `session-export.db`),
+cutover identity, integrity/checksum procedure, and the rollback/archive-
+deletion procedure are R17 (bounded decision, open; required by P4.2a). R17
+distinguishes the pre-P4 operational containment archive (section 4) from the
+P4.2 cutover archive, which is the rollback authority (section 6.3).
+
+## 7. Storage Work Units (S0..S5, under orchestrator P4.2)
+
+The storage foundation lands inside orchestrator P4.2a. Dependencies run top to
+bottom; each unit ships its exit criteria before the next starts. The S-labels
+are namespaced storage work units and collide with no orchestrator phase.
+
+| Unit | Scope | Exit criteria | Test / verification |
+|---|---|---|---|
+| S0 Baseline and fixtures | Freeze the read-only aggregate measurement queries (section 10) as reproducible commands; build lossless-family fixtures (retained family; active/in-flight family; maintenance-leased/read family); record storage baseline metrics in the tracker (section 8) | Reproducible commands + fixture tests pass; baseline recorded (2026-08-14 values, section 2.2) | Measurement queries from section 10; fixture tests in `packages/opencode` |
+| S1 Canonical aggregate schema and revision commit model | Define the canonical aggregate/read-model schema and the atomic monotonic aggregate/session revision commit (section 5.1); crash-safe maintenance transactions | Every mutation commits canonical state + revision atomically; crash injection leaves no torn state; no unbounded replay log is written | Round-trip and crash-injection tests |
+| S2 Automatic retention engine | Byte-budget high/low watermarks with hysteresis (exact values R15), family eligibility/ordering, atomic family pruning, protections, diagnostics (section 5.3) | Retention engine bounded-test passes (no numeric values frozen); active/in-flight and maintenance-leased/read families never pruned; retained families fully lossless; rows/bytes reclaimed recorded | Retention engine tests; family-protection tests |
+| S3 Artifact field/owner/retention registry | Register every session-owned sidecar/artifact with owner and retention (section 5.4) | Registry covers all session-owned artifacts; audit finds zero unregistered; unregistered artifacts block this unit's exit | Registry audit test |
+| S4 Bounded changefeed/outbox | Bounded derived feed for reconnect deltas (section 5.2; R9): not authoritative history, truncatable after authoritative hydration state | Storage-side feed behavior verified: bounded ordering, truncation, and idempotency; feed truncation never affects reconstruction. Wire-level R9 convergence (hydrate + replay deltas) is a P4.2b gate, not an S4 exit | Storage-side feed tests (ordering/truncation/idempotency); wire-level R9 convergence at P4.2b (runtime spec section 7.1) |
+| S5 Offline cutover | Stop the sole runtime, verify + archive legacy DB and sidecars (opaque artifact, checksum/integrity), boot fresh canonical DB, retain rollback authority (section 6) | Archive integrity verified; fresh DB boots clean; rollback procedure documented and rehearsed; R17 resolved | Cutover rehearsal; archive integrity check |
+
+## 8. Gates And Tests
+
+### 8.1 P4.2 storage gates
+
+P4.2 cannot exit until all of the following pass (ADR-0005 I-11; runtime spec
+section 9):
+
+- Canonical schema/revision model (S1, R16) — mutations commit canonical state
+  and a monotonic revision atomically.
+- Automatic retention (S2, R15) — invisible byte-budget pruning with
+  hysteresis, family protections, complete-family deletion, diagnostics.
+- Artifact field/owner/retention registry (S3, R16) — no unregistered
+  session-owned artifact remains.
+- R15-R17 resolved and recorded in the runtime spec and tracker (both section
+  9).
+- Clean-DB cutover (S5, R17) — offline archive with integrity evidence, fresh
+  canonical DB boot, rollback authority retained.
+- H-10/H-11 persistence and lifecycle evidence passes against the canonical
+  storage foundation (direction spec section 6; runtime spec section 7.1).
+
+### 8.2 Tests
+
+- Storage unit tests in `packages/opencode` (S0-S5 scope in section 7).
+- Storage-side bounded changefeed tests (S4: ordering/truncation/idempotency);
+  wire-level R9 convergence is a P4.2b gate under the runtime observation
+  contract (runtime spec sections 7.1-7.2), not an S4 exit.
+- H-10/H-11 evidence from the target surface recorded in the tracker capability
+  table (tracker section 6).
+- No cross-client or released-client storage tests exist or are planned
+  (ADR-0005 I-4).
+
+## 9. Terminology
+
+| Term | Definition | Boundary |
+|---|---|---|
+| Canonical aggregate | The normalized session aggregate/read-model state that is canonical durable truth, plus its explicitly registered artifacts | The private runtime's canonical store (section 5.1); not a replay log |
+| Bounded changefeed | A bounded derived feed of deltas for reconnect hydration (R9) | Not authoritative history; truncatable after authoritative hydration state (section 5.2) |
+| Offline archive | The opaque archived legacy DB + session-owned sidecars with checksum/integrity evidence from the P4.2 cutover | No runtime archive reader; rollback authority until deletion is separately authorized (section 6) |
+| Revert snapshot | Filesystem snapshot storage used by SessionRevert + Snapshot semantics (direction spec LOCK-007) | Distinct from canonical aggregates; part of the artifact registry scope (section 5.4) |
+| Config generation snapshot | The immutable versioned config/runtime snapshot a generation consumes (runtime spec section 5) | Derived versioned value, not a second persisted store; distinct from storage artifacts |
+| Observation snapshot | An observation of runtime operational facts under the observation contract (runtime spec section 7.1) | Distinct from the config generation snapshot; delivered over the R9 bounded changefeed/outbox |
+
+## 10. Verification Commands
 
 Measurement (read-only, against a local install):
 
@@ -467,12 +536,21 @@ Measurement (read-only, against a local install):
 - Event-type breakdown: `SELECT type, count(*), round(sum(length(data))/1024.0/1024.0, 1) FROM event GROUP BY type ORDER BY 3 DESC;`
 - File stores: `du -sh ~/.local/share/kilo/storage/* ~/.local/share/kilo/snapshot`
 
-Markdown/table check for this file (must pass without modifying anything):
+Markdown/table check for this file and the storage-related docs (must pass
+without modifying anything):
 
-- `bun run script/check-md-table-padding.ts specs/storage/session-storage-rewriting.md`
+- `bun run script/check-md-table-padding.ts specs/adr/0001-lossless-session-storage-rewriting.md specs/adr/0004-architecture-first-direct-reconstruction.md specs/adr/0005-bounded-private-runtime-storage.md specs/storage/session-storage-rewriting.md specs/vscode-orchestrator/agent-orchestration-direction.md specs/vscode-orchestrator/runtime-and-configuration-direction.md specs/vscode-orchestrator/migration-tracker.md`
 
-Test/typecheck guidance (from root AGENTS.md; run only the smallest relevant layer):
+Test/typecheck guidance (from root AGENTS.md; run only the smallest relevant
+layer when a storage work unit touches code):
 
 - `bun test` from `packages/opencode/` (never from repo root)
-- Focused: `bun test ./test/session/session-remove-storage.test.ts` from `packages/opencode/`
 - `bun run typecheck` from `packages/opencode/`
+
+## 11. Open Decisions
+
+- R15, R16, R17 (section 1.4) are open, required by P4.2a, and not P1-P3
+  blockers. No numeric budget, exact schema, or archive format is invented in
+  this document.
+- The operational containment evidence slots (section 4.2) remain pending until
+  manual execution evidence exists.

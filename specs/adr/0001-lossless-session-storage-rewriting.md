@@ -1,6 +1,6 @@
 # 0001: Lossless Session Storage Rewriting
 
-- Status: Active
+- Status: Superseded
 - Date: 2026-08-07
 - Owner: Kilo maintainers
 
@@ -97,4 +97,13 @@ Negative:
 ## Supersession
 
 - Supersedes: none.
-- Superseded by: none.
+- Superseded by: [ADR-0005: Bounded Private-Runtime Storage](0005-bounded-private-runtime-storage.md)
+  (2026-08-14).
+
+Status is Superseded: ADR-0005 replaces ADR-0001's checkpoint + resync /
+multi-client transport target for the final product. The decision body above is
+historical and is not rewritten; ADR-0005 records which ADR-0001 principles
+remain valid (lossless logical content and continuation for canonical-era
+runtime-retained sessions, monotonic integrity, crash-safe maintenance,
+complete-session/family deletion, no silent lossy compaction) and which
+mechanisms are explicitly rejected.

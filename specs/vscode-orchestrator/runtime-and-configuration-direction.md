@@ -21,6 +21,12 @@ The durable decisions are recorded in
 [ADR-0004: Architecture-First Direct Reconstruction](../adr/0004-architecture-first-direct-reconstruction.md)
 (Status: Active); this document owns its bounded Failure/Outcome/Recovery target
 (section 7.2) and the R11-R14 bounded implementation decisions (section 9).
+The durable storage decision is recorded in
+[ADR-0005: Bounded Private-Runtime Storage](../adr/0005-bounded-private-runtime-storage.md)
+(Status: Active), which supersedes ADR-0001's checkpoint + resync / multi-client
+transport target; this document owns the P4.2 storage integration (ordering,
+gates, R9/R11 interaction, R15-R17) and its implementation source of truth is
+the [storage spec](../storage/session-storage-rewriting.md).
 This document is the implementation source of truth for the
 runtime/config migration; the product direction spec
 [`agent-orchestration-direction.md`](agent-orchestration-direction.md) owns the
@@ -78,13 +84,21 @@ This spec owns:
   semantic recovery authority — with post-reconstruction maturity separately
   scoped and the four bounded implementation decisions R11-R14 required by P4.2
   (sections 7.2, 7.3, 9).
+- The storage foundation landing inside P4.2: canonical aggregate storage with
+  invisible automatic byte-budget retention, the artifact field/owner/retention
+  registry, and the offline archive cutover (ADR-0005; storage spec sections
+  5-8). P4.2a (storage) is the first sub-boundary and lands before the P4.2b
+  private-wire/schema freeze for R9 and R11-R14 (sections 7, 9); R15-R17 are
+  bounded here (section 9).
 - The performance model: cost attribution, redundancy candidates, latency
   attribution, instrumentation plan, benchmark scenarios, regression gates, and
   runtime-slimming acceptance criteria (section 10).
 
 Not in scope: product surfaces, the harness capability matrix, and product
-removal phases (owned by `agent-orchestration-direction.md`); session storage
-rewriting (ADR-0001); code changes of any kind.
+removal phases (owned by `agent-orchestration-direction.md`); standalone
+storage work outside the P4.2 storage foundation (owned by the storage spec
+under ADR-0005 — ADR-0001's checkpoint/resync direction is superseded and is
+not target behavior); code changes of any kind.
 
 ## 2. Current State And Root Causes
 
@@ -291,7 +305,7 @@ Documented separately — not effective-config inputs:
 | Domain | Owner | Persistence path | Legal contents |
 |---|---|---|---|
 | VS Code application state | Extension host | VS Code `globalState` / `workspaceState` | UI-only layout/churn, dismissed state, derived selector/read-model indexes; never effective-config authority |
-| Session and storage state | Runtime (harness kernel) | Runtime-owned persistence (existing session/storage semantics, ADR-0001 for storage rewriting) | Sessions, events, artifacts, transcript data, operational facts |
+| Session and storage state | Runtime (harness kernel) | Runtime-owned persistence: canonical aggregate storage + registered artifacts after the P4.2 cutover (ADR-0005; storage spec); the legacy store serves P1-P3 until the cutover | Sessions, events, artifacts, transcript data, operational facts; automatic retention is invisible runtime maintenance, not a user surface. The P4.2 cutover boots an empty canonical DB with no pre-cutover sessions; the operational-containment last-week set remains only in the offline legacy archive (ADR-0005 I-8/I-10; storage spec section 6.2) |
 | Permission approval records | Runtime (per-session) | Runtime-owned per-session records | Explicit operation approvals with bounded scope/lifetime (section 5.3); never authored config |
 | Immutable runtime snapshot | Runtime (harness kernel) | Derived versioned value, created atomically on config commit | Effective config + runtime identity consumed by generations; derived, not a second persisted store (R2) |
 | Private worker resources | Private worker (per version, lazy) | Version-scoped resource ownership | Provider/MCP/tool resources; disposed only after owners release them |
@@ -634,6 +648,16 @@ path (step 5) — and the observation surface rides the private transport (R1)
 after the P4.4 transport narrowing. Failure/outcome/recovery behavior follows
 the section 7.2 target on the private runtime; the current retry/error stack
 (section 2.7) is implementation history, not a target contract (ADR-0004).
+Storage: within P4.2, the storage foundation and cutover (P4.2a; storage spec
+work units S0..S5) is the first sub-boundary and precedes the P4.2b private-wire/
+schema freeze for R9 and R11-R14; P4.2 cannot exit until the canonical
+schema/revision model, automatic retention, artifact registry, R15-R17,
+clean-DB cutover, and H-10/H-11 persistence/lifecycle evidence all pass
+(ADR-0005 I-11; storage spec section 8). P4.2a's storage cutover (offline
+archive, fresh canonical DB) mirrors this step 3 cutover discipline: no
+migration/import, no dual-reader, and no runtime archive reader. Legacy
+storage writers/readers and the old sync/warp surfaces are removed at
+P4.4/P4.5 (section 8.2).
 
 ### 7.1 Runtime observation and hydration contract
 
@@ -662,7 +686,11 @@ domains; it does not create a new persisted store.
   durable retention of every ephemeral fact, polling, a timer subsystem, or a
   specific wire schema. The snapshot/event handshake, revision
   scope/ordering/idempotency, and retention policy sufficient to meet
-  convergence are bounded implementation decisions (R9, section 9). The private
+  convergence are bounded implementation decisions (R9, section 9). R9 may use a
+  bounded derived changefeed/outbox for reconnect deltas; such a feed is not
+  authoritative history, is not required for reconstruction, and is eligible
+  for automatic truncation once the extension/webview holds an authoritative
+  hydration state (ADR-0005; storage spec sections 5.2, 9). The private
   transport (R1) is the carrier after the P4.4 transport narrowing, but its wire
   shape for observation is part of R9, not fixed here.
 
@@ -745,7 +773,10 @@ field tiers, runtime redaction, cancellation provenance, versioned panel
 envelope, recovery accounting/coordination, and worker-crash in-flight
 disposition are bounded implementation decisions R11-R14 (section 9), required
 by P4.2; a 14-variant taxonomy or a frozen algorithm set is not decided now
-(ADR-0004).
+(ADR-0004). R11's durable Failure/Outcome fields persist in the canonical
+aggregate storage / registered artifact model (ADR-0005; storage spec sections
+5.1, 5.4); diagnostic and panel projections are derived and never create
+competing stores.
 
 ### 7.3 Post-reconstruction error maturity
 
@@ -823,6 +854,20 @@ counting method.
 | Legacy global config filenames/readers | Delete; no target reader; the only global authored scope is the canonical global config root (section 3.1) | P4.4 |
 | Legacy migration readers/import tooling | Delete; no target reader; no migration tool exists or will be created | P4.4 |
 
+### 8.2 Legacy storage reader/writer removal
+
+Old event-log and sync surfaces are removed with the old runtime surfaces
+(ADR-0005 I-4/I-11; storage spec sections 3.4, 5.5). They have no default
+compatibility entitlement (ADR-0004) and are removed at P4.4/P4.5 with the same
+per-category evidence rules as section 8; none is reclassified as deferred.
+
+| Removal | What is removed | Residual today | Phase |
+|---|---|---|---|
+| Multi-client sync/warp replay protocol | `/sync/history`, `/sync/replay`, `/sync/steal`, workspace sync live SSE replay, session warp over the event log | Present in repo (current sync/warp implementation on the event log) | P4.4/P4.5 |
+| Old-peer capability negotiation / released-client storage compatibility | Capability negotiation for pre-compaction peers, mixed-version DB sharing boundary, removed-client compatibility for the event log; `/sync/checkpoint` was never built and is rejected | Present in repo (capability-boundary design only, never implemented) | P4.4/P4.5 |
+| Unbounded full-payload event log as authoritative history | Append-only `event` table as authoritative durable history and sync transport; permanent duplicate full-payload snapshots; generic full-object update history | Present in repo (current behavior) | P4.4/P4.5 (canonical model replaces writes at P4.2a) |
+| Legacy storage writers/readers | Event-log writers (`updateMessage`/`updatePart` full-snapshot publishes), event-log read paths, legacy file-backed storage prefixes (`session/`, `message/`, `part/`) | Present in repo | P4.4/P4.5 |
+
 ## 9. Bounded Implementation Decisions
 
 These were intentionally not chosen at spec-writing time. They are recorded as
@@ -840,7 +885,11 @@ Failure/Outcome schema, normalization boundary, field tiers, runtime redaction,
 cancellation provenance, and versioned panel envelope; recovery
 accounting/coordination; worker-crash in-flight disposition) are added open on
 2026-08-14, all required by P4.2 (see
-rows; ADR-0004). The tracker (section 9) is the mutable
+rows; ADR-0004). R15-R17 (storage bounds: automatic retention values, canonical
+aggregate schema/revision + changefeed disposition + artifact registry, and the
+offline archive/cutover procedure) are added open on 2026-08-14 under ADR-0005,
+all required by P4.2 (P4.2a storage sub-boundary) and not P1-P3 blockers (see
+rows). The tracker (section 9) is the mutable
 status source; this table is the durable decision record.
 
 On 2026-08-13 R2 and R6 were revised by a post-P0 user clarification
@@ -859,12 +908,15 @@ checklist. P0 remains Complete; its recorded evidence is unchanged.
 | R6 Legacy-reader cutover (formerly: dual-read window deadline) | No dual authority and no compatibility window (LOCK-009; section 7) | P4.3 | Resolved (2026-08-12; **revised 2026-08-13**): there is no dual-read compatibility window and no import tool. P4.3 is the last legacy-reader phase boundary: the current implementation may use old sources only before the cutover; at the P4.3 boundary all legacy readers are deleted together and cannot influence effective config. The sole user manually reconciles any desired current configuration into canonical files before the cutover. The original 2026-08-12 decision (dual-read opens only during P4.3, shrinks monotonically, no new bridge consumers) is preserved as historical evidence in the tracker |
 | R7 Performance gate thresholds (startup stages, prompt-submit/first-token, stream-render, tool/permission, session-switch, config-update, removal reduction) | Resolved (2026-08-14): gates use no numeric pass/fail thresholds. P1/P2 compare descriptive, affected-path, same-environment measurements against the P0 baseline — record med/p95/sample/provenance and investigate obvious structural anomalies; measurement noise alone does not block and there is no requirement to improve. P3/P4 removal phases prove removed-feature initialization/readers/listeners/resources are absent and record affected startup/session-switch/memory/worker-lifecycle deltas; zero or positive noisy delta is allowed if no removed work remains and no structurally unbounded growth/resource leak appears; only affected measured rows are rerun per phase. Complexity budgets record deltas; zero reduction in a dimension is allowed with a stated phase-boundary reason; permanent-removal completeness remains required. `Same environment/comparable` means same benchmark scripts/scenario, machine/OS class, VS Code profile type, seeded/provider conditions, instrumentation mode, and recorded git SHA/dirty/environment drift; non-comparable runs are recorded but cannot support gate claims. Numeric product SLA is R3, resolved separately at P5 | Resolved (2026-08-14) | Resolved — no threshold-using gate remains; P1 can start without an undefined threshold gate (LOCK-PERF-6) |
 | R8 Benchmark tooling/harness choice | Internal implementation choice; not prescribed by this spec | P0 profiling tasks | Resolved: retain the existing two-harness tooling as the P0 and later comparison harness — Extension Host scenarios 1/2/3/4/5/10 under `packages/kilo-vscode/script/p0-bench/` (runner/merge/safety/provenance tools); backend scenarios 6/7/8/9/11/12/13 under `packages/opencode/test/benchmark/` (runner). Limitations recorded: manual-only, platform/environment/provenance scoped, backend in-process `Server.listen`/`AppLayer` only, n=5 descriptive |
-| R9 Observation/hydration implementation details (snapshot/event handshake; revision scope/ordering/idempotency; ephemeral-fact retention) | Bounded implementation decision; the normative contract (section 7.1) fixes the one-owner and lifecycle-convergence constraints but not the wire schema, event sourcing, polling, timer subsystems, or retention | P4.2 (the private-worker observation surface must not ship without it). Not a P0 blocker | Open — added 2026-08-13 |
+| R9 Observation/hydration implementation details (snapshot/event handshake; revision scope/ordering/idempotency; ephemeral-fact retention) | Bounded implementation decision; the normative contract (section 7.1) fixes the one-owner and lifecycle-convergence constraints but not the wire schema, event sourcing, polling, timer subsystems, or retention. R9 may use a bounded derived changefeed/outbox for reconnect deltas; it is not authoritative history, is not required for reconstruction, and is eligible for automatic truncation after authoritative hydration state exists (ADR-0005; storage spec section 5.2) | P4.2 (P4.2a storage sub-boundary first, then the P4.2b wire/schema freeze; the private-worker observation surface must not ship without it). Required by P4.2 only; not a P1-P3 blocker | Open — added 2026-08-13 |
 | R10 Canonical schema/field-registry layout and exact persistence assignment | The normative rules are fixed by this spec — legal source taxonomy (section 3.1), field-registry content (section 3.2), typed composition/materialization/provenance (section 5.1), agent-manifest role (section 5.2), permission composition (section 5.3), and the bidirectional file-editing/WYSIWYG contract (section 5.4). File/asset authority is fixed by R2 (revised 2026-08-13), and R10 is bounded within that topology: exact canonical filenames/layout, the registry entry per remaining field class, legal scope/operator per field, and watcher owner/stamping/conflict implementation details (section 5.4). It does not reopen file authority, the two-level authored scope set, the SecretStorage exception, or the no-migration decision | P4.1 (P4.1 is not verifiable until the registry covers every configurable field class and the schema/provenance/WYSIWYG contract is evidenced). Not a P0 blocker | Open — added 2026-08-13 |
-| R11 Operation/outcome identity and record location/retention | Bounded implementation decision under the normative Failure/Outcome/Recovery target (section 7.2) and the observation contract (section 7.1): what an accepted semantic operation's identity is, where the canonical Failure/Outcome records live, and their minimal retention under existing storage — no new store mandate. Generation-path operations only (prompt/generation, provider attempt, tool call, permission/question wait, child/background task); config commit outcomes are owned by sections 5/5.4 and are not R11 operations. It does not reopen runtime sole authority for operational facts or the client replay prohibition | P4.2 (the private-runtime Failure/Outcome foundation must not ship without it). Not a P0-P1 blocker | Open — added 2026-08-14 |
+| R11 Operation/outcome identity and record location/retention | Bounded implementation decision under the normative Failure/Outcome/Recovery target (section 7.2) and the observation contract (section 7.1): what an accepted semantic operation's identity is, where the canonical Failure/Outcome records live, and their minimal retention under existing storage — no new store mandate. Generation-path operations only (prompt/generation, provider attempt, tool call, permission/question wait, child/background task); config commit outcomes are owned by sections 5/5.4 and are not R11 operations. Durable Failure/Outcome fields persist in the canonical aggregate storage / registered artifact model; diagnostic and panel projections are derived and never create competing stores (ADR-0005; storage spec sections 5.1, 5.4). It does not reopen runtime sole authority for operational facts or the client replay prohibition | P4.2 (P4.2a storage sub-boundary first). Not a P0-P1 blocker | Open — added 2026-08-14 |
 | R12 Minimum private-runtime Failure/Outcome schema + panel projection/redaction | Bounded implementation decision under section 7.2: the minimum Failure/Outcome schema, the runtime-owned normalization boundary, minimal field tiers (durable vs diagnostic vs panel-visible), runtime-side redaction before persistence/projection, cancellation provenance (at least user stop/steering/timeout/network disconnect/unknown), and a versioned private panel envelope/projection. No complete taxonomy and no byte/depth sanitizer contract freeze. The private error envelope's version/compatibility is owned by R1/R9/R12 as appropriate | P4.2. Not a P0-P1 blocker | Open — added 2026-08-14 |
 | R13 Recovery accounting/coordination and low-level retry visibility | Bounded implementation decision under section 7.2 — P4.2 is accounting/coordination only: owner/scope, budget consumed/termination, next-at occurrence time, provenance, and visibility of nested low-level attempts within the owning operation. It may reuse current bounded behavior. Retryability algorithms, delay shapes, and future recovery features are post-foundation (section 7.3). It does not preserve old retry shapes, delay ladders, the environment retry flag, or the auto-continue implementation | P4.2. Not a P0-P1 blocker | Open — added 2026-08-14 |
 | R14 Worker-crash in-flight disposition | Bounded implementation decision under sections 7.2 and 7.1: how an accepted in-flight operation at a worker crash converges to a recorded disposition with resource cleanup and no silent client replay — without requiring resumability and without a new persistent operation ledger | P4.2. Not a P0-P1 blocker | Open — added 2026-08-14 |
+| R15 Automatic retention bounds (byte-budget high/low watermarks, recent-retention floor, family eligibility/ordering, diagnostics) | Bounded implementation decision under the invisible automatic retention policy (ADR-0005 I-6; storage spec section 5.3): the exact byte-budget high/low watermarks with hysteresis, the recent-retention floor, root-session-family eligibility and pruning ordering, and diagnostic reporting of aggregate rows/bytes reclaimed and failures. No numeric budget is decided now; no user-visible setting, per-session pin UI, storage dashboard, or manual cleanup surface exists or will be added | P4.2 (P4.2a storage sub-boundary). Not a P1-P3 blocker | Open — added 2026-08-14 |
+| R16 Canonical aggregate schema/revision model + bounded outbox/changefeed disposition + artifact ownership/retention registry | Bounded implementation decision under the canonical storage target (ADR-0005 I-2/I-3/I-7; storage spec sections 5.1, 5.2, 5.4): the canonical aggregate/read-model schema and the atomic monotonic aggregate/session revision commit model; the bounded outbox/changefeed disposition (retention, truncation eligibility after authoritative hydration state, not authoritative history); and the artifact field/owner/retention registry (analogous to the config field registry, section 3.2) registering every session-owned sidecar/artifact. Unregistered session-owned artifacts block the storage phase exit. No exact schema is invented now | P4.2 (P4.2a storage sub-boundary). Not a P1-P3 blocker | Open — added 2026-08-14 |
+| R17 Offline archive format/location/integrity + fresh-DB cutover identity + rollback/archive-deletion authority | Bounded implementation decision under the offline cutover (ADR-0005 I-8; storage spec section 6): exact archive format and location, checksum/integrity evidence, fresh canonical DB cutover identity, the explicit archive member set (legacy `kilo.db` including `event_sequence`, the three session-owned sidecar dirs, and the disposition of inert `session-export.db`), and the rollback procedure and archive-deletion authority (deletion is separately authorized, never a cutover side effect). R17 distinguishes the pre-P4 operational containment archive from the P4.2 cutover archive, which is the rollback authority. No migration/import, no dual-reader, and no runtime archive reader | P4.2 (P4.2a storage sub-boundary). Not a P1-P3 blocker | Open — added 2026-08-14 |
 
 ## 10. Performance Model And Regression Gates
 
@@ -1054,6 +1106,13 @@ classes below must be measured separately, never summed into one number.
   prove structural absence of removed work and record affected-path deltas.
 - Localhost transport is not presumed dominant (LOCK-PERF-7); attribution is
   measured per cost class (10.5).
+- Storage maintenance is invisible private-runtime work, never a user-visible
+  surface (ADR-0005 I-6): automatic retention runs when the runtime is idle and
+  never on the generation hot path; active/in-flight and maintenance-leased/
+  read families are never pruned. Rows/bytes reclaimed and retention failures
+  are recorded descriptively as diagnostics; reclaimed-byte figures are
+  descriptive maintenance evidence, not a numeric performance gate and not a
+  storage-product metric (R7 resolved 2026-08-14; R15, section 9).
 
 ### 10.8 Instrumentation plan
 
@@ -1241,7 +1300,7 @@ A phase claims runtime slimming only with all of:
 
 Markdown/table check for the spec files (must pass without modifying anything):
 
-- `bun run script/check-md-table-padding.ts specs/adr/0002-focus-vscode-on-agent-orchestration.md specs/adr/0003-replace-cli-configuration-with-private-gui-runtime.md specs/adr/0004-architecture-first-direct-reconstruction.md specs/vscode-orchestrator/agent-orchestration-direction.md specs/vscode-orchestrator/runtime-and-configuration-direction.md specs/vscode-orchestrator/migration-tracker.md`
+- `bun run script/check-md-table-padding.ts specs/adr/0001-lossless-session-storage-rewriting.md specs/adr/0002-focus-vscode-on-agent-orchestration.md specs/adr/0003-replace-cli-configuration-with-private-gui-runtime.md specs/adr/0004-architecture-first-direct-reconstruction.md specs/adr/0005-bounded-private-runtime-storage.md specs/storage/session-storage-rewriting.md specs/vscode-orchestrator/agent-orchestration-direction.md specs/vscode-orchestrator/runtime-and-configuration-direction.md specs/vscode-orchestrator/migration-tracker.md`
 
 Architecture impact check (run from repo root; report the outcome):
 

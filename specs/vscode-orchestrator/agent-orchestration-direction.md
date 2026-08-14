@@ -14,9 +14,12 @@ The durable architecture decisions are recorded separately in
 [ADR-0002: Focus VS Code on Agent Orchestration](../adr/0002-focus-vscode-on-agent-orchestration.md)
 (Status: Active),
 [ADR-0003: Replace CLI Configuration with Private GUI Runtime](../adr/0003-replace-cli-configuration-with-private-gui-runtime.md)
-(Status: Active), and
+(Status: Active),
 [ADR-0004: Architecture-First Direct Reconstruction](../adr/0004-architecture-first-direct-reconstruction.md)
-(Status: Active). This document is the implementation source of truth for product
+(Status: Active), and
+[ADR-0005: Bounded Private-Runtime Storage](../adr/0005-bounded-private-runtime-storage.md)
+(Status: Active; canonical storage foundation, superseding ADR-0001's
+checkpoint + resync / multi-client transport target). This document is the implementation source of truth for product
 direction, target surfaces, capability matrix, bounded target architecture,
 product migration phases, acceptance gates, compatibility policy, risks, and open
 questions. Runtime/config migration (private worker, file-authoritative
@@ -48,7 +51,7 @@ project.
 | LOCK-004 | Remove indexing, semantic indexing/search integration, project memory, memory tools/system-prompt injection, user-visible context management/compaction settings, and autocomplete completely. |
 | LOCK-005 | Retain a minimal internal context-overflow safeguard for long-running agents. It is an invisible harness reliability mechanism, not a user-facing context-management product. Do not require preserving the existing compaction implementation. |
 | LOCK-006 | Retain only user-defined/custom providers. Remove preset provider identities/catalogs, bundled gateway/provider onboarding/auth flows, the models.dev catalog dependency, and organization/cloud provider sources. Generic protocol adapters required to connect a user-defined provider may remain. |
-| LOCK-007 | Retain checkpoint behavior defined as SessionRevert + Snapshot semantics: withdrawing/reverting a message restores affected code, with unrevert/cleanup and lifecycle correctness. Do not conflate this with ADR-0001 storage checkpoint/resync. |
+| LOCK-007 | Retain checkpoint behavior defined as SessionRevert + Snapshot semantics: withdrawing/reverting a message restores affected code, with unrevert/cleanup and lifecycle correctness. Do not conflate this with the ADR-0005 canonical storage foundation (or ADR-0001's historical storage checkpoint/resync). |
 | LOCK-008 | Preserve core harness capabilities: custom agents, sub-task delegation, extensible tools, skills, MCP, permissions/questions, parent-child sessions, background/parallel execution, user-selected custom-provider models, persistence, lifecycle correctness, checkpoint rollback, and internal context-overflow reliability. Worktrees are not a harness invariant. |
 | LOCK-009 | Eliminate CLI/TUI/Console as products and public interfaces. Keep the agent runtime out of the VS Code Extension Host as an extension-owned private headless worker process for crash/resource/lifecycle isolation. The existing `kilo serve` HTTP/SSE/generated-SDK path may be a migration bridge, but it is not a target compatibility contract. The private transport remains an internal implementation choice. |
 | LOCK-010 | GUI-managed file authority is authoritative (revised 2026-08-13: file-authoritative hybrid). All user-authored effective configuration is file-authoritative and WYSIWYG through the UI under exactly two canonical authored scopes — one global config root and `<workspaceRoot>/.kilo/` — with the field registry deciding global-only/project-only/both-with-typed-composition; the UI is a bidirectional editor/read model over canonical files/assets, not a separate config store. Product/UI configuration and persisted selector indexes are extension-owned (VS Code state is UI-local/derived only, never effective-config authority); secrets use VS Code SecretStorage; project-versioned harness assets use the one canonical explicit project boundary with no multi-source precedence merge; the runtime consumes immutable versioned snapshots. No migration/import tool and no dual-read compatibility window (runtime spec sections 3, 5.4, 7, 9). |
@@ -155,8 +158,8 @@ section 10).
 6. Review a checkpoint: withdrawing or reverting a message restores affected code
    through SessionRevert + Snapshot semantics (LOCK-007), reviewed with native VS
    Code diff APIs (LOCK-002).
-7. Return later: sessions, events, and artifacts persist (ADR-0001) and resume in
-   place.
+7. Return later: sessions and registered artifacts persist (ADR-0005) and
+   resume in place.
 
 The ordinary single-chat sidebar habit is replaced by this loop through migration
 affordances, not by a forced break (section 10).
@@ -173,13 +176,22 @@ affordances, not by a forced break (section 10).
 | Private runtime | Extension-owned headless worker process, outside the Extension Host | Runtime ownership (ADR-0003) |
 | Ordinary single-chat sidebar | The deprecated chat surface, distinct from topic/session navigation | On the deprecation/removal path (LOCK-001) |
 | Custom provider | A user-defined provider record: endpoint, protocol, model definitions, or supported discovery | Only provider kind retained (LOCK-006) |
-| Checkpoint rollback | SessionRevert + Snapshot semantics for withdrawing/reverting messages | Harness capability, distinct from ADR-0001 storage rewriting (LOCK-007) |
+| Checkpoint rollback | SessionRevert + Snapshot semantics for withdrawing/reverting messages | Harness capability, distinct from the ADR-0005 storage foundation and ADR-0001's historical checkpoint/resync (LOCK-007) |
 | Operational fact | A runtime-owned fact about runtime/session state: session existence, lifecycle state, message presence/ordering, state-transition timing | Sole runtime authority; the UI renders it, never invents or revises it (runtime spec section 7.1) |
 | Presentation state | Extension/webview state derived from runtime operational facts (read-model state) | Derived only; never authoritative for operational facts (runtime spec section 7.1) |
 | Agent manifest | The typed, schema-validated canonical asset defining an agent's prompt and schema-approved specialization/defaults | Canonical typed asset (project or global); one manifest per agent ID; never widens enclosing policy (runtime spec section 5.2) |
 | Permission policy stack | The restrictive composition of runtime hard safety ceilings, global/workspace policy, agent manifest policy, and session restrictions | Monotonic deny/ask/allow composition; provenance per decision (runtime spec section 5.3) |
 | Effective configuration | Every user-authored datum that can affect a materialized generation snapshot | File-authoritative with canonical file/asset provenance; the UI and files are WYSIWYG (runtime spec sections 3.1, 5.1, 5.4) |
 | Canonical config files/assets | The only two authored scopes: one global config root and `<workspaceRoot>/.kilo/` | The only effective-config inputs; no other authored scope, external path, or ancestor source (runtime spec section 3.1) |
+
+Storage terminology — canonical aggregate, bounded changefeed, offline archive,
+revert snapshot, config generation snapshot, and observation snapshot — is
+defined in the storage spec (section 9) under ADR-0005. The last three keep
+their boundaries here and in the runtime spec: revert snapshot is
+SessionRevert + Snapshot storage (LOCK-007), config generation snapshot is the
+immutable versioned config snapshot (runtime spec section 5), and observation
+snapshot is an observation of runtime operational facts (runtime spec section
+7.1); none is a competing durable store for session history.
 
 ## 5. Target Product Surfaces
 
@@ -215,9 +227,9 @@ criterion already passes.
 | H-7 | Parent-child sessions | Parent/child session relations are first-class and preserved | Topic/session navigation shows parent/child session hierarchy, and relations persist across panel restarts | Implemented in CLI harness | Navigation must show hierarchy |
 | H-8 | Background/parallel execution | Sessions run in background and in parallel, without worktree isolation as a requirement | Two or more panel-hosted sessions run concurrently in the background, and each remains controllable | Implemented in CLI harness (Agent Manager) | Core orchestration behavior; worktrees are not a harness invariant (LOCK-008) |
 | H-9 | User-selected custom-provider models | Per-session model and reasoning-variant selection, restricted to models offered by user-defined/custom providers | Each panel-hosted session selects its own model and reasoning variant from a user-defined provider independently, and the selection applies | Implemented in CLI harness (agent/model selectors); preset-provider removal not done (LOCK-006) | Per-session selector in panels |
-| H-10 | Persistence | Sessions, events, and artifacts persist and resume across extension restarts | A panel-hosted session's transcript, events, and artifacts persist across an extension restart and resume in place | Implemented (existing storage behavior); ADR-0001 checkpoint/resync rewriting is a separate, unimplemented direction and is not evidence of current behavior | Unchanged by this direction; UI does not own state |
-| H-11 | Lifecycle correctness | Session create/pause/resume/close/cleanup, process ownership, and resource release are correct; the extension-owned view lifecycle boundaries (panel close/reopen, reload, session switch) and the runtime boundaries (transport reconnect, worker restart) never corrupt runtime operational facts or leave orphaned processes/resources | Panel-driven create/pause/resume/close drives the harness lifecycle API and releases processes/resources correctly, with no bypass, and presentation state converges to runtime operational facts across panel close/reopen, reload, session switch, transport reconnect, and worker restart (runtime spec section 7.1) | Implemented in CLI harness | UI must drive lifecycle through harness APIs, never bypass them; presentation state derives from runtime facts (runtime spec section 7.1) |
-| H-12 | Checkpoint rollback | SessionRevert + Snapshot semantics: withdrawing/reverting a message restores affected code, with unrevert/cleanup and lifecycle correctness; distinct from ADR-0001 storage checkpoint/resync | From a panel-hosted session, withdrawing/reverting a message restores the affected code state, the revert can be un-reverted or cleaned up, and lifecycle stays correct | Implemented (SessionRevert + Snapshot in CLI harness); not conflated with ADR-0001 | Review via native VS Code diff APIs (LOCK-002) |
+| H-10 | Persistence | Sessions and registered artifacts persist and resume across extension restarts; the bounded changefeed is non-authoritative derived state, not H-10 history | A panel-hosted session's transcript and registered artifacts persist across an extension restart and resume in place; the bounded changefeed is non-authoritative and is not H-10 history | Implemented (existing storage behavior on the legacy store through P1-P3); the ADR-0005 canonical storage foundation is a separate, unimplemented direction landing at P4.2 (P4.2a) and is not evidence of current behavior. Final H-10 parity is proven at P4 against the canonical storage foundation after the P4.2 cutover; no old-history storage compatibility is required | Unchanged by this direction; UI does not own state |
+| H-11 | Lifecycle correctness | Session create/pause/resume/close/cleanup, process ownership, and resource release are correct; the extension-owned view lifecycle boundaries (panel close/reopen, reload, session switch) and the runtime boundaries (transport reconnect, worker restart) never corrupt runtime operational facts or leave orphaned processes/resources | Panel-driven create/pause/resume/close drives the harness lifecycle API and releases processes/resources correctly, with no bypass, and presentation state converges to runtime operational facts across panel close/reopen, reload, session switch, transport reconnect, and worker restart (runtime spec section 7.1) | Implemented in CLI harness; P4.2 storage cutover evidence includes H-10/H-11 persistence/lifecycle against the canonical storage foundation (ADR-0005; storage spec section 8) | UI must drive lifecycle through harness APIs, never bypass them; presentation state derives from runtime facts (runtime spec section 7.1) |
+| H-12 | Checkpoint rollback | SessionRevert + Snapshot semantics: withdrawing/reverting a message restores affected code, with unrevert/cleanup and lifecycle correctness; distinct from the ADR-0005 canonical storage foundation and ADR-0001's historical checkpoint/resync | From a panel-hosted session, withdrawing/reverting a message restores the affected code state, the revert can be un-reverted or cleaned up, and lifecycle stays correct | Implemented (SessionRevert + Snapshot in CLI harness); not conflated with ADR-0005 canonical storage or ADR-0001's historical checkpoint/resync | Review via native VS Code diff APIs (LOCK-002) |
 | H-13 | Internal context-overflow safeguard | Long-running agents keep functioning past context limits through a minimal internal safeguard; it is an invisible harness reliability mechanism, not a user-facing context-management product | A long-running panel-hosted session remains functional at context overflow with no user-facing context-management UI, and the safeguard never surfaces as a context-management product | Existing compaction machinery present; no requirement to preserve it (LOCK-005) | Invisible; no UI surface |
 
 No parity suite exists today: the target-surface acceptance criteria above are
@@ -254,7 +266,10 @@ never at P2.
 - Harness kernel (private runtime) owns: agents, tools, permissions, session
   model, storage, lifecycle, execution, checkpoint rollback, and the internal
   context-overflow safeguard. The runtime is an extension-owned private headless
-  worker outside the Extension Host (LOCK-009).
+  worker outside the Extension Host (LOCK-009). Storage ownership follows
+  ADR-0005: the private runtime is the sole owner of session/event/artifact
+  persistence and maintenance, with invisible automatic retention and the
+  offline archive cutover at P4.2a.
 - The existing `kilo serve` HTTP/SSE/generated-SDK path is a migration bridge, not
   a target compatibility contract (LOCK-009); the private transport is an internal
   implementation choice.
@@ -303,6 +318,12 @@ The target shape, bounded to avoid scope creep:
   `runtime-and-configuration-direction.md`.
 - No new persisted domain model for 'topic' in this direction; navigation derives
   grouping from existing session metadata until open question 1 is decided.
+- One private runtime owns all session/event/artifact persistence and
+  maintenance: canonical aggregate storage with transactionally maintained
+  normalized aggregates/read models plus explicitly registered artifacts,
+  invisible automatic byte-budget retention, and an offline archive cutover at
+  P4.2 (ADR-0005; storage spec). No multi-client sync/warp, no old-peer
+  capability negotiation, and no old-history storage compatibility.
 - No worktree execution, no custom diff surfaces, no cloud/Console/JetBrains
   surfaces (LOCK-002, LOCK-003).
 - Removed features never contribute to startup/readiness (LOCK-PERF-3): a removal
@@ -471,6 +492,13 @@ feature-flag subsystem.
   never create a compatibility promise, implementation backlog, or phase gate,
   and they never block P1-P4 exits. Final H parity and the permanent removals
   are not weakened by an entry or an observed-candidate note.
+- Final H parity is the only persistence parity: no old-history storage
+  compatibility is required (ADR-0005). The legacy event-log sync/warp surfaces
+  and legacy storage writers/readers are removed at P4.4/P4.5 with no default
+  compatibility entitlement (ADR-0004; runtime spec section 8.2); the clean
+  P4.2 storage cutover carries no migration/import, no dual-reader, and no
+  archive reader, and direct reconstruction applies to storage exactly as it
+  applies to configuration.
 
 ## 13. Risks
 
@@ -535,7 +563,9 @@ decisions are listed in `runtime-and-configuration-direction.md` section 9.
   readiness. This direction is the design target, not shipped behavior.
 - ADR-0002 records the durable product decision; ADR-0003 records the durable
   runtime/config decision; ADR-0004 records the durable just-in-time direct-
-  reconstruction policy; this document owns the product migration design; the
+  reconstruction policy; ADR-0005 records the durable bounded private-runtime
+  storage decision (superseding ADR-0001's checkpoint/resync transport target);
+  this document owns the product migration design; the
   runtime spec owns the runtime/config migration design and the bounded
   Failure/Outcome/Recovery target (section 7.2).
 - Phase status, exit evidence, and next actions are tracked in the migration
@@ -546,7 +576,7 @@ decisions are listed in `runtime-and-configuration-direction.md` section 9.
 Markdown/table check for the spec files (must pass without modifying
 anything):
 
-- `bun run script/check-md-table-padding.ts specs/adr/0002-focus-vscode-on-agent-orchestration.md specs/adr/0003-replace-cli-configuration-with-private-gui-runtime.md specs/adr/0004-architecture-first-direct-reconstruction.md specs/vscode-orchestrator/agent-orchestration-direction.md specs/vscode-orchestrator/runtime-and-configuration-direction.md specs/vscode-orchestrator/migration-tracker.md`
+- `bun run script/check-md-table-padding.ts specs/adr/0001-lossless-session-storage-rewriting.md specs/adr/0002-focus-vscode-on-agent-orchestration.md specs/adr/0003-replace-cli-configuration-with-private-gui-runtime.md specs/adr/0004-architecture-first-direct-reconstruction.md specs/adr/0005-bounded-private-runtime-storage.md specs/storage/session-storage-rewriting.md specs/vscode-orchestrator/agent-orchestration-direction.md specs/vscode-orchestrator/runtime-and-configuration-direction.md specs/vscode-orchestrator/migration-tracker.md`
 
 Architecture impact check (run from repo root; report the outcome):
 
