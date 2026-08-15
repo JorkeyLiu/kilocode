@@ -1,0 +1,22 @@
+{
+  "phase": "real-session-post-abort",
+  "total": 4,
+  "runOwned": 4,
+  "violations": [],
+  "byModel": {
+    "e2e-local/e2e-model": 4
+  },
+  "byAgent": {
+    "title": 2,
+    "e2e-agent": 1,
+    "e2e-agent-b": 1
+  },
+  "small": 2,
+  "nonSmall": 2,
+  "bySession": {
+    "title-ses_ffb70d7c6ffe3KiCSzFQGc70ID": 1,
+    "ses_ffb70d7c6ffe3KiCSzFQGc70ID": 1,
+    "title-ses_ffb70c9d5ffeXE7q8yj8IUOr5C": 1,
+    "ses_ffb70c9d5ffeXE7q8yj8IUOr5C": 1
+  }
+}

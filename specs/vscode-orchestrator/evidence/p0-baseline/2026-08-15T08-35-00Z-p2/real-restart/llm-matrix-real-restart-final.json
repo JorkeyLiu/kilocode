@@ -1,0 +1,19 @@
+{
+  "phase": "real-restart-final",
+  "total": 3,
+  "runOwned": 3,
+  "violations": [],
+  "byModel": {
+    "e2e-local/e2e-model": 3
+  },
+  "byAgent": {
+    "title": 1,
+    "e2e-agent": 2
+  },
+  "small": 1,
+  "nonSmall": 2,
+  "bySession": {
+    "title-ses_ffb69b28fffeq8awKW3bLwkl8r": 1,
+    "ses_ffb69b28fffeq8awKW3bLwkl8r": 2
+  }
+}

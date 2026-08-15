@@ -1,0 +1,221 @@
+{
+  "activation": {
+    "activateDoneMs": {
+      "name": "activate.done d",
+      "n": 1,
+      "min": 26,
+      "med": 26,
+      "max": 26,
+      "mean": 26
+    },
+    "spawnMs": {
+      "name": "spawn ms",
+      "n": 1,
+      "min": 7,
+      "med": 7,
+      "max": 7,
+      "mean": 7
+    },
+    "portDetectedMs": {
+      "name": "port.detected d",
+      "n": 1,
+      "min": 6165,
+      "med": 6165,
+      "max": 6165,
+      "mean": 6165
+    },
+    "sseConnectedMs": {
+      "name": "sse.connected d",
+      "n": 1,
+      "min": 6290,
+      "med": 6290,
+      "max": 6290,
+      "mean": 6290
+    },
+    "dataReadyDoneMs": {
+      "name": "dataReady.done d",
+      "n": 2,
+      "min": 12744,
+      "med": 94812,
+      "max": 94812,
+      "mean": 53778
+    }
+  },
+  "webview": {
+    "loadWd": {
+      "name": "load wd",
+      "n": 2,
+      "min": 215,
+      "med": 224,
+      "max": 224,
+      "mean": 219.5
+    },
+    "mountWd": {
+      "name": "mount wd",
+      "n": 2,
+      "min": 255,
+      "med": 260,
+      "max": 260,
+      "mean": 257.5
+    },
+    "renderWd": {
+      "name": "render wd",
+      "n": 2,
+      "min": 1347,
+      "med": 1354,
+      "max": 1354,
+      "mean": 1350.5
+    },
+    "paintWd": {
+      "name": "paint wd",
+      "n": 2,
+      "min": 1432,
+      "med": 1451,
+      "max": 1451,
+      "mean": 1441.5
+    },
+    "readyD": {
+      "name": "webview.ready d",
+      "n": 2,
+      "min": 2748,
+      "med": 93167,
+      "max": 93167,
+      "mean": 47957.5
+    }
+  },
+  "promptFirst": {
+    "pairs": [
+      {
+        "deltaMs": 3738,
+        "session": "ses_ffba5a668ffe"
+      },
+      {
+        "deltaMs": 147,
+        "session": "ses_ffba5a668ffe"
+      },
+      {
+        "deltaMs": 138,
+        "session": "ses_ffba5a668ffe"
+      },
+      {
+        "deltaMs": 159,
+        "session": "ses_ffba5a668ffe"
+      },
+      {
+        "deltaMs": 80,
+        "session": "ses_ffba5a668ffe"
+      },
+      {
+        "deltaMs": 61,
+        "session": "ses_ffba5a668ffe"
+      },
+      {
+        "deltaMs": 140,
+        "session": "ses_ffba5a668ffe"
+      },
+      {
+        "deltaMs": 86,
+        "session": "ses_ffba5a668ffe"
+      }
+    ],
+    "stats": {
+      "name": "prompt.submit -> firstEvent ms",
+      "n": 8,
+      "min": 61,
+      "med": 140,
+      "max": 3738,
+      "mean": 568.6
+    }
+  },
+  "sse": {
+    "eventSpanEndDur": {
+      "name": "sse.event span dur",
+      "n": 733,
+      "min": 0,
+      "med": 0,
+      "max": 3,
+      "mean": 0.3
+    },
+    "partUpdatedDur": {
+      "name": "part.updated span dur",
+      "n": 308,
+      "min": 0,
+      "med": 0,
+      "max": 1,
+      "mean": 0.2
+    },
+    "eventCount": 733
+  },
+  "backend": {
+    "appLayerDefine": {
+      "name": "app_layer_define",
+      "n": 1,
+      "min": 2,
+      "med": 2,
+      "max": 2,
+      "mean": 2
+    },
+    "listener": {
+      "name": "listener",
+      "n": 1,
+      "min": 579,
+      "med": 579,
+      "max": 579,
+      "mean": 579
+    },
+    "instanceBootstrap": {
+      "name": "instance_bootstrap",
+      "n": 1,
+      "min": 908,
+      "med": 908,
+      "max": 908,
+      "mean": 908
+    },
+    "configLoad": {
+      "name": "config_load",
+      "n": 3,
+      "min": 747,
+      "med": 848,
+      "max": 1099,
+      "mean": 898
+    },
+    "providerStateInit": {
+      "name": "provider_state_init",
+      "n": 2,
+      "min": 855,
+      "med": 2896,
+      "max": 2896,
+      "mean": 1875.5
+    },
+    "toolExecute": {
+      "name": "tool_execute",
+      "n": 7,
+      "min": 5,
+      "med": 616,
+      "max": 3758,
+      "mean": 1305
+    },
+    "permissionWait": {
+      "name": "permission_wait",
+      "n": 1,
+      "min": 690,
+      "med": 690,
+      "max": 690,
+      "mean": 690
+    },
+    "questionWait": {
+      "name": "question_wait",
+      "n": 1,
+      "min": 2945,
+      "med": 2945,
+      "max": 2945,
+      "mean": 2945
+    }
+  },
+  "p95": {
+    "promptFirstMs": 3738,
+    "sseEventDurMs": 1,
+    "partUpdatedDurMs": 1,
+    "note": "nearest-rank p95 at these sample sizes (n<=16); descriptive only, R7"
+  }
+}

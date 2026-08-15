@@ -52,6 +52,11 @@ export type AgentRequirementsControllerOptions = {
 export class AgentRequirementsController {
   private readonly cache = new Map<string, HostAgentRequirementResult>()
   private readonly generations = new Map<string, object>()
+  /** Coalesces concurrent in-flight checks per key so the webview's fetch and
+   *  the send-path assert share ONE round-trip instead of superseding each
+   *  other (which previously failed sends with "Agent requirement check was
+   *  superseded" when the user picked an agent and sent immediately). */
+  private readonly inFlight = new Map<string, Promise<HostAgentRequirementResult>>()
   private readonly subscription: Disposable | undefined
 
   constructor(private readonly opts: AgentRequirementsControllerOptions) {
@@ -62,6 +67,10 @@ export class AgentRequirementsController {
     const active = this.cache.size > 0 || this.generations.size > 0
     this.cache.clear()
     this.generations.clear()
+    // Drop in-flight coalescing so a post-invalidation refetch starts FRESH
+    // instead of reusing a pre-invalidation round-trip. The abandoned run is
+    // still in flight; it rejects as superseded when it lands (see loadFresh).
+    this.inFlight.clear()
     if (!active) return
     this.opts.post({ type: "agentRequirementsInvalidated" })
   }
@@ -70,6 +79,10 @@ export class AgentRequirementsController {
     this.subscription?.dispose()
     this.cache.clear()
     this.generations.clear()
+    // Drop in-flight coalescing so nothing survives disposal: a later fetch
+    // starts FRESH instead of joining a pre-dispose round-trip, and the
+    // abandoned run rejects as superseded when it lands (see loadFresh).
+    this.inFlight.clear()
   }
 
   fetch(request: AgentRequirementsRequest): Promise<void> {
@@ -131,8 +144,17 @@ export class AgentRequirementsController {
     const dir = this.scope(directory)
     if (!dir) throw new Error("The agent requirement scope is no longer active")
 
-    const result = await this.load(agent, dir)
-    if (!this.blocked(result)) return
+    const result = await this.load(agent, dir).catch((error: unknown) => {
+      // A clear/invalidation supersedes every in-flight check (all generation
+      // tokens drop), and a later refresh supersedes a same-key check by
+      // replacing its generation token. Either way the superseding check is
+      // authoritative for the UI, and the backend independently enforces
+      // requirements in createUserMessage — a blocked agent stays rejected —
+      // so the send must not fail on this stale-check race.
+      if (error instanceof Error && error.message === "Agent requirement check was superseded") return undefined
+      throw error
+    })
+    if (!result || !this.blocked(result)) return
 
     this.opts.post({ type: "agentRequirementsLoaded", result })
     throw new Error(this.message(result))
@@ -144,7 +166,30 @@ export class AgentRequirementsController {
       const cached = this.cache.get(key)
       if (cached) return cached
     }
+    // Share the in-flight check for this key. Without this, the webview's
+    // fetch (fired on agent pick) and the send-path assert for the same
+    // agent+directory would start two concurrent round-trips and the earlier
+    // one would reject as superseded — failing the send even though the newer
+    // check is equally authoritative for the same key.
+    const pending = this.inFlight.get(key)
+    if (pending) return pending
+    const run = this.loadFresh(agent, directory, key)
+    this.inFlight.set(key, run)
+    // Clean up on both outcomes; the `.catch` here is what consumes the shared
+    // rejection (callers awaiting `run` still see it — the cleanup must not
+    // surface an unhandled rejection of its own).
+    void run.then(
+      () => {
+        if (this.inFlight.get(key) === run) this.inFlight.delete(key)
+      },
+      () => {
+        if (this.inFlight.get(key) === run) this.inFlight.delete(key)
+      },
+    )
+    return run
+  }
 
+  private async loadFresh(agent: string, directory: string, key: string): Promise<HostAgentRequirementResult> {
     const client = this.opts.client()
     if (!client || !this.opts.connected()) throw new Error("Not connected to CLI backend")
 

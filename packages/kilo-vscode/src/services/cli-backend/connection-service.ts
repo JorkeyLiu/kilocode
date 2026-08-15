@@ -938,4 +938,155 @@ export class KiloConnectionService {
       p0Stage("question.rejected", { requestID: event.properties.requestID })
     }
   }
+
+  // -------------------------------------------------------------------------
+  // E2E fixture bridge (KILO_E2E_FIXTURE only; commands registered in
+  // extension.ts). These are the transport/process-ownership probes for the
+  // real-restart scenario: an explicit SSE reconnect trigger/observation on
+  // this shared service, an exact-owned worker kill through ServerManager's
+  // owner path, and the production connection flow for the replacement. Every
+  // method throws when the fixture env is absent so no production path can
+  // reach them. `getServerPidForFixture` is internal to ServerManager and
+  // remains in use by the reconnect/kill outputs below.
+  // -------------------------------------------------------------------------
+
+  public fixtureKillServer(): { pid: number; port: number } | null {
+    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture killServer requires KILO_E2E_FIXTURE")
+    return this.serverManager.killServerForFixture()
+  }
+
+  /**
+   * Fixture read of the aggregate generation-request store (every `service=llm`
+   * line observed across all server instances/launches of this run). Fail-closed
+   * LOCK-006/LOCK-008 evidence: the harness asserts every record is the
+   * run-owned e2e-local/e2e-model. Returns null when no server ever spawned.
+   */
+  public fixtureLlmRequests() {
+    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture llmRequests requires KILO_E2E_FIXTURE")
+    return this.serverManager.getLlmRequestsForFixture()
+  }
+
+  /** Fixture reset of the generation-request store (run start only). */
+  public fixtureLlmRequestsReset(): boolean {
+    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture llmRequestsReset requires KILO_E2E_FIXTURE")
+    return this.serverManager.resetLlmRequestsForFixture()
+  }
+
+  /**
+   * Fixture observation of one explicit SSE reconnect with the backend left
+   * ALIVE (production SdkSSEAdapter.reconnect() → per-attempt abort → outer
+   * consumeLoop reconnects → connection-service state listeners). Records the
+   * state sequence, the (unchanged) server port/pid, and the number of
+   * `server.connected` events delivered across the reconnect window as
+   * evidence the stream re-established. `/global/event` emits exactly one
+   * `server.connected` per new stream subscription (then heartbeats + bus
+   * events); `sync` envelopes are activity-driven and never guaranteed on a
+   * quiet reconnect, so this counter is the direct new-stream signal.
+   */
+  public async fixtureSseReconnect(): Promise<{
+    before: ConnectionState
+    portBefore: number | null
+    pidBefore: number | null
+    after: ConnectionState
+    portAfter: number | null
+    pidAfter: number | null
+    states: Array<{ state: ConnectionState; at: string }>
+    connectedEvents: number
+  }> {
+    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture sseReconnect requires KILO_E2E_FIXTURE")
+    const states: Array<{ state: ConnectionState; at: string }> = []
+    const unsub = this.onStateChange((state) => states.push({ state, at: new Date().toISOString() }))
+    const before = this.state
+    const portBefore = this.info?.port ?? null
+    const pidBefore = this.serverManager.getServerPidForFixture()?.pid ?? null
+    let connectedEvents = 0
+    const unsubEvents = this.onEvent((event) => {
+      if (event.type === "server.connected") connectedEvents += 1
+    })
+    try {
+      const sse = this.sseClient
+      if (!sse) throw new Error("fixture sseReconnect: no active SSE client")
+      sse.reconnect()
+      // Wait until the observed state sequence shows a non-connected dip and
+      // the service is connected again (the new stream's first event flips
+      // state back to connected through the production state listener).
+      const deadline = Date.now() + 30_000
+      for (;;) {
+        if (this.state === "connected" && states.some((s) => s.state !== "connected")) break
+        if (Date.now() > deadline) {
+          throw new Error(
+            `fixture sseReconnect: reconnect did not converge to connected. states=${JSON.stringify(states)}`,
+          )
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      return {
+        before,
+        portBefore,
+        pidBefore,
+        after: this.state,
+        portAfter: this.info?.port ?? null,
+        pidAfter: this.serverManager.getServerPidForFixture()?.pid ?? null,
+        states,
+        connectedEvents,
+      }
+    } finally {
+      unsub()
+      unsubEvents()
+    }
+  }
+
+  /**
+   * Fixture trigger of the PRODUCTION reconnect flow after an exact worker
+   * kill: `getClientAsync` observes the disconnected/error state and calls
+   * `connect()`, which starts a replacement server via ServerManager (the exit
+   * handler already nulled the old instance) and re-establishes the SSE stream
+   * — the exact path production uses to recover when the CLI backend dies.
+   * Resolves only when the connection service reaches "connected" again.
+   *
+   * The exact-owned kill returns before the CLI's graceful SIGTERM shutdown
+   * completes, so the child's exit event (which nulls the ServerManager
+   * instance and fires the production onExit reset) arrives asynchronously —
+   * this fixture waits, with a bounded deadline, until the exit observation
+   * has actually happened before driving `getClientAsync`. Without the wait,
+   * `getServer()` would hand back the freshly-killed instance and the
+   * replacement connect would fail. In production the exit event has always
+   * fired by the time a recovery request arrives, so the wait only models
+   * that ordering for the fixture; no production logic is changed.
+   */
+  public async fixtureReconnectServer(dir?: string): Promise<{
+    state: ConnectionState
+    port: number | null
+    pid: number | null
+    states: Array<{ state: ConnectionState; at: string }>
+  }> {
+    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture reconnectServer requires KILO_E2E_FIXTURE")
+    const states: Array<{ state: ConnectionState; at: string }> = []
+    const unsub = this.onStateChange((state) => states.push({ state, at: new Date().toISOString() }))
+    try {
+      const exitDeadline = Date.now() + 30_000
+      while (this.serverManager.getServerPidForFixture() !== null) {
+        if (Date.now() > exitDeadline) {
+          throw new Error(
+            "fixture reconnectServer: killed server instance was never nulled (exit event not observed within 30s)",
+          )
+        }
+        await new Promise((resolve) => setTimeout(resolve, 100))
+      }
+      const root = dir ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+      if (!root) throw new Error("fixture reconnectServer: no workspace folder")
+      await this.getClientAsync(root)
+      if (this.state !== "connected") {
+        throw new Error(`fixture reconnectServer: state=${this.state} expected connected. states=${JSON.stringify(states)}`)
+      }
+      return {
+        state: this.state,
+        port: this.info?.port ?? null,
+        pid: this.serverManager.getServerPidForFixture()?.pid ?? null,
+        states,
+      }
+    } finally {
+      unsub()
+    }
+  }
 }

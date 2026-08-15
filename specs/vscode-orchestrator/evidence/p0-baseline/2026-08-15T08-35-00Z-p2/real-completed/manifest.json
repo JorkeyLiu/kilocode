@@ -1,0 +1,542 @@
+{
+  "schema": "kilo-e2e-evidence/1",
+  "run": {
+    "fixtureId": "e2e-probe-bd4466b5",
+    "scenario": "real-completed",
+    "startedAt": "2026-08-15T08:35:40.595Z",
+    "completedAt": "2026-08-15T08:37:58.189Z",
+    "durationMs": 137594,
+    "probePid": 38016,
+    "success": true,
+    "provenance": "focused E2E harness (packages/kilo-vscode), fixture-gated, run-owned evidence",
+    "env": {
+      "KILO_E2E_SCENARIO": "real-completed",
+      "KILO_P0_PERF": "1"
+    }
+  },
+  "destination": "/Users/jorkeyliu/workspace/repos/kilocode/specs/vscode-orchestrator/evidence/p0-baseline/2026-08-15T08-35-00Z-p2/real-completed",
+  "required": [
+    "llm-matrix-real-completed-final.json",
+    "llm-requests-real-completed.json",
+    "llm-requests.jsonl",
+    "plan.json",
+    "rc-snap-1.json",
+    "rc-snap-10.json",
+    "rc-snap-11.json",
+    "rc-snap-12.json",
+    "rc-snap-13.json",
+    "rc-snap-14.json",
+    "rc-snap-15.json",
+    "rc-snap-16.json",
+    "rc-snap-17.json",
+    "rc-snap-18.json",
+    "rc-snap-19.json",
+    "rc-snap-2.json",
+    "rc-snap-20.json",
+    "rc-snap-21.json",
+    "rc-snap-22.json",
+    "rc-snap-23.json",
+    "rc-snap-24.json",
+    "rc-snap-25.json",
+    "rc-snap-26.json",
+    "rc-snap-27.json",
+    "rc-snap-28.json",
+    "rc-snap-29.json",
+    "rc-snap-3.json",
+    "rc-snap-30.json",
+    "rc-snap-31.json",
+    "rc-snap-32.json",
+    "rc-snap-33.json",
+    "rc-snap-34.json",
+    "rc-snap-35.json",
+    "rc-snap-36.json",
+    "rc-snap-37.json",
+    "rc-snap-38.json",
+    "rc-snap-39.json",
+    "rc-snap-4.json",
+    "rc-snap-40.json",
+    "rc-snap-41.json",
+    "rc-snap-5.json",
+    "rc-snap-6.json",
+    "rc-snap-7.json",
+    "rc-snap-8.json",
+    "rc-snap-9.json",
+    "real-completed-dom-evidence",
+    "runner-pid",
+    "workspace/.kilo/kilo.json",
+    "workspace/ask.txt",
+    "workspace/e2e-custom-called.txt",
+    "workspace/mcp-fixture/calls.log",
+    "workspace/rollback.txt"
+  ],
+  "files": [
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/llm-matrix-real-completed-final.json",
+      "sourceRel": "scratch/llm-matrix-real-completed-final.json",
+      "dest": "llm-matrix-real-completed-final.json",
+      "bytes": 397,
+      "sha256": "f8c4ba37e32c2055313f2722f533cf1acca3845cd8b969a3df3ca248465f3f93"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/llm-matrix-real-completed-final.json",
+      "sourceRel": "scratch/llm-matrix-real-completed-final.json",
+      "dest": "llm-matrix-real-completed-final.json",
+      "bytes": 397,
+      "sha256": "f8c4ba37e32c2055313f2722f533cf1acca3845cd8b969a3df3ca248465f3f93"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/llm-matrix-real-completed-post-h7.json",
+      "sourceRel": "scratch/llm-matrix-real-completed-post-h7.json",
+      "dest": "llm-matrix-real-completed-post-h7.json",
+      "bytes": 399,
+      "sha256": "1001a56cc0853b967e3952fbb05dd344d2f34b9dde1125d657ad4a3fa4c71be3"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/llm-requests-real-completed.json",
+      "sourceRel": "scratch/llm-requests-real-completed.json",
+      "dest": "llm-requests-real-completed.json",
+      "bytes": 4938,
+      "sha256": "f751ad7177fe6ff0e63163e3a7774033b411944d6a4938fe0525283ab2e4d55a"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/llm-requests.jsonl",
+      "sourceRel": "scratch/llm-requests.jsonl",
+      "dest": "llm-requests.jsonl",
+      "bytes": 3349,
+      "sha256": "63e69d8cbb09bff8d8da320452d07de1cd9e78b6920e05c1cb9e3f845df2177d"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/plan.json",
+      "sourceRel": "scratch/plan.json",
+      "dest": "plan.json",
+      "bytes": 1195,
+      "sha256": "d688796e75ef3507937f727b34da1b5ad723631f55efade703957b12e9fec3be"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-1.json",
+      "sourceRel": "scratch/rc-snap-1.json",
+      "dest": "rc-snap-1.json",
+      "bytes": 1375,
+      "sha256": "ec4cbc8fadbb9a0e5e4f0efbfcbff892f0dbc5e082e4d6ed939b77464152b78b"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-10.json",
+      "sourceRel": "scratch/rc-snap-10.json",
+      "dest": "rc-snap-10.json",
+      "bytes": 4585,
+      "sha256": "1aa0c8ca610de64a69e98910b4f0e0c03989e493e8d301dfbbed0ff2ef9835cb"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-11.json",
+      "sourceRel": "scratch/rc-snap-11.json",
+      "dest": "rc-snap-11.json",
+      "bytes": 4507,
+      "sha256": "3f7a8b734c275d257738a133094b4b36b0bbcad44cb187f113c3b130a0a3a2f1"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-12.json",
+      "sourceRel": "scratch/rc-snap-12.json",
+      "dest": "rc-snap-12.json",
+      "bytes": 4993,
+      "sha256": "dc9ba1251a3a5122358aff699fb1a1c04e8ec0a039ef77b48f7b5f81b9130711"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-13.json",
+      "sourceRel": "scratch/rc-snap-13.json",
+      "dest": "rc-snap-13.json",
+      "bytes": 5887,
+      "sha256": "ae5cb42ab6db4c88147d051b92141113d674f092cdafde91c9205de63b5f730d"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-14.json",
+      "sourceRel": "scratch/rc-snap-14.json",
+      "dest": "rc-snap-14.json",
+      "bytes": 6001,
+      "sha256": "7f6e0806d0c2ee40bd9726fe1796e156626baf7475a0d0f74195c0b7e1fd5c9d"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-15.json",
+      "sourceRel": "scratch/rc-snap-15.json",
+      "dest": "rc-snap-15.json",
+      "bytes": 6494,
+      "sha256": "faf542c01afa825c61f262f61b06ebac8112627c99d069c38ad0e8eecbb8fbd2"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-16.json",
+      "sourceRel": "scratch/rc-snap-16.json",
+      "dest": "rc-snap-16.json",
+      "bytes": 6916,
+      "sha256": "e17e3276a00a0dee80d1f3dd01d446994374cdc5daa5d337b0b95887cc5f00e9"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-17.json",
+      "sourceRel": "scratch/rc-snap-17.json",
+      "dest": "rc-snap-17.json",
+      "bytes": 6885,
+      "sha256": "b5923d79416f9a6a43f49a4331d1becdb622073f559e8419889cd85a5e7177bb"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-18.json",
+      "sourceRel": "scratch/rc-snap-18.json",
+      "dest": "rc-snap-18.json",
+      "bytes": 7412,
+      "sha256": "9813a0763ee785a85df69461d393d5743e396905e8b9502daaca9f748f41c0e3"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-19.json",
+      "sourceRel": "scratch/rc-snap-19.json",
+      "dest": "rc-snap-19.json",
+      "bytes": 7590,
+      "sha256": "357d4a8f13dbbdddf8f9ed6d1ae29924a6941c8d124466440d640a024b791de9"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-2.json",
+      "sourceRel": "scratch/rc-snap-2.json",
+      "dest": "rc-snap-2.json",
+      "bytes": 1526,
+      "sha256": "e73120b6fa4afd84d34deac8e1ba0dac3c72ae355dcb4d0460f26687d984451e"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-20.json",
+      "sourceRel": "scratch/rc-snap-20.json",
+      "dest": "rc-snap-20.json",
+      "bytes": 8477,
+      "sha256": "1cc5df662f5dc6b3241d929e5889cc2beb8aa1e0c89a33434bbc57868ef9abd4"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-21.json",
+      "sourceRel": "scratch/rc-snap-21.json",
+      "dest": "rc-snap-21.json",
+      "bytes": 8501,
+      "sha256": "65d5bf5a8c620f2af7cd059d9a341634bfeb6ebdb0f243233542b51dc7c9ecc2"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-22.json",
+      "sourceRel": "scratch/rc-snap-22.json",
+      "dest": "rc-snap-22.json",
+      "bytes": 8453,
+      "sha256": "47977271bf0e5a8c60e06b8c05868fc77bf0fdd0ef6fbc31af878c88459cf347"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-23.json",
+      "sourceRel": "scratch/rc-snap-23.json",
+      "dest": "rc-snap-23.json",
+      "bytes": 9240,
+      "sha256": "7d5b202fea1ee004864810efc091516d3893d6a6cf93d2262071dd2ebd1ed817"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-24.json",
+      "sourceRel": "scratch/rc-snap-24.json",
+      "dest": "rc-snap-24.json",
+      "bytes": 9462,
+      "sha256": "c6052a7679ecda60fba103794fb0f7d546ee137c4227840d343bee35f7b71c4c"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-25.json",
+      "sourceRel": "scratch/rc-snap-25.json",
+      "dest": "rc-snap-25.json",
+      "bytes": 9627,
+      "sha256": "42d12f3d566f32c955aa8cb97b42c5a5c79396ab824d598181bd29d8ba31f9e2"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-26.json",
+      "sourceRel": "scratch/rc-snap-26.json",
+      "dest": "rc-snap-26.json",
+      "bytes": 9579,
+      "sha256": "8367d7ff277f5f709b815e2d07f09b2d1df8bdce59051594c7ba9398c47306fc"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-27.json",
+      "sourceRel": "scratch/rc-snap-27.json",
+      "dest": "rc-snap-27.json",
+      "bytes": 9579,
+      "sha256": "e446294ba6e442d69f7ea25ca2c6979e59a615753edb0d4d767195ebdb3a327b"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-28.json",
+      "sourceRel": "scratch/rc-snap-28.json",
+      "dest": "rc-snap-28.json",
+      "bytes": 9579,
+      "sha256": "7af652c91d68c43ef3b20254535a5c3f839770664a81d0a6fb0d0a43a48f402f"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-29.json",
+      "sourceRel": "scratch/rc-snap-29.json",
+      "dest": "rc-snap-29.json",
+      "bytes": 9578,
+      "sha256": "0016f1f4faba318d84b273c7bd9c1469ce8ec7184db49cce96b6378975a9fcb9"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-3.json",
+      "sourceRel": "scratch/rc-snap-3.json",
+      "dest": "rc-snap-3.json",
+      "bytes": 2728,
+      "sha256": "4381e9026b1b5d91e103201e206b52050adcd1bdc515147e9cc13426cc06bb62"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-30.json",
+      "sourceRel": "scratch/rc-snap-30.json",
+      "dest": "rc-snap-30.json",
+      "bytes": 10075,
+      "sha256": "c79b768047b517580ee274459eeb31d3ba2c740ea4575d1953394916f40efb93"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-31.json",
+      "sourceRel": "scratch/rc-snap-31.json",
+      "dest": "rc-snap-31.json",
+      "bytes": 11284,
+      "sha256": "3e964bf5217a950c9fd73db67d7c4db97d026187e3ce5b0f03cfa59de456c844"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-32.json",
+      "sourceRel": "scratch/rc-snap-32.json",
+      "dest": "rc-snap-32.json",
+      "bytes": 11484,
+      "sha256": "8e699644f7021b1f32a6ad72619a66daf12fba1291e79dcac6ba8391df491d7c"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-33.json",
+      "sourceRel": "scratch/rc-snap-33.json",
+      "dest": "rc-snap-33.json",
+      "bytes": 11406,
+      "sha256": "ccd3136bbfc86716e4109b27b72a41faabcc27714e9fb97f79afb2e83296fcd8"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-34.json",
+      "sourceRel": "scratch/rc-snap-34.json",
+      "dest": "rc-snap-34.json",
+      "bytes": 11931,
+      "sha256": "2769dd74e673cf8dfa5015ec4c777448730f0470aea8837ab845bf10f8fe3b3b"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-35.json",
+      "sourceRel": "scratch/rc-snap-35.json",
+      "dest": "rc-snap-35.json",
+      "bytes": 11933,
+      "sha256": "988609d9bd5ac0a1a77e1c984a10a84d837b365b36166ad1305fb7d9ec1819eb"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-36.json",
+      "sourceRel": "scratch/rc-snap-36.json",
+      "dest": "rc-snap-36.json",
+      "bytes": 11885,
+      "sha256": "53f48fe3f1cb05e83865316f34854419e64014a51c0b0bc676a17fa6d4c62955"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-37.json",
+      "sourceRel": "scratch/rc-snap-37.json",
+      "dest": "rc-snap-37.json",
+      "bytes": 11885,
+      "sha256": "3ec5038130a5836463950cd2baee25a194bed99db3b68da229a910e462e825b4"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-38.json",
+      "sourceRel": "scratch/rc-snap-38.json",
+      "dest": "rc-snap-38.json",
+      "bytes": 12399,
+      "sha256": "4e165b5587255c5ab95e22ef438bf27b92029f97d6182b1dafcbfe021ec395b2"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-39.json",
+      "sourceRel": "scratch/rc-snap-39.json",
+      "dest": "rc-snap-39.json",
+      "bytes": 12399,
+      "sha256": "009310dc41171a056b9a554d616e7039bb3f3a2c37df1d7a029f3cd3e53e8f9f"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-4.json",
+      "sourceRel": "scratch/rc-snap-4.json",
+      "dest": "rc-snap-4.json",
+      "bytes": 3549,
+      "sha256": "2acaf6f2adaca2d03ac1bea51539b0c1cd3a34130388a511669f7b19f661e164"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-40.json",
+      "sourceRel": "scratch/rc-snap-40.json",
+      "dest": "rc-snap-40.json",
+      "bytes": 12064,
+      "sha256": "dcafc028ba1bdc4867c6ce3ce3d0146610c6f6614368b98997cde6a871d121f4"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-41.json",
+      "sourceRel": "scratch/rc-snap-41.json",
+      "dest": "rc-snap-41.json",
+      "bytes": 12064,
+      "sha256": "11ca68a255ef76fcca5904c40c910be99fe1b7102864b59dd6d3d89877456946"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-5.json",
+      "sourceRel": "scratch/rc-snap-5.json",
+      "dest": "rc-snap-5.json",
+      "bytes": 3694,
+      "sha256": "831a526539f0846c439b1f51201aafab117276faaff9cda8af9aefabb8499635"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-6.json",
+      "sourceRel": "scratch/rc-snap-6.json",
+      "dest": "rc-snap-6.json",
+      "bytes": 3664,
+      "sha256": "9d45b2098c4b4390e78fa3e4d7c3fe69e2a871456227272655a4e9a2231ff87a"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-7.json",
+      "sourceRel": "scratch/rc-snap-7.json",
+      "dest": "rc-snap-7.json",
+      "bytes": 3616,
+      "sha256": "708343d6300089241ccd75cb242e8273fc305341f1b3d1cec70859c522a1e198"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-8.json",
+      "sourceRel": "scratch/rc-snap-8.json",
+      "dest": "rc-snap-8.json",
+      "bytes": 4114,
+      "sha256": "a9f7c39d1bd4bf89d64f9cf8861c46870e0223836c64a9f7d11cf7ec06af3c2e"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/rc-snap-9.json",
+      "sourceRel": "scratch/rc-snap-9.json",
+      "dest": "rc-snap-9.json",
+      "bytes": 4532,
+      "sha256": "b793ea2351a1de77e90fc36c3dfac9ce4e5cb891530d19c90f459ed266ddbfcd"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/real-completed-dom-evidence",
+      "sourceRel": "scratch/real-completed-dom-evidence",
+      "dest": "real-completed-dom-evidence",
+      "bytes": 1133612,
+      "sha256": "c18ea2e5fedc52357aca9301b4633845614cef031503cf612e2ddf88aa01fd3a"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/real-completed-mcp-disconnect-done",
+      "sourceRel": "scratch/real-completed-mcp-disconnect-done",
+      "dest": "real-completed-mcp-disconnect-done",
+      "bytes": 26,
+      "sha256": "fa69f30fcd99886b3ee704ea2e60a31ac0bd734377fcb854d397fb7c09629c9f"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/real-completed-ready",
+      "sourceRel": "scratch/real-completed-ready",
+      "dest": "real-completed-ready",
+      "bytes": 18,
+      "sha256": "2cb11041a820222e4cd7ca5eee132ca95224704415a56a60bf8b81505403f39c"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/real-completed-ready",
+      "sourceRel": "scratch/real-completed-ready",
+      "dest": "real-completed-ready",
+      "bytes": 18,
+      "sha256": "2cb11041a820222e4cd7ca5eee132ca95224704415a56a60bf8b81505403f39c"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/real-completed-reopen-ready",
+      "sourceRel": "scratch/real-completed-reopen-ready",
+      "dest": "real-completed-reopen-ready",
+      "bytes": 18,
+      "sha256": "2cb11041a820222e4cd7ca5eee132ca95224704415a56a60bf8b81505403f39c"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/runner-alive",
+      "sourceRel": "scratch/runner-alive",
+      "dest": "runner-alive",
+      "bytes": 7,
+      "sha256": "03494afd4248c42f5fa1237bf2eeebe751ab8d9c977d55405fcb17469dbd91f8"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/runner-done",
+      "sourceRel": "scratch/runner-done",
+      "dest": "runner-done",
+      "bytes": 2,
+      "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/runner-pid",
+      "sourceRel": "scratch/runner-pid",
+      "dest": "runner-pid",
+      "bytes": 5,
+      "sha256": "7ee4971c222e1143f511357db75a186a6ce7d98380e4cfdc4cce5c28597df0e2"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/workspace/.kilo/kilo.json",
+      "sourceRel": "workspace/.kilo/kilo.json",
+      "dest": "workspace/.kilo/kilo.json",
+      "bytes": 1528,
+      "sha256": "0f7231b0686ba353c3c84665819aaf4ad54099f6e5651cd7b1e31d43f44d31b2"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/workspace/.kilo/package-lock.json",
+      "sourceRel": "workspace/.kilo/package-lock.json",
+      "dest": "workspace/.kilo/package-lock.json",
+      "bytes": 129,
+      "sha256": "f259e669c975607abe83b2b1fa91498a03bc9215e563f560bfb9765edb199587"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/workspace/.kilo/skills/e2e-skill/SKILL.md",
+      "sourceRel": "workspace/.kilo/skills/e2e-skill/SKILL.md",
+      "dest": "workspace/.kilo/skills/e2e-skill/SKILL.md",
+      "bytes": 104,
+      "sha256": "2990d96879b5e701c4c2ce79deee29b03417b2f033346c874ab1046b805831ca"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/workspace/.kilo/tool/e2e_marker.ts",
+      "sourceRel": "workspace/.kilo/tool/e2e_marker.ts",
+      "dest": "workspace/.kilo/tool/e2e_marker.ts",
+      "bytes": 428,
+      "sha256": "7328dd9f4e80bb397de87d1d8b4870adbfebb557aeba9834db7b32f210c18f5c"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/workspace/ask.txt",
+      "sourceRel": "workspace/ask.txt",
+      "dest": "workspace/ask.txt",
+      "bytes": 24,
+      "sha256": "2d9964aad9b947a96df315602330cf0284e9c0648475042d0633d40e231b94df"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/workspace/e2e-custom-called.txt",
+      "sourceRel": "workspace/e2e-custom-called.txt",
+      "dest": "workspace/e2e-custom-called.txt",
+      "bytes": 10,
+      "sha256": "864906b76932e8c538ea1a1abf8632788af6536bf1e25603376f9091165ba0a1"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/workspace/mcp-fixture/calls.log",
+      "sourceRel": "workspace/mcp-fixture/calls.log",
+      "dest": "workspace/mcp-fixture/calls.log",
+      "bytes": 8,
+      "sha256": "889744bd59e7bdf567a9b063d80ed2d788bc40a8ab37922bae76207c6842eeeb"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/workspace/mcp-fixture/server.js",
+      "sourceRel": "workspace/mcp-fixture/server.js",
+      "dest": "workspace/mcp-fixture/server.js",
+      "bytes": 1329,
+      "sha256": "169e90265fe69560a0a8774a6e63461d431c012614c70b92c08c64e65761195f"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-jNSxkS/workspace/rollback.txt",
+      "sourceRel": "workspace/rollback.txt",
+      "dest": "workspace/rollback.txt",
+      "bytes": 20,
+      "sha256": "ae1e8e9806f3ae10147819d2d8ef2ccc64c0297057dfe25abfaa4f26b5a7cb72"
+    },
+    {
+      "source": "launcher:probe stdout+stderr",
+      "sourceRel": "launcher:run.log",
+      "dest": "run.log",
+      "bytes": 569412,
+      "sha256": "b9ebc14d14ed9012b7b12eec3e874b4c924f0fd3bfe5c429ee03ef94c4a4537d"
+    }
+  ],
+  "missing": [],
+  "malformed": [],
+  "notes": [],
+  "captureLog": {
+    "source": "launcher:probe stdout+stderr",
+    "sourceRel": "launcher:run.log",
+    "dest": "run.log",
+    "bytes": 569412,
+    "sha256": "b9ebc14d14ed9012b7b12eec3e874b4c924f0fd3bfe5c429ee03ef94c4a4537d"
+  },
+  "status": "complete",
+  "validated": true,
+  "finalizedAt": "2026-08-15T08:37:58.536Z"
+}

@@ -1,0 +1,66 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "provider": {
+    "e2e-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "E2E Local",
+      "options": {
+        "baseURL": "http://127.0.0.1:49589/v1",
+        "apiKey": "e2e-fixture-key",
+        "timeout": false,
+        "headerTimeout": false,
+        "firstChunkTimeout": false
+      },
+      "models": {
+        "e2e-model": {
+          "name": "E2E Model",
+          "variants": {
+            "low": {},
+            "medium": {},
+            "high": {}
+          }
+        }
+      }
+    }
+  },
+  "agent": {
+    "e2e-agent": {
+      "displayName": "E2E Agent",
+      "description": "E2E parity custom agent",
+      "mode": "primary",
+      "model": "e2e-local/e2e-model"
+    },
+    "e2e-agent-b": {
+      "displayName": "E2E Agent B",
+      "description": "E2E parity custom agent B",
+      "mode": "primary",
+      "model": "e2e-local/e2e-model"
+    }
+  },
+  "model": "e2e-local/e2e-model",
+  "small_model": "e2e-local/e2e-model",
+  "subagent_model": "e2e-local/e2e-model",
+  "permission": {
+    "question": "allow",
+    "read": {
+      "*": "allow",
+      "ask.txt": "ask"
+    },
+    "edit": {
+      "rollback.txt": "allow"
+    }
+  },
+  "mcp": {
+    "e2e-fixture": {
+      "type": "local",
+      "command": [
+        "bun",
+        "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-8ANOTU/workspace/mcp-fixture/server.js"
+      ],
+      "environment": {
+        "E2E_MCP_LOG": "mcp-fixture/calls.log"
+      },
+      "enabled": true
+    }
+  }
+}

@@ -1,0 +1,149 @@
+{
+  "url": "vscode-webview://1aprvo23pl85j563lb8d9sno3f3p91to6bqgqtcg924f55ickpsv/fake.html?id=20d169f9-b676-43cc-940e-6bbdbb76f75f",
+  "plan": {
+    "sourceId": "e2e-probe-8eda5252-A",
+    "siblingId": "e2e-probe-8eda5252-B",
+    "childId": "e2e-probe-8eda5252-C",
+    "variantId": "e2e-probe-8eda5252-D",
+    "tabAId": "e2e-probe-8eda5252-TA",
+    "tabBId": "e2e-probe-8eda5252-TB",
+    "tabCId": "e2e-probe-8eda5252-TC",
+    "sourceTitle": "E2E Source",
+    "siblingTitle": "E2E Sibling",
+    "childTitle": "E2E Child",
+    "variantTitle": "E2E Variant",
+    "tabATitle": "E2E Tab A",
+    "tabBTitle": "E2E Tab B",
+    "tabCTitle": "E2E Tab C",
+    "topicRootId": "e2e-probe-8eda5252-T1",
+    "topicChildId": "e2e-probe-8eda5252-T1C",
+    "topicSiblingId": "e2e-probe-8eda5252-T2",
+    "topicRootTitle": "E2E Topic Root",
+    "topicChildTitle": "E2E Topic Child",
+    "topicSiblingTitle": "E2E Sibling Root",
+    "customProvider": "e2e-local",
+    "customModel": "e2e-model",
+    "customAgent": "e2e-agent",
+    "customAgentB": "e2e-agent-b",
+    "customAgentLabel": "E2E Agent",
+    "customAgentBLabel": "E2E Agent B",
+    "customVariantA": "Low",
+    "customVariantB": "High",
+    "realMcpServer": "e2e-fixture",
+    "realMcpTool": "e2e-fixture_e2e_echo",
+    "realUserTool": "e2e_marker",
+    "realSkill": "e2e-skill",
+    "realPermissionFile": "ask.txt",
+    "realArtifact": "e2e-custom-called.txt"
+  },
+  "sessionA": "ses_ffb70d7c6ffe3KiCSzFQGc70ID",
+  "sessionB": "ses_ffb70c9d5ffeXE7q8yj8IUOr5C",
+  "pins": [
+    {
+      "prompt": "E2E parity prompt A: custom agent plus low variant",
+      "expected": {
+        "agent": "e2e-agent",
+        "model": "e2e-local/e2e-model",
+        "variant": "low"
+      },
+      "users": [
+        {
+          "id": "msg_0048f2823001hZWdwfkNeFJA1M",
+          "agent": "e2e-agent",
+          "model": "e2e-local/e2e-model/low",
+          "pass": true
+        }
+      ]
+    },
+    {
+      "prompt": "E2E parity prompt B: custom agent B plus high variant",
+      "expected": {
+        "agent": "e2e-agent-b",
+        "model": "e2e-local/e2e-model",
+        "variant": "high"
+      },
+      "users": [
+        {
+          "id": "msg_0048f3615001rQegtEr9LA39n9",
+          "agent": "e2e-agent-b",
+          "model": "e2e-local/e2e-model/high",
+          "pass": true
+        }
+      ]
+    }
+  ],
+  "llmRequests": [
+    {
+      "pid": 35295,
+      "instance": 1,
+      "ts": "2026-08-15T08:34:46",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "title-ses_ffb70d7c6ffe3KiCSzFQGc70ID",
+      "small": true,
+      "agent": "title",
+      "mode": "primary"
+    },
+    {
+      "pid": 35295,
+      "instance": 1,
+      "ts": "2026-08-15T08:34:48",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "ses_ffb70d7c6ffe3KiCSzFQGc70ID",
+      "small": false,
+      "agent": "e2e-agent",
+      "mode": "primary"
+    },
+    {
+      "pid": 35295,
+      "instance": 1,
+      "ts": "2026-08-15T08:34:49",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "title-ses_ffb70c9d5ffeXE7q8yj8IUOr5C",
+      "small": true,
+      "agent": "title",
+      "mode": "primary"
+    },
+    {
+      "pid": 35295,
+      "instance": 1,
+      "ts": "2026-08-15T08:34:51",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "ses_ffb70c9d5ffeXE7q8yj8IUOr5C",
+      "small": false,
+      "agent": "e2e-agent-b",
+      "mode": "primary"
+    }
+  ],
+  "llmMatrix": {
+    "total": 4,
+    "runOwned": 4,
+    "violations": [],
+    "byModel": {
+      "e2e-local/e2e-model": 4
+    },
+    "byAgent": {
+      "title": 2,
+      "e2e-agent": 1,
+      "e2e-agent-b": 1
+    },
+    "small": 2,
+    "nonSmall": 2,
+    "bySession": {
+      "title-ses_ffb70d7c6ffe3KiCSzFQGc70ID": 1,
+      "ses_ffb70d7c6ffe3KiCSzFQGc70ID": 1,
+      "title-ses_ffb70c9d5ffeXE7q8yj8IUOr5C": 1,
+      "ses_ffb70c9d5ffeXE7q8yj8IUOr5C": 1
+    }
+  },
+  "finalTabs": [
+    {
+      "id": "ses_ffb70c9d5ffeXE7q8yj8IUOr5C",
+      "label": "New session - 2026-08-15T08:34:49.514Z"
+    }
+  ],
+  "finalHeader": "New session - 2026-08-15T08:34:49.514Z"
+}

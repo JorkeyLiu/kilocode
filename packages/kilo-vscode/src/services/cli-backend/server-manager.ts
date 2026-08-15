@@ -8,6 +8,7 @@ import { resolveLocalBwrapEnv, resolveTreeSitterEnv } from "./cli-resources"
 import { t } from "./i18n"
 import { parseServerPort } from "./server-utils"
 import { StderrTail } from "./stderr-tail"
+import { LlmRequestCollector, type LlmRequestRecord } from "./llm-request-collector"
 import { p0Stage, isP0PerfEnabled } from "../../perf/perf-instrument"
 
 export interface ServerInstance {
@@ -60,6 +61,16 @@ export class ServerManager {
   private instance: ServerInstance | null = null
   private startupPromise: Promise<ServerInstance> | null = null
 
+  /**
+   * E2E fixture generation-request collector (KILO_E2E_FIXTURE only): sees
+   * every backend `service=llm ... providerID=... modelID=...` line through
+   * the stderr relay BEFORE provider/network resolution and persists typed
+   * records to the run-owned scratch store (see llm-request-collector.ts).
+   * Null in production — no collector is created and no line is parsed.
+   */
+  private llmStore: LlmRequestCollector | null = null
+  private llmInstance = 0
+
   constructor(
     private readonly context: vscode.ExtensionContext,
     private readonly onExit?: ServerExitListener,
@@ -96,6 +107,18 @@ export class ServerManager {
     const cliPath = this.getCliPath()
     console.log("[Kilo New] ServerManager: 📍 CLI path:", cliPath)
     console.log("[Kilo New] ServerManager: 🔐 Generated password (length):", password.length)
+
+    // E2E fixture generation-request collection (KILO_E2E_FIXTURE only): the
+    // run-owned scratch store is created lazily on the first spawn so every
+    // `service=llm` line of every server instance lands in the same
+    // append-only file. `instance` counts each spawn so records are
+    // attributable across worker restarts/launches (real-restart Phase B/C).
+    this.llmInstance += 1
+    if (!this.llmStore && process.env.KILO_E2E_FIXTURE && process.env.KILO_E2E_SCRATCH) {
+      this.llmStore = new LlmRequestCollector(path.join(process.env.KILO_E2E_SCRATCH, "llm-requests.jsonl"))
+    }
+    const llmInstance = this.llmInstance
+    const llmStore = this.llmStore
 
     // Verify the CLI binary exists
     if (!fs.existsSync(cliPath)) {
@@ -140,7 +163,10 @@ export class ServerManager {
       // backend's `service=p0-perf` records stream through this process's
       // stderr relay and are captured by the P0 harness. Default behavior
       // (logs to the scratch XDG file) is unchanged when the flag is off.
-      const p0LogArgs = isP0PerfEnabled() ? ["--print-logs"] : []
+      // The E2E fixture flag (KILO_E2E_FIXTURE, also test-only) enables the
+      // same print path so the fixture-gated generation-request collector
+      // below sees every `service=llm` line through the stderr relay.
+      const p0LogArgs = isP0PerfEnabled() || !!process.env.KILO_E2E_FIXTURE ? ["--print-logs"] : []
       const serverProcess = spawn(cliPath, ["serve", "--port", "0", ...p0LogArgs], {
         cwd: spawnCwd,
         env: {
@@ -196,7 +222,15 @@ export class ServerManager {
       // retained for startup-failure diagnostics (see stderr-tail.ts); the
       // trailing partial line is flushed at exit/error.
       const stderrTail = new StderrTail({
-        onLine: (line) => console.error("[Kilo New] ServerManager: ⚠️ CLI Server stderr:", line),
+        onLine: (line) => {
+          console.error("[Kilo New] ServerManager: ⚠️ CLI Server stderr:", line)
+          // Fixture-gated generation-request collection (LOCK-006/LOCK-008):
+          // every backend line reaches the collector; only `service=llm`
+          // records with providerID/modelID produce a persisted record. The
+          // line is emitted before provider/network resolution, so a failed
+          // or aborted non-run-owned attempt is still recorded.
+          llmStore?.feed(line, serverProcess.pid ?? 0, llmInstance)
+        },
       })
 
       serverProcess.stdout?.on("data", (data: Buffer) => {
@@ -255,6 +289,76 @@ export class ServerManager {
         }
       }, STARTUP_TIMEOUT_SECONDS * 1000)
     })
+  }
+
+  /**
+   * E2E fixture bridge (KILO_E2E_FIXTURE only, registered by extension.ts):
+   * exact PID + port of the CURRENT server instance. Read-only; returns null
+   * when no server is running or the fixture env is absent. No production
+   * effect — the caller (the connection service's fixture command) is itself
+   * env-gated.
+   */
+  public getServerPidForFixture(): { pid: number; port: number } | null {
+    if (!process.env.KILO_E2E_FIXTURE) return null
+    const instance = this.instance
+    if (!instance?.process.pid) return null
+    return { pid: instance.process.pid, port: instance.port }
+  }
+
+  /**
+   * E2E fixture bridge (KILO_E2E_FIXTURE only): terminate ONLY the exact
+   * current server process group through the same owner-equivalent path
+   * `dispose()` uses (ServerManager.killProcess → `process.kill(-pid,
+   * SIGTERM)`), WITHOUT touching `this.instance` — the child's own exit event
+   * nulls the instance and fires the production onExit → connection-service
+   * reset, so the replacement server comes up through the unmodified
+   * production lifecycle. Returns the killed PID + port. No production effect
+   * when the fixture env is absent.
+   */
+  public killServerForFixture(): { pid: number; port: number } | null {
+    if (!process.env.KILO_E2E_FIXTURE) return null
+    const instance = this.instance
+    if (!instance?.process.pid) return null
+    console.log(
+      "[Kilo New] ServerManager: fixture kill — SIGTERM to exact owned process group, PID:",
+      instance.process.pid,
+    )
+    ServerManager.killProcess(instance.process, "SIGTERM")
+    return { pid: instance.process.pid, port: instance.port }
+  }
+
+  /**
+   * E2E fixture bridge (KILO_E2E_FIXTURE only): aggregate generation-request
+   * records from the run-owned store — every `service=llm` line observed
+   * across ALL server instances and extension-host launches of this run
+   * (worker restart + reloadWindow relaunch included), with the per-class
+   * matrix. Returns null when the fixture env is absent or no server ever
+   * spawned. No production effect.
+   */
+  public getLlmRequestsForFixture(): { records: LlmRequestRecord[]; file: string } | null {
+    if (!process.env.KILO_E2E_FIXTURE) return null
+    if (!this.llmStore) return null
+    return { records: this.llmStore.read(), file: this.llmStoreFile() }
+  }
+
+  /**
+   * E2E fixture bridge (KILO_E2E_FIXTURE only): clear the generation-request
+   * store. Called once at the start of a real-* scenario run (never between
+   * real-restart launches — the persisted evidence must aggregate across
+   * them). No production effect.
+   */
+  public resetLlmRequestsForFixture(): boolean {
+    if (!process.env.KILO_E2E_FIXTURE) return false
+    if (!this.llmStore) {
+      if (!process.env.KILO_E2E_SCRATCH) return false
+      this.llmStore = new LlmRequestCollector(this.llmStoreFile())
+    }
+    this.llmStore.reset()
+    return true
+  }
+
+  private llmStoreFile(): string {
+    return path.join(process.env.KILO_E2E_SCRATCH ?? ".", "llm-requests.jsonl")
   }
 
   private getCliPath(): string {

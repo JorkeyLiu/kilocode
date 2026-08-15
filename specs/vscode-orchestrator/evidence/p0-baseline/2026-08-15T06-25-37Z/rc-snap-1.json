@@ -1,0 +1,32 @@
+{
+  "requestedAt": "2026-08-15T06:26:27.034Z",
+  "sessions": [],
+  "messages": {},
+  "statuses": {},
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "e2e-agent-b",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {
+    "e2e-fixture": "connected"
+  },
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {}
+}

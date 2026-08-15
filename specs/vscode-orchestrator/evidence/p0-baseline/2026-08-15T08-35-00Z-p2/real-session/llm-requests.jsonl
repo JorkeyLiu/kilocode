@@ -1,0 +1,4 @@
+{"pid":35295,"instance":1,"ts":"2026-08-15T08:34:46","providerID":"e2e-local","modelID":"e2e-model","sessionID":"title-ses_ffb70d7c6ffe3KiCSzFQGc70ID","small":true,"agent":"title","mode":"primary"}
+{"pid":35295,"instance":1,"ts":"2026-08-15T08:34:48","providerID":"e2e-local","modelID":"e2e-model","sessionID":"ses_ffb70d7c6ffe3KiCSzFQGc70ID","small":false,"agent":"e2e-agent","mode":"primary"}
+{"pid":35295,"instance":1,"ts":"2026-08-15T08:34:49","providerID":"e2e-local","modelID":"e2e-model","sessionID":"title-ses_ffb70c9d5ffeXE7q8yj8IUOr5C","small":true,"agent":"title","mode":"primary"}
+{"pid":35295,"instance":1,"ts":"2026-08-15T08:34:51","providerID":"e2e-local","modelID":"e2e-model","sessionID":"ses_ffb70c9d5ffeXE7q8yj8IUOr5C","small":false,"agent":"e2e-agent-b","mode":"primary"}

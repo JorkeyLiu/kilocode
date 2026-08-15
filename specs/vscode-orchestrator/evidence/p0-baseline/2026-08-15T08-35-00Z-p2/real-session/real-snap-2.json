@@ -1,0 +1,107 @@
+{
+  "requestedAt": "2026-08-15T08:34:51.338Z",
+  "sessions": [
+    {
+      "id": "ses_ffb70c9d5ffeXE7q8yj8IUOr5C",
+      "title": "New session - 2026-08-15T08:34:49.514Z",
+      "agent": "e2e-agent-b",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "high"
+      },
+      "parentID": null,
+      "createdAt": 1786782889514,
+      "updatedAt": 1786782889793
+    },
+    {
+      "id": "ses_ffb70d7c6ffe3KiCSzFQGc70ID",
+      "title": "New session - 2026-08-15T08:34:45.945Z",
+      "agent": "e2e-agent",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": null,
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "createdAt": 1786782885945,
+      "updatedAt": 1786782887811
+    }
+  ],
+  "messages": {
+    "ses_ffb70c9d5ffeXE7q8yj8IUOr5C": [
+      {
+        "id": "msg_0048f3615001rQegtEr9LA39n9",
+        "role": "user",
+        "agent": "e2e-agent-b",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "high"
+        },
+        "text": "E2E parity prompt B: custom agent B plus high variant"
+      },
+      {
+        "id": "msg_0048f377b00114YcasO1uAyiwz",
+        "role": "assistant",
+        "agent": "e2e-agent-b",
+        "text": ""
+      }
+    ],
+    "ses_ffb70d7c6ffe3KiCSzFQGc70ID": [
+      {
+        "id": "msg_0048f2823001hZWdwfkNeFJA1M",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E parity prompt A: custom agent plus low variant"
+      },
+      {
+        "id": "msg_0048f2997001HA0y4POVtxmfXr",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": ""
+      }
+    ]
+  },
+  "statuses": {
+    "ses_ffb70d7c6ffe3KiCSzFQGc70ID": "busy",
+    "ses_ffb70c9d5ffeXE7q8yj8IUOr5C": "busy"
+  },
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "e2e-agent-b",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {},
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {
+    "ses_ffb70c9d5ffeXE7q8yj8IUOr5C": [],
+    "ses_ffb70d7c6ffe3KiCSzFQGc70ID": []
+  }
+}

@@ -92,7 +92,8 @@ async function provisionVariantModelFixture(
   } catch (err) {
     console.error("[Kilo New] provisionVariantModelFixture: real catalog/agents unavailable:", err)
   }
-  if (!providers[providerID]) providers[providerID] = { id: providerID, name: providerID, models: { [modelID]: injected } }
+  if (!providers[providerID])
+    providers[providerID] = { id: providerID, name: providerID, models: { [modelID]: injected } }
   if (!connected.includes(providerID)) connected = [...connected, providerID]
 
   const post = () => {
@@ -599,15 +600,17 @@ export function activate(context: vscode.ExtensionContext) {
   )
 
   // E2E fixture bridge (gated). Registered only when the real Extension Host
-  // E2E harness (script/e2e-probe.ts) sets KILO_E2E_FIXTURE. Exposes four
+  // E2E harness (script/e2e-probe.ts) sets KILO_E2E_FIXTURE. Exposes
   // deterministic probes to the extension-host test runner: Agent Manager
   // panel readiness, typed webview posting, session-list settlement
   // (await the real backend session refresh so the runner can re-seed after
-  // it), and variant-model provisioning (inject a model with ≥2 reasoning
+  // it), variant-model provisioning (inject a model with ≥2 reasoning
   // variants into the served provider catalog so the real ThinkingSelector is
-  // interactive — the models.dev snapshot ships no variant-bearing models).
-  // No production effect when the env var is absent — no commands are
-  // registered and no webview code runs.
+  // interactive — the models.dev snapshot ships no variant-bearing models),
+  // and a read-only snapshot of served-backend truth (session list,
+  // transcripts, statuses, agent catalog, connected providers) for the
+  // real-session scenario. No production effect when the env var is absent —
+  // no commands are registered and no webview code runs.
   if (process.env.KILO_E2E_FIXTURE) {
     context.subscriptions.push(
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerReady", async () => {
@@ -621,6 +624,38 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.settleSessions", async () => {
         await agentManagerProvider.settleSessionsForFixture()
         return true
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.backendSnapshot", async () => {
+        return agentManagerProvider.backendSnapshotForFixture()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.mcpDisconnect", async (name: string) => {
+        return agentManagerProvider.mcpDisconnectForFixture(name)
+      }),
+      // LOCK-006/LOCK-008 generation-request evidence: aggregate typed records
+      // of every backend `service=llm` line (provider/model/agent/small/
+      // session) across all server instances and launches of this run, plus a
+      // run-start reset. The real-* scenarios assert every record is the
+      // run-owned e2e-local/e2e-model — any kilo/kilo-auto/* line fails.
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.llmRequests", async () => {
+        return connectionService.fixtureLlmRequests()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.llmRequestsReset", async () => {
+        return connectionService.fixtureLlmRequestsReset()
+      }),
+      // real-restart transport/process-ownership probes over the shared
+      // bridge: SSE reconnect trigger + observation, exact-owned worker kill,
+      // and the production reconnect flow. All are env-gated: the
+      // connection-service methods throw when the fixture env is absent and
+      // these commands are not registered at all. The live reconnect/kill
+      // outputs carry the exact server PID facts the harness asserts on.
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sseReconnect", async () => {
+        return connectionService.fixtureSseReconnect()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.killServer", async () => {
+        return connectionService.fixtureKillServer()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.reconnectServer", async () => {
+        return connectionService.fixtureReconnectServer()
       }),
       vscode.commands.registerCommand(
         "kilo-code.new.e2eFixture.provisionVariantModel",

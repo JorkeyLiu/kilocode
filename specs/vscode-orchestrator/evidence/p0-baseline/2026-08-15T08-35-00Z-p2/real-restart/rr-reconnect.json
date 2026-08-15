@@ -1,0 +1,23 @@
+{
+  "state": "connected",
+  "port": 55436,
+  "pid": 54774,
+  "states": [
+    {
+      "state": "error",
+      "at": "2026-08-15T08:42:48.232Z"
+    },
+    {
+      "state": "connecting",
+      "at": "2026-08-15T08:42:48.259Z"
+    },
+    {
+      "state": "connecting",
+      "at": "2026-08-15T08:42:54.049Z"
+    },
+    {
+      "state": "connected",
+      "at": "2026-08-15T08:42:54.151Z"
+    }
+  ]
+}

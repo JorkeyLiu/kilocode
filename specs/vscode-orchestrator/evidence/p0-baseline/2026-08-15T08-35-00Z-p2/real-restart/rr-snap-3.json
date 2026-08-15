@@ -1,0 +1,87 @@
+{
+  "requestedAt": "2026-08-15T08:42:45.794Z",
+  "sessions": [
+    {
+      "id": "ses_ffb69b28fffeq8awKW3bLwkl8r",
+      "title": "E2E Title",
+      "agent": "e2e-agent",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": null,
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "createdAt": 1786783354224,
+      "updatedAt": 1786783357299
+    }
+  ],
+  "messages": {
+    "ses_ffb69b28fffeq8awKW3bLwkl8r": [
+      {
+        "id": "msg_004964d59001qwvQ7Gju2tplLi",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_RESTART_PROMPT: call the user tool and wait for the result"
+      },
+      {
+        "id": "msg_004964edb001bONHbwKRsx3tR2",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "",
+        "tools": [
+          {
+            "tool": "e2e_marker",
+            "status": "completed",
+            "callID": "call_e2e_restart_1",
+            "output": "echo:restart",
+            "metadata": {
+              "truncated": false
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg_004965807001ZVIYP2RfekXy1W",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "E2E_RESTART_DONE"
+      }
+    ]
+  },
+  "statuses": {},
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {},
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {
+    "ses_ffb69b28fffeq8awKW3bLwkl8r": []
+  }
+}

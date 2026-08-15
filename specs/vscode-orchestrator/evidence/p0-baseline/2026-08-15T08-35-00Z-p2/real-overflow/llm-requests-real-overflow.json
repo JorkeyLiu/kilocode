@@ -1,0 +1,51 @@
+{
+  "scenario": "real-overflow",
+  "collectedAt": "2026-08-15T08:41:22.457Z",
+  "file": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/llm-requests.jsonl",
+  "records": [
+    {
+      "pid": 49944,
+      "instance": 1,
+      "ts": "2026-08-15T08:41:15",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "title-ses_ffb6aea17ffe3RPzfuXHJ6U3ah",
+      "small": true,
+      "agent": "title",
+      "mode": "primary"
+    },
+    {
+      "pid": 49944,
+      "instance": 1,
+      "ts": "2026-08-15T08:41:16",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "ses_ffb6aea17ffe3RPzfuXHJ6U3ah",
+      "small": false,
+      "agent": "e2e-agent",
+      "mode": "primary"
+    },
+    {
+      "pid": 49944,
+      "instance": 1,
+      "ts": "2026-08-15T08:41:16",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "ses_ffb6aea17ffe3RPzfuXHJ6U3ah",
+      "small": false,
+      "agent": "compaction",
+      "mode": "primary"
+    },
+    {
+      "pid": 49944,
+      "instance": 1,
+      "ts": "2026-08-15T08:41:19",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "ses_ffb6aea17ffe3RPzfuXHJ6U3ah",
+      "small": false,
+      "agent": "e2e-agent",
+      "mode": "primary"
+    }
+  ]
+}

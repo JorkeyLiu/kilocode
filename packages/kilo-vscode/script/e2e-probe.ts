@@ -25,25 +25,105 @@
  *   - topic-navigation   => only the derived-Topic lifecycle-convergence
  *                           scenario (navigation, panel close/reopen, webview
  *                           reload) + its fixtures.
+ *   - real-session       => only the real-session parity scenario: drives the
+ *                           real Agent Manager webview to create/prompt REAL
+ *                           backend sessions through the production message
+ *                           path and asserts served-backend truth (H-1 custom
+ *                           agent, H-8 concurrent sessions, H-9 per-session
+ *                           model+variant, H-10 transcript rehydration, H-11
+ *                           create/abort/close). Requires the run-owned
+ *                           workspace config seed this harness writes before VS
+ *                           Code launches (custom provider/model/variant +
+ *                           custom agents) and a run-owned hang server the
+ *                           custom provider points at, so prompts stay busy
+ *                           until the production abort path cancels them.
+ *   - real-completed     => only the real-completed-turn parity scenario:
+ *                           drives the real Agent Manager webview through
+ *                           COMPLETED turns against a run-owned scripted
+ *                           OpenAI-compatible SSE provider, proving H-2
+ *                           (delegation with result flow-back), H-3 (user
+ *                           tool), H-4 (skill), H-5 (MCP connect/execute/
+ *                           exact-PID cleanup), H-6 (permission + question
+ *                           inline docks), H-7 (parent-child hierarchy
+ *                           persists after panel close/reopen), and H-12
+ *                           (Revert-to-here restores a tracked file via
+ *                           production SessionRevert+Snapshot, the RevertBanner
+ *                           renders its diff, and Redo All/unrevert restores
+ *                           the edited bytes).
+ *   - real-overflow       => only the real-overflow H-13 scenario: drives the
+ *                           real Agent Manager webview through ONE completed
+ *                           turn whose first scripted response deliberately
+ *                           exceeds the run-owned compaction cap (custom
+ *                           provider model limit.context ×
+ *                           compaction.threshold_percent on a DEDICATED config
+ *                           that never shares the H-2..H-7 model), proving the
+ *                           production internal context-overflow safeguard
+ *                           stays invisible and functional: the served backend
+ *                           records a typed auto-compaction part + summary +
+ *                           automatic-continuation turn, the panel renders the
+ *                           continuation answer (and the summary trace), and
+ *                           the Agent Manager DOM has no context-management /
+ *                           compact controls.
+ *   - real-restart        => only the real-restart H-10/H-11 scenario: drives
+ *                           ONE real completed session (durable transcript +
+ *                           artifact) against the run-owned scripted provider,
+ *                           then proves presentation converges to runtime facts
+ *                           across every remaining boundary over the shared
+ *                           bridge — Phase A: explicit SSE reconnect with the
+ *                           backend alive (same port/PID, no duplicate/stale
+ *                           presentation), Phase B: exact-owned worker kill
+ *                           through ServerManager's owner path + production
+ *                           reconnect flow (new PID/port, transcript/artifact
+ *                           rehydrate, UI converges), Phase C: the runner
+ *                           executes workbench.action.reloadWindow (the true
+ *                           window/extension restart); the test-mode main
+ *                           process exits with the torn-down Extension Host, so
+ *                           the harness RELAUNCHES VS Code with identical args
+ *                           and the fresh Extension Host re-runs the test
+ *                           runner, detects the persisted marker, and the
+ *                           restored panel resumes the same session/artifact
+ *                           from the same XDG scratch.
  *   Any other value fails fast before VS Code launches. Focused runs:
  *     KILO_E2E_SCENARIO=tab-close         node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=child-task-order  node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=variant-memory    node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=topic-navigation  node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=real-session      node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=real-completed    node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=real-overflow     node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
  *   (package shortcuts: `bun run test:e2e:tab-close`,
  *   `bun run test:e2e:child-task-order`,
  *   `bun run test:e2e:variant-memory`,
- *   `bun run test:e2e:topic-navigation`.)
+ *   `bun run test:e2e:topic-navigation`,
+ *   `bun run test:e2e:real-session`,
+ *   `bun run test:e2e:real-completed`,
+ *   `bun run test:e2e:real-overflow`,
+ *   `bun run test:e2e:real-restart`.)
  *
  * Scenarios are independent: each seeds only its own fixtures and coordinates
  * through scenario-specific markers (tab-close-done, child-phase1-done /
  * child-phase2-ready / child-phase2-done, variant-ready, topic-nav-done /
  * topic-reopen-ready / topic-reopen-done / topic-reload-frame /
- * topic-reload-ready / topic-reload-done). No scenario waits on another's
- * markers. The tab-close scenario runs first in the `all` composition and
- * closes all its own tabs before finishing, so the strip it hands to the child
- * scenario is exactly the startup state (one pending tab + bottom page) the
- * child seeding already expects.
+ * topic-reload-ready / topic-reload-done, real-ready / real-snap-N-request /
+ * real-snap-N.json / real-reopen-request / real-reopen-ready,
+ * real-completed-ready / rc-snap-N-request / rc-snap-N.json /
+ * real-completed-reopen-request / real-completed-reopen-ready /
+ * real-completed-mcp-disconnect-request / real-completed-mcp-disconnect-done,
+ * real-overflow-ready / of-snap-N-request / of-snap-N.json,
+ * rr-ready / rr-conn-request / rr-conn.json / rr-kill-request / rr-kill.json /
+ * rr-reconnect-request / rr-reconnect.json / rr-snap-N-request / rr-snap-N.json /
+ * rr-reload-request / rr-reload-executed / rr-reloaded /
+ * rr-c-snap-N-request / rr-c-snap-N.json /
+ * runner-pid).
+ * No scenario waits on another's markers. The tab-close scenario runs first
+ * in the `all` composition and closes all its own tabs before finishing, so
+ * the strip it hands to the child scenario is exactly the startup state (one
+ * pending tab + bottom page) the child seeding already expects. real-session,
+ * real-completed, real-overflow, and real-restart are focused-only (like
+ * topic-navigation): they create REAL backend sessions and close/reopen the
+ * panel (real-session / real-completed) or reload the whole window
+ * (real-restart), which would pollute the other scenarios.
  *
  * MUST run under Node, not Bun: Playwright's CDP WebSocket transport hangs
  * under Bun's runtime against VS Code's Electron CDP endpoint (verified:
@@ -76,11 +156,64 @@ import { runTests } from "@vscode/test-electron"
 import { chromium, type Browser, type Frame, type Page } from "@playwright/test"
 import { build } from "esbuild"
 import { spawnSync } from "node:child_process"
-import { createServer } from "node:net"
+import { createServer, type Socket } from "node:net"
 import { randomBytes } from "node:crypto"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
+import { pathToFileURL } from "node:url"
+import type { BackendSnapshot, SessionTruth } from "../src/agent-manager/fixture-backend"
+import { createScriptedModel, SCRIPTED, type ScriptedModelHandle } from "./e2e-scripted-model"
+import { writeRealCompletedSeed, writeRealOverflowSeed, initWorkspaceGit, type CompletedSeedPaths } from "./e2e-completed-seed"
+import { writeRealRestartSeed, RESTART_ARTIFACT_CONTENT } from "./e2e-restart-seed"
+import { isWrongPin, pinnedReason, pinReport, type PinExpectation } from "./e2e-pin"
+import { assertRunOwnedLlmRequests, readLlmRequests } from "./e2e-llm-matrix"
+import { evidenceDirFor, runEvidenceHandoff } from "./e2e-evidence"
+import {
+  activeTabId,
+  activeTabLabel,
+  agentOptions,
+  assertNoWorktree,
+  clickChildTaskLink,
+  clickRevertToHere,
+  clickSidebarChild,
+  clickSidebarTopic,
+  clickTab,
+  clickTabClose,
+  closePopover,
+  describeTargets,
+  E2EPlan,
+  expectBannerFile,
+  expectHeaderTitle,
+  expectTabOrder,
+  expectTopicHierarchy,
+  expectTranscriptText,
+  findAgentManagerFrameAny,
+  headerTitle,
+  labelText,
+  openSidebarSession,
+  pickAgent,
+  pickOption,
+  pickVariant,
+  realTabStates,
+  sendTurnWithPin,
+  sendWithRetry,
+  sidebarTopicStates,
+  sleep,
+  snapshotClient,
+  tabLabels,
+  tabStates,
+  waitForAgentOption,
+  waitForFile,
+  waitForFileBytes,
+  waitForLabel,
+  waitForModelSelected,
+  waitForNoSessionTabs,
+  waitForRealSessionTabs,
+  type SidebarChildState,
+  type SidebarTopicState,
+} from "./e2e-probe-dom"
+import { assertRealRestartReload, runRealRestartBoundaries } from "./e2e-probe-restart"
 
 if (process.versions.bun) {
   console.error(
@@ -95,19 +228,62 @@ if (process.versions.bun) {
 const root = process.env.KILO_E2E_ROOT ? resolve(process.env.KILO_E2E_ROOT) : resolve(process.cwd())
 const runnerEntry = join(root, "tests", "e2e", "runner.ts")
 const shouldBuild = !process.argv.includes("--no-build")
-const timeoutMs = Number(process.env.KILO_E2E_TIMEOUT ?? 300_000)
+// Watchdog for the whole probe run (outer bound). real-completed drives
+// completed turns through the real webview, then reopens the panel (H-7),
+// disconnects the MCP server (H-5), and runs H-12 Phase 9; its extension-host
+// runner declares a 5.4M ms service budget (REAL_COMPLETED_SERVICE_BUDGET in
+// tests/e2e/runner.ts), so the 300s default would kill a valid slow/retry-heavy
+// run before Phase 9. real-overflow declares a 900s service budget
+// (REAL_OVERFLOW_SERVICE_BUDGET) that a 600s watchdog could not outlive, and
+// real-restart declares 2.1M ms across its reload boundary. Derive wider
+// defaults ONLY for those scenarios (real-completed 100 min, real-overflow
+// 20 min, real-restart 100 min); every other scenario — including real-session,
+// whose service loop is bounded at 240s — keeps the 300s default, so the global
+// watchdog is not weakened. An explicit KILO_E2E_TIMEOUT always wins over the
+// derived default.
+const timeoutMs = Number(
+  process.env.KILO_E2E_TIMEOUT ??
+    (process.env.KILO_E2E_SCENARIO === "real-completed"
+      ? 6_000_000
+      : process.env.KILO_E2E_SCENARIO === "real-overflow"
+        ? 1_200_000
+        : process.env.KILO_E2E_SCENARIO === "real-restart"
+          ? 6_000_000
+          : 300_000),
+)
 
 // LOCK-002: scenario selection. `all` (default) runs every scenario in one VS
 // Code lifecycle; a focused value runs exactly that scenario. Unknown values
-// fail fast BEFORE VS Code launches (see main()). topic-navigation is
-// focused-only by design (not part of `all`): it closes/reopens the Agent
-// Manager panel mid-run, which would dispose the tab strip the other `all`
-// scenarios coordinate on, so the delivery-gate composition stays deliberate
-// and unchanged.
-const SCENARIO_VALUES = ["all", "tab-close", "child-task-order", "variant-memory", "topic-navigation"] as const
+// fail fast BEFORE VS Code launches (see main()). topic-navigation,
+// real-session, and real-completed are focused-only by design (not part of
+// `all`): topic closes/reopens the Agent Manager panel mid-run (which would
+// dispose the tab strip the other `all` scenarios coordinate on), and the
+// real scenarios create REAL backend sessions through the production webview
+// path (which would pollute the synthetic session lists the other scenarios
+// re-seed) — so the delivery-gate composition stays deliberate and unchanged.
+const SCENARIO_VALUES = [
+  "all",
+  "tab-close",
+  "child-task-order",
+  "variant-memory",
+  "topic-navigation",
+  "real-session",
+  "real-completed",
+  "real-overflow",
+  "real-restart",
+] as const
 function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
-  if (value === "tab-close" || value === "child-task-order" || value === "variant-memory" || value === "topic-navigation") {
+  if (
+    value === "tab-close" ||
+    value === "child-task-order" ||
+    value === "variant-memory" ||
+    value === "topic-navigation" ||
+    value === "real-session" ||
+    value === "real-completed" ||
+    value === "real-overflow" ||
+    value === "real-restart"
+  ) {
     return new Set([value])
   }
   throw new Error(
@@ -131,8 +307,6 @@ if (process.platform === "win32") {
   )
   process.exit(1)
 }
-
-const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 // ---------------------------------------------------------------------------
 // Unique ownership
@@ -225,38 +399,6 @@ async function waitForCdp(port: number, timeoutMs: number): Promise<void> {
   }
 }
 
-async function waitForFile(file: string, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    if (existsSync(file)) return
-    if (Date.now() > deadline) throw new Error(`probe: timeout waiting for ${label}`)
-    await sleep(200)
-  }
-}
-
-interface E2EPlan {
-  sourceId: string
-  siblingId: string
-  childId: string
-  variantId: string
-  tabAId: string
-  tabBId: string
-  tabCId: string
-  sourceTitle: string
-  siblingTitle: string
-  childTitle: string
-  variantTitle: string
-  tabATitle: string
-  tabBTitle: string
-  tabCTitle: string
-  topicRootId: string
-  topicChildId: string
-  topicSiblingId: string
-  topicRootTitle: string
-  topicChildTitle: string
-  topicSiblingTitle: string
-}
-
 /**
  * Find the Agent Manager webview frame among CDP pages. VS Code webviews are
  * OOPIF iframes; Playwright exposes them as frames (page.frames()) of the
@@ -305,122 +447,6 @@ async function findAgentManagerFrame(
     await sleep(250)
   }
   return found
-}
-
-async function tabLabels(frame: Frame): Promise<string[]> {
-  return frame
-    .locator(".am-tab .am-tab-label")
-    .allTextContents()
-    .then((items) => items.map((s) => s.trim()))
-    .catch(() => [])
-}
-
-/** Ordered [{id, label}] for every session tab (ids from the sortable container). */
-async function tabStates(frame: Frame): Promise<Array<{ id: string; label: string }>> {
-  return frame.evaluate(() => {
-    const out: Array<{ id: string; label: string }> = []
-    const containers = Array.from(document.querySelectorAll<HTMLElement>(".am-tab-sortable"))
-    for (const container of containers) {
-      const id = container.getAttribute("data-tab-id") ?? ""
-      const label = container.querySelector(".am-tab-label")?.textContent?.trim() ?? ""
-      if (label) out.push({ id, label })
-    }
-    return out
-  })
-}
-
-async function activeTabLabel(frame: Frame): Promise<string | undefined> {
-  return frame
-    .locator(".am-tab.am-tab-active .am-tab-label")
-    .first()
-    .textContent()
-    .then((s) => s?.trim())
-    .catch(() => undefined)
-}
-
-/** The tab ID of the currently active session tab, if any. */
-async function activeTabId(frame: Frame): Promise<string | undefined> {
-  return frame
-    .evaluate(() => {
-      const containers = Array.from(document.querySelectorAll<HTMLElement>(".am-tab-sortable"))
-      const active = containers.find((c) => c.querySelector(".am-tab-active"))
-      return active?.getAttribute("data-tab-id") ?? undefined
-    })
-    .catch(() => undefined)
-}
-
-/**
- * Assert the ordered tab strip. Tab IDs (from `.am-tab-sortable[data-tab-id]`)
- * are the primary order evidence — they are stable across sessions and immune
- * to title-wording drift. Labels are asserted as supplementary UI evidence.
- */
-async function expectTabOrder(
-  frame: Frame,
-  expectedIds: string[],
-  expectedLabels: string[],
-  expectedActiveId: string,
-  expectedActiveLabel: string,
-  timeoutMs: number,
-  label: string,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const states = await tabStates(frame)
-    const ids = states.map((t) => t.id)
-    const labels = states.map((t) => t.label)
-    const active = await activeTabLabel(frame)
-    const activeId = await activeTabId(frame)
-    const idMatch = ids.length === expectedIds.length && ids.every((id, i) => id === expectedIds[i])
-    const labelMatch = labels.every((l, i) => l === expectedLabels[i])
-    const activeMatch = active === expectedActiveLabel && activeId === expectedActiveId
-    if (idMatch && labelMatch && activeMatch) {
-      console.log(
-        `[probe] PASS ${label}: ids=[${ids.join(", ")}] labels=[${labels.join(", ")}] active="${active}" (${activeId})`,
-      )
-      return
-    }
-    if (Date.now() > deadline) {
-      const body = await frame
-        .locator("body")
-        .innerText()
-        .catch(() => "<unreadable>")
-      throw new Error(
-        `probe: ${label} failed.\n` +
-          `  expected ids=[${expectedIds.join(", ")}] labels=[${expectedLabels.join(", ")}] activeId="${expectedActiveId}" activeLabel="${expectedActiveLabel}"\n` +
-          `  actual   ids=[${ids.join(", ")}] labels=[${labels.join(", ")}] active="${active ?? "<none>"}" (${activeId ?? "<none>"})\n` +
-          `  body:\n${body.slice(0, 1500)}`,
-      )
-    }
-    await sleep(250)
-  }
-}
-
-async function clickChildTaskLink(frame: Frame, timeoutMs: number): Promise<void> {
-  const link = frame.locator('button[aria-label="Open sub-agent in tab"]').first()
-  try {
-    await link.waitFor({ state: "visible", timeout: timeoutMs })
-    await link.click({ timeout: timeoutMs })
-  } catch (err) {
-    const wrappers = await frame
-      .evaluate(() => {
-        const nodes = Array.from(document.querySelectorAll('[data-component="tool-part-wrapper"]'))
-        return nodes.map((n) => ({
-          dataTool: n.getAttribute("data-tool"),
-          subagentButtons: n.querySelectorAll('button[aria-label="Open sub-agent in tab"]').length,
-          outer: n.outerHTML.slice(0, 1200),
-        }))
-      })
-      .catch(() => [])
-    const body = await frame
-      .locator("body")
-      .innerHTML()
-      .catch(() => "<unreadable>")
-    throw new Error(
-      `probe: production open button not clickable.\n  wrappers=${JSON.stringify(wrappers, null, 2)}\n` +
-        `  bodyHTML:\n${body.slice(0, 1200)}`,
-    )
-  }
-  console.log('[probe] clicked production open button (aria-label="Open sub-agent in tab")')
 }
 
 /**
@@ -624,266 +650,9 @@ async function assertTabCloseSuccessor(browser: Browser, plan: E2EPlan, scratch:
 // Variant memory across agents (LOCK-001) — real webview DOM
 // ---------------------------------------------------------------------------
 
-/** Text of the first element matching the selector (label of a selector trigger). */
-async function labelText(frame: Frame, selector: string): Promise<string | undefined> {
-  return frame
-    .locator(selector)
-    .first()
-    // Bounded per-read wait so a transiently absent node (e.g. a selector that
-    // unmounts/remounts during an agent-switch re-render) never blocks a poll
-    // loop on Playwright's 30s default — the caller's loop survives it.
-    .textContent({ timeout: 2_000 })
-    .then((s) => s?.trim())
-    .catch(() => undefined)
-}
-
-/** Poll until the selector trigger label equals the expected text. */
-async function waitForLabel(frame: Frame, selector: string, expected: string, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const text = await labelText(frame, selector)
-    if (text === expected) {
-      console.log(`[probe] PASS ${label}: "${text}"`)
-      return
-    }
-    if (Date.now() > deadline) {
-      const evidence = await frame
-        .evaluate((sel) => {
-          const nodes = Array.from(document.querySelectorAll<HTMLElement>(sel))
-          const body = document.body?.innerText ?? ""
-          return {
-            selector: sel,
-            count: nodes.length,
-            texts: nodes.map((n) => n.textContent?.trim() ?? ""),
-            modeTrigger: document.querySelector(".mode-switcher-trigger-label")?.textContent?.trim() ?? null,
-            thinkingTrigger: document.querySelector(".thinking-selector-trigger-label")?.textContent?.trim() ?? null,
-            body: body.slice(0, 1200),
-          }
-        }, selector)
-        .catch(() => ({ selector, error: "evaluate failed" }))
-      throw new Error(
-        `probe: ${label} failed: expected "${expected}", got "${text ?? "<none>"}".\n` +
-          `  dom=${JSON.stringify(evidence, null, 2)}`,
-      )
-    }
-    await sleep(250)
-  }
-}
-
-async function clickTab(frame: Frame, tabId: string, timeoutMs: number): Promise<void> {
-  const tab = frame.locator(`.am-tab-sortable[data-tab-id="${tabId}"]`).first()
-  await tab.waitFor({ state: "visible", timeout: timeoutMs })
-  await tab.click({ timeout: timeoutMs })
-}
-
-/**
- * Click the real production close button of one session tab. The button is
- * the `.am-tab-close` rendered by the production SessionTab component inside
- * that tab's `.am-tab-sortable` container — the exact DOM element a user
- * clicks. Scoping by the tab's data-tab-id never depends on a locale-dependent
- * aria-label or title string.
- */
-async function clickTabClose(frame: Frame, tabId: string, timeoutMs: number): Promise<void> {
-  const btn = frame.locator(`.am-tab-sortable[data-tab-id="${tabId}"] .am-tab-close`).first()
-  await btn.waitFor({ state: "visible", timeout: timeoutMs })
-  await btn.click({ timeout: timeoutMs })
-  console.log(`[probe] clicked .am-tab-close for tab ${tabId}`)
-}
-
-/** Poll until no `.am-tab-sortable` session tab remains (only-tab close path). */
-async function waitForNoSessionTabs(frame: Frame, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const states = await tabStates(frame)
-    if (states.length === 0) {
-      console.log(`[probe] PASS ${label}: no session tabs remain`)
-      return
-    }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `probe: ${label} failed: ${states.length} session tab(s) remain: ` +
-          states.map((s) => `${s.id}="${s.label}"`).join(", "),
-      )
-    }
-    await sleep(250)
-  }
-}
-
 // ---------------------------------------------------------------------------
 // Derived Topic navigation — real webview sidebar
 // ---------------------------------------------------------------------------
-
-interface SidebarChildState {
-  id: string
-  label: string
-  active: boolean
-}
-
-interface SidebarTopicState {
-  id: string
-  label: string
-  active: boolean
-  /** Ordered child rows rendered under the expanded topic (`#topic-children-{id}`). */
-  children: SidebarChildState[]
-}
-
-/**
- * Read the runtime-derived Topic hierarchy from the real Agent Manager
- * sidebar: topic root rows (`.am-item.am-topic-root[data-topic-id]`, label
- * from `.am-item-title-text`) with their rendered child rows under
- * `#topic-children-{id}`. DOM order is the derivation order (activity
- * descending, deterministic ID tie-break) — same order the runtime derived.
- */
-async function sidebarTopicStates(frame: Frame): Promise<SidebarTopicState[]> {
-  return frame
-    .evaluate(() => {
-      const out: SidebarTopicState[] = []
-      const roots = Array.from(document.querySelectorAll<HTMLElement>(".am-list .am-topic-root[data-topic-id]"))
-      for (const root of roots) {
-        const id = root.getAttribute("data-topic-id") ?? ""
-        const children: SidebarChildState[] = []
-        const box = document.getElementById(`topic-children-${id}`)
-        if (box) {
-          for (const child of Array.from(box.querySelectorAll<HTMLElement>(":scope > .am-item"))) {
-            children.push({
-              id: child.getAttribute("data-sidebar-id") ?? "",
-              label: child.querySelector(".am-item-title-text")?.textContent?.trim() ?? "",
-              active: child.classList.contains("am-item-active"),
-            })
-          }
-        }
-        out.push({
-          id,
-          label: root.querySelector(".am-item-title-text")?.textContent?.trim() ?? "",
-          active: root.classList.contains("am-item-active"),
-          children,
-        })
-      }
-      return out
-    })
-    .catch(() => [])
-}
-
-/**
- * Assert the runtime-derived Topic hierarchy: ordered topic roots with
- * labels, active-topic highlight, and rendered child membership. Children are
- * only rendered when the topic is expanded; the active session's topic
- * auto-expands and the default-expand effect opens the most active topic with
- * children, so the seeded root topic's child row is expected visible.
- */
-async function expectTopicHierarchy(
-  frame: Frame,
-  expected: SidebarTopicState[],
-  timeoutMs: number,
-  label: string,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const topics = await sidebarTopicStates(frame)
-    const same = (a: SidebarTopicState, b: SidebarTopicState) =>
-      a.id === b.id &&
-      a.label === b.label &&
-      a.active === b.active &&
-      a.children.length === b.children.length &&
-      a.children.every((c, i) => {
-        const d = b.children[i]
-        return d && c.id === d.id && c.label === d.label && c.active === d.active
-      })
-    const match = topics.length === expected.length && topics.every((t, i) => same(t, expected[i]!))
-    if (match) {
-      console.log(
-        `[probe] PASS ${label}: ${topics.map((t) => `${t.id}="${t.label}"${t.active ? "(active)" : ""}[${t.children.map((c) => `${c.id}${c.active ? "(active)" : ""}`).join(",")}]`).join(" ")}`,
-      )
-      return
-    }
-    if (Date.now() > deadline) {
-      throw new Error(
-        `probe: ${label} failed.\n` +
-          `  expected=${JSON.stringify(expected)}\n` +
-          `  actual  =${JSON.stringify(topics)}`,
-      )
-    }
-    await sleep(250)
-  }
-}
-
-/** Current title of the real TaskHeader (`[data-slot="task-header-title-label"]`). */
-async function headerTitle(frame: Frame): Promise<string | undefined> {
-  return frame
-    .locator('[data-slot="task-header-title-label"]')
-    .first()
-    .textContent({ timeout: 2_000 })
-    .then((s) => s?.trim())
-    .catch(() => undefined)
-}
-
-/** Poll until the chat header title equals the expected session title. */
-async function expectHeaderTitle(frame: Frame, expected: string, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const title = await headerTitle(frame)
-    if (title === expected) {
-      console.log(`[probe] PASS ${label}: "${title}"`)
-      return
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`probe: ${label} failed: expected "${expected}", got "${title ?? "<none>"}"`)
-    }
-    await sleep(250)
-  }
-}
-
-/** Click a Topic root row in the real sidebar (clicks the title, bubbles to the row's onSelectSession). */
-async function clickSidebarTopic(frame: Frame, topicId: string, timeoutMs: number): Promise<void> {
-  const row = frame.locator(`.am-item.am-topic-root[data-topic-id="${topicId}"]`).first()
-  await row.waitFor({ state: "visible", timeout: timeoutMs })
-  await row.locator(".am-item-title-text").first().click({ timeout: timeoutMs })
-  console.log(`[probe] clicked sidebar topic row ${topicId}`)
-}
-
-/** Click a child session row under its expanded Topic in the real sidebar. */
-async function clickSidebarChild(frame: Frame, sessionId: string, timeoutMs: number): Promise<void> {
-  const row = frame.locator(`.am-topic-children [data-sidebar-id="${sessionId}"]`).first()
-  await row.waitFor({ state: "visible", timeout: timeoutMs })
-  await row.locator(".am-item-title-text").first().click({ timeout: timeoutMs })
-  console.log(`[probe] clicked sidebar child row ${sessionId}`)
-}
-
-/**
- * The Topic hierarchy must derive purely from runtime session facts (parentID
- * edges) with no worktree dependency — the derived-Topic model is a
- * navigation view, not a persisted domain model. Asserts the sidebar renders
- * exactly the derived topic rows (no worktree cards, no data-worktree-id, no
- * stray `.am-item` outside the topic hierarchy).
- */
-async function assertNoWorktree(frame: Frame, label: string): Promise<void> {
-  const stats = await frame
-    .evaluate(() => {
-      const list = document.querySelector(".am-list")
-      if (!list) {
-        return { list: false, worktreeIds: 0, cards: 0, topicRoots: 0, children: 0, items: 0 }
-      }
-      const topicRoots = list.querySelectorAll(".am-topic-root[data-topic-id]").length
-      const children = list.querySelectorAll(".am-topic-children .am-item").length
-      return {
-        list: true,
-        worktreeIds: list.querySelectorAll("[data-worktree-id]").length,
-        cards: list.querySelectorAll(".am-worktree-card, .am-worktree-group, .am-group-card").length,
-        topicRoots,
-        children,
-        items: list.querySelectorAll(".am-item").length,
-      }
-    })
-    .catch(() => ({ list: false, worktreeIds: -1, cards: -1, topicRoots: 0, children: 0, items: 0 }))
-  const noWorktree = stats.list && stats.worktreeIds === 0 && stats.cards === 0
-  const exactHierarchy = stats.topicRoots > 0 && stats.items === stats.topicRoots + stats.children
-  if (!noWorktree || !exactHierarchy) {
-    throw new Error(`probe: ${label} failed: ${JSON.stringify(stats)}`)
-  }
-  console.log(
-    `[probe] PASS ${label}: no worktree markers; ${stats.topicRoots} topic root(s) + ${stats.children} child row(s)`,
-  )
-}
 
 /**
  * Reload the Agent Manager webview through the VS Code host's own webview
@@ -950,128 +719,6 @@ async function findReloadedFrame(
 }
 
 /**
- * Close an open popover list if one exists. Counts first so an absent list
- * never blocks on Playwright's default 30s action timeout (an unconditional
- * `press("Escape")` on a locator with no match did exactly that and exhausted
- * the pick retry deadline), and bounds the press itself for the Kobalte detach
- * race (options can detach on focus).
- */
-async function closePopover(frame: Frame, listSelector: string): Promise<void> {
-  const open = await frame.locator(listSelector).count().catch(() => 0)
-  if (open > 0) {
-    await frame.locator(listSelector).first().press("Escape", { timeout: 2_000 }).catch(() => {})
-  }
-}
-
-/**
- * Open a popover selector (trigger) and click the option whose label matches
- * `value` exactly. Matching is scoped to the option's label span
- * (`nameSelector`, e.g. `.mode-switcher-item-name` or
- * `.thinking-selector-item-name`) and is case-sensitive whole-string
- * (`getByText(value, { exact: true })`) — never a case-insensitive substring of
- * the option's full text — so a label like "Ask" cannot match a sibling
- * description containing "tasks", and a label like "Code" cannot match a
- * description containing "codebase". The owning `[role="option"]` is clicked,
- * not the span. Retries the open→pick sequence because kobalte popovers
- * re-render option nodes on focus, so a single located reference can detach
- * mid-click. Every wait inside is bounded (≤5s per attempt, retried until the
- * overall deadline) so a transiently missing list can never stall the retry
- * loop.
- */
-async function pickOption(
-  frame: Frame,
-  triggerSelector: string,
-  listSelector: string,
-  nameSelector: string,
-  value: string,
-  timeoutMs: number,
-  label: string,
-): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    // Ensure any open popover is closed so the trigger click opens fresh.
-    await closePopover(frame, listSelector)
-    await frame.locator(triggerSelector).first().click({ timeout: 5_000 }).catch(() => {})
-    try {
-      const name = frame
-        .locator(`${listSelector} [role="option"] ${nameSelector}`)
-        .getByText(value, { exact: true })
-        .first()
-      await name.waitFor({ state: "visible", timeout: 5_000 })
-      const option = name.locator("xpath=ancestor::*[@role='option']").first()
-      await option.waitFor({ state: "visible", timeout: 5_000 })
-      await option.click({ timeout: 5_000 })
-      console.log(`[probe] picked "${value}" from ${label}`)
-      return
-    } catch (err) {
-      if (Date.now() > deadline) {
-        const evidence = await frame
-          .evaluate(
-            ([triggerSel, listSel, nameSel]) => {
-              const body = document.body?.innerText ?? ""
-              const nodes = Array.from(document.querySelectorAll<HTMLElement>(listSel))
-              const names = Array.from(document.querySelectorAll<HTMLElement>(`${listSel} ${nameSel}`))
-              return {
-                trigger: document.querySelector(triggerSel)?.textContent?.trim() ?? null,
-                listCount: nodes.length,
-                listText: nodes.map((n) => n.textContent?.trim() ?? "").slice(0, 20),
-                names: names.map((n) => n.textContent?.trim() ?? "").slice(0, 20),
-                modeTrigger: document.querySelector(".mode-switcher-trigger-label")?.textContent?.trim() ?? null,
-                body: body.slice(0, 800),
-              }
-            },
-            [triggerSelector, listSelector, nameSelector] as const,
-          )
-          .catch(() => ({ evaluate: "failed" }))
-        throw new Error(
-          `probe: could not pick "${value}" from ${label}: ${err instanceof Error ? err.message : String(err)}. dom=${JSON.stringify(evidence, null, 2)}`,
-        )
-      }
-      await sleep(250)
-    }
-  }
-}
-
-/** Open the ThinkingSelector and pick a variant option (real production popover). */
-async function pickVariant(frame: Frame, value: string, timeoutMs: number): Promise<void> {
-  await pickOption(
-    frame,
-    ".thinking-selector-trigger-label",
-    ".thinking-selector-list",
-    ".thinking-selector-item-name",
-    value,
-    timeoutMs,
-    "variant picker",
-  )
-}
-
-/** Open the ModeSwitcher and pick an agent option (real production popover). */
-async function pickAgent(frame: Frame, value: string, timeoutMs: number): Promise<void> {
-  await pickOption(
-    frame,
-    ".mode-switcher-trigger-label",
-    ".mode-switcher-list",
-    ".mode-switcher-item-name",
-    value,
-    timeoutMs,
-    "agent picker",
-  )
-}
-
-/** Agent labels offered by the ModeSwitcher (production popover options), then close it. */
-async function agentOptions(frame: Frame, timeoutMs: number): Promise<string[]> {
-  await frame.locator(".mode-switcher-trigger-label").first().click({ timeout: 5_000 }).catch(() => {})
-  const names = await frame
-    .locator('.mode-switcher-list .mode-switcher-item-name')
-    .allTextContents()
-    .then((items) => items.map((s) => s.trim()).filter((s) => s.length > 0))
-    .catch(() => [])
-  // Close the popover again (Escape) so the next pick starts from a closed state.
-  await closePopover(frame, ".mode-switcher-list")
-  return names
-}
-
-/**
  * Real-webview E2E for the LOCK-001 regression: within ONE session, each agent
  * keeps its own session-scoped reasoning variant.
  *
@@ -1132,7 +779,13 @@ async function assertVariantMemoryAcrossAgents(browser: Browser, plan: E2EPlan, 
   // B has no own variant yet — the legacy model memory ("low") applies.
   await pickAgent(frame, bLabel, timeout)
   await waitForLabel(frame, ".mode-switcher-trigger-label", bLabel, timeout, "agent switched to B")
-  await waitForLabel(frame, ".thinking-selector-trigger-label", "Low", timeout, "agent B inherits model memory before picking")
+  await waitForLabel(
+    frame,
+    ".thinking-selector-trigger-label",
+    "Low",
+    timeout,
+    "agent B inherits model memory before picking",
+  )
 
   // Agent B picks "High" → session-scoped key for B.
   await pickVariant(frame, "High", timeout)
@@ -1142,12 +795,24 @@ async function assertVariantMemoryAcrossAgents(browser: Browser, plan: E2EPlan, 
   // agent-less session key shadows this and shows B's "High".
   await pickAgent(frame, aLabel, timeout)
   await waitForLabel(frame, ".mode-switcher-trigger-label", aLabel, timeout, "agent switched back to A")
-  await waitForLabel(frame, ".thinking-selector-trigger-label", "Low", timeout, "agent A restores low in-session (LOCK-001)")
+  await waitForLabel(
+    frame,
+    ".thinking-selector-trigger-label",
+    "Low",
+    timeout,
+    "agent A restores low in-session (LOCK-001)",
+  )
 
   // Back to B: restores "High".
   await pickAgent(frame, bLabel, timeout)
   await waitForLabel(frame, ".mode-switcher-trigger-label", bLabel, timeout, "agent switched back to B")
-  await waitForLabel(frame, ".thinking-selector-trigger-label", "High", timeout, "agent B restores high in-session (LOCK-001)")
+  await waitForLabel(
+    frame,
+    ".thinking-selector-trigger-label",
+    "High",
+    timeout,
+    "agent B restores high in-session (LOCK-001)",
+  )
 
   writeFileSync(
     join(scratch, "variant-dom-evidence"),
@@ -1366,17 +1031,1468 @@ async function assertTopicNavigation(browser: Browser, plan: E2EPlan, scratch: s
   writeFileSync(join(scratch, "topic-reload-done"), "ok")
 }
 
-async function describeTargets(browser: Browser): Promise<string> {
-  const lines: string[] = []
-  for (const ctx of browser.contexts()) {
-    for (const page of ctx.pages()) {
-      lines.push(`  page: ${page.url()}`)
-      for (const frame of page.frames()) {
-        lines.push(`    frame: ${frame.url().slice(0, 120)}`)
+// ---------------------------------------------------------------------------
+// Real-session parity scenario — real backend sessions via the production path
+// ---------------------------------------------------------------------------
+
+/** Prompt texts typed into the real Agent Manager prompt input. */
+const REAL_PROMPT_A = "E2E parity prompt A: custom agent plus low variant"
+const REAL_PROMPT_B = "E2E parity prompt B: custom agent B plus high variant"
+
+/**
+ * A run-owned TCP listener that accepts connections and never responds. The
+ * seeded custom provider points its baseURL here, so every real prompt stays
+ * busy (waiting for response headers) until the production abort path cancels
+ * it — making H-8 concurrency and H-11 abort observable against backend truth.
+ * The listener is in-process (it dies with the harness) and is closed
+ * explicitly on both success and failure paths; no global kills, no external
+ * processes.
+ */
+async function createHangServer(): Promise<{ port: number; close: () => Promise<void> }> {
+  const sockets = new Set<Socket>()
+  const server = createServer((socket) => {
+    // Hold the connection open and never write a response; socket errors from
+    // the client-side abort are expected and ignored here (the abort is the
+    // production path under test, not a harness failure).
+    socket.on("error", () => {})
+    sockets.add(socket)
+    socket.on("close", () => sockets.delete(socket))
+  })
+  await new Promise<void>((resolve, reject) => {
+    server.once("error", reject)
+    server.listen(0, "127.0.0.1", () => {
+      server.removeListener("error", reject)
+      resolve()
+    })
+  })
+  const address = server.address()
+  if (!address || typeof address !== "object") {
+    server.close()
+    throw new Error("probe: hang server address unavailable")
+  }
+  return {
+    port: address.port,
+    close: async () => {
+      for (const socket of sockets) socket.destroy()
+      await new Promise<void>((resolve) => server.close(() => resolve()))
+    },
+  }
+}
+
+/**
+ * Run-owned workspace config seed for the real-session scenario, written into
+ * the scratch workspace's `.kilo/kilo.json` BEFORE VS Code launches so the
+ * lazily-spawned CLI backend loads it at startup (project-config convention:
+ * the CLI loads `.kilo/kilo.json` from the instance cwd, which the extension
+ * pins to the first workspace folder). Seeds:
+ *   - a custom provider `e2e-local` (bundled @ai-sdk/openai-compatible) whose
+ *     model `e2e-model` carries three reasoning variants and whose baseURL
+ *     points at the run-owned hang server — with every request-phase timeout
+ *     disabled (timeout/headerTimeout/firstChunkTimeout false) so the prompt
+ *     stays busy until the production abort path cancels it,
+ *   - two custom primary agents (`e2e-agent`, `e2e-agent-b`) bound to that
+ *     model, which the real ModeSwitcher lists and the backend pins on the
+ *     created user messages,
+ *   - `model` default = e2e-local/e2e-model so the real webview selects the
+ *     custom model without any synthetic providersLoaded post.
+ *   - `small_model` + `subagent_model` = e2e-local/e2e-model so EVERY implicit
+ *     generation (title, summaries, subagent) resolves to the run-owned
+ *     provider — Provider.getSmallModel honors cfg.small_model before any kilo
+ *     gateway fallback (kilo/kilo-auto/small). LOCK-006: zero gateway attempts.
+ */
+function writeRealSessionConfig(workspace: string, hangPort: number): string {
+  const dir = join(workspace, ".kilo")
+  mkdirSync(dir, { recursive: true })
+  const file = join(dir, "kilo.json")
+  writeFileSync(
+    file,
+    JSON.stringify(
+      {
+        $schema: "https://app.kilo.ai/config.json",
+        provider: {
+          "e2e-local": {
+            npm: "@ai-sdk/openai-compatible",
+            name: "E2E Local",
+            options: {
+              baseURL: `http://127.0.0.1:${hangPort}/v1`,
+              apiKey: "e2e-fixture-key",
+              timeout: false,
+              headerTimeout: false,
+              firstChunkTimeout: false,
+            },
+            models: {
+              "e2e-model": {
+                name: "E2E Model",
+                variants: { low: {}, medium: {}, high: {} },
+              },
+            },
+          },
+        },
+        agent: {
+          "e2e-agent": {
+            displayName: "E2E Agent",
+            description: "E2E parity custom agent",
+            mode: "primary",
+            model: "e2e-local/e2e-model",
+          },
+          "e2e-agent-b": {
+            displayName: "E2E Agent B",
+            description: "E2E parity custom agent B",
+            mode: "primary",
+            model: "e2e-local/e2e-model",
+          },
+        },
+        model: "e2e-local/e2e-model",
+        small_model: "e2e-local/e2e-model",
+        subagent_model: "e2e-local/e2e-model",
+      },
+      null,
+      2,
+    ),
+  )
+  return file
+}
+
+/** Click the real New session button in the tab bar (production add-pending path). */
+async function clickNewSession(frame: Frame, timeoutMs: number): Promise<void> {
+  const btn = frame.locator('.am-tab-add-split [data-component="icon-button"][data-icon="plus"]').first()
+  await btn.waitFor({ state: "visible", timeout: timeoutMs })
+  await btn.click({ timeout: timeoutMs })
+  console.log("[probe] clicked New session (production add-pending path)")
+}
+
+/** Click the real Stop button (production abort path: webview → extension → SDK abort). */
+async function clickStop(frame: Frame, timeoutMs: number): Promise<void> {
+  const stop = frame.locator('button[aria-label="Stop"]').first()
+  await stop.waitFor({ state: "visible", timeout: timeoutMs })
+  await stop.click({ timeout: timeoutMs })
+  console.log("[probe] clicked Stop (production abort path)")
+}
+
+/** Concatenated user-message text of one session from the backend snapshot. */
+function userText(snap: BackendSnapshot, id: string): string {
+  const user = (snap.messages[id] ?? []).find((m) => m.role === "user")
+  return user?.text ?? ""
+}
+
+/** The real-session pinned expectation for a send: custom agent + model + variant. */
+function pinExpect(plan: E2EPlan, agent: string, variant: string): PinExpectation {
+  return { agent, provider: plan.customProvider, model: plan.customModel, variant }
+}
+
+/**
+ * Real-webview E2E for the first parity cluster. Drives the REAL Agent Manager
+ * webview — prompt input, Send/Stop buttons, ModeSwitcher, ThinkingSelector,
+ * tab strip, New session — over the production webview → AgentManagerProvider
+ * → KiloProvider → SDK → served-backend path, then asserts served-backend
+ * truth via the backendSnapshot fixture command:
+ *
+ *   1. H-1 + H-9: the real ModeSwitcher lists the seeded custom agent (proving
+ *      the run-owned config reached the served backend), the harness picks the
+ *      custom agent + a reasoning variant, sends prompt A, and the backend
+ *      pins the session's user message to that agent and the custom-provider
+ *      model + variant,
+ *   2. H-8: a second real session is created through the same path while the
+ *      first is still busy; both run concurrently and each stays pinned to its
+ *      own agent/variant,
+ *   3. H-11: each session is aborted independently via the real Stop button
+ *      (the other stays busy), then one tab is closed via the real close
+ *      button and the backend confirms the session persists (view lifecycle
+ *      only — no owned handle is leaked),
+ *   4. H-10: the panel is closed and reopened; the fresh webview re-fetches the
+ *      real session list from the backend and the surviving session's
+ *      transcript rehydrates into the real DOM.
+ */
+async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scratch: string): Promise<void> {
+  const timeout = 30_000
+  await waitForFile(join(scratch, "real-ready"), 120_000, "real-ready marker")
+
+  // The panel opens with a single pending "New Session" tab; the frame is
+  // anchored by any .am-tab-sortable tab (never rendered by the sidebar).
+  const found = await findAgentManagerFrameAny(browser, 60_000)
+  const frame = found.frame
+  const snap = snapshotClient(scratch)
+
+  // --- Phase 1 (H-1 + H-9): custom agent served, selected; variant picked ---
+  await waitForAgentOption(frame, plan.customAgentLabel, timeout)
+  await pickAgent(frame, plan.customAgentLabel, timeout)
+  await waitForLabel(frame, ".mode-switcher-trigger-label", plan.customAgentLabel, timeout, "custom agent selected")
+  await pickVariant(frame, plan.customVariantA, timeout)
+  await waitForLabel(frame, ".thinking-selector-trigger-label", plan.customVariantA, timeout, "variant A selected")
+  // LOCK-012 action-specific readiness: the visible model selector must show the
+  // custom provider/model before the first send — until it does, the webview
+  // model resolution falls through to the gateway KILO_AUTO free model
+  // (kilo/kilo-auto/free), a real gateway call (LOCK-006 violation).
+  await waitForModelSelected(frame, plan.customProvider, plan.customModel, timeout, "custom model visibly selected")
+  const expA = pinExpect(plan, plan.customAgent, plan.customVariantA)
+
+  // --- Phase 2 (H-11 create): send prompt A through the production path ---
+  const snapA = await sendWithRetry(
+    frame,
+    snap,
+    REAL_PROMPT_A,
+    1,
+    (s) => {
+      if (s.sessions.length < 1) return "no backend session yet"
+      const id = s.sessions[0]!.id
+      const pinned = pinnedReason(s, id, expA, REAL_PROMPT_A)
+      if (pinned) return pinned
+      if ((s.statuses[id] ?? "idle") !== "busy") return `session ${id} status=${s.statuses[id]} expected busy`
+      return undefined
+    },
+    "session A created via production path, pinned and busy",
+    timeout,
+    isWrongPin,
+  )
+  const sessionA = snapA.sessions[0]!
+  console.log(`[probe] session A: ${sessionA.id}`)
+
+  // --- Phase 3 (H-8): second concurrent session with a different agent+model ---
+  await clickNewSession(frame, timeout)
+  await waitForAgentOption(frame, plan.customAgentBLabel, timeout)
+  await pickAgent(frame, plan.customAgentBLabel, timeout)
+  await waitForLabel(frame, ".mode-switcher-trigger-label", plan.customAgentBLabel, timeout, "custom agent B selected")
+  await pickVariant(frame, plan.customVariantB, timeout)
+  await waitForLabel(frame, ".thinking-selector-trigger-label", plan.customVariantB, timeout, "variant B selected")
+  const expB = pinExpect(plan, plan.customAgentB, plan.customVariantB)
+  const snapB = await sendWithRetry(
+    frame,
+    snap,
+    REAL_PROMPT_B,
+    2,
+    (s) => {
+      if (s.sessions.length < 2) return `expected 2 backend sessions, got ${s.sessions.length}`
+      const b = s.sessions.find((x) => x.id !== sessionA.id)
+      if (!b) return "session B missing from backend"
+      const failA = pinnedReason(s, sessionA.id, expA, REAL_PROMPT_A)
+      if (failA) return `A: ${failA}`
+      const failB = pinnedReason(s, b.id, expB, REAL_PROMPT_B)
+      if (failB) return `B: ${failB}`
+      if ((s.statuses[sessionA.id] ?? "idle") !== "busy" || (s.statuses[b.id] ?? "idle") !== "busy") {
+        return `expected both busy, got A=${s.statuses[sessionA.id]} B=${s.statuses[b.id]}`
       }
+      return undefined
+    },
+    "two concurrent sessions pinned to their own agent/variant and busy",
+    timeout,
+    isWrongPin,
+  )
+  const sessionB = snapB.sessions.find((x) => x.id !== sessionA.id)!
+  console.log(`[probe] session B: ${sessionB.id}`)
+
+  // --- Phase 4 (H-11 abort, independent control): abort A, then B ---
+  // The backend status endpoint deletes idle sessions from its map (absent
+  // status == idle), so the probes below normalize `undefined` to "idle".
+  await clickTab(frame, sessionA.id, timeout)
+  await clickStop(frame, timeout)
+  await snap.waitFor(
+    (s) => {
+      const a = s.statuses[sessionA.id] ?? "idle"
+      if (a !== "idle") return `session A status=${a} expected idle after abort`
+      if (s.statuses[sessionB.id] !== "busy")
+        return `session B status=${s.statuses[sessionB.id]} expected still busy (independent control)`
+      return undefined
+    },
+    60_000,
+    "abort A leaves A idle and B busy",
+  )
+  await clickTab(frame, sessionB.id, timeout)
+  await clickStop(frame, timeout)
+  await snap.waitFor(
+    (s) => {
+      const b = s.statuses[sessionB.id] ?? "idle"
+      if (b !== "idle") return `session B status=${b} expected idle after abort`
+      return undefined
+    },
+    60_000,
+    "abort B leaves B idle",
+  )
+
+  // --- Phase 5 (H-11 close): close tab A; the backend session must persist ---
+  await clickTab(frame, sessionA.id, timeout)
+  await clickTabClose(frame, sessionA.id, timeout)
+  await waitForRealSessionTabs(frame, 1, timeout, "tab A closed leaves session B tab")
+  await snap.waitFor(
+    (s) => {
+      if (!s.sessions.some((x) => x.id === sessionA.id)) {
+        return "session A deleted from backend by tab close (close must be view lifecycle only)"
+      }
+      return undefined
+    },
+    30_000,
+    "closed session A persists in the backend",
+  )
+
+  // LOCK-006/LOCK-008: request-level isolation — every backend generation
+  // request so far (agent turns + any implicit title call) is e2e-local/e2e-model.
+  // The fixture collector sees the `service=llm` line BEFORE provider/network
+  // resolution, so a failed/aborted non-run-owned attempt fails here even while
+  // session pins look correct.
+  assertRunOwnedLlmRequests(scratch, "real-session-post-abort")
+
+  // --- Phase 6 (H-10): panel close/reopen rehydrates the transcript ---
+  // Give the webview's 300ms local-state persist debounce a beat so the tab
+  // inventory is durable before the panel is disposed, then hand the panel
+  // lifecycle to the runner (tab-groups close + reopen + settle).
+  await sleep(1_000)
+  writeFileSync(join(scratch, "real-reopen-request"), "ok")
+  await waitForFile(join(scratch, "real-reopen-ready"), 120_000, "real-reopen-ready marker")
+  const reopened = await findAgentManagerFrameAny(browser, 60_000)
+  const rf = reopened.frame
+
+  // The fresh webview re-fetches the real session list (the runner settled it
+  // after reopen). Session B may restore as a tab (webview state) or appear
+  // only as a sidebar row; open it either way, then assert its transcript
+  // rehydrated from the served backend into the real DOM.
+  const deadlineOpen = Date.now() + 60_000
+  for (;;) {
+    const tabs = await realTabStates(rf)
+    if (tabs.some((t) => t.id === sessionB.id)) break
+    const sidebarHit = await rf
+      .locator(`.am-item.am-topic-root[data-topic-id="${sessionB.id}"]`)
+      .count()
+      .catch(() => 0)
+    if (sidebarHit > 0) {
+      await openSidebarSession(rf, sessionB.id, 10_000)
+      break
+    }
+    if (Date.now() > deadlineOpen) {
+      throw new Error("probe: session B not restored as a tab or sidebar row after panel reopen")
+    }
+    await sleep(250)
+  }
+  await expectTranscriptText(rf, REAL_PROMPT_B, 60_000, "session B transcript rehydrates after panel reopen")
+  await snap.waitFor(
+    (s) => {
+      const text = userText(s, sessionB.id)
+      if (!text.includes(REAL_PROMPT_B)) return "session B transcript missing the prompt in the backend after reopen"
+      return undefined
+    },
+    30_000,
+    "session B backend transcript persists",
+  )
+
+  // Backend pin evidence for every UI send of this scenario (LOCK-006): each
+  // user message must be pinned to e2e-local/e2e-model + the expected variant
+  // and the selected custom agent in the FINAL served state — no gateway
+  // KILO_AUTO free fallback or non-run-owned provider anywhere in the run.
+  const finalPinSnap = await snap.request()
+  const pinEvidence = [
+    pinReport(finalPinSnap, sessionA.id, expA, REAL_PROMPT_A),
+    pinReport(finalPinSnap, sessionB.id, expB, REAL_PROMPT_B),
+  ]
+  console.log(`[probe] PIN EVIDENCE: ${JSON.stringify(pinEvidence, null, 2)}`)
+
+  // Final request-level isolation (LOCK-006/LOCK-008): every generation request
+  // of the whole run — including implicit title calls and reopened-panel turns.
+  const llmFinal = assertRunOwnedLlmRequests(scratch, "real-session-final")
+
+  writeFileSync(
+    join(scratch, "real-dom-evidence"),
+    JSON.stringify(
+      {
+        url: rf.url(),
+        plan,
+        sessionA: sessionA.id,
+        sessionB: sessionB.id,
+        pins: pinEvidence,
+        llmRequests: readLlmRequests(scratch),
+        llmMatrix: llmFinal,
+        finalTabs: await realTabStates(rf),
+        finalHeader: await headerTitle(rf),
+      },
+      null,
+      2,
+    ),
+  )
+  console.log("[probe] real-session lifecycle passed")
+}
+
+// ---------------------------------------------------------------------------
+// Real-completed-turn parity scenario — H-2..H-7 over the shared bridge
+// ---------------------------------------------------------------------------
+
+/** Prompt texts typed into the real Agent Manager prompt input. */
+const REAL_TASK_PROMPT = `${SCRIPTED.taskMarker}: delegate one read-only sub-task that only replies with a fixed text string, wait for it, and report its reply verbatim`
+const REAL_USER_TOOL_PROMPT = `${SCRIPTED.userToolMarker}: call the user-defined tool`
+const REAL_SKILL_PROMPT = `${SCRIPTED.skillMarker}: load the e2e skill`
+const REAL_MCP_PROMPT = `${SCRIPTED.mcpMarker}: call the mcp echo tool`
+const REAL_PERMISSION_PROMPT = `${SCRIPTED.permissionMarker}: read the ask.txt file`
+const REAL_QUESTION_PROMPT = `${SCRIPTED.questionMarker}: ask me a question`
+const REAL_ROLLBACK_PROMPT = `${SCRIPTED.rollbackMarker}: edit the tracked file`
+const REAL_ROLLBACK_SUMMARY_PROMPT = `${SCRIPTED.rollbackSummaryMarker}: summarize the edit`
+
+/** The root (non-child) session in the real-completed scenario. */
+function realRootSession(s: BackendSnapshot): SessionTruth | undefined {
+  return s.sessions.find((x) => !x.parentID)
+}
+
+/** Completed tool-part of one session transcript (all messages). */
+function completedTool(s: BackendSnapshot, sessionID: string, tool: string) {
+  return (s.messages[sessionID] ?? []).flatMap((m) => m.tools ?? []).find((t) => t.tool === tool)
+}
+
+/** Poll until the given webview DOM selector matches at least one element. */
+async function waitForDock(frame: Frame, selector: string, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const hit = await frame
+      .locator(selector)
+      .count()
+      .catch(() => 0)
+    if (hit > 0) {
+      console.log(`[probe] PASS ${label}`)
+      return
+    }
+    if (Date.now() > deadline) {
+      const body = await frame.locator("body").innerText().catch(() => "<unreadable>")
+      throw new Error(`probe: ${label} failed: selector "${selector}" not found.\nbody:\n${body.slice(0, 1200)}`)
+    }
+    await sleep(250)
+  }
+}
+
+/** Poll until the given webview DOM selector matches nothing. */
+async function waitForNoDock(frame: Frame, selector: string, timeoutMs: number, label: string): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const hit = await frame
+      .locator(selector)
+      .count()
+      .catch(() => 0)
+    if (hit === 0) {
+      console.log(`[probe] PASS ${label}`)
+      return
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`probe: ${label} failed: selector "${selector}" still present`)
+    }
+    await sleep(250)
+  }
+}
+
+/** Click the real PermissionDock "Allow once" button (production kilo-ui Button). */
+async function clickPermissionAllowOnce(frame: Frame, timeoutMs: number): Promise<void> {
+  const btn = frame
+    .locator('[data-slot="permission-actions"] [data-component="button"][data-variant="primary"]')
+    .first()
+  await btn.waitFor({ state: "visible", timeout: timeoutMs })
+  await btn.click({ timeout: timeoutMs })
+  console.log("[probe] clicked PermissionDock Allow once")
+}
+
+/** Click one QuestionDock option (by exact label) then the footer Submit button. */
+async function clickQuestionAnswer(frame: Frame, optionLabel: string, timeoutMs: number): Promise<void> {
+  const dock = frame.locator('[data-component="question-dock"]').first()
+  const option = dock
+    .locator('button[data-slot="question-option"]')
+    .filter({ has: frame.locator('[data-slot="option-label"]').getByText(optionLabel, { exact: true }) })
+    .first()
+  await option.waitFor({ state: "visible", timeout: timeoutMs })
+  await option.click({ timeout: timeoutMs })
+  console.log(`[probe] clicked QuestionDock option "${optionLabel}"`)
+  const submit = dock
+    .locator('[data-slot="question-dock-footer"] [data-component="button"][data-variant="primary"]')
+    .first()
+  await submit.waitFor({ state: "visible", timeout: timeoutMs })
+  await submit.click({ timeout: timeoutMs })
+  console.log("[probe] clicked QuestionDock Submit")
+}
+
+/**
+ * Exact-recorded-handle scan for the run-owned MCP stdio child: every process
+ * whose command line contains the absolute fixture server path. The seed's MCP
+ * config uses the absolute path, so this is the run-owned handle — never a
+ * process-name or pattern kill.
+ */
+function mcpChildPids(serverPath: string): number[] {
+  const proc = spawnSync("ps", ["-axo", "pid=,args="], { encoding: "utf8" })
+  const out = proc.stdout ?? ""
+  return out
+    .split("\n")
+    .filter((line) => line.includes(serverPath))
+    .map((line) => line.trim())
+    .map((line) => {
+      const space = line.indexOf(" ")
+      return Number(line.slice(0, space))
+    })
+    .filter((pid) => Number.isInteger(pid) && pid > 0)
+}
+
+async function waitForMcpChildPids(serverPath: string, timeoutMs: number, label: string): Promise<number[]> {
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const pids = mcpChildPids(serverPath)
+    if (pids.length > 0) {
+      console.log(`[probe] PASS ${label}: ${pids.join(", ")}`)
+      return pids
+    }
+    if (Date.now() > deadline) {
+      throw new Error(`probe: ${label} failed: no process references ${serverPath}`)
+    }
+    await sleep(250)
+  }
+}
+
+/**
+ * Real-webview E2E for the completed-turn parity cluster. Drives the REAL
+ * Agent Manager webview — prompt input, Send, ModeSwitcher, the inline
+ * PermissionDock/QuestionDock, and the tab strip — over the production webview
+ * → AgentManagerProvider → KiloProvider → SDK → served-backend path, against a
+ * run-owned scripted OpenAI-compatible SSE provider (script/e2e-scripted-model.ts).
+ * Served-backend truth is asserted via the backendSnapshot fixture command:
+ *
+ *   1. H-2: the prompt triggers a real `task` delegation; the backend creates a
+ *      real child session (parentID set), the child's own prompt completes
+ *      against the scripted provider, and the completed task tool part in the
+ *      PARENT transcript carries the child id + the delegated result; the
+ *      panel renders the completed turn text and the child-open button,
+ *   2. H-3: the seeded .kilo/tool user tool executes; its completed tool part
+ *      is backend-observable and the run-owned artifact file exists,
+ *   3. H-4: the seeded skill is loaded through the skill tool; its completed
+ *      part returns the skill content,
+ *   4. H-5: the seeded MCP server reaches connected status, its tool executes
+ *      (log written), and the run-owned child PID is recorded,
+ *   5. H-6: a permission ask surfaces the real PermissionDock; clicking
+ *      "Allow once" drains the backend pending permission and the turn
+ *      completes; a question ask surfaces the real QuestionDock; answering
+ *      drains the backend pending question and the turn completes,
+ *   6. H-7: the runner closes/reopens the panel; the backend parentID/children
+ *      facts persist and the reopened panel renders the parent topic with the
+ *      child row (real hierarchy, no synthetic injection),
+ *   7. H-5 cleanup: the runner disconnects the MCP server through the real SDK
+ *      and every recorded child PID exits; the snapshot shows disabled.
+ *   8. H-12 rollback (on the reopened panel): the production write tool edits a
+ *      tracked file, the real user-message "Revert to here" control runs
+ *      production SessionRevert+Snapshot and restores the exact initial bytes,
+ *      the RevertBanner renders the per-file diff, and the real "Redo All"
+ *      button invokes production unrevert and restores the edited bytes.
+ */
+/**
+ * H-12 rollback phase of the real-completed scenario (called after the panel
+ * reopen and MCP cleanup). Drives the REAL Agent Manager webview (the
+ * reopened frame `rf`) through two completed turns against the scripted
+ * provider — the production write tool edits a tracked file, then a plain
+ * summary turn — and then clicks the real user-message "Revert to here"
+ * control. Production SessionRevert+Snapshot restores the exact initial
+ * bytes, the RevertBanner renders the per-file diff, and the real "Redo All"
+ * button invokes production unrevert and restores the edited bytes. Asserts
+ * served-backend revert/checkpoint facts and lifecycle correctness. Returns
+ * the revert boundary user-message id for the caller's evidence.
+ */
+async function assertRealRollbackPhase(
+  rf: Frame,
+  snap: ReturnType<typeof snapshotClient>,
+  model: ScriptedModelHandle,
+  workspace: string,
+  timeout: number,
+  plan: E2EPlan,
+  sendTurn: (
+    target: Frame,
+    prompt: string,
+    probe: (s: BackendSnapshot) => string | undefined,
+    label: string,
+  ) => Promise<BackendSnapshot>,
+): Promise<string> {
+    // The reopened panel (rf) is still showing the root session (opened in
+    // Phase 7), so the two rollback turns go through the FRESH webview document
+    // against the same served backend session. The tracked rollback file is
+    // committed in the run-owned git workspace; the production write tool edits
+    // it, Revert-to-here runs production SessionRevert+Snapshot and restores the
+    // exact initial bytes, the RevertBanner renders the per-file diff, and Redo
+    // All invokes the production unrevert path and restores the edited bytes.
+    //
+    // The fresh webview document re-resolves its model from scratch: until the
+    // served config/catalog resolve, the model selector falls through to the
+    // gateway KILO_AUTO free model (kilo/kilo-auto/free) — the only live
+    // gateway-fallback window in the real scenarios — so BEFORE the first send
+    // on this document, explicitly wait for the visible custom agent + variant
+    // and the visible custom model selection (LOCK-006/LOCK-012).
+    await waitForAgentOption(rf, plan.customAgentLabel, timeout)
+    await pickAgent(rf, plan.customAgentLabel, timeout)
+    await waitForLabel(rf, ".mode-switcher-trigger-label", plan.customAgentLabel, timeout, "custom agent selected (reopened panel)")
+    await pickVariant(rf, plan.customVariantA, timeout)
+    await waitForLabel(rf, ".thinking-selector-trigger-label", plan.customVariantA, timeout, "variant Low selected (reopened panel)")
+    await waitForModelSelected(rf, plan.customProvider, plan.customModel, timeout, "custom model visibly selected (reopened panel)")
+
+    const rollbackFile = join(workspace, SCRIPTED.rollbackFile)
+    const readRollback = () => (existsSync(rollbackFile) ? readFileSync(rollbackFile, "utf8") : "<missing>")
+
+    // 9a. Turn 1: the real write tool edits the tracked file (production path).
+    await sendTurn(
+      rf,
+      REAL_ROLLBACK_PROMPT,
+      (s) => {
+        const root = realRootSession(s)
+        if (!root) return "root session missing"
+        const tool = completedTool(s, root.id, "write")
+        if (!tool) {
+          const pending = (s.pending?.permissions ?? []).filter((p) => p.sessionID === root.id)
+          return (
+            `write tool part missing; session=${s.statuses[root.id] ?? "idle"}` +
+            (pending.length > 0 ? `; pending-permissions=${JSON.stringify(pending)}` : "; no pending permissions")
+          )
+        }
+        if (tool.status !== "completed") return `write status=${tool.status}`
+        if (!tool.output?.includes("Wrote file successfully")) {
+          return `write output=${JSON.stringify(tool.output?.slice(0, 300))}`
+        }
+        if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+        return undefined
+      },
+      "H-12 write: completed write tool part in the backend",
+    )
+    if (readRollback() !== SCRIPTED.rollbackEdited) {
+      throw new Error(`probe: H-12 tracked file not edited after the write turn: ${JSON.stringify(readRollback())}`)
+    }
+    console.log(`[probe] PASS H-12 tracked file edited: ${rollbackFile} = ${JSON.stringify(SCRIPTED.rollbackEdited)}`)
+    await expectTranscriptText(rf, SCRIPTED.rollbackFinal, 60_000, "H-12 panel shows the edit completion text")
+
+    // 9b. Turn 2: a plain-text summary turn so the revert boundary covers TWO
+    // user turns and the real RevertBanner renders its "Redo All" action.
+    const snapSummary = await sendTurn(
+      rf,
+      REAL_ROLLBACK_SUMMARY_PROMPT,
+      (s) => {
+        const root = realRootSession(s)
+        if (!root) return "root session missing"
+        const users = (s.messages[root.id] ?? []).filter((m) => m.role === "user")
+        if (users.length < 2) return `expected at least 2 user messages, got ${users.length}`
+        if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+        return undefined
+      },
+      "H-12 summary: second user turn completes and the session is idle",
+    )
+    await expectTranscriptText(rf, SCRIPTED.rollbackSummaryFinal, 60_000, "H-12 panel shows the summary text")
+
+    // The revert boundary is the FIRST rollback user message (the edit turn).
+    const summaryRoot = realRootSession(snapSummary)
+    const editUserMsg = (summaryRoot ? snapSummary.messages[summaryRoot.id] ?? [] : []).find(
+      (m) => m.role === "user" && m.text.includes(SCRIPTED.rollbackMarker),
+    )
+    if (!editUserMsg || !editUserMsg.id) {
+      throw new Error("probe: H-12 edit user message missing from the backend transcript")
+    }
+    const editMessageID = editUserMsg.id
+    console.log(`[probe] H-12 revert boundary user message: ${editMessageID}`)
+
+    // 9c. Click the real user-message "Revert to here" button (hover-revealed
+    // production control; the same DOM a user clicks).
+    await clickRevertToHere(rf, editMessageID, 30_000)
+
+    // 9d. Backend: active revert/checkpoint fact + exact initial bytes restored.
+    await snap.waitFor(
+      (s) => {
+        const root = realRootSession(s)
+        if (!root) return "root session missing"
+        const rev = root.revert
+        if (!rev) return "session.revert missing (Revert-to-here did not set the checkpoint)"
+        if (rev.messageID !== editMessageID) {
+          return `session.revert.messageID=${JSON.stringify(rev.messageID)} expected ${editMessageID}`
+        }
+        if (!rev.snapshot) return "session.revert.snapshot missing (no checkpoint hash)"
+        const diffs = root.summary?.diffs ?? []
+        if (!diffs.some((d) => d.file === SCRIPTED.rollbackFile)) {
+          return `session.summary.diffs missing ${SCRIPTED.rollbackFile}: ${JSON.stringify(diffs)}`
+        }
+        return undefined
+      },
+      90_000,
+      "H-12 backend revert/checkpoint fact + summary diff",
+    )
+    await waitForFileBytes(rollbackFile, SCRIPTED.rollbackOriginal, 30_000, "H-12 exact initial bytes restored")
+    console.log(
+      `[probe] PASS H-12 restored bytes: ${rollbackFile} = ${JSON.stringify(SCRIPTED.rollbackOriginal)}`,
+    )
+
+    // 9e. UI: the RevertBanner is visible with the per-file diff row.
+    await waitForDock(rf, ".revert-banner", 60_000, "H-12 RevertBanner visible")
+    await expectBannerFile(rf, SCRIPTED.rollbackFile, 30_000, "H-12 RevertBanner lists the reverted file")
+
+    // 9f. Click the real "Redo All" button (production unrevert path).
+    const redoAll = rf
+      .locator('.revert-banner-actions [data-component="button"]')
+      .filter({ hasText: "Redo All" })
+      .first()
+    await redoAll.waitFor({ state: "visible", timeout: 30_000 })
+    await redoAll.click({ timeout: 30_000 })
+    console.log("[probe] clicked RevertBanner Redo All (production unrevert path)")
+
+    // 9g. Backend: checkpoint cleared, edited bytes restored, session idle/clean.
+    await snap.waitFor(
+      (s) => {
+        const root = realRootSession(s)
+        if (!root) return "root session missing"
+        if (root.revert) return "session.revert still set after Redo All"
+        if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+        return undefined
+      },
+      90_000,
+      "H-12 Redo All clears the backend checkpoint and the session stays idle",
+    )
+    await waitForFileBytes(rollbackFile, SCRIPTED.rollbackEdited, 30_000, "H-12 edited bytes restored by Redo All")
+    await waitForNoDock(rf, ".revert-banner", 30_000, "H-12 RevertBanner gone after Redo All")
+    await expectTranscriptText(rf, SCRIPTED.rollbackSummaryFinal, 60_000, "H-12 reverted turns re-shown in the transcript")
+    console.log("[probe] PASS H-12 rollback lifecycle passed")
+    return editMessageID
+}
+
+
+async function assertRealCompletedLifecycle(
+  browser: Browser,
+  plan: E2EPlan,
+  scratch: string,
+  workspace: string,
+  mcpServerFile: string,
+  model: ScriptedModelHandle,
+): Promise<void> {
+  const timeout = 30_000
+  await waitForFile(join(scratch, "real-completed-ready"), 120_000, "real-completed-ready marker")
+  const found = await findAgentManagerFrameAny(browser, 60_000)
+  const frame = found.frame
+  const snap = snapshotClient(scratch, "rc-snap")
+
+  // Send a prompt through the real input and poll served-backend truth until
+  // `probe` passes. Bounded retries: a transiently failed send restores the
+  // draft into the input (sendMessageFailed → restoreFailed), and the scripted
+  // provider is idempotent per marker (a re-sent marker with the tool already
+  // in the transcript gets the final text), so a retry never double-executes.
+  // The target frame is explicit so post-reopen phases send through the fresh
+  // webview document (the pre-reopen frame is detached once the panel closes).
+  // EVERY send carries the shared backend pin predicate (e2e-pin.ts withPin) so
+  // a wrong-pinned send is a permanent non-retryable failure, never masked by a
+  // retry (LOCK-006/LOCK-008).
+  const exp = pinExpect(plan, plan.customAgent, plan.customVariantA)
+  const sendTurn = async (
+    target: Frame,
+    prompt: string,
+    probe: (s: BackendSnapshot) => string | undefined,
+    label: string,
+  ): Promise<BackendSnapshot> => {
+    return sendTurnWithPin(
+      target,
+      snap,
+      prompt,
+      probe,
+      label,
+      timeout,
+      { exp, prompt, sessionID: (s) => realRootSession(s)?.id },
+      (err) => {
+        console.error(
+          "[probe] model request log:",
+          JSON.stringify(
+            model.requests.map((r) => {
+              const body = r.body as { messages?: Array<{ role?: string; content?: unknown }> }
+              const last = [...(body?.messages ?? [])].reverse().find((m) => m?.role === "user")
+              return {
+                url: r.url,
+                lastUser: typeof last?.content === "string" ? last.content : JSON.stringify(last?.content),
+              }
+            }),
+            null,
+            2,
+          ),
+        )
+        if (!(err instanceof Error)) return
+        console.error(`[probe] turn failure (attempt will be retried or aborted): ${err.message}`)
+      },
+    )
+  }
+
+  // --- Phase 0: pick the seeded custom agent (config reachable from the panel) ---
+  await waitForAgentOption(frame, plan.customAgentLabel, timeout)
+  await pickAgent(frame, plan.customAgentLabel, timeout)
+  await waitForLabel(frame, ".mode-switcher-trigger-label", plan.customAgentLabel, timeout, "custom agent selected")
+  // Mirror the green real-session flow: pick the reasoning variant too, so the
+  // webview resolves the per-session model from the served catalog BEFORE the
+  // first send (without it, the first send could race the provider catalog load
+  // and fall back to KILO_AUTO, missing the scripted server). Then wait for the
+  // VISIBLE custom model selection (LOCK-012): the model selector falls through
+  // to the gateway KILO_AUTO free model until the config/catalog resolve, so
+  // the first send must not race it.
+  await pickVariant(frame, plan.customVariantA, timeout)
+  await waitForLabel(frame, ".thinking-selector-trigger-label", plan.customVariantA, timeout, "variant Low selected")
+  await waitForModelSelected(frame, plan.customProvider, plan.customModel, timeout, "custom model visibly selected")
+
+  // --- Phase 1 (H-2): real task delegation with result flow-back ---
+  const snapTask = await sendTurn(
+    frame,
+    REAL_TASK_PROMPT,
+    (s) => {
+      const root = realRootSession(s)
+      if (!root) return "no root session yet"
+      const child = s.sessions.find((x) => x.parentID === root.id)
+      if (!child) return "child session missing (delegation did not create one)"
+      const task = completedTool(s, root.id, "task")
+      if (!task) return "task tool part missing in parent transcript"
+      if (task.status !== "completed") return `task status=${task.status}`
+      if (task.metadata?.["sessionId"] !== child.id) {
+        return `task metadata.sessionId=${JSON.stringify(task.metadata?.["sessionId"])} expected ${child.id}`
+      }
+      if (!task.output?.includes(child.id)) return "task output missing the child session id"
+      if (!task.output?.includes(SCRIPTED.childResult)) {
+        const childText = (s.messages[child.id] ?? []).map((m) => m.text).join("\n")
+        return `task output missing the delegated result.\n  task.output=${JSON.stringify(task.output?.slice(0, 500))}\n  child transcript text=${JSON.stringify(childText.slice(0, 500))}\n  root session=${JSON.stringify(root)}\n  child session=${JSON.stringify(child)}`
+      }
+      if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+      return undefined
+    },
+    "H-2 delegation: backend child + completed task result in the parent",
+  )
+  const rootId = realRootSession(snapTask)!.id
+  const childId = snapTask.sessions.find((x) => x.parentID === rootId)!.id
+  console.log(`[probe] H-2 root=${rootId} child=${childId}`)
+  await expectTranscriptText(frame, SCRIPTED.taskFinal, 60_000, "H-2 panel shows the completed-turn text")
+  await frame
+    .locator('button[aria-label="Open sub-agent in tab"]')
+    .first()
+    .waitFor({ state: "visible", timeout: 30_000 })
+  console.log("[probe] PASS H-2 panel renders the child-open button (task linkage)")
+
+  // --- Phase 2 (H-3): user-defined tool executes, artifact backend-observable ---
+  await sendTurn(
+    frame,
+    REAL_USER_TOOL_PROMPT,
+    (s) => {
+      const root = realRootSession(s)
+      if (!root) return "root session missing"
+      const tool = completedTool(s, root.id, plan.realUserTool)
+      if (!tool) return "e2e_marker tool part missing"
+      if (tool.status !== "completed") return `e2e_marker status=${tool.status}`
+      if (!tool.output?.includes("echo:hello")) return `e2e_marker output=${JSON.stringify(tool.output)}`
+      if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+      return undefined
+    },
+    "H-3 user tool: completed tool part in the backend",
+  )
+  const artifactFile = join(workspace, plan.realArtifact)
+  const artifact = existsSync(artifactFile) ? readFileSync(artifactFile, "utf8") : ""
+  if (artifact !== "echo:hello") {
+    throw new Error(`probe: H-3 artifact missing or wrong at ${artifactFile}: ${JSON.stringify(artifact)}`)
+  }
+  console.log(`[probe] PASS H-3 run-owned artifact: ${artifactFile} = "echo:hello"`)
+  await expectTranscriptText(frame, SCRIPTED.userToolFinal, 60_000, "H-3 panel shows the tool completion text")
+
+  // --- Phase 3 (H-4): seeded skill loads, content returned through the skill tool ---
+  await sendTurn(
+    frame,
+    REAL_SKILL_PROMPT,
+    (s) => {
+      const root = realRootSession(s)
+      if (!root) return "root session missing"
+      const tool = completedTool(s, root.id, "skill")
+      if (!tool) return "skill tool part missing"
+      if (tool.status !== "completed") return `skill status=${tool.status}`
+      if (tool.title !== `Loaded skill: ${plan.realSkill}`) return `skill title=${JSON.stringify(tool.title)}`
+      if (!tool.output?.includes(`<skill_content name="${plan.realSkill}">`)) {
+        return `skill output missing the content wrapper: ${JSON.stringify(tool.output?.slice(0, 200))}`
+      }
+      if (!tool.output?.includes(SCRIPTED.skillContentMarker)) return "skill output missing the content marker"
+      if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+      return undefined
+    },
+    "H-4 skill: content returned through the real skill tool",
+  )
+  await expectTranscriptText(frame, SCRIPTED.skillFinal, 60_000, "H-4 panel shows the skill completion text")
+
+  // --- Phase 4 (H-5): MCP connected, tool executes, child PID recorded ---
+  await sendTurn(
+    frame,
+    REAL_MCP_PROMPT,
+    (s) => {
+      if (s.mcp?.[plan.realMcpServer] !== "connected") {
+        return `mcp ${plan.realMcpServer} status=${JSON.stringify(s.mcp?.[plan.realMcpServer])} expected connected`
+      }
+      const root = realRootSession(s)
+      if (!root) return "root session missing"
+      const tool = completedTool(s, root.id, plan.realMcpTool)
+      if (!tool) return "mcp tool part missing"
+      if (tool.status !== "completed") return `mcp tool status=${tool.status}`
+      if (!tool.output?.includes("echo:hi")) return `mcp tool output=${JSON.stringify(tool.output)}`
+      if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+      return undefined
+    },
+    "H-5 MCP: connected + tool executed inside the real loop",
+  )
+  const mcpLog = join(workspace, "mcp-fixture", "calls.log")
+  if (!existsSync(mcpLog) || !readFileSync(mcpLog, "utf8").includes("echo:hi")) {
+    throw new Error(`probe: H-5 MCP server-side log missing at ${mcpLog}`)
+  }
+  console.log(`[probe] PASS H-5 MCP server-side log written: ${mcpLog}`)
+  // The MCP child is alive while connected — record its exact PID(s) via the
+  // run-owned absolute server path (the recorded handle).
+  const mcpPids = await waitForMcpChildPids(mcpServerFile, 30_000, "H-5 MCP child alive while connected")
+  for (const pid of mcpPids) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      throw new Error(`probe: H-5 recorded MCP child pid ${pid} is not alive while connected`)
     }
   }
-  return lines.length > 0 ? lines.join("\n") : "  (no pages visible via CDP)"
+
+  // --- Phase 5 (H-6): permission dock — real inline PermissionDock reply ---
+  // The initial send goes through sendTurn like every other phase, so a
+  // transiently failed send is retried with the same bounded semantics (the
+  // scripted provider is marker-idempotent, so a re-send never double-executes).
+  await sendTurn(
+    frame,
+    REAL_PERMISSION_PROMPT,
+    (s) => {
+      const root = realRootSession(s)
+      if (!root) return "root session missing"
+      const pending = (s.pending?.permissions ?? []).find(
+        (p) => p.permission === "read" && p.sessionID === root.id,
+      )
+      if (!pending) return "no pending read permission for the root session"
+      return undefined
+    },
+    "H-6 permission: backend pending permission observable",
+  )
+  await waitForDock(frame, '[data-component="dock-prompt"][data-kind="permission"]', 60_000, "H-6 permission dock visible")
+  await clickPermissionAllowOnce(frame, timeout)
+  await snap.waitFor(
+    (s) => {
+      const root = realRootSession(s)
+      if (!root) return "root session missing"
+      const tool = completedTool(s, root.id, "read")
+      if (!tool) return "read tool part missing"
+      if (tool.status !== "completed") return `read status=${tool.status}`
+      if (!tool.output?.includes(SCRIPTED.permissionSentinel)) {
+        return `read output missing the sentinel: ${JSON.stringify(tool.output?.slice(0, 200))}`
+      }
+      if ((s.pending?.permissions ?? []).some((p) => p.sessionID === root.id)) {
+        return "pending permission not drained by the reply"
+      }
+      if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+      return undefined
+    },
+    90_000,
+    "H-6 permission reply drains the pending request and completes",
+  )
+  await waitForNoDock(frame, '[data-component="dock-prompt"][data-kind="permission"]', timeout, "H-6 permission dock gone")
+  await expectTranscriptText(frame, SCRIPTED.permissionFinal, 60_000, "H-6 panel shows the permission completion text")
+
+  // --- Phase 6 (H-6): question dock — real inline QuestionDock reply ---
+  await sendTurn(
+    frame,
+    REAL_QUESTION_PROMPT,
+    (s) => {
+      const root = realRootSession(s)
+      if (!root) return "root session missing"
+      const pending = (s.pending?.questions ?? []).find(
+        (q) => q.sessionID === root.id && q.questions.some((x) => x.question === "Pick an option"),
+      )
+      if (!pending) return "no pending question for the root session"
+      return undefined
+    },
+    "H-6 question: backend pending question observable",
+  )
+  await waitForDock(frame, '[data-component="question-dock"]', 60_000, "H-6 question dock visible")
+  await clickQuestionAnswer(frame, "B", timeout)
+  await snap.waitFor(
+    (s) => {
+      const root = realRootSession(s)
+      if (!root) return "root session missing"
+      const tool = completedTool(s, root.id, "question")
+      if (!tool) return "question tool part missing"
+      if (tool.status !== "completed") return `question status=${tool.status}`
+      if (!tool.output?.includes('"Pick an option"="B"')) {
+        return `question output missing the answer mapping: ${JSON.stringify(tool.output)}`
+      }
+      if ((s.pending?.questions ?? []).some((q) => q.sessionID === root.id)) {
+        return "pending question not drained by the reply"
+      }
+      if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+      return undefined
+    },
+    90_000,
+    "H-6 question reply drains the pending request and completes",
+  )
+  await waitForNoDock(frame, '[data-component="question-dock"]', timeout, "H-6 question dock gone")
+  await expectTranscriptText(frame, SCRIPTED.questionFinal, 60_000, "H-6 panel shows the question completion text")
+
+  // --- Phase 7 (H-7): panel close/reopen — hierarchy persists and renders ---
+  const pre = await snap.request()
+  const rootTitle = pre.sessions.find((x) => x.id === rootId)?.title ?? ""
+  const childTitle = pre.sessions.find((x) => x.id === childId)?.title ?? ""
+  writeFileSync(join(scratch, "real-completed-reopen-request"), "ok")
+  await waitForFile(join(scratch, "real-completed-reopen-ready"), 120_000, "real-completed-reopen-ready marker")
+  const reopened = await findAgentManagerFrameAny(browser, 60_000)
+  const rf = reopened.frame
+  await snap.waitFor(
+    (s) => {
+      const root = s.sessions.find((x) => x.id === rootId)
+      if (!root) return "root session missing after reopen"
+      const child = s.sessions.find((x) => x.id === childId)
+      if (!child) return "child session missing after reopen"
+      if (child.parentID !== rootId) return `child.parentID=${child.parentID} expected ${rootId}`
+      if (!(s.children?.[rootId] ?? []).includes(childId)) {
+        return `children[${rootId}]=${JSON.stringify(s.children?.[rootId])} missing ${childId}`
+      }
+      return undefined
+    },
+    60_000,
+    "H-7 backend parentID/children facts persist after panel reopen",
+  )
+  // The reopened panel re-derives the hierarchy from backend facts: open the
+  // root topic row (real click), then assert the child row renders under it.
+  await clickSidebarTopic(rf, rootId, timeout)
+  const deadlineHierarchy = Date.now() + 30_000
+  for (;;) {
+    const topics = await sidebarTopicStates(rf)
+    const root = topics.find((t) => t.id === rootId)
+    const child = root?.children.find((c) => c.id === childId)
+    if (root && child) {
+      console.log(
+        `[probe] PASS H-7 reopened panel renders parent topic "${root.label}" with child row "${child.label}"`,
+      )
+      break
+    }
+    if (Date.now() > deadlineHierarchy) {
+      throw new Error(
+        `probe: H-7 hierarchy rendering failed.\n` +
+          `  topics=${JSON.stringify(topics)}\n  expected root=${rootId} child=${childId}`,
+      )
+    }
+    await sleep(250)
+  }
+
+  // --- Phase 8 (H-5 cleanup): disconnect through the real SDK, exact PIDs exit ---
+  const pidsBefore = mcpChildPids(mcpServerFile)
+  if (pidsBefore.length === 0) {
+    throw new Error("probe: H-5 cleanup — recorded MCP child pids no longer alive before disconnect")
+  }
+  writeFileSync(join(scratch, "real-completed-mcp-disconnect-request"), "ok")
+  await waitForFile(join(scratch, "real-completed-mcp-disconnect-done"), 60_000, "real-completed-mcp-disconnect-done marker")
+  const deadlineExit = Date.now() + 30_000
+  for (;;) {
+    const alive = pidsBefore.filter((pid) => {
+      try {
+        process.kill(pid, 0)
+        return true
+      } catch {
+        return false
+      }
+    })
+    if (alive.length === 0) break
+    if (Date.now() > deadlineExit) {
+      throw new Error(`probe: H-5 cleanup — MCP child pids still alive after disconnect: ${alive.join(", ")}`)
+    }
+    await sleep(250)
+  }
+  console.log(`[probe] PASS H-5 cleanup: recorded MCP child pids ${pidsBefore.join(", ")} exited after disconnect`)
+  await snap.waitFor(
+    (s) => {
+      if (s.mcp?.[plan.realMcpServer] !== "disabled") {
+        return `mcp ${plan.realMcpServer} status=${JSON.stringify(s.mcp?.[plan.realMcpServer])} expected disabled`
+      }
+      return undefined
+    },
+    30_000,
+    "H-5 snapshot shows the MCP server disabled after disconnect",
+  )
+
+  // LOCK-006/LOCK-008: request-level isolation after H-2..H-7 — every
+  // generation request so far (turns, delegated subagent, any implicit title).
+  assertRunOwnedLlmRequests(scratch, "real-completed-post-h7")
+
+  // --- Phase 9 (H-12): rollback — real write turn, Revert-to-here, Redo All ---
+  // Extracted into assertRealRollbackPhase (complexity cap); the reopened panel
+  // (rf) is still showing the root session, so the turns go through the FRESH
+  // webview document against the same served backend session.
+  const editMessageID = await assertRealRollbackPhase(rf, snap, model, workspace, timeout, plan, sendTurn)
+  const rollbackFile = join(workspace, SCRIPTED.rollbackFile)
+  const readRollback = () => (existsSync(rollbackFile) ? readFileSync(rollbackFile, "utf8") : "<missing>")
+
+  // Backend pin evidence for every UI send of this scenario (LOCK-006): each
+  // submitted user message must be pinned to e2e-local/e2e-model / low with the
+  // custom agent in the FINAL served state — H-2..H-6, the permission/question
+  // turns, and the two H-12 turns (the latter sent through the reopened webview
+  // document). The per-prompt report only inspects the messages that carry that
+  // prompt, so the H-12 summary pin can never be masked by the edit turn.
+  const finalPinSnap = await snap.request()
+  const rootFinal = realRootSession(finalPinSnap)!
+  const pinEvidence = [
+    pinReport(finalPinSnap, rootFinal.id, exp, REAL_TASK_PROMPT),
+    pinReport(finalPinSnap, rootFinal.id, exp, REAL_USER_TOOL_PROMPT),
+    pinReport(finalPinSnap, rootFinal.id, exp, REAL_SKILL_PROMPT),
+    pinReport(finalPinSnap, rootFinal.id, exp, REAL_MCP_PROMPT),
+    pinReport(finalPinSnap, rootFinal.id, exp, REAL_PERMISSION_PROMPT),
+    pinReport(finalPinSnap, rootFinal.id, exp, REAL_QUESTION_PROMPT),
+    pinReport(finalPinSnap, rootFinal.id, exp, REAL_ROLLBACK_PROMPT),
+    pinReport(finalPinSnap, rootFinal.id, exp, REAL_ROLLBACK_SUMMARY_PROMPT),
+  ]
+  console.log(`[probe] PIN EVIDENCE: ${JSON.stringify(pinEvidence, null, 2)}`)
+
+  // Final request-level isolation (LOCK-006/LOCK-008): every generation request
+  // of the whole run — turns, subagent, compaction summary, continuation, and
+  // any implicit title call. A kilo gateway title call fails here even though
+  // the session pins never see it.
+  const llmFinal = assertRunOwnedLlmRequests(scratch, "real-completed-final")
+
+  writeFileSync(
+    join(scratch, "real-completed-dom-evidence"),
+    JSON.stringify(
+      {
+        url: rf.url(),
+        plan,
+        rootId,
+        childId,
+        rootTitle,
+        childTitle,
+        modelRequests: model.requests.map((r) => ({ url: r.url, body: r.body })),
+        pins: pinEvidence,
+        llmRequests: readLlmRequests(scratch),
+        llmMatrix: llmFinal,
+        finalTopics: await sidebarTopicStates(rf),
+        finalTabs: await realTabStates(rf),
+        // H-12 rollback evidence: boundary message id, exact file bytes at each
+        // stage, and the backend revert/checkpoint fact.
+        rollback: {
+          file: SCRIPTED.rollbackFile,
+          boundaryMessageID: editMessageID,
+          editedBytes: readRollback(),
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  console.log("[probe] real-completed lifecycle passed")
+}
+
+// ---------------------------------------------------------------------------
+// Real-overflow parity scenario — H-13 internal context-overflow safeguard
+// ---------------------------------------------------------------------------
+
+/** Prompt typed into the real Agent Manager prompt input for the overflow turn. */
+const REAL_OVERFLOW_PROMPT = `${SCRIPTED.overflowMarker}: produce a very long answer and keep going`
+
+/**
+ * Real-webview E2E for the H-13 internal context-overflow safeguard. Drives the
+ * REAL Agent Manager webview — prompt input, Send, ModeSwitcher,
+ * ThinkingSelector — over the production webview → AgentManagerProvider →
+ * KiloProvider → SDK → served-backend path, against a run-owned scripted
+ * OpenAI-compatible SSE provider whose dedicated config seeds a deliberately
+ * small model `limit.context` + `compaction.threshold_percent` (this config is
+ * NEVER shared with real-completed's H-2..H-7 model). Served-backend truth is
+ * asserted via the backendSnapshot fixture command:
+ *
+ *   1. the scripted first response reports usage crossing cap =
+ *      context × threshold_percent, so the production step-finish overflow
+ *      check deterministically fires; the served backend records a REAL
+ *      large pre-compaction assistant response (the marker text that only
+ *      exists when the first model call ran before compaction — a future
+ *      preflight-estimate compaction cannot produce it), a REAL
+ *      auto-compaction user message (typed `compaction` part, auto: true,
+ *      overflow false/absent), a REAL summary assistant message
+ *      (summary: true) generated against the scripted provider, and a REAL
+ *      synthetic automatic-continuation user message (compaction_continue
+ *      metadata) whose continuation answer completes the SAME turn — no user
+ *      action, no context-management product surface involved,
+ *   2. the panel renders the continuation answer and the compaction summary
+ *      trace, and the session ends idle,
+ *   3. the Agent Manager panel DOM has NO context-management/compact controls:
+ *      no settings surface (the sidebar ContextTab is not inspected), no
+ *      task-header context-menu/action content (the header popover is closed),
+ *      while the pre-existing shared TaskHeader widgets are recorded as
+ *      evidence, not asserted absent.
+ */
+async function assertRealOverflowLifecycle(
+  browser: Browser,
+  plan: E2EPlan,
+  scratch: string,
+  model: ScriptedModelHandle,
+): Promise<void> {
+  const timeout = 30_000
+  await waitForFile(join(scratch, "real-overflow-ready"), 120_000, "real-overflow-ready marker")
+  const found = await findAgentManagerFrameAny(browser, 60_000)
+  const frame = found.frame
+  const snap = snapshotClient(scratch, "of-snap")
+
+  // EVERY send carries the shared backend pin predicate (e2e-pin.ts withPin):
+  // the overflow prompt's user message must be pinned to the custom
+  // provider/model/variant + agent — a wrong-pinned send is a permanent
+  // non-retryable failure, never masked by a retry (LOCK-006/LOCK-008). The
+  // synthetic automatic-continuation and compaction user messages the backend
+  // generates mid-turn are excluded from the pin set (isSyntheticUser).
+  const exp = pinExpect(plan, plan.customAgent, plan.customVariantA)
+  const sendTurn = async (
+    target: Frame,
+    prompt: string,
+    probe: (s: BackendSnapshot) => string | undefined,
+    label: string,
+  ): Promise<BackendSnapshot> => {
+    return sendTurnWithPin(target, snap, prompt, probe, label, timeout, {
+      exp,
+      prompt,
+      sessionID: (s) => realRootSession(s)?.id,
+    })
+  }
+
+  // --- Phase 0: pick the seeded custom agent + Low variant (mirror the
+  // proven real-completed flow so the first send never races the provider
+  // catalog load and falls back to KILO_AUTO, missing the scripted server).
+  // Then wait for the VISIBLE custom model selection (LOCK-012): the model
+  // selector falls through to the gateway KILO_AUTO free model until the
+  // config/catalog resolve, so the first send must not race it.
+  await waitForAgentOption(frame, plan.customAgentLabel, timeout)
+  await pickAgent(frame, plan.customAgentLabel, timeout)
+  await waitForLabel(frame, ".mode-switcher-trigger-label", plan.customAgentLabel, timeout, "custom agent selected")
+  await pickVariant(frame, plan.customVariantA, timeout)
+  await waitForLabel(frame, ".thinking-selector-trigger-label", plan.customVariantA, timeout, "variant Low selected")
+  await waitForModelSelected(frame, plan.customProvider, plan.customModel, timeout, "custom model visibly selected")
+
+  // --- Phase 1 (H-13 backend): the overflow turn — large first response,
+  // internal auto-compaction, and the post-compaction continuation answer, all
+  // in ONE user turn with no user action beyond the single send.
+  const snapTurn = await sendTurn(
+    frame,
+    REAL_OVERFLOW_PROMPT,
+    (s) => {
+      const root = realRootSession(s)
+      if (!root) return "no root session yet"
+      const msgs = s.messages[root.id] ?? []
+      const compactionMsg = msgs.find((m) => m.compaction)
+      if (!compactionMsg) {
+        return `no compaction part yet; status=${s.statuses[root.id] ?? "idle"}`
+      }
+      if (compactionMsg.compaction?.auto !== true) {
+        return `compaction.auto=${JSON.stringify(compactionMsg.compaction)} expected true (internal safeguard)`
+      }
+      // H-13 audit: the large pre-compaction assistant response must be in the
+      // backend transcript. Its unique marker text only exists if the FIRST
+      // model call ran before compaction, so a future preflight-estimate
+      // compaction (no model call before compacting) can no longer pass the
+      // post-response usage-threshold claim.
+      const bigResponse = msgs.find((m) => m.role === "assistant" && m.text.includes(SCRIPTED.overflowBig))
+      if (!bigResponse) {
+        return "no pre-compaction large assistant response (E2E_OVERFLOW_BIG_RESPONSE) in the backend transcript"
+      }
+      // Production semantics (prompt.ts): `overflow: true` is reserved for
+      // unfinished-stream provider overflow, never this usage-threshold path —
+      // the served part is expected `false` or absent.
+      if (compactionMsg.compaction?.overflow === true) {
+        return `compaction.overflow=${JSON.stringify(compactionMsg.compaction.overflow)} expected false (usage-threshold-at-finish)`
+      }
+      const summaryMsg = msgs.find((m) => m.summary === true)
+      if (!summaryMsg) return "no compaction summary message in the backend transcript"
+      if (!summaryMsg.text.includes(SCRIPTED.compactionSummary)) {
+        return `summary text missing the marker: ${JSON.stringify(summaryMsg.text.slice(0, 200))}`
+      }
+      const continueMsg = msgs.find((m) => m.continuation === true)
+      if (!continueMsg) return "no automatic-continuation user message in the backend transcript"
+      const contAnswer = msgs.find(
+        (m) => m.role === "assistant" && m.text.includes(SCRIPTED.continuationAnswer),
+      )
+      if (!contAnswer) return "continuation answer missing from the backend transcript"
+      if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
+      return undefined
+    },
+    "H-13 backend: compaction part + summary + automatic continuation in one turn",
+  )
+  const rootId = realRootSession(snapTurn)!.id
+  console.log(`[probe] H-13 overflow session: ${rootId}`)
+
+  // --- Phase 2 (H-13 UI): the panel renders the continuation answer and the
+  // compaction summary trace (the invisible safeguard's transcript evidence).
+  await expectTranscriptText(frame, SCRIPTED.continuationAnswer, 60_000, "H-13 panel shows the continuation answer")
+  await expectTranscriptText(frame, SCRIPTED.compactionSummary, 60_000, "H-13 panel shows the compaction summary trace")
+
+  // --- Phase 3 (H-13 panel surface): no context-management/compact controls
+  // in the Agent Manager panel DOM. The sidebar ContextTab is intentionally
+  // NOT inspected (LOCK-004: P3.4 removal scope). The shared TaskHeader's
+  // context popover trigger is recorded as evidence only — the popover CONTENT
+  // (with the Compact action) is not mounted while closed, and the panel
+  // mounts no settings/context-management surface at all.
+  const surface = await frame
+    .evaluate(() => {
+      const sel = (s: string) => document.querySelectorAll(s).length
+      return {
+        settingsRows: sel('[data-slot="settings-row"]'),
+        headerContextMenu: sel('[data-slot="task-header-context-menu"]'),
+        headerContextActions: sel('[data-slot="task-header-context-action"]'),
+        contextTriggers: sel(".task-header-context-trigger"),
+        promptInput: sel("textarea.prompt-input"),
+        transcriptText: document.body?.innerText?.includes("E2E_CONTINUATION_ANSWER") ?? false,
+      }
+    })
+    .catch(() => ({
+      settingsRows: -1,
+      headerContextMenu: -1,
+      headerContextActions: -1,
+      contextTriggers: -1,
+      promptInput: -1,
+      transcriptText: false,
+    }))
+  const noControls =
+    surface.settingsRows === 0 && surface.headerContextMenu === 0 && surface.headerContextActions === 0
+  if (!noControls) {
+    throw new Error(`probe: H-13 Agent Manager panel has context-management/compact controls: ${JSON.stringify(surface)}`)
+  }
+  console.log(`[probe] PASS H-13 panel surface: no context-management/compact controls ${JSON.stringify(surface)}`)
+  if (surface.transcriptText !== true) {
+    throw new Error("probe: H-13 panel transcript does not contain the continuation answer in innerText")
+  }
+
+  // Backend pin evidence for the overflow UI send (LOCK-006): the overflow
+  // prompt's user message must be pinned to e2e-local/e2e-model / low with the
+  // custom agent — the synthetic auto-compaction and continuation user messages
+  // the backend generated mid-turn are excluded from the pin set.
+  const finalPinSnap = await snap.request()
+  const rootFinal = realRootSession(finalPinSnap)!
+  const pinEvidence = [pinReport(finalPinSnap, rootFinal.id, exp, REAL_OVERFLOW_PROMPT)]
+  console.log(`[probe] PIN EVIDENCE: ${JSON.stringify(pinEvidence, null, 2)}`)
+
+  // Final request-level isolation (LOCK-006/LOCK-008): every generation request
+  // of the run — overflow turn, compaction summary, continuation, implicit title.
+  const llmFinal = assertRunOwnedLlmRequests(scratch, "real-overflow-final")
+
+  writeFileSync(
+    join(scratch, "real-overflow-dom-evidence"),
+    JSON.stringify(
+      {
+        url: found.url,
+        plan,
+        rootId,
+        modelRequests: model.requests.map((r) => ({ url: r.url, body: r.body })),
+        pins: pinEvidence,
+        llmRequests: readLlmRequests(scratch),
+        llmMatrix: llmFinal,
+        finalTabs: await realTabStates(frame),
+        surface,
+        // The exact scripted-model decision log proves the first request
+        // reached the model (large response) and the continuation followed
+        // the compaction summary — no preflight interception, no retries.
+        overflowConfig: {
+          provider: plan.customProvider,
+          model: plan.customModel,
+          agent: plan.customAgent,
+          variant: plan.customVariantA,
+          prompt: REAL_OVERFLOW_PROMPT,
+          reportedUsage: SCRIPTED.overflowUsage,
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  console.log("[probe] real-overflow lifecycle passed")
+}
+
+/** real-session only: create the run-owned hang server and write the config seed. */
+async function prepareRealSession(
+  workspace: string,
+  real: boolean,
+): Promise<{ port: number; close: () => Promise<void> } | undefined> {
+  if (!real) return undefined
+  const hang = await createHangServer()
+  const configFile = writeRealSessionConfig(workspace, hang.port)
+  console.log(`[probe] real-session config seed: ${configFile} (hang server port ${hang.port})`)
+  return hang
+}
+
+/**
+ * real-completed only: create the run-owned scripted OpenAI-compatible SSE
+ * provider and write the full workspace seed (config + user tool + skill +
+ * MCP fixture + permission target + no-op dependency guard) BEFORE VS Code
+ * launches, so the lazily-spawned CLI backend loads every fixture at startup.
+ */
+async function prepareRealCompleted(
+  workspace: string,
+  real: boolean,
+): Promise<{ handle: ScriptedModelHandle; mcpServerFile: string } | undefined> {
+  if (!real) return undefined
+  const handle = await createScriptedModel(workspace)
+  const sdkEsmDir = join(root, "..", "opencode", "node_modules", "@modelcontextprotocol", "sdk", "dist", "esm")
+  const pluginToolUrl = pathToFileURL(join(root, "..", "plugin", "src", "tool.ts")).href
+  const seed = writeRealCompletedSeed(workspace, handle.port, sdkEsmDir, pluginToolUrl)
+  // H-6: the seeded read rule "ask.txt" is relative to the workspace; make the
+  // workspace a git repo so the backend resolves worktree == workspace and the
+  // read tool's permission pattern is exactly "ask.txt" (not a /-relative
+  // absolute path the "*" allow rule swallows).
+  initWorkspaceGit(workspace)
+  console.log(`[probe] real-completed seed: ${seed.configFile} (scripted model port ${handle.port})`)
+  return { handle, mcpServerFile: seed.mcpServerFile }
+}
+
+/**
+ * real-overflow only: create the run-owned scripted OpenAI-compatible SSE
+ * provider and write the dedicated small-context workspace seed (config +
+ * no-op dependency guard) BEFORE VS Code launches, so the lazily-spawned CLI
+ * backend loads the overflow trigger config at startup. This config is NEVER
+ * shared with real-completed — the small model limit + low threshold would
+ * change the served-model behavior the H-2..H-7 turns depend on.
+ */
+async function prepareRealOverflow(
+  workspace: string,
+  real: boolean,
+): Promise<ScriptedModelHandle | undefined> {
+  if (!real) return undefined
+  const handle = await createScriptedModel(workspace)
+  const configFile = writeRealOverflowSeed(workspace, handle.port)
+  console.log(`[probe] real-overflow seed: ${configFile} (scripted model port ${handle.port})`)
+  return handle
+}
+
+/**
+ * real-restart only: create the run-owned scripted OpenAI-compatible SSE
+ * provider and write the dedicated workspace seed (minimal config + user tool
+ * + no-op dependency guard) BEFORE VS Code launches, so the lazily-spawned CLI
+ * backend loads it at startup. The scripted model survives every restart
+ * boundary (it lives in THIS harness process), while the seeded session +
+ * artifact live in the run-owned XDG scratch the extension host reuses after
+ * the exact worker kill and the true window restart.
+ */
+async function prepareRealRestart(workspace: string, real: boolean): Promise<ScriptedModelHandle | undefined> {
+  if (!real) return undefined
+  const handle = await createScriptedModel(workspace)
+  const pluginToolUrl = pathToFileURL(join(root, "..", "plugin", "src", "tool.ts")).href
+  const seed = writeRealRestartSeed(workspace, handle.port, pluginToolUrl)
+  console.log(`[probe] real-restart seed: ${seed.configFile} (scripted model port ${handle.port})`)
+  return handle
+}
+
+/** Dispatch the selected focused scenarios to their assertion functions. */
+async function runScenario(
+  browser: Browser,
+  scenarios: Set<string>,
+  plan: E2EPlan,
+  scratch: string,
+  workspace: string,
+  completed?: { handle: ScriptedModelHandle; mcpServerFile: string },
+  overflowModel?: ScriptedModelHandle,
+): Promise<void> {
+  if (scenarios.has("tab-close")) {
+    await assertTabCloseSuccessor(browser, plan, scratch)
+    console.log("[probe] tab-close successor assertion passed")
+  }
+  if (scenarios.has("child-task-order")) {
+    await assertChildTaskOrder(browser, plan, scratch)
+    console.log("[probe] child-task tab-order assertion passed")
+  }
+  if (scenarios.has("variant-memory")) {
+    await assertVariantMemoryAcrossAgents(browser, plan, scratch)
+    console.log("[probe] variant-memory assertion passed")
+  }
+  if (scenarios.has("topic-navigation")) {
+    await assertTopicNavigation(browser, plan, scratch)
+    console.log("[probe] topic-navigation assertion passed")
+  }
+  if (scenarios.has("real-session")) {
+    await assertRealSessionLifecycle(browser, plan, scratch)
+    console.log("[probe] real-session lifecycle assertion passed")
+  }
+  if (scenarios.has("real-completed")) {
+    if (!completed) throw new Error("probe: real-completed preparation missing")
+    await assertRealCompletedLifecycle(browser, plan, scratch, workspace, completed.mcpServerFile, completed.handle)
+    console.log("[probe] real-completed lifecycle assertion passed")
+  }
+  if (scenarios.has("real-overflow")) {
+    if (!overflowModel) throw new Error("probe: real-overflow preparation missing")
+    await assertRealOverflowLifecycle(browser, plan, scratch, overflowModel)
+    console.log("[probe] real-overflow lifecycle assertion passed")
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1450,7 +2566,206 @@ function cleanEnv() {
 // Main
 // ---------------------------------------------------------------------------
 
+/**
+ * Ready marker per scenario: real-session / real-completed / real-overflow /
+ * real-restart write their own `*-ready` marker (they never seed synthetic
+ * fixtures and never write the synthetic `ready`); every other scenario
+ * writes `ready` after its fixture seeding.
+ */
+function readyMarkerFor(scenarios: Set<string>): string {
+  if (scenarios.has("real-session")) return "real-ready"
+  if (scenarios.has("real-completed")) return "real-completed-ready"
+  if (scenarios.has("real-overflow")) return "real-overflow-ready"
+  if (scenarios.has("real-restart")) return "rr-ready"
+  return "ready"
+}
+
 let vscodeRun: Promise<number> | undefined
+
+/**
+ * Shared VS Code launch — the restart lifecycle and the standard single-process
+ * path pass identical runTests args (hermetic scratch XDG tree;
+ * `--remote-allow-origins=*` is required for Playwright's CDP WebSocket Origin
+ * on this ephemeral loopback-only test profile, never production).
+ */
+function launchVSCode(opts: {
+  executable?: string
+  runnerOut: string
+  scratch: string
+  fixtureId: string
+  scenario: string
+  userData: string
+  extensions: string
+  workspace: string
+  port: number
+}): Promise<number> {
+  const { executable, runnerOut, scratch, fixtureId, scenario, userData, extensions, workspace, port } = opts
+  return runTests({
+    ...(executable ? { vscodeExecutablePath: executable } : {}),
+    extensionDevelopmentPath: root,
+    extensionTestsPath: runnerOut,
+    extensionTestsEnv: {
+      KILO_E2E_FIXTURE: "1",
+      KILO_E2E_SCRATCH: scratch,
+      KILO_E2E_FIXTURE_ID: fixtureId,
+      KILO_E2E_SCENARIO: scenario,
+      XDG_CONFIG_HOME: join(scratch, "xdg-config"),
+      XDG_DATA_HOME: join(scratch, "xdg-data"),
+      XDG_CACHE_HOME: join(scratch, "xdg-cache"),
+      XDG_STATE_HOME: join(scratch, "xdg-state"),
+    },
+    launchArgs: [
+      workspace,
+      `--user-data-dir=${userData}`,
+      `--extensions-dir=${extensions}`,
+      `--remote-debugging-port=${port}`,
+      "--remote-allow-origins=*",
+    ],
+  })
+}
+
+/**
+ * real-restart only: the Phase C window/extension-restart boundary over TWO
+ * VS Code processes. The FIRST process runs Phases 0/A/B (real completed turn,
+ * SSE reconnect with the backend alive, exact-owned worker restart), then the
+ * harness writes rr-reload-request and the extension-host runner executes
+ * `workbench.action.reloadWindow` (acknowledged via rr-reload-executed). In
+ * --extensionTestsPath test mode the reload teardown exits the main process
+ * with the old Extension Host — the fresh window never comes up in-place — so
+ * this treats that exit as the expected reload boundary and RELAUNCHES VS Code
+ * with identical args (same user-data-dir, workspace, XDG scratch, and
+ * extensionTestsPath runner). The fresh Extension Host re-runs the runner,
+ * detects the persisted rr-reload-request, and services the Phase C
+ * assertions (runner re-entry, deserialized/reopened Agent Manager, same
+ * session/transcript/artifact). Returns true when the run failed.
+ */
+async function runRealRestartLifecycle(opts: {
+  scratch: string
+  workspace: string
+  userData: string
+  extensions: string
+  executable: string | undefined
+  runnerOut: string
+  fixtureId: string
+  cdpPort: number
+  restartModel: ScriptedModelHandle
+}): Promise<boolean> {
+  const { scratch, workspace, userData, extensions, executable, runnerOut, fixtureId, cdpPort, restartModel } = opts
+  const doneFile = join(scratch, "done")
+  const planFile = join(scratch, "plan.json")
+  let failed = false
+
+  const launch = async (port: number) => {
+    vscodeRun = launchVSCode({ executable, runnerOut, scratch, fixtureId, scenario: "real-restart", userData, extensions, workspace, port })
+    await waitForCdp(port, 90_000)
+    console.log("[probe] CDP endpoint reachable, connecting Playwright")
+    return chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30_000 })
+  }
+
+  const awaitRun = async (label: string, reloadBoundary = false): Promise<number> => {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const watch = new Promise<number>((resolve) => {
+      timer = setTimeout(() => {
+        failed = true
+        console.error(`[probe] FAIL: ${label} did not exit within ${timeoutMs}ms`)
+        void terminateOwned(userData, 2_000).then((remaining) => {
+          if (remaining > 0) {
+            console.error(`[probe] FAIL: ${remaining} owned processes survived SIGKILL (${label})`)
+          } else {
+            console.log(`[probe] watchdog: all owned processes terminated by exact PID (${label})`)
+          }
+          resolve(remaining)
+        })
+      }, timeoutMs)
+    })
+    const code = await Promise.race([vscodeRun!, watch]).catch((err) => {
+      if (reloadBoundary) {
+        // The --extensionTestsPath reload teardown rejects runTests with a
+        // nonzero code when the main process exits with the torn-down
+        // Extension Host — this is the EXPECTED Phase C reload boundary (the
+        // runner already executed workbench.action.reloadWindow, proven by the
+        // rr-reload-executed acknowledgment the harness waited for).
+        console.log(
+          `[probe] NOTE: ${label} rejected — expected reload boundary: ${err instanceof Error ? err.message : String(err)}`,
+        )
+        return 1
+      }
+      failed = true
+      console.error(`[probe] FAIL: runTests error (${label}): ${err instanceof Error ? err.message : String(err)}`)
+      return 1
+    })
+    if (timer) clearTimeout(timer)
+    console.log(`[probe] VS Code exited (code ${code}) — ${label}`)
+    return code
+  }
+
+  const readPlan = () => JSON.parse(readFileSync(planFile, "utf8")) as E2EPlan
+
+  // ── Launch 1: Phases 0, A, B ────────────────────────────────────────────
+  const browser = await launch(cdpPort)
+  let evidence
+  try {
+    if (process.env.KILO_E2E_FORCE_FAIL) {
+      throw new Error("forced failure (KILO_E2E_FORCE_FAIL): exercising failure-path cleanup")
+    }
+    await waitForFile(join(scratch, "rr-ready"), 120_000, "runner ready marker")
+    await waitForFile(planFile, 30_000, "runner plan marker")
+    const plan = readPlan()
+    console.log(
+      `[probe] runner ready, plan: source=${plan.sourceId} sibling=${plan.siblingId} child=${plan.childId} ` +
+        `variant=${plan.variantId} tabA=${plan.tabAId} tabB=${plan.tabBId} tabC=${plan.tabCId} ` +
+        `topicRoot=${plan.topicRootId} topicChild=${plan.topicChildId} topicSibling=${plan.topicSiblingId} ` +
+        `realAgent=${plan.customAgent} realAgentB=${plan.customAgentB} realModel=${plan.customProvider}/${plan.customModel}`,
+    )
+    evidence = await runRealRestartBoundaries(browser, plan, scratch, workspace, restartModel)
+    // Phase C: request the true window/extension restart. The runner executes
+    // workbench.action.reloadWindow and acknowledges it before the teardown.
+    writeFileSync(join(scratch, "rr-reload-request"), "ok")
+    await waitForFile(join(scratch, "rr-reload-executed"), 60_000, "runner executed reloadWindow")
+  } finally {
+    // Unblock the first extension-host runner so VS Code exits under program
+    // control (the reload teardown is what actually ends the process).
+    writeFileSync(doneFile, "done")
+    await browser.close()
+  }
+  const first = await awaitRun("first launch (reload boundary)", true)
+  if (first === 0) {
+    console.log("[probe] NOTE: first launch exited 0; reloadWindow main-exit not observed, fresh host re-entry still runs")
+  }
+
+  // ── Launch 2: Phase C re-entry in the fresh Extension Host ──────────────
+  // The `done` marker from launch 1 must NOT leak into the fresh runner (its
+  // reload-phase loop would break immediately and never service the Phase C
+  // snapshot requests); remove it before the relaunch.
+  rmSync(doneFile, { force: true })
+  const freshPort = await freePort()
+  console.log(`[probe] relaunching VS Code for Phase C re-entry (cdp port ${freshPort})`)
+  const fresh = await launch(freshPort)
+  try {
+    await waitForFile(join(scratch, "rr-reloaded"), 300_000, "rr-reloaded marker (fresh Extension Host re-entry)")
+    await waitForFile(planFile, 30_000, "fresh runner plan marker")
+    const plan = readPlan()
+    await assertRealRestartReload(
+      fresh,
+      snapshotClient(scratch, "rr-c-snap"),
+      scratch,
+      plan,
+      workspace,
+      evidence,
+      restartModel,
+    )
+    console.log("[probe] real-restart lifecycle assertion passed")
+  } finally {
+    writeFileSync(doneFile, "done")
+    await fresh.close()
+  }
+  const second = await awaitRun("fresh launch (Phase C)")
+  if (second !== 0) failed = true
+  const freshPortFree = await portFree(freshPort)
+  console.log(`[probe] cleanup: relaunch CDP port ${freshPort} ${freshPortFree ? "released" : "STILL BOUND"}`)
+  if (!freshPortFree) failed = true
+  return failed
+}
 
 async function main() {
   const started = Date.now()
@@ -1470,12 +2785,32 @@ async function main() {
   const workspace = join(scratch, "workspace")
   mkdirSync(workspace, { recursive: true })
 
+  // LOCK-013: test-only evidence contract — resolve/validate fail-fast (e2e-evidence.ts).
+  const evidenceDir = evidenceDirFor(scratch)
+
   console.log(`[probe] fixture id: ${fixtureId}`)
   console.log(`[probe] cdp port:   ${cdpPort}`)
   console.log(`[probe] scratch:    ${scratch}`)
 
   const doneFile = join(scratch, "done")
   let failed = false
+  // real-session only: the run-owned hang server + workspace config seed must
+  // exist BEFORE VS Code launches so the lazily-spawned CLI backend loads the
+  // custom provider/model/variant and agents at startup.
+  const hang = await prepareRealSession(workspace, scenarios.has("real-session"))
+  // real-completed only: the run-owned scripted model server + the full
+  // workspace seed (config, user tool, skill, MCP fixture, permission target,
+  // no-op dependency guard) must also exist BEFORE VS Code launches.
+  const completed = await prepareRealCompleted(workspace, scenarios.has("real-completed"))
+  // real-overflow only: the run-owned scripted model server + the dedicated
+  // small-context workspace seed (config + no-op dependency guard) must also
+  // exist BEFORE VS Code launches.
+  const overflowModel = await prepareRealOverflow(workspace, scenarios.has("real-overflow"))
+  // real-restart only: the run-owned scripted model server + the minimal
+  // workspace seed (config + user tool + no-op dependency guard) must also
+  // exist BEFORE VS Code launches — the scripted model and the session/artifact
+  // survive every restart boundary.
+  const restartModel = await prepareRealRestart(workspace, scenarios.has("real-restart"))
   try {
     const runnerOut = join(scratch, "runner.cjs")
     await build({
@@ -1497,88 +2832,60 @@ async function main() {
       console.log("[probe] no VS Code override/cache; @vscode/test-electron will download into .vscode-test")
     }
 
-    vscodeRun = runTests({
-      ...(executable ? { vscodeExecutablePath: executable } : {}),
-      extensionDevelopmentPath: root,
-      extensionTestsPath: runnerOut,
-      extensionTestsEnv: {
-        KILO_E2E_FIXTURE: "1",
-        KILO_E2E_SCRATCH: scratch,
-        KILO_E2E_FIXTURE_ID: fixtureId,
-        // The runner seeds only the selected scenario(s) — never markers or
-        // state produced by another scenario.
-        KILO_E2E_SCENARIO: scenario,
-        // Hermetic isolation: point the spawned CLI backend at a scratch XDG
-        // tree so it loads a clean global config instead of the developer's
-        // real ~/.config/kilo. This makes the Agent Manager's agent catalog and
-        // provider/model config deterministic across machines (builtin agents
-        // code/ask/plan, no custom providers, no model_variant overrides) and
-        // prevents a dev's local config from breaking the scenario.
-        XDG_CONFIG_HOME: join(scratch, "xdg-config"),
-        XDG_DATA_HOME: join(scratch, "xdg-data"),
-        XDG_CACHE_HOME: join(scratch, "xdg-cache"),
-        XDG_STATE_HOME: join(scratch, "xdg-state"),
-      },
-      launchArgs: [
+    if (scenarios.has("real-restart")) {
+      if (!restartModel) throw new Error("probe: real-restart preparation missing")
+      // The real-restart scenario owns TWO VS Code processes: the first runs
+      // Phases 0/A/B and then the runner executes workbench.action.reloadWindow
+      // (test-mode teardown exits the main process), and a relaunch with
+      // identical args carries the fresh Extension Host into Phase C.
+      const relaunchFailed = await runRealRestartLifecycle({
+        scratch,
         workspace,
-        `--user-data-dir=${userData}`,
-        `--extensions-dir=${extensions}`,
-        `--remote-debugging-port=${cdpPort}`,
-        // Security note: CDP is bound to the loopback interface with a
-        // freshly allocated port and a unique temp user-data profile owned by
-        // this process. `--remote-allow-origins=*` is required because the
-        // Playwright CDP WebSocket transport sends an Origin header that
-        // recent Chromium builds reject unless allowed. Scope: this flag only
-        // applies to the ephemeral, localhost-only, test-profile instance
-        // launched here; it is never used by production extension launches.
-        // Revisit for later docs: if a future Chromium accepts Playwright's
-        // Origin without the flag, restrict it to the exact local origin.
-        `--remote-allow-origins=*`,
-      ],
-    })
+        userData,
+        extensions,
+        executable,
+        runnerOut,
+        fixtureId,
+        cdpPort,
+        restartModel,
+      })
+      if (relaunchFailed) failed = true
+    } else {
+      vscodeRun = launchVSCode({ executable, runnerOut, scratch, fixtureId, scenario, userData, extensions, workspace, port: cdpPort })
 
-    await waitForCdp(cdpPort, 90_000)
-    console.log("[probe] CDP endpoint reachable, connecting Playwright")
-    const browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, { timeout: 30_000 })
-    try {
-      if (process.env.KILO_E2E_FORCE_FAIL) {
-        throw new Error("forced failure (KILO_E2E_FORCE_FAIL): exercising failure-path cleanup")
+      await waitForCdp(cdpPort, 90_000)
+      console.log("[probe] CDP endpoint reachable, connecting Playwright")
+      const browser = await chromium.connectOverCDP(`http://127.0.0.1:${cdpPort}`, { timeout: 30_000 })
+      try {
+        if (process.env.KILO_E2E_FORCE_FAIL) {
+          throw new Error("forced failure (KILO_E2E_FORCE_FAIL): exercising failure-path cleanup")
+        }
+        const readyMarker = readyMarkerFor(scenarios)
+        await waitForFile(join(scratch, readyMarker), 120_000, "runner ready marker")
+        await waitForFile(join(scratch, "plan.json"), 30_000, "runner plan marker")
+        const plan = JSON.parse(readFileSync(join(scratch, "plan.json"), "utf8")) as E2EPlan
+        console.log(
+          `[probe] runner ready, plan: source=${plan.sourceId} sibling=${plan.siblingId} child=${plan.childId} ` +
+            `variant=${plan.variantId} tabA=${plan.tabAId} tabB=${plan.tabBId} tabC=${plan.tabCId} ` +
+            `topicRoot=${plan.topicRootId} topicChild=${plan.topicChildId} topicSibling=${plan.topicSiblingId} ` +
+            `realAgent=${plan.customAgent} realAgentB=${plan.customAgentB} realModel=${plan.customProvider}/${plan.customModel}`,
+        )
+        await runScenario(browser, scenarios, plan, scratch, workspace, completed, overflowModel)
+      } finally {
+        // Unblock the extension-host runner on success AND failure so VS Code
+        // always exits under program control (no detached processes).
+        writeFileSync(doneFile, "done")
+        await browser.close()
       }
-      await waitForFile(join(scratch, "ready"), 120_000, "runner ready marker")
-      await waitForFile(join(scratch, "plan.json"), 30_000, "runner plan marker")
-      const plan = JSON.parse(readFileSync(join(scratch, "plan.json"), "utf8")) as E2EPlan
-      console.log(
-        `[probe] runner ready, plan: source=${plan.sourceId} sibling=${plan.siblingId} child=${plan.childId} ` +
-          `variant=${plan.variantId} tabA=${plan.tabAId} tabB=${plan.tabBId} tabC=${plan.tabCId} ` +
-          `topicRoot=${plan.topicRootId} topicChild=${plan.topicChildId} topicSibling=${plan.topicSiblingId}`,
-      )
-      if (scenarios.has("tab-close")) {
-        await assertTabCloseSuccessor(browser, plan, scratch)
-        console.log("[probe] tab-close successor assertion passed")
-      }
-      if (scenarios.has("child-task-order")) {
-        await assertChildTaskOrder(browser, plan, scratch)
-        console.log("[probe] child-task tab-order assertion passed")
-      }
-      if (scenarios.has("variant-memory")) {
-        await assertVariantMemoryAcrossAgents(browser, plan, scratch)
-        console.log("[probe] variant-memory assertion passed")
-      }
-      if (scenarios.has("topic-navigation")) {
-        await assertTopicNavigation(browser, plan, scratch)
-        console.log("[probe] topic-navigation assertion passed")
-      }
-    } finally {
-      // Unblock the extension-host runner on success AND failure so VS Code
-      // always exits under program control (no detached processes).
-      writeFileSync(doneFile, "done")
-      await browser.close()
     }
   } catch (err) {
     failed = true
     console.error(`[probe] FAIL: ${err instanceof Error ? err.message : String(err)}`)
     writeFileSync(doneFile, "done")
   }
+
+  // Release the run-owned scripted/hang listeners before process settle + scratch deletion.
+  await closeHandles({ hang, completed, overflowModel, restartModel })
 
   // VS Code exits only after the runner sees the `done` marker (or times out).
   // Await it before touching the scratch dir so the unique user-data/extensions
@@ -1618,9 +2925,35 @@ async function main() {
     if (code !== 0) failed = true
   }
 
+  // Durable evidence handoff after the runner quiesced, before scratch cleanup.
+  if (
+    runEvidenceHandoff({ evidenceDir, staging: process.env.KILO_E2E_EVIDENCE_STAGING!, scratch, workspace, scenarios, fixtureId, startedAt: started, success: !failed })
+  ) {
+    failed = true
+  }
+
   await verifyCleanup(userData, cdpPort, scratch)
   console.log(`[probe] total elapsed: ${Math.round((Date.now() - started) / 1000)}s`)
   if (failed) process.exit(1)
+}
+
+/**
+ * Release the run-owned scripted/hang listeners BEFORE the owned VS Code
+ * processes are settled and the scratch dir is deleted; the listeners are
+ * in-process, so closing also releases sockets still held by aborted model
+ * requests.
+ */
+async function closeHandles(opts: {
+  hang: { close: () => Promise<void> } | undefined
+  completed: { handle: { close: () => Promise<void> } } | undefined
+  overflowModel: { close: () => Promise<void> } | undefined
+  restartModel: { close: () => Promise<void> } | undefined
+}) {
+  const { hang, completed, overflowModel, restartModel } = opts
+  if (hang) await hang.close().catch((err) => console.error("[probe] hang server close failed:", err))
+  if (completed) await completed.handle.close().catch((err) => console.error("[probe] scripted model close failed:", err))
+  if (overflowModel) await overflowModel.close().catch((err) => console.error("[probe] overflow scripted model close failed:", err))
+  if (restartModel) await restartModel.close().catch((err) => console.error("[probe] restart scripted model close failed:", err))
 }
 
 async function verifyCleanup(userData: string, cdpPort: number, scratch: string) {

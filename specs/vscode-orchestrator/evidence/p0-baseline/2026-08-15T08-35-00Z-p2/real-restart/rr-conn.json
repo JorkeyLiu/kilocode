@@ -1,0 +1,19 @@
+{
+  "before": "connected",
+  "portBefore": 55326,
+  "pidBefore": 53824,
+  "after": "connected",
+  "portAfter": 55326,
+  "pidAfter": 53824,
+  "states": [
+    {
+      "state": "connecting",
+      "at": "2026-08-15T08:42:39.474Z"
+    },
+    {
+      "state": "connected",
+      "at": "2026-08-15T08:42:39.744Z"
+    }
+  ],
+  "connectedEvents": 1
+}

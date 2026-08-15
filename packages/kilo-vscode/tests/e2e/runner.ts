@@ -69,12 +69,30 @@
  *                           other scenarios entirely.
  *   - topic-navigation   => seeds only the topic fixtures (T1, T1C, T2) and
  *                           runs the topic lifecycle-convergence phases.
+ *   - real-session       => no synthetic fixtures: the harness drives the real
+ *                           Agent Manager webview to create/prompt REAL backend
+ *                           sessions through the production message path. This
+ *                           runner loop services the backendSnapshot truth
+ *                           markers and the panel close/reopen boundary.
+ *   - real-completed     => no synthetic fixtures either: the harness drives
+ *                           COMPLETED turns through the real webview against a
+ *                           run-owned scripted OpenAI-compatible provider. This
+ *                           runner loop services the snapshot truth markers,
+ *                           the panel close/reopen boundary (H-7), the MCP
+ *                           disconnect through the real SDK (H-5 cleanup), and
+ *                           the H-12 rollback phase (Revert-to-here / Redo All
+ *                           on the same served session after the reopen).
  *   Scenarios are independent: each seeds only its own fixtures and coordinates
  *   through scenario-specific markers (tab-close-done, child-phase1-done /
  *   child-phase2-ready / child-phase2-done, variant-ready, topic-nav-done /
  *   topic-reopen-ready / topic-reopen-done / topic-reload-frame /
- *   topic-reload-ready / topic-reload-done). `ready`, `done`, `runner-done`
- *   are process-level harness gates, not scenario state.
+ *   topic-reload-ready / topic-reload-done, real-ready / real-snap-N-request /
+ *   real-snap-N.json / real-reopen-request / real-reopen-ready,
+ *   real-completed-ready / rc-snap-N-request / rc-snap-N.json /
+ *   real-completed-reopen-request / real-completed-reopen-ready /
+ *   real-completed-mcp-disconnect-request / real-completed-mcp-disconnect-done).
+ *   `ready`, `done`, `runner-done` are process-level harness gates, not scenario
+ *   state.
  *
  * All seeding goes through the env-gated fixture bridge (KILO_E2E_FIXTURE only)
  * and the production Agent Manager message/rendering/tab logic. No ordering
@@ -82,7 +100,7 @@
  */
 
 import * as vscode from "vscode"
-import { existsSync, writeFileSync } from "node:fs"
+import { existsSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Message, SessionInfo } from "../../webview-ui/src/types/messages/sessions"
 import type { ToolPart } from "../../webview-ui/src/types/messages/parts"
@@ -98,6 +116,13 @@ const CMD_READY = "kilo-code.new.e2eFixture.agentManagerReady"
 const CMD_POST = "kilo-code.new.e2eFixture.postToAgentManager"
 const CMD_SETTLE = "kilo-code.new.e2eFixture.settleSessions"
 const CMD_PROVISION = "kilo-code.new.e2eFixture.provisionVariantModel"
+const CMD_SNAPSHOT = "kilo-code.new.e2eFixture.backendSnapshot"
+const CMD_MCP_DISCONNECT = "kilo-code.new.e2eFixture.mcpDisconnect"
+const CMD_SSE_RECONNECT = "kilo-code.new.e2eFixture.sseReconnect"
+const CMD_KILL_SERVER = "kilo-code.new.e2eFixture.killServer"
+const CMD_RECONNECT_SERVER = "kilo-code.new.e2eFixture.reconnectServer"
+const CMD_LLM_REQUESTS = "kilo-code.new.e2eFixture.llmRequests"
+const CMD_LLM_RESET = "kilo-code.new.e2eFixture.llmRequestsReset"
 const AM_VIEW_TYPE = "kilo-code.new.AgentManagerPanel"
 
 // --- Fixture session IDs (deterministic per run; shared with the harness via plan.json) ---
@@ -124,6 +149,29 @@ function planIds(fixtureId: string) {
     topicRootTitle: "E2E Topic Root",
     topicChildTitle: "E2E Topic Child",
     topicSiblingTitle: "E2E Sibling Root",
+    // real-session scenario: run-owned workspace config seed (written by the
+    // harness into scratch/workspace/.kilo/kilo.json before VS Code launches).
+    // The custom provider/model/variant and the two custom agents are served
+    // by the real backend; the harness drives the real webview to select and
+    // prompt with them, then asserts served-backend truth through the
+    // backendSnapshot fixture command.
+    customProvider: "e2e-local",
+    customModel: "e2e-model",
+    customAgent: "e2e-agent",
+    customAgentB: "e2e-agent-b",
+    customAgentLabel: "E2E Agent",
+    customAgentBLabel: "E2E Agent B",
+    customVariantA: "Low",
+    customVariantB: "High",
+    // real-completed scenario: run-owned fixture identities (the harness wrote
+    // the workspace seed — config + user tool + skill + MCP server + permission
+    // target — into the scratch workspace before VS Code launched).
+    realMcpServer: "e2e-fixture",
+    realMcpTool: "e2e-fixture_e2e_echo",
+    realUserTool: "e2e_marker",
+    realSkill: "e2e-skill",
+    realPermissionFile: "ask.txt",
+    realArtifact: "e2e-custom-called.txt",
   }
 }
 
@@ -175,6 +223,30 @@ async function waitForHarness(scratch: string, target: string, timeoutMs: number
 
 async function post(vscodeApi: typeof vscode, msg: unknown): Promise<void> {
   await vscodeApi.commands.executeCommand(CMD_POST, msg)
+}
+
+/**
+ * LOCK-006/LOCK-008: reset the fixture-gated generation-request collector at
+ * the start of a real-* scenario run. Never called between real-restart
+ * launches — the persisted store must aggregate across them.
+ */
+async function resetLlmRequests(vscodeApi: typeof vscode): Promise<void> {
+  await vscodeApi.commands.executeCommand(CMD_LLM_RESET)
+}
+
+/**
+ * Write the aggregate generation-request evidence for one real-* scenario into
+ * `<scratch>/llm-requests-<scenario>.json`: every `service=llm` record observed
+ * across all server instances/launches of this run (typed provider/model/agent/
+ * small/session per request, LOCK-008 diagnostics preserved). The harness
+ * asserts the same store directly per phase; this is the durable evidence copy.
+ */
+async function writeLlmRequestsEvidence(vscodeApi: typeof vscode, scratch: string, scenario: string): Promise<void> {
+  const result = (await vscodeApi.commands.executeCommand(CMD_LLM_REQUESTS)) as { records: unknown[]; file: string } | null
+  writeFileSync(
+    join(scratch, `llm-requests-${scenario}.json`),
+    JSON.stringify({ scenario, collectedAt: new Date().toISOString(), file: result?.file ?? null, records: result?.records ?? [] }, null, 2),
+  )
 }
 
 /** Full production SessionInfo shape (parentID/revert/summary explicitly set). */
@@ -366,6 +438,51 @@ async function seedTopicFixtures(
   } satisfies SessionsLoadedMessage)
 }
 
+interface ScenarioFlags {
+  runTabClose: boolean
+  runChild: boolean
+  runVariant: boolean
+  runTopic: boolean
+  runReal: boolean
+  runRealCompleted: boolean
+  runRealOverflow: boolean
+  runRealRestart: boolean
+}
+
+/**
+ * LOCK-002/003: seed only the selected scenario(s); each scenario's fixtures
+ * and markers stay independent of the other. `all` stays the exact
+ * tab-close → child-task-order → variant-memory composition (the delivery
+ * gate); every other scenario is focused-only.
+ */
+function scenarioFlags(scenario: string): ScenarioFlags {
+  return {
+    runTabClose: scenario === "all" || scenario === "tab-close",
+    runChild: scenario === "all" || scenario === "child-task-order",
+    runVariant: scenario === "all" || scenario === "variant-memory",
+    // topic-navigation is focused-only (not part of `all`): it closes/reopens the
+    // Agent Manager panel mid-run, which would dispose the tab strip the other
+    // `all` scenarios coordinate on, so the delivery-gate composition stays
+    // exactly tab-close → child-task-order → variant-memory.
+    runTopic: scenario === "topic-navigation",
+    // real-session is focused-only (not part of `all`): it creates REAL backend
+    // sessions through the production webview path, which would pollute the
+    // synthetic session lists the other scenarios re-seed, and it closes/reopens
+    // the panel mid-run like topic-navigation.
+    runReal: scenario === "real-session",
+    // real-completed is focused-only for the same reasons (real backend sessions,
+    // completed turns, panel close/reopen, MCP disconnect).
+    runRealCompleted: scenario === "real-completed",
+    // real-overflow is focused-only for the same reasons (a real backend session
+    // driven through a dedicated small-context config; see serviceRealOverflowBoundary).
+    runRealOverflow: scenario === "real-overflow",
+    // real-restart is focused-only for the same reasons PLUS its reload phase:
+    // the runner itself executes workbench.action.reloadWindow mid-run, which
+    // re-runs this runner in a fresh Extension Host (see serviceRealRestartBoundary).
+    runRealRestart: scenario === "real-restart",
+  }
+}
+
 export async function run(): Promise<void> {
   const scratch = process.env.KILO_E2E_SCRATCH
   const fixtureId = process.env.KILO_E2E_FIXTURE_ID
@@ -375,21 +492,29 @@ export async function run(): Promise<void> {
   // LOCK-002/003: seed only the selected scenario(s); each scenario's fixtures
   // and markers stay independent of the other.
   const scenario = process.env.KILO_E2E_SCENARIO ?? "all"
-  const runTabClose = scenario === "all" || scenario === "tab-close"
-  const runChild = scenario === "all" || scenario === "child-task-order"
-  const runVariant = scenario === "all" || scenario === "variant-memory"
-  // topic-navigation is focused-only (not part of `all`): it closes/reopens the
-  // Agent Manager panel mid-run, which would dispose the tab strip the other
-  // `all` scenarios coordinate on, so the delivery-gate composition stays
-  // exactly tab-close → child-task-order → variant-memory.
-  const runTopic = scenario === "topic-navigation"
-  if (!runTabClose && !runChild && !runVariant && !runTopic) {
+  const supported = new Set([
+    "all",
+    "tab-close",
+    "child-task-order",
+    "variant-memory",
+    "topic-navigation",
+    "real-session",
+    "real-completed",
+    "real-overflow",
+    "real-restart",
+  ])
+  if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart (default: all)",
     )
   }
+  const { runTabClose, runChild, runVariant, runTopic, runReal, runRealCompleted, runRealOverflow, runRealRestart } =
+    scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
+  // Exact Extension-Host process identity: the harness compares this across
+  // the reloadWindow boundary as runner re-entry evidence.
+  writeFileSync(join(scratch, "runner-pid"), String(process.pid))
 
   const plan = planIds(fixtureId)
   writeFileSync(join(scratch, "plan.json"), JSON.stringify(plan, null, 2))
@@ -675,15 +800,28 @@ export async function run(): Promise<void> {
         .flatMap((group) => group.tabs)
         .map((tab) => {
           const input = tab.input
-          const kind = input instanceof vscode.TabInputWebview ? `webview:${input.viewType}` : (input?.constructor.name ?? "<none>")
+          const kind =
+            input instanceof vscode.TabInputWebview
+              ? `webview:${input.viewType}`
+              : (input?.constructor.name ?? "<none>")
           return `${tab.label}:${kind}`
         })
-      throw new Error(`probe runner: Agent Manager tab not found for close/reopen boundary. tabs=${inventory.join(", ")}`)
+      throw new Error(
+        `probe runner: Agent Manager tab not found for close/reopen boundary. tabs=${inventory.join(", ")}`,
+      )
     }
     await vscode.window.tabGroups.close(amTab, true)
-    await waitFor(async () => (agentManagerTabOpen() ? undefined : "closed"), 30_000, "Agent Manager panel disposed on close")
+    await waitFor(
+      async () => (agentManagerTabOpen() ? undefined : "closed"),
+      30_000,
+      "Agent Manager panel disposed on close",
+    )
     await vscode.commands.executeCommand(CMD_OPEN)
-    await waitFor(async () => (agentManagerTabOpen() ? true : undefined), 30_000, "reopened Agent Manager panel present")
+    await waitFor(
+      async () => (agentManagerTabOpen() ? true : undefined),
+      30_000,
+      "reopened Agent Manager panel present",
+    )
     await waitFor(
       async () => {
         try {
@@ -721,6 +859,425 @@ export async function run(): Promise<void> {
     await waitForHarness(scratch, join(scratch, "topic-reload-done"), 120_000, "harness topic-reload-done marker")
   }
 
+  // --- Real-session scenario (focused only) ---
+  // No synthetic seeding: the harness drives the REAL Agent Manager webview to
+  // create and prompt REAL backend sessions (via the production webview →
+  // AgentManagerProvider → KiloProvider → SDK path) against a run-owned config
+  // seed the harness wrote into the scratch workspace. This runner loop only
+  // services two deterministic extension-host boundaries the harness cannot
+  // reach from the Node side (see serviceRealSessionBoundary).
+  if (runReal) {
+    await serviceRealSessionBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- Real-completed scenario (focused only) ---
+  // Same production-path principle, but the turns COMPLETE against the
+  // run-owned scripted OpenAI-compatible provider. This runner loop services
+  // the snapshot markers, the panel close/reopen boundary (H-7), and the MCP
+  // disconnect through the real SDK (H-5 cleanup) — see
+  // serviceRealCompletedBoundary.
+  if (runRealCompleted) {
+    await serviceRealCompletedBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- Real-overflow scenario (focused only) ---
+  // H-13: a single real backend session completes an auto-compaction turn
+  // against the run-owned scripted provider (dedicated small-context config).
+  // This runner loop only services the snapshot truth markers.
+  if (runRealOverflow) {
+    await serviceRealOverflowBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- Real-restart scenario (focused only) ---
+  // H-10/H-11 runtime-boundary evidence over the shared bridge: transport
+  // reconnect (Phase A), exact-owned worker restart (Phase B), and a true
+  // extension/window restart with session/artifact rehydration (Phase C). See
+  // serviceRealRestartBoundary — the same runner re-enters after reloadWindow.
+  if (runRealRestart) {
+    await serviceRealRestartBoundary(vscode, scratch, fixtureId)
+  }
+
   await waitForHarness(scratch, join(scratch, "done"), 120_000, "harness done marker")
   writeFileSync(join(scratch, "runner-done"), "ok")
+}
+
+/**
+ * Extension-host service loop for the real-session scenario:
+ *   1. backend truth: on each `real-snap-N-request` marker, executes the
+ *      env-gated backendSnapshot fixture command against the shared served
+ *      backend and writes `real-snap-N.json` (the harness asserts on it),
+ *   2. panel close/reopen: on `real-reopen-request`, closes the Agent Manager
+ *      editor tab, reopens it, waits for the fresh webview's readiness,
+ *      settles the real session list, then writes `real-reopen-ready` so the
+ *      harness can assert transcript rehydration from the real backend.
+ * Stops when the harness writes the `done` marker (success or abort).
+ */
+async function serviceRealSessionBoundary(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
+  await resetLlmRequests(vscodeApi)
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  writeFileSync(join(scratch, "real-ready"), fixtureId)
+
+  let snap = 1
+  const deadline = Date.now() + 240_000
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    const req = join(scratch, `real-snap-${snap}-request`)
+    if (existsSync(req)) {
+      const snapshot = await vscodeApi.commands.executeCommand(CMD_SNAPSHOT)
+      writeFileSync(join(scratch, `real-snap-${snap}.json`), JSON.stringify(snapshot, null, 2))
+      snap += 1
+    }
+    const reopen = join(scratch, "real-reopen-request")
+    if (existsSync(reopen)) {
+      rmSync(reopen)
+      const amTab = vscodeApi.window.tabGroups.all.flatMap((group) => group.tabs).find(isAgentManagerTab)
+      if (!amTab) throw new Error("probe runner: Agent Manager tab not found for real-session reopen boundary")
+      await vscodeApi.window.tabGroups.close(amTab, true)
+      await waitFor(
+        async () => (agentManagerTabOpen() ? undefined : "closed"),
+        30_000,
+        "real-session: panel disposed on close",
+      )
+      await vscodeApi.commands.executeCommand(CMD_OPEN)
+      await waitFor(
+        async () => (agentManagerTabOpen() ? true : undefined),
+        30_000,
+        "real-session: reopened panel present",
+      )
+      await waitFor(
+        async () => {
+          try {
+            const ready = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
+            return ready ? true : undefined
+          } catch {
+            return undefined
+          }
+        },
+        60_000,
+        "real-session: reopened webview readiness",
+      )
+      await vscodeApi.commands.executeCommand(CMD_SETTLE)
+      writeFileSync(join(scratch, "real-reopen-ready"), fixtureId)
+    }
+    await sleep(200)
+  }
+  await writeLlmRequestsEvidence(vscodeApi, scratch, "real-session")
+}
+
+/**
+ * Service-window budget for the real-completed scenario (ms), derived from the
+ * declared worst-case phase budgets in script/e2e-probe.ts
+ * assertRealCompletedLifecycle so a valid slow/retry-heavy run is never
+ * abandoned while the harness is still inside its own declared budgets:
+ *   - per sendTurn phase (H-2..H-6, 6 phases): 3 attempts × (send 30s +
+ *     snap.waitFor 90s) + 2 retry sleeps 1s = 362s → 2,172s
+ *   - H-6 post-sendTurn UI waits (permission + question): 2 × (dock 60s +
+ *     click 30s + completion 90s + dock gone 30s + text 60s) = 540s
+ *   - H-2..H-5 transcript/UI extras: 90s + 60s + 60s + 30s = 240s
+ *   - setup (agent + variant picks, 5 × 30s): 150s
+ *   - H-7 reopen: waitForFile 120s + refind 60s + hierarchy facts 60s +
+ *     topic click 30s + hierarchy loop 30s = 300s (the runner's own close 30s
+ *     / open 30s / readiness 60s runs inside this window)
+ *   - H-5 cleanup: marker 60s + exit loop 30s + disabled snapshot 30s = 120s
+ *   - H-12 rollback (Phase 9, after the reopened panel): 2 sendTurn phases
+ *     (edit + summary, 2 × 362s = 724s) + transcript text 3 × 60s + revert
+ *     click 90s + revert fact 90s + file bytes 2 × 30s + banner 60s + banner
+ *     file 30s + Redo All click 60s + unrevert fact 90s + banner gone 30s =
+ *     1,414s
+ *   Total: 3,522 + 1,414 = 4,936s; margin ≈ 10% → 5,400s (90 min). The global
+ *   probe watchdog (KILO_E2E_TIMEOUT) stays the outer bound; this deadline
+ *   only guarantees the service loop outlives every declared phase budget.
+ */
+const REAL_COMPLETED_SERVICE_BUDGET = 5_400_000
+
+/**
+ * Extension-host service loop for the real-completed scenario:
+ *   1. backend truth: on each `rc-snap-N-request` marker, executes the
+ *      env-gated backendSnapshot fixture command against the shared served
+ *      backend and writes `rc-snap-N.json` (the harness asserts on it),
+ *   2. panel close/reopen (H-7): on `real-completed-reopen-request`, closes
+ *      the Agent Manager editor tab, reopens it, waits for the fresh webview's
+ *      readiness, settles the real session list, then writes
+ *      `real-completed-reopen-ready`,
+ *   3. MCP disconnect (H-5 cleanup): on `real-completed-mcp-disconnect-request`,
+ *      disconnects the run-owned MCP server through the real SDK (the env-gated
+ *      fixture command calls the shared client's mcp.disconnect) and writes
+ *      `real-completed-mcp-disconnect-done` — the harness verifies the recorded
+ *      child PIDs exited.
+ * Stops when the harness writes the `done` marker (success or abort).
+ */
+async function serviceRealCompletedBoundary(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
+  await resetLlmRequests(vscodeApi)
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  writeFileSync(join(scratch, "real-completed-ready"), fixtureId)
+
+  let snap = 1
+  const deadline = Date.now() + REAL_COMPLETED_SERVICE_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    const req = join(scratch, `rc-snap-${snap}-request`)
+    if (existsSync(req)) {
+      const snapshot = await vscodeApi.commands.executeCommand(CMD_SNAPSHOT)
+      writeFileSync(join(scratch, `rc-snap-${snap}.json`), JSON.stringify(snapshot, null, 2))
+      snap += 1
+    }
+    const reopen = join(scratch, "real-completed-reopen-request")
+    if (existsSync(reopen)) {
+      rmSync(reopen)
+      const amTab = vscodeApi.window.tabGroups.all.flatMap((group) => group.tabs).find(isAgentManagerTab)
+      if (!amTab) {
+        throw new Error("probe runner: Agent Manager tab not found for real-completed reopen boundary")
+      }
+      await vscodeApi.window.tabGroups.close(amTab, true)
+      await waitFor(
+        async () => (agentManagerTabOpen() ? undefined : "closed"),
+        30_000,
+        "real-completed: panel disposed on close",
+      )
+      await vscodeApi.commands.executeCommand(CMD_OPEN)
+      await waitFor(
+        async () => (agentManagerTabOpen() ? true : undefined),
+        30_000,
+        "real-completed: reopened panel present",
+      )
+      await waitFor(
+        async () => {
+          try {
+            const ready = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
+            return ready ? true : undefined
+          } catch {
+            return undefined
+          }
+        },
+        60_000,
+        "real-completed: reopened webview readiness",
+      )
+      await vscodeApi.commands.executeCommand(CMD_SETTLE)
+      writeFileSync(join(scratch, "real-completed-reopen-ready"), fixtureId)
+    }
+    const mcpDisconnect = join(scratch, "real-completed-mcp-disconnect-request")
+    if (existsSync(mcpDisconnect)) {
+      rmSync(mcpDisconnect)
+      const status = await vscodeApi.commands.executeCommand(CMD_MCP_DISCONNECT, "e2e-fixture")
+      writeFileSync(join(scratch, "real-completed-mcp-disconnect-done"), JSON.stringify(status))
+    }
+    await sleep(200)
+  }
+  await writeLlmRequestsEvidence(vscodeApi, scratch, "real-completed")
+}
+
+/**
+ * Service-window budget for the real-overflow scenario (ms), derived from the
+ * declared worst-case phase budgets in script/e2e-probe.ts
+ * assertRealOverflowLifecycle so a valid slow/retry-heavy run is never
+ * abandoned while the harness is still inside its own declared budgets:
+ *   - Phase 0 (agent + variant picks): 5 × 30s = 150s
+ *   - Phase 1 (overflow turn): sendTurn 3 attempts × (send 30s + snap.waitFor
+ *     90s) + 2 retry sleeps 1s = 362s; the compaction turn itself adds ~3
+ *     model round-trips (seconds each) inside the same snap.waitFor window
+ *   - Phase 2 (panel text + divider): 3 × 60s = 180s
+ *   - Phase 3 (panel surface DOM): 30s
+ *   Total: ~722s; margin ≈ 25% → 900s (15 min). The global probe watchdog
+ *   (KILO_E2E_TIMEOUT) stays the outer bound; this deadline only guarantees
+ *   the service loop outlives every declared phase budget.
+ */
+const REAL_OVERFLOW_SERVICE_BUDGET = 900_000
+
+/**
+ * Extension-host service loop for the real-overflow scenario (H-13):
+ *   1. settles the real session list and writes `real-overflow-ready`,
+ *   2. backend truth: on each `of-snap-N-request` marker, executes the
+ *      env-gated backendSnapshot fixture command against the shared served
+ *      backend and writes `of-snap-N.json` (the harness asserts the typed
+ *      compaction/overflow facts on it).
+ * No panel close/reopen and no MCP disconnect — the panel stays open for the
+ * whole scenario. Stops when the harness writes the `done` marker.
+ */
+async function serviceRealOverflowBoundary(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
+  await resetLlmRequests(vscodeApi)
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  writeFileSync(join(scratch, "real-overflow-ready"), fixtureId)
+
+  let snap = 1
+  const deadline = Date.now() + REAL_OVERFLOW_SERVICE_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    const req = join(scratch, `of-snap-${snap}-request`)
+    if (existsSync(req)) {
+      const snapshot = await vscodeApi.commands.executeCommand(CMD_SNAPSHOT)
+      writeFileSync(join(scratch, `of-snap-${snap}.json`), JSON.stringify(snapshot, null, 2))
+      snap += 1
+    }
+    await sleep(200)
+  }
+  await writeLlmRequestsEvidence(vscodeApi, scratch, "real-overflow")
+}
+
+/**
+ * Service-window budget for the real-restart scenario (ms), derived from the
+ * declared worst-case phase budgets in script/e2e-probe.ts
+ * assertRealRestartLifecycle so a valid slow/retry-heavy run is never
+ * abandoned while the harness is still inside its own declared budgets:
+ *   - Phase 0 (agent pick + completed turn): sendTurn 3 attempts × (send 30s +
+ *     snap.waitFor 90s) + 2 retry sleeps 1s = 362s + artifact wait 60s = 422s
+ *   - Phase A (SSE reconnect observation + convergence): conn.json 120s +
+ *     snapshot 90s + DOM asserts 90s = 300s
+ *   - Phase B (kill + reconnect + rehydration): kill 60s + settle 30s +
+ *     reconnect 180s + snapshot 90s + UI convergence 120s = 480s
+ *   - Phase C (reloadWindow re-entry): reload 300s + fresh host ready 120s +
+ *     snapshot 120s + DOM asserts 120s = 660s
+ *   Total: ~1,862s; margin ≈ 10% → 2,100s (35 min). The global probe watchdog
+ *   (KILO_E2E_TIMEOUT) stays the outer bound; this deadline only guarantees
+ *   the service loop outlives every declared phase budget.
+ */
+const REAL_RESTART_SERVICE_BUDGET = 2_100_000
+
+/**
+ * Extension-host service loop for the real-restart scenario (Phase A/B entry,
+ * or Phase C re-entry after the runner executed workbench.action.reloadWindow).
+ *
+ * Entry (no persisted rr-reload-request yet):
+ *   1. settles the real session list and writes `rr-ready`,
+ *   2. on `rr-conn-request`, executes the env-gated sseReconnect fixture
+ *      command against the SHARED connection service (production
+ *      SdkSSEAdapter.reconnect, backend left alive) and writes `rr-conn.json` —
+ *      the fixture counts `server.connected` deliveries (the direct new-stream
+ *      event), not `sync` envelopes (activity-driven, not guaranteed),
+ *   3. on `rr-kill-request`, executes the exact-owned killServer fixture
+ *      command (ServerManager's owner kill path — SIGTERM to the exact process
+ *      group only) and writes `rr-kill.json` with the killed PID + port,
+ *   4. on `rr-reconnect-request`, executes the production reconnect flow
+ *      (getClientAsync → connect → replacement server + SSE) and writes
+ *      `rr-reconnect.json` with the new PID/port/state,
+ *   5. on `rr-snap-N-request`, executes the backendSnapshot fixture command
+ *      and writes `rr-snap-N.json`,
+ *   6. on `rr-reload-request` (harness finished Phase B), writes
+ *      `rr-reload-executed` and executes `workbench.action.reloadWindow` — the
+ *      true window/extension restart. In --extensionTestsPath test mode the
+ *      reload teardown exits the main process with this Extension Host (the
+ *      fresh window never comes up in-place), so the harness treats that exit
+ *      as the expected reload boundary and RELAUNCHES VS Code with identical
+ *      args; the runner is torn down with the old Extension Host and the
+ *      harness keeps the same scratch/user-data for the relaunch.
+ *
+ * Re-entry (fresh Extension Host after the relaunch; the persisted marker is
+ * still on disk):
+ *   7. ensures the Agent Manager panel is open (the webview-panel serializer
+ *      restored it, or CMD_OPEN recreates it), settles the real session list,
+ *      and writes `rr-reloaded` — the runner re-entry evidence the harness
+ *      waits on (together with the changed `runner-pid`),
+ *   8. services `rr-c-snap-N-request` snapshots (post-restart backend truth)
+ *      until the harness writes `done`.
+ * Stops when the harness writes the `done` marker (success or abort).
+ */
+async function serviceRealRestartBoundary(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
+  const reloadRequested = existsSync(join(scratch, "rr-reload-request"))
+  if (reloadRequested) {
+    await serviceRealRestartReloadPhase(vscodeApi, scratch, fixtureId)
+    return
+  }
+
+  // LOCK-006/LOCK-008: reset the generation-request store at run start ONLY.
+  // The persisted store must aggregate across the Phase B worker restart and
+  // the Phase C reloadWindow relaunch, so no reset happens in the reload
+  // re-entry above.
+  await resetLlmRequests(vscodeApi)
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  writeFileSync(join(scratch, "rr-ready"), fixtureId)
+
+  let snap = 1
+  let reloaded = false
+  const deadline = Date.now() + REAL_RESTART_SERVICE_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+
+    const conn = join(scratch, "rr-conn-request")
+    if (existsSync(conn)) {
+      rmSync(conn)
+      const obs = await vscodeApi.commands.executeCommand(CMD_SSE_RECONNECT)
+      writeFileSync(join(scratch, "rr-conn.json"), JSON.stringify(obs, null, 2))
+    }
+
+    const kill = join(scratch, "rr-kill-request")
+    if (existsSync(kill)) {
+      rmSync(kill)
+      const killed = await vscodeApi.commands.executeCommand(CMD_KILL_SERVER)
+      writeFileSync(join(scratch, "rr-kill.json"), JSON.stringify(killed, null, 2))
+    }
+
+    const rc = join(scratch, "rr-reconnect-request")
+    if (existsSync(rc)) {
+      rmSync(rc)
+      const obs = await vscodeApi.commands.executeCommand(CMD_RECONNECT_SERVER)
+      writeFileSync(join(scratch, "rr-reconnect.json"), JSON.stringify(obs, null, 2))
+    }
+
+    const req = join(scratch, `rr-snap-${snap}-request`)
+    if (existsSync(req)) {
+      const snapshot = await vscodeApi.commands.executeCommand(CMD_SNAPSHOT)
+      writeFileSync(join(scratch, `rr-snap-${snap}.json`), JSON.stringify(snapshot, null, 2))
+      snap += 1
+    }
+
+    const reload = join(scratch, "rr-reload-request")
+    if (existsSync(reload) && !reloaded) {
+      reloaded = true
+      // Acknowledge BEFORE the reload tears this Extension Host down so the
+      // harness can prove workbench.action.reloadWindow actually executed.
+      writeFileSync(join(scratch, "rr-reload-executed"), String(process.pid))
+      console.log("[probe runner] executing workbench.action.reloadWindow (true window/extension restart)")
+      await vscodeApi.commands.executeCommand("workbench.action.reloadWindow")
+      // This Extension Host is being torn down; stop servicing. The harness
+      // relaunches VS Code with identical args and the fresh host re-runs this
+      // runner, detecting the persisted rr-reload-request.
+      return
+    }
+
+    await sleep(200)
+  }
+  await writeLlmRequestsEvidence(vscodeApi, scratch, "real-restart")
+}
+
+/**
+ * Phase C of the real-restart scenario, running in the FRESH Extension Host
+ * after workbench.action.reloadWindow (the window reload re-runs the
+ * --extensionTestsPath runner; the persisted `rr-reload-request` marker tells
+ * this instance it is the reload phase, not the initial entry). The fresh
+ * Extension Host re-spawned the shared kilo serve backend (extension
+ * deactivation disposed the old one), so the same run-owned XDG scratch holds
+ * the persisted session + artifact; this loop settles the session list, proves
+ * the panel is present, writes `rr-reloaded`, and services the post-restart
+ * `rr-c-snap-N` backend snapshots until the harness writes `done`.
+ */
+async function serviceRealRestartReloadPhase(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
+  // run() already executed CMD_OPEN (which reveals an existing restored panel
+  // or opens a new one); wait for the fresh webview's readiness.
+  await waitFor(
+    async () => {
+      try {
+        const ready = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
+        return ready ? true : undefined
+      } catch {
+        return undefined
+      }
+    },
+    60_000,
+    "real-restart reload phase: Agent Manager webview readiness",
+  )
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  writeFileSync(join(scratch, "rr-reloaded"), fixtureId)
+
+  let snap = 1
+  const deadline = Date.now() + 600_000
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    const req = join(scratch, `rr-c-snap-${snap}-request`)
+    if (existsSync(req)) {
+      const snapshot = await vscodeApi.commands.executeCommand(CMD_SNAPSHOT)
+      writeFileSync(join(scratch, `rr-c-snap-${snap}.json`), JSON.stringify(snapshot, null, 2))
+      snap += 1
+    }
+    await sleep(200)
+  }
+  await writeLlmRequestsEvidence(vscodeApi, scratch, "real-restart")
 }

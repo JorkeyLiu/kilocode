@@ -230,7 +230,7 @@ Evidence:
 | Config application | Cold saves rebuild directory-keyed identities through convergence (2.4) | Deterministic materialization to immutable versioned snapshots; typed composition; no active-generation interruption (sections 5, 5.1) |
 | Effective-config input | Right-biased deep merge; global/project file load order conflicts with the write-target preference; root-file and config-dir loaders disagree; overlay provenance collapses many sources to `system` (2.2) | Closed legal source taxonomy; schema-declared composition operators replace generic merge/last-writer-wins (sections 3.1, 5.1) |
 | Providers | Preset catalogs + config + auth + organization sources (2.3) | User-defined/custom provider records only (section 4) |
-| Selector readiness | Backend spawn -> SSE -> HTTP fetch -> UI enable (2.5) | Persisted indexes before worker readiness; action-specific gates (section 6) |
+| Selector readiness | Backend spawn -> SSE -> HTTP fetch -> UI enable (2.5) | Persisted indexes render and remain interactive independent of worker lifecycle; action-specific gates (section 6) |
 | Runtime process | General `kilo serve` child with public HTTP/SSE/SDK surface (2.1) | Extension-owned private headless worker; private transport (section 7) |
 | Agent definitions | Agent markdown shares the config-object schema and merges per-field with config-defined agents; per-agent permission currently overrides global user policy (2.2) | Typed canonical agent manifests: agent markdown retained as a canonical project/global asset, one manifest per ID; duplicate/conflict fails validation, never widens enclosing policy (section 5.2) |
 | Permission evaluation | Last-match-wins within flattened layers; session tool toggles can weaken non-mode agent denies; `question` and legacy `mcp` rules have enforcement ambiguity (2.2) | Restrictive policy stack with monotonic deny/ask/allow composition; provenance identifies contributing policies and the decisive rule (section 5.3) |
@@ -573,20 +573,78 @@ question 5:
 
 ## 6. Startup Acceptance
 
-Accepted behavior once the runtime/config migration lands (P5 gates):
+Accepted behavior once the runtime/config migration lands (P5 gates). The
+target is streamlined, unified, and efficient: selector and navigation UI do
+not wait on the private worker or on runtime/provider catalog readiness, and
+the target removes redundant connection stages — it does not merely shorten a
+spinner. Worker startup may still take time; a waiting or disabled selector
+surface during that time is not acceptable target behavior.
 
-- Persisted custom providers, models, and agents render in their selectors before
-  the private worker is ready, from extension-owned persisted indexes (LOCK-012).
-- No selector is globally disabled by backend connection state; runtime
-  connection/validation is separate readiness.
-- Invalid or stale entries reconcile visibly (for example a stale model marked and
-  refreshed when its provider validates) without erasing the user's choice.
-- Startup stages are instrumented (cold and warm), so per-stage timing and failure
-  are observable; no numeric SLA is mandated here (bounded decision, section 9).
-- No autocomplete prewarm dependency: autocomplete is removed (LOCK-004) and the
-  worker never starts merely to prewarm completions.
-- No single `extensionDataReady` barrier remains as a gate for the whole UI; gates
-  are action-specific (LOCK-012).
+Normative acceptance criteria (each is a P5 exit gate and is falsifiable by
+the named evidence; R3/R7, section 9, bound only the numeric parts):
+
+1. Selector availability is independent of worker lifecycle (LOCK-012). Custom
+   provider, model, and agent selectors render and remain interactive from
+   extension-owned persisted indexes while the private worker is not started,
+   is deliberately unavailable (withheld, killed, or failed to spawn), is
+   starting, is reconnecting, or is in a failed state. No worker lifecycle
+   state may disable a selector, replace a selector with a waiting state, or
+   blank the selector surface.
+2. Selection is never disabled by readiness. Selecting a provider, model, or
+   agent is not disabled solely because runtime or provider validation
+   readiness has not been reached. Runtime-required actions (for example
+   prompt submission, provider validation, live provider testing) are gated
+   individually with an explicit state and reason surfaced to the user;
+   selection itself is not a runtime-required action.
+3. Reconciliation preserves selector availability. External canonical-file and
+   persisted-index reconciliation (section 5.4) preserves selector
+   availability: during and after reconciliation, selectors keep rendering and
+   accepting input from the last-known valid derived index, or present the
+   invalid/stale state explicitly (marked stale/invalid with the reason),
+   without erasing the user's choice; reconciliation never reintroduces a
+   worker-readiness dependency into the selector path and never blanks or
+   disables selectors as a side effect.
+4. Structural absence of the old readiness chain is proven (P4.4/P4.5).
+   Objective structural evidence proves the absence of the single global
+   `extensionDataReady` barrier, the port-detection/health/SSE/generated-SDK
+   selector fetch chain (section 2.5), and the removed startup contributors
+   (LOCK-PERF-3, section 10.4) from the worker startup path. The selector data
+   path is the extension-owned persisted index, not a backend fetch.
+5. P5 evidence includes a real worker-unavailable scenario. P5 exit evidence
+   includes an Extension Host scenario in which the worker is withheld, killed,
+   or failed while selectors still render and remain interactive, plus
+   descriptive paint-before-ready timing and provenance per R7 (section 9):
+   persisted-selector paint occurs before worker readiness, with cold and warm
+   per-stage timing recorded descriptively (section 10.8); no numeric SLA is
+   mandated here (R3, section 9).
+6. Cold and warm activation distinguish UI selector readiness from runtime
+   action readiness. Cold and warm instrumentation records separately when the
+   selector/navigation UI is interactive (persisted indexes) and when
+   runtime-required actions become available (worker ready). These are two
+   distinct facts; acceptance evidence never collapses them into one
+   readiness point.
+
+Also accepted, unchanged:
+
+- Invalid or stale entries reconcile visibly without erasing the user's choice
+  (criterion 3).
+- Startup stages are instrumented (cold and warm), so per-stage timing and
+  failure are observable; no numeric SLA is mandated here (R3, criteria 5-6).
+- No autocomplete prewarm dependency: autocomplete is removed (LOCK-004) and
+  the worker never starts merely to prewarm completions.
+- No single `extensionDataReady` barrier remains as a gate for the whole UI;
+  gates are action-specific (LOCK-012, criterion 4).
+
+Clarifications that bound the criteria:
+
+- Worker startup may still take time; the target removes the coupling that
+  makes selector/navigation UI wait on it. Redundant connection stages (port
+  detection, health checks, SSE connect, generated-SDK fetches on the selector
+  path) are removed, not merely shortened.
+- Direction spec open question 5 decides how the configuration surface is
+  presented; it cannot gate selector availability (criteria 1-2).
+- Numeric SLA policy (R3, section 9) remains open; criteria 1-4 and 6 are
+  behavioral/structural gates that apply regardless of any numeric decision.
 
 ## 7. Migration Strategy
 
@@ -902,14 +960,14 @@ checklist. P0 remains Complete; its recorded evidence is unchanged.
 |---|---|---|---|
 | R1 Private transport protocol | Internal implementation choice; not a compatibility contract (LOCK-009) | P4.2 (snapshot API + transport) | Resolved: JSON-RPC 2.0 over child-process stdio with standard Content-Length framing (`vscode-jsonrpc` precedent). One extension-owned worker child; initialize handshake replaces port detection/health; requests carry commands, notifications carry normalized event envelopes; stderr remains bounded diagnostics; EOF/process exit owns lifecycle. HTTP/SSE/generated SDK remains bridge-only and is deleted. No retained-terminal protocol commitment: terminal/worktree surfaces are not LOCK-008 harness invariants and are handled by their removal/migration scope |
 | R2 Storage engine for extension-owned state | Extension application state with VS Code storage APIs; complex records never in settings.json (LOCK-010) | P4.1 (file-authoritative read/write model) | Resolved (2026-08-12; **revised 2026-08-13**): canonical files/assets own effective config (one global config root and `<workspaceRoot>/.kilo/`, section 3.1); VS Code `globalState`/`workspaceState` own only UI-local/derived state (layout/churn, dismissed state, derived selector/read-model indexes); all secrets use `SecretStorage`; runtime-owned session/event/artifact persistence remains runtime-owned; immutable worker snapshots are derived versioned values — not a second persisted store — identified by canonical file content + schema version + opaque secret references, never by UI state. The original 2026-08-12 wording (product/UI config in `globalState`) is preserved as historical evidence in the tracker |
-| R3 Numeric startup SLA | Thresholds are a recorded product decision | P5 (startup acceptance) | Open |
+| R3 Numeric startup SLA | Thresholds are a recorded product decision; the behavioral and structural P5 gates (section 6 criteria 1-4, 6) are mandatory regardless — this row decides only whether numeric thresholds are added on top | P5 (startup acceptance) | Open |
 | R4 Adoption thresholds for removal timing | Evidence-driven product decision | P3 (product removal gates) | Open |
 | R5 Exact project harness-assets path | One canonical explicit project boundary (LOCK-010) | P4.1 | Resolved (2026-08-12): one canonical project boundary = first VS Code workspace root; project-versioned harness assets live only under `<workspaceRoot>/.kilo/`, including `.kilo/kilo.json[c]`, agent/command/rules/skills/workflows/plans/config assets. P4.1 establishes the canonical project files and field registry; the ancestor walk, `.kilocode`/`.opencode`, global project-asset sources, and primary-worktree mirror reads are deleted together at the P4.3 cutover, with per-row removal evidence recorded at P4.4. No multi-source precedence remains; no migration/import tool exists |
 | R6 Legacy-reader cutover (formerly: dual-read window deadline) | No dual authority and no compatibility window (LOCK-009; section 7) | P4.3 | Resolved (2026-08-12; **revised 2026-08-13**): there is no dual-read compatibility window and no import tool. P4.3 is the last legacy-reader phase boundary: the current implementation may use old sources only before the cutover; at the P4.3 boundary all legacy readers are deleted together and cannot influence effective config. The sole user manually reconciles any desired current configuration into canonical files before the cutover. The original 2026-08-12 decision (dual-read opens only during P4.3, shrinks monotonically, no new bridge consumers) is preserved as historical evidence in the tracker |
 | R7 Performance gate thresholds (startup stages, prompt-submit/first-token, stream-render, tool/permission, session-switch, config-update, removal reduction) | Resolved (2026-08-14): gates use no numeric pass/fail thresholds. P1/P2 compare descriptive, affected-path, same-environment measurements against the P0 baseline — record med/p95/sample/provenance and investigate obvious structural anomalies; measurement noise alone does not block and there is no requirement to improve. P3/P4 removal phases prove removed-feature initialization/readers/listeners/resources are absent and record affected startup/session-switch/memory/worker-lifecycle deltas; zero or positive noisy delta is allowed if no removed work remains and no structurally unbounded growth/resource leak appears; only affected measured rows are rerun per phase. Complexity budgets record deltas; zero reduction in a dimension is allowed with a stated phase-boundary reason; permanent-removal completeness remains required. `Same environment/comparable` means same benchmark scripts/scenario, machine/OS class, VS Code profile type, seeded/provider conditions, instrumentation mode, and recorded git SHA/dirty/environment drift; non-comparable runs are recorded but cannot support gate claims. Numeric product SLA is R3, resolved separately at P5 | Resolved (2026-08-14) | Resolved — no threshold-using gate remains; P1 can start without an undefined threshold gate (LOCK-PERF-6) |
 | R8 Benchmark tooling/harness choice | Internal implementation choice; not prescribed by this spec | P0 profiling tasks | Resolved: retain the existing two-harness tooling as the P0 and later comparison harness — Extension Host scenarios 1/2/3/4/5/10 under `packages/kilo-vscode/script/p0-bench/` (runner/merge/safety/provenance tools); backend scenarios 6/7/8/9/11/12/13 under `packages/opencode/test/benchmark/` (runner). Limitations recorded: manual-only, platform/environment/provenance scoped, backend in-process `Server.listen`/`AppLayer` only, n=5 descriptive |
 | R9 Observation/hydration implementation details (snapshot/event handshake; revision scope/ordering/idempotency; ephemeral-fact retention) | Bounded implementation decision; the normative contract (section 7.1) fixes the one-owner and lifecycle-convergence constraints but not the wire schema, event sourcing, polling, timer subsystems, or retention. R9 may use a bounded derived changefeed/outbox for reconnect deltas; it is not authoritative history, is not required for reconstruction, and is eligible for automatic truncation after authoritative hydration state exists (ADR-0005; storage spec section 5.2) | P4.2 (P4.2a storage sub-boundary first, then the P4.2b wire/schema freeze; the private-worker observation surface must not ship without it). Required by P4.2 only; not a P1-P3 blocker | Open — added 2026-08-13 |
-| R10 Canonical schema/field-registry layout and exact persistence assignment | The normative rules are fixed by this spec — legal source taxonomy (section 3.1), field-registry content (section 3.2), typed composition/materialization/provenance (section 5.1), agent-manifest role (section 5.2), permission composition (section 5.3), and the bidirectional file-editing/WYSIWYG contract (section 5.4). File/asset authority is fixed by R2 (revised 2026-08-13), and R10 is bounded within that topology: exact canonical filenames/layout, the registry entry per remaining field class, legal scope/operator per field, and watcher owner/stamping/conflict implementation details (section 5.4). It does not reopen file authority, the two-level authored scope set, the SecretStorage exception, or the no-migration decision | P4.1 (P4.1 is not verifiable until the registry covers every configurable field class and the schema/provenance/WYSIWYG contract is evidenced). Not a P0 blocker | Open — added 2026-08-13 |
+| R10 Canonical schema/field-registry layout and exact persistence assignment | The normative rules are fixed by this spec — legal source taxonomy (section 3.1), field-registry content (section 3.2), typed composition/materialization/provenance (section 5.1), agent-manifest role (section 5.2), permission composition (section 5.3), and the bidirectional file-editing/WYSIWYG contract (section 5.4). File/asset authority is fixed by R2 (revised 2026-08-13), and R10 is bounded within that topology: exact canonical filenames/layout, the registry entry per remaining field class, legal scope/operator per field, and watcher owner/stamping/conflict implementation details (section 5.4). It does not reopen file authority, the two-level authored scope set, the SecretStorage exception, or the no-migration decision. The persisted-index layout and reconciliation behavior are additionally bounded by section 6 criterion 3: reconciliation must preserve the last-known valid derived index or an explicit invalid/stale presentation and never reintroduce a worker-readiness dependency | P4.1 (P4.1 is not verifiable until the registry covers every configurable field class and the schema/provenance/WYSIWYG contract is evidenced). Not a P0 blocker | Open — added 2026-08-13 |
 | R11 Operation/outcome identity and record location/retention | Bounded implementation decision under the normative Failure/Outcome/Recovery target (section 7.2) and the observation contract (section 7.1): what an accepted semantic operation's identity is, where the canonical Failure/Outcome records live, and their minimal retention under existing storage — no new store mandate. Generation-path operations only (prompt/generation, provider attempt, tool call, permission/question wait, child/background task); config commit outcomes are owned by sections 5/5.4 and are not R11 operations. Durable Failure/Outcome fields persist in the canonical aggregate storage / registered artifact model; diagnostic and panel projections are derived and never create competing stores (ADR-0005; storage spec sections 5.1, 5.4). It does not reopen runtime sole authority for operational facts or the client replay prohibition | P4.2 (P4.2a storage sub-boundary first). Not a P0-P1 blocker | Open — added 2026-08-14 |
 | R12 Minimum private-runtime Failure/Outcome schema + panel projection/redaction | Bounded implementation decision under section 7.2: the minimum Failure/Outcome schema, the runtime-owned normalization boundary, minimal field tiers (durable vs diagnostic vs panel-visible), runtime-side redaction before persistence/projection, cancellation provenance (at least user stop/steering/timeout/network disconnect/unknown), and a versioned private panel envelope/projection. No complete taxonomy and no byte/depth sanitizer contract freeze. The private error envelope's version/compatibility is owned by R1/R9/R12 as appropriate | P4.2. Not a P0-P1 blocker | Open — added 2026-08-14 |
 | R13 Recovery accounting/coordination and low-level retry visibility | Bounded implementation decision under section 7.2 — P4.2 is accounting/coordination only: owner/scope, budget consumed/termination, next-at occurrence time, provenance, and visibility of nested low-level attempts within the owning operation. It may reuse current bounded behavior. Retryability algorithms, delay shapes, and future recovery features are post-foundation (section 7.3). It does not preserve old retry shapes, delay ladders, the environment retry flag, or the auto-continue implementation | P4.2. Not a P0-P1 blocker | Open — added 2026-08-14 |
@@ -1094,9 +1152,9 @@ classes below must be measured separately, never summed into one number.
   remain for isolation, but its startup and runtime costs are measured
   (LOCK-PERF-2).
 - Removed features never contribute to startup/readiness (LOCK-PERF-3).
-- Persisted selector indexes render before worker readiness; gates are
-  action-specific, not the global `extensionDataReady` barrier (LOCK-PERF-4,
-  section 6).
+- Persisted selector indexes render and remain interactive independent of worker
+  readiness and lifecycle; gates are action-specific, not the global
+  `extensionDataReady` barrier (LOCK-PERF-4, section 6 criteria 1-6).
 - Harness semantics and performance correctness are preserved (LOCK-PERF-5): no
   regression in transport/event handling, generation pinning, rollback, or the
   overflow safeguard.
@@ -1203,6 +1261,13 @@ Gate rules:
   apply or legacy fallback on invalid external edits; predictable
   deletion/unset; and generation pinning with new readers using the new valid
   snapshot (LOCK-011).
+- P5 selector-readiness gate: P5 does not exit until the section 6 criteria are
+  evidenced — selector availability across worker lifecycle states (criterion 1),
+  no readiness-based selection disable (criterion 2), reconciliation preservation
+  (criterion 3), structural absence of the old chain (criterion 4), the Extension
+  Host worker-unavailable scenario plus descriptive paint-before-ready timing
+  (criterion 5, R7), and the cold/warm UI-vs-runtime readiness distinction
+  (criterion 6).
 - Permission-evaluator gate: P4 does not exit until the permission evaluator
   implements the section 5.3 restrictive policy stack — monotonic deny/ask/allow
   composition, no widening, enclosing parent denies/session restrictions for
@@ -1247,8 +1312,11 @@ Safety infrastructure (not gates, not thresholds, not claims):
 A phase claims runtime slimming only with all of:
 
 - Startup: the worker reaches readiness without initializing removed features
-  (LOCK-PERF-3); persisted selectors render before worker readiness (LOCK-PERF-4,
-  section 6); no global `extensionDataReady` barrier; the AppLayer/process-graph
+  (LOCK-PERF-3); persisted selectors render and remain interactive independent
+  of worker readiness and lifecycle, with structural absence of the old
+  readiness chain and the worker-unavailable scenario evidence (LOCK-PERF-4,
+  section 6 criteria 1-6); no global `extensionDataReady` barrier; the
+  AppLayer/process-graph
   is structurally absent of removed features, with affected startup deltas
   recorded against the P0 baseline (zero or positive noisy delta is allowed if
   no removed work remains and no structurally unbounded growth/resource leak
@@ -1281,7 +1349,9 @@ A phase claims runtime slimming only with all of:
   private-worker evidence.
 - Target-only metrics without a P0 measurement are later-phase evidence, not P0
   blockers: persisted-selector paint gates at P5 (no extension-owned persisted
-  indexes exist before P4.1); cost attribution (LOCK-PERF-7) and per-event
+  indexes exist before P4.1; P5 evidence per section 6 criteria 1/5/6 —
+  descriptive paint-before-ready timing plus a worker-unavailable Extension
+  Host scenario); cost attribution (LOCK-PERF-7) and per-event
   transport/webview render flush are descriptive evidence at P2
   (harness-parity/streaming) — recorded with med/p95/sample/provenance, not an
   independent P2 exit blocker; removed-feature initialization absence and

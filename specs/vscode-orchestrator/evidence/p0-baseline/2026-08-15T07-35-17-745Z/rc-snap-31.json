@@ -1,0 +1,329 @@
+{
+  "requestedAt": "2026-08-15T07:38:26.646Z",
+  "sessions": [
+    {
+      "id": "ses_ffba5a668ffeP77RqCa6WauoqE",
+      "title": "E2E Title",
+      "agent": "e2e-agent",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": null,
+      "summary": {
+        "additions": 2,
+        "deletions": 0,
+        "files": 2
+      },
+      "createdAt": 1786779425175,
+      "updatedAt": 1786779496438
+    },
+    {
+      "id": "ses_ffba56b8effeAJiTBv4ngT59CM",
+      "title": "E2E read-only reply sub-task (@general subagent)",
+      "agent": "general",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": "ses_ffba5a668ffeP77RqCa6WauoqE",
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "createdAt": 1786779440242,
+      "updatedAt": 1786779443918
+    }
+  ],
+  "messages": {
+    "ses_ffba5a668ffeP77RqCa6WauoqE": [
+      {
+        "id": "msg_0045a5947001ATE7cWvF2GvcmJ",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_TASK_DELEGATE: delegate one read-only sub-task that only replies with a fixed text string, wait for it, and report its reply verbatim"
+      },
+      {
+        "id": "msg_0045a67eb001mH0PWc3x07tfO4",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "",
+        "tools": [
+          {
+            "tool": "task",
+            "status": "completed",
+            "callID": "call_e2e_task_1",
+            "output": "<task id=\"ses_ffba56b8effeAJiTBv4ngT59CM\" state=\"completed\">\n<task_result>\nE2E delegated result marker\n</task_result>\n</task>",
+            "title": "E2E read-only reply sub-task",
+            "metadata": {
+              "parentSessionId": "ses_ffba5a668ffeP77RqCa6WauoqE",
+              "sessionId": "ses_ffba56b8effeAJiTBv4ngT59CM",
+              "model": {
+                "providerID": "e2e-local",
+                "modelID": "e2e-model"
+              },
+              "variant": "low",
+              "truncated": false
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg_0045aafc200197WEcX3VSzzUMN",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "E2E_TASK_COMPLETED"
+      },
+      {
+        "id": "msg_0045ac719001dbQXeak8fixpla",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_USER_TOOL: call the user-defined tool"
+      },
+      {
+        "id": "msg_0045ac79a001Es1e9tKny87WNg",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "",
+        "tools": [
+          {
+            "tool": "e2e_marker",
+            "status": "completed",
+            "callID": "call_e2e_marker_1",
+            "output": "echo:hello",
+            "metadata": {
+              "truncated": false
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg_0045ad340001TT65X0YQDMMoZF",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "E2E_USER_TOOL_COMPLETED"
+      },
+      {
+        "id": "msg_0045ae762001oMokStBzdGNJw6",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_SKILL: load the e2e skill"
+      },
+      {
+        "id": "msg_0045ae7d0001vFXGfEwV26m72w",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "",
+        "tools": [
+          {
+            "tool": "skill",
+            "status": "completed",
+            "callID": "call_e2e_skill_1",
+            "output": "<skill_content name=\"e2e-skill\">\n# Skill: e2e-skill\n\n# E2E Skill\n\nE2E_SKILL_CONTENT_MARKER\n\nBase directory for this skill: file:///private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-8ANOTU/workspace/.kilo/skills/e2e-skill\nRelative paths in this skill (e.g., scripts/, reference/) are relative to this base directory.\nNote: file list is sampled.\n\n<skill_files>\n\n</skill_files>\n</skill_content>",
+            "title": "Loaded skill: e2e-skill",
+            "metadata": {
+              "name": "e2e-skill",
+              "dir": "/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-8ANOTU/workspace/.kilo/skills/e2e-skill",
+              "truncated": false
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg_0045aee83001Bx6LEKwWO6uNut",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "E2E_SKILL_COMPLETED"
+      },
+      {
+        "id": "msg_0045afdad001ccYjnaAfo8itNW",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_MCP_TOOL: call the mcp echo tool"
+      },
+      {
+        "id": "msg_0045afdf2001Yeu5Nge55T64Pt",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "",
+        "tools": [
+          {
+            "tool": "e2e-fixture_e2e_echo",
+            "status": "completed",
+            "callID": "call_e2e_mcp_1",
+            "output": "echo:hi",
+            "metadata": {
+              "truncated": false
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg_0045b0d41001X1l5wvDnRoxeKO",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "E2E_MCP_COMPLETED"
+      },
+      {
+        "id": "msg_0045b17960017S4Y538aQktitL",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_PERMISSION_READ: read the ask.txt file"
+      },
+      {
+        "id": "msg_0045b17d5001Fh83uLVDQytODZ",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "",
+        "tools": [
+          {
+            "tool": "read",
+            "status": "completed",
+            "callID": "call_e2e_read_1",
+            "output": "<path>/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-8ANOTU/workspace/ask.txt</path>\n<type>file</type>\n<content>\n1: E2E_PERMISSION_SENTINEL\n\n(End of file - total 1 lines)\n</content>",
+            "title": "ask.txt",
+            "metadata": {
+              "preview": "E2E_PERMISSION_SENTINEL",
+              "truncated": false,
+              "loaded": [],
+              "display": {
+                "type": "file",
+                "path": "/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-8ANOTU/workspace/ask.txt",
+                "text": "E2E_PERMISSION_SENTINEL",
+                "lineStart": 1,
+                "lineEnd": 1,
+                "totalLines": 1,
+                "truncated": false
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg_0045b26da001fTHuwE0wnvlljB",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "E2E_PERMISSION_COMPLETED"
+      },
+      {
+        "id": "msg_0045b4ea00019ZgmNE63Dwh5TZ",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_QUESTION: ask me a question"
+      },
+      {
+        "id": "msg_0045b4ee9001UD3Di5NzQhffvS",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "",
+        "tools": [
+          {
+            "tool": "question",
+            "status": "completed",
+            "callID": "call_e2e_question_1",
+            "output": "User has answered your questions: \"Pick an option\"=\"B\". You can now continue with the user's answers in mind.",
+            "title": "Asked 1 question",
+            "metadata": {
+              "answers": [
+                [
+                  "B"
+                ]
+              ],
+              "truncated": false
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg_0045b67a8001JEHRA1ydfYtMcK",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "E2E_QUESTION_COMPLETED"
+      }
+    ],
+    "ses_ffba56b8effeAJiTBv4ngT59CM": [
+      {
+        "id": "msg_0045a9505001kddp8EHPFhF5Vb",
+        "role": "user",
+        "agent": "general",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_CHILD_TASK: Reply with exactly this text and nothing else. Do not use any tools, do not read any files: E2E delegated result marker"
+      },
+      {
+        "id": "msg_0045a9535001ZE0bi4UCFQ2Llr",
+        "role": "assistant",
+        "agent": "general",
+        "text": "E2E delegated result marker"
+      }
+    ]
+  },
+  "statuses": {},
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "e2e-agent-b",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {
+    "e2e-fixture": "disabled"
+  },
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {
+    "ses_ffba5a668ffeP77RqCa6WauoqE": [
+      "ses_ffba56b8effeAJiTBv4ngT59CM"
+    ],
+    "ses_ffba56b8effeAJiTBv4ngT59CM": []
+  }
+}

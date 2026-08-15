@@ -1,0 +1,436 @@
+[probe] scenarios: real-overflow (real-overflow)
+[probe] Building extension + webview bundles via node esbuild.js
+[watch] build started
+[watch] build started
+[watch] build started
+[watch] build started
+[watch] build started
+[watch] build started
+[watch] build started
+[watch] build started
+[watch] build finished
+[watch] build finished
+[watch] build finished
+[watch] build finished
+[watch] build finished
+[watch] build finished
+[watch] build finished
+[watch] build finished
+[probe] Build complete
+[probe] evidence handoff enabled: /Users/jorkeyliu/workspace/repos/kilocode/specs/vscode-orchestrator/evidence/p0-baseline/2026-08-15T08-35-00Z-p2/real-overflow (staging /Users/jorkeyliu/workspace/repos/kilocode/specs/vscode-orchestrator/evidence/p0-baseline/2026-08-15T08-35-00Z-p2/.real-overflow.staging-fa07060c)
+[probe] fixture id: e2e-probe-b9d4c452
+[probe] cdp port:   55130
+[probe] scratch:    /var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm
+[probe] real-overflow seed: /var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace/.kilo/kilo.json (scripted model port 55131)
+[probe] runner bundled: /var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/runner.cjs
+[probe] VS Code executable: /Users/jorkeyliu/workspace/repos/kilocode/packages/kilo-vscode/.vscode-test/vscode-darwin-arm64-1.133.0/Visual Studio Code.app/Contents/MacOS/Code
+
+DevTools listening on ws://127.0.0.1:55130/devtools/browser/59b2917e-1fb0-4a1a-ab62-14edd6081af1
+[probe] CDP endpoint reachable, connecting Playwright
+Warning: 'remote-debugging-port' is not in the list of known options, but still passed to Electron/Chromium.
+Warning: 'remote-allow-origins' is not in the list of known options, but still passed to Electron/Chromium.
+[90m[main 2026-08-15T08:40:56.758Z][0m StorageMainService: creating application shared storage
+[90m[main 2026-08-15T08:40:56.973Z][0m [shared storage] Creating shared storage database at ':memory:' (wasCreated: true)
+[90m[main 2026-08-15T08:40:56.975Z][0m [shared storage] Initializing fallback application storage (path: in-memory)
+[90m[main 2026-08-15T08:40:57.189Z][0m [shared storage] Fallback application storage initialized with 3 items
+[90m[main 2026-08-15T08:40:57.190Z][0m update#setState disabled
+[90m[main 2026-08-15T08:40:57.190Z][0m update#ctor - updates are disabled by the environment
+[AgentHost:renderer] Acquiring MessagePort to agent host...
+[90m[main 2026-08-15T08:40:59.604Z][0m AgentHostProcessManager: agent host started
+[AgentHost:renderer] MessagePort acquired, creating client...
+2026-08-15 16:40:59.931 Code[49085:17737123] error messaging the mach port for IMKCFRunLoopWakeUpReliable
+Started local extension host with pid 49724.
+Started initializing default profile extensions in extensions installation folder. file:///var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/extensions
+[AccountPolicyGate] apply: state=inactive, reason=undefined, isRestricted=false
+Completed initializing default profile extensions in extensions installation folder. file:///var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/extensions
+Loading development extension at /Users/jorkeyliu/workspace/repos/kilocode/packages/kilo-vscode
+[vscode.mermaid-markdown-features]: Extension 'vscode.mermaid-markdown-features' CANNOT use 'legacyToolReferenceFullNames' without the 'chatParticipantPrivate' API proposal enabled
+Settings Sync: Account status changed from uninitialized to unavailable
+[AgentHost:renderer] Protocol connection established; clientId=7d7f1436-5668-4604-a417-9a96fdc03be8
+[91m[main 2026-08-15T08:41:01.332Z][0m [AgentHost:stderr] (node:49720) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `Code Helper --trace-deprecation ...` to show where the warning was created)
+
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+[AgentHost] No token resolved for resource: https://api.github.com/repos
+Kilo Code extension is now active
+[Kilo New] ServerManager: 🔍 getServer called
+[Kilo New] ServerManager: 🚀 Starting new server instance...
+[Kilo New] ServerManager: 📦 Using CLI path: /Users/jorkeyliu/workspace/repos/kilocode/packages/kilo-vscode/bin/kilo
+[Kilo New] ServerManager: 📍 CLI path: /Users/jorkeyliu/workspace/repos/kilocode/packages/kilo-vscode/bin/kilo
+[Kilo New] ServerManager: 🔐 Generated password (length): 64
+[Kilo New] ServerManager: 📄 CLI isFile: true
+[Kilo New] ServerManager: 📄 CLI mode (octal): 755
+[Kilo New] ServerManager: 🎬 Spawning CLI process: /Users/jorkeyliu/workspace/repos/kilocode/packages/kilo-vscode/bin/kilo [ 'serve', '--port', '0' ]
+[Kilo New] ServerManager: 📦 Process spawned with PID: 49944
+[telemetry] Agent Manager Opened { source: 'agent-manager' }
+[Kilo New] KiloProvider: 🔧 Starting initializeConnection...
+Unknown channel: agentHostClientProxy
+(node:49724) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `Code Helper (Plugin) --trace-deprecation ...` to show where the warning was created)
+[49239:0815/164102.527096:ERROR:net/socket/ssl_client_socket_impl.cc:924] handshake failed; returned -1, SSL error code 1, net_error -100
+Unknown channel: agentHostClientProxy
+Unknown channel: agentHostClientProxy
+[Kilo New] KiloProvider: ✅ webviewReady received
+[Kilo New] KiloProvider: 🔄 syncWebviewState() {
+  reason: 'webviewReady',
+  isWebviewReady: true,
+  connectionState: 'connecting',
+  hasClient: false,
+  hasServerInfo: false
+}
+[AccountPolicyGate] apply: state=inactive, reason=undefined, isRestricted=false
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:07 +191ms service=default version=0.0.0-jorkey-refactor-vscode-agent-orchestrator-202608141823 args=["serve","--port","0","--print-logs"] process_role=main run_id=bef49d26-7790-423f-a34e-14a8c8b2cb15 opencode
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: Performing one time database migration, may take a few minutes...
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:07 +160ms service=json-migration storage directory does not exist, skipping migration
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: sqlite-migration:done
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: Database migration complete.
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:07 +376ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/config.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:07 +4ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/kilo.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:07 +1ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/kilo.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:07 +8ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/opencode.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:07 +4ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/opencode.jsonc loading
+[Kilo New] ServerManager: 📥 CLI Server stdout: kilo server listening on http://127.0.0.1:55155
+
+[Kilo New] ServerManager: 🎯 Port detected: 55155
+[Kilo New] ServerManager: ✅ Server started successfully: { port: 55155 }
+[Kilo New] SSE: 🔌 connect() called
+[Kilo New] SSE: 🔄 Setting state to "connecting"
+[Kilo New] SSE: 🎬 Calling SDK global.event()...
+[Kilo New] SSE: ⏳ Waiting for first stream event
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +704ms service=parent-watchdog parent=49724 ppid=49724 intervalMs=1000 watching parent process
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +50ms service=server global event connected
+[Kilo New] SSE: ✅ Stream opened successfully
+[Kilo New] CLI connected, calling remoteService.refresh()
+[Kilo New] KiloProvider: checking config warnings {
+  from: 'init',
+  dir: '/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace'
+}
+[Kilo New] KiloProvider: 🔄 syncWebviewState() {
+  reason: 'initializeConnection',
+  isWebviewReady: true,
+  connectionState: 'connected',
+  hasClient: true,
+  hasServerInfo: true
+}
+[Kilo New] KiloProvider: 👤 syncWebviewState fetching profile...
+[Kilo New] KiloProvider: 🔄 Flushing deferred sessions refresh { reason: 'refreshSessions' }
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +98ms service=default directory=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace creating instance
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +2ms service=project directory=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace fromDirectory
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +127ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/config.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +0ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/kilo.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +1ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/kilo.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +1ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/opencode.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +0ms service=config path=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo/opencode.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +157ms service=config path=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace/.kilo/kilo.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +263ms service=config path=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace/.kilo/kilo.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +12ms service=config path=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace/.kilo/opencode.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:08 +4ms service=config path=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace/.kilo/opencode.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +92ms service=config path=/Users/jorkeyliu/.kilo/kilo.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +8ms service=config path=/Users/jorkeyliu/.kilo/kilo.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +1ms service=config path=/Users/jorkeyliu/.kilo/opencode.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +4ms service=config path=/Users/jorkeyliu/.kilo/opencode.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +54ms service=plugin name=SH6 loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +0ms service=plugin name=Fo6 loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +2ms service=plugin name=fW_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +0ms service=plugin name= loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +3ms service=plugin name=SF_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +2ms service=plugin name=nX_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +0ms service=plugin name=yW1 loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +2ms service=plugin name=_K_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +0ms service=plugin name=qK_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +2ms service=plugin name=TK_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +2ms service=plugin name=RK_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +1ms service=plugin name=WK_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +14ms service=bus type=session.turn.open subscribing
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +2ms service=bus type=session.turn.close subscribing
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +0ms service=bus type=memory.status subscribing
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +0ms service=bus type=memory.updated subscribing
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +12ms service=lsp all LSPs are disabled
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +0ms service=format all formatters are disabled
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +0ms service=format init
+[Kilo New] KiloProvider: config warnings fetched { from: 'init', count: 0 }
+[Kilo New] KiloProvider: 👤 syncWebviewState profile: null
+[probe] runner ready, plan: source=e2e-probe-b9d4c452-A sibling=e2e-probe-b9d4c452-B child=e2e-probe-b9d4c452-C variant=e2e-probe-b9d4c452-D tabA=e2e-probe-b9d4c452-TA tabB=e2e-probe-b9d4c452-TB tabC=e2e-probe-b9d4c452-TC topicRoot=e2e-probe-b9d4c452-T1 topicChild=e2e-probe-b9d4c452-T1C topicSibling=e2e-probe-b9d4c452-T2 realAgent=e2e-agent realAgentB=e2e-agent-b realModel=e2e-local/e2e-model
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +333ms service=model-cache providerID=kilo fetching models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +245ms service=skill count=5 init
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +205ms service=config path=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace/.kilo/kilo.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:09 +23ms service=config path=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace/.kilo/kilo.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +37ms service=config path=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace/.kilo/opencode.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +27ms service=config path=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace/.kilo/opencode.json loading
+[probe] PASS custom agent served in ModeSwitcher: "E2E Agent"
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +185ms service=config path=/Users/jorkeyliu/.kilo/kilo.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +0ms service=config path=/Users/jorkeyliu/.kilo/kilo.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +1ms service=config path=/Users/jorkeyliu/.kilo/opencode.jsonc loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +0ms service=config path=/Users/jorkeyliu/.kilo/opencode.json loading
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +13ms service=kilocode-indexing workspacePath=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace initializing project indexing
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +14ms service=bus type=indexing.status publishing
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +16ms service=bus type=indexing.status publishing
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +88ms service=model-cache providerID=kilo count=291 models fetched and cached
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +76ms service=model-cache providerID=apertis fetching models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +83ms service=model-cache providerID=apertis count=0 models fetched and cached
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +9ms service=provider status=started state
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +3ms service=model-cache providerID=apertis refreshing models
+[probe] picked "E2E Agent" from agent picker
+[probe] PASS custom agent selected: "E2E Agent"
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +344ms service=provider init
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +4ms service=model-cache providerID=apertis count=0 models fetched and cached
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: WARN  2026-08-15T08:41:10 +34ms service=config dir=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo error=Cause([Fail(NpmInstallFailedError (cause: @kilocode/plugin: No matching version found for @kilocode/plugin@0.0.0-jorkey-refactor-vscode-agent-orchestrator-202608141823.))]) background dependency install failed
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +2ms service=model-cache providerID=apertis refreshing models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:10 +10ms service=model-cache providerID=apertis count=0 models fetched and cached
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: ERROR 2026-08-15T08:41:11 +68ms service=provider Provider does not exist in model list github-copilot-enterprise
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:11 +2ms service=provider providerID=kilo found
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:11 +0ms service=provider providerID=e2e-local found
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:11 +0ms service=provider status=completed duration=467 state
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: WARN  2026-08-15T08:41:12 +1629ms service=config dir=/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/xdg-config/kilo error=Cause([Fail(NpmInstallFailedError (cause: @kilocode/plugin: No matching version found for @kilocode/plugin@0.0.0-jorkey-refactor-vscode-agent-orchestrator-202608141823.))]) background dependency install failed
+[Kilo New] KiloProvider: ✅ initializeConnection completed successfully
+[probe] picked "Low" from variant picker
+[probe] PASS variant Low selected: "Low"
+[probe] PASS custom model visibly selected: "E2E Local / E2E Model"
+[probe] sent prompt via real prompt input: E2E_OVERFLOW: produce a very long answer and keep going
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:14 +1835ms service=session id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah slug=lucky-wolf version=0.0.0-jorkey-refactor-vscode-agent-orchestrator-202608141823 projectID=global directory=/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace path=private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-0PDSHm/workspace title=New session - 2026-08-15T08:41:14.472Z metadata={"kilocode.sandbox":{"enabled":false,"version":0}} cost=0 tokens={"input":0,"output":0,"reasoning":0,"cache":{"read":0,"write":0}} time={"created":1786783274472,"updated":1786783274472} created
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:14 +23ms service=kilo-sessions sessionId=ses_ffb6aea17ffe3RPzfuXHJ6U3ah session bootstrap skipped: no client
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: ERROR 2026-08-15T08:41:14 +381ms service=kilo-sessions type=message.updated cause=InstanceRef not provided subscriber failed
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:14 +11ms service=bus type=session.turn.open publishing
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:14 +42ms service=session.prompt session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah step=0 loop
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:15 +898ms service=llm providerID=e2e-local modelID=e2e-model session.id=title-ses_ffb6aea17ffe3RPzfuXHJ6U3ah small=true agent=title mode=primary stream
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:15 +4ms service=provider status=started providerID=e2e-local getSDK
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:15 +1ms service=provider providerID=e2e-local pkg=@ai-sdk/openai-compatible using bundled provider
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:15 +1ms service=provider status=completed duration=2 providerID=e2e-local getSDK
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:15 +2ms service=model-cache providerID=apertis refreshing models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:15 +45ms service=default llm.runtime=ai-sdk llm.provider=e2e-local llm.model=e2e-model llm runtime selected
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:15 +57ms service=model-cache providerID=apertis count=0 models fetched and cached
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +106ms service=session.tools status=started resolveTools
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +14ms service=shell-tool shell=/bin/zsh shell tool using shell
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +85ms service=tool.registry status=started invalid
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +1ms service=tool.registry status=completed duration=1 invalid
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started question
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 question
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started bash
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 bash
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started read
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 read
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started glob
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 glob
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started grep
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 grep
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started edit
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 edit
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started write
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +1ms service=tool.registry status=completed duration=1 write
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started task
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +2ms service=tool.registry status=completed duration=2 task
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started webfetch
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 webfetch
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started todowrite
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +5ms service=tool.registry status=completed duration=5 todowrite
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started skill
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +3ms service=tool.registry status=completed duration=3 skill
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started plan_exit
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 plan_exit
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started kilo_local_recall
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 kilo_local_recall
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started background_process
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 background_process
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started agent_manager_models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=completed duration=0 agent_manager_models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=tool.registry status=started agent_manager
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +1ms service=tool.registry status=completed duration=1 agent_manager
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +10ms service=session.tools status=completed duration=122 resolveTools
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +58ms service=storage index=0 running migration
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +18ms service=storage index=1 running migration
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +53ms service=provider status=started state
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +1ms service=session.processor session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah messageID=msg_0049517c5001XZ71A0J3hDpkF9 process
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +8ms service=llm providerID=e2e-local modelID=e2e-model session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah small=false agent=e2e-agent mode=primary stream
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +10ms service=default llm.runtime=ai-sdk llm.provider=e2e-local llm.model=e2e-model llm runtime selected
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +72ms service=model-cache providerID=kilo fetching models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +159ms service=session.prompt session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah step=1 loop
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +142ms service=session.processor session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah messageID=msg_004951e0d001lanLs79t4x8yoR process
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +5ms service=llm providerID=e2e-local modelID=e2e-model session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah small=false agent=compaction mode=primary stream
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +21ms service=default llm.runtime=ai-sdk llm.provider=e2e-local llm.model=e2e-model llm runtime selected
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +138ms service=session.compaction reason=post-compaction pruning
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +2ms service=session.compaction pruned=0 total=0 found
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +0ms service=session.prompt session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah step=2 loop
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:16 +147ms service=session.tools status=started resolveTools
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +1ms service=tool.registry status=started invalid
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 invalid
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started question
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +1ms service=tool.registry status=completed duration=1 question
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started bash
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 bash
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started read
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 read
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started glob
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 glob
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started grep
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 grep
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started edit
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +1ms service=tool.registry status=completed duration=1 edit
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started write
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 write
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started task
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +1ms service=tool.registry status=completed duration=1 task
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started webfetch
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 webfetch
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started todowrite
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 todowrite
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started skill
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 skill
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started plan_exit
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 plan_exit
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started kilo_local_recall
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +1ms service=tool.registry status=completed duration=1 kilo_local_recall
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started background_process
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 background_process
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started agent_manager_models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 agent_manager_models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=started agent_manager
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=tool.registry status=completed duration=0 agent_manager
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=session.tools status=completed duration=5 resolveTools
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +132ms service=model-cache providerID=kilo count=291 models fetched and cached
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=model-cache providerID=apertis fetching models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +2ms service=model-cache providerID=apertis count=0 models fetched and cached
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +197ms service=provider init
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +11ms service=plugin name=SH6 loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name=Fo6 loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name=fW_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name= loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name=SF_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +1ms service=plugin name=nX_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name=yW1 loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name=_K_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name=qK_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name=TK_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name=RK_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +0ms service=plugin name=WK_ loading internal plugin
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +1ms service=model-cache providerID=apertis refreshing models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:17 +41ms service=model-cache providerID=apertis count=0 models fetched and cached
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:18 +1497ms service=model-cache providerID=apertis refreshing models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:18 +28ms service=model-cache providerID=apertis count=0 models fetched and cached
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:19 +101ms service=session.processor session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah messageID=msg_004951f37001hNH7tqwBT7vCVF process
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:19 +3ms service=llm providerID=e2e-local modelID=e2e-model session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah small=false agent=e2e-agent mode=primary stream
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:19 +9ms service=default llm.runtime=ai-sdk llm.provider=e2e-local llm.model=e2e-model llm runtime selected
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: ERROR 2026-08-15T08:41:19 +193ms service=provider Provider does not exist in model list github-copilot-enterprise
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:19 +1ms service=provider providerID=kilo found
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:19 +0ms service=provider providerID=e2e-local found
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:19 +0ms service=provider status=completed duration=2927 state
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:19 +20ms service=session.prompt session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah step=3 loop
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:19 +1ms service=session.prompt session.id=ses_ffb6aea17ffe3RPzfuXHJ6U3ah exiting loop
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:19 +8ms service=bus type=session.turn.close publishing
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:20 +1573ms service=model-cache providerID=apertis refreshing models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:20 +28ms service=model-cache providerID=apertis count=0 models fetched and cached
+[probe] PASS H-13 backend: compaction part + summary + automatic continuation in one turn (attempt 1)
+[probe] H-13 overflow session: ses_ffb6aea17ffe3RPzfuXHJ6U3ah
+[probe] PASS H-13 panel shows the continuation answer: transcript text present
+[probe] PASS H-13 panel shows the compaction summary trace: transcript text present
+[probe] PASS H-13 panel surface: no context-management/compact controls {"settingsRows":0,"headerContextMenu":0,"headerContextActions":0,"contextTriggers":1,"promptInput":1,"transcriptText":true}
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:22 +1221ms service=model-cache providerID=apertis refreshing models
+[Kilo New] ServerManager: ⚠️ CLI Server stderr: INFO  2026-08-15T08:41:22 +16ms service=model-cache providerID=apertis count=0 models fetched and cached
+[probe] PIN EVIDENCE: [
+  {
+    "prompt": "E2E_OVERFLOW: produce a very long answer and keep going",
+    "expected": {
+      "agent": "e2e-agent",
+      "model": "e2e-local/e2e-model",
+      "variant": "low"
+    },
+    "users": [
+      {
+        "id": "msg_0049515d20015dvWrmEPRcyPU2",
+        "agent": "e2e-agent",
+        "model": "e2e-local/e2e-model/low",
+        "pass": true
+      }
+    ]
+  }
+]
+[probe] PASS real-overflow-final: 4 generation request(s), all e2e-local/e2e-model (matrix={
+  "total": 4,
+  "runOwned": 4,
+  "violations": [],
+  "byModel": {
+    "e2e-local/e2e-model": 4
+  },
+  "byAgent": {
+    "title": 1,
+    "e2e-agent": 2,
+    "compaction": 1
+  },
+  "small": 1,
+  "nonSmall": 3,
+  "bySession": {
+    "title-ses_ffb6aea17ffe3RPzfuXHJ6U3ah": 1,
+    "ses_ffb6aea17ffe3RPzfuXHJ6U3ah": 3
+  }
+})
+[probe] real-overflow lifecycle passed
+[probe] real-overflow lifecycle assertion passed
+[90m[main 2026-08-15T08:41:22.504Z][0m Extension host with pid 49724 exited with code: 0, signal: unknown.
+Exit code:   0
+[probe] VS Code exited (code 0)
+[probe] evidence handoff: status=complete files=17 missing=0 malformed=0 validated=true
+[probe] cleanup: no owned VS Code process remains
+[probe] cleanup: CDP port 55130 released
+[probe] cleanup: scratch dir removed: true
+[probe] total elapsed: 60s

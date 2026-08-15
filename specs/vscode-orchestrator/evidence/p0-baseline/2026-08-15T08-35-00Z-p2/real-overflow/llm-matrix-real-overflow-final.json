@@ -1,0 +1,20 @@
+{
+  "phase": "real-overflow-final",
+  "total": 4,
+  "runOwned": 4,
+  "violations": [],
+  "byModel": {
+    "e2e-local/e2e-model": 4
+  },
+  "byAgent": {
+    "title": 1,
+    "e2e-agent": 2,
+    "compaction": 1
+  },
+  "small": 1,
+  "nonSmall": 3,
+  "bySession": {
+    "title-ses_ffb6aea17ffe3RPzfuXHJ6U3ah": 1,
+    "ses_ffb6aea17ffe3RPzfuXHJ6U3ah": 3
+  }
+}

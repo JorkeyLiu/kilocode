@@ -1,6 +1,16 @@
 import * as fs from "fs"
 import * as path from "path"
-import type { KiloClient, Session } from "@kilocode/sdk/v2/client"
+import type { KiloClient, McpStatus, Message, Part, Session } from "@kilocode/sdk/v2/client"
+import {
+  summarizeMcp,
+  summarizeMessage,
+  summarizePermissions,
+  summarizeQuestions,
+  summarizeSession,
+  summarizeStatuses,
+  type BackendSnapshot,
+  type McpTruth,
+} from "./fixture-backend"
 import type { KiloConnectionService } from "../services/cli-backend"
 import { getErrorMessage } from "../kilo-provider-utils"
 import { isAbsolutePath } from "../path-utils"
@@ -778,6 +788,113 @@ export class AgentManagerProvider implements Disposable {
       // load chain resolves in order.
     }
     await panel.sessions.refreshSessions()
+  }
+
+  /**
+   * Read-only snapshot of served-backend truth for the real-session E2E
+   * fixture (KILO_E2E_FIXTURE only, registered by extension.ts): the session
+   * list, per-session transcripts (text + completed tool-part summaries),
+   * session statuses, the served agent catalog, the connected provider ids,
+   * MCP server statuses, pending permission/question requests, and the
+   * backend-derived child session ids — all fetched through the shared client
+   * against the real `kilo serve` backend. The extension-host runner writes
+   * this to the scratch dir and the harness asserts on it. No production
+   * effect: the command is unregistered when the env var is absent.
+   */
+  public async backendSnapshotForFixture(): Promise<BackendSnapshot> {
+    const root = this.getRoot() ?? ""
+    const client = await this.connectionService.getClientAsync(root)
+    const empty = (label: string): never[] => {
+      this.log(`fixture backendSnapshot: ${label} failed; returning empty`)
+      return []
+    }
+    const sessions = await client.session
+      .list({ directory: root })
+      .then((r) => r.data ?? [])
+      .catch((err) => {
+        this.log("fixture backendSnapshot: session.list failed:", err)
+        return empty("session.list")
+      })
+    const statuses = await client.session
+      .status({ directory: root })
+      .then((r) => r.data ?? {})
+      .catch((err) => {
+        this.log("fixture backendSnapshot: session.status failed:", err)
+        return {}
+      })
+    const agents = await client.app
+      .agents({ directory: root })
+      .then((r) => r.data ?? [])
+      .catch(() => empty("app.agents"))
+    const connected = await client.provider
+      .list({ directory: root })
+      .then((r) => r.data?.connected ?? [])
+      .catch(() => empty("provider.list"))
+    const messages: Record<string, ReturnType<typeof summarizeMessage>[]> = {}
+    const children: Record<string, string[]> = {}
+    for (const s of sessions) {
+      const rows = await client.session
+        .messages({ sessionID: s.id, directory: root })
+        .then((r) => r.data ?? [])
+        .catch(() => empty(`session.messages(${s.id})`))
+      messages[s.id] = rows.map(summarizeMessage)
+      const kids = await client.session
+        .children({ sessionID: s.id, directory: root })
+        .then((r) => r.data ?? [])
+        .catch(() => empty(`session.children(${s.id})`))
+      children[s.id] = kids.map((kid) => (kid as { id?: string }).id ?? "").filter((id) => id.length > 0)
+    }
+    const mcp = await client.mcp
+      .status({ directory: root })
+      .then((r) => summarizeMcp(r.data ?? {}))
+      .catch((err) => {
+        this.log("fixture backendSnapshot: mcp.status failed:", err)
+        return undefined
+      })
+    const pending = await Promise.all([
+      client.permission
+        .list({ directory: root })
+        .then((r) => summarizePermissions(r.data ?? []))
+        .catch((err) => {
+          this.log("fixture backendSnapshot: permission.list failed:", err)
+          return [] as ReturnType<typeof summarizePermissions>
+        }),
+      client.question
+        .list({ directory: root })
+        .then((r) => summarizeQuestions(r.data ?? []))
+        .catch((err) => {
+          this.log("fixture backendSnapshot: question.list failed:", err)
+          return [] as ReturnType<typeof summarizeQuestions>
+        }),
+    ]).then(([permissions, questions]) => ({ permissions, questions }))
+    return {
+      requestedAt: new Date().toISOString(),
+      sessions: sessions.map(summarizeSession),
+      messages,
+      statuses: summarizeStatuses(statuses),
+      agents: agents.map((agent) => (agent as { name?: string }).name ?? "").filter((name) => name.length > 0),
+      connectedProviders: connected,
+      ...(mcp ? { mcp } : {}),
+      ...(pending ? { pending } : {}),
+      children,
+    }
+  }
+
+  /**
+   * Disconnect a named MCP server through the real shared client, then return
+   * the served MCP status map. Env-gated E2E fixture bridge only
+   * (KILO_E2E_FIXTURE): lets the harness prove the run-owned MCP stdio child
+   * is cleaned up by its exact owner (disconnect through the SDK, not a
+   * process-name kill). No production effect when the env var is absent.
+   */
+  public async mcpDisconnectForFixture(name: string): Promise<McpTruth> {
+    const root = this.getRoot() ?? ""
+    const client = await this.connectionService.getClientAsync(root)
+    await client.mcp.disconnect({ name, directory: root }).catch((err) => {
+      this.log(`fixture mcpDisconnect(${name}) failed:`, err)
+    })
+    const status = await client.mcp.status({ directory: root }).catch(() => ({ data: {} as Record<string, McpStatus> }))
+    return summarizeMcp(status.data ?? {})
   }
 
   public shutdown(): Promise<void> {
