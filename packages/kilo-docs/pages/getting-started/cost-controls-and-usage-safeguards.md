@@ -42,7 +42,7 @@ Every action Kilo takes — reading files, editing code, running shell commands,
 
 ### Runtime auto-approve toggle (VS Code)
 
-A shield button in the prompt controls lets you toggle auto-approve on and off at runtime without opening Settings. When enabled, pending permission prompts are approved automatically. The state stays synced across the sidebar and open Kilo tabs.
+A shield button in the prompt controls lets you toggle auto-approve on and off at runtime without opening Settings. When enabled, pending permission prompts are approved automatically. The state stays synced across open Kilo tabs and Agent Manager sessions.
 
 **When to use:** Turn it on when working on a well-understood, low-risk task that does not need step-by-step review. Turn it off as soon as you want to pause and review the agent's next actions.
 

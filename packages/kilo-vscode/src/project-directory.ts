@@ -3,9 +3,10 @@
  *
  * ## Why this exists
  *
- * The sidebar KiloProvider always uses `getWorkspaceDirectory()`, which returns
- * `workspaceFolders[0]`. That works because the sidebar is tied to the window
- * and there's an implicit "current workspace" context.
+ * The chat KiloProvider (editor tabs and the Agent Manager) always uses
+ * `getWorkspaceDirectory()`, which returns `workspaceFolders[0]`. That works
+ * because chat is tied to the window and there's an implicit "current
+ * workspace" context.
  *
  * Standalone editor panels (opened via SettingsEditorProvider) don't have that
  * implicit context. In a **multi-root workspace** — where VS Code has multiple
@@ -31,7 +32,7 @@
  *
  * - A string value overrides the workspace directory for project-scoped operations
  * - `null` explicitly disables project scope (forces global-only)
- * - `undefined` (default, used by the sidebar) falls through to `getWorkspaceDirectory()`
+ * - `undefined` (default, used by chat panels) falls through to `getWorkspaceDirectory()`
  */
 
 export interface WorkspaceFolderLike {

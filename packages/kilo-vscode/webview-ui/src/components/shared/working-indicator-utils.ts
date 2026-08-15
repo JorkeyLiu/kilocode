@@ -56,7 +56,7 @@ export function showSpinner(snap: SessionTimingEntry | undefined, submitting: bo
  * Cumulative elapsed seconds in ms for the current session, at the given `now`.
  * Prefers the Agent Manager extension snapshot when present (settled `elapsedMs`
  * plus the still-running segment from `activeStart`); otherwise falls back to the
- * legacy `since` timestamp used by the sidebar/editor webviews.
+ * legacy `since` timestamp used by the editor-tab webviews.
  */
 export function cumulativeElapsedMs(
   snap: SessionTimingEntry | undefined,

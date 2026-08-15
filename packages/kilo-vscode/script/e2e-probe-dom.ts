@@ -110,7 +110,7 @@ export function snapshotClient(scratch: string, prefix = "real-snap") {
  * (`.am-layout`). The real-session scenarios never know the real session ids
  * ahead of time and start in the bottom-page state (pending tab, no tab strip
  * yet), so neither the title-based finder nor a `.am-tab-sortable` anchor
- * works. `.am-layout` is Agent Manager-specific — the sidebar webview never
+ * works. `.am-layout` is Agent Manager-specific — the editor-tab webview never
  * renders it. NOTE: on current VS Code the Agent Manager's content frame URL
  * is `fake.html` (the webview shim), so the finder must not filter on the
  * `index.html` path. Re-enumerates contexts/pages on every poll, so it also

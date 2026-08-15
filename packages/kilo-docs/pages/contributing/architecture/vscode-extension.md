@@ -20,7 +20,7 @@ Activation creates one `KiloConnectionService`. It owns one `ServerManager`, one
 ```mermaid
 flowchart LR
   subgraph host ["VS Code extension host"]
-    consumers["Sidebar, tabs, panels, services"]
+    consumers["Tabs, panels, services"]
     service["KiloConnectionService"]
     manager["ServerManager"]
     sdk["Generated SDK client"]
@@ -43,9 +43,24 @@ flowchart LR
 | Binary | Uses extension `bin/kilo`, or `bin/kilo.exe` on Windows |
 | Port | Starts `kilo serve --port 0`; CLI server prefers `4096`, then asks OS for free port |
 | Authentication | Generates random 32-byte hex password per spawn and passes it as `KILO_SERVER_PASSWORD`; username defaults to `kilo` |
-| Reuse | Sidebar, editor tabs, panels, Agent Manager, and host services share active server |
+| Reuse | Editor tabs, panels, Agent Manager, and host services share active server |
 | Exit | `ServerManager` clears dead child; connection service clears SDK/SSE state and enters error state |
 | Replacement | Later retry or connection attempt starts replacement server |
+
+## Chat surfaces (P3.1 sidebar removal)
+
+The ordinary single-chat **Activity Bar sidebar** (`kilo-code.SidebarProvider` webview view under the `kilo-code-ActivityBar` views container) is **permanently removed**. It is not deferred, gated, or re-registered: no `viewsContainers`/`views` contribution, no `registerWebviewViewProvider`, no `kilo-code.new.sidebarVisible` context, and no `sidebarTitle.*` commands or view-title menus remain. The one-time deprecation step shipped as the P1/P2 migration surface plus the release note; there is no temporary feature flag and no retained old surface.
+
+Chat now opens through the preserved editor surfaces:
+
+| Surface | How it opens |
+|---|---|
+| Agent Manager | `Cmd/Ctrl+Shift+M` (`kilo-code.new.agentManagerOpen`) — multi-session orchestration panel |
+| Open in Tab | `kilo-code.new.openInTab` / the editor-title "Open in Tab" button — a `kilo-code.new.TabPanel` webview with the shared chat UI |
+
+Commands that previously fell back to the sidebar chat now resolve a chat target at runtime: the active editor-tab `KiloProvider` when one is focused, otherwise the Agent Manager panel (opened on demand). The decision rules live in the vscode-free `services/code-actions/chat-target.ts` helper. Delivery is readiness-gated: toolbar/code/terminal/review-comment posts wait for the chosen surface's webview to report ready and are skipped when it never does, and the cloud-session deep link waits for a newly created/restored tab's readiness (bounded) before posting `openCloudSession`, surfacing a warning instead of silently dropping the message. Deep links (cloud session / linked model selection) open or reuse an editor tab. The Diff Viewer session source and the auto-approve directory source resolve from active tabs and the Agent Manager instead of a sidebar provider. No surrogate hidden sidebar provider or duplicate state owner is created.
+
+**Rollback path.** This removal is a breaking product change, not a flag-gated migration. The only supported rollback is reverting the P3.1 removal commit(s) in git (the removed manifest contributions, `registerWebviewViewProvider`, `KiloProvider.viewType`/`resolveWebviewView`/`setSidebarVisible`, and the `sidebarTitle.*` wrapper commands are all preserved in git history); no runtime shim or compatibility surface is retained. After a revert, verify the `sidebar-removal` E2E scenario and the manifest-level absence contract (`tests/unit/sidebar-removal.test.ts`) fail, confirming the surface is actually restored.
 
 ## Shared consumers
 
@@ -53,7 +68,7 @@ Shared service has more consumers than chat tabs:
 
 | Family | Consumers |
 |---|---|
-| Chat | Sidebar provider and editor-tab providers |
+| Chat | Editor-tab providers and the Agent Manager's embedded chat |
 | Panels | Settings, profile and marketplace surfaces, sub-agent viewers, Agent Manager, KiloClaw |
 | Diff | Diff Viewer, Diff Virtual, and diff source catalog |
 | Editor assistance | Autocomplete and commit-message generation |
@@ -81,15 +96,15 @@ Global SSE carries wrapped events for multiple directories. Connection service b
 
 ## Agent Manager
 
-Agent Manager is extension feature, not separate product. It opens as editor tab and manages parallel sessions, optional worktrees, terminals, setup scripts, and extra editor windows. Worktree diff/review rendering was removed from the Agent Manager; the sidebar Diff Viewer webview owns all diff rendering.
+Agent Manager is extension feature, not separate product. It opens as editor tab and manages parallel sessions, optional worktrees, terminals, setup scripts, and extra editor windows. With the P3.1 sidebar removal, Agent Manager is the primary chat entry point (alongside "Open in Tab" editor panels). Worktree diff/review rendering was removed from the Agent Manager; the Diff Viewer webview owns all diff rendering.
 
-| Aspect | Sidebar | Agent Manager |
-|---|---|---|
-| Primary use | One active chat view | Multi-session orchestration |
-| Git isolation | Workspace root by default | Optional worktree per session |
-| Backend | Shared `kilo serve` process | Same shared process |
-| Request routing | Workspace directory | Session worktree path passed as SDK `directory` |
-| CLI instance key | Normalized workspace root | Normalized worktree directory |
+| Aspect | Agent Manager |
+|---|---|
+| Primary use | Multi-session orchestration (single-chat surfaces live in editor tabs / the Agent Manager) |
+| Git isolation | Optional worktree per session |
+| Backend | Shared `kilo serve` process |
+| Request routing | Session worktree path passed as SDK `directory` |
+| CLI instance key | Normalized worktree directory |
 
 Agent Manager request path is:
 
@@ -111,7 +126,7 @@ The right-bottom working indicator in Agent Manager shows a session's cumulative
 | Persistence | Writes on status boundaries only, never per display tick |
 | Shutdown | `AgentManagerProvider.disposeAsync()` settles active segments and awaits the durable write, so normal shutdown does not count later downtime |
 | Pruning | Explicit forget in Agent Manager and backend `session.deleted` prune the session's timing entry; tab close is view lifecycle and retains it |
-| Webview bridge | Snapshots ride `agentManager.state` pushes and land in the shared `SessionContext` (`timingFor`/`setTimingSnapshots`). The shared `WorkingIndicator` prefers a snapshot when present (cumulative + running segment) and falls back to the legacy `busySince` timestamp otherwise, keeping sidebar behavior unchanged |
+| Webview bridge | Snapshots ride `agentManager.state` pushes and land in the shared `SessionContext` (`timingFor`/`setTimingSnapshots`). The shared `WorkingIndicator` prefers a snapshot when present (cumulative + running segment) and falls back to the legacy `busySince` timestamp otherwise, keeping editor-tab behavior unchanged |
 
 An abnormal crash can leave a stale active-segment marker persisted; the backend supplies no segment start timestamp, so the marker is preserved conservatively and the segment keeps counting until the next status event settles it.
 
@@ -181,7 +196,7 @@ Speech-to-text captures audio locally, then sends completed recording through sh
 | Build | Source | Output |
 |---|---|---|
 | Extension host | `src/extension.ts` | `dist/extension.js` |
-| Sidebar and editor chat webview | `webview-ui/src/index.tsx` | `dist/webview.js` |
+| Editor chat webview (Open in Tab) | `webview-ui/src/index.tsx` | `dist/webview.js` |
 | Agent Manager webview | `webview-ui/agent-manager/index.tsx` | `dist/agent-manager.js` |
 | KiloClaw webview | `webview-ui/kiloclaw/index.tsx` | `dist/kiloclaw.js` |
 | Diff Viewer webview | `webview-ui/diff-viewer/index.tsx` | `dist/diff-viewer.js` |
@@ -200,6 +215,7 @@ Extension host bundle targets Node/CommonJS. Browser webviews and shared worker 
 | CDP control | The harness connects Playwright to the workbench over a uniquely owned loopback CDP port (`--remote-debugging-port`) and asserts real webview DOM: tab order, then clicks the production sub-agent open button |
 | Fixture bridge | `kilo-code.new.e2eFixture.*` commands are registered in `src/extension.ts` only when `KILO_E2E_FIXTURE` is set; they expose panel readiness, typed webview posting, deterministic session-list settlement, a read-only served-backend snapshot (`backendSnapshot`), MCP disconnect, transport/process probes over the single shared connection service (`sseReconnect`, `killServer`, `reconnectServer`), and a fail-closed generation-request collector (`llmRequests` / `llmRequestsReset`) that records every backend `service=llm` line through the ServerManager stderr relay into a run-owned append-only store. Zero production effect when the env var is absent — no commands registered and no webview code runs |
 | Real scenarios | Four focused-only scenarios drive REAL backend sessions through the production webview path and assert served-backend truth through the snapshot bridge: `real-session` (create/prompt/reopen), `real-completed` (completed turns, MCP disconnect, H-12 rollback), `real-overflow` (H-13 internal context-overflow compaction), and `real-restart` (SSE reconnect, exact-owned worker restart, true window reload re-entry). Each seeds `small_model`/`subagent_model` to the run-owned provider and asserts at the request level that every generation (agent turns, titles, summaries, subagents) used `e2e-local/e2e-model` — any `kilo/kilo-auto/*` line fails the scenario |
+| P3.1 removal | `sidebar-removal` (focused-only) runs assertions in the Extension Host runner: the loaded manifest contributes no Activity Bar sidebar surface under the forbidden ids/prefixes (`kilo-code-ActivityBar`, `kilo-code.SidebarProvider`, `sidebarTitle.*`) — identifier-based, so unrelated future views are not banned — and the production "Open in Tab" editor panel opens and reaches webview readiness through the env-gated `openInTabReady` fixture bridge, with the Agent Manager still ready afterwards. No CDP DOM driving |
 | Session-load serialization | `KiloProvider` serializes session-list loads (full refreshes, load-more, deferred flushes) so the bridge's awaited refresh is the last applied, making fixture survival deterministic without timers |
 | Process lifecycle | All owned processes are terminated by exact PID matched to the unique user-data dir, the CDP port is verified released, then the scratch dir is deleted — on success and failure paths |
 | Binary resolution | `VSCODE_TEST_EXECUTABLE` (must exist) → cached `.vscode-test/` → `@vscode/test-electron` auto-download into `.vscode-test/`; clean checkouts need no preinstalled binary |

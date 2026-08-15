@@ -1,7 +1,8 @@
 /**
  * WorktreeMode context -- provides Local/Worktree mode toggle state.
- * Only active inside the Agent Manager. In the sidebar, the context is undefined
- * so consumers can check `useWorktreeMode()` to decide whether to render the toggle.
+ * Only active inside the Agent Manager. In the editor-tab chat webview, the
+ * context is undefined so consumers can check `useWorktreeMode()` to decide
+ * whether to render the toggle.
  *
  * When the mode changes, a message is posted to the extension so the interceptor
  * knows whether to create a worktree for the next session.

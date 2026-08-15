@@ -104,13 +104,13 @@ import { openSession, openChildSession, type OpenChildSessionDeps, type OpenSess
 import "./agent-manager.css"
 
 // Explicit tool registration at the Agent Manager boundary. The task renderer
-// (TaskToolExpanded) and VS Code sidebar tool overrides were previously active
+// (TaskToolExpanded) and VS Code chat UI tool overrides were previously active
 // in this webview only as an accidental side effect of importing DataBridge
 // from ../src/App (whose module scope called these). DataBridge now lives in
 // the side-effect-free ../src/AppBridge, so Agent Manager must register the
 // renderers it owns explicitly — this is the Agent Manager-owned boundary for
 // that registration. ToolRegistry.register is idempotent, so this is safe to
-// run alongside the sidebar's own App.tsx registration.
+// run alongside the editor-tab App.tsx registration.
 registerExpandedTaskTool()
 registerVscodeToolOverrides()
 const isMac = typeof navigator !== "undefined" && /Mac|iPhone|iPad/.test(navigator.userAgent)

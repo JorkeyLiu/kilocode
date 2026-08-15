@@ -1,6 +1,6 @@
 /**
  * VS Code-specific tool registry overrides.
- * Wraps upstream tool renderers to inject VS Code sidebar preferences
+ * Wraps upstream tool renderers to inject VS Code chat UI preferences
  * (e.g. expanded by default) without duplicating render logic.
  *
  * Call registerVscodeToolOverrides() once at app startup, after the
@@ -12,7 +12,7 @@ import { Dynamic } from "solid-js/web"
 import { BasicTool } from "@kilocode/kilo-ui/basic-tool"
 import { ToolRegistry, type ToolProps } from "@kilocode/kilo-ui/message-part"
 
-/** Tools that should be open by default in the VS Code sidebar. */
+/** Tools that should be open by default in the VS Code chat UI. */
 const DEFAULT_OPEN_TOOLS = ["bash"]
 const registered = new Set<string>()
 

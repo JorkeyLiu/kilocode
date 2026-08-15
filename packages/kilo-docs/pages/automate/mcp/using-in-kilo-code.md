@@ -23,7 +23,7 @@ MCP server configurations are stored inside the main Kilo config file. There are
 
 You can edit MCP settings from the Kilo Code settings UI:
 
-1. Click the {% codicon name="gear" /%} icon in the sidebar toolbar to open Settings.
+1. Open a Kilo chat tab and click the {% codicon name="gear" /%} icon in the tab toolbar, or run **Kilo Code: Settings** from the Command Palette, to open Settings.
 2. Click the `Agent Behaviour` tab on the left side.
 3. Select the `MCP Servers` sub-tab.
 

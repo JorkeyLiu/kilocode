@@ -5,7 +5,7 @@ description: "Configure Kilo Code settings and preferences"
 
 # Settings
 
-The VS Code extension can be configured through the Settings window, opened by pressing the gear icon in Kilo Code. Changes apply across extension surfaces, including the sidebar and Agent Manager. The CLI can also use the same JSONC config files when you use it directly.
+The VS Code extension can be configured through the Settings window, opened by pressing the gear icon in a Kilo chat tab or running **Kilo Code: Settings** from the Command Palette. Changes apply across extension surfaces, including editor-tab chat and Agent Manager. The CLI can also use the same JSONC config files when you use it directly.
 
 ## Configuring with the Agent
 
@@ -38,7 +38,7 @@ Kilo reads JSONC config from a **global** location (`~/.config/kilo/kilo.jsonc`)
 
 The VS Code extension provides a **Settings webview UI** accessible from Kilo Code by clicking the gear icon ({% codicon name="gear" /%}). The UI is organized into tabs including Providers, Auto-Approve, Models, and more.
 
-This UI reads and writes to the same underlying JSONC config files used across extension surfaces. Changes apply to the sidebar, Agent Manager, and the CLI when used directly.
+This UI reads and writes to the same underlying JSONC config files used across extension surfaces. Changes apply to editor-tab chat, Agent Manager, and the CLI when used directly.
 
 ### Config File Locations
 

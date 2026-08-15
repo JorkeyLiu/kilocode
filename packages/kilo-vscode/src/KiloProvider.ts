@@ -278,8 +278,7 @@ export function unwrapSyncEvent(event: SSEPayload | RawSyncPayload): ProviderEve
   }
 }
 
-export class KiloProvider implements vscode.WebviewViewProvider, TelemetryPropertiesProvider {
-  public static readonly viewType = "kilo-code.SidebarProvider"
+export class KiloProvider implements TelemetryPropertiesProvider {
   private readonly instanceId = crypto.randomUUID()
 
   private webview: vscode.Webview | null = null
@@ -389,7 +388,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   private indexingConfigDisposable: vscode.Disposable | null = null
   private telemetryStateDisposable: vscode.Disposable | null = null
   private viewStateDisposable: vscode.Disposable | null = null
-  private visibilityDisposable: vscode.Disposable | null = null
   private autoApproveBridge: ReturnType<typeof createAutoApproveBridge> | null = null
   private readonly marketplaceRemove = createMarketplaceRemover()
 
@@ -681,42 +679,12 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     // Three triggers cover all timing scenarios:
     //   "webviewReady" + connected — webview loaded after SSE was already up
     //   "sse-connected"            — SSE connected after webview was ready
-    //   "initializeConnection"     — sidebar path where connect() resolves before
+    //   "initializeConnection"     — editor-tab path where connect() resolves before
     //                                onStateChange is subscribed, so sse-connected never fires
     if (this.connectionState === "connected") {
       void checkAndShowMigrationWizard(this.migrationCtx)
     }
     // legacy-migration end
-  }
-
-  public resolveWebviewView(
-    webviewView: vscode.WebviewView,
-    _context: vscode.WebviewViewResolveContext,
-    _token: vscode.CancellationToken,
-  ) {
-    this.isWebviewReady = false
-    this.webview = webviewView.webview
-
-    webviewView.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [this.extensionUri],
-    }
-
-    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview)
-    this.setupWebviewMessageHandler(webviewView.webview)
-
-    this.setSidebarVisible(webviewView.visible)
-    this.visibilityDisposable?.dispose()
-    this.visibilityDisposable = webviewView.onDidChangeVisibility(() => {
-      this.setSidebarVisible(webviewView.visible)
-      this.focusSession(webviewView.visible ? this.contextSessionID : undefined)
-    })
-    this.initializeConnection()
-  }
-
-  private setSidebarVisible(visible: boolean): void {
-    this.setStreamVisibility(visible)
-    vscode.commands.executeCommand("setContext", "kilo-code.new.sidebarVisible", visible)
   }
 
   /** Resolve a WebviewPanel for displaying Kilo in an editor tab. */
@@ -1517,7 +1485,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.connectionGeneration++
     this.postMessage({ type: "connectionState", state: "connecting" })
 
-    // Clean up any existing subscriptions (e.g., sidebar re-shown)
+    // Clean up any existing subscriptions (e.g., webview panel re-created)
     this.unsubscribeEvent?.()
     this.unsubscribeState?.()
     this.unsubscribeLanguageChange?.()
@@ -3848,7 +3816,7 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     // Org switch succeeded — refresh profile and providers independently (best-effort)
     try {
       const profileResult = await this.client!.kilo.profile()
-      // Broadcast to all webviews (sidebar, profile tab, agent manager, etc.)
+      // Broadcast to all webviews (editor tabs, profile tab, agent manager, etc.)
       this.connectionService.notifyProfileChanged(profileResult.data ?? null)
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to refresh profile after org switch:", error)
@@ -4418,10 +4386,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
   public async appendReviewComments(comments: unknown[], autoSend = false): Promise<void> {
     this.pendingReviewComments.push({ comments, autoSend })
 
-    if (!this.webview) {
-      await vscode.commands.executeCommand(`${KiloProvider.viewType}.focus`)
-    }
-
     this.flushPendingReviewComments()
   }
 
@@ -4707,7 +4671,6 @@ export class KiloProvider implements vscode.WebviewViewProvider, TelemetryProper
     this.reconcileSeq += 1
     this.connectionGeneration += 1
     this.viewStateDisposable?.dispose()
-    this.visibilityDisposable?.dispose()
     this.webviewMessageDisposable?.dispose()
     this.autocompleteConfigDisposable?.dispose()
     this.indexingConfigDisposable?.dispose()

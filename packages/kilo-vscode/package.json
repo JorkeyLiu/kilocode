@@ -68,25 +68,6 @@
         }
       }
     },
-    "viewsContainers": {
-      "activitybar": [
-        {
-          "id": "kilo-code-ActivityBar",
-          "title": "Kilo Code",
-          "icon": "assets/icons/kilo-light.png",
-          "darkIcon": "assets/icons/kilo-dark.png"
-        }
-      ]
-    },
-    "views": {
-      "kilo-code-ActivityBar": [
-        {
-          "type": "webview",
-          "id": "kilo-code.SidebarProvider",
-          "name": "Kilo Code"
-        }
-      ]
-    },
     "commands": [
       {
         "command": "kilo-code.new.plusButtonClicked",
@@ -128,41 +109,6 @@
         "command": "kilo-code.new.settingsButtonClicked",
         "title": "Settings",
         "category": "Kilo Code",
-        "icon": "$(settings-gear)"
-      },
-      {
-        "command": "kilo-code.new.sidebarTitle.plusButtonClicked",
-        "title": "New Task",
-        "icon": "$(add)"
-      },
-      {
-        "command": "kilo-code.new.sidebarTitle.agentManagerOpen",
-        "title": "Agent Manager",
-        "icon": "$(organization)"
-      },
-      {
-        "command": "kilo-code.new.sidebarTitle.kiloClawOpen",
-        "title": "KiloClaw",
-        "icon": "$(comment-discussion)"
-      },
-      {
-        "command": "kilo-code.new.sidebarTitle.marketplaceButtonClicked",
-        "title": "Marketplace",
-        "icon": "$(extensions)"
-      },
-      {
-        "command": "kilo-code.new.sidebarTitle.historyButtonClicked",
-        "title": "History",
-        "icon": "$(history)"
-      },
-      {
-        "command": "kilo-code.new.sidebarTitle.profileButtonClicked",
-        "title": "Profile",
-        "icon": "$(account)"
-      },
-      {
-        "command": "kilo-code.new.sidebarTitle.settingsButtonClicked",
-        "title": "Settings",
         "icon": "$(settings-gear)"
       },
       {
@@ -407,73 +353,6 @@
       }
     ],
     "menus": {
-      "commandPalette": [
-        {
-          "command": "kilo-code.new.sidebarTitle.plusButtonClicked",
-          "when": "false"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.historyButtonClicked",
-          "when": "false"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.agentManagerOpen",
-          "when": "false"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.kiloClawOpen",
-          "when": "false"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.marketplaceButtonClicked",
-          "when": "false"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.profileButtonClicked",
-          "when": "false"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.settingsButtonClicked",
-          "when": "false"
-        }
-      ],
-      "view/title": [
-        {
-          "command": "kilo-code.new.sidebarTitle.plusButtonClicked",
-          "group": "navigation@0",
-          "when": "view == kilo-code.SidebarProvider"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.historyButtonClicked",
-          "group": "navigation@1",
-          "when": "view == kilo-code.SidebarProvider"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.agentManagerOpen",
-          "group": "navigation@2",
-          "when": "view == kilo-code.SidebarProvider"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.kiloClawOpen",
-          "group": "navigation@3",
-          "when": "view == kilo-code.SidebarProvider"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.marketplaceButtonClicked",
-          "group": "navigation@4",
-          "when": "view == kilo-code.SidebarProvider"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.profileButtonClicked",
-          "group": "navigation@5",
-          "when": "view == kilo-code.SidebarProvider"
-        },
-        {
-          "command": "kilo-code.new.sidebarTitle.settingsButtonClicked",
-          "group": "navigation@6",
-          "when": "view == kilo-code.SidebarProvider"
-        }
-      ],
       "scm/title": [
         {
           "command": "kilo-code.new.generateCommitMessage",
@@ -705,13 +584,13 @@
         "command": "kilo-code.new.cycleAgentMode",
         "key": "ctrl+.",
         "mac": "cmd+.",
-        "when": "sideBarFocus && kilo-code.new.sidebarVisible || activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel' || activeWebviewPanelId == 'kilo-code.new.TabPanel'"
+        "when": "activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel' || activeWebviewPanelId == 'kilo-code.new.TabPanel'"
       },
       {
         "command": "kilo-code.new.cyclePreviousAgentMode",
         "key": "ctrl+shift+.",
         "mac": "cmd+shift+.",
-        "when": "sideBarFocus && kilo-code.new.sidebarVisible || activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel' || activeWebviewPanelId == 'kilo-code.new.TabPanel'"
+        "when": "activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel' || activeWebviewPanelId == 'kilo-code.new.TabPanel'"
       },
       {
         "command": "kilo-code.new.autocomplete.cancelSuggestions",
@@ -1094,6 +973,7 @@
     "test:e2e:real-completed": "KILO_E2E_SCENARIO=real-completed node script/e2e-probe-launch.mjs",
     "test:e2e:real-overflow": "KILO_E2E_SCENARIO=real-overflow node script/e2e-probe-launch.mjs",
     "test:e2e:real-restart": "KILO_E2E_SCENARIO=real-restart node script/e2e-probe-launch.mjs",
+    "test:e2e:sidebar-removal": "KILO_E2E_SCENARIO=sidebar-removal node script/e2e-probe-launch.mjs",
     "test:p0-bench": "node script/e2e-p0-bench-launch.mjs",
     "test:p0-bench:merge": "node script/p0-bench-merge-launch.mjs",
     "snapshot:build": "bun script/dev-snapshot.ts build",

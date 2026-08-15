@@ -74,7 +74,6 @@ export const dict = {
   "theme.scheme.light": "Light",
   "theme.scheme.dark": "Dark",
 
-  "command.sidebar.toggle": "Toggle sidebar",
   "command.project.open": "Open project",
   "command.provider.connect": "Connect provider",
   "command.server.switch": "Switch server",
@@ -763,17 +762,7 @@ export const dict = {
   "common.loadMore": "Load more",
   "common.key.esc": "ESC",
 
-  "sidebar.menu.toggle": "Toggle menu",
-  "sidebar.nav.projectsAndSessions": "Projects and sessions",
   "sidebar.settings": "Settings",
-  "sidebar.help": "Help",
-  "sidebar.workspaces.enable": "Enable workspaces",
-  "sidebar.workspaces.disable": "Disable workspaces",
-  "sidebar.gettingStarted.title": "Getting started",
-  "sidebar.gettingStarted.line1": "Kilo includes free models so you can start immediately.",
-  "sidebar.gettingStarted.line2": "Connect any provider to use models, inc. Claude, GPT, Gemini etc.",
-  "sidebar.project.recentSessions": "Recent sessions",
-  "sidebar.project.viewAllSessions": "View all sessions",
 
   "app.name.desktop": "Kilo Desktop",
 

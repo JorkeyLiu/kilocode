@@ -75,7 +75,6 @@ export const dict = {
   "theme.scheme.light": "Світла",
   "theme.scheme.dark": "Темна",
 
-  "command.sidebar.toggle": "Перемкнути бічну панель",
   "command.project.open": "Відкрити проєкт",
   "command.provider.connect": "Підключити провайдера",
   "command.server.switch": "Переключити сервер",
@@ -769,17 +768,7 @@ export const dict = {
   "common.loadMore": "Завантажити більше",
   "common.key.esc": "ESC",
 
-  "sidebar.menu.toggle": "Перемкнути меню",
-  "sidebar.nav.projectsAndSessions": "Проєкти і сесії",
   "sidebar.settings": "Налаштування",
-  "sidebar.help": "Допомога",
-  "sidebar.workspaces.enable": "Увімкнути робочі дерева",
-  "sidebar.workspaces.disable": "Вимкнути робочі дерева",
-  "sidebar.gettingStarted.title": "Початок роботи",
-  "sidebar.gettingStarted.line1": "Kilo включає безкоштовні моделі, тому ви можете почати відразу.",
-  "sidebar.gettingStarted.line2": "Підключіть будь-якого провайдера для використання моделей Claude, GPT, Gemini тощо.",
-  "sidebar.project.recentSessions": "Останні сесії",
-  "sidebar.project.viewAllSessions": "Переглянути всі сесії",
 
   "app.name.desktop": "Kilo Desktop",
 

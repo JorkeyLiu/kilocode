@@ -448,10 +448,10 @@ export const MessageList: Component<MessageListProps> = (props) => {
     // no live child session to display instead (result() there resolves to
     // undefined once a child session exists) — mirror that exactly so a
     // completed task with no child session stays searchable. The fallback is
-    // indexed for the sidebar only (`inAgentManager` skips it): the sidebar
-    // registers TaskToolExpanded, and the Agent Manager now registers the
-    // same renderer explicitly at its own entry boundary (AgentManagerApp.tsx)
-    // but indexes no result text.
+    // indexed only in the non-Agent-Manager webview (`inAgentManager` skips
+    // it): the editor-tab App.tsx registers TaskToolExpanded, and the Agent
+    // Manager registers the same renderer explicitly at its own entry
+    // boundary (AgentManagerApp.tsx) but indexes no result text.
     if (state.status === "completed" && !inAgentManager) {
       const child = childID({
         type: "tool",

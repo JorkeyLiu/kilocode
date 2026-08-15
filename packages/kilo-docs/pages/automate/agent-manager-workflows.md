@@ -1,22 +1,22 @@
 ---
 title: "Agent Manager Workflows"
-description: "Scaling from the sidebar to multiple agents in parallel worktrees"
+description: "Scaling from a single chat session to multiple agents in parallel worktrees"
 ---
 
 # Agent Manager Workflows
 
-If you already use the sidebar chat and want to start running multiple agents in parallel, this page is the fastest path to productive. For the full reference of buttons and settings, see the [Agent Manager reference](/docs/automate/agent-manager).
+If you already use Kilo Code's single-session chat (an "Open in Tab" editor panel) and want to start running multiple agents in parallel, this page is the fastest path to productive. For the full reference of buttons and settings, see the [Agent Manager reference](/docs/automate/agent-manager).
 
-## Sidebar vs. Agent Manager
+## Single Chat vs. Agent Manager
 
-- **Sidebar** — one agent on your current branch. Best for small, interactive tasks where you want tight feedback.
+- **Chat (editor tab)** — one agent on your current branch. Best for small, interactive tasks where you want tight feedback.
 - **Agent Manager** — multiple agents, each in its own git worktree (its own branch checked out on disk). Best for long-running work, trying several approaches, or keeping side work isolated from your main branch.
 - **Multiple sessions inside one worktree** (`Cmd+T` / `Ctrl+T`) — same branch, separate conversations. Useful for planner + implementer splits or read-only investigations alongside the main agent.
 
 Rule of thumb: if you would stash or switch branches to do the work, create a worktree instead.
 
 {% callout type="info" %}
-All Agent Manager sessions use the extension's embedded runtime. What each worktree isolates is the filesystem and git state: the branch, the directory, and the terminal. Providers, BYOK keys, custom providers, models, and extension settings are shared with the sidebar.
+All Agent Manager sessions use the extension's embedded runtime. What each worktree isolates is the filesystem and git state: the branch, the directory, and the terminal. Providers, BYOK keys, custom providers, models, and extension settings are shared with the editor-tab chat.
 {% /callout %}
 
 {% callout type="warning" %}
@@ -54,7 +54,7 @@ Something unrelated came up while you are mid-task. Create a new worktree for it
 
 For multi-part features where several pieces share a few core contracts — types, API boundaries, folder layout:
 
-1. Build the walking skeleton in one worktree or the sidebar. Update AGENTS.md with the conventions.
+1. Build the walking skeleton in one worktree or a plain chat session. Update AGENTS.md with the conventions.
 2. Merge it, then create one worktree per feature slice — each branched off the skeleton.
 3. Merge slices in dependency order as each goes green.
 
@@ -68,17 +68,11 @@ For genuinely hard tasks where you do not know which approach will work:
 2. Optionally assign a different model to each.
 3. Review the diffs side by side, pick the winner, apply it, discard the rest.
 
-### 4. Continue in Worktree
-
-A sidebar task grew bigger than planned. From the sidebar chat, choose **Continue in Worktree** — the session history and any uncommitted changes move into a new worktree, and the sidebar is free again.
-
-A related pattern: use the sidebar as an investigation surface. Start two or three investigation chats in the sidebar, then promote only the ones worth pursuing into worktrees.
-
-### 5. A worktree per bug
+### 4. A worktree per bug
 
 For a day of small fixes: one worktree per bug (`Cmd+N`), one branch per fix, merge each quickly so none drift. Close the worktree when the fix lands.
 
-### 6. Multiple sessions on one branch
+### 5. Multiple sessions on one branch
 
 Press `Cmd+T` / `Ctrl+T` inside an existing worktree to open another session on the same branch. Useful for:
 
@@ -224,10 +218,9 @@ Merge the most foundational one first. Then, in each remaining worktree, ask the
 
 | Situation | Where |
 |---|---|
-| Small, interactive task | Sidebar |
+| Small, interactive task | Chat (editor tab) |
 | Long task, want to do something else meanwhile | New worktree (`Cmd+N`) |
 | Two or three approaches, pick the winner | Multi-version (`Cmd+Shift+N`) |
-| Sidebar task outgrew the sidebar | Continue in Worktree |
 | Separate conversation on the same branch | New tab (`Cmd+T`) |
 | Long conversation, want a fresh context on same branch | New tab, summarize |
 | Run the app to verify | Run script (`Cmd+E`) |

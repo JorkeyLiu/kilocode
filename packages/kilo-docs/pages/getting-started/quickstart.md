@@ -14,7 +14,7 @@ After you [set up Kilo Code](/docs/getting-started/setup-authentication), follow
 
 ### Step 1: Open Kilo Code
 
-Click the Kilo Code icon in the VS Code Primary Side Bar to open the chat panel. If you don't see the icon, verify the [extension is installed](/docs/getting-started/installing).
+Press `Cmd+Shift+M` (macOS) / `Ctrl+Shift+M` (Windows/Linux), or run **Kilo Code: Agent Manager** from the Command Palette, to open the Agent Manager chat panel. If you don't see the extension, verify the [extension is installed](/docs/getting-started/installing).
 
 ### Step 2: Type Your Task
 

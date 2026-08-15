@@ -74,7 +74,6 @@ export const dict = {
   "theme.scheme.light": "فاتح",
   "theme.scheme.dark": "داكن",
 
-  "command.sidebar.toggle": "تبديل الشريط الجانبي",
   "command.project.open": "فتح مشروع",
   "command.provider.connect": "اتصال بموفر",
   "command.server.switch": "تبديل الخادم",
@@ -753,17 +752,7 @@ export const dict = {
   "common.loadMore": "تحميل المزيد",
   "common.key.esc": "ESC",
 
-  "sidebar.menu.toggle": "تبديل القائمة",
-  "sidebar.nav.projectsAndSessions": "المشاريع والجلسات",
   "sidebar.settings": "الإعدادات",
-  "sidebar.help": "مساعدة",
-  "sidebar.workspaces.enable": "تمكين مساحات العمل",
-  "sidebar.workspaces.disable": "تعطيل مساحات العمل",
-  "sidebar.gettingStarted.title": "البدء",
-  "sidebar.gettingStarted.line1": "يتضمن Kilo نماذج مجانية حتى تتمكن من البدء فورًا.",
-  "sidebar.gettingStarted.line2": "قم بتوصيل أي موفر لاستخدام النماذج، بما في ذلك Claude و GPT و Gemini وما إلى ذلك.",
-  "sidebar.project.recentSessions": "الجلسات الحديثة",
-  "sidebar.project.viewAllSessions": "عرض جميع الجلسات",
 
   "app.name.desktop": "Kilo Desktop",
   "settings.section.desktop": "سطح المكتب",

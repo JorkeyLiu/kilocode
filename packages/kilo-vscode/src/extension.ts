@@ -18,13 +18,20 @@ import { AttentionService } from "./services/attention"
 import { BrowserAutomationService } from "./services/browser-automation"
 import { TelemetryEventName, TelemetryProxy } from "./services/telemetry"
 import { registerCommitMessageService } from "./services/commit-message"
-import { registerCodeActions, registerTerminalActions, KiloCodeActionProvider } from "./services/code-actions"
+import {
+  registerCodeActions,
+  registerTerminalActions,
+  KiloCodeActionProvider,
+  type ChatTarget,
+} from "./services/code-actions"
+import { resolveChatTarget as resolveChatTargetImpl, waitForChatReady } from "./services/code-actions/chat-target"
 import { registerToggleAutoApprove } from "./commands/toggle-auto-approve"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
 import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
+import { resolveReloadDirectory } from "./reload-directory"
 
 let agentManager: AgentManagerProvider | undefined
 let shuttingDown = false
@@ -34,6 +41,14 @@ const RESTORE_KEY = "kilo.workbench.restore"
 type RestoreState = {
   agentManager?: boolean
 }
+
+// Track all open tab panel providers so toolbar button commands can target
+// them. Module scope so the env-gated E2E fixture bridge can snapshot tab
+// panel readiness. The editor/title toolbar for tab panels intentionally
+// omits Agent Manager and Marketplace buttons; too many icons causes VS Code
+// to collapse them into a "..." overflow menu, hiding important buttons like
+// Settings.
+const tabPanels = new Map<vscode.WebviewPanel, KiloProvider>()
 
 const panelTitleHandler = (panel: vscode.WebviewPanel) => (title: string) => {
   panel.title = title || EXTENSION_DISPLAY_NAME
@@ -121,7 +136,7 @@ async function provisionVariantModelFixture(
 
 // Activated via "onStartupFinished" and "onUri" (package.json) so that commands, code actions,
 // keybindings, autocomplete, commit-message generation, and URI deep links all work immediately —
-// without requiring the user to open a Kilo sidebar or panel first. The CLI backend is NOT spawned here;
+// without requiring the user to open a Kilo chat surface first. The CLI backend is NOT spawned here;
 // it starts lazily when a webview connects or when ensureBackendForAutocomplete() triggers it.
 export function activate(context: vscode.ExtensionContext) {
   console.log("Kilo Code extension is now active")
@@ -193,11 +208,6 @@ export function activate(context: vscode.ExtensionContext) {
     void markWorkspace(folder.uri.fsPath, (msg) => console.warn(`[Kilo New] ${msg}`))
   }
 
-  // Track all open tab panel providers so toolbar button commands can target them.
-  // NOTE: The editor/title toolbar for tab panels intentionally omits Agent Manager
-  // and Marketplace buttons (unlike the sidebar). Too many icons causes VS Code to
-  // collapse them into a "..." overflow menu, hiding important buttons like Settings.
-  const tabPanels = new Map<vscode.WebviewPanel, KiloProvider>()
   const activeTabProvider = () => {
     for (const [panel, p] of tabPanels) {
       if (panel.active) return p
@@ -205,17 +215,49 @@ export function activate(context: vscode.ExtensionContext) {
     return undefined
   }
 
-  // Create the provider with shared service
-  const provider = new KiloProvider(context.extensionUri, connectionService, context)
-  provider.setRemoteService(remoteService)
+  /**
+   * P3.1 chat target resolution shared by code/terminal actions and chat
+   * commands: the active Agent Manager panel is preferred, then the active
+   * editor-tab KiloProvider, then the Agent Manager opened on demand when
+   * nothing is focused. Returns undefined only when the chosen webview never
+   * reached readiness — callers skip posting instead of dropping messages
+   * into an unprepared panel. The removed sidebar provider is intentionally
+   * not recreated. The decision rules live in the vscode-free chat-target
+   * helper so they are executable-tested.
+   */
+  const resolveChatTarget = (): Promise<ChatTarget | undefined> =>
+    resolveChatTargetImpl(agentManagerProvider, activeTabProvider)
 
-  // Register the webview view provider for the sidebar.
-  // retainContextWhenHidden keeps the webview alive when switching to other sidebar panels.
-  context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(KiloProvider.viewType, provider, {
-      webviewOptions: { retainContextWhenHidden: true },
-    }),
-  )
+  /**
+   * Cold-open fallback for editor/title toolbar commands: open the Agent
+   * Manager panel and deliver `msg` only after its webview reports readiness.
+   * Posting before readiness drops the message into an unprepared webview
+   * (P3.1 readiness race fix).
+   */
+  const postToAgentManager = async (msg: unknown): Promise<void> => {
+    await agentManagerProvider.openPanel()
+    const ok = await agentManagerProvider.waitForReady()
+    if (!ok) return
+    agentManagerProvider.postMessage(msg)
+  }
+
+  /**
+   * Resolve an editor-tab chat surface for deep links (cloud session / linked
+   * model selection): the active tab, or a freshly opened "Open in Tab" panel.
+   * The Agent Manager webview does not handle openCloudSession/selectKiloModel.
+   */
+  const ensureChatTab = async (): Promise<KiloProvider> => {
+    const tab = activeTabProvider()
+    if (tab) return tab
+    return openKiloInNewTab(
+      context,
+      connectionService,
+      agentManagerProvider,
+      diffVirtualProvider,
+      remoteService,
+      autoApprove,
+    )
+  }
 
   // Ensure Agent Manager navigation keybindings work when a VS Code terminal has focus.
   // The terminal intercepts all keystrokes unless the command is listed in
@@ -242,15 +284,18 @@ export function activate(context: vscode.ExtensionContext) {
     connectionService,
     (sessionId) => {
       if (sessionId) {
-        const dir =
-          provider.getSessionDirectories().get(sessionId) ?? agentManagerProvider.getSessionDirectories().get(sessionId)
+        for (const [, p] of tabPanels) {
+          const dir = p.getSessionDirectories().get(sessionId)
+          if (dir) return dir
+        }
+        const dir = agentManagerProvider.getSessionDirectories().get(sessionId)
         if (dir) return dir
       }
       return defaultDir()
     },
     () => {
       const dirs = new Set([defaultDir()])
-      for (const dir of provider.getSessionDirectories().values()) dirs.add(dir)
+      for (const [, p] of tabPanels) for (const dir of p.getSessionDirectories().values()) dirs.add(dir)
       for (const dir of agentManagerProvider.getSessionDirectories().values()) dirs.add(dir)
       return [...dirs]
     },
@@ -262,7 +307,6 @@ export function activate(context: vscode.ExtensionContext) {
   // Prewarm only after all global event consumers are ready.
   ensureBackendForAutocomplete(connectionService)
 
-  provider.setAutoApproveController(autoApprove)
   agentManagerHost.setAutoApproveController(autoApprove)
 
   // Register serializer so Agent Manager restores when VS Code restarts
@@ -322,16 +366,25 @@ export function activate(context: vscode.ExtensionContext) {
   const diffSourceCatalog = new DiffSourceCatalog(connectionService)
   context.subscriptions.push(diffSourceCatalog)
   const diffViewerProvider = new DiffViewerProvider(context.extensionUri, connectionService, diffSourceCatalog, {
-    sessionIdProvider: () => provider.getCurrentSessionId(),
+    // P3.1: the sidebar provider no longer owns the focused session. Resolve the
+    // session from the active editor tab, falling back to the Agent Manager's
+    // active session; the Diff Viewer itself stays a P3.2-preserved surface.
+    sessionIdProvider: () => activeTabProvider()?.getCurrentSessionId() ?? agentManagerProvider.getActiveSessionId(),
   })
   diffViewerProvider.setCommentHandler((comments, autoSend) => {
-    void provider.appendReviewComments(comments, autoSend)
+    // P3.1: route review comments through the readiness-aware resolver. The
+    // Agent Manager embeds the same ChatView/PromptInput as the editor tabs,
+    // so the message is identical either way — but posting into a closed or
+    // not-yet-ready Agent Manager panel used to drop the comments silently.
+    void resolveChatTarget().then((target) => {
+      if (!target) return
+      target.postMessage({ type: "appendReviewComments", comments, autoSend })
+    })
   })
   context.subscriptions.push(diffViewerProvider)
 
   // Create diff virtual provider (lightweight single-file diff for permission approval)
   const diffVirtualProvider = new DiffVirtualProvider(context.extensionUri)
-  provider.setDiffVirtualProvider(diffVirtualProvider)
   agentManagerHost.setDiffVirtualProvider(diffVirtualProvider)
   context.subscriptions.push(diffVirtualProvider)
 
@@ -379,43 +432,18 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   )
 
-  // Sidebar menus use wrapper commands so this event measures real title button presses,
-  // not programmatic opens, shortcuts, or editor title commands.
-  const track = (button: string, command: string) => {
-    TelemetryProxy.capture(TelemetryEventName.TITLE_BUTTON_CLICKED, {
-      button,
-      surface: "sidebar_title",
-    })
-    void vscode.commands.executeCommand(command)
-  }
-
-  // Register toolbar button command handlers
+  // Register toolbar button command handlers. P3.1: the sidebar is gone, so
+  // commands that previously fell back to the sidebar chat surface now target
+  // the active editor-tab KiloProvider, or open/focus the Agent Manager panel
+  // when no tab exists. No surrogate hidden sidebar provider is created.
   context.subscriptions.push(
-    vscode.commands.registerCommand("kilo-code.new.sidebarTitle.plusButtonClicked", () => {
-      track("new_task", "kilo-code.new.plusButtonClicked")
-    }),
-    vscode.commands.registerCommand("kilo-code.new.sidebarTitle.historyButtonClicked", () => {
-      track("history", "kilo-code.new.historyButtonClicked")
-    }),
-    vscode.commands.registerCommand("kilo-code.new.sidebarTitle.agentManagerOpen", () => {
-      track("agent_manager", "kilo-code.new.agentManagerOpen")
-    }),
-    vscode.commands.registerCommand("kilo-code.new.sidebarTitle.kiloClawOpen", () => {
-      track("kiloclaw", "kilo-code.new.kiloClawOpen")
-    }),
-    vscode.commands.registerCommand("kilo-code.new.sidebarTitle.marketplaceButtonClicked", () => {
-      track("marketplace", "kilo-code.new.marketplaceButtonClicked")
-    }),
-    vscode.commands.registerCommand("kilo-code.new.sidebarTitle.profileButtonClicked", () => {
-      track("profile", "kilo-code.new.profileButtonClicked")
-    }),
-    vscode.commands.registerCommand("kilo-code.new.sidebarTitle.settingsButtonClicked", () => {
-      track("settings", "kilo-code.new.settingsButtonClicked")
-    }),
-    vscode.commands.registerCommand("kilo-code.new.plusButtonClicked", () => {
+    vscode.commands.registerCommand("kilo-code.new.plusButtonClicked", async () => {
       const tab = activeTabProvider()
-      if (tab) tab.postMessage({ type: "action", action: "plusButtonClicked" })
-      else provider.postMessage({ type: "action", action: "plusButtonClicked" })
+      if (tab) {
+        tab.postMessage({ type: "action", action: "plusButtonClicked" })
+      } else {
+        await postToAgentManager({ type: "action", action: "newTab" })
+      }
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManagerOpen", () => {
       agentManagerProvider.openPanel()
@@ -426,22 +454,29 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("kilo-code.new.kiloClawOpen", () => {
       kiloClawProvider.openPanel()
     }),
-    vscode.commands.registerCommand("kilo-code.new.historyButtonClicked", () => {
+    vscode.commands.registerCommand("kilo-code.new.historyButtonClicked", async () => {
       const tab = activeTabProvider()
-      if (tab) tab.postMessage({ type: "action", action: "historyButtonClicked" })
-      else provider.postMessage({ type: "action", action: "historyButtonClicked" })
+      if (tab) {
+        tab.postMessage({ type: "action", action: "historyButtonClicked" })
+      } else {
+        await postToAgentManager({ type: "navigate", view: "history" })
+      }
     }),
-    vscode.commands.registerCommand("kilo-code.new.cycleAgentMode", () => {
+    vscode.commands.registerCommand("kilo-code.new.cycleAgentMode", async () => {
       const tab = activeTabProvider()
-      if (tab) tab.postMessage({ type: "action", action: "cycleAgentMode" })
-      else provider.postMessage({ type: "action", action: "cycleAgentMode" })
-      agentManagerProvider.postMessage({ type: "action", action: "cycleAgentMode" })
+      if (tab) {
+        tab.postMessage({ type: "action", action: "cycleAgentMode" })
+      } else {
+        await postToAgentManager({ type: "action", action: "cycleAgentMode" })
+      }
     }),
-    vscode.commands.registerCommand("kilo-code.new.cyclePreviousAgentMode", () => {
+    vscode.commands.registerCommand("kilo-code.new.cyclePreviousAgentMode", async () => {
       const tab = activeTabProvider()
-      if (tab) tab.postMessage({ type: "action", action: "cyclePreviousAgentMode" })
-      else provider.postMessage({ type: "action", action: "cyclePreviousAgentMode" })
-      agentManagerProvider.postMessage({ type: "action", action: "cyclePreviousAgentMode" })
+      if (tab) {
+        tab.postMessage({ type: "action", action: "cyclePreviousAgentMode" })
+      } else {
+        await postToAgentManager({ type: "action", action: "cyclePreviousAgentMode" })
+      }
     }),
     vscode.commands.registerCommand("kilo-code.new.profileButtonClicked", () => {
       settingsEditorProvider.openPanel("profile")
@@ -457,24 +492,49 @@ export function activate(context: vscode.ExtensionContext) {
         await agentManagerProvider.showMemory()
         return
       }
-      const target = activeTabProvider() ?? provider
-      if (target === provider) await vscode.commands.executeCommand("kilo-code.SidebarProvider.focus")
-      await target.waitForReady()
-      await target.showMemory()
+      const tab = activeTabProvider()
+      if (tab) {
+        await tab.waitForReady()
+        await tab.showMemory()
+        return
+      }
+      await agentManagerProvider.openPanel()
+      await agentManagerProvider.waitForReady()
+      await agentManagerProvider.showMemory()
     }),
     vscode.commands.registerCommand("kilo-code.new.toggleMemory", async () => {
       if (agentManagerProvider.isActive()) {
         await agentManagerProvider.toggleMemory()
         return
       }
-      const target = activeTabProvider() ?? provider
-      if (target === provider) await vscode.commands.executeCommand("kilo-code.SidebarProvider.focus")
-      await target.waitForReady()
-      await target.toggleMemory()
+      const tab = activeTabProvider()
+      if (tab) {
+        await tab.waitForReady()
+        await tab.toggleMemory()
+        return
+      }
+      await agentManagerProvider.openPanel()
+      await agentManagerProvider.waitForReady()
+      await agentManagerProvider.toggleMemory()
     }),
     // legacy-migration start
-    vscode.commands.registerCommand("kilo-code.new.openMigrationWizard", () => {
-      provider.postMessage({ type: "migrationState", needed: true, source: "legacy" })
+    vscode.commands.registerCommand("kilo-code.new.openMigrationWizard", async () => {
+      const tab = activeTabProvider()
+      if (tab) {
+        await tab.waitForReady()
+        tab.postMessage({ type: "migrationState", needed: true, source: "legacy" })
+        return
+      }
+      const tabProvider = await openKiloInNewTab(
+        context,
+        connectionService,
+        agentManagerProvider,
+        diffVirtualProvider,
+        remoteService,
+        autoApprove,
+      )
+      await tabProvider.waitForReady()
+      tabProvider.postMessage({ type: "migrationState", needed: true, source: "legacy" })
     }),
     // legacy-migration end
     vscode.commands.registerCommand("kilo-code.new.generateTerminalCommand", async () => {
@@ -483,9 +543,9 @@ export function activate(context: vscode.ExtensionContext) {
         placeHolder: "e.g., find all .ts files modified in the last 24 hours",
       })
       if (!input) return
-      await vscode.commands.executeCommand("kilo-code.SidebarProvider.focus")
-      await provider.waitForReady()
-      provider.postMessage({ type: "triggerTask", text: `Generate a terminal command: ${input}` })
+      const target = await resolveChatTarget()
+      if (!target) return
+      target.postMessage({ type: "triggerTask", text: `Generate a terminal command: ${input}` })
     }),
     vscode.commands.registerCommand("kilo-code.new.toggleRemote", () => {
       remoteService.toggle().catch((err) => console.error("[Kilo New] toggleRemote command failed:", err))
@@ -495,7 +555,6 @@ export function activate(context: vscode.ExtensionContext) {
         context,
         connectionService,
         agentManagerProvider,
-        tabPanels,
         diffVirtualProvider,
         remoteService,
         autoApprove,
@@ -548,6 +607,8 @@ export function activate(context: vscode.ExtensionContext) {
   )
 
   // Register URI handler for extension deep links (vscode://kilocode.kilo-code/kilocode/...)
+  // P3.1: deep links target an editor-tab chat (opening one via Open in Tab when
+  // none exists) — the sidebar surface that previously owned these is gone.
   context.subscriptions.push(
     vscode.window.registerUriHandler({
       async handleUri(uri: vscode.Uri) {
@@ -555,8 +616,20 @@ export function activate(context: vscode.ExtensionContext) {
         const sessionId = sessionMatch?.[1]
         if (sessionId) {
           console.log("[Kilo New] URI handler: opening cloud session:", sessionId)
-          await vscode.commands.executeCommand(`${KiloProvider.viewType}.focus`)
-          provider.openCloudSession(sessionId)
+          const tab = await ensureChatTab()
+          // Deliver only after the (possibly freshly opened) tab's webview
+          // reports readiness; an earlier post lands before the webview
+          // registers its message listener and is lost. On readiness failure,
+          // surface it instead of silently proceeding into a dropped message.
+          const ready = await waitForChatReady(tab.waitForReady(), 15_000)
+          if (!ready) {
+            console.warn("[Kilo New] URI handler: chat tab never became ready; cloud session deep link not delivered")
+            void vscode.window.showWarningMessage(
+              "Kilo could not open the shared session because the chat tab did not become ready.",
+            )
+            return
+          }
+          tab.openCloudSession(sessionId)
           return
         }
 
@@ -566,8 +639,8 @@ export function activate(context: vscode.ExtensionContext) {
         const agent = params.get("agent") || undefined
         if (!modelID && !agent) return
         console.log("[Kilo New] URI handler: applying linked Kilo selection:", { modelID, agent })
-        await vscode.commands.executeCommand(`${KiloProvider.viewType}.focus`)
-        provider.selectKiloModel(modelID, agent)
+        const tab = await ensureChatTab()
+        tab.selectKiloModel(modelID, agent)
       },
     }),
   )
@@ -581,14 +654,47 @@ export function activate(context: vscode.ExtensionContext) {
   registerHeapSnapshot(context, connectionService)
 
   context.subscriptions.push(
-    vscode.commands.registerCommand("kilo-code.new.reload", () => {
-      provider.reload().catch((e) => console.error("[Kilo New] reload command failed:", e))
+    vscode.commands.registerCommand("kilo-code.new.reload", async () => {
+      // P3.1: reload is a backend instance reload, so it runs directly on the
+      // shared connection instead of a (removed) sidebar webview. Target the
+      // active surface's session directory — the active editor tab, else the
+      // Agent Manager's active session — so worktree-scoped backend state
+      // reloads where the user is working; fall back to the first workspace
+      // root/cwd (matching the removed sidebar provider's reload semantics).
+      try {
+        const client = await connectionService.getClientAsync()
+        const tab = activeTabProvider()
+        const dir = resolveReloadDirectory({
+          tab: tab
+            ? { sessionID: tab.getCurrentSessionId(), sessionDirectories: tab.getSessionDirectories() }
+            : undefined,
+          agentManager: {
+            sessionID: agentManagerProvider.getActiveSessionId(),
+            sessionDirectories: agentManagerProvider.getSessionDirectories(),
+          },
+          fallback: vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd(),
+        })
+        await client.instance.reload({ directory: dir }, { throwOnError: true })
+      } catch (err) {
+        const status =
+          err && typeof err === "object" && "response" in err
+            ? (err as { response?: { status?: number } }).response?.status
+            : undefined
+        if (status === 409) {
+          vscode.window.showWarningMessage(
+            "Cannot reload while a session is running. Wait for it to finish or abort it first.",
+          )
+        } else {
+          console.error("[Kilo New] reload command failed:", err)
+          vscode.window.showErrorMessage("Reload failed. See extension logs for details.")
+        }
+      }
     }),
   )
 
   // Register code actions (editor context menus, terminal context menus, keyboard shortcuts)
-  registerCodeActions(context, provider, agentManagerProvider, activeTabProvider)
-  registerTerminalActions(context, provider, agentManagerProvider)
+  registerCodeActions(context, resolveChatTarget)
+  registerTerminalActions(context, resolveChatTarget)
 
   // Register CodeActionProvider (lightbulb quick fixes)
   context.subscriptions.push(
@@ -670,6 +776,21 @@ export function activate(context: vscode.ExtensionContext) {
           return true
         },
       ),
+      // P3.1 sidebar-removal scenario: open a fresh "Open in Tab" editor panel
+      // through the production openInTab path and report whether its webview
+      // reached readiness. Proves the session editor survives without the
+      // removed sidebar provider.
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.openInTabReady", async () => {
+        await vscode.commands.executeCommand("kilo-code.new.openInTab")
+        const newest = [...tabPanels.entries()].at(-1)
+        if (!newest) return { count: 0, ready: false }
+        const [, tabProvider] = newest
+        const ready = await Promise.race([
+          tabProvider.waitForReady().then(() => true),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 30_000)),
+        ])
+        return { count: tabPanels.size, ready }
+      }),
     )
   }
 
@@ -680,7 +801,6 @@ export function activate(context: vscode.ExtensionContext) {
       unsubscribeStateChange()
       attention.dispose()
       browserAutomationService.dispose()
-      provider.dispose()
       notebookBridge.dispose()
       connectionService.dispose()
     },
@@ -701,11 +821,10 @@ async function openKiloInNewTab(
   context: vscode.ExtensionContext,
   connectionService: KiloConnectionService,
   agentManagerProvider: AgentManagerProvider,
-  tabPanels: Map<vscode.WebviewPanel, KiloProvider>,
   diffVirtualProvider: DiffVirtualProvider,
   remoteService: RemoteStatusService,
   autoApprove: ReturnType<typeof registerToggleAutoApprove>,
-) {
+): Promise<KiloProvider> {
   const lastCol = Math.max(...vscode.window.visibleTextEditors.map((e) => e.viewColumn || 0), 0)
   const hasVisibleEditors = vscode.window.visibleTextEditors.length > 0
 
@@ -749,6 +868,7 @@ async function openKiloInNewTab(
     null,
     context.subscriptions,
   )
+  return tabProvider
 }
 
 /**

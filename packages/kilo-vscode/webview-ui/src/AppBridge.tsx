@@ -1,15 +1,15 @@
 /**
- * Side-effect-free bridge components shared by the sidebar and Agent Manager
- * webviews.
+ * Side-effect-free bridge components shared by the editor-tab chat and Agent
+ * Manager webviews.
  *
  * `DataBridge` and `MermaidDownloadBridge` previously lived in App.tsx. The
- * Agent Manager imported them from there, which pulled the whole sidebar App
+ * Agent Manager imported them from there, which pulled the whole editor-tab App
  * module into the Agent Manager bundle and ran App.tsx's module-scope tool
  * registrations (`registerExpandedTaskTool`, `registerVscodeToolOverrides`)
  * as an accidental side effect.
  *
  * This module contains no module-scope side effects. Each webview entry
- * explicitly registers the tool renderers it owns (sidebar: App.tsx;
+ * explicitly registers the tool renderers it owns (editor tabs: App.tsx;
  * Agent Manager: its own entry boundary).
  */
 

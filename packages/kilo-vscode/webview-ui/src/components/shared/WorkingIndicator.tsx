@@ -28,7 +28,7 @@ export const WorkingIndicator: Component = () => {
   const [retryCountdown, setRetryCountdown] = createSignal(0)
 
   // Agent Manager cumulative snapshot for the current session (undefined in
-  // sidebar/editor webviews, which keep the legacy busySince behavior).
+  // editor-tab webviews, which keep the legacy busySince behavior).
   const snapshot = () => {
     const id = session.currentSessionID() ?? session.draftSessionID()
     return id ? session.timingFor(id) : undefined

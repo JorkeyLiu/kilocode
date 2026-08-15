@@ -14,18 +14,16 @@ The Agent Manager is a **full-panel editor tab** built directly into the extensi
 - Dedicated VS Code integrated terminals per session
 - Setup scripts and `.env` auto-copy on worktree creation
 - Session import from existing branches, external worktrees, or GitHub PR URLs
-- "Continue in Worktree" to promote a sidebar session to the Agent Manager
-- The same providers, BYOK keys, custom providers, and extension features supported in the sidebar
+- The same providers, BYOK keys, custom providers, and extension features supported in the editor-tab chat
 
 {% callout type="tip" %}
-New to running multiple agents in parallel? The [Agent Manager Workflows](/docs/automate/agent-manager-workflows) guide walks through when to use the sidebar vs. the Agent Manager, how to pick tasks that parallelize well, and the common patterns for testing, reviewing, and integrating changes across worktrees.
+New to running multiple agents in parallel? The [Agent Manager Workflows](/docs/automate/agent-manager-workflows) guide walks through when to use a single chat session vs. the Agent Manager, how to pick tasks that parallelize well, and the common patterns for testing, reviewing, and integrating changes across worktrees.
 {% /callout %}
 
 ## Opening the Agent Manager
 
 - Keyboard shortcut: `Cmd+Shift+M` (macOS) / `Ctrl+Shift+M` (Windows/Linux)
-- Command Palette: "Kilo Code: Open Agent Manager"
-- Click the Agent Manager icon in the sidebar toolbar
+- Command Palette: "Kilo Code: Agent Manager"
 
 The panel opens as an editor tab and stays active across focus changes.
 
@@ -37,7 +35,7 @@ The panel opens as an editor tab and stays active across focus changes.
 
 ## Providers and Authentication
 
-Agent Manager uses the same sign-in, provider settings, models, BYOK keys, custom providers, MCP servers, and permission rules as the extension sidebar. Configure them from extension Settings and they apply to Agent Manager as well.
+Agent Manager uses the same sign-in, provider settings, models, BYOK keys, custom providers, MCP servers, and permission rules as the editor-tab chat. Configure them from extension Settings and they apply to Agent Manager as well.
 
 See [Authentication](/docs/getting-started/setup-authentication), [AI Providers](/docs/ai-providers), and [Bring Your Own Key](/docs/getting-started/byok) for setup details.
 
@@ -125,7 +123,6 @@ You can run up to 4 parallel implementations of the same prompt across separate 
 - **From a branch:** Import an existing git branch as a worktree
 - **From a GitHub PR URL:** Paste a PR URL to import it as a worktree
 - **From an external worktree:** Import a worktree that already exists on disk
-- **Continue in Worktree:** From the sidebar chat, promote the current session to a new Agent Manager worktree
 
 Imported work stays associated with its branch or worktree and can be continued from Agent Manager.
 
@@ -161,7 +158,7 @@ The tool uses the `agent_manager` permission. Approval prompts are scoped to the
 
 ## Sections
 
-Sections let you group worktrees into collapsible, color-coded folders in the sidebar. Use them to organize your workflow however you like — by status ("Review Pending", "In Progress"), by project area ("Frontend", "Backend"), priority, or any other scheme that fits.
+Sections let you group worktrees into collapsible, color-coded folders in the Agent Manager's session sidebar. Use them to organize your workflow however you like — by status ("Review Pending", "In Progress"), by project area ("Frontend", "Backend"), priority, or any other scheme that fits.
 
 ### Creating a Section
 
@@ -186,7 +183,7 @@ Right-click the section header and select **Set Color** to open the color picker
 
 ### Reordering
 
-Right-click the section header and use **Move Up** / **Move Down** to reposition it in the sidebar. Sections and ungrouped worktrees share the same ordering space.
+Right-click the section header and use **Move Up** / **Move Down** to reposition it in the Agent Manager's session sidebar. Sections and ungrouped worktrees share the same ordering space.
 
 ### Collapsing
 
@@ -224,7 +221,7 @@ Each session has a dedicated integrated terminal rooted in the session's worktre
 A common workflow is letting the agent work, then switching to the terminal to run tests or inspect the worktree, then switching back to control the agent:
 
 1. **Agent Manager → Terminal:** Press `Cmd+/` (macOS) / `Ctrl+/` (Windows/Linux) to open and focus the terminal for the current session. The terminal runs inside the session's worktree, so commands like `npm test` or `git status` operate on the agent's isolated branch.
-2. **Terminal → Agent Manager:** Press `Cmd+Shift+M` (macOS) / `Ctrl+Shift+M` (Windows/Linux) to bring focus back to the Agent Manager panel and its prompt input. This works from anywhere in VS Code — the terminal, another editor tab, or the sidebar.
+2. **Terminal → Agent Manager:** Press `Cmd+Shift+M` (macOS) / `Ctrl+Shift+M` (Windows/Linux) to bring focus back to the Agent Manager panel and its prompt input. This works from anywhere in VS Code — the terminal or another editor tab.
 
 ## Setup Scripts
 
@@ -370,7 +367,7 @@ Closing a managed worktree removes it from Agent Manager, deletes its `.kilo/wor
 
 - **"Please open a folder…" error** — the Agent Manager requires a VS Code workspace folder
 - **Worktree creation fails** — ensure Git is installed and the workspace is a valid git repository. Open the main repository (where `.git` is a directory), not an existing worktree checkout.
-- **Provider or authentication errors** — open extension Settings and verify your sign-in, provider, model, or BYOK configuration. Agent Manager uses the same settings as the sidebar.
+- **Provider or authentication errors** — open extension Settings and verify your sign-in, provider, model, or BYOK configuration. Agent Manager uses the same settings as the rest of the extension.
 - **Session history missing cloud sessions** — sign in through the extension and confirm the repository remote matches the sessions you expect to see.
 - **PR badges or PR import missing** — install and authenticate the GitHub CLI (`gh`). This is only required for GitHub PR features.
 

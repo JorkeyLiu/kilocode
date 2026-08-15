@@ -76,7 +76,6 @@ export const dict = {
   "theme.scheme.light": "淺色",
   "theme.scheme.dark": "深色",
 
-  "command.sidebar.toggle": "切換側邊欄",
   "command.project.open": "開啟專案",
   "command.provider.connect": "連接供應商",
   "command.server.switch": "切換伺服器",
@@ -745,17 +744,7 @@ export const dict = {
   "common.loadMore": "載入更多",
 
   "common.key.esc": "ESC",
-  "sidebar.menu.toggle": "切換選單",
-  "sidebar.nav.projectsAndSessions": "專案與工作階段",
   "sidebar.settings": "設定",
-  "sidebar.help": "說明",
-  "sidebar.workspaces.enable": "啟用工作區",
-  "sidebar.workspaces.disable": "停用工作區",
-  "sidebar.gettingStarted.title": "開始使用",
-  "sidebar.gettingStarted.line1": "Kilo 提供免費模型，你可以立即開始使用。",
-  "sidebar.gettingStarted.line2": "連線任意供應商即可使用更多模型，如 Claude、GPT、Gemini 等。",
-  "sidebar.project.recentSessions": "最近工作階段",
-  "sidebar.project.viewAllSessions": "查看全部工作階段",
 
   "app.name.desktop": "Kilo Desktop",
   "settings.section.desktop": "桌面",

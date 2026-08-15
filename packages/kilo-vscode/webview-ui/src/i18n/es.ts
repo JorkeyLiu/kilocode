@@ -75,7 +75,6 @@ export const dict = {
   "theme.scheme.light": "Claro",
   "theme.scheme.dark": "Oscuro",
 
-  "command.sidebar.toggle": "Alternar barra lateral",
   "command.project.open": "Abrir proyecto",
   "command.provider.connect": "Conectar proveedor",
   "command.server.switch": "Cambiar servidor",
@@ -772,17 +771,7 @@ export const dict = {
   "common.loadMore": "Cargar más",
 
   "common.key.esc": "ESC",
-  "sidebar.menu.toggle": "Alternar menú",
-  "sidebar.nav.projectsAndSessions": "Proyectos y sesiones",
   "sidebar.settings": "Ajustes",
-  "sidebar.help": "Ayuda",
-  "sidebar.workspaces.enable": "Habilitar espacios de trabajo",
-  "sidebar.workspaces.disable": "Deshabilitar espacios de trabajo",
-  "sidebar.gettingStarted.title": "Empezando",
-  "sidebar.gettingStarted.line1": "Kilo incluye modelos gratuitos para que puedas empezar inmediatamente.",
-  "sidebar.gettingStarted.line2": "Conecta cualquier proveedor para usar modelos, inc. Claude, GPT, Gemini etc.",
-  "sidebar.project.recentSessions": "Sesiones recientes",
-  "sidebar.project.viewAllSessions": "Ver todas las sesiones",
 
   "app.name.desktop": "Kilo Desktop",
   "settings.section.desktop": "Escritorio",

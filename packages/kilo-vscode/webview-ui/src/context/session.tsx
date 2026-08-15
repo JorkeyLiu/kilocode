@@ -169,7 +169,7 @@ interface SessionContextValue {
   messageMutation: Accessor<MessageMutation | undefined>
 
   // Cumulative active-generation runtime snapshots pushed by the Agent Manager
-  // extension host. Empty in sidebar/editor webviews, which keep the legacy
+  // extension host. Empty in editor-tab webviews, which keep the legacy
   // busySince behavior.
   timingFor: (sessionID: string) => SessionTimingEntry | undefined
   setTimingSnapshots: (map: Record<string, SessionTimingEntry>) => void
@@ -2888,7 +2888,7 @@ export const SessionProvider: ParentComponent = (props) => {
     }
     const ready = loaded().has(id)
     // Reflect the selection locally and synchronously so the chat always tracks
-    // the sidebar/tab selection. These are local signals and need no backend, so
+    // the tab/Agent Manager selection. These are local signals and need no backend, so
     // they update even while disconnected. Bailing out here when not connected
     // froze the chat on the previous session while the side diff (resolved from
     // the worktree selection) still moved (the reported "only the diff changes").

@@ -756,6 +756,11 @@ export class AgentManagerProvider implements Disposable {
     return this.panel?.sessions.getSessionDirectories() ?? new Map()
   }
 
+  /** Expose the active session id so shared commands (e.g. Show Changes) can target the focused session. */
+  public getActiveSessionId(): string | undefined {
+    return this.activeSessionId
+  }
+
   public getWorktreeDirectories(): string[] {
     return []
   }

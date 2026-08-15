@@ -158,7 +158,7 @@ export interface ApplyResult {
  * Apply a user-initiated model selection.
  *
  * Session-scoped selections write only to the per-session override.
- * No-session selections write to the global modelSelections map so sidebar
+ * No-session selections write to the global modelSelections map so chat
  * default picks still mirror CLI TUI's model.json behavior.
  */
 export function applyModel(

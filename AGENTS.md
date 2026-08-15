@@ -113,11 +113,11 @@ All products are clients of the **CLI** (`packages/opencode/`), which contains t
 | Product | Package | Description |
 |---|---|---|
 | Kilo CLI | `packages/opencode/` | Core engine. TUI, `kilo run`, `kilo serve`. Originated from OpenCode; independently governed. |
-| Kilo VS Code Extension | `packages/kilo-vscode/` | VS Code extension. Bundles the CLI binary, spawns `kilo serve` as a child process. Includes the **Agent Manager** — a multi-session orchestration panel with git worktree isolation. |
+| Kilo VS Code Extension | `packages/kilo-vscode/` | VS Code extension with Agent Manager and editor-tab chat. Bundles the CLI binary, spawns `kilo serve` as a child process. Includes the **Agent Manager** — a multi-session orchestration panel with git worktree isolation. |
 
 **Agent Manager** refers to a feature inside `packages/kilo-vscode/` (extension code in `src/agent-manager/`, webview in `webview-ui/agent-manager/`). It is not a standalone product. See the extension's `AGENTS.md` for details.
 
-In each VS Code extension host, one `KiloConnectionService` is created for the sidebar, every Kilo editor tab, and Agent Manager; it lazily starts and reuses one current `kilo serve` backend at a time. Agent Manager worktree sessions pass a directory context to this shared backend rather than starting one per worktree. State captured by the active service layer, such as Snapshot `trackState`, is shared across those requests; only directory-keyed `InstanceState` data is isolated.
+In each VS Code extension host, one `KiloConnectionService` is created for every Kilo editor tab and the Agent Manager; it lazily starts and reuses one current `kilo serve` backend at a time. Agent Manager worktree sessions pass a directory context to this shared backend rather than starting one per worktree. State captured by the active service layer, such as Snapshot `trackState`, is shared across those requests; only directory-keyed `InstanceState` data is isolated.
 
 Extension-specific settings should live in the Kilo extension settings, not default VS Code settings, unless they are intentionally VS Code-wide. Experimental flags should follow existing flag patterns, not VS Code settings; they usually belong in the Kilo Experimental settings section.
 
@@ -133,7 +133,7 @@ Turborepo + Bun workspaces. The packages you'll work with most:
 |---|---|---|
 | `packages/opencode/` | `@kilocode/cli` | Core CLI -- agents, tools, sessions, server, TUI. This is where most work happens. |
 | `packages/sdk/js/` | `@kilocode/sdk` | Auto-generated TypeScript SDK (client for the server API). Do not edit `src/gen/` by hand. |
-| `packages/kilo-vscode/` | `kilo-code` | VS Code extension with sidebar chat + Agent Manager. See its own `AGENTS.md` for details. |
+| `packages/kilo-vscode/` | `kilo-code` | VS Code extension with Agent Manager and editor-tab chat. See its own `AGENTS.md` for details. |
 | `packages/kilo-gateway/` | `@kilocode/kilo-gateway` | Kilo auth, provider routing, API integration |
 | `packages/kilo-telemetry/` | `@kilocode/kilo-telemetry` | PostHog analytics + OpenTelemetry |
 | `packages/kilo-i18n/` | `@kilocode/kilo-i18n` | Internationalization / translations |

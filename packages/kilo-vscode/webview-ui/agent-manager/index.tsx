@@ -1,5 +1,5 @@
 // Agent Manager SolidJS entry point
-// Shares components and providers with the sidebar webview
+// Shares components and providers with the editor-tab chat webview
 // webviewReady is sent by ServerProvider inside the component tree
 
 import { render } from "solid-js/web"

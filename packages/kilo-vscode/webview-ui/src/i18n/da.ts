@@ -75,7 +75,6 @@ export const dict = {
   "theme.scheme.light": "Lys",
   "theme.scheme.dark": "Mørk",
 
-  "command.sidebar.toggle": "Skift sidebjælke",
   "command.project.open": "Åbn projekt",
   "command.provider.connect": "Tilslut udbyder",
   "command.server.switch": "Skift server",
@@ -764,17 +763,7 @@ export const dict = {
   "common.loadMore": "Indlæs flere",
 
   "common.key.esc": "ESC",
-  "sidebar.menu.toggle": "Skift menu",
-  "sidebar.nav.projectsAndSessions": "Projekter og sessioner",
   "sidebar.settings": "Indstillinger",
-  "sidebar.help": "Hjælp",
-  "sidebar.workspaces.enable": "Aktiver arbejdsområder",
-  "sidebar.workspaces.disable": "Deaktiver arbejdsområder",
-  "sidebar.gettingStarted.title": "Kom i gang",
-  "sidebar.gettingStarted.line1": "Kilo inkluderer gratis modeller så du kan starte med det samme.",
-  "sidebar.gettingStarted.line2": "Forbind enhver udbyder for at bruge modeller, inkl. Claude, GPT, Gemini osv.",
-  "sidebar.project.recentSessions": "Seneste sessioner",
-  "sidebar.project.viewAllSessions": "Vis alle sessioner",
 
   "app.name.desktop": "Kilo Desktop",
   "settings.section.desktop": "Desktop",

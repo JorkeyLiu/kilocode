@@ -21,7 +21,7 @@ Agents in Kilo Code are specialized personas that tailor the assistant's behavio
 
 There are several ways to switch agents:
 
-- **Dropdown menu:** Click the agent selector in the sidebar to switch between agents.
+- **Dropdown menu:** Click the agent selector in the chat prompt to switch between agents.
 - **Slash commands:** Type `/agents` in the chat input to open the agent picker.
 - **Keyboard shortcut:** Press `Cmd+.` (macOS) or `Ctrl+.` (Windows/Linux) to cycle through available agents. Add `Shift` to cycle in reverse.
 

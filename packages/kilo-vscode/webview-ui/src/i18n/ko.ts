@@ -79,7 +79,6 @@ export const dict = {
   "theme.scheme.light": "라이트",
   "theme.scheme.dark": "다크",
 
-  "command.sidebar.toggle": "사이드바 토글",
   "command.project.open": "프로젝트 열기",
   "command.provider.connect": "공급자 연결",
   "command.server.switch": "서버 전환",
@@ -760,17 +759,7 @@ export const dict = {
   "common.loadMore": "더 불러오기",
 
   "common.key.esc": "ESC",
-  "sidebar.menu.toggle": "메뉴 토글",
-  "sidebar.nav.projectsAndSessions": "프로젝트 및 세션",
   "sidebar.settings": "설정",
-  "sidebar.help": "도움말",
-  "sidebar.workspaces.enable": "작업 공간 활성화",
-  "sidebar.workspaces.disable": "작업 공간 비활성화",
-  "sidebar.gettingStarted.title": "시작하기",
-  "sidebar.gettingStarted.line1": "Kilo에는 무료 모델이 포함되어 있어 즉시 시작할 수 있습니다.",
-  "sidebar.gettingStarted.line2": "Claude, GPT, Gemini 등을 포함한 모델을 사용하려면 공급자를 연결하세요.",
-  "sidebar.project.recentSessions": "최근 세션",
-  "sidebar.project.viewAllSessions": "모든 세션 보기",
 
   "app.name.desktop": "Kilo Desktop",
   "settings.section.desktop": "데스크톱",

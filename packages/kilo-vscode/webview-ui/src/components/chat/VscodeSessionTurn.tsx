@@ -1,6 +1,6 @@
 /**
  * VscodeSessionTurn component
- * Custom replacement for the upstream SessionTurn, designed for the VS Code sidebar.
+ * Custom replacement for the upstream SessionTurn, designed for the VS Code chat UI.
  *
  * Key differences from upstream SessionTurn:
  * - No "Gathered context" grouping — each tool call is rendered individually

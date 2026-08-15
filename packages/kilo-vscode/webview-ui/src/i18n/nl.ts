@@ -75,7 +75,6 @@ export const dict = {
   "theme.scheme.light": "Licht",
   "theme.scheme.dark": "Donker",
 
-  "command.sidebar.toggle": "Zijbalk in-/uitschakelen",
   "command.project.open": "Project openen",
   "command.provider.connect": "Provider verbinden",
   "command.server.switch": "Server wisselen",
@@ -770,17 +769,7 @@ export const dict = {
   "common.loadMore": "Meer laden",
   "common.key.esc": "ESC",
 
-  "sidebar.menu.toggle": "Menu in-/uitschakelen",
-  "sidebar.nav.projectsAndSessions": "Projecten en sessies",
   "sidebar.settings": "Instellingen",
-  "sidebar.help": "Help",
-  "sidebar.workspaces.enable": "Werkruimtes inschakelen",
-  "sidebar.workspaces.disable": "Werkruimtes uitschakelen",
-  "sidebar.gettingStarted.title": "Aan de slag",
-  "sidebar.gettingStarted.line1": "Kilo bevat gratis modellen, zodat je meteen kunt beginnen.",
-  "sidebar.gettingStarted.line2": "Koppel een provider om modellen te gebruiken, incl. Claude, GPT, Gemini enz.",
-  "sidebar.project.recentSessions": "Recente sessies",
-  "sidebar.project.viewAllSessions": "Bekijk alle sessies",
 
   "app.name.desktop": "Kilo Desktop",
 

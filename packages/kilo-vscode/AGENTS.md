@@ -30,7 +30,7 @@ Every client spawns or connects to a `kilo serve` process and communicates via H
 |---|---|---|---|
 | Kilo CLI (TUI) | `packages/opencode/` | Interactive terminal UI (SolidJS + OpenTUI) | In-process — TUI and server run together |
 | Kilo CLI (`kilo run`) | `packages/opencode/` | Non-interactive headless mode for scripting | In-process — no network socket |
-| **Kilo VS Code Extension** | **`packages/kilo-vscode/`** | VS Code extension with sidebar chat + Agent Manager | Bundles CLI binary, spawns `kilo serve --port 0` as child process |
+| **Kilo VS Code Extension** | **`packages/kilo-vscode/`** | VS Code extension with Agent Manager and editor-tab chat | Bundles CLI binary, spawns `kilo serve --port 0` as child process |
 
 ### Kilo-Domain Packages
 
@@ -122,15 +122,14 @@ Extension (Node.js)                          CLI Backend (child process)
 │   ├── HttpClient         │                │   SSE event stream   │
 │   └── SSEClient          │                │   Session management │
 │                          │                │   AI agent runtime   │
-│ KiloProvider (sidebar)   │                └──────────────────────┘
-│ KiloProvider (agent mgr) │
+│ KiloProvider (agent mgr) │                └──────────────────────┘
 │ KiloProvider (open tabs) │
 └──────────────────────────┘
 ```
 
-- **`KiloConnectionService`** (`src/services/cli-backend/connection-service.ts`) is created once during extension activation and shared across the sidebar, Kilo editor tabs, and Agent Manager. It owns the current server process, HTTP client, and SSE connection.
+- **`KiloConnectionService`** (`src/services/cli-backend/connection-service.ts`) is created once during extension activation and shared across Kilo editor tabs and Agent Manager. It owns the current server process, HTTP client, and SSE connection.
 - **`ServerManager`** (`src/services/cli-backend/server-manager.ts`) lazily spawns the CLI binary, reuses its current process, and can start a replacement if that process exits.
-- The sidebar, every **Open in Tab** Kilo panel, and the Agent Manager chat provider reuse this connection. Multiple **`KiloProvider`** instances subscribe to it, with SSE events filtered per-webview via a `trackedSessionIds` Set. Agent Manager terminals may use additional PTY/WebSocket channels to the same backend, not separate `kilo serve` processes.
+- Every **Open in Tab** Kilo panel and the Agent Manager chat provider reuse this connection. Multiple **`KiloProvider`** instances subscribe to it, with SSE events filtered per-webview via a `trackedSessionIds` Set. Agent Manager terminals may use additional PTY/WebSocket channels to the same backend, not separate `kilo serve` processes.
 - Backend state follows where it is allocated, not the worktree shown in a panel. Snapshot repository state uses directory-keyed `InstanceState`, while `trackState` is created once in the active Snapshot service closure. For these shared VS Code session paths, its slow-track `asked` guard spans worktree requests; choosing **Continue with snapshots** resets `asked` only when continued tracking returns a snapshot hash.
 
 ### Builds
@@ -170,13 +169,13 @@ Key patterns:
 
 ## Agent Manager
 
-The Agent Manager is a feature within this extension (not a separate product). It opens as an **editor tab** (`Cmd+Shift+M`) and provides multi-session orchestration — running multiple independent AI sessions in parallel, each optionally isolated in its own git worktree.
+The Agent Manager is a feature within this extension (not a separate product). It opens as an **editor tab** (`Cmd+Shift+M`) and provides multi-session orchestration — running multiple independent AI sessions in parallel, each optionally isolated in its own git worktree. Since the P3.1 sidebar removal, it is the primary chat entry point together with "Open in Tab" editor panels.
 
-### How It Differs From the Sidebar
+### How It Compares to Open-in-Tab Editor Panels
 
-| Aspect | Sidebar | Agent Manager |
+| Aspect | Open in Tab panel | Agent Manager |
 |---|---|---|
-| Location | Activity bar sidebar panel | Editor tab (full panel) |
+| Location | Editor tab | Editor tab (full panel) |
 | Sessions | Single session at a time | Multiple parallel sessions with tabbed UI |
 | Git isolation | Uses workspace root | Each session can get its own worktree branch |
 | State | No dedicated state file | `.kilo/agent-manager.json` |
@@ -188,7 +187,7 @@ The Agent Manager is a feature within this extension (not a separate product). I
 
 Agent Manager local worktree sessions use the current shared `kilo serve` process owned by `KiloConnectionService`; no session starts its own backend. Their CLI requests pass the worktree path as `directory`, which resolves directory-scoped backend state. Setup scripts, terminal PTYs, git subprocesses, and a separately opened VS Code window are separate process or extension-host boundaries, not per-worktree `kilo serve` instances.
 
-Extension-side code lives in `src/agent-manager/`, webview code in `webview-ui/agent-manager/`. The webview reuses the sidebar's provider chain and `ChatView` component, adding a `WorktreeModeProvider` and a split layout.
+Extension-side code lives in `src/agent-manager/`, webview code in `webview-ui/agent-manager/`. The webview reuses the shared chat provider chain and `ChatView` component, adding a `WorktreeModeProvider` and a split layout.
 
 ## Webview UI (kilo-ui)
 
@@ -229,7 +228,7 @@ Visual regression baselines are Linux Chromium only and are never produced or co
 ## Naming Conventions
 
 - All VSCode commands must use `kilo-code.new.` prefix (not `kilo-code.`)
-- All view IDs must use `kilo-code.new.` prefix, **except** the sidebar view which uses `kilo-code.SidebarProvider` to preserve user sidebar position when upgrading from the legacy extension
+- All view IDs must use `kilo-code.new.` prefix. The legacy `kilo-code.SidebarProvider` Activity Bar view was removed in P3.1 and must not be reintroduced; "sidebar" in Agent Manager code refers to the Agent Manager's internal session sidebar, which stays.
 
 ## Process Spawning (Windows)
 

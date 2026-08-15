@@ -91,7 +91,7 @@ export class VscodeHost implements Host {
       title: "Agent Manager",
       port,
       // P0 benchmark webview timing (opt-in KILO_P0_PERF only, same as the
-      // sidebar's webview HTML — the Agent Manager panel must also set
+      // editor-tab webview's HTML — the Agent Manager panel must also set
       // window.__KILO_P0_PERF__ so its load/render/paint/mount stages stream).
       perfEnabled: isP0PerfEnabled(),
     })

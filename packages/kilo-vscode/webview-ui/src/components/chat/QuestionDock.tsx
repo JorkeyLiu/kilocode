@@ -88,7 +88,7 @@ export const QuestionDock: Component<{ request: QuestionRequest }> = (props) => 
   // translateOption returns accessor functions, not plain strings. SolidJS runs the <For>
   // child callback in an untracked scope (via mapArray), so reading `language.t(...)` once
   // at construction would freeze translations at the first render. Accessors force every
-  // JSX read to happen inside the binding's tracking scope, so switching the sidebar
+  // JSX read to happen inside the binding's tracking scope, so switching the
   // language while a question dock is visible re-renders the option labels.
   const questionText = createMemo(() => tr(language.t, question()?.questionKey, question()?.question ?? ""))
   const translateOption = (opt: {

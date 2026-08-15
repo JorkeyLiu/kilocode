@@ -30,7 +30,7 @@ const KEY = "enabled"
  *
  * Instead of writing to the CLI config, the attention coordinator delegates
  * `permission.asked` events here and auto-replies "once". This avoids config-layer
- * issues (merged vs global, sparse defaults) and works even when the sidebar is closed.
+ * issues (merged vs global, sparse defaults) and works even when no chat surface is open.
  */
 export function registerToggleAutoApprove(
   context: vscode.ExtensionContext,

@@ -166,7 +166,7 @@ URL-encode the `/` in model IDs as `%2F` when embedding this URL in HTML links o
 
 ### How It Works
 
-- **VS Code open**: the Kilo sidebar is focused and the linked selection is applied to the active session immediately.
+- **VS Code open**: Kilo opens or focuses a chat editor tab and applies the linked selection to the active session immediately.
 - **VS Code closed**: VS Code launches, then applies the selection once the extension is ready.
 - When `model` is provided, it must identify a model in the current Kilo Gateway catalog. Invalid or unavailable models cause the deep link to be ignored.
 - When `agent` is provided, it must identify a visible primary agent. Invalid or unavailable agents cause the deep link to be ignored.

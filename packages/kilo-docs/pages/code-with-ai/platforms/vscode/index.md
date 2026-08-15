@@ -20,7 +20,7 @@ The extension includes its own embedded runtime. No separate Kilo CLI installati
 
 Key features include:
 
-- **SolidJS-based UI** — Rebuilt sidebar with a modern component architecture
+- **SolidJS-based UI** — Agent Manager and editor-tab chat built on a modern component architecture
 - **[JSONC config files](/docs/getting-started/settings)** — Portable settings in `kilo.jsonc` instead of VS Code settings
 - **[Granular permissions](/docs/getting-started/settings/auto-approving-actions)** — Per-tool permission rules with glob patterns
 - **[Agents](/docs/code-with-ai/agents/using-agents)** — Customizable agents (`.kilo/agents/*.md`) replacing the modes system
@@ -36,7 +36,7 @@ Key features include:
 
 ## Shared Settings
 
-Settings apply across extension surfaces, including the sidebar and Agent Manager. The standalone CLI uses the same `~/.config/kilo/kilo.jsonc` (global) and `./kilo.jsonc` (project) files when used directly.
+Settings apply across extension surfaces, including editor-tab chat and Agent Manager. The standalone CLI uses the same `~/.config/kilo/kilo.jsonc` (global) and `./kilo.jsonc` (project) files when used directly.
 
 ## Proxy and Certificate Troubleshooting
 

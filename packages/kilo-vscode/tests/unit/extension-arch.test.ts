@@ -142,6 +142,18 @@ describe("KiloProvider — remote focus lifecycle", () => {
     const resolve = sliceBlock(provider, provider.indexOf("private async resolveSession"))
     expect(create).toContain("this.focusSession(session.id)")
     expect(resolve).toContain("this.focusSession(session.id)")
-    expect(provider).toContain("this.focusSession(webviewView.visible ? this.contextSessionID : undefined)")
+    // Editor-tab panels keep the panel.visible-driven stream focus (the
+    // sidebar's webviewView.visible path is removed with the sidebar).
+    expect(provider).toContain("this.streams.focus(panel.visible ? id : undefined)")
+  })
+
+  it("no longer exposes the sidebar webview-view path (P3.1 removal)", () => {
+    // The Activity Bar sidebar is permanently removed; the provider must not
+    // implement WebviewViewProvider or carry any sidebar resolve path.
+    expect(provider).not.toContain("resolveWebviewView")
+    expect(provider).not.toContain("WebviewViewProvider")
+    expect(provider).not.toContain("setSidebarVisible")
+    expect(provider).not.toContain("kilo-code.SidebarProvider")
+    expect(provider).not.toContain("kilo-code.new.sidebarVisible")
   })
 })

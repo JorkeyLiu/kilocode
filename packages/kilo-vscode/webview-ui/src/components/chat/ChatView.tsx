@@ -47,7 +47,8 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const server = useServer()
   const tabs = useLocalTabs()
   const requirements = useAgentRequirements()
-  // Sidebar-only behaviors: session tab strip and message-list live-region announcements.
+  // Non-Agent-Manager (editor-tab chat) behaviors: session tab strip and
+  // message-list live-region announcements.
   const isSidebar = () => worktreeMode === undefined
   const pendingSessionID = () => props.pendingSessionID ?? tabs?.pending()
 

@@ -18,7 +18,7 @@ If you're typing code in the editor and want AI to finish your line or block, ch
 {% tabs %}
 {% tab label="VSCode" %}
 
-Click the Kilo Code icon ({% kiloCodeIcon /%}) in VS Code's Primary Side Bar to open the sidebar chat. You can also pop it out into an editor tab for a larger workspace.
+Open Kilo Code's chat from the **Agent Manager** — press `Cmd/Ctrl+Shift+M` or run **Kilo Code: Agent Manager** from the Command Palette. Each conversation lives in its own editor tab, and you can also open a standalone chat panel with **Kilo Code: Open in Tab** (or the "Open in Tab" button in the chat header).
 
 {% /tab %}
 {% tab label="CLI" %}
@@ -62,7 +62,7 @@ Open your terminal and run `kilo` to launch the interactive terminal interface (
 
 - **Input prompt** - Type your requests and press Enter to send
 - **Action buttons** - Approve or reject proposed changes, answer questions
-- **Agent dropdown** - Switch between agents (e.g. Code, Ask, Plan) from the sidebar
+- **Agent dropdown** - Switch between agents (e.g. Code, Ask, Plan) from the chat header
 - **Session management** - Start new sessions or resume previous ones
 
 **Providing context:**
@@ -157,17 +157,15 @@ This feature streamlines the interaction when Kilo Code requires clarification, 
 {% /callout %}
 
 {% callout type="tip" %}
+**Agent Manager for multiple tasks.** Chat lives in editor tabs. For parallel tasks — each with its own tab, optional git worktree, and terminal — open the Agent Manager with `Cmd/Ctrl+Shift+M`.
+{% /callout %}
+
+{% callout type="tip" %}
 **Your editor context is automatic.** The extension reads your open tabs and active file, so you don't need to manually reference every file. Focus your message on what you want done.
 {% /callout %}
 
 {% callout type="tip" %}
-**Pop out to an editor tab.** If the sidebar feels cramped, pop the chat into a full editor tab for more room.
-{% /callout %}
-
-{% callout type="tip" %}
-**Move Kilo Code to the Secondary Side Bar** for a better layout. Right-click on the Kilo Code icon in the Activity Bar and select **Move To → Secondary Side Bar**. This lets you see the Explorer, Search, Source Control, etc. alongside Kilo Code.
-
-{% image src="/docs/img/move-to-secondary.png" alt="Move to Secondary Side Bar" width="600" caption="Move Kilo Code to the Secondary Side Bar for better workspace organization" /%}
+**Open a standalone chat panel.** Use **Kilo Code: Open in Tab** from the Command Palette (or the "Open in Tab" button in the chat header) to pin a full-size chat panel in its own editor group.
 {% /callout %}
 
 {% /tab %}

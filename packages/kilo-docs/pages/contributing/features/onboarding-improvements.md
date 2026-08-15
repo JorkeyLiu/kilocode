@@ -49,7 +49,7 @@ Earlier design notes referred to Chat, Edit, and Architect modes. Treat those na
 |---|---|---|
 | Welcome | Interface | Explain purpose of short tour |
 | Agent or mode selection | Current selector UI | Explain available task behaviors |
-| Side panels and MCP | Sidebar | Point to history and MCP configuration |
+| Side panels and MCP | Chat toolbar and Settings | Point to history and MCP configuration |
 | Starting chat | Input area | Explain prompts and file references |
 | Starter prompts | Welcome actions | Show common first tasks |
 

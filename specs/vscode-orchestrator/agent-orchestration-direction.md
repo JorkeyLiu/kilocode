@@ -544,7 +544,11 @@ decisions are listed in `runtime-and-configuration-direction.md` section 9.
    independent Topic persistence/API/config/schema/metadata. (Affects P1
    navigation and section 8; recorded in the migration tracker section 9.)
 2. When does the sidebar deprecation notice ship relative to P1 navigation?
-   (P1/P3.1.)
+   RESOLVED (2026-08-15): P1/P2 supplied the migration affordances and P3.1
+   removes the sidebar now; the deprecation step shipped as the P1/P2 migration
+   surface plus the release note (minor `remove-sidebar-chat.md` changeset), so
+   no separate deprecation notice remains. (Recorded in the migration tracker
+   section 9.)
 3. What exact counts form the P0 complexity baseline (message types, provider
    methods, webview entry points)? RESOLVED (2026-08-12): 332 distinct webview
    message `type:` literals (WebviewMessage 189 + ExtensionMessage 143, disjoint
@@ -553,9 +557,11 @@ decisions are listed in `runtime-and-configuration-direction.md` section 9.
    excluding the shiki worker asset. Reproducible commands and current counts:
    `p0-current-state-inventory.md` (sections 4.4/9/10); decision recorded in
    the migration tracker (section 9).
-4. Sidebar removal timing/order within P3.1 and any adoption thresholds: LOCK-001
-   decides removal; numeric thresholds remain a recorded product decision
-   (bounded, runtime spec section 9).
+4. Sidebar removal timing/order within P3.1 and any adoption thresholds:
+   RESOLVED (2026-08-15): LOCK-001 decides removal; P1/P2 supplied the migration
+   affordances and P3.1 removes the sidebar now; no numeric adoption threshold
+   applies. (Recorded in the migration tracker section 9 and the runtime spec
+   section 9, R4.)
 5. Which consolidated configuration surface replaces settings/profile/marketplace
    panels, how does it present custom provider records, and what is the exact
    WYSIWYG presentation of draft conflicts, invalid-edit reporting, and

@@ -74,7 +74,6 @@ export const dict = {
   "theme.scheme.light": "สว่าง",
   "theme.scheme.dark": "มืด",
 
-  "command.sidebar.toggle": "สลับแถบข้าง",
   "command.project.open": "เปิดโปรเจกต์",
   "command.provider.connect": "เชื่อมต่อผู้ให้บริการ",
   "command.server.switch": "สลับเซิร์ฟเวอร์",
@@ -758,17 +757,7 @@ export const dict = {
   "common.loadMore": "โหลดเพิ่มเติม",
   "common.key.esc": "ESC",
 
-  "sidebar.menu.toggle": "สลับเมนู",
-  "sidebar.nav.projectsAndSessions": "โปรเจกต์และเซสชัน",
   "sidebar.settings": "การตั้งค่า",
-  "sidebar.help": "ช่วยเหลือ",
-  "sidebar.workspaces.enable": "เปิดใช้งานพื้นที่ทำงาน",
-  "sidebar.workspaces.disable": "ปิดใช้งานพื้นที่ทำงาน",
-  "sidebar.gettingStarted.title": "เริ่มต้นใช้งาน",
-  "sidebar.gettingStarted.line1": "Kilo รวมถึงโมเดลฟรีเพื่อให้คุณเริ่มต้นได้ทันที",
-  "sidebar.gettingStarted.line2": "เชื่อมต่อผู้ให้บริการใด ๆ เพื่อใช้โมเดล รวมถึง Claude, GPT, Gemini ฯลฯ",
-  "sidebar.project.recentSessions": "เซสชันล่าสุด",
-  "sidebar.project.viewAllSessions": "ดูเซสชันทั้งหมด",
 
   "app.name.desktop": "Kilo Desktop",
 

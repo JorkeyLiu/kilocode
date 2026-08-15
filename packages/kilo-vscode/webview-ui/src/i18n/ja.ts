@@ -75,7 +75,6 @@ export const dict = {
   "theme.scheme.light": "ライト",
   "theme.scheme.dark": "ダーク",
 
-  "command.sidebar.toggle": "サイドバーの切り替え",
   "command.project.open": "プロジェクトを開く",
   "command.provider.connect": "プロバイダーに接続",
   "command.server.switch": "サーバーの切り替え",
@@ -762,17 +761,7 @@ export const dict = {
   "common.loadMore": "さらに読み込む",
 
   "common.key.esc": "ESC",
-  "sidebar.menu.toggle": "メニューを切り替え",
-  "sidebar.nav.projectsAndSessions": "プロジェクトとセッション",
   "sidebar.settings": "設定",
-  "sidebar.help": "ヘルプ",
-  "sidebar.workspaces.enable": "ワークスペースを有効化",
-  "sidebar.workspaces.disable": "ワークスペースを無効化",
-  "sidebar.gettingStarted.title": "はじめに",
-  "sidebar.gettingStarted.line1": "Kiloには無料モデルが含まれているため、すぐに開始できます。",
-  "sidebar.gettingStarted.line2": "プロバイダーを接続して、Claude、GPT、Geminiなどのモデルを使用できます。",
-  "sidebar.project.recentSessions": "最近のセッション",
-  "sidebar.project.viewAllSessions": "すべてのセッションを表示",
 
   "app.name.desktop": "Kilo Desktop",
   "settings.section.desktop": "デスクトップ",

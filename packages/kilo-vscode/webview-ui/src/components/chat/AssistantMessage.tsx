@@ -2,7 +2,7 @@
  * AssistantMessage component
  * Renders all parts of an assistant message as a flat list — no context grouping.
  * Unlike the upstream AssistantParts, this renders each read/glob/grep/list tool
- * individually for maximum verbosity in the VS Code sidebar context.
+ * individually for maximum verbosity in the VS Code chat context.
  *
  * Active questions render inline via QuestionDock; permissions are in the bottom dock.
  */

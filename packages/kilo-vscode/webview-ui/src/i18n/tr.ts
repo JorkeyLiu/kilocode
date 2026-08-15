@@ -75,7 +75,6 @@ export const dict = {
   "theme.scheme.light": "Açık",
   "theme.scheme.dark": "Koyu",
 
-  "command.sidebar.toggle": "Kenar çubuğunu aç/kapat",
   "command.project.open": "Proje aç",
   "command.provider.connect": "Sağlayıcı bağla",
   "command.server.switch": "Sunucu değiştir",
@@ -767,17 +766,7 @@ export const dict = {
   "common.loadMore": "Daha fazla yükle",
   "common.key.esc": "ESC",
 
-  "sidebar.menu.toggle": "Menüyü aç/kapat",
-  "sidebar.nav.projectsAndSessions": "Projeler ve oturumlar",
   "sidebar.settings": "Ayarlar",
-  "sidebar.help": "Yardım",
-  "sidebar.workspaces.enable": "Çalışma alanlarını etkinleştir",
-  "sidebar.workspaces.disable": "Çalışma alanlarını devre dışı bırak",
-  "sidebar.gettingStarted.title": "Başlarken",
-  "sidebar.gettingStarted.line1": "Kilo ücretsiz modeller içerir, böylece hemen başlayabilirsiniz.",
-  "sidebar.gettingStarted.line2": "Claude, GPT, Gemini vb. modelleri kullanmak için herhangi bir sağlayıcı bağlayın.",
-  "sidebar.project.recentSessions": "Son oturumlar",
-  "sidebar.project.viewAllSessions": "Tüm oturumları görüntüle",
 
   "app.name.desktop": "Kilo Masaüstü",
 

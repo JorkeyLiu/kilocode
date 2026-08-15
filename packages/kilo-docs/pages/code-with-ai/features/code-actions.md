@@ -20,9 +20,9 @@ The extension provides code actions via the editor context menu and lightbulb:
 - **Fix Code:** Asks Kilo to fix problems in the selected code.
 - **Improve Code:** Asks Kilo to suggest improvements to the selected code.
 
-### Agent Manager Integration
+### Where Code Actions Deliver
 
-If the **Agent Manager** is active, code actions route to the current Agent Manager session rather than the sidebar chat. This allows code actions to work seamlessly within multi-session workflows.
+Code actions route to the active **Agent Manager** session when the panel is focused, otherwise to the active editor-tab chat (opening the Agent Manager on demand when neither is open). This allows code actions to work seamlessly within multi-session workflows.
 
 ### Terminal Context Menu
 

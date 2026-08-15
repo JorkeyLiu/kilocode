@@ -810,7 +810,7 @@ export interface EnhancePromptRequest {
   requestId: string
 }
 
-// Open the standalone changes viewer tab from the sidebar
+// Open the standalone changes viewer tab
 export interface OpenChangesRequest {
   type: "openChanges"
   /**

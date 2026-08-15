@@ -206,7 +206,7 @@ async function main() {
     plugins: [esbuildProblemMatcherPlugin],
   })
 
-  // Build Agent Manager webview (SolidJS, shares components with sidebar)
+  // Build Agent Manager webview (SolidJS, shares components with the editor-tab chat webview)
   const agentManagerCtx = await createBrowserWebviewContext(
     "webview-ui/agent-manager/index.tsx",
     "dist/agent-manager.js",

@@ -78,7 +78,6 @@ export const dict = {
   "theme.scheme.light": "Lys",
   "theme.scheme.dark": "Mørk",
 
-  "command.sidebar.toggle": "Veksle sidepanel",
   "command.project.open": "Åpne prosjekt",
   "command.provider.connect": "Koble til leverandør",
   "command.server.switch": "Bytt server",
@@ -770,17 +769,7 @@ export const dict = {
   "common.loadMore": "Last flere",
   "common.key.esc": "ESC",
 
-  "sidebar.menu.toggle": "Veksle meny",
-  "sidebar.nav.projectsAndSessions": "Prosjekter og sesjoner",
   "sidebar.settings": "Innstillinger",
-  "sidebar.help": "Hjelp",
-  "sidebar.workspaces.enable": "Aktiver arbeidsområder",
-  "sidebar.workspaces.disable": "Deaktiver arbeidsområder",
-  "sidebar.gettingStarted.title": "Kom i gang",
-  "sidebar.gettingStarted.line1": "Kilo inkluderer gratis modeller så du kan starte umiddelbart.",
-  "sidebar.gettingStarted.line2": "Koble til en leverandør for å bruke modeller, inkl. Claude, GPT, Gemini osv.",
-  "sidebar.project.recentSessions": "Nylige sesjoner",
-  "sidebar.project.viewAllSessions": "Vis alle sesjoner",
 
   "app.name.desktop": "Kilo Desktop",
   "settings.section.desktop": "Skrivebord",

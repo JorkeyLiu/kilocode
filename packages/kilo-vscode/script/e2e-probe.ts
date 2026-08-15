@@ -271,6 +271,7 @@ const SCENARIO_VALUES = [
   "real-completed",
   "real-overflow",
   "real-restart",
+  "sidebar-removal",
 ] as const
 function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -282,7 +283,8 @@ function parseScenarios(value: string): Set<string> {
     value === "real-session" ||
     value === "real-completed" ||
     value === "real-overflow" ||
-    value === "real-restart"
+    value === "real-restart" ||
+    value === "sidebar-removal"
   ) {
     return new Set([value])
   }
@@ -408,8 +410,8 @@ async function waitForCdp(port: number, timeoutMs: number): Promise<void> {
  * `anchorTitle`. Each scenario passes its own fixture title (child: source
  * title; variant: variant title) so the finder never depends on a tab seeded
  * by another scenario. Anchoring on the sortable container — not just
- * `.am-tab-label` — prevents matching the sidebar webview, which never renders
- * `.am-tab-sortable`.
+ * `.am-tab-label` — prevents matching the editor-tab webview, which never
+ * renders `.am-tab-sortable`.
  */
 async function findAgentManagerFrame(
   browser: Browser,
@@ -453,7 +455,7 @@ async function findAgentManagerFrame(
  * Full production-behavior E2E for the Agent Manager child-task open action:
  *   1. initial tab order [source, sibling] with source active,
  *   2. click the real "Open sub-agent in tab" IconButton in source's chat
- *      (TaskToolExpanded renderer — the same production component the sidebar uses),
+ *      (TaskToolExpanded renderer — the same production component the editor-tab webview uses),
  *   3. assert [source, child, sibling] with child active,
  *   4. re-select source (runner via sessionAdded), click again,
  *   5. assert the already-open child is focused WITHOUT reordering.
@@ -1208,7 +1210,8 @@ async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scrat
   await waitForFile(join(scratch, "real-ready"), 120_000, "real-ready marker")
 
   // The panel opens with a single pending "New Session" tab; the frame is
-  // anchored by any .am-tab-sortable tab (never rendered by the sidebar).
+  // anchored by any .am-tab-sortable tab (never rendered by the editor-tab
+  // webview).
   const found = await findAgentManagerFrameAny(browser, 60_000)
   const frame = found.frame
   const snap = snapshotClient(scratch)
@@ -1736,7 +1739,6 @@ async function assertRealRollbackPhase(
     console.log("[probe] PASS H-12 rollback lifecycle passed")
     return editMessageID
 }
-
 
 async function assertRealCompletedLifecycle(
   browser: Browser,
@@ -2493,6 +2495,7 @@ async function runScenario(
     await assertRealOverflowLifecycle(browser, plan, scratch, overflowModel)
     console.log("[probe] real-overflow lifecycle assertion passed")
   }
+  if (scenarios.has("sidebar-removal")) console.log("[probe] sidebar-removal assertions ran in the Extension Host runner")
 }
 
 // ---------------------------------------------------------------------------
@@ -2573,6 +2576,7 @@ function cleanEnv() {
  * writes `ready` after its fixture seeding.
  */
 function readyMarkerFor(scenarios: Set<string>): string {
+  if (scenarios.has("sidebar-removal")) return "sidebar-removal-ready"
   if (scenarios.has("real-session")) return "real-ready"
   if (scenarios.has("real-completed")) return "real-completed-ready"
   if (scenarios.has("real-overflow")) return "real-overflow-ready"

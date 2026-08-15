@@ -123,6 +123,7 @@ const CMD_KILL_SERVER = "kilo-code.new.e2eFixture.killServer"
 const CMD_RECONNECT_SERVER = "kilo-code.new.e2eFixture.reconnectServer"
 const CMD_LLM_REQUESTS = "kilo-code.new.e2eFixture.llmRequests"
 const CMD_LLM_RESET = "kilo-code.new.e2eFixture.llmRequestsReset"
+const CMD_OPEN_TAB_READY = "kilo-code.new.e2eFixture.openInTabReady"
 const AM_VIEW_TYPE = "kilo-code.new.AgentManagerPanel"
 
 // --- Fixture session IDs (deterministic per run; shared with the harness via plan.json) ---
@@ -242,10 +243,17 @@ async function resetLlmRequests(vscodeApi: typeof vscode): Promise<void> {
  * asserts the same store directly per phase; this is the durable evidence copy.
  */
 async function writeLlmRequestsEvidence(vscodeApi: typeof vscode, scratch: string, scenario: string): Promise<void> {
-  const result = (await vscodeApi.commands.executeCommand(CMD_LLM_REQUESTS)) as { records: unknown[]; file: string } | null
+  const result = (await vscodeApi.commands.executeCommand(CMD_LLM_REQUESTS)) as {
+    records: unknown[]
+    file: string
+  } | null
   writeFileSync(
     join(scratch, `llm-requests-${scenario}.json`),
-    JSON.stringify({ scenario, collectedAt: new Date().toISOString(), file: result?.file ?? null, records: result?.records ?? [] }, null, 2),
+    JSON.stringify(
+      { scenario, collectedAt: new Date().toISOString(), file: result?.file ?? null, records: result?.records ?? [] },
+      null,
+      2,
+    ),
   )
 }
 
@@ -447,6 +455,7 @@ interface ScenarioFlags {
   runRealCompleted: boolean
   runRealOverflow: boolean
   runRealRestart: boolean
+  runSidebarRemoval: boolean
 }
 
 /**
@@ -480,6 +489,10 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // the runner itself executes workbench.action.reloadWindow mid-run, which
     // re-runs this runner in a fresh Extension Host (see serviceRealRestartBoundary).
     runRealRestart: scenario === "real-restart",
+    // P3.1 sidebar-removal is focused-only: it asserts manifest absence and
+    // opens an "Open in Tab" editor panel (no synthetic fixtures, no CDP DOM
+    // driving — all assertions run extension-host-side).
+    runSidebarRemoval: scenario === "sidebar-removal",
   }
 }
 
@@ -502,15 +515,25 @@ export async function run(): Promise<void> {
     "real-completed",
     "real-overflow",
     "real-restart",
+    "sidebar-removal",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal (default: all)",
     )
   }
-  const { runTabClose, runChild, runVariant, runTopic, runReal, runRealCompleted, runRealOverflow, runRealRestart } =
-    scenarioFlags(scenario)
+  const {
+    runTabClose,
+    runChild,
+    runVariant,
+    runTopic,
+    runReal,
+    runRealCompleted,
+    runRealOverflow,
+    runRealRestart,
+    runSidebarRemoval,
+  } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
   // the reloadWindow boundary as runner re-entry evidence.
@@ -550,6 +573,18 @@ export async function run(): Promise<void> {
   )
 
   const iso = new Date().toISOString()
+
+  // --- P3.1 sidebar-removal scenario (focused only) ---
+  // Proves the ordinary single-chat Activity Bar sidebar is gone from the
+  // loaded manifest, and that the "Open in Tab" session editor survives
+  // without it: the production openInTab command opens a real TabPanel whose
+  // webview reaches readiness (env-gated fixture bridge), and the Agent
+  // Manager panel opened above still reports readiness. All assertions run
+  // extension-host-side; no CDP DOM driving is needed because the removed
+  // surface never renders and tab readiness is proven through the bridge.
+  if (runSidebarRemoval) {
+    await assertSidebarRemoval(vscode, ext, scratch, fixtureId)
+  }
 
   // --- Tab-close scenario fixtures (TA, TB, TC) — independent of child/variant ---
   // Seeds three session tabs in a known order [TA, TB, TC] with TA active, using
@@ -902,6 +937,61 @@ export async function run(): Promise<void> {
 }
 
 /**
+ * P3.1 sidebar-removal assertions (extension-host side):
+ *   1. the loaded manifest contributes no Activity Bar sidebar surface under
+ *      the forbidden ids/prefixes (kilo-code-ActivityBar /
+ *      kilo-code.SidebarProvider / sidebarTitle.*) — identifier-based, so
+ *      unrelated future views are not banned,
+ *   2. the production "Open in Tab" command opens a TabPanel whose webview
+ *      reaches readiness (env-gated fixture bridge),
+ *   3. the Agent Manager panel still reports readiness afterwards.
+ * Writes the `sidebar-removal-ready` marker on success; throws on any
+ * assertion failure so the Extension Host run exits non-zero.
+ */
+async function assertSidebarRemoval(
+  vscodeApi: typeof vscode,
+  ext: vscode.Extension<unknown>,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  const contributes = ext.packageJSON?.contributes ?? {}
+  const sidebarIds = ["kilo-code-ActivityBar", "kilo-code.SidebarProvider"]
+  const containers: Array<{ id?: string }> = contributes.viewsContainers?.activitybar ?? []
+  if (containers.some((c) => sidebarIds.includes(c.id ?? ""))) {
+    throw new Error("probe runner: activitybar container still contributes the removed sidebar (P3.1)")
+  }
+  const views: Record<string, Array<{ id?: string }>> = contributes.views ?? {}
+  if (
+    Object.values(views)
+      .flat()
+      .some((v) => sidebarIds.includes(v.id ?? "") || (v.id ?? "").startsWith("kilo-code.Sidebar"))
+  ) {
+    throw new Error("probe runner: manifest still contributes a view under the removed sidebar (P3.1)")
+  }
+  const declaredCommands: string[] = contributes.commands?.map((c: { command: string }) => c.command) ?? []
+  if (declaredCommands.some((c) => c.startsWith("kilo-code.new.sidebarTitle."))) {
+    throw new Error("probe runner: manifest still declares sidebarTitle.* commands (P3.1 sidebar removal)")
+  }
+  const menuEntries = Object.values(contributes.menus ?? {}).flat() as Array<{ command?: string }>
+  if (menuEntries.some((m) => m.command?.startsWith("kilo-code.new.sidebarTitle."))) {
+    throw new Error("probe runner: manifest still wires sidebarTitle.* menus (P3.1 sidebar removal)")
+  }
+  if (JSON.stringify(contributes).includes("kilo-code.SidebarProvider")) {
+    throw new Error("probe runner: manifest still references kilo-code.SidebarProvider (P3.1 sidebar removal)")
+  }
+
+  const probe = await vscodeApi.commands.executeCommand<{ count: number; ready: boolean }>(CMD_OPEN_TAB_READY)
+  if (!probe || probe.count < 1 || !probe.ready) {
+    throw new Error(`probe runner: Open in Tab panel did not become ready: ${JSON.stringify(probe)}`)
+  }
+
+  const amReady = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
+  if (!amReady) throw new Error("probe runner: Agent Manager readiness lost after tab-panel open (P3.1)")
+
+  writeFileSync(join(scratch, "sidebar-removal-ready"), fixtureId)
+}
+
+/**
  * Extension-host service loop for the real-session scenario:
  *   1. backend truth: on each `real-snap-N-request` marker, executes the
  *      env-gated backendSnapshot fixture command against the shared served
@@ -1006,7 +1096,11 @@ const REAL_COMPLETED_SERVICE_BUDGET = 5_400_000
  *      child PIDs exited.
  * Stops when the harness writes the `done` marker (success or abort).
  */
-async function serviceRealCompletedBoundary(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
+async function serviceRealCompletedBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
   await resetLlmRequests(vscodeApi)
   await vscodeApi.commands.executeCommand(CMD_SETTLE)
   writeFileSync(join(scratch, "real-completed-ready"), fixtureId)
@@ -1093,7 +1187,11 @@ const REAL_OVERFLOW_SERVICE_BUDGET = 900_000
  * No panel close/reopen and no MCP disconnect — the panel stays open for the
  * whole scenario. Stops when the harness writes the `done` marker.
  */
-async function serviceRealOverflowBoundary(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
+async function serviceRealOverflowBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
   await resetLlmRequests(vscodeApi)
   await vscodeApi.commands.executeCommand(CMD_SETTLE)
   writeFileSync(join(scratch, "real-overflow-ready"), fixtureId)
@@ -1249,7 +1347,11 @@ async function serviceRealRestartBoundary(vscodeApi: typeof vscode, scratch: str
  * the panel is present, writes `rr-reloaded`, and services the post-restart
  * `rr-c-snap-N` backend snapshots until the harness writes `done`.
  */
-async function serviceRealRestartReloadPhase(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
+async function serviceRealRestartReloadPhase(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
   // run() already executed CMD_OPEN (which reveals an existing restored panel
   // or opens a new one); wait for the fresh webview's readiness.
   await waitFor(

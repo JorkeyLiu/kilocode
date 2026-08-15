@@ -14,14 +14,14 @@ const PANEL_TITLES: Record<PanelView, string> = {
 
 /**
  * Opens Settings or Profile as an editor-area WebviewPanel,
- * keeping the sidebar chat undisturbed.
+ * leaving the chat panels undisturbed.
  *
  * Each view type is a singleton panel — calling openPanel() again
  * reveals the existing panel instead of creating a duplicate.
  *
  * Uses a full KiloProvider under the hood so each panel has
  * the same backend connectivity (config, providers, profile, auth)
- * as the sidebar.
+ * as the chat panels.
  */
 export class SettingsEditorProvider implements vscode.Disposable {
   private panels = new Map<PanelView, vscode.WebviewPanel>()

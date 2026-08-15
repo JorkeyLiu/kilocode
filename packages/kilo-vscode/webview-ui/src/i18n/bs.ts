@@ -75,7 +75,6 @@ export const dict = {
   "theme.scheme.light": "Svijetlo",
   "theme.scheme.dark": "Tamno",
 
-  "command.sidebar.toggle": "Prikaži/sakrij bočnu traku",
   "command.project.open": "Otvori projekat",
   "command.provider.connect": "Poveži provajdera",
   "command.server.switch": "Promijeni server",
@@ -767,17 +766,7 @@ export const dict = {
   "common.loadMore": "Učitaj još",
   "common.key.esc": "ESC",
 
-  "sidebar.menu.toggle": "Prikaži/sakrij meni",
-  "sidebar.nav.projectsAndSessions": "Projekti i sesije",
   "sidebar.settings": "Postavke",
-  "sidebar.help": "Pomoć",
-  "sidebar.workspaces.enable": "Omogući radne prostore",
-  "sidebar.workspaces.disable": "Onemogući radne prostore",
-  "sidebar.gettingStarted.title": "Početak",
-  "sidebar.gettingStarted.line1": "Kilo uključuje besplatne modele, tako da možeš odmah početi.",
-  "sidebar.gettingStarted.line2": "Poveži bilo kojeg provajdera da koristiš modele, npr. Claude, GPT, Gemini itd.",
-  "sidebar.project.recentSessions": "Nedavne sesije",
-  "sidebar.project.viewAllSessions": "Prikaži sve sesije",
 
   "app.name.desktop": "Kilo Desktop",
 

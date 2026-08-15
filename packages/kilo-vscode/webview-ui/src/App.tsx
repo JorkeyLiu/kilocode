@@ -31,9 +31,9 @@ import { SpeechToTextPrewarm } from "./components/speech-to-text/SpeechToTextPre
 import { p0WebviewStage } from "./utils/perf"
 
 // Override the upstream "task" tool renderer with the fully-expanded version
-// that shows child session parts inline in the VS Code sidebar.
+// that shows child session parts inline in the VS Code chat UI.
 registerExpandedTaskTool()
-// Apply VS Code sidebar preferences to other tools (e.g. bash expanded by default).
+// Apply VS Code chat UI preferences to other tools (e.g. bash expanded by default).
 registerVscodeToolOverrides()
 import HistoryView from "./components/history/HistoryView"
 import { MigrationWizard } from "./components/migration" // legacy-migration
@@ -41,8 +41,9 @@ import { FeedbackProvider } from "./context/feedback"
 import { KiloEmbeddingModelsProvider } from "./context/kilo-embedding-models"
 import { ImageModelsProvider } from "./context/image-models"
 // Side-effect-free bridges (shared with the Agent Manager webview). Imported
-// here for the sidebar's provider chain and re-exported so the sidebar
-// surface keeps its public API; no module-scope side effects run on import.
+// here for the editor-tab webview's provider chain and re-exported so the
+// editor-tab surface keeps its public API; no module-scope side effects run on
+// import.
 import { DataBridge, MermaidDownloadBridge } from "./AppBridge"
 export { DataBridge, MermaidDownloadBridge }
 import "./styles/chat.css"

@@ -44,7 +44,7 @@ export const VSCodeProvider: ParentComponent = (props) => {
   const handlers = new Set<(message: ExtensionMessage) => void>()
 
   // Model-selector expand/collapse preference. Stored in extension globalState
-  // so it is shared across webviews (sidebar + agent-manager panel); a local
+  // so it is shared across webviews (editor-tab chat + agent-manager panel); a local
   // signal mirrors it for synchronous reads.
   const [expanded, setExpanded] = createSignal(true)
 
