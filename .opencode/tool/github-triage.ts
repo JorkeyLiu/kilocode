@@ -6,7 +6,6 @@ const TEAM = {
   tui: ["catrielmuller"],
   desktop_web: ["markijbema"],
   core: ["markijbema", "marius-kilocode", "catrielmuller", "chrarnoldus", "imanolmzd-svg"],
-  jetbrains: ["kirillk"],
   inference: ["chrarnoldus", "markijbema"],
   windows: ["catrielmuller"],
 } as const

@@ -66,6 +66,7 @@ import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { MemoryService } from "@kilocode/kilo-memory/effect/service" // kilocode_change
+import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change - admission required by withGenerationAdmission
 
 void Log.init({ print: false })
 
@@ -137,6 +138,7 @@ function makeHttp() {
     EventV2Bridge.defaultLayer,
     Bus.layer, // kilocode_change - satisfy the Kilo ToolRegistry dependency
     MemoryService.layer, // kilocode_change
+    GenerationGate.defaultLayer, // kilocode_change - admission required by withGenerationAdmission
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))
@@ -220,7 +222,90 @@ const providerCfg = (url: string) => ({
   },
 })
 
-it.live("tool execution produces non-empty session diff (snapshot race)", () =>
+it.live(
+  "tool execution produces non-empty session diff (snapshot race)",
+  () =>
+    provideTmpdirServer(
+      Effect.fnUntraced(function* ({ dir, llm }) {
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const summary = yield* SessionSummary.Service
+
+        const session = yield* sessions.create({
+          title: "snapshot race test",
+          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        })
+
+        // Use bash tool (always registered) to create a file
+        const command = `echo 'snapshot race test content' > ${path.join(dir, "race-test.txt")}`
+        yield* llm.toolMatch((hit) => JSON.stringify(hit.body).includes("create the file"), "bash", {
+          command,
+          description: "create test file",
+        })
+        yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("bash"), "done")
+
+        // Seed user message
+        yield* prompt.prompt({
+          sessionID: session.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "create the file" }],
+        })
+
+        // Run the agent loop
+        const result = yield* prompt.loop({ sessionID: session.id })
+        expect(result.info.role).toBe("assistant")
+
+        // Verify the file was created
+        const filePath = path.join(dir, "race-test.txt")
+        const fileExists = yield* Effect.promise(() =>
+          fs
+            .access(filePath)
+            .then(() => true)
+            .catch(() => false),
+        )
+        expect(fileExists).toBe(true)
+
+        // Verify the tool call completed (in the first assistant message)
+        const allMsgs = yield* MessageV2.filterCompactedEffect(session.id)
+        const user = allMsgs.find(
+          (msg): msg is SessionV1.WithParts & { info: SessionV1.User } => msg.info.role === "user",
+        )
+        const tool = allMsgs
+          .flatMap((m) => m.parts)
+          .find((p): p is SessionV1.ToolPart => p.type === "tool" && p.tool === "bash")
+        expect(tool?.state.status).toBe("completed")
+        if (!user) throw new Error("Expected user message")
+
+        // Poll for the turn diff — summarize() is fire-and-forget.
+        let diff: Array<{ file?: string }> = []
+        for (let i = 0; i < 50; i++) {
+          diff = yield* summary.diff({ sessionID: session.id, messageID: user.info.id })
+          if (diff.length > 0) break
+          yield* Effect.sleep("100 millis")
+        }
+        expect(diff.length).toBeGreaterThan(0)
+      }),
+      { git: true, config: providerCfg },
+    ),
+  20000,
+)
+
+type FileDiffRow = { file?: string }
+
+function pollDiffs(diff: Effect.Effect<Array<FileDiffRow>>, predicate: (items: Array<FileDiffRow>) => boolean) {
+  return Effect.gen(function* () {
+    let items: Array<FileDiffRow> = []
+    for (let i = 0; i < 50; i++) {
+      items = yield* diff
+      if (predicate(items)) break
+      yield* Effect.sleep("100 millis")
+    }
+    return items
+  })
+}
+
+it.live("summarize persists cumulative session_diff and the no-messageID read path returns it", () =>
   provideTmpdirServer(
     Effect.fnUntraced(function* ({ dir, llm }) {
       const prompt = yield* SessionPrompt.Service
@@ -228,60 +313,111 @@ it.live("tool execution produces non-empty session diff (snapshot race)", () =>
       const summary = yield* SessionSummary.Service
 
       const session = yield* sessions.create({
-        title: "snapshot race test",
+        title: "session diff write test",
         permission: [{ permission: "*", pattern: "*", action: "allow" }],
       })
 
-      // Use bash tool (always registered) to create a file
-      const command = `echo 'snapshot race test content' > ${path.join(dir, "race-test.txt")}`
-      yield* llm.toolMatch((hit) => JSON.stringify(hit.body).includes("create the file"), "bash", {
-        command,
-        description: "create test file",
+      // Turn 1 creates a/t1.txt
+      yield* llm.toolMatch((hit) => JSON.stringify(hit.body).includes("first file"), "bash", {
+        command: `mkdir -p ${path.join(dir, "a")} && echo one > ${path.join(dir, "a", "t1.txt")}`,
+        description: "create first file",
       })
-      yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("bash"), "done")
-
-      // Seed user message
+      yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("bash"), "first done")
       yield* prompt.prompt({
         sessionID: session.id,
         agent: "build",
         noReply: true,
-        parts: [{ type: "text", text: "create the file" }],
+        parts: [{ type: "text", text: "create the first file" }],
       })
+      yield* prompt.loop({ sessionID: session.id })
 
-      // Run the agent loop
-      const result = yield* prompt.loop({ sessionID: session.id })
-      expect(result.info.role).toBe("assistant")
+      // Turn 2 creates b/t2.txt
+      yield* llm.toolMatch((hit) => JSON.stringify(hit.body).includes("second file"), "bash", {
+        command: `mkdir -p ${path.join(dir, "b")} && echo two > ${path.join(dir, "b", "t2.txt")}`,
+        description: "create second file",
+      })
+      yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("bash"), "second done")
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "create the second file" }],
+      })
+      yield* prompt.loop({ sessionID: session.id })
 
-      // Verify the file was created
-      const filePath = path.join(dir, "race-test.txt")
-      const fileExists = yield* Effect.promise(() =>
-        fs
-          .access(filePath)
-          .then(() => true)
-          .catch(() => false),
+      // Cumulative no-messageID path must cover both turns once summarization has flushed.
+      const sessionDiff = yield* pollDiffs(
+        summary.diff({ sessionID: session.id }),
+        (items) => items.filter((d) => d.file === "a/t1.txt" || d.file === "b/t2.txt").length >= 2,
       )
-      expect(fileExists).toBe(true)
-
-      // Verify the tool call completed (in the first assistant message)
-      const allMsgs = yield* MessageV2.filterCompactedEffect(session.id)
-      const user = allMsgs.find(
-        (msg): msg is SessionV1.WithParts & { info: SessionV1.User } => msg.info.role === "user",
-      )
-      const tool = allMsgs
-        .flatMap((m) => m.parts)
-        .find((p): p is SessionV1.ToolPart => p.type === "tool" && p.tool === "bash")
-      expect(tool?.state.status).toBe("completed")
-      if (!user) throw new Error("Expected user message")
-
-      // Poll for the turn diff — summarize() is fire-and-forget.
-      let diff: Array<{ file?: string }> = []
-      for (let i = 0; i < 50; i++) {
-        diff = yield* summary.diff({ sessionID: session.id, messageID: user.info.id })
-        if (diff.length > 0) break
-        yield* Effect.sleep("100 millis")
-      }
-      expect(diff.length).toBeGreaterThan(0)
+      expect(sessionDiff.map((d) => d.file)).toContain("a/t1.txt")
+      expect(sessionDiff.map((d) => d.file)).toContain("b/t2.txt")
     }),
     { git: true, config: providerCfg },
   ),
+  20000,
+)
+
+it.live("per-message session diff is turn-scoped across multiple turns", () =>
+  provideTmpdirServer(
+    Effect.fnUntraced(function* ({ dir, llm }) {
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const summary = yield* SessionSummary.Service
+
+      const session = yield* sessions.create({
+        title: "turn-scoped diff test",
+        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+      })
+
+      yield* llm.toolMatch((hit) => JSON.stringify(hit.body).includes("first file"), "bash", {
+        command: `mkdir -p ${path.join(dir, "a")} && echo one > ${path.join(dir, "a", "t1.txt")}`,
+        description: "create first file",
+      })
+      yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("bash"), "first done")
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "create the first file" }],
+      })
+      yield* prompt.loop({ sessionID: session.id })
+
+      yield* llm.toolMatch((hit) => JSON.stringify(hit.body).includes("second file"), "bash", {
+        command: `mkdir -p ${path.join(dir, "b")} && echo two > ${path.join(dir, "b", "t2.txt")}`,
+        description: "create second file",
+      })
+      yield* llm.textMatch((hit) => JSON.stringify(hit.body).includes("bash"), "second done")
+      yield* prompt.prompt({
+        sessionID: session.id,
+        agent: "build",
+        noReply: true,
+        parts: [{ type: "text", text: "create the second file" }],
+      })
+      yield* prompt.loop({ sessionID: session.id })
+
+      const allMsgs = yield* MessageV2.filterCompactedEffect(session.id)
+      const users = allMsgs.filter(
+        (msg): msg is SessionV1.WithParts & { info: SessionV1.User } => msg.info.role === "user",
+      )
+      expect(users.length).toBeGreaterThanOrEqual(2)
+
+      const first = yield* pollDiffs(
+        summary.diff({ sessionID: session.id, messageID: users[0]!.info.id }),
+        (items) => items.some((d) => d.file === "a/t1.txt"),
+      )
+      // Turn-scoped: the first user message's diff reflects only its own turn.
+      expect(first.map((d) => d.file)).toContain("a/t1.txt")
+      expect(first.map((d) => d.file)).not.toContain("b/t2.txt")
+
+      const second = yield* pollDiffs(
+        summary.diff({ sessionID: session.id, messageID: users[1]!.info.id }),
+        (items) => items.some((d) => d.file === "b/t2.txt"),
+      )
+      expect(second.map((d) => d.file)).toContain("b/t2.txt")
+      expect(second.map((d) => d.file)).not.toContain("a/t1.txt")
+    }),
+    { git: true, config: providerCfg },
+  ),
+  20000,
 )

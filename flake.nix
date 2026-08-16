@@ -224,7 +224,6 @@
                 gzip
                 patchelf
                 ripgrep
-                jetbrains.jdk
                 jdk21
                 kilo-dev
                 kilo-install-bin

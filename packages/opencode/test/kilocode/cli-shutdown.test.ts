@@ -71,7 +71,6 @@ mock.module("@/kilocode/help-command", () => ({
 }))
 
 for (const path of [
-  "@/kilocode/cli/cmd/console",
   "@/kilocode/cli/cmd/roll-call",
   "@/kilocode/cli/cmd/profile",
   "@/kilocode/cli/cmd/daemon",
@@ -80,7 +79,6 @@ for (const path of [
   "@/cli/cmd/config",
 ]) {
   mock.module(path, () => ({
-    KiloConsoleCommand: { command: "console", handler() {} },
     RollCallCommand: { command: "roll-call", handler() {} },
     ProfileCommand: { command: "profile", handler() {} },
     DaemonCommand: { command: "daemon", handler() {} },

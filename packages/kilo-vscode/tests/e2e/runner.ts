@@ -465,6 +465,7 @@ interface ScenarioFlags {
   runRealRestart: boolean
   runSidebarRemoval: boolean
   runWorktreeRemoval: boolean
+  runCloudClawRemoval: boolean
 }
 
 /**
@@ -508,6 +509,14 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // rollback phase against the run-owned scripted provider (real backend
     // sessions — never part of `all`).
     runWorktreeRemoval: scenario === "worktree-removal",
+    // P3.3 cloud-claw-removal is focused-only: it asserts runtime manifest /
+    // command-table / bundle-list absence of the removed cloud-session, KiloClaw,
+    // local Console, and JetBrains product surfaces, then proves the retained
+    // Open-in-Tab and Agent Manager surfaces stay ready. No synthetic fixtures,
+    // no CDP DOM driving, no model requests — all assertions run
+    // extension-host-side and are recorded into
+    // `<scratch>/cloud-claw-removal-runtime-evidence`.
+    runCloudClawRemoval: scenario === "cloud-claw-removal",
   }
 }
 
@@ -532,11 +541,12 @@ export async function run(): Promise<void> {
     "real-restart",
     "sidebar-removal",
     "worktree-removal",
+    "cloud-claw-removal",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal | worktree-removal (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal | worktree-removal | cloud-claw-removal (default: all)",
     )
   }
   const {
@@ -550,6 +560,7 @@ export async function run(): Promise<void> {
     runRealRestart,
     runSidebarRemoval,
     runWorktreeRemoval,
+    runCloudClawRemoval,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -591,31 +602,10 @@ export async function run(): Promise<void> {
 
   const iso = new Date().toISOString()
 
-  // --- P3.1 sidebar-removal scenario (focused only) ---
-  // Proves the ordinary single-chat Activity Bar sidebar is gone from the
-  // loaded manifest, and that the "Open in Tab" session editor survives
-  // without it: the production openInTab command opens a real TabPanel whose
-  // webview reaches readiness (env-gated fixture bridge), and the Agent
-  // Manager panel opened above still reports readiness. All assertions run
-  // extension-host-side; no CDP DOM driving is needed because the removed
-  // surface never renders and tab readiness is proven through the bridge.
-  if (runSidebarRemoval) {
-    await assertSidebarRemoval(vscode, ext, scratch, fixtureId)
-  }
-
-  // --- P3.2 worktree-removal scenario (focused only) ---
-  // Proves the loaded manifest + runtime command table expose no managed
-  // worktree or custom Diff Viewer surface, that root-local Agent Manager
-  // orchestration survives with two root-local sessions, and that no worktree
-  // state is created in the run-owned workspace. All assertions run
-  // extension-host-side and are recorded into
-  // `<scratch>/worktree-removal-runtime-evidence`; the harness then drives the
-  // seeded two-session controllability and the bounded H-12 rollback over
-  // CDP (see assertWorktreeRemovalLifecycle in script/e2e-probe.ts).
-  if (runWorktreeRemoval) {
-    await assertWorktreeRemoval(vscode, ext, scratch, fixtureId)
-    await serviceWorktreeRemovalBoundary(vscode, scratch, fixtureId)
-  }
+  // --- P3 removal scenarios (focused only) — dispatched from a helper so the
+  // run() complexity stays under the ESLint cap. Each proves one removed
+  // product surface is absent while the retained editor surfaces stay ready.
+  await runRemovalScenarios(vscode, ext, scratch, fixtureId, runSidebarRemoval, runWorktreeRemoval, runCloudClawRemoval)
 
   // --- Tab-close scenario fixtures (TA, TB, TC) — independent of child/variant ---
   // Seeds three session tabs in a known order [TA, TB, TC] with TA active, using
@@ -959,6 +949,58 @@ export async function run(): Promise<void> {
 
   await waitForHarness(scratch, join(scratch, "done"), 120_000, "harness done marker")
   writeFileSync(join(scratch, "runner-done"), "ok")
+}
+
+/**
+ * Dispatch the focused P3 removal scenarios (P3.1 sidebar, P3.2 worktree, P3.3
+ * cloud/KiloClaw/Console/JetBrains). Extracted from run() to keep its ESLint
+ * complexity under the cap. Each scenario proves one removed product surface
+ * is absent while the retained editor surfaces (Open in Tab / Agent Manager)
+ * stay ready; all assertions run extension-host-side.
+ */
+async function runRemovalScenarios(
+  vscodeApi: typeof vscode,
+  ext: vscode.Extension<unknown>,
+  scratch: string,
+  fixtureId: string,
+  runSidebarRemoval: boolean,
+  runWorktreeRemoval: boolean,
+  runCloudClawRemoval: boolean,
+): Promise<void> {
+  // P3.1 sidebar-removal: proves the ordinary single-chat Activity Bar sidebar
+  // is gone from the loaded manifest, and that the "Open in Tab" session editor
+  // survives without it — the production openInTab command opens a real TabPanel
+  // whose webview reaches readiness (env-gated fixture bridge), and the Agent
+  // Manager panel opened above still reports readiness. No CDP DOM driving is
+  // needed because the removed surface never renders and tab readiness is proven
+  // through the bridge.
+  if (runSidebarRemoval) {
+    await assertSidebarRemoval(vscodeApi, ext, scratch, fixtureId)
+  }
+
+  // P3.2 worktree-removal: proves the loaded manifest + runtime command table
+  // expose no managed worktree or custom Diff Viewer surface, that root-local
+  // Agent Manager orchestration survives with two root-local sessions, and that
+  // no worktree state is created in the run-owned workspace. All assertions run
+  // extension-host-side and are recorded into
+  // `<scratch>/worktree-removal-runtime-evidence`; the harness then drives the
+  // seeded two-session controllability and the bounded H-12 rollback over CDP
+  // (see assertWorktreeRemovalLifecycle in script/e2e-probe.ts).
+  if (runWorktreeRemoval) {
+    await assertWorktreeRemoval(vscodeApi, ext, scratch, fixtureId)
+    await serviceWorktreeRemovalBoundary(vscodeApi, scratch, fixtureId)
+  }
+
+  // P3.3 cloud-claw-removal: proves the loaded manifest, runtime command table,
+  // and built bundle list expose no active cloud-session, KiloClaw, local
+  // Console, or JetBrains product contribution (LOCK-003/PERF-3), while the
+  // retained Open-in-Tab and Agent Manager surfaces still become ready
+  // (LOCK-008). No synthetic fixtures, no CDP DOM driving, and no model
+  // requests or external calls; evidence in
+  // `<scratch>/cloud-claw-removal-runtime-evidence`.
+  if (runCloudClawRemoval) {
+    await assertCloudClawRemoval(vscodeApi, ext, scratch, fixtureId)
+  }
 }
 
 /**
@@ -1313,6 +1355,250 @@ async function assertWorktreeRemoval(
     ),
   )
   writeFileSync(join(scratch, "worktree-removal-ready"), fixtureId)
+}
+
+/**
+ * Forbidden P3.3 active-product identifiers (cloud sessions, KiloClaw, local
+ * Console, JetBrains). Identifier-based by design (LOCK-003): each is a
+ * product-unique token that would only be present if that removed product's
+ * extension surface were still active — no broad substring search. Retained
+ * generic names are deliberately NOT here, so unrelated future strings are
+ * never banned:
+ *   - the `jetbrainsMono` font option (webview i18n, not a product surface),
+ *   - the legacy autocomplete `IdeType = "vscode" | "jetbrains"` enum,
+ *   - generic `console` / `cloud` words in retained strings.
+ * Mirrors the static P3.3 contract (tests/unit/cloud-claw-removal.test.ts).
+ */
+const FORBIDDEN_PRODUCT_IDS = [
+  // cloud sessions
+  "openCloudSession",
+  "selectCloudSession",
+  "cloudSessionCtx",
+  "cloudPreviewId",
+  "RequestCloudSessions",
+  "RequestCloudSessionData",
+  "CloudSessionsLoaded",
+  "CloudSessionDataLoaded",
+  "CloudSessionImported",
+  "CloudSessionImportFailed",
+  "OpenCloudSessionMessage",
+  "ImportAndSendMessage",
+  "GitRemoteUrl",
+  "CloudSessionList",
+  "CloudImportDialog",
+  // KiloClaw
+  "KiloClawProvider",
+  "kiloClawProvider",
+  "kilo-code.new.kiloClawOpen",
+  "openKiloClaw",
+  "OpenKiloClawRequest",
+  "kiloclaw",
+  // local Console
+  "ConsoleProvider",
+  "kilo-code.new.consoleOpen",
+  "openLocalConsole",
+  "LocalConsole",
+  // JetBrains
+  "JetBrainsProvider",
+  "jetbrainsProvider",
+  "kilo-code.new.jetbrainsOpen",
+  "openJetBrains",
+  "jetbrainsPanel",
+]
+
+/**
+ * Removed-product bundle filename prefixes. A file under the extension's built
+ * `dist/` whose basename starts with any of these is a forbidden active
+ * product bundle (e.g. `kiloclaw.js`, `cloud-session.js`, `console.js`,
+ * `jetbrains.js`). Identifier-based: only exact removed-product bundle names
+ * match, never the retained `webview.js` / `agent-manager.js` / `extension.js`
+ * / `shiki-worker.js` assets.
+ */
+const FORBIDDEN_BUNDLE_PREFIXES = ["kiloclaw", "cloud-session", "console", "jetbrains", "claw"]
+
+/**
+ * P3.3 cloud-claw-removal assertions (extension-host side):
+ *   1. assertNoForbiddenProductContributions — the loaded manifest contributes
+ *      no forbidden cloud-session / KiloClaw / Console / JetBrains surface
+ *      (views, containers, commands, keybindings, menus, settings) —
+ *      identifier-based, so retained generic names are never banned,
+ *   2. assertNoForbiddenProductRuntimeCommands — the RUNTIME command table
+ *      registers no removed-product command (LOCK-PERF-3) and keeps the
+ *      retained root-local surface commands,
+ *   3. assertNoForbiddenProductBundles — the built `dist/` contains no removed
+ *      KiloClaw/Console/JetBrains/cloud-session product bundle,
+ *   4. retained surfaces stay ready: the production "Open in Tab" editor panel
+ *      opens and reaches webview readiness, and the Agent Manager panel still
+ *      reports readiness (LOCK-008).
+ * Writes `<scratch>/cloud-claw-removal-runtime-evidence` (durable runtime
+ * facts) and `<scratch>/cloud-claw-removal-ready`. Throws on any assertion
+ * failure so the Extension Host run exits non-zero. No synthetic fixtures, no
+ * CDP DOM driving, and no model requests or external calls.
+ */
+async function assertCloudClawRemoval(
+  vscodeApi: typeof vscode,
+  ext: vscode.Extension<unknown>,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  const contributes = (ext.packageJSON?.contributes ?? {}) as Record<string, unknown>
+  const manifest = assertNoForbiddenProductContributions(contributes)
+  const runtime = await assertNoForbiddenProductRuntimeCommands(vscodeApi)
+  const bundles = assertNoForbiddenProductBundles(ext)
+
+  const probe = await vscodeApi.commands.executeCommand<{ count: number; ready: boolean }>(CMD_OPEN_TAB_READY)
+  if (!probe || probe.count < 1 || !probe.ready) {
+    throw new Error(`probe runner: Open in Tab panel did not become ready: ${JSON.stringify(probe)}`)
+  }
+  const amReady = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
+  if (!amReady) throw new Error("probe runner: Agent Manager readiness lost after P3.3 cloud-claw-removal assertions")
+
+  writeFileSync(
+    join(scratch, "cloud-claw-removal-runtime-evidence"),
+    JSON.stringify(
+      {
+        scenario: "cloud-claw-removal",
+        collectedAt: new Date().toISOString(),
+        pid: process.pid,
+        fixtureId,
+        manifest: {
+          contributedCommandCount: manifest.declaredCommands.length,
+          contributedCommands: manifest.declaredCommands,
+          contributedViewIds: manifest.contributedViewIds,
+          contributedConfigurationProperties: manifest.configProps,
+          forbidden: manifest.forbidden,
+        },
+        runtime: {
+          kiloCommandTotal: runtime.kiloCommands.length,
+          forbiddenCommandHits: runtime.runtimeForbidden,
+          retainedCommands: {
+            agentManagerOpen: runtime.kiloCommands.includes("kilo-code.new.agentManagerOpen"),
+            openInTab: runtime.kiloCommands.includes("kilo-code.new.openInTab"),
+            agentManagerNewTab: runtime.kiloCommands.includes("kilo-code.new.agentManager.newTab"),
+          },
+        },
+        bundles: {
+          distDir: bundles.distDir,
+          bundleCount: bundles.bundleFiles.length,
+          bundleFiles: bundles.bundleFiles,
+          forbiddenBundleHits: bundles.forbiddenBundleHits,
+        },
+        retained: {
+          openInTab: { panels: probe.count, ready: probe.ready },
+          agentManager: { ready: amReady },
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  writeFileSync(join(scratch, "cloud-claw-removal-ready"), fixtureId)
+}
+
+/**
+ * P3.3 manifest absence check (part 1 of assertCloudClawRemoval): the loaded
+ * contributes must expose no forbidden cloud-session / KiloClaw / Console /
+ * JetBrains surface — no product view ids, containers, commands, keybindings,
+ * menus, settings, or identifiers (identifier-based, mirroring
+ * tests/unit/cloud-claw-removal.test.ts). Throws on any violation and returns
+ * the manifest evidence for the durable runtime-evidence file.
+ */
+function assertNoForbiddenProductContributions(contributes: Record<string, unknown>): {
+  declaredCommands: string[]
+  contributedViewIds: string[]
+  configProps: string[]
+  forbidden: Record<string, string[]>
+} {
+  const views = (contributes.views ?? {}) as Record<string, Array<{ id?: string }>>
+  const viewHits: string[] = []
+  for (const group of Object.values(views)) {
+    for (const view of group) {
+      if (view.id && FORBIDDEN_PRODUCT_IDS.includes(view.id)) viewHits.push(view.id)
+    }
+  }
+  const containers = (contributes.viewsContainers ?? {}) as Record<string, Array<{ id?: string }>>
+  const containerHits: string[] = []
+  for (const group of Object.values(containers)) {
+    for (const c of group) {
+      if (c.id && FORBIDDEN_PRODUCT_IDS.includes(c.id)) containerHits.push(c.id)
+    }
+  }
+  const declaredCommands: string[] = ((contributes.commands ?? []) as Array<{ command: string }>).map((c) => c.command)
+  const commandHits = declaredCommands.filter((c) => FORBIDDEN_PRODUCT_IDS.includes(c))
+  const bindingHits = ((contributes.keybindings ?? []) as Array<{ command?: string }>)
+    .map((b) => b.command ?? "")
+    .filter((c) => FORBIDDEN_PRODUCT_IDS.includes(c))
+  const menuHits = Object.values((contributes.menus ?? {}) as Record<string, Array<{ command?: string }>>)
+    .flat()
+    .map((m) => m.command ?? "")
+    .filter((c) => FORBIDDEN_PRODUCT_IDS.includes(c))
+  const configProps = Object.keys(
+    ((contributes.configuration ?? {}) as { properties?: Record<string, unknown> }).properties ?? {},
+  )
+  const settingHits = configProps.filter((k) => FORBIDDEN_PRODUCT_IDS.some((id) => k.includes(id)))
+  const identifierHits = FORBIDDEN_PRODUCT_IDS.filter((id) => JSON.stringify(contributes).includes(id))
+  const forbidden = { viewHits, containerHits, commandHits, bindingHits, menuHits, settingHits, identifierHits }
+  if (Object.values(forbidden).some((hits) => hits.length > 0)) {
+    throw new Error(`probe runner: loaded manifest still exposes a forbidden P3.3 product surface (${JSON.stringify(forbidden)})`)
+  }
+  return {
+    declaredCommands,
+    contributedViewIds: Object.values(views).flat().map((v) => v.id ?? ""),
+    configProps,
+    forbidden,
+  }
+}
+
+/**
+ * P3.3 runtime command-table check (part 2 of assertCloudClawRemoval): the
+ * RUNTIME command table must contain no registered removed-product command
+ * (LOCK-PERF-3) while the retained root-local surface commands exist
+ * (agentManagerOpen / openInTab / agentManager.newTab). Throws on any
+ * violation and returns the runtime evidence.
+ */
+async function assertNoForbiddenProductRuntimeCommands(vscodeApi: typeof vscode): Promise<{
+  kiloCommands: string[]
+  runtimeForbidden: string[]
+}> {
+  const kiloCommands = (await vscodeApi.commands.getCommands(true)).filter((c) => c.startsWith("kilo-code."))
+  const runtimeForbidden = kiloCommands.filter((c) => FORBIDDEN_PRODUCT_IDS.includes(c))
+  if (runtimeForbidden.length > 0) {
+    throw new Error(`probe runner: runtime command table still registers forbidden P3.3 commands: ${runtimeForbidden.join(", ")}`)
+  }
+  for (const retained of ["kilo-code.new.agentManagerOpen", "kilo-code.new.openInTab", "kilo-code.new.agentManager.newTab"]) {
+    if (!kiloCommands.includes(retained)) {
+      throw new Error(`probe runner: retained root-local command missing at runtime: ${retained}`)
+    }
+  }
+  return { kiloCommands, runtimeForbidden }
+}
+
+/**
+ * P3.3 bundle-list check (part 3 of assertCloudClawRemoval): the built
+ * extension/webview asset list under `dist/` must contain no removed
+ * KiloClaw/Console/JetBrains/cloud-session product bundle. Throws on any
+ * violation and returns the bundle evidence.
+ */
+function assertNoForbiddenProductBundles(ext: vscode.Extension<unknown>): {
+  distDir: string
+  bundleFiles: string[]
+  forbiddenBundleHits: string[]
+} {
+  const distDir = join(ext.extensionPath, "dist")
+  let bundleFiles: string[] = []
+  try {
+    bundleFiles = readdirSync(distDir).sort()
+  } catch {
+    // dist/ missing during a source run — treat as no bundles (absence holds).
+    bundleFiles = []
+  }
+  const forbiddenBundleHits = bundleFiles.filter((name) =>
+    FORBIDDEN_BUNDLE_PREFIXES.some((prefix) => name.startsWith(`${prefix}.`)),
+  )
+  if (forbiddenBundleHits.length > 0) {
+    throw new Error(`probe runner: built dist/ still contains forbidden P3.3 product bundles: ${forbiddenBundleHits.join(", ")}`)
+  }
+  return { distDir, bundleFiles, forbiddenBundleHits }
 }
 
 

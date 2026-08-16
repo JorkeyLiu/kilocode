@@ -6,7 +6,7 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">Ο open source agent προγραμματισμού για δημιουργία με AI σε VS Code, JetBrains ή CLI.</p>
+<p align="center">Ο open source agent προγραμματισμού για δημιουργία με AI σε VS Code ή CLI.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
@@ -21,7 +21,7 @@
 
 ---
 
-Το Kilo Code είναι ένας AI agent προγραμματισμού που σας συναντά παντού όπου εργάζεστε: [VS Code](https://kilo.ai/landing/vs-code), [JetBrains](https://kilo.ai/features/jetbrains-native) και [CLI](https://kilo.ai/cli). Είναι open source με ανοιχτή τιμολόγηση. Επιλέγετε από περισσότερα από 500 μοντέλα, αλλάζετε μεταξύ τους στη μέση μιας εργασίας και πληρώνετε την τιμή του παρόχου του μοντέλου χωρίς προσαύξηση. Δεν απαιτούνται API keys για να ξεκινήσετε.
+Το Kilo Code είναι ένας AI agent προγραμματισμού που σας συναντά παντού όπου εργάζεστε: [VS Code](https://kilo.ai/landing/vs-code) και [CLI](https://kilo.ai/cli). Είναι open source με ανοιχτή τιμολόγηση. Επιλέγετε από περισσότερα από 500 μοντέλα, αλλάζετε μεταξύ τους στη μέση μιας εργασίας και πληρώνετε την τιμή του παρόχου του μοντέλου χωρίς προσαύξηση. Δεν απαιτούνται API keys για να ξεκινήσετε.
 
 ### Εγκατάσταση
 
@@ -66,15 +66,6 @@ paru -S kilo-bin
 </details>
 
 <details>
-<summary><strong>JetBrains</strong></summary>
-
-<br>
-
-Εγκαταστήστε το [plugin Kilo Code](https://plugins.jetbrains.com/plugin/28350-kilo-code) από το JetBrains Marketplace ή αναζητήστε "Kilo Code" στο `Settings → Plugins` σε οποιοδήποτε JetBrains IDE.
-
-</details>
-
-<details>
 <summary><strong>Cloud Agent</strong></summary>
 
 <br>
@@ -89,15 +80,6 @@ paru -S kilo-bin
 <br>
 
 Ρυθμίστε αυτοματοποιημένα AI code reviews στα pull requests σας στο [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews).
-
-</details>
-
-<details>
-<summary><strong>KiloClaw</strong></summary>
-
-<br>
-
-Εκκινήστε τον πάντα ενεργό AI agent σας στο [app.kilo.ai/claw](https://app.kilo.ai/claw).
 
 </details>
 
@@ -155,7 +137,7 @@ kilo run --auto "run tests and fix any failures"
 
 ### Συνεισφορά
 
-Οι συνεισφορές είναι ευπρόσδεκτες από developers, writers και όλους. Ξεκινήστε με τον [Contributing Guide](/CONTRIBUTING.md) για ρύθμιση περιβάλλοντος, πρότυπα κώδικα και άνοιγμα pull request. Δείτε το [RELEASING.md](../RELEASING.md) για τη διαδικασία release της επέκτασης VS Code και του CLI, και το [packages/kilo-jetbrains/RELEASING.md](../packages/kilo-jetbrains/RELEASING.md) για το JetBrains plugin.
+Οι συνεισφορές είναι ευπρόσδεκτες από developers, writers και όλους. Ξεκινήστε με τον [Contributing Guide](/CONTRIBUTING.md) για ρύθμιση περιβάλλοντος, πρότυπα κώδικα και άνοιγμα pull request. Δείτε το [RELEASING.md](../RELEASING.md) για τη διαδικασία release της επέκτασης VS Code και του CLI.
 
 Παρακαλούμε διαβάστε τον [Code of Conduct](/CODE_OF_CONDUCT.md) πριν συμμετάσχετε.
 

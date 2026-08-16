@@ -95,37 +95,6 @@ export interface RequestSessionModelUsageMessage {
   requestID: string
 }
 
-export interface RequestCloudSessionsMessage {
-  type: "requestCloudSessions"
-  cursor?: string
-  limit?: number
-  gitUrl?: string
-}
-
-export interface RequestGitRemoteUrlMessage {
-  type: "requestGitRemoteUrl"
-}
-
-export interface RequestCloudSessionDataMessage {
-  type: "requestCloudSessionData"
-  sessionId: string
-}
-
-export interface ImportAndSendMessage {
-  type: "importAndSend"
-  cloudSessionId: string
-  text: string
-  messageID?: string
-  providerID?: string
-  modelID?: string
-  agent?: string
-  variant?: string
-  files?: FileAttachment[]
-  review?: ReviewMessageData
-  command?: string
-  commandArgs?: string
-}
-
 export interface LoginRequest {
   type: "login"
 }
@@ -235,10 +204,6 @@ export interface OpenConfigFileRequest {
 export interface OpenMarketplacePanelRequest {
   type: "openMarketplacePanel"
   directory?: string
-}
-
-export interface OpenKiloClawRequest {
-  type: "openKiloClaw"
 }
 
 export interface RequestAgentsMessage {
@@ -920,8 +885,6 @@ export type WebviewMessage =
   | LoadMessagesRequest
   | LoadSessionsRequest
   | RequestSessionModelUsageMessage
-  | RequestCloudSessionsMessage
-  | RequestGitRemoteUrlMessage
   | LoginRequest
   | LogoutRequest
   | RefreshProfileRequest
@@ -931,7 +894,6 @@ export type WebviewMessage =
   | OpenVSCodeSettingsRequest
   | OpenConfigFileRequest
   | OpenMarketplacePanelRequest
-  | OpenKiloClawRequest
   | OpenFileRequest
   | ValidateFilesRequest
   | CancelLoginRequest
@@ -1010,8 +972,6 @@ export type WebviewMessage =
   | SetSidebarCollapsedRequest
   | PersistVariantRequest
   | RequestVariantsMessage
-  | RequestCloudSessionDataMessage
-  | ImportAndSendMessage
   // legacy-migration start
   | RequestMigrationDataMessage
   | StartMigrationMessage

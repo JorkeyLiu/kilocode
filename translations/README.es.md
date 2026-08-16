@@ -6,7 +6,7 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">El agente de programación de código abierto para construir con IA en VS Code, JetBrains o la CLI.</p>
+<p align="center">El agente de programación de código abierto para construir con IA en VS Code o la CLI.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
@@ -21,7 +21,7 @@
 
 ---
 
-Kilo Code es un agente de programación con IA que te acompaña en todos los lugares donde trabajas: [VS Code](https://kilo.ai/landing/vs-code), [JetBrains](https://kilo.ai/features/jetbrains-native) y la [CLI](https://kilo.ai/cli). Es de código abierto y tiene precios abiertos. Puedes elegir entre más de 500 modelos, cambiar entre ellos a mitad de una tarea y pagar la tarifa del proveedor del modelo sin recargos. No necesitas claves de API para empezar.
+Kilo Code es un agente de programación con IA que te acompaña en todos los lugares donde trabajas: [VS Code](https://kilo.ai/landing/vs-code) y la [CLI](https://kilo.ai/cli). Es de código abierto y tiene precios abiertos. Puedes elegir entre más de 500 modelos, cambiar entre ellos a mitad de una tarea y pagar la tarifa del proveedor del modelo sin recargos. No necesitas claves de API para empezar.
 
 ### Instalación
 
@@ -66,15 +66,6 @@ Luego ejecuta `kilo` en cualquier directorio de proyecto para empezar.
 </details>
 
 <details>
-<summary><strong>JetBrains</strong></summary>
-
-<br>
-
-Instala el [plugin Kilo Code](https://plugins.jetbrains.com/plugin/28350-kilo-code) desde JetBrains Marketplace, o busca "Kilo Code" en `Settings → Plugins` dentro de cualquier IDE de JetBrains.
-
-</details>
-
-<details>
 <summary><strong>Cloud Agent</strong></summary>
 
 <br>
@@ -89,15 +80,6 @@ Ejecuta Kilo desde la web, sin necesitar una máquina local, en [app.kilo.ai/clo
 <br>
 
 Configura revisiones automáticas de código con IA en tus pull requests en [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews).
-
-</details>
-
-<details>
-<summary><strong>KiloClaw</strong></summary>
-
-<br>
-
-Activa tu agente de IA siempre disponible en [app.kilo.ai/claw](https://app.kilo.ai/claw).
 
 </details>
 
@@ -155,7 +137,7 @@ Para configuración y todo lo demás, consulta la [documentación](https://kilo.
 
 ### Contribuir
 
-Las contribuciones de desarrolladores, escritores y cualquier persona son bienvenidas. Empieza con la [Guía de contribución](/CONTRIBUTING.md) para la configuración del entorno, los estándares de código y cómo abrir un pull request. Consulta [RELEASING.md](../RELEASING.md) para el proceso de lanzamiento de la extensión de VS Code y la CLI, y [packages/kilo-jetbrains/RELEASING.md](../packages/kilo-jetbrains/RELEASING.md) para el plugin de JetBrains.
+Las contribuciones de desarrolladores, escritores y cualquier persona son bienvenidas. Empieza con la [Guía de contribución](/CONTRIBUTING.md) para la configuración del entorno, los estándares de código y cómo abrir un pull request. Consulta [RELEASING.md](../RELEASING.md) para el proceso de lanzamiento de la extensión de VS Code y la CLI.
 
 Lee nuestro [Código de conducta](/CODE_OF_CONDUCT.md) antes de participar.
 

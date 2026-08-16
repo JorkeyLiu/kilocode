@@ -119,7 +119,6 @@ Agent Manager presentation state (open tabs, active tab, sidebar state, tab orde
 
 - **"Please open a folder…" error** — the Agent Manager requires a VS Code workspace folder
 - **Provider or authentication errors** — open extension Settings and verify your sign-in, provider, model, or BYOK configuration. Agent Manager uses the same settings as the rest of the extension.
-- **Session history missing cloud sessions** — sign in through the extension and confirm the repository remote matches the sessions you expect to see.
 
 ## Related features
 

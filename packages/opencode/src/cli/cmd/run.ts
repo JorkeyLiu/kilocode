@@ -29,7 +29,6 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { FormatError, FormatUnknownError } from "../error"
 import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.stdin"
 import { event as normalizeEvent } from "./run/event"
-import { importCloudSession, validateCloudFork } from "@/kilocode/cloud-session" // kilocode_change
 import { KiloRunAuto } from "@/kilocode/cli/run-auto" // kilocode_change
 import { KiloHeadless } from "@/kilocode/permission/headless" // kilocode_change
 import { KiloRun, KiloRunDaemon } from "@/kilocode/cli/cmd/run" // kilocode_change
@@ -165,12 +164,6 @@ export const RunCommand = effectCmd({
         describe: "fork the session before continuing (requires --continue or --session)",
         type: "boolean",
       })
-      // kilocode_change start - support cloud fork in run command
-      .option("cloud-fork", {
-        type: "boolean",
-        describe: "fetch session from cloud and continue locally (use with --session)",
-      })
-      // kilocode_change end
       .option("share", {
         type: "boolean",
         describe: "share the session",
@@ -389,19 +382,6 @@ export const RunCommand = effectCmd({
         process.exit(1)
       }
 
-      // kilocode_change start - validate cloud session imports before local lookup
-      const cloudForkError = validateCloudFork({
-        cloudFork: args["cloud-fork"],
-        fork: args.fork,
-        continue: args.continue,
-        session: args.session,
-      })
-      if (cloudForkError) {
-        UI.error(cloudForkError)
-        process.exit(1)
-      }
-      // kilocode_change end
-
       const rules: PermissionV1.Ruleset = args.interactive
         ? []
         : [
@@ -436,34 +416,6 @@ export const RunCommand = effectCmd({
       }
 
       async function session(sdk: KiloClient): Promise<SessionInfo | undefined> {
-        // kilocode_change start - import cloud session before local lookup
-        if (args.session && args["cloud-fork"]) {
-          const id = await importCloudSession(sdk, args.session).catch(() => undefined)
-          if (!id) {
-            UI.error("Failed to import session from cloud")
-            process.exit(1)
-          }
-
-          const current = await sdk.session
-            .get({
-              sessionID: id,
-            })
-            .catch(() => undefined)
-
-          if (!current?.data) {
-            UI.error("Session not found")
-            process.exit(1)
-          }
-
-          return {
-            id: current.data.id,
-            title: current.data.title,
-            directory: current.data.directory,
-            model: current.data.model,
-          }
-        }
-        // kilocode_change end
-
         if (args.session) {
           const current = await sdk.session
             .get({

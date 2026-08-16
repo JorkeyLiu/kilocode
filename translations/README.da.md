@@ -6,7 +6,7 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">Den open source-kodeagent til at bygge med AI i VS Code, JetBrains eller CLI.</p>
+<p align="center">Den open source-kodeagent til at bygge med AI i VS Code eller CLI.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
@@ -21,7 +21,7 @@
 
 ---
 
-Kilo Code er en AI-kodeagent, der møder dig overalt, hvor du arbejder: [VS Code](https://kilo.ai/landing/vs-code), [JetBrains](https://kilo.ai/features/jetbrains-native) og [CLI](https://kilo.ai/cli). Den er open source med åben prissætning. Du vælger mellem mere end 500 modeller, skifter mellem dem midt i en opgave og betaler modeludbyderens pris uden tillæg. Ingen API-nøgler kræves for at komme i gang.
+Kilo Code er en AI-kodeagent, der møder dig overalt, hvor du arbejder: [VS Code](https://kilo.ai/landing/vs-code) og [CLI](https://kilo.ai/cli). Den er open source med åben prissætning. Du vælger mellem mere end 500 modeller, skifter mellem dem midt i en opgave og betaler modeludbyderens pris uden tillæg. Ingen API-nøgler kræves for at komme i gang.
 
 ### Installation
 
@@ -66,15 +66,6 @@ Kør derefter `kilo` i en vilkårlig projektmappe for at starte.
 </details>
 
 <details>
-<summary><strong>JetBrains</strong></summary>
-
-<br>
-
-Installer [Kilo Code-pluginet](https://plugins.jetbrains.com/plugin/28350-kilo-code) fra JetBrains Marketplace, eller søg efter "Kilo Code" i `Settings → Plugins` i en JetBrains IDE.
-
-</details>
-
-<details>
 <summary><strong>Cloud Agent</strong></summary>
 
 <br>
@@ -89,15 +80,6 @@ Kør Kilo fra webben, uden lokal maskine, på [app.kilo.ai/cloud](https://app.ki
 <br>
 
 Opsæt automatiske AI-kodegennemgange på dine pull requests på [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews).
-
-</details>
-
-<details>
-<summary><strong>KiloClaw</strong></summary>
-
-<br>
-
-Start din altid aktive AI-agent på [app.kilo.ai/claw](https://app.kilo.ai/claw).
 
 </details>
 
@@ -155,7 +137,7 @@ For konfiguration og alt andet, se [dokumentationen](https://kilo.ai/docs).
 
 ### Bidrag
 
-Bidrag er velkomne fra udviklere, forfattere og alle andre. Start med [Contributing Guide](/CONTRIBUTING.md) for miljøopsætning, kodestandarder og hvordan du åbner en pull request. Se [RELEASING.md](../RELEASING.md) for releaseprocessen for VS Code-udvidelsen og CLI'en, og [packages/kilo-jetbrains/RELEASING.md](../packages/kilo-jetbrains/RELEASING.md) for JetBrains-pluginet.
+Bidrag er velkomne fra udviklere, forfattere og alle andre. Start med [Contributing Guide](/CONTRIBUTING.md) for miljøopsætning, kodestandarder og hvordan du åbner en pull request. Se [RELEASING.md](../RELEASING.md) for releaseprocessen for VS Code-udvidelsen og CLI'en.
 
 Læs venligst vores [Code of Conduct](/CODE_OF_CONDUCT.md), før du deltager.
 

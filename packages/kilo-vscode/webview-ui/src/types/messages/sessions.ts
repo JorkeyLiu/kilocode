@@ -63,12 +63,4 @@ export interface SessionInfo {
 
 export type SessionUpdate = Partial<SessionInfo> & Pick<SessionInfo, "id">
 
-// Cloud session info (from Kilo cloud API)
-export interface CloudSessionInfo {
-  session_id: string
-  title: string | null
-  created_at: string
-  updated_at: string
-}
-
 export type MessageLoadMode = "replace" | "prepend" | "focus" | "reconcile"

@@ -1,6 +1,6 @@
 /**
  * Mercury Next Edit prompt assembly. Lives in the gateway so every client
- * (VS Code, JetBrains, TUI) sends the same structured editor context and the
+ * (VS Code, TUI) sends the same structured editor context and the
  * Mercury-specific sentinel format is defined in exactly one place.
  *
  * Tag set is defined by the model and must be reproduced verbatim — see

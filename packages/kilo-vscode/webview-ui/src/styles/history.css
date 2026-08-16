@@ -89,8 +89,7 @@
 }
 
 /* Title column — flex row so seq and title text share space */
-.session-list [data-slot="list-item-title"],
-.cloud-session-list [data-slot="list-item-title"] {
+.session-list [data-slot="list-item-title"] {
   display: flex;
   align-items: center;
   gap: 4px;
@@ -98,27 +97,20 @@
   text-align: left;
 }
 
-.session-list [data-slot="list-item-title-text"],
-.cloud-session-list [data-slot="list-item-title-text"] {
+.session-list [data-slot="list-item-title-text"] {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.session-list [data-slot="list-item-description"],
-.cloud-session-list [data-slot="list-item-description"] {
+.session-list [data-slot="list-item-description"] {
   font-size: var(--kilo-font-size-12);
   color: var(--text-weak, var(--vscode-descriptionForeground));
   white-space: nowrap;
 }
 
 body.vscode-light .session-list [data-slot="list-item"][data-active="true"] [data-slot="list-item-description"],
-body.vscode-light .session-list [data-slot="list-item"][data-selected="true"] [data-slot="list-item-description"],
-body.vscode-light .cloud-session-list [data-slot="list-item"][data-active="true"] [data-slot="list-item-description"],
-body.vscode-light
-  .cloud-session-list
-  [data-slot="list-item"][data-selected="true"]
-  [data-slot="list-item-description"] {
+body.vscode-light .session-list [data-slot="list-item"][data-selected="true"] [data-slot="list-item-description"] {
   color: var(--text-on-interactive-base, white);
 }
 
@@ -189,7 +181,7 @@ body.vscode-light
   }
 }
 
-/* History View (unified Local + Cloud tabs) */
+/* History View (local session list) */
 .history-view {
   display: flex;
   flex-direction: column;
@@ -206,44 +198,6 @@ body.vscode-light
   min-height: 40px;
 }
 
-.history-view-tabs {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  flex: 1;
-}
-
-.history-tab-btn {
-  appearance: none;
-  border: none;
-  background: transparent;
-  cursor: pointer;
-  padding: 3px 10px;
-  border-radius: 4px;
-  font-size: var(--kilo-font-size-12);
-  color: var(--vscode-foreground);
-  opacity: 0.6;
-  transition:
-    opacity 0.1s,
-    background 0.1s;
-  white-space: nowrap;
-}
-
-.history-tab-btn:hover {
-  opacity: 1;
-  background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.1));
-}
-
-.history-tab-btn--active {
-  opacity: 1;
-  background: var(--vscode-toolbar-activeBackground, rgba(128, 128, 128, 0.2));
-  font-weight: 600;
-}
-
-.history-import-btn {
-  flex-shrink: 0;
-}
-
 .history-view-content {
   flex: 1;
   min-height: 0;
@@ -255,33 +209,6 @@ body.vscode-light
   display: none;
 }
 
-/* Cloud Session List (inside History View) */
-.cloud-session-list {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-height: 0;
-}
-
-/* Make the list search wrapper wrap so the repo filter appears below search */
-.cloud-session-list [data-slot="list-search-wrapper"] {
-  flex-wrap: wrap;
-}
-
-.cloud-session-repo-filter {
-  width: 100%;
-  padding: 4px 10px 2px;
-
-  [data-component="checkbox"] {
-    gap: 8px;
-
-    [data-slot="checkbox-checkbox-label"] {
-      padding-inline-start: 0;
-      margin-inline-end: 0;
-    }
-  }
-}
-
 [data-component="input"][data-variant="normal"] [data-slot="input-wrapper"]:focus-within:not(:has([data-readonly])) {
   border-color: transparent;
   box-shadow: none;
@@ -289,14 +216,14 @@ body.vscode-light
   outline-offset: -1px;
 }
 
-.cloud-session-load-more {
+.session-load-more {
   flex-shrink: 0;
   display: flex;
   justify-content: center;
   padding: 8px;
 }
 
-.cloud-session-load-more-btn {
+.session-load-more-btn {
   appearance: none;
   border: none;
   background: transparent;
@@ -308,7 +235,7 @@ body.vscode-light
   border-radius: 4px;
 }
 
-.cloud-session-load-more-btn:hover {
+.session-load-more-btn:hover {
   opacity: 1;
   background: var(--vscode-toolbar-hoverBackground, rgba(128, 128, 128, 0.1));
 }

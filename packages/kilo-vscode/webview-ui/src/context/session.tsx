@@ -91,7 +91,6 @@ import { createPendingPullBacks } from "./session-pull-back"
 import { clearSessionDraftDiscarded, deleteDraftsForSession } from "../utils/draft-store"
 import { capturePullBack } from "../utils/pull-back"
 import { createAbortState } from "./abort-state"
-import { clearIfOn, createCloudPrune } from "./session-cloud-prune"
 import { isSameSessionTree } from "./model-usage"
 import { createDraftAgentSeed } from "./session-agent"
 import { seedPendingChoices } from "./session-pending"
@@ -326,10 +325,6 @@ interface SessionContextValue {
   renameSession: (id: string, title: string) => void
   exportSessionTranscript: (id: string) => void
   syncSession: (sessionID: string) => void
-
-  // Cloud session preview
-  cloudPreviewId: Accessor<string | null>
-  selectCloudSession: (cloudSessionId: string) => void
   draftSessionID: Accessor<string | undefined>
   setDraftSessionID: (id: string | undefined) => void
   userClearedSession: Accessor<boolean>
@@ -513,7 +508,6 @@ export const SessionProvider: ParentComponent = (props) => {
   }
 
   // Cloud session preview state
-  const [cloudPreviewId, setCloudPreviewId] = createSignal<string | null>(null)
   const [hiddenErrors, setHiddenErrors] = createSignal<Set<string>>(new Set())
 
   // Tracks optimistic messageIDs that haven't been confirmed by the server yet.
@@ -586,7 +580,7 @@ export const SessionProvider: ParentComponent = (props) => {
 
   function refreshModelUsage() {
     const sessionID = currentSessionID()
-    if (!sessionID || sessionID.startsWith("cloud:")) return
+    if (!sessionID) return
     const requestID = crypto.randomUUID()
     setStore("modelUsage", sessionID, { requestID, data: store.modelUsage[sessionID]?.data })
     vscode.postMessage({ type: "requestSessionModelUsage", sessionID, requestID })
@@ -640,8 +634,6 @@ export const SessionProvider: ParentComponent = (props) => {
         produce((agents) => void delete agents[draft]),
       ),
   })
-
-  const { pendingCloudPrune, prune: pruneCloudOrphans } = createCloudPrune((m) => setStore("parts", produce(m)), stash)
 
   /** Per-mode model from config (e.g. config.agent.code.model). */
   function getModeModel(agentName: string): ModelSelection | null {
@@ -1282,50 +1274,6 @@ export const SessionProvider: ParentComponent = (props) => {
       case "sendMessageFailed":
         handleSendMessageFailed(message as unknown as SendMessageFailedMessage)
         break
-
-      case "cloudSessionDataLoaded":
-        handleCloudSessionDataLoaded(message.cloudSessionId, message.title, message.messages)
-        break
-
-      case "cloudSessionImported":
-        handleCloudSessionImported(message.cloudSessionId, message.session)
-        break
-
-      case "cloudSessionImportFailed": {
-        const failedKey = `cloud:${message.cloudSessionId}`
-        pruneCloudOrphans(failedKey)
-        setStore(
-          "sessions",
-          produce((sessions) => {
-            delete sessions[failedKey]
-          }),
-        )
-        setStore(
-          "messages",
-          produce((messages) => {
-            delete messages[failedKey]
-          }),
-        )
-        setStore(
-          "toolParts",
-          produce((toolParts) => {
-            delete toolParts[failedKey]
-          }),
-        )
-        // cloudPreviewId stores the raw cloud session id (see selectCloudSession),
-        // not the synthetic "cloud:<id>" key used for session/draft ids.
-        clearIfOn(cloudPreviewId, () => setLoading(false), message.cloudSessionId)
-        clearIfOn(cloudPreviewId, () => setCloudPreviewId(null), message.cloudSessionId)
-        clearIfOn(currentSessionID, () => setCurrentSessionID(undefined), failedKey)
-        clearIfOn(draftSessionID, () => setDraftSessionID(undefined), failedKey)
-        showToast({
-          variant: "error",
-          title: language.t("session.cloud.import.failed") ?? "Failed to import cloud session",
-          description: message.error,
-        })
-        console.error("[Kilo New] Cloud session import failed:", message.error)
-        break
-      }
     }
   }
 
@@ -1352,11 +1300,10 @@ export const SessionProvider: ParentComponent = (props) => {
       if (draftID && submissionMap[draftID]) transferSubmissions(draftID, session.id)
       if (draftID) promoteDraftMessages(draftID, session.id)
 
-      // Only initialize messages if none exist yet — a cloud session import
-      // (handleCloudSessionImported) may have already populated messages for
-      // this session ID. The SSE session.created event can race with the
-      // cloudSessionImported message, and wiping to [] causes a flash of
-      // the empty/welcome screen.
+      // Only initialize messages if none exist yet — a session import may
+      // have already populated messages for this session ID. The SSE
+      // session.created event can race with the import, and wiping to [] causes
+      // a flash of the empty/welcome screen.
       if (!store.messages[session.id]?.length) setStore("messages", session.id, [])
       if (!store.toolParts[session.id]) setStore("toolParts", session.id, [])
 
@@ -1698,19 +1645,6 @@ export const SessionProvider: ParentComponent = (props) => {
       const revert = store.sessions[sessionID]?.revert ?? undefined
       if (revert) resetTodos(sessionID, revert)
       recoverPrefs(sessionID, merged)
-
-      const cloudIDs = pendingCloudPrune.get(sessionID)
-      if (cloudIDs?.size) {
-        const live = new Set(messages.map((m) => m.id))
-        setStore(
-          "parts",
-          produce((p) => {
-            for (const id of cloudIDs) if (!live.has(id)) delete p[id]
-          }),
-        )
-        for (const id of cloudIDs) stash.remove(id)
-        pendingCloudPrune.delete(sessionID)
-      }
     })
     if (reset) requestAnimationFrame(() => patchPage(sessionID, { lastMutation: undefined }))
   }
@@ -2156,7 +2090,6 @@ export const SessionProvider: ParentComponent = (props) => {
         "sessions",
         produce((sessions) => {
           for (const id of Object.keys(sessions)) {
-            if (id.startsWith("cloud:")) continue
             if (kept?.has(id)) continue
             if (!ids.has(id)) delete sessions[id]
           }
@@ -2240,7 +2173,6 @@ export const SessionProvider: ParentComponent = (props) => {
       if (draftSessionID() === sessionID) { setDraftSessionID(undefined) }
     })
     deleteDraftsForSession(sessionID)
-    pruneCloudOrphans(sessionID)
   }
 
   // Splices the message from the store and deletes its parts.
@@ -2272,170 +2204,6 @@ export const SessionProvider: ParentComponent = (props) => {
     stash.remove(messageID)
     // LOCK-002/LOCK-004: recompute recovery from the authoritative array.
     recoverPrefs(sessionID, store.messages[sessionID] ?? [])
-  }
-
-  function handleCloudSessionDataLoaded(cloudSessionId: string, title: string, messages: Message[]) {
-    if (cloudPreviewId() !== cloudSessionId) return
-    const key = `cloud:${cloudSessionId}`
-    pendingCloudPrune.set(key, new Set(messages.map((m) => m.id)))
-    batch(() => {
-      setLoaded((prev) => {
-        if (prev.has(key)) return prev
-        const next = new Set(prev)
-        next.add(key)
-        return next
-      })
-      setStore("sessions", key, {
-        id: key,
-        title,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      })
-      patchPage(key, { initialLoaded: true, hasMore: false, lastMutation: "replace" })
-      setStore("messages", key, messages)
-      for (const msg of messages) {
-        if (msg.parts && msg.parts.length > 0) {
-          setStore("parts", msg.id, msg.parts)
-        }
-      }
-      rebuildToolParts(key, messages)
-      // LOCK-004: recompute recovered agent/model/variant for cloud preview
-      // before selection/send so first continuation has correct state.
-      recoverPrefs(key, messages)
-      setCurrentSessionID(key)
-      setLoading(false)
-    })
-  }
-
-  function handleCloudSessionImported(cloudSessionId: string, session: SessionInfo) {
-    freshSessions.add(session.id)
-    const cloudKey = `cloud:${cloudSessionId}`
-    const cloudMessages = store.messages[cloudKey] ?? []
-    const active = cloudPreviewId() === cloudSessionId && currentSessionID() === cloudKey
-    // LOCK-004: snapshot all cloud-key explicit and recovered state before transfer
-    const cloudExplicitAgent = store.agentSelections[cloudKey]
-    const cloudExplicitModel = store.sessionOverrides[cloudKey]
-    const cloudRecoveredAgent = store.sessionRecoveredAgents[cloudKey]
-    const cloudRecoveredModel = store.sessionRecoveredModels[cloudKey]
-    const cloudRecoveredVariant = store.sessionRecoveredVariants[cloudKey]
-    batch(() => {
-      setLoaded((prev) => {
-        const next = new Set(prev)
-        next.add(session.id)
-        next.delete(cloudKey)
-        return next
-      })
-      setStore("sessions", session.id, session)
-
-      // LOCK-004: transfer explicit cloud agent selection
-      if (cloudExplicitAgent && !store.agentSelections[session.id])
-        setStore("agentSelections", session.id, cloudExplicitAgent)
-      const pendingAgent = pendingAgentSelection()
-      if (pendingAgent && !store.agentSelections[session.id]) setStore("agentSelections", session.id, pendingAgent)
-      // LOCK-004: transfer explicit cloud model override
-      if (cloudExplicitModel && !store.sessionOverrides[session.id])
-        setStore("sessionOverrides", session.id, cloudExplicitModel)
-      // LOCK-005: promote explicit fresh-composer picks into the converted
-      // local session, then consume them.
-      const seeds = seedPendingChoices(
-        session.id,
-        store.agentSelections[session.id] ?? defaultAgent(),
-        { model: pendingModelSelection(), variant: pendingVariantSelection() },
-        store.sessionOverrides,
-        store.variantSelections,
-      )
-      setStore("sessionOverrides", seeds.overrides)
-      setStore("variantSelections", seeds.variants)
-      setPendingModelSelection(null)
-      setPendingVariantSelection(null)
-      // Carry over cloud messages so there's no loading flash
-      setStore("messages", session.id, cloudMessages)
-      rebuildToolParts(session.id, cloudMessages)
-
-      // LOCK-004: transfer recovered agent/model/variant from cloud session
-      if (cloudRecoveredAgent && !store.agentSelections[session.id])
-        setStore("sessionRecoveredAgents", session.id, cloudRecoveredAgent)
-      if (cloudRecoveredModel) setStore("sessionRecoveredModels", session.id, cloudRecoveredModel)
-      if (cloudRecoveredVariant) setStore("sessionRecoveredVariants", session.id, cloudRecoveredVariant)
-      // LOCK-004: transfer all session-scoped explicit variant entries
-      const cloudEntries = transferVariants(store.variantSelections, cloudKey, session.id)
-      for (const [k, v] of Object.entries(cloudEntries)) {
-        setStore("variantSelections", k, v)
-        vscode.postMessage({ type: "persistVariant", key: k, value: v })
-      }
-
-      if (active) {
-        setCloudPreviewId(null)
-        setCurrentSessionID(session.id)
-        setDraftSessionID(session.id)
-        setUserClearedSession(false)
-      }
-
-      // LOCK-005: clean up ALL cloud-key state after transfer
-      setStore(
-        "sessions",
-        produce((s) => {
-          delete s[cloudKey]
-        }),
-      )
-      setStore(
-        "messages",
-        produce((m) => {
-          delete m[cloudKey]
-        }),
-      )
-      setStore(
-        "toolParts",
-        produce((p) => {
-          delete p[cloudKey]
-        }),
-      )
-      setStore(
-        "agentSelections",
-        produce((a) => {
-          delete a[cloudKey]
-        }),
-      )
-      setStore(
-        "sessionOverrides",
-        produce((o) => {
-          delete o[cloudKey]
-        }),
-      )
-      setStore(
-        "sessionRecoveredAgents",
-        produce((a) => {
-          delete a[cloudKey]
-        }),
-      )
-      setStore(
-        "sessionRecoveredModels",
-        produce((m) => {
-          delete m[cloudKey]
-        }),
-      )
-      setStore(
-        "sessionRecoveredVariants",
-        produce((v) => {
-          delete v[cloudKey]
-        }),
-      )
-      setStore(
-        "variantSelections",
-        produce((variants) => {
-          for (const k of sessionVariantKeys(variants, cloudKey)) delete variants[k]
-        }),
-      )
-    })
-    const cloudPruneIDs = pendingCloudPrune.get(cloudKey)
-    if (cloudPruneIDs) {
-      pendingCloudPrune.set(session.id, cloudPruneIDs)
-      pendingCloudPrune.delete(cloudKey)
-    }
-    // Load real messages in the background (picks up server-assigned IDs
-    // and the new user message once the send completes via SSE)
-    patchPage(session.id, { loadingInitial: true, before: undefined, hasMore: false })
-    vscode.postMessage({ type: "loadMessages", sessionID: session.id, mode: "replace", limit: MESSAGE_PAGE_LIMIT })
   }
 
   // Actions
@@ -2523,29 +2291,6 @@ export const SessionProvider: ParentComponent = (props) => {
     const messageID = Identifier.ascending("message")
 
     const sid = origin === undefined ? currentSessionID() : (origin ?? undefined)
-    const preview = sid?.startsWith("cloud:")
-      ? sid.slice("cloud:".length)
-      : origin === undefined
-        ? cloudPreviewId()
-        : null
-    if (preview) {
-      const scope = draftID ?? sid
-      const agent = promptAgent(scope)
-      vscode.postMessage({
-        type: "importAndSend",
-        cloudSessionId: preview,
-        text,
-        messageID,
-        providerID,
-        modelID,
-        agent,
-        variant: currentVariant(scope),
-        files,
-        review,
-      })
-      return
-    }
-
     const suggestion = scopedSuggestions(sid)[0]
     if (suggestion) dismissSuggestion(suggestion.id)
     for (const q of scopedQuestions(sid)) {
@@ -2610,32 +2355,7 @@ export const SessionProvider: ParentComponent = (props) => {
       return
     }
 
-    // Cloud previews need import-then-command; post importAndSend with command metadata
     const sid = origin === undefined ? currentSessionID() : (origin ?? undefined)
-    const preview = sid?.startsWith("cloud:")
-      ? sid.slice("cloud:".length)
-      : origin === undefined
-        ? cloudPreviewId()
-        : null
-    if (preview) {
-      const scope = draftID ?? sid
-      const agent = promptAgent(scope)
-      vscode.postMessage({
-        type: "importAndSend",
-        cloudSessionId: preview,
-        text: `/${command} ${args}`.trim(),
-        messageID: Identifier.ascending("message"),
-        providerID,
-        modelID,
-        agent,
-        variant: currentVariant(scope),
-        files,
-        command,
-        commandArgs: args,
-      })
-      return
-    }
-
     const messageID = Identifier.ascending("message")
     const suggestion = scopedSuggestions(sid)[0]
     if (suggestion) dismissSuggestion(suggestion.id)
@@ -2838,7 +2558,6 @@ export const SessionProvider: ParentComponent = (props) => {
     setUserClearedSession(true)
     setCurrentSessionID(undefined)
     setDraftSessionID(undefined)
-    setCloudPreviewId(null)
     setLoading(false)
     setPendingAgentSelection(defaultAgent())
     vscode.postMessage({ type: "clearSession" })
@@ -2881,11 +2600,6 @@ export const SessionProvider: ParentComponent = (props) => {
   let deferredFetch: string | undefined
 
   function selectSession(id: string) {
-    // Cloud preview sessions use a separate keyed path (selectCloudSession).
-    if (id.startsWith("cloud:")) {
-      console.warn("[Kilo New] Cannot select cloud preview session via selectSession")
-      return
-    }
     const ready = loaded().has(id)
     // Reflect the selection locally and synchronously so the chat always tracks
     // the tab/Agent Manager selection. These are local signals and need no backend, so
@@ -2893,7 +2607,6 @@ export const SessionProvider: ParentComponent = (props) => {
     // froze the chat on the previous session while the side diff (resolved from
     // the selection) still moved (the reported "only the diff changes").
     agentDrafts.prune(draftSessionID())
-    setCloudPreviewId(null)
     setCurrentSessionID(id)
     setDraftSessionID(id)
     setUserClearedSession(false)
@@ -2934,21 +2647,6 @@ export const SessionProvider: ParentComponent = (props) => {
     }),
   )
 
-  function selectCloudSession(cloudSessionId: string) {
-    if (!server.isConnected()) {
-      console.warn("[Kilo New] Cannot select cloud session: not connected")
-      return
-    }
-    const key = `cloud:${cloudSessionId}`
-    agentDrafts.prune(draftSessionID())
-    setCloudPreviewId(cloudSessionId)
-    setCurrentSessionID(key)
-    setDraftSessionID(key)
-    setUserClearedSession(false)
-    setLoading(true)
-    vscode.postMessage({ type: "requestCloudSessionData", sessionId: cloudSessionId })
-  }
-
   function deleteSession(id: string) {
     if (!server.isConnected()) {
       console.warn("[Kilo New] Cannot delete session: not connected")
@@ -2982,10 +2680,6 @@ export const SessionProvider: ParentComponent = (props) => {
   function exportSessionTranscript(id: string) {
     if (!server.isConnected()) {
       console.warn("[Kilo New] Cannot export session transcript: not connected")
-      return
-    }
-    if (id.startsWith("cloud:")) {
-      console.warn("[Kilo New] Cannot export cloud session transcript")
       return
     }
     vscode.postMessage({ type: "exportSessionTranscript", sessionID: id })
@@ -3129,9 +2823,7 @@ export const SessionProvider: ParentComponent = (props) => {
   }
 
   const sessions = createMemo(() =>
-    Object.values(store.sessions)
-      .filter((s) => !s.id.startsWith("cloud:"))
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
+    Object.values(store.sessions).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()),
   )
 
   /**
@@ -3330,8 +3022,6 @@ export const SessionProvider: ParentComponent = (props) => {
     renameSession,
     exportSessionTranscript,
     syncSession,
-    cloudPreviewId,
-    selectCloudSession,
     draftSessionID,
     setDraftSessionID,
     userClearedSession,

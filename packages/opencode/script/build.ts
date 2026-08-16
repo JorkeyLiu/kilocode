@@ -51,29 +51,6 @@ async function copyTreeSitterWasms(outputDir: string) {
   console.log(`copied ${languageWasmFiles.length + 1} tree-sitter wasm files to ${targetDir}`)
 }
 
-async function buildKiloConsole() {
-  const app = path.resolve(dir, "../kilo-console")
-  const out = path.join(app, "dist")
-  console.log("building Kilo Console")
-  const proc = Bun.spawn([process.execPath, "run", "build"], {
-    cwd: app,
-    env: { ...process.env, KILO_CONSOLE_BASE: "/console/" },
-    stdout: "inherit",
-    stderr: "inherit",
-    windowsHide: true,
-  })
-  const code = await proc.exited
-  if (code !== 0) throw new Error(`Kilo Console build failed with exit code ${code}`)
-  return out
-}
-
-async function copyKiloConsole(input: string, outputDir: string) {
-  const target = path.join(outputDir, "console")
-  await fs.promises.rm(target, { recursive: true, force: true })
-  await fs.promises.cp(input, target, { recursive: true })
-  console.log(`copied Kilo Console assets to ${target}`)
-}
-
 function smokeEnv(root: string) {
   const env = { ...process.env }
   delete env.KILO_MODELS_PATH
@@ -219,7 +196,6 @@ const targets = singleFlag
 
 await $`rm -rf dist`
 // kilocode_change start
-const kiloConsoleDist = await buildKiloConsole()
 const kiloSandboxWorker = await KiloSandboxWorker.bundle()
 const kiloSandboxNetwork = await KiloSandboxNetwork.bundle()
 // kilocode_change end
@@ -322,7 +298,6 @@ for (const item of targets) {
 
   // kilocode_change start
   await copyTreeSitterWasms(path.resolve(dir, `dist/${name}/bin`))
-  await copyKiloConsole(kiloConsoleDist, path.resolve(dir, `dist/${name}/bin`))
   await KiloSandboxWorker.copy(kiloSandboxWorker, path.resolve(dir, `dist/${name}/bin`))
   if (item.os === "linux") {
     await KiloSandboxNetwork.copy(kiloSandboxNetwork, path.resolve(dir, `dist/${name}/bin`), item.arch)

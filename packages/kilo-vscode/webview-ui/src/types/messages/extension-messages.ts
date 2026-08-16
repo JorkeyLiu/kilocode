@@ -5,7 +5,6 @@ import type { ConnectionState, ServerInfo, SessionStatus } from "./connection"
 import type { FileAttachment, Part } from "./parts"
 import type { ImageAttachment } from "../../hooks/useImageAttachments"
 import type {
-  CloudSessionInfo,
   Message,
   MessageLoadMode,
   SessionCloseReason,
@@ -212,41 +211,6 @@ export interface SessionsLoadedMessage {
   nextCursor?: number | null
   /** True when another page can be requested via loadSessions cursor. */
   hasMore?: boolean
-}
-
-export interface CloudSessionsLoadedMessage {
-  type: "cloudSessionsLoaded"
-  sessions: CloudSessionInfo[]
-  nextCursor: string | null
-}
-
-export interface GitRemoteUrlLoadedMessage {
-  type: "gitRemoteUrlLoaded"
-  gitUrl: string | null
-}
-
-export interface CloudSessionDataLoadedMessage {
-  type: "cloudSessionDataLoaded"
-  cloudSessionId: string
-  title: string
-  messages: Message[]
-}
-
-export interface CloudSessionImportedMessage {
-  type: "cloudSessionImported"
-  cloudSessionId: string
-  session: SessionInfo
-}
-
-export interface CloudSessionImportFailedMessage {
-  type: "cloudSessionImportFailed"
-  cloudSessionId: string
-  error: string
-}
-
-export interface OpenCloudSessionMessage {
-  type: "openCloudSession"
-  sessionId: string
 }
 
 export interface SelectKiloModelMessage {
@@ -927,8 +891,6 @@ export type ExtensionMessage =
   | SessionModelUsageChangedMessage
   | MessageCreatedMessage
   | SessionsLoadedMessage
-  | CloudSessionsLoadedMessage
-  | GitRemoteUrlLoadedMessage
   | ActionMessage
   | ProfileDataMessage
   | DeviceAuthStartedMessage
@@ -993,10 +955,6 @@ export type ExtensionMessage =
   | AppendChatBoxMessage
   | TriggerTaskMessage
   | VariantsLoadedMessage
-  | CloudSessionDataLoadedMessage
-  | CloudSessionImportedMessage
-  | CloudSessionImportFailedMessage
-  | OpenCloudSessionMessage
   | SelectKiloModelMessage
   | AgentManagerLocalStatsMessage
   | WorkspaceDirectoryChangedMessage

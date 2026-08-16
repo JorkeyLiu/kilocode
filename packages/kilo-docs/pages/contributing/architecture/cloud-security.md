@@ -25,7 +25,6 @@ Kilo Cloud combines web control plane with Cloudflare-hosted services and scoped
 - Managed PostgreSQL stores relational control-plane records. Durable Objects, queues, KV, R2, and feature-specific analytical stores hold scoped state.
 - Cloud Agent coding sessions run in Cloudflare sandbox containers with session-specific workspaces and policy-selected sandbox allocation.
 - Generated-app preview and deployment builds run in boundaries separate from Cloud Agent coding sessions.
-- KiloClaw assistant instances run in owner-scoped provider-backed runtimes with instance-scoped storage and encrypted configuration delivery.
 - Gas Town binds to Wasteland as separate multi-agent orchestration boundary.
 
 ## Logical topology
@@ -56,7 +55,6 @@ flowchart LR
     agent["Cloud Agent policy-selected sandbox"]
     preview["App Builder preview sandbox"]
     build["Deployment builder sandbox"]
-    claw["Owner-scoped KiloClaw runtime"]
     town["Gas Town Town container"]
     wasteland["Wasteland commons boundary"]
   end
@@ -86,12 +84,10 @@ flowchart LR
   workers --> agent
   workers --> preview
   workers --> build
-  workers --> claw
   workers --> town --> wasteland
   agent --> repos
   agent --> source
   agent --> model
-  claw --> model
   chat --> messaging
   web --> postgres
   workers --> postgres
@@ -110,7 +106,6 @@ flowchart LR
 | Cloud Agent execution | Policy-selected sandbox containers with session-specific workspace and home directory |
 | Generated-app preview | App Builder preview `Sandbox` container reached through preview routing |
 | Generated-app deployment | Deployment builder `Sandbox` container plus dispatcher public wildcard ingress |
-| KiloClaw execution | Owner-scoped provider-backed runtime with persistent storage |
 | Gas Town and Wasteland | Town-owned container execution plus separate collaborative commons Worker |
 | External providers | Third-party trust boundaries invoked by enabled capabilities |
 
@@ -126,7 +121,6 @@ flowchart LR
 | Control plane to generated-app preview | Generated source and preview request traffic | App Builder `PreviewDO`, preview routing, bearer-protected status APIs, and separate preview sandbox |
 | Control plane to deployment builder | Generated source and build input | `DeploymentOrchestrator`, build sandbox container, and deployment event callbacks |
 | Internet to deployed applications | Public wildcard deployed-app requests | Dispatcher routes, dispatch namespace, KV mappings, and dispatcher rate limit |
-| Control plane to KiloClaw runtime | Owner routing, config, proxy traffic, and machine lifecycle | JWT auth, one-time code redemption, derived gateway tokens, machine API keys, Durable Object owner scope, and encrypted config delivery |
 | Gas Town to Wasteland | Collaborative orchestration operations | `WASTELAND_SERVICE` binding and separate Wasteland Durable Objects |
 | Kilo Cloud to third parties | Repository operations, model requests, billing, notifications, and telemetry | Provider credentials, opt-in where applicable, scoped tokens, and feature-specific routing |
 
@@ -144,7 +138,7 @@ Kilo Cloud uses several authorization contexts:
 - Short-lived one-time Event Service connection tickets.
 - Provider-specific signature or token checks on supported external ingress.
 
-Application records commonly scope to user or organization. Cloud Agent durable state scopes to session while sandbox allocation remains policy-selected. KiloClaw runtime scopes to owner or instance rather than global assistant process.
+Application records commonly scope to user or organization. Cloud Agent durable state scopes to session while sandbox allocation remains policy-selected.
 
 ## Data and persistence
 
@@ -155,7 +149,7 @@ Application records commonly scope to user or organization. Cloud Agent durable 
 | Billing | Customer IDs, subscription state, transaction references, and invoices | Entitlement, reconciliation, and financial record keeping |
 | Usage and operations | Model, token counts, costs, feature status, session IDs, timestamps, and error summaries | Metering, support, and reliability |
 | Repository and automation | Repository metadata, refs, issue or review context, webhook payloads, and findings | Source control, Cloud Agent work, review automation, and security features |
-| AI and session content | Prompts, responses, conversation history, attachments, and session events | Inference, Cloud Agent sessions, KiloClaw, and enabled experiments |
+| AI and session content | Prompts, responses, conversation history, attachments, and session events | Inference, Cloud Agent sessions, and enabled experiments |
 | Integration config | OAuth metadata, provider config, webhook settings, and customer secrets | Enabled integrations and owner-scoped runtime config |
 | Network and abuse telemetry | IP address, user agent, browser signals, and risk metadata | Abuse prevention, fraud controls, and investigation |
 | Mobile and notification | Device tokens, notification status, and mobile-store transaction metadata | Mobile auth, subscriptions, and notifications |
@@ -168,7 +162,6 @@ Application records commonly scope to user or organization. Cloud Agent durable 
 | R2 | Session blobs, attachments, feature assets, templates, and telemetry export | Bucket lifecycle, encryption, residency, and deletion require live validation |
 | KV | Cache, rollout, mapping, and dedup state | Not strongly consistent authority |
 | Analytical stores | Analytics Engine datasets, Pipeline export, and optional specialized stores | Active providers and retention require live validation |
-| Runtime storage | Owner-scoped KiloClaw workspace and config persistence | Separate execution boundary tied to assigned runtime provider |
 
 ## Core data flows
 
@@ -298,48 +291,6 @@ sequenceDiagram
 
 Kilo Chat binds to Event Service and Notifications. Event Service consumes one-time tickets before WebSocket upgrade and places connections in per-user Durable Objects. Notifications service uses per-user Durable Objects, checks presence context for conversation pushes, sends Expo push, and processes delayed receipts. See [Chat, events, and notifications](/docs/contributing/architecture/cloud-platform#chat-events-and-notifications) for canonical service topology.
 
-### KiloClaw ingress
-
-```mermaid
-flowchart TB
-  subgraph ingress ["Public and external ingress"]
-    direction LR
-    browser["Browser request"] --> jwt["JWT validation"]
-    code["One-time code"] --> access["Access gateway form"]
-    machine["Runtime machine"] --> machineAuth["API key + gateway token"]
-    chat["Kilo Chat RPC binding"]
-    email["Cloudflare Email Routing"] --> parse["Alias lookup + bounded parse"]
-    gmail["Gmail Pub/Sub push"] --> oidc["Google OIDC validation"]
-  end
-
-  subgraph coordination ["KiloClaw coordination"]
-    direction LR
-    proxy["KiloClaw proxy"]
-    scope["Resolve owner or instance scope"]
-    instance["Owner- or instance-scoped<br/>Durable Object"]
-    redeem["Hyperdrive-backed redemption<br/>Auth cookie + derived gateway token"]
-    controller["/api/controller/checkin"]
-    emailQueue["Inbound email queue"]
-    gmailQueue["Gmail delivery queue"]
-    platform["KiloClaw platform delivery"]
-    controllerDelivery["KiloClaw controller delivery"]
-  end
-
-  runtime["Provider-backed runtime"]
-  ui["OpenClaw UI"]
-
-  jwt --> proxy --> scope
-  access --> redeem --> scope
-  machineAuth --> controller --> scope
-  chat --> scope
-  parse --> emailQueue --> platform --> scope
-  oidc --> gmailQueue --> controllerDelivery --> scope
-  scope --> instance --> runtime
-  scope --> ui
-```
-
-KiloClaw separates lifecycle coordination from runtime process. Fly is provider path and legacy fallback, docker-local supports development, and Northflank support exists in provider model. Active rollout must be checked in live environment. See [KiloClaw](/docs/contributing/architecture/cloud-platform#kiloclaw) for canonical runtime topology.
-
 ### Gas Town and Wasteland
 
 Gas Town and Wasteland are separate trust boundaries. Gas Town owns town state and container execution. It calls Wasteland through `WASTELAND_SERVICE` binding; Wasteland owns separate Durable Objects and DoltHub-backed collaborative commons paths. See [Gas Town and Wasteland](/docs/contributing/architecture/cloud-platform#gas-town-and-wasteland) for canonical topology and orchestration concepts.
@@ -374,8 +325,8 @@ Higher-order agent outcome analysis is roadmap work unless separate source prove
 | Authorization | User, organization, role, owner, instance, and administrative checks by operation |
 | Abuse prevention | Turnstile, fraud telemetry, blocking logic, free-model limits, bounded external payload handling, and deployment threat scanning |
 | Internal service separation | Service bindings, callback tokens, and service credentials separate public access from orchestration |
-| Execution isolation | Cloud Agent workspaces, preview sandbox, deployment builder sandbox, town container, and owner-scoped KiloClaw runtimes |
-| Secret handling | Protected config storage, encrypted delivery for supported runtime secrets, fail-closed KiloClaw bootstrap, and sensitive-log prohibitions |
+| Execution isolation | Cloud Agent workspaces, preview sandbox, deployment builder sandbox, and town container |
+| Secret handling | Protected config storage, encrypted delivery for supported runtime secrets, and sensitive-log prohibitions |
 | Privacy | Soft-delete and anonymization workflows, webhook-header redaction, explicit experiment paths, and purpose-specific retention paths |
 | Reliability | Durable coordination, queues, retries, dead-letter patterns, idempotency handling, and reconciliation |
 | Browser hardening | HSTS, framing restrictions, MIME protection, referrer policy, cross-origin policies, permissions restrictions, and configurable CSP |

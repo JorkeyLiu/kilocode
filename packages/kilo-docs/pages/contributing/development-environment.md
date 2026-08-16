@@ -18,7 +18,6 @@ Before you begin, make sure you have the following installed:
 1. **Git** - For version control
 2. **Bun 1.3.14+** - Required for installing dependencies and running scripts
 3. **Visual Studio Code** - Our recommended IDE for development
-4. **Java 21** - Required only when running JetBrains plugin checks or repo-level checks that include `@kilocode/kilo-jetbrains`
 
 ## Getting Started
 
@@ -69,7 +68,6 @@ The project is organized into several key packages:
 - **`packages/kilo-vscode/`** - VS Code extension, webview UI, Agent Manager, and extension packaging
 - **`packages/sdk/js/`** - Generated TypeScript SDK for the local server API
 - **`packages/kilo-docs/`** - Documentation site
-- **`packages/kilo-jetbrains/`** - JetBrains plugin
 
 ## Development Workflow
 
@@ -249,7 +247,7 @@ Agent limitations, local resource constraints, OOM constraints, or an agent prom
 
 ## Git Hooks
 
-This project uses [Husky](https://typicode.github.io/husky/) to manage Git hooks. The current pre-push hook checks the Bun version against root `package.json` and runs the repo-level typecheck. The JetBrains typecheck runs only when the pushed changes can affect the JetBrains plugin, so VS Code-only, docs-only, and changeset-only pushes do not require Java.
+This project uses [Husky](https://typicode.github.io/husky/) to manage Git hooks. The current pre-push hook checks the Bun version against root `package.json`.
 
 ## Troubleshooting
 

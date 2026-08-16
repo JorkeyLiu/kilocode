@@ -39,7 +39,7 @@ jobs:
           fetch-depth: 0
 
       # Pinned to the repository-approved commit for setup-bun v2 (same SHA as
-      # test-jetbrains.yml / .github/actions/setup-bun).
+      # .github/actions/setup-bun).
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
 
       - name: Verify base and head commit objects

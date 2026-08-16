@@ -6,9 +6,7 @@ import { Flag } from "@opencode-ai/core/flag/flag"
 import { errorMessage } from "@/util/error"
 import { TuiConfig } from "@/cli/cmd/tui/config/tui"
 import { validateSession } from "@/cli/cmd/tui/validate-session"
-import { importCloudSession } from "@/kilocode/cloud-session"
 import { DaemonClient } from "@/kilocode/daemon/client"
-import { createKiloClient } from "@kilocode/sdk/v2"
 
 type TuiInput = Parameters<typeof import("@/cli/cmd/tui/app").tui>[0]
 export type StartInput = Omit<TuiInput, "renderer">
@@ -16,7 +14,6 @@ export type StartInput = Omit<TuiInput, "renderer">
 type Args = NetworkOptions & {
   prompt?: string
   session?: string
-  cloudFork?: boolean
   continue?: boolean
   agent?: string
   model?: string
@@ -28,23 +25,6 @@ type Input = {
   cwd: string
   input: () => Promise<string | undefined>
   start: (input: StartInput) => Promise<void>
-}
-
-async function session(input: Input, daemon: DaemonClient.Connection) {
-  if (!input.args.cloudFork || !input.args.session) return { ok: true as const, id: input.args.session }
-
-  UI.println("Importing session from cloud...")
-  const client = createKiloClient({
-    baseUrl: daemon.url,
-    directory: input.cwd,
-    headers: daemon.headers,
-  })
-  const id = await importCloudSession(client, input.args.session).catch(() => undefined)
-  if (id) return { ok: true as const, id }
-
-  UI.error("Failed to import session from cloud")
-  process.exitCode = 1
-  return { ok: false as const }
 }
 
 export namespace KiloTuiThreadDaemon {
@@ -67,13 +47,10 @@ export namespace KiloTuiThreadDaemon {
     const prompt = await input.input()
     const config = await TuiConfig.get()
 
-    const fork = await session(input, daemon)
-    if (!fork.ok) return true
-
     try {
       await validateSession({
         url: daemon.url,
-        sessionID: fork.id,
+        sessionID: input.args.session,
         directory: input.cwd,
         headers: daemon.headers,
       })
@@ -90,7 +67,7 @@ export namespace KiloTuiThreadDaemon {
       headers: daemon.headers,
       args: {
         continue: input.args.continue,
-        sessionID: fork.id,
+        sessionID: input.args.session,
         agent: input.args.agent,
         model: input.args.model,
         prompt,

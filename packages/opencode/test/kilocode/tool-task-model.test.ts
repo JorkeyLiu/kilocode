@@ -584,7 +584,7 @@ describe("tool.task model resolution", () => {
   it.live("unknown client gate ignores saved worker model and uses parent", () =>
     run({
       agent: "worker",
-      client: "jetbrains",
+      client: "unknown",
       state: { model: { worker: saved }, variant: { "saved-provider/saved-model": savedVariant } },
     }).pipe(
       Effect.tap((result) =>

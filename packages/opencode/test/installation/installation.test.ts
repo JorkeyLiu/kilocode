@@ -59,7 +59,7 @@ function testLayer(
 describe("installation", () => {
   describe("latest", () => {
     // kilocode_change start - curl/unknown fallback now resolves from the public npm
-    // registry instead of GitHub /releases/latest (which is polluted by JetBrains releases)
+    // registry instead of GitHub /releases/latest (which is polluted by non-CLI releases)
     const curlCalls: string[] = []
     testEffect(
       testLayer((request) => {

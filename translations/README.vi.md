@@ -6,7 +6,7 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">Tác nhân lập trình mã nguồn mở để xây dựng với AI trong VS Code, JetBrains hoặc CLI.</p>
+<p align="center">Tác nhân lập trình mã nguồn mở để xây dựng với AI trong VS Code hoặc CLI.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
@@ -21,7 +21,7 @@
 
 ---
 
-Kilo Code là một tác nhân lập trình AI đồng hành với bạn ở mọi nơi bạn làm việc: [VS Code](https://kilo.ai/landing/vs-code), [JetBrains](https://kilo.ai/features/jetbrains-native) và [CLI](https://kilo.ai/cli). Dự án là mã nguồn mở với giá minh bạch. Bạn chọn trong hơn 500 mô hình, chuyển đổi giữa chúng giữa chừng một tác vụ và trả theo giá của nhà cung cấp mô hình, không có phụ phí. Không cần API key để bắt đầu.
+Kilo Code là một tác nhân lập trình AI đồng hành với bạn ở mọi nơi bạn làm việc: [VS Code](https://kilo.ai/landing/vs-code) và [CLI](https://kilo.ai/cli). Dự án là mã nguồn mở với giá minh bạch. Bạn chọn trong hơn 500 mô hình, chuyển đổi giữa chúng giữa chừng một tác vụ và trả theo giá của nhà cung cấp mô hình, không có phụ phí. Không cần API key để bắt đầu.
 
 ### Cài đặt
 
@@ -66,15 +66,6 @@ Sau đó chạy `kilo` trong bất kỳ thư mục dự án nào để bắt đ�
 </details>
 
 <details>
-<summary><strong>JetBrains</strong></summary>
-
-<br>
-
-Cài [plugin Kilo Code](https://plugins.jetbrains.com/plugin/28350-kilo-code) từ JetBrains Marketplace, hoặc tìm "Kilo Code" trong `Settings → Plugins` bên trong bất kỳ JetBrains IDE nào.
-
-</details>
-
-<details>
 <summary><strong>Cloud Agent</strong></summary>
 
 <br>
@@ -89,15 +80,6 @@ Chạy Kilo từ web, không cần máy cục bộ, tại [app.kilo.ai/cloud](ht
 <br>
 
 Thiết lập review code tự động bằng AI cho pull request của bạn tại [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews).
-
-</details>
-
-<details>
-<summary><strong>KiloClaw</strong></summary>
-
-<br>
-
-Khởi chạy AI agent luôn hoạt động của bạn tại [app.kilo.ai/claw](https://app.kilo.ai/claw).
 
 </details>
 
@@ -155,7 +137,7 @@ Về cấu hình và mọi thứ khác, hãy xem [tài liệu](https://kilo.ai/d
 
 ### Đóng góp
 
-Chúng tôi chào đón đóng góp từ developer, writer và tất cả mọi người. Bắt đầu với [Contributing Guide](/CONTRIBUTING.md) để thiết lập môi trường, tiêu chuẩn code và cách mở pull request. Xem [RELEASING.md](../RELEASING.md) cho quy trình release tiện ích VS Code và CLI, và [packages/kilo-jetbrains/RELEASING.md](../packages/kilo-jetbrains/RELEASING.md) cho plugin JetBrains.
+Chúng tôi chào đón đóng góp từ developer, writer và tất cả mọi người. Bắt đầu với [Contributing Guide](/CONTRIBUTING.md) để thiết lập môi trường, tiêu chuẩn code và cách mở pull request. Xem [RELEASING.md](../RELEASING.md) cho quy trình release tiện ích VS Code và CLI.
 
 Vui lòng đọc [Code of Conduct](/CODE_OF_CONDUCT.md) trước khi tham gia.
 

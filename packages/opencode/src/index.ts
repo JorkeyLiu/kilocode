@@ -3,7 +3,6 @@ import { hideBin } from "yargs/helpers"
 import { RunCommand } from "./cli/cmd/run"
 import { GenerateCommand } from "./cli/cmd/generate"
 import * as Log from "@opencode-ai/core/util/log"
-// import { ConsoleCommand } from "./cli/cmd/account" // kilocode_change - reserve `kilo console` for local settings
 import { ProvidersCommand } from "./cli/cmd/providers"
 import { AgentCommand } from "./cli/cmd/agent"
 import { UpgradeCommand } from "./cli/cmd/upgrade"
@@ -123,7 +122,6 @@ let cli = yargs(args) // kilocode_change
   .command(RunCommand)
   .command(GenerateCommand)
   .command(DebugCommand)
-  // kilocode_change - upstream account console intentionally not registered; KiloConsole is added by KiloCli.register
   .command(ProvidersCommand)
   .command(AgentCommand)
   .command(UpgradeCommand)

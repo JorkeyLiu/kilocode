@@ -1142,9 +1142,6 @@ export const dict = {
   "session.search.placeholder": "Rechercher des sessions...",
   "session.empty": "Aucune session pour l'instant. Cliquez + pour démarrer une nouvelle conversation.",
   "session.tab.local": "Local",
-  "session.tab.cloud": "Cloud",
-  "session.cloud.repoOnly": "Uniquement ce dépôt",
-  "session.cloud.import": "Importer depuis le cloud",
   "feedback.button": "Commentaires & support",
   "feedback.dialog.message":
     "Nous aimerions recueillir vos commentaires ou vous aider avec les problèmes que vous rencontrez.",
@@ -1181,12 +1178,6 @@ export const dict = {
   "workStyle.choice.autonomous.bash":
     "Peut exécuter des commandes dans le terminal de l'espace de travail sans autorisation.",
   "workStyle.choice.autonomous.visibility": "Les détails restent repliés jusqu'à ce que vous les développiez.",
-  "session.cloud.import.title": "Importer depuis le cloud",
-  "session.cloud.import.placeholder": "ID de session, URL ou commande kilo import",
-  "session.cloud.import.button": "Importer",
-  "session.cloud.import.invalid": "Format d'ID de session invalide",
-  "session.cloud.import.legacy": "Cette session semble être une ancienne session qui n'est plus prise en charge.",
-  "session.cloud.import.failed": "Échec de l'importation de la session cloud",
 
   "workspace.new": "Nouvel espace de travail",
   "workspace.type.local": "local",

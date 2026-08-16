@@ -6,7 +6,7 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">Open source-агент для разработки с ИИ в VS Code, JetBrains или CLI.</p>
+<p align="center">Open source-агент для разработки с ИИ в VS Code или CLI.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
@@ -21,7 +21,7 @@
 
 ---
 
-Kilo Code — это AI-агент для написания кода, который работает там, где работаете вы: в [VS Code](https://kilo.ai/landing/vs-code), [JetBrains](https://kilo.ai/features/jetbrains-native) и [CLI](https://kilo.ai/cli). Он имеет открытый исходный код и открытую модель ценообразования. Вы выбираете из более чем 500 моделей, переключаетесь между ними во время задачи и платите по тарифу поставщика модели без наценки. Для начала не нужны API-ключи.
+Kilo Code — это AI-агент для написания кода, который работает там, где работаете вы: в [VS Code](https://kilo.ai/landing/vs-code) и [CLI](https://kilo.ai/cli). Он имеет открытый исходный код и открытую модель ценообразования. Вы выбираете из более чем 500 моделей, переключаетесь между ними во время задачи и платите по тарифу поставщика модели без наценки. Для начала не нужны API-ключи.
 
 ### Установка
 
@@ -66,15 +66,6 @@ paru -S kilo-bin
 </details>
 
 <details>
-<summary><strong>JetBrains</strong></summary>
-
-<br>
-
-Установите [плагин Kilo Code](https://plugins.jetbrains.com/plugin/28350-kilo-code) из JetBrains Marketplace или найдите "Kilo Code" в `Settings → Plugins` в любой IDE JetBrains.
-
-</details>
-
-<details>
 <summary><strong>Cloud Agent</strong></summary>
 
 <br>
@@ -89,15 +80,6 @@ paru -S kilo-bin
 <br>
 
 Настройте автоматические AI-ревью кода для ваших pull request на [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews).
-
-</details>
-
-<details>
-<summary><strong>KiloClaw</strong></summary>
-
-<br>
-
-Запустите своего постоянно активного AI-агента на [app.kilo.ai/claw](https://app.kilo.ai/claw).
 
 </details>
 
@@ -155,7 +137,7 @@ kilo run --auto "run tests and fix any failures"
 
 ### Участие
 
-Мы приветствуем вклад разработчиков, авторов и всех желающих. Начните с [Contributing Guide](/CONTRIBUTING.md), чтобы настроить окружение, изучить стандарты кода и узнать, как открыть pull request. См. [RELEASING.md](../RELEASING.md) для процесса релиза расширения VS Code и CLI, а также [packages/kilo-jetbrains/RELEASING.md](../packages/kilo-jetbrains/RELEASING.md) для плагина JetBrains.
+Мы приветствуем вклад разработчиков, авторов и всех желающих. Начните с [Contributing Guide](/CONTRIBUTING.md), чтобы настроить окружение, изучить стандарты кода и узнать, как открыть pull request. См. [RELEASING.md](../RELEASING.md) для процесса релиза расширения VS Code и CLI.
 
 Перед участием ознакомьтесь с нашим [Code of Conduct](/CODE_OF_CONDUCT.md).
 

@@ -81,7 +81,7 @@ describe("session context pull-back implementation", () => {
 
   it("restores on removal confirmation only for non-empty capture and clears pending", () => {
     const start = session.indexOf("function handleMessageRemoved")
-    const end = session.indexOf("function handleCloudSessionDataLoaded", start)
+    const end = session.indexOf("// Actions", start)
     const block = session.slice(start, end)
     expect(block).toContain("pullBacks.pending.get(messageID)")
     expect(block).toContain("pullBacks.pending.delete(messageID)")

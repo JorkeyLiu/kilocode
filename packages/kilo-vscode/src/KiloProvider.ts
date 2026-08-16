@@ -110,12 +110,6 @@ import {
   type AuthContext,
 } from "./kilo-provider/handlers/auth"
 import {
-  handleRequestCloudSessions,
-  handleRequestCloudSessionData,
-  handleImportAndSend,
-  type CloudSessionContext,
-} from "./kilo-provider/handlers/cloud-session"
-import {
   handlePermissionResponse,
   fetchAndSendPendingPermissions,
   type PermissionContext,
@@ -816,10 +810,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
   }
 
-  public openCloudSession(sessionId: string): void {
-    this.postMessage({ type: "openCloudSession", sessionId })
-  }
-
   public selectKiloModel(modelID?: string, agent?: string): void {
     if (!modelID && !agent) return
     this.pendingKiloModel = { ...(modelID && { modelID }), ...(agent && { agent }) }
@@ -1011,9 +1001,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           break
         case "openProfilePanel":
           vscode.commands.executeCommand("kilo-code.new.profileButtonClicked")
-          break
-        case "openKiloClaw":
-          vscode.commands.executeCommand("kilo-code.new.kiloClawOpen")
           break
         case "openVSCodeSettings":
           vscode.commands.executeCommand("workbench.action.openSettings", message.query)
@@ -1271,35 +1258,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         case "requestTimelineSetting":
           this.sendTimelineSetting()
           break
-        case "requestCloudSessions":
-          await handleRequestCloudSessions(this.cloudSessionCtx, message)
-          break
-        case "requestGitRemoteUrl":
-          void this.getGitRemoteUrl().then((url) => {
-            this.postMessage({ type: "gitRemoteUrlLoaded", gitUrl: url ?? null })
-          })
-          break
-        case "requestCloudSessionData":
-          void handleRequestCloudSessionData(this.cloudSessionCtx, message.sessionId)
-          break
-        case "importAndSend": {
-          const files = parseMessageFiles(message.files)
-          void handleImportAndSend(
-            this.cloudSessionCtx,
-            message.cloudSessionId,
-            message.text,
-            typeof message.messageID === "string" ? message.messageID : undefined,
-            message.providerID,
-            message.modelID,
-            message.agent,
-            message.variant,
-            files,
-            parseReview(message.review, message.text),
-            typeof message.command === "string" ? message.command : undefined,
-            typeof message.commandArgs === "string" ? message.commandArgs : undefined,
-          )
-          break
-        }
         case "resetAllSettings":
           await this.handleResetAllSettings()
           break
@@ -2617,8 +2575,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
   }
 
-  // Cloud session methods extracted to kilo-provider/handlers/cloud-session.ts
-
   /** Read attention settings from VS Code config and push to webview. */
   private sendNotificationSettings(): void {
     const attention = vscode.workspace.getConfiguration("kilo-code.new.attention")
@@ -3735,29 +3691,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       getQuestionRevision: () => this.connectionService.getQuestionRevision(),
       pruneQuestionDirectories: (active: Set<string>, dirs: Set<string>) =>
         this.connectionService.pruneQuestionDirectories(active, dirs),
-    }
-  }
-
-  // Cloud session handlers extracted to kilo-provider/handlers/cloud-session.ts
-
-  private get cloudSessionCtx(): CloudSessionContext {
-    const self = this
-    return {
-      client: this.client,
-      get currentSession() {
-        return self.currentSession
-      },
-      set currentSession(session) {
-        self.stopCurrentSessionProcesses(session?.id)
-        self.setCurrentSession(session)
-        if (session) self.contextSessionID = session.id
-      },
-      trackedSessionIds: this.trackedSessionIds,
-      connectionService: this.connectionService,
-      postMessage: (msg) => this.postMessage(msg),
-      getWorkspaceDirectory: (sid) => this.getWorkspaceDirectory(sid),
-      gatherEditorContext: () => this.gatherEditorContext(),
-      runWithMessageConfirmation: (id, label, run) => runWithMessageConfirmation(this.confirmations, id, label, run),
     }
   }
 

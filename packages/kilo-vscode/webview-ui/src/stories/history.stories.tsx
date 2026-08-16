@@ -99,8 +99,6 @@ const WithSessions: ParentComponent<{ sessions?: typeof mockSessions }> = (props
     deleteSession: noop,
     renameSession: noop,
     syncSession: noop,
-    cloudPreviewId: () => null,
-    selectCloudSession: noop,
   }
 
   return (

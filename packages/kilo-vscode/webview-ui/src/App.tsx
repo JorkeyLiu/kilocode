@@ -143,11 +143,6 @@ const AppContent: Component = () => {
         setCurrentView(message.view as ViewType)
         vscode.postMessage({ type: "settingsTabChanged", tab: message.tab })
       }
-      if (message?.type === "openCloudSession" && message.sessionId) {
-        console.log("[Kilo New] App: ☁️ openCloudSession:", message.sessionId)
-        session.selectCloudSession(message.sessionId)
-        setCurrentView("newTask")
-      }
       handleKiloModel(message)
       handleForked(message)
       if (message?.type === "viewChildSession" && message.sessionID) {

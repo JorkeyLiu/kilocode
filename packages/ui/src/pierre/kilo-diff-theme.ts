@@ -12,8 +12,8 @@ import { registerCustomTheme, RegisteredCustomThemes, type ThemeRegistrationReso
 // diff component imports the worker factory, which calls ensureKiloDiffTheme()
 // at module load — before any WorkerPoolManager.initialize() runs. Previously the
 // registration was only a side effect of importing the (heavy, katex/marked-
-// pulling) markdown context module, which forced consumers that render diffs
-// without markdown (e.g. kilo-console) to fire a racy `void import(...)` purely to
+// pulling) markdown context module, which forced diff-rendering consumers
+// that do not use markdown to fire a racy `void import(...)` purely to
 // register the theme. Keeping it here, free of katex/marked, lets those consumers
 // stay light while removing the race entirely.
 //

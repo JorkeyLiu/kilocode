@@ -4,7 +4,6 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Snapshot } from "@/snapshot"
 import { Session } from "./session"
 import { SessionID, MessageID } from "./schema"
-import { appendSessionDiffs, readSessionDiffBase } from "@/kilocode/session-portability/cumulative-diff" // kilocode_change
 import { Storage } from "@/storage/storage" // kilocode_change
 import { Config } from "@/config/config"
 
@@ -109,23 +108,7 @@ export const layer = Layer.effect(
       if (!all.length) return
       if ((yield* config.get()).snapshot === false) return // kilocode_change - respect snapshot config toggle
 
-      // kilocode_change start - preserve imported cumulative diffs when summarizing cloud-forked sessions
-      const base = yield* readSessionDiffBase(storage, input.sessionID)
-      const messages = all.filter(
-        (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
-      )
-      const target = messages.find((m) => m.info.id === input.messageID)
-      const local = base.length > 0 && target?.info.role === "user" ? yield* computeDiff({ messages }) : []
-      const diffs =
-        base.length > 0
-          ? yield* storage.read<Snapshot.FileDiff[]>(["session_diff", input.sessionID]).pipe(
-              Effect.orElseSucceed((): Snapshot.FileDiff[] => base),
-              Effect.map((existing) =>
-                appendSessionDiffs({ existing: existing.length > 0 ? existing : base, next: local }),
-              ),
-            )
-          : yield* computeDiff({ messages: all })
-      // kilocode_change end
+      const diffs = yield* computeDiff({ messages: all })
       yield* sessions.setSummary({
         sessionID: input.sessionID,
         summary: {
@@ -134,12 +117,18 @@ export const layer = Layer.effect(
           files: diffs.length,
         },
       })
-      yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore) // kilocode_change
+      // kilocode_change - steady-state cumulative write retained for legacy TUI/VS Code/session readers.
+      yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
       yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs })
 
+      // Turn-scoped message summary: diffs for the target user message plus its child assistant messages only.
+      const turn = all.filter(
+        (m) => m.info.id === input.messageID || (m.info.role === "assistant" && m.info.parentID === input.messageID),
+      )
+      const target = turn.find((m) => m.info.id === input.messageID)
       if (!target || target.info.role !== "user") return
-      const msgDiffs = base.length > 0 ? local : yield* computeDiff({ messages }) // kilocode_change
-      target.info.summary = { ...target.info.summary, diffs: msgDiffs }
+      const turnDiffs = yield* computeDiff({ messages: turn })
+      target.info.summary = { ...target.info.summary, diffs: turnDiffs }
       yield* sessions.updateMessage(target.info)
     })
 

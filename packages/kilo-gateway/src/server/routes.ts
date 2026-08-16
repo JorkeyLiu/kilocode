@@ -10,16 +10,11 @@ import { fetchKiloImageModels } from "../api/models.js"
 import { fetchOrganizationModes, clearModesCache } from "../api/modes.js"
 import { KILO_API_BASE, HEADER_FEATURE, HEADER_ORGANIZATIONID } from "../api/constants.js"
 import { buildKiloHeaders } from "../headers.js"
-import type { ImportDeps, DrizzleDb } from "../cloud-sessions.js"
-import { fetchCloudSession, fetchCloudSessionForImport, importSessionToDb } from "../cloud-sessions.js"
 import { createEditHandler } from "./edit.js"
 import { createFimHandler } from "./fim.js"
 import {
   GatewayError,
   UnauthorizedError,
-  getClawChatCredentials,
-  getClawStatus,
-  getCloudSessions,
   getNotifications,
   getProfile,
   setOrganization,
@@ -35,7 +30,7 @@ type Auth = any
 type ModelCache = { clear: (providerID: string) => void | Promise<void> }
 type Z = any
 
-interface KiloRoutesDeps extends ImportDeps {
+interface KiloRoutesDeps {
   Hono: new () => Hono
   describeRoute: DescribeRoute
   validator: Validator
@@ -79,15 +74,6 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
     errors,
     Auth,
     z,
-    Database,
-    Instance,
-    SessionTable,
-    MessageTable,
-    PartTable,
-    SessionToRow,
-    Bus,
-    SessionCreatedEvent,
-    Identifier,
     ModelCache,
     Instances,
   } = deps
@@ -555,256 +541,6 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
       }),
       async (c: any) => {
         return c.json(await getNotifications(Auth))
-      },
-    )
-    .get(
-      "/cloud/session/:id",
-      describeRoute({
-        summary: "Get cloud session",
-        description: "Fetch full session data from the Kilo cloud for preview",
-        operationId: "kilo.cloud.session.get",
-        responses: {
-          200: {
-            description: "Cloud session data",
-            content: {
-              "application/json": {
-                schema: resolver(z.unknown()),
-              },
-            },
-          },
-          ...errors(401, 404),
-        },
-      }),
-      validator("param", z.object({ id: z.string() })),
-      async (c: any) => {
-        try {
-          const auth = await Auth.get("kilo")
-          if (!auth) return c.json({ error: "Not authenticated with Kilo Gateway" }, 401)
-          const token = auth.type === "api" ? auth.key : auth.type === "oauth" ? auth.access : undefined
-          if (!token) return c.json({ error: "No valid token found" }, 401)
-
-          const { id } = c.req.valid("param")
-          const result = await fetchCloudSession(token, id)
-          if (!result.ok) return c.json({ error: result.error }, result.status)
-          return c.json(result.data)
-        } catch (err: any) {
-          console.error("[Kilo Gateway] cloud/session/get: unhandled error", err?.message ?? err)
-          return c.json({ error: "Internal error" }, 500)
-        }
-      },
-    )
-    .post(
-      "/cloud/session/import",
-      describeRoute({
-        summary: "Import session from cloud",
-        description: "Download a cloud-synced session and write it to local storage with fresh IDs.",
-        operationId: "kilo.cloud.session.import",
-        responses: {
-          200: {
-            description: "Imported session info",
-            content: {
-              "application/json": {
-                schema: resolver(z.unknown()),
-              },
-            },
-          },
-          ...errors(400, 401, 404),
-        },
-      }),
-      validator(
-        "json",
-        z.object({
-          sessionId: z.string(),
-        }),
-      ),
-      async (c: any) => {
-        try {
-          const { sessionId } = c.req.valid("json")
-
-          const auth = await Auth.get("kilo")
-          if (!auth) return c.json({ error: "Not authenticated with Kilo" }, 401)
-          const token = auth.type === "api" ? auth.key : auth.type === "oauth" ? auth.access : undefined
-          if (!token) return c.json({ error: "No valid token found" }, 401)
-
-          const fetched = await fetchCloudSessionForImport(token, sessionId)
-          if (!fetched.ok) return c.json({ error: fetched.error }, fetched.status as any)
-
-          const data = fetched.data
-          if (!data?.info?.id) return c.json({ error: "Invalid export data" }, 400)
-
-          const info = importSessionToDb(data, {
-            Database,
-            Instance,
-            SessionTable,
-            MessageTable,
-            PartTable,
-            SessionToRow,
-            Bus,
-            SessionCreatedEvent,
-            Identifier,
-          })
-
-          return c.json(info)
-        } catch (err: any) {
-          console.error("[Kilo Gateway] cloud/session/import: unhandled error", err?.message ?? err)
-          return c.json({ error: "Internal error" }, 500)
-        }
-      },
-    )
-    .get(
-      "/claw/status",
-      describeRoute({
-        summary: "Get KiloClaw instance status",
-        description: "Fetch the user's KiloClaw instance status via the KiloClaw worker",
-        operationId: "kilo.claw.status",
-        responses: {
-          200: {
-            description: "Instance status",
-            content: {
-              "application/json": {
-                schema: resolver(
-                  z.object({
-                    // `recovering` and `restoring` are transitional states the
-                    // worker reports while it brings an instance back online
-                    // after an unexpected stop or a snapshot restore — see
-                    // cloud `services/kiloclaw/src/index.ts` and the
-                    // `PlatformStatusResponse` type in
-                    // cloud/apps/web/src/lib/kiloclaw/types.ts. Keeping them in
-                    // the enum so the SDK types stay accurate.
-                    status: z
-                      .enum([
-                        "provisioned",
-                        "starting",
-                        "restarting",
-                        "recovering",
-                        "running",
-                        "stopped",
-                        "destroying",
-                        "restoring",
-                      ])
-                      .nullable(),
-                    sandboxId: z.string().optional(),
-                    flyRegion: z.string().optional(),
-                    machineSize: z.object({ cpus: z.number(), memory_mb: z.number() }).optional(),
-                    openclawVersion: z.string().nullable().optional(),
-                    lastStartedAt: z.string().nullable().optional(),
-                    lastStoppedAt: z.string().nullable().optional(),
-                    channelCount: z.number().optional(),
-                    secretCount: z.number().optional(),
-                    userId: z.string().optional(),
-                    botName: z.string().nullable().optional(),
-                  }),
-                ),
-              },
-            },
-          },
-          ...errors(401, 502),
-        },
-      }),
-      async (c: any) => {
-        try {
-          return c.json(await getClawStatus(Auth))
-        } catch (err: any) {
-          if (err instanceof GatewayError) {
-            return c.json({ error: `KiloClaw request failed: ${err.status} ${err.message}` }, err.status as any)
-          }
-          console.error("[Kilo Gateway] claw/status: error", err?.message ?? err)
-          return c.json({ error: "Failed to reach KiloClaw" }, 502)
-        }
-      },
-    )
-    .get(
-      "/claw/chat-credentials",
-      describeRoute({
-        summary: "Get KiloClaw chat credentials",
-        description:
-          "Returns the bearer token and endpoint URLs the client uses to talk to the Kilo Chat worker " +
-          "and the Event Service. The bearer is the user's existing long-lived Kilo JWT — kilo-chat and " +
-          "event-service both verify it directly with NEXTAUTH_SECRET, so no separate token mint is needed.",
-        operationId: "kilo.claw.chatCredentials",
-        responses: {
-          200: {
-            description: "Kilo Chat credentials or null",
-            content: {
-              "application/json": {
-                schema: resolver(
-                  z
-                    .object({
-                      token: z.string(),
-                      expiresAt: z.string(),
-                      kiloChatUrl: z.string(),
-                      eventServiceUrl: z.string(),
-                    })
-                    .nullable(),
-                ),
-              },
-            },
-          },
-          ...errors(401),
-        },
-      }),
-      async (c: any) => {
-        try {
-          return c.json(await getClawChatCredentials(Auth))
-        } catch (err) {
-          if (!(err instanceof UnauthorizedError)) throw err
-          return c.json({ error: "Not authenticated with Kilo Gateway" }, 401)
-        }
-      },
-    )
-    .get(
-      "/cloud-sessions",
-      describeRoute({
-        summary: "Get cloud sessions",
-        description: "Fetch cloud CLI sessions from Kilo API",
-        operationId: "kilo.cloudSessions",
-        responses: {
-          200: {
-            description: "Cloud sessions list",
-            content: {
-              "application/json": {
-                schema: resolver(
-                  z.object({
-                    cliSessions: z.array(
-                      z.object({
-                        session_id: z.string(),
-                        title: z.string().nullable(),
-                        created_at: z.string(),
-                        updated_at: z.string(),
-                        version: z.number(),
-                      }),
-                    ),
-                    nextCursor: z.string().nullable(),
-                  }),
-                ),
-              },
-            },
-          },
-          ...errors(400, 401),
-        },
-      }),
-      validator(
-        "query",
-        z.object({
-          cursor: z.string().optional(),
-          limit: z.coerce.number().optional(),
-          gitUrl: z.string().optional(),
-        }),
-      ),
-      async (c: any) => {
-        try {
-          const auth = await Auth.get("kilo")
-          if (!auth) return c.json({ error: "Not authenticated with Kilo Gateway" }, 401)
-
-          const token = auth.type === "api" ? auth.key : auth.type === "oauth" ? auth.access : undefined
-          if (!token) return c.json({ error: "No valid token found" }, 401)
-
-          return c.json(await getCloudSessions(token, c.req.valid("query")))
-        } catch (err: any) {
-          if (err instanceof GatewayError) return c.json({ error: err.message }, err.status as any)
-          console.error("[Kilo Gateway] cloud-sessions: unhandled error", err?.message ?? err)
-          return c.json({ error: "Internal error" }, 500)
-        }
       },
     )
 }

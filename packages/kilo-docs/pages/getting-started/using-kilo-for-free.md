@@ -9,7 +9,7 @@ Kilo Code can be used completely free of charge. There are three places where Ki
 
 ## Where Kilo Uses Models
 
-1. **Agentic interactions** — Conversations with coding agents in IDE extensions (VS Code, JetBrains), CLI, and cloud services like App Builder and Code Reviewer
+1. **Agentic interactions** — Conversations with coding agents in IDE extensions (VS Code), CLI, and cloud services like App Builder and Code Reviewer
 2. **Autocomplete** — In-editor code completions as you type (IDE extensions only)
 3. **Background tasks** — Automatic session titles and context summarization
 
@@ -33,7 +33,7 @@ For NVIDIA free endpoints (Super/Ultra/etc): Trial use only - do not submit pers
 
 You can also browse and select individual free models. In the model picker, type `free` to filter the list — free models are clearly labeled across all platforms.
 
-**In the IDE Extensions (VS Code, JetBrains):**
+**In the IDE Extension (VS Code):**
 
 1. Click on the current model below the chat window
 2. Type `free` in the search box

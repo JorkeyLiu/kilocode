@@ -6,7 +6,7 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">VS Code、JetBrains、CLI で AI を使って開発するためのオープンソースのコーディングエージェント。</p>
+<p align="center">VS Code、CLI で AI を使って開発するためのオープンソースのコーディングエージェント。</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
@@ -21,7 +21,7 @@
 
 ---
 
-Kilo Code は、[VS Code](https://kilo.ai/landing/vs-code)、[JetBrains](https://kilo.ai/features/jetbrains-native)、[CLI](https://kilo.ai/cli) など、あなたが作業する場所で使える AI コーディングエージェントです。オープンソースで、透明な価格体系を採用しています。500 以上のモデルから選択し、タスクの途中で切り替え、追加料金なしでモデルプロバイダーの料金を支払います。開始に API キーは不要です。
+Kilo Code は、[VS Code](https://kilo.ai/landing/vs-code)、[CLI](https://kilo.ai/cli) など、あなたが作業する場所で使える AI コーディングエージェントです。オープンソースで、透明な価格体系を採用しています。500 以上のモデルから選択し、タスクの途中で切り替え、追加料金なしでモデルプロバイダーの料金を支払います。開始に API キーは不要です。
 
 ### インストール
 
@@ -66,15 +66,6 @@ paru -S kilo-bin
 </details>
 
 <details>
-<summary><strong>JetBrains</strong></summary>
-
-<br>
-
-JetBrains Marketplace から [Kilo Code プラグイン](https://plugins.jetbrains.com/plugin/28350-kilo-code)をインストールするか、任意の JetBrains IDE の `Settings → Plugins` で "Kilo Code" を検索してください。
-
-</details>
-
-<details>
 <summary><strong>Cloud Agent</strong></summary>
 
 <br>
@@ -89,15 +80,6 @@ JetBrains Marketplace から [Kilo Code プラグイン](https://plugins.jetbrai
 <br>
 
 [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews) で pull request に自動 AI コードレビューを設定できます。
-
-</details>
-
-<details>
-<summary><strong>KiloClaw</strong></summary>
-
-<br>
-
-[app.kilo.ai/claw](https://app.kilo.ai/claw) で常時稼働する AI エージェントを起動できます。
 
 </details>
 
@@ -155,7 +137,7 @@ kilo run --auto "run tests and fix any failures"
 
 ### コントリビューション
 
-開発者、ライター、その他すべての方からのコントリビューションを歓迎します。環境設定、コーディング標準、pull request の作成方法については [Contributing Guide](/CONTRIBUTING.md) から始めてください。VS Code 拡張機能と CLI のリリース手順は [RELEASING.md](../RELEASING.md)、JetBrains プラグインについては [packages/kilo-jetbrains/RELEASING.md](../packages/kilo-jetbrains/RELEASING.md) を参照してください。
+開発者、ライター、その他すべての方からのコントリビューションを歓迎します。環境設定、コーディング標準、pull request の作成方法については [Contributing Guide](/CONTRIBUTING.md) から始めてください。VS Code 拡張機能と CLI のリリース手順は [RELEASING.md](../RELEASING.md) を参照してください。
 
 参加する前に [Code of Conduct](/CODE_OF_CONDUCT.md) を確認してください。
 

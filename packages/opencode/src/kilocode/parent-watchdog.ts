@@ -5,7 +5,7 @@ const log = Log.create({ service: "parent-watchdog" })
 /**
  * Exit the server when the embedded client that spawned it dies.
  *
- * Editor clients (VS Code extension, JetBrains plugin) run `kilo serve` as a child
+ * Editor clients (VS Code extension) run `kilo serve` as a child
  * process. A graceful client shutdown signals the server, but a hard kill (SIGKILL,
  * crash, OOM) never gets the chance, orphaning the server. The client passes its own
  * PID via `KILO_PARENT_PID`; we poll that PID and re-parenting so the server shuts

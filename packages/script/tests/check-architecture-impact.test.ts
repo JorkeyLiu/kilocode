@@ -202,9 +202,9 @@ describe("Kotlin and YAML source detection", () => {
 
   test("diffHasCodeFor routes Kotlin through the scanner and YAML through the comment detector", () => {
     const ktCode = ["diff --git a/x.kt b/x.kt", "@@ -1 +1,2 @@", "-// old", "+fun main() {}"].join("\n")
-    expect(diffHasCodeFor("packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/Foo.kt", ktCode)).toBe(true)
+    expect(diffHasCodeFor("packages/shared/src/main/kotlin/ai/example/Foo.kt", ktCode)).toBe(true)
     const ktComment = ["diff --git a/x.kt b/x.kt", "@@ -1 +1,2 @@", "-// old", "+// new"].join("\n")
-    expect(diffHasCodeFor("packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/Foo.kt", ktComment)).toBe(false)
+    expect(diffHasCodeFor("packages/shared/src/main/kotlin/ai/example/Foo.kt", ktComment)).toBe(false)
   })
 
   test("yamlHasCode treats blank and full-line # as comments, everything else as code", () => {
@@ -379,39 +379,10 @@ describe("taxonomy expansion: cross-client contracts and product surfaces", () =
     })
   })
 
-  test("JetBrains backend ownership files are HIGH cross-client-contract", () => {
-    const surfaces = [
-      "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/KiloBackendCliManager.kt",
-      "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/app/KiloBackendConnectionService.kt",
-      "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/workspace/KiloBackendWorkspaceManager.kt",
-    ]
-    for (const f of surfaces) {
-      expect(classifyFile(f, codeDiff("a", "b"))).toEqual([{ tier: "high", kind: "cross-client-contract", file: f }])
-    }
-  })
-
-  test("JetBrains RPC contract directory is HIGH cross-client-contract", () => {
-    const f = "packages/kilo-jetbrains/shared/src/main/kotlin/ai/kilocode/rpc/dto/SessionDto.kt"
-    expect(classifyFile(f, codeDiff("a", "b"))).toEqual([{ tier: "high", kind: "cross-client-contract", file: f }])
-  })
-
-  test("JetBrains app/workspace dirs are MEDIUM arch-adjacent but exact owners stay HIGH", () => {
-    for (const f of [
-      "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/app/KiloBackendSessionManager.kt",
-      "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/workspace/KiloBackendWorkspace.kt",
-    ]) {
-      const sig = classifyFile(f, codeDiff("a", "b"))
-      expect(sig[0]?.tier).toBe("medium")
-      expect(sig[0]?.kind).toBe("arch-adjacent")
-    }
-    expect(classifyFile("packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/app/KiloBackendConnectionService.kt", codeDiff("a", "b"))[0]?.tier).toBe("high")
-  })
-
   test("future siblings in known lifecycle dirs warn MEDIUM arch-adjacent; exact owners stay HIGH", () => {
     const siblings = [
       "packages/opencode/src/kilocode/session/session-reaper.ts",
       "packages/kilo-vscode/src/services/cli-backend/session-store.ts",
-      "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/KiloBackendCliPoller.kt",
     ]
     for (const f of siblings) {
       expect(classifyFile(f, codeDiff("a", "b"))).toEqual([{ tier: "medium", kind: "arch-adjacent", file: f }])
@@ -426,7 +397,6 @@ describe("taxonomy expansion: cross-client contracts and product surfaces", () =
       kind: "cross-client-contract",
       file: "packages/kilo-vscode/src/services/cli-backend/server-manager.ts",
     })
-    expect(classifyFile("packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/KiloBackendCliManager.kt", codeDiff("a", "b"))[0]?.tier).toBe("high")
   })
 
   test("comment/test/build changes in known lifecycle dirs stay exempt", () => {
@@ -435,17 +405,6 @@ describe("taxonomy expansion: cross-client contracts and product surfaces", () =
     expect(classifyFile("packages/opencode/src/kilocode/session/dist/session-reaper.ts", codeDiff("a", "b"))).toEqual([])
     expect(classifyFile("packages/kilo-vscode/src/services/cli-backend/session-store.test.ts", codeDiff("a", "b"))).toEqual([])
     expect(classifyFile("packages/kilo-vscode/src/services/cli-backend/out/session-store.js", codeDiff("a", "b"))).toEqual([])
-    expect(classifyFile("packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/KiloBackendCliPoller.kt", commentOnlyDiff)).toEqual([])
-    expect(classifyFile("packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/KiloBackendCliPollerTest.kt", codeDiff("a", "b"))).toEqual([])
-  })
-
-  test("Kotlin comment-only and Kotlin test files never signal", () => {
-    const high = "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/KiloBackendCliManager.kt"
-    expect(classifyFile(high, ["@@ -1 +1,2 @@", "-// old", "+// new"].join("\n"))).toEqual([])
-    const testFile = "packages/kilo-jetbrains/backend/src/test/kotlin/ai/kilocode/backend/cli/KiloBackendCliManagerTest.kt"
-    expect(classifyFile(testFile, codeDiff("a", "b"))).toEqual([])
-    // Kotlin *Tests.kt suffix is also test-only even outside a src/test segment.
-    expect(classifyFile("packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/KiloBackendCliManagerTests.kt", codeDiff("a", "b"))).toEqual([])
   })
 
   test("handwritten SDK client is HIGH; generated SDK gen output is exempt", () => {
@@ -505,7 +464,7 @@ describe("taxonomy expansion: cross-client contracts and product surfaces", () =
   test("build output directories never signal at any tier", () => {
     expect(classifyFile("packages/opencode/src/kilocode/server/dist/drain-control.ts", codeDiff("a", "b"))).toEqual([])
     expect(classifyFile("packages/kilo-vscode/out/connection-service.js", codeDiff("a", "b"))).toEqual([])
-    expect(classifyFile("packages/kilo-jetbrains/backend/build/classes/main/Foo.kt", codeDiff("a", "b"))).toEqual([])
+    expect(classifyFile("packages/kilo-vscode/out/classes/main/Foo.kt", codeDiff("a", "b"))).toEqual([])
   })
 })
 
@@ -960,11 +919,9 @@ describe("evaluateCheck", () => {
   test("MEDIUM product dirs only warn, even with a missing declaration", () => {
     for (const f of [
       "packages/kilo-vscode/src/agent-manager/AgentManagerProvider.ts",
-      "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/app/KiloBackendSessionManager.kt",
       "packages/kilo-vscode/src/services/cli-backend/types.ts",
       "packages/opencode/src/kilocode/session/session-reaper.ts",
       "packages/kilo-vscode/src/services/cli-backend/session-store.ts",
-      "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/KiloBackendCliPoller.kt",
     ]) {
       const r = evaluateCheck({ changes: change(f, codeDiff("a", "b")), body: "## Summary\nNothing.", worktree: false })
       expect(r.signals[0]?.tier).toBe("medium")
@@ -1381,31 +1338,6 @@ describe("check-architecture-impact CLI (real git)", () => {
       expect(res.status).toBe(0)
       expect(res.stdout).toContain("[high] runtime-lifecycle")
       expect(res.stdout).toContain("drain-control.ts")
-    } finally {
-      rmSync(repo, { recursive: true, force: true })
-    }
-  }, { timeout: 30000 })
-
-  test("worktree: Kotlin cross-client surface signals HIGH, comment-only does not", () => {
-    const repo = freshRepo("kilo-arch-kotlin-")
-    try {
-      const dir = path.join(repo, "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli")
-      mkdirSync(dir, { recursive: true })
-      const f = path.join(dir, "KiloBackendCliManager.kt")
-      writeFileSync(f, "package ai.kilocode.backend.cli\n// baseline\n")
-      git(repo, ["add", "-A"])
-      git(repo, ["commit", "-qm", "baseline"])
-
-      writeFileSync(f, "package ai.kilocode.backend.cli\n// baseline\nclass KiloBackendCliManager\n")
-      let res = run(repo, ["--worktree"])
-      expect(res.status).toBe(0)
-      expect(res.stdout).toContain("[high] cross-client-contract")
-      expect(res.stdout).toContain("KiloBackendCliManager.kt")
-
-      writeFileSync(f, "package ai.kilocode.backend.cli\n// baseline\n// just a comment\n")
-      res = run(repo, ["--worktree"])
-      expect(res.status).toBe(0)
-      expect(res.stdout).toContain("0 architecture signal(s)")
     } finally {
       rmSync(repo, { recursive: true, force: true })
     }

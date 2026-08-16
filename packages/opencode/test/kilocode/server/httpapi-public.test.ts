@@ -198,22 +198,6 @@ describe("Kilo PublicApi OpenAPI contract", () => {
       authenticated: { type: "boolean" },
       type: { type: "string", enum: ["api", "oauth"] },
     })
-
-    const sessions = response(KiloGatewayPaths.cloudSessions)?.properties
-    expect(sessions?.cliSessions?.items?.properties?.title).toEqual({
-      anyOf: [{ type: "string" }, { type: "null" }],
-    })
-    expect(sessions?.nextCursor).toEqual({ anyOf: [{ type: "string" }, { type: "null" }] })
-
-    const claw = response(KiloGatewayPaths.clawStatus)?.properties
-    expect(claw?.status).toEqual({ anyOf: [expect.objectContaining({ type: "string" }), { type: "null" }] })
-    for (const field of ["openclawVersion", "lastStartedAt", "lastStoppedAt", "botName"]) {
-      expect(claw?.[field]).toEqual({ anyOf: [{ type: "string" }, { type: "null" }] })
-    }
-
-    expect(response(KiloGatewayPaths.clawChatCredentials)).toEqual({
-      anyOf: [expect.objectContaining({ type: "object" }), { type: "null" }],
-    })
   })
 
   test("keeps transcription prompts in the public contract", () => {

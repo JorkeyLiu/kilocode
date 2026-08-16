@@ -132,7 +132,6 @@ Options:
   -c, --continue     continue the last session  [boolean]
   -s, --session      session id to continue  [string]
       --fork         fork the session when continuing (use with --continue or --session)  [boolean]
-      --cloud-fork   fetch session from cloud and continue locally (use with --session)  [boolean]
       --prompt       prompt to use  [string]
       --agent        agent to use  [string]
 ```
@@ -146,15 +145,14 @@ Positionals:
   url  http://localhost:4096  [string]
 
 Options:
-      --help        Show help  [boolean]
-      --version     Show version number  [boolean]
-      --dir         directory to run in  [string]
-  -c, --continue    continue the last session  [boolean]
-  -s, --session     session id to continue  [string]
-      --fork        fork the session when continuing (use with --continue or --session)  [boolean]
-      --cloud-fork  fetch session from cloud and continue locally (use with --session)  [boolean]
-  -p, --password    basic auth password (defaults to KILO_SERVER_PASSWORD)  [string]
-  -u, --username    basic auth username (defaults to KILO_SERVER_USERNAME or 'kilo')  [string]
+      --help      Show help  [boolean]
+      --version   Show version number  [boolean]
+      --dir       directory to run in  [string]
+  -c, --continue  continue the last session  [boolean]
+  -s, --session   session id to continue  [string]
+      --fork      fork the session when continuing (use with --continue or --session)  [boolean]
+  -p, --password  basic auth password (defaults to KILO_SERVER_PASSWORD)  [string]
+  -u, --username  basic auth username (defaults to KILO_SERVER_USERNAME or 'kilo')  [string]
 ```
 
 ## kilo run
@@ -172,7 +170,6 @@ Options:
   -c, --continue                      continue the last session  [boolean]
   -s, --session                       session id to continue  [string]
       --fork                          fork the session before continuing (requires --continue or --session)  [boolean]
-      --cloud-fork                    fetch session from cloud and continue locally (use with --session)  [boolean]
       --share                         share the session  [boolean]
   -m, --model                         model to use in the format of provider/model  [string]
       --agent                         agent to use  [string]
@@ -952,37 +949,6 @@ Options:
       --cors         additional domains to allow for CORS  [array] [default: []]
       --json         print daemon details as JSON  [boolean]
   -f, --foreground   keep the command active until interrupted  [boolean]
-```
-
-## kilo console
-
-```
-open or stop the local Kilo Console
-
-Commands:
-  kilo console       open the local Kilo Console  [default]
-  kilo console stop  stop the local kilo daemon
-
-Options:
-      --help         Show help  [boolean]
-      --version      Show version number  [boolean]
-      --port         port to listen on  [number] [default: 0]
-      --hostname     hostname to listen on  [string] [default: "127.0.0.1"]
-      --mdns         enable mDNS service discovery (defaults hostname to 0.0.0.0)  [boolean] [default: false]
-      --mdns-domain  custom domain name for mDNS service (default: kilo.local)  [string] [default: "kilo.local"]
-      --cors         additional domains to allow for CORS  [array] [default: []]
-  -f, --foreground   keep the command active until interrupted  [boolean]
-```
-
-### kilo console stop
-
-```
-stop the local kilo daemon
-
-Options:
-  --help     Show help  [boolean]
-  --version  Show version number  [boolean]
-  --json     print daemon details as JSON  [boolean]
 ```
 
 ## kilo db

@@ -388,18 +388,6 @@ export const kiloScenarios: Scenario[] = [
     .post("/kilo/organization", "kilo.organization.set")
     .at((ctx) => ({ path: "/kilo/organization", headers: ctx.headers(), body: { organizationId: null } }))
     .status(401),
-  http.protected.get("/kilo/claw/status", "kilo.claw.status").probe({ path: "/path" }).status(401),
-  http.protected.get("/kilo/claw/chat-credentials", "kilo.claw.chatCredentials").probe({ path: "/path" }).status(401),
-  http.protected.get("/kilo/cloud-sessions", "kilo.cloudSessions").probe({ path: "/path" }).status(401),
-  http.protected
-    .get("/kilo/cloud/session/{id}", "kilo.cloud.session.get")
-    .probe({ path: "/path" })
-    .at((ctx) => ({ path: route("/kilo/cloud/session/{id}", { id: "httpapi-missing" }), headers: ctx.headers() }))
-    .status(401),
-  http.protected
-    .post("/kilo/cloud/session/import", "kilo.cloud.session.import")
-    .at((ctx) => ({ path: "/kilo/cloud/session/import", headers: ctx.headers(), body: { sessionId: "missing" } }))
-    .status(401),
   http.protected.get("/network", "network.list").json(200, array),
   http.protected
     .post("/network/{requestID}/reply", "network.reply")

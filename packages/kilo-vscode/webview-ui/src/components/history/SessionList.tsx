@@ -280,8 +280,8 @@ const SessionList: Component<SessionListProps> = (props) => {
         itemWrapper={wrapItem}
         footer={
           <Show when={session.sessionsHasMore()}>
-            <div class="cloud-session-load-more">
-              <button class="cloud-session-load-more-btn" onClick={() => session.loadMoreSessions()}>
+            <div class="session-load-more">
+              <button class="session-load-more-btn" onClick={() => session.loadMoreSessions()}>
                 {language.t("common.loadMore") ?? "Load more"}
               </button>
             </div>

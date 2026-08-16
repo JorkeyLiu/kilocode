@@ -6,7 +6,7 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">VS Code, JetBrains veya CLI'de AI ile geliştirme yapmak için açık kaynak kodlama ajanı.</p>
+<p align="center">VS Code veya CLI'de AI ile geliştirme yapmak için açık kaynak kodlama ajanı.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
@@ -21,7 +21,7 @@
 
 ---
 
-Kilo Code, çalıştığınız her yerde size eşlik eden bir AI kodlama ajanıdır: [VS Code](https://kilo.ai/landing/vs-code), [JetBrains](https://kilo.ai/features/jetbrains-native) ve [CLI](https://kilo.ai/cli). Açık kaynaktır ve açık fiyatlandırma sunar. 500'den fazla model arasından seçim yapabilir, görev sırasında model değiştirebilir ve hiçbir ek ücret olmadan model sağlayıcısının fiyatını ödersiniz. Başlamak için API anahtarı gerekmez.
+Kilo Code, çalıştığınız her yerde size eşlik eden bir AI kodlama ajanıdır: [VS Code](https://kilo.ai/landing/vs-code) ve [CLI](https://kilo.ai/cli). Açık kaynaktır ve açık fiyatlandırma sunar. 500'den fazla model arasından seçim yapabilir, görev sırasında model değiştirebilir ve hiçbir ek ücret olmadan model sağlayıcısının fiyatını ödersiniz. Başlamak için API anahtarı gerekmez.
 
 ### Kurulum
 
@@ -66,15 +66,6 @@ Ardından başlamak için herhangi bir proje dizininde `kilo` çalıştırın.
 </details>
 
 <details>
-<summary><strong>JetBrains</strong></summary>
-
-<br>
-
-[Kilo Code eklentisini](https://plugins.jetbrains.com/plugin/28350-kilo-code) JetBrains Marketplace'ten kurun veya herhangi bir JetBrains IDE içinde `Settings → Plugins` bölümünde "Kilo Code" arayın.
-
-</details>
-
-<details>
 <summary><strong>Cloud Agent</strong></summary>
 
 <br>
@@ -89,15 +80,6 @@ Kilo'yu yerel makine gerekmeden web üzerinden [app.kilo.ai/cloud](https://app.k
 <br>
 
 Pull request'leriniz için otomatik AI kod incelemelerini [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews) adresinde ayarlayın.
-
-</details>
-
-<details>
-<summary><strong>KiloClaw</strong></summary>
-
-<br>
-
-Her zaman açık AI ajanınızı [app.kilo.ai/claw](https://app.kilo.ai/claw) adresinde başlatın.
 
 </details>
 
@@ -155,7 +137,7 @@ Yapılandırma ve diğer her şey için [dokümantasyona](https://kilo.ai/docs) 
 
 ### Katkıda bulunma
 
-Geliştiricilerden, yazarlardan ve herkesten katkı bekliyoruz. Ortam kurulumu, kodlama standartları ve pull request açma hakkında bilgi için [Contributing Guide](/CONTRIBUTING.md) ile başlayın. VS Code uzantısı ve CLI yayın süreci için [RELEASING.md](../RELEASING.md), JetBrains eklentisi için [packages/kilo-jetbrains/RELEASING.md](../packages/kilo-jetbrains/RELEASING.md) dosyasına bakın.
+Geliştiricilerden, yazarlardan ve herkesten katkı bekliyoruz. Ortam kurulumu, kodlama standartları ve pull request açma hakkında bilgi için [Contributing Guide](/CONTRIBUTING.md) ile başlayın. VS Code uzantısı ve CLI yayın süreci için [RELEASING.md](../RELEASING.md) dosyasına bakın.
 
 Katılmadan önce lütfen [Code of Conduct](/CODE_OF_CONDUCT.md) belgemizi okuyun.
 

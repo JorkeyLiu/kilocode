@@ -461,9 +461,9 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
         </>
       ))}
       <Show when={session.sessionsHasMore()}>
-        <div class="cloud-session-load-more">
+        <div class="session-load-more">
           <button
-            class="cloud-session-load-more-btn"
+            class="session-load-more-btn"
             onClick={() => {
               // No pre-capture needed — the container-owned tracker already
               // maintains the latest visible anchor from scroll events.

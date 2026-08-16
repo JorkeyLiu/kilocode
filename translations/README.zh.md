@@ -6,7 +6,7 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">用于在 VS Code、JetBrains 或 CLI 中借助 AI 构建的开源编码代理。</p>
+<p align="center">用于在 VS Code 或 CLI 中借助 AI 构建的开源编码代理。</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
@@ -21,7 +21,7 @@
 
 ---
 
-Kilo Code 是一个 AI 编码代理，可以在你工作的任何地方使用：[VS Code](https://kilo.ai/landing/vs-code)、[JetBrains](https://kilo.ai/features/jetbrains-native) 和 [CLI](https://kilo.ai/cli)。它是开源的，并采用开放定价。你可以从 500 多个模型中选择，在任务中途切换模型，并按模型提供商的价格付费，没有加价。开始使用无需 API 密钥。
+Kilo Code 是一个 AI 编码代理，可以在你工作的任何地方使用：[VS Code](https://kilo.ai/landing/vs-code) 和 [CLI](https://kilo.ai/cli)。它是开源的，并采用开放定价。你可以从 500 多个模型中选择，在任务中途切换模型，并按模型提供商的价格付费，没有加价。开始使用无需 API 密钥。
 
 ### 安装
 
@@ -66,15 +66,6 @@ paru -S kilo-bin
 </details>
 
 <details>
-<summary><strong>JetBrains</strong></summary>
-
-<br>
-
-从 JetBrains Marketplace 安装 [Kilo Code 插件](https://plugins.jetbrains.com/plugin/28350-kilo-code)，或在任意 JetBrains IDE 的 `Settings → Plugins` 中搜索 "Kilo Code"。
-
-</details>
-
-<details>
 <summary><strong>Cloud Agent</strong></summary>
 
 <br>
@@ -89,15 +80,6 @@ paru -S kilo-bin
 <br>
 
 在 [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews) 为你的 Pull Request 设置自动 AI 代码审查。
-
-</details>
-
-<details>
-<summary><strong>KiloClaw</strong></summary>
-
-<br>
-
-在 [app.kilo.ai/claw](https://app.kilo.ai/claw) 启动你的常驻 AI 代理。
 
 </details>
 
@@ -155,7 +137,7 @@ kilo run --auto "run tests and fix any failures"
 
 ### 贡献
 
-欢迎开发者、写作者以及所有人参与贡献。请先阅读 [Contributing Guide](/CONTRIBUTING.md)，了解环境设置、编码标准以及如何创建 Pull Request。VS Code 扩展和 CLI 的发布流程请参阅 [RELEASING.md](../RELEASING.md)，JetBrains 插件请参阅 [packages/kilo-jetbrains/RELEASING.md](../packages/kilo-jetbrains/RELEASING.md)。
+欢迎开发者、写作者以及所有人参与贡献。请先阅读 [Contributing Guide](/CONTRIBUTING.md)，了解环境设置、编码标准以及如何创建 Pull Request。VS Code 扩展和 CLI 的发布流程请参阅 [RELEASING.md](../RELEASING.md)。
 
 参与前请阅读我们的 [Code of Conduct](/CODE_OF_CONDUCT.md)。
 

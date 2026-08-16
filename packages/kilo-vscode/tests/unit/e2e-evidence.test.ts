@@ -194,6 +194,19 @@ describe("evidenceInventory (required artifact set)", () => {
     expect(rels).toContain("workspace:.kilo/kilo.json")
     expect(rels).toContain("workspace:rollback.txt")
   })
+
+  it("requires the P3.3 cloud-claw-removal runtime evidence with no LLM evidence", () => {
+    const { required } = evidenceInventory(new Set(["cloud-claw-removal"]))
+    const rels = required.map((s) => `${s.base}:${s.rel}`)
+    expect(rels).toContain("scratch:plan.json")
+    expect(rels).toContain("scratch:runner-pid")
+    expect(rels).toContain("scratch:cloud-claw-removal-runtime-evidence")
+    // The scenario never issues model requests, so no LLM evidence is required.
+    expect(rels).not.toContain("scratch:llm-requests.jsonl")
+    expect(rels).not.toContain("scratch:llm-matrix-cloud-claw-removal-final.json")
+    // No backend-snapshot globs exist for a pure runtime-absence scenario.
+    expect(rels).not.toContain("scratch:llm-requests-cloud-claw-removal.json")
+  })
 })
 
 describe("expandGlob (snapshot expansion)", () => {

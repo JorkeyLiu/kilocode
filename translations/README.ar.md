@@ -8,7 +8,7 @@
   <a href="https://kilo.ai"><img width="250" alt="Kilo Code logo" src="https://github.com/user-attachments/assets/bdb0c174-b9fd-40ad-a47b-f3aab9b54e8d" /></a>
 </p>
 
-<p align="center">وكيل برمجة مفتوح المصدر للبناء باستخدام الذكاء الاصطناعي في VS Code أو JetBrains أو CLI.</p>
+<p align="center">وكيل برمجة مفتوح المصدر للبناء باستخدام الذكاء الاصطناعي في VS Code أو CLI.</p>
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=kilocode.Kilo-Code"><img src="https://raster.shields.io/badge/VS_Code_Marketplace-007ACC?style=flat&logo=visualstudiocode&logoColor=white" alt="VS Code Marketplace" height="20"></a>
@@ -23,7 +23,7 @@
 
 ---
 
-Kilo Code هو وكيل برمجة بالذكاء الاصطناعي يعمل معك أينما تعمل: [VS Code](https://kilo.ai/landing/vs-code) و[JetBrains](https://kilo.ai/features/jetbrains-native) و[CLI](https://kilo.ai/cli). إنه مفتوح المصدر وبتسعير مفتوح. يمكنك الاختيار من بين أكثر من 500 نموذج، والتبديل بينها أثناء المهمة، ودفع سعر مزود النموذج من دون أي هامش إضافي. لا تحتاج إلى مفاتيح API للبدء.
+Kilo Code هو وكيل برمجة بالذكاء الاصطناعي يعمل معك أينما تعمل: [VS Code](https://kilo.ai/landing/vs-code) و[CLI](https://kilo.ai/cli). إنه مفتوح المصدر وبتسعير مفتوح. يمكنك الاختيار من بين أكثر من 500 نموذج، والتبديل بينها أثناء المهمة، ودفع سعر مزود النموذج من دون أي هامش إضافي. لا تحتاج إلى مفاتيح API للبدء.
 
 ### التثبيت
 
@@ -68,15 +68,6 @@ paru -S kilo-bin
 </details>
 
 <details>
-<summary><strong>JetBrains</strong></summary>
-
-<br>
-
-ثبّت [إضافة Kilo Code](https://plugins.jetbrains.com/plugin/28350-kilo-code) من JetBrains Marketplace، أو ابحث عن "Kilo Code" في `Settings → Plugins` داخل أي JetBrains IDE.
-
-</details>
-
-<details>
 <summary><strong>Cloud Agent</strong></summary>
 
 <br>
@@ -91,15 +82,6 @@ paru -S kilo-bin
 <br>
 
 أعدّ مراجعات كود آلية بالذكاء الاصطناعي لطلبات السحب الخاصة بك على [app.kilo.ai/code-reviews](https://app.kilo.ai/code-reviews).
-
-</details>
-
-<details>
-<summary><strong>KiloClaw</strong></summary>
-
-<br>
-
-شغّل وكيل الذكاء الاصطناعي الدائم لديك على [app.kilo.ai/claw](https://app.kilo.ai/claw).
 
 </details>
 
@@ -157,7 +139,7 @@ kilo run --auto "run tests and fix any failures"
 
 ### المساهمة
 
-نرحب بمساهمات المطورين والكتّاب والجميع. ابدأ بـ [Contributing Guide](/CONTRIBUTING.md) لإعداد البيئة ومعايير الكود وكيفية فتح pull request. راجع [RELEASING.md](../RELEASING.md) لعملية إصدار إضافة VS Code وCLI، و[packages/kilo-jetbrains/RELEASING.md](../packages/kilo-jetbrains/RELEASING.md) لإضافة JetBrains.
+نرحب بمساهمات المطورين والكتّاب والجميع. ابدأ بـ [Contributing Guide](/CONTRIBUTING.md) لإعداد البيئة ومعايير الكود وكيفية فتح pull request. راجع [RELEASING.md](../RELEASING.md) لعملية إصدار إضافة VS Code وCLI.
 
 يرجى قراءة [Code of Conduct](/CODE_OF_CONDUCT.md) قبل المشاركة.
 

@@ -107,8 +107,6 @@ describe("active documentation integrity", () => {
   })
 
   it("preserves current IDE migration anchors", () => {
-    const jetbrains = fs.readFileSync(path.join(root, "markdoc/partials/install-jetbrains.md"), "utf8")
-    expect(jetbrains).toContain("{% #jetbrains-early-access %}")
     expect(fs.existsSync(path.join(pages, "code-with-ai/platforms/vscode/whats-new.md"))).toBe(true)
   })
 

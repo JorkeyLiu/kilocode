@@ -90,8 +90,6 @@ function args() {
     continue: false,
     session: "ses_root",
     fork: false,
-    "cloud-fork": false,
-    cloudFork: false,
     share: false,
     model: undefined,
     agent: undefined,

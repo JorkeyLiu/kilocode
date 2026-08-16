@@ -29,7 +29,6 @@ describe("sitemap.xml", () => {
     expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/vscode")
     expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/vscode/whats-new")
     expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/cli")
-    expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/jetbrains")
     expect(xml).toContain("https://kilo.ai/docs/automate/tools")
     expect(xml).toContain("https://kilo.ai/docs/automate/tools/semantic-search")
   })

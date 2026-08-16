@@ -308,6 +308,14 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
     )
     optional.push({ rel: ".kilo/package-lock.json", base: "workspace" })
   }
+  // P3.3 cloud-claw-removal: the extension-host runtime evidence (manifest +
+  // command-table + bundle-list absence facts + retained readiness) is
+  // decision-critical; no LLM evidence exists because this scenario never
+  // issues model requests. The ready marker is optional (copied when present).
+  if (scenarios.has("cloud-claw-removal")) {
+    required.push({ rel: "cloud-claw-removal-runtime-evidence", base: "scratch" })
+    optional.push({ rel: "cloud-claw-removal-ready", base: "scratch" })
+  }
   if (scenarios.has("real-restart")) {
     optional.push({ rel: "e2e-custom-called.txt", base: "workspace" })
   }

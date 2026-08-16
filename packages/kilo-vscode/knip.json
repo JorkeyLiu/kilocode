@@ -3,7 +3,6 @@
   "entry": [
     "src/extension.ts",
     "webview-ui/agent-manager/index.tsx",
-    "webview-ui/kiloclaw/index.tsx",
     "webview-ui/marketplace/index.tsx",
     "webview-ui/pierre-worker.ts",
     "webview-ui/src/index.tsx",

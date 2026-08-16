@@ -5,7 +5,7 @@ description: "Architecture of the Kilo CLI runtime, daemon, server, config updat
 
 # CLI Runtime Architecture
 
-The CLI (`packages/opencode/`) is Kilo Code's local agent engine. It owns agent execution, tools, sessions, provider integration, configuration, local persistence, directory routing, and HTTP surfaces used by editor clients and Kilo Console.
+The CLI (`packages/opencode/`) is Kilo Code's local agent engine. It owns agent execution, tools, sessions, provider integration, configuration, local persistence, directory routing, and HTTP surfaces used by editor clients.
 
 {% callout type="info" title="Scope" %}
 This page describes repository-defined local runtime behavior. It is not an endpoint catalog or a statement about cloud deployment configuration.
@@ -18,7 +18,7 @@ These terms describe local execution. They are separate from hosted Cloud Agent 
 | Term | Meaning |
 |---|---|
 | Kilo CLI runtime | Local agent engine in `packages/opencode/` |
-| `kilo serve` server | Local HTTP and SSE process used by editor clients and Kilo Console; selected browser-oriented paths also use WebSocket |
+| `kilo serve` server | Local HTTP and SSE process used by editor clients; selected browser-oriented paths also use WebSocket |
 | Local daemon | Detached reusable `kilo serve` server managed by `kilo daemon` commands |
 | Directory context | Normalized local filesystem directory used to select local runtime state |
 | Local runtime instance | Directory-keyed runtime context inside one Kilo CLI process |
@@ -39,8 +39,7 @@ One `kilo serve` process can host several local runtime instances. Directory-key
 | Attached run | `kilo run --attach <url>` | Targets explicit running `kilo serve` server |
 | Explicit API server | `kilo serve` | Starts HTTP + SSE server for external local clients |
 | Local daemon | `kilo daemon start` | Starts detached `kilo serve` child for reuse |
-| Browser console | `kilo console` | Starts or reuses local daemon and opens daemon-served `/console` UI |
-| Editor-spawned server | VS Code or JetBrains client | Starts bundled `kilo serve --port 0` child owned by editor client, not local daemon manager |
+| Editor-spawned server | VS Code client | Starts bundled `kilo serve --port 0` child owned by editor client, not local daemon manager |
 
 ```mermaid
 flowchart LR
@@ -51,7 +50,7 @@ flowchart LR
   rpc["RPC-backed fetch and global events"]
   embedded["Embedded Server.Default().app.fetch"]
   serve["Explicit kilo serve"]
-  editors["VS Code or JetBrains"]
+  editors["VS Code"]
   editorServer["Editor-owned kilo serve --port 0"]
   runtime["Kilo CLI runtime"]
 
@@ -97,7 +96,7 @@ flowchart LR
 | Select state | `InstanceStore` normalizes directory and selects directory-keyed local runtime instance | Sessions for alternate directories keep isolated runtime state |
 | Return events | Server publishes event with directory metadata through shared `/global/event` SSE stream | Editor client routes event to matching directory and session view |
 
-This distinction matters for directory-scoped workspace requests and JetBrains workspace caches. Directory-keyed state stays isolated. Process-wide event stream and server-owned service state remain shared; snapshot slow-track guard is one example. Authentication, provider routing, SSE, and snapshots appear in later sections.
+This distinction matters for directory-scoped workspace requests. Directory-keyed state stays isolated. Process-wide event stream and server-owned service state remain shared; snapshot slow-track guard is one example. Authentication, provider routing, SSE, and snapshots appear in later sections.
 
 ## Authentication boundaries
 
@@ -122,7 +121,7 @@ Server Basic Auth is optional. It becomes required when `KILO_SERVER_PASSWORD` i
 | PTY ticket connect | `GET /pty/{ptyID}/connect?ticket=...` bypasses Basic middleware, then consumes single-use, scope-bound ticket in PTY handler |
 | PTY shell child | Removes `KILO_SERVER_PASSWORD` and `KILO_SERVER_USERNAME` from spawned user-shell environment |
 
-PTY connect supports two browser-oriented modes: loopback query credential mode (`auth_token`) used by current Console and VS Code Agent Manager paths, and short-lived ticket mode exposed by server API.
+PTY connect supports two browser-oriented modes: loopback query credential mode (`auth_token`) used by the VS Code Agent Manager path, and short-lived ticket mode exposed by server API.
 
 ### Outbound provider authentication
 
@@ -157,7 +156,7 @@ Local routing workspace selection is separate. Session workspace, `workspace` qu
 | Local | Provides resolved directory and optional workspace ID to request handlers |
 | Remote | Proxies HTTP or WebSocket request to adapter target |
 | Missing workspace | Returns workspace-not-found response |
-| Workspace-routing local | Keeps selected local routes and `/console` on local server instead of proxying |
+| Workspace-routing local | Keeps selected local routes on local server instead of proxying |
 
 Remote HTTP proxy responses can include sync fence metadata. Router waits for matching sync progress before returning. `InstanceStore` normalizes directory keys, deduplicates concurrent boots with deferred entry, and disposes directory state through registered cleanup hooks.
 
@@ -177,7 +176,7 @@ Remote HTTP proxy responses can include sync fence metadata. Router waits for ma
 
 ## Daemon lifecycle
 
-`kilo daemon start|status|stop|restart` manage a detached local `kilo serve` child, with bare `kilo daemon` equivalent to `kilo daemon start`. `kilo console` calls the same start path, so it reuses a healthy daemon instead of spawning a second process, while `kilo console stop` aliases `kilo daemon stop`.
+`kilo daemon start|status|stop|restart` manage a detached local `kilo serve` child, with bare `kilo daemon` equivalent to `kilo daemon start`.
 
 | Area | Behavior |
 |---|---|
@@ -239,7 +238,6 @@ CLI server contract flows through generated and handwritten layers. This describ
 4. `packages/sdk/js/script/build.ts` generates TypeScript v2 client from CLI OpenAPI.
 5. `packages/sdk/js/src/v2/client.ts` adds `createKiloClient()` wrapper for directory and workspace routing, Electron and Node fetch compatibility, and clearer empty-response errors.
 6. Root `./script/generate.ts` runs SDK generation, emits tracked OpenAPI artifact, updates CLI docs, and formats outputs.
-7. JetBrains Gradle build generates build-local OpenAPI, normalizes it, and generates Kotlin OkHttp client.
 
 Regenerate checked-in JavaScript SDK output after server endpoint changes. Do not hand-edit generated client files.
 
@@ -323,21 +321,7 @@ Testing expectations: tests must cover saving during active streaming, not only 
 | `/event` | One local runtime instance bus | Direct event payloads until instance disposal |
 | `/global/event` | Process-wide multiplexed bus | Wrapper with payload and available directory, project, and workspace metadata |
 
-Both streams send initial `server.connected` event and heartbeat every 10 seconds. VS Code and JetBrains consume `/global/event` so one server connection can route events for multiple directories.
-
-## Kilo Console
-
-`kilo console` starts or reuses daemon, opens `/console`, and prints Console launch URL. Browser launch URL embeds daemon Basic credentials so initial request authenticates.
-
-| Area | Behavior |
-|---|---|
-| Frontend | Solid/Vite app in `packages/kilo-console/` |
-| Server route | `/console` assets resolved by CLI UI handler |
-| Release build | CLI executable build copies Console assets beside binary under `bin/console` |
-| SDK | Console calls generated JavaScript SDK through `createKiloClient()` |
-| Discovery | Console scans `4097..4116` loopback daemon URLs, ranks healthy hits, then tries cached URL fallback |
-
-Source development can serve built Console assets from package output or build them on demand. This is development behavior, not production deployment claim.
+Both streams send initial `server.connected` event and heartbeat every 10 seconds. VS Code consumes `/global/event` so one server connection can route events for multiple directories.
 
 ## Codebase indexing
 
@@ -368,7 +352,6 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 | SQLite | `packages/opencode/src/storage/db.ts` |
 | Snapshots | `packages/opencode/src/snapshot/index.ts`{% linebreak /%}`packages/opencode/src/kilocode/snapshot/track.ts` |
 | SDK | `packages/sdk/js/`{% linebreak /%}`script/generate.ts` |
-| Console | `packages/kilo-console/`{% linebreak /%}`packages/opencode/src/kilocode/console/` |
 | Indexing | `packages/kilo-indexing/`{% linebreak /%}`packages/opencode/src/kilocode/indexing.ts` |
 | Config update lifecycle and convergence | `packages/opencode/src/kilocode/server/config-convergence.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/config-rebuild.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/generation-gate.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/control-lease.ts` |
 | Config schema shape | `packages/opencode/src/config/config.ts` |
@@ -381,6 +364,5 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 
 - [Architecture Overview](/docs/contributing/architecture) - local and hosted execution map
 - [VS Code Extension](/docs/contributing/architecture/vscode-extension) - extension-host ownership, Agent Manager, and webview bridge
-- [JetBrains Plugin](/docs/contributing/architecture/jetbrains-plugin) - split-mode client, bundled server lifecycle, and workspace cache
 - [Development Patterns](/docs/contributing/architecture/development-patterns) - API generation, code-ownership seams, and modular-boundary rules
 - [CLI Config Schema](/docs/contributing/architecture/config-schema) - editor-facing schema surface for CLI config keys

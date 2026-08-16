@@ -148,7 +148,6 @@ Webhook Agent Ingest handles configured trigger endpoints and schedules. `Trigge
 | Activation | HTTP webhook | Can apply configured webhook authentication before queued delivery |
 | Activation | Scheduled | Uses cron expression and Durable Object alarm; webhook auth is not applicable |
 | Destination | `cloud_agent` | Launches Cloud Agent session with webhook or scheduled platform marker |
-| Destination | `kiloclaw_chat` | Posts to user-scoped Kilo Chat destination through Kilo Chat service binding |
 
 ```mermaid
 flowchart LR

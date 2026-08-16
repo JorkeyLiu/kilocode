@@ -25,7 +25,6 @@ import { DbCommand } from "../../src/cli/cmd/db"
 import { HelpCommand } from "../../src/kilocode/help-command"
 import { ProfileCommand } from "../../src/kilocode/cli/cmd/profile"
 import { DaemonCommand } from "../../src/kilocode/cli/cmd/daemon"
-import { KiloConsoleCommand } from "../../src/kilocode/cli/cmd/console"
 
 // Stand-in for TuiThreadCommand — the real one imports @opentui/solid which
 // doesn't resolve in the test environment. Only command/describe matter here.
@@ -75,7 +74,6 @@ const commands = [
   PluginCommand,
   ProfileCommand,
   DaemonCommand,
-  KiloConsoleCommand,
   HelpCommand,
   CompletionStub,
 ] as any[]
@@ -123,13 +121,6 @@ describe("kilo help <command>", () => {
     const output = await generateHelp({ command: "auth", format: "md", commands })
     expect(output).not.toContain("## kilo run")
     expect(output).not.toContain("## kilo debug")
-  })
-
-  test("documents console stop and foreground mode", async () => {
-    const output = await generateHelp({ command: "console", format: "md", commands })
-    expect(output).toContain("kilo console stop")
-    expect(output).toContain("--foreground")
-    expect(output).toContain("-f")
   })
 
   test("documents daemon foreground mode", async () => {
@@ -213,11 +204,13 @@ describe("Kilo CLI customizations are wired into index.ts", () => {
     expect(index).toContain("KiloCli.shutdown(")
   })
 
-  test("registers the local Kilo Console instead of the upstream account console", async () => {
+  test("local Kilo Console command is not registered and upstream account console is not wired", async () => {
     const index = await file(INDEX)
     const setup = await file(SETUP)
     const barrel = await file(BARREL)
-    expect(setup).toContain("KiloConsoleCommand")
+    expect(setup).not.toContain("KiloConsoleCommand")
+    expect(barrel).not.toContain("KiloConsoleCommand")
+    expect(setup).not.toContain('.command(ConsoleCommand)')
     expect(index).not.toContain(".command(ConsoleCommand)")
     expect(barrel).not.toContain('from "../cli/cmd/account"')
   })

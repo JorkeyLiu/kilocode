@@ -25,9 +25,8 @@ Prefer narrow, well-scoped seams and Kilo-owned packages for additive behavior. 
 | Additive Kilo CLI behavior | `packages/opencode/src/kilocode/` | Concentrates Kilo-only behavior in Kilo-owned paths |
 | Kilo CLI test for additive behavior | `packages/opencode/test/kilocode/` | Avoids shared tests that encode only Kilo behavior |
 | Required shared engine edit | Small import, route, or injection seam in shared file | Keeps the edit local and reviewable |
-| VS Code, JetBrains, docs, indexing, UI, gateway, or telemetry change | Existing Kilo-owned package | These packages are Kilo-owned; no shared-file seam needed |
+| VS Code, docs, indexing, UI, gateway, or telemetry change | Existing Kilo-owned package | These packages are Kilo-owned; no shared-file seam needed |
 | CLI server endpoint change | Effect `HttpApi` route plus handler; then run root SDK generator | Keeps server contract and generated JavaScript SDK aligned |
-| JetBrains API contract change | Shared CLI OpenAPI change; let Gradle regenerate build-local Kotlin client | Kotlin client is generated during JetBrains build |
 | Kilo-only config-key change | Update CLI Effect Schema and classify the key in the hot-key set | Config schema and hot/cold classification are complete within this repository |
 | Docs page move or removal | Update nav and add permanent redirect | Preserves external links and bookmarks |
 
@@ -39,7 +38,7 @@ The Kilo CLI runtime began as a fork of OpenCode. Prefer Kilo-owned directories 
 |---|---|
 | `packages/opencode/src/kilocode/` | Broad edits to shared `packages/opencode/src/` files |
 | `packages/opencode/test/kilocode/` | Shared tests that encode only Kilo behavior |
-| `packages/kilo-vscode/`, `packages/kilo-jetbrains/`, `packages/kilo-docs/`, `packages/kilo-indexing/` | Moving Kilo-only behavior into shared engine modules |
+| `packages/kilo-vscode/`, `packages/kilo-docs/`, `packages/kilo-indexing/` | Moving Kilo-only behavior into shared engine modules |
 | Narrow import or route seams in shared files | Refactors that broadly restructure shared engine files |
 
 ## Shared engine files
@@ -87,7 +86,7 @@ When a PR reports changed baselines, contributors do not generate PNGs locally. 
 
 ## CLI server API
 
-CLI server uses Effect `HttpApi` and publishes OpenAPI-compatible HTTP + SSE surfaces consumed by JavaScript SDK and JetBrains build-local Kotlin client.
+CLI server uses Effect `HttpApi` and publishes OpenAPI-compatible HTTP + SSE surfaces consumed by the JavaScript SDK.
 
 | Rule | Reason |
 |---|---|
@@ -106,7 +105,6 @@ CLI server uses Effect `HttpApi` and publishes OpenAPI-compatible HTTP + SSE sur
 | Add or change CLI server endpoint | Run root `./script/generate.ts` after route and handler edits |
 | JavaScript SDK generated files under `packages/sdk/js/src/v2/gen/` | Do not edit by hand |
 | JavaScript SDK wrapper behavior | Edit handwritten `packages/sdk/js/src/v2/client.ts` |
-| JetBrains generated Kotlin client | Let Gradle regenerate build-local client from normalized OpenAPI |
 
 ## CLI config schema
 
@@ -167,8 +165,7 @@ Reuse tool helpers, permission gates, and telemetry conventions before adding ab
 | Task orchestration | Turborepo |
 | CLI executable | Bun compile build in `packages/opencode/script/build.ts` |
 | VS Code extension and webviews | esbuild |
-| JetBrains plugin | Gradle, Kotlin JVM toolchain 21, build-local OpenAPI generation |
-| Type checking | `tsgo` through `bun turbo typecheck`; Gradle compile checks for JetBrains |
+| Type checking | `tsgo` through `bun turbo typecheck` |
 | Tests | Package-level Bun test, Vitest, or Gradle test depending on package |
 | Docs | Next.js, Markdoc, Mermaid, and custom Markdoc components |
 
@@ -194,7 +191,6 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 | Public OpenAPI normalization | `packages/opencode/src/server/routes/instance/httpapi/public.ts` |
 | Kilo route seam | `packages/opencode/src/kilocode/server/httpapi/` |
 | JavaScript SDK generation | `packages/sdk/js/script/build.ts`{% linebreak /%}`script/generate.ts` |
-| JetBrains client generation | `packages/kilo-jetbrains/backend/build.gradle.kts` |
 
 ## Historical upstream merge workflow
 

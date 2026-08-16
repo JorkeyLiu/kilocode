@@ -100,6 +100,18 @@
  *                           scripted provider) proves Revert-to-here restores
  *                           the exact original bytes and Redo All restores the
  *                           edited bytes through the retained chat UI.
+ *   - cloud-claw-removal   => only the P3.3 runtime-absence scenario: the
+ *                           extension host proves the loaded manifest, the
+ *                           RUNTIME command table, and the built dist/ bundle
+ *                           list expose no active cloud-session, KiloClaw, local
+ *                           Console, or JetBrains product contribution
+ *                           (identifier-based, no false-positive generic
+ *                           retained names), and the retained "Open in Tab"
+ *                           panel + Agent Manager still become ready. No
+ *                           synthetic fixtures, no CDP DOM driving, no model
+ *                           requests — all assertions run extension-host-side
+ *                           and are recorded in
+ *                           `cloud-claw-removal-runtime-evidence`.
  *   Any other value fails fast before VS Code launches. Focused runs:
  *     KILO_E2E_SCENARIO=tab-close         node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=child-task-order  node script/e2e-probe-launch.mjs
@@ -110,6 +122,7 @@
  *     KILO_E2E_SCENARIO=real-overflow     node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=worktree-removal  node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=cloud-claw-removal node script/e2e-probe-launch.mjs
  *   (package shortcuts: `bun run test:e2e:tab-close`,
  *   `bun run test:e2e:child-task-order`,
  *   `bun run test:e2e:variant-memory`,
@@ -118,7 +131,8 @@
  *   `bun run test:e2e:real-completed`,
  *   `bun run test:e2e:real-overflow`,
  *   `bun run test:e2e:real-restart`,
- *   `bun run test:e2e:worktree-removal`.)
+ *   `bun run test:e2e:worktree-removal`,
+ *   `bun run test:e2e:cloud-claw-removal`.)
  *
  * Scenarios are independent: each seeds only its own fixtures and coordinates
  * through scenario-specific markers (tab-close-done, child-phase1-done /
@@ -305,6 +319,7 @@ const SCENARIO_VALUES = [
   "real-restart",
   "sidebar-removal",
   "worktree-removal",
+  "cloud-claw-removal",
 ] as const
 function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -318,7 +333,8 @@ function parseScenarios(value: string): Set<string> {
     value === "real-overflow" ||
     value === "real-restart" ||
     value === "sidebar-removal" ||
-    value === "worktree-removal"
+    value === "worktree-removal" ||
+    value === "cloud-claw-removal"
   ) {
     return new Set([value])
   }
@@ -2339,6 +2355,7 @@ async function runScenario(
     await assertWorktreeRemovalLifecycle(browser, plan, scratch, workspace, wtModel)
     console.log("[probe] worktree-removal lifecycle assertion passed")
   }
+  if (scenarios.has("cloud-claw-removal")) console.log("[probe] cloud-claw-removal assertions ran in the Extension Host runner")
 }
 
 // ---------------------------------------------------------------------------
@@ -2425,6 +2442,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has("real-overflow")) return "real-overflow-ready"
   if (scenarios.has("real-restart")) return "rr-ready"
   if (scenarios.has("worktree-removal")) return "worktree-removal-ready"
+  if (scenarios.has("cloud-claw-removal")) return "cloud-claw-removal-ready"
   return "ready"
 }
 

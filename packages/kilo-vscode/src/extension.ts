@@ -2,7 +2,6 @@ import * as vscode from "vscode"
 import { KiloProvider } from "./KiloProvider"
 import { AgentManagerProvider } from "./agent-manager/AgentManagerProvider"
 import { VscodeHost } from "./agent-manager/vscode-host"
-import { KiloClawProvider } from "./kiloclaw/KiloClawProvider"
 import { SettingsEditorProvider } from "./SettingsEditorProvider"
 import { MarketplacePanelProvider } from "./MarketplacePanelProvider"
 import { MarketplaceNotifier } from "./services/marketplace/notifier"
@@ -21,7 +20,7 @@ import {
   KiloCodeActionProvider,
   type ChatTarget,
 } from "./services/code-actions"
-import { resolveChatTarget as resolveChatTargetImpl, waitForChatReady } from "./services/code-actions/chat-target"
+import { resolveChatTarget as resolveChatTargetImpl } from "./services/code-actions/chat-target"
 import { registerToggleAutoApprove } from "./commands/toggle-auto-approve"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
@@ -239,9 +238,9 @@ export function activate(context: vscode.ExtensionContext) {
   }
 
   /**
-   * Resolve an editor-tab chat surface for deep links (cloud session / linked
-   * model selection): the active tab, or a freshly opened "Open in Tab" panel.
-   * The Agent Manager webview does not handle openCloudSession/selectKiloModel.
+   * Resolve an editor-tab chat surface for deep links (linked model selection):
+   * the active tab, or a freshly opened "Open in Tab" panel.
+   * The Agent Manager webview does not handle selectKiloModel.
    */
   const ensureChatTab = async (): Promise<KiloProvider> => {
     const tab = activeTabProvider()
@@ -255,10 +254,6 @@ export function activate(context: vscode.ExtensionContext) {
   // commands by default.
   const skip = ["kilo-code.new.agentManagerOpen", "kilo-code.new.agentManager.showTerminal"]
   ensureCommandsSkipShell(skip)
-
-  // Create KiloClaw chat provider for editor panel
-  const kiloClawProvider = new KiloClawProvider(context.extensionUri, connectionService)
-  context.subscriptions.push(kiloClawProvider)
 
   // Create Agent Manager provider for editor panel
   const agentManagerHost = new VscodeHost(context.extensionUri, connectionService, context, remoteService)
@@ -311,16 +306,6 @@ export function activate(context: vscode.ExtensionContext) {
           onBeforeMessage: (msg) => agentManagerProvider.handleMessage(msg),
         })
         agentManagerProvider.deserializePanel(ctx)
-        return Promise.resolve()
-      },
-    }),
-  )
-
-  // Register serializer so KiloClaw panel restores when VS Code restarts
-  context.subscriptions.push(
-    vscode.window.registerWebviewPanelSerializer(KiloClawProvider.viewType, {
-      deserializeWebviewPanel(panel: vscode.WebviewPanel) {
-        kiloClawProvider.restorePanel(panel)
         return Promise.resolve()
       },
     }),
@@ -404,9 +389,6 @@ export function activate(context: vscode.ExtensionContext) {
     }),
     vscode.commands.registerCommand("kilo-code.new.marketplaceButtonClicked", (directory?: string | null) => {
       marketplacePanelProvider.openPanel(directory)
-    }),
-    vscode.commands.registerCommand("kilo-code.new.kiloClawOpen", () => {
-      kiloClawProvider.openPanel()
     }),
     vscode.commands.registerCommand("kilo-code.new.historyButtonClicked", async () => {
       const tab = activeTabProvider()
@@ -552,27 +534,6 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.window.registerUriHandler({
       async handleUri(uri: vscode.Uri) {
-        const sessionMatch = uri.path.match(/^\/kilocode\/s\/([a-zA-Z0-9_-]+)$/)
-        const sessionId = sessionMatch?.[1]
-        if (sessionId) {
-          console.log("[Kilo New] URI handler: opening cloud session:", sessionId)
-          const tab = await ensureChatTab()
-          // Deliver only after the (possibly freshly opened) tab's webview
-          // reports readiness; an earlier post lands before the webview
-          // registers its message listener and is lost. On readiness failure,
-          // surface it instead of silently proceeding into a dropped message.
-          const ready = await waitForChatReady(tab.waitForReady(), 15_000)
-          if (!ready) {
-            console.warn("[Kilo New] URI handler: chat tab never became ready; cloud session deep link not delivered")
-            void vscode.window.showWarningMessage(
-              "Kilo could not open the shared session because the chat tab did not become ready.",
-            )
-            return
-          }
-          tab.openCloudSession(sessionId)
-          return
-        }
-
         if (uri.path !== "/kilocode/switch" && uri.path !== "/kilocode/model") return
         const params = new URLSearchParams(uri.query)
         const modelID = params.get("model") || undefined

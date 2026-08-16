@@ -139,4 +139,49 @@ describe("previous-docs-redirects", () => {
       expect(redirect.destination).toMatch(/\.md(?:#.*)?$/)
     }
   })
+
+  it("redirects every formerly-live KiloClaw page explicitly to cloud-agent", () => {
+    const actual = new Map(entries.map((redirect) => [redirect.source, redirect.destination]))
+    const target = "/docs/code-with-ai/platforms/cloud-agent"
+
+    // Representative nested deleted pages — no wildcard, every path explicit.
+    const deleted = [
+      "/docs/kiloclaw",
+      "/docs/kiloclaw/overview",
+      "/docs/kiloclaw/chat-platforms/slack",
+      "/docs/kiloclaw/control-ui/exec-approvals",
+      "/docs/kiloclaw/development-tools/github",
+      "/docs/kiloclaw/faq/pricing",
+      "/docs/kiloclaw/tools/1password",
+      "/docs/kiloclaw/triggers/webhooks",
+      "/docs/kiloclaw/troubleshooting/gateway-process",
+      "/docs/kiloclaw/version-pinning",
+    ]
+    for (const source of deleted) expect(actual.get(source), source).toBe(target)
+  })
+
+  it("uses no wildcard redirect for the KiloClaw section (leaf destination)", () => {
+    const wildcards = entries.filter(
+      (redirect) => redirect.source.startsWith("/docs/kiloclaw") && redirect.source.includes(":"),
+    )
+    expect(wildcards).toEqual([])
+  })
+
+  it("resolves nested legacy automate/kiloclaw paths through the KiloClaw chain", () => {
+    const wildcard = entries.find((redirect) => redirect.source === "/docs/automate/kiloclaw/:path*")
+    expect(wildcard).toBeDefined()
+    expect(wildcard?.destination).toBe("/docs/kiloclaw/:path*")
+
+    // Root exact redirect is preserved and takes precedence.
+    const root = entries.find((redirect) => redirect.source === "/docs/automate/kiloclaw")
+    expect(root?.destination).toBe("/docs/code-with-ai/platforms/cloud-agent")
+
+    // A representative nested legacy URL rewrites to the deleted-page key, then
+    // resolves through the explicit /docs/kiloclaw/... redirect to cloud-agent.
+    const legacy = "/docs/automate/kiloclaw/chat-platforms/slack"
+    const captured = legacy.slice("/docs/automate/kiloclaw".length)
+    const intermediate = `/docs/kiloclaw${captured}`
+    const next = entries.find((redirect) => redirect.source === intermediate)
+    expect(next?.destination).toBe("/docs/code-with-ai/platforms/cloud-agent")
+  })
 })

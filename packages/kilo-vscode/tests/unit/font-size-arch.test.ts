@@ -3,7 +3,7 @@
  *
  * Kilo's VS Code webviews use the `kilo-code.new.fontSize` setting, not
  * VS Code editor font-size or raw pixel declarations. This keeps the Kilo UI
- * independently scalable across settings, Agent Manager, KiloClaw,
+ * independently scalable across settings, Agent Manager,
  * code blocks, and shared kilo-ui controls.
  */
 
@@ -17,14 +17,12 @@ const REPO = path.resolve(ROOT, "../..")
 const TARGETS = [
   path.join(ROOT, "webview-ui/src"),
   path.join(ROOT, "webview-ui/agent-manager"),
-  path.join(ROOT, "webview-ui/kiloclaw"),
   path.join(ROOT, "webview-ui/marketplace"),
   path.join(REPO, "packages/kilo-ui/src/components"),
 ]
 
 const WATCHED_PROVIDERS = [
   path.join(ROOT, "src/KiloProvider.ts"),
-  path.join(ROOT, "src/kiloclaw/KiloClawProvider.ts"),
   path.join(ROOT, "src/MarketplacePanelProvider.ts"),
 ]
 

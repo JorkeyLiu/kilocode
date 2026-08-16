@@ -101,13 +101,6 @@ If you plan to remain on that version for a while, you may also want to temporar
 {% partial file="install-cli.md" /%}
 
 {% /tab %}
-{% tab label="JetBrains" %}
-
-## JetBrains IDEs
-
-{% partial file="install-jetbrains.md" /%}
-
-{% /tab %}
 {% tab label="Slack" %}
 
 ## Slack Integration

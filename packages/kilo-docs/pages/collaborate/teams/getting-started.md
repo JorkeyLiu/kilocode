@@ -12,7 +12,7 @@ seats for Kilo in the Teams or Enterprise subscription brings transparent AI cod
 - Your GitHub account or a Google Workspaces company email
 - Approximate team size for initial seat planning
 - Credit card for billing setup
-- VS Code or a JetBrains IDE installed for team members
+- VS Code installed for team members
 
 ## Quick Setup Guide
 

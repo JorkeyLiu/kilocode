@@ -31,10 +31,6 @@ export const ContributingNav: NavSection[] = [
         children: "VS Code Extension",
       },
       {
-        href: "/contributing/architecture/jetbrains-plugin",
-        children: "JetBrains Plugin",
-      },
-      {
         href: "/contributing/architecture/cloud-platform",
         children: "Cloud Platform",
       },

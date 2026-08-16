@@ -84,7 +84,7 @@ export namespace KiloSessionPrompt {
   }
 
   function supportsPlanFollowup() {
-    return ["cli", "vscode", "jetbrains"].includes(Flag.KILO_CLIENT)
+    return ["cli", "vscode"].includes(Flag.KILO_CLIENT)
   }
 
   /**

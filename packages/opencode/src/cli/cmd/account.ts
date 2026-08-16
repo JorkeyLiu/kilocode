@@ -1,4 +1,3 @@
-import { cmd } from "./cmd"
 import { Duration, Effect, Match, Option } from "effect"
 import { UI } from "../ui"
 import { Account } from "@/account/account"
@@ -232,33 +231,4 @@ export const OpenCommand = effectCmd({
     UI.empty()
     yield* Effect.orDie(openEffect())
   }),
-})
-
-export const ConsoleCommand = cmd({
-  command: "console",
-  describe: false,
-  builder: (yargs) =>
-    yargs
-      .command({
-        ...LoginCommand,
-        describe: "log in to console",
-      })
-      .command({
-        ...LogoutCommand,
-        describe: "log out from console",
-      })
-      .command({
-        ...SwitchCommand,
-        describe: "switch active org",
-      })
-      .command({
-        ...OrgsCommand,
-        describe: "list orgs",
-      })
-      .command({
-        ...OpenCommand,
-        describe: "open active console account",
-      })
-      .demandCommand(),
-  async handler() {},
 })

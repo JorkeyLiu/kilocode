@@ -1,0 +1,86 @@
+{
+  "schema": "kilo-e2e-evidence/1",
+  "run": {
+    "fixtureId": "e2e-probe-153b7ca6",
+    "scenario": "cloud-claw-removal",
+    "startedAt": "2026-08-16T11:10:42.758Z",
+    "completedAt": "2026-08-16T11:11:06.173Z",
+    "durationMs": 23415,
+    "probePid": 27348,
+    "success": true,
+    "provenance": "focused E2E harness (packages/kilo-vscode), fixture-gated, run-owned evidence",
+    "env": {
+      "KILO_E2E_SCENARIO": "cloud-claw-removal"
+    }
+  },
+  "destination": "/Users/jorkeyliu/workspace/repos/kilocode/specs/vscode-orchestrator/evidence/p0-baseline/p3-3-final-2026-08-16T11-10-35-000Z",
+  "required": [
+    "cloud-claw-removal-runtime-evidence",
+    "plan.json",
+    "runner-pid"
+  ],
+  "files": [
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-pfwtDs/cloud-claw-removal-ready",
+      "sourceRel": "scratch/cloud-claw-removal-ready",
+      "dest": "cloud-claw-removal-ready",
+      "bytes": 18,
+      "sha256": "5cb64dfd10fca1e680824270ac1cd4dae8a6544782a19b4916294bb511e358cb"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-pfwtDs/cloud-claw-removal-runtime-evidence",
+      "sourceRel": "scratch/cloud-claw-removal-runtime-evidence",
+      "dest": "cloud-claw-removal-runtime-evidence",
+      "bytes": 7172,
+      "sha256": "54b231b0b3ba1af34402b836d29d5833c34de168df7b7082693fe38cfa3d9772"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-pfwtDs/plan.json",
+      "sourceRel": "scratch/plan.json",
+      "dest": "plan.json",
+      "bytes": 1195,
+      "sha256": "b978e362b2d9dac23139bf829635a4d3e37369ff35f3bc4febfe682acc0573c6"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-pfwtDs/runner-alive",
+      "sourceRel": "scratch/runner-alive",
+      "dest": "runner-alive",
+      "bytes": 7,
+      "sha256": "03494afd4248c42f5fa1237bf2eeebe751ab8d9c977d55405fcb17469dbd91f8"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-pfwtDs/runner-done",
+      "sourceRel": "scratch/runner-done",
+      "dest": "runner-done",
+      "bytes": 2,
+      "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-pfwtDs/runner-pid",
+      "sourceRel": "scratch/runner-pid",
+      "dest": "runner-pid",
+      "bytes": 5,
+      "sha256": "d8459319765c06435b20874c44a2f0e89e4d4c73966c91cc88a2608200b3f42b"
+    },
+    {
+      "source": "launcher:probe stdout+stderr",
+      "sourceRel": "launcher:run.log",
+      "dest": "run.log",
+      "bytes": 10945,
+      "sha256": "109da10ef1ddbffa38380b73945649d3b3afa684c4157bcac658217f983c1518"
+    }
+  ],
+  "missing": [],
+  "malformed": [],
+  "notes": [],
+  "captureLog": {
+    "source": "launcher:probe stdout+stderr",
+    "sourceRel": "launcher:run.log",
+    "dest": "run.log",
+    "bytes": 10945,
+    "sha256": "109da10ef1ddbffa38380b73945649d3b3afa684c4157bcac658217f983c1518"
+  },
+  "status": "complete",
+  "validated": true,
+  "finalizedAt": "2026-08-16T11:11:07.537Z"
+}

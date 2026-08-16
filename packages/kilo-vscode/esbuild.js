@@ -212,9 +212,6 @@ async function main() {
     "dist/agent-manager.js",
   )
 
-  // Build KiloClaw webview (SolidJS, standalone chat panel)
-  const kiloClawCtx = await createBrowserWebviewContext("webview-ui/kiloclaw/index.tsx", "dist/kiloclaw.js")
-
   // Build Marketplace webview (SolidJS, standalone catalog panel)
   const marketplaceCtx = await createBrowserWebviewContext("webview-ui/marketplace/index.tsx", "dist/marketplace.js")
 
@@ -229,7 +226,6 @@ async function main() {
       extensionCtx.watch(),
       webviewCtx.watch(),
       agentManagerCtx.watch(),
-      kiloClawCtx.watch(),
       marketplaceCtx.watch(),
       shikiWorkerCtx.watch(),
     ])
@@ -238,7 +234,6 @@ async function main() {
       extensionCtx.rebuild(),
       webviewCtx.rebuild(),
       agentManagerCtx.rebuild(),
-      kiloClawCtx.rebuild(),
       marketplaceCtx.rebuild(),
       shikiWorkerCtx.rebuild(),
     ])
@@ -246,7 +241,6 @@ async function main() {
       extensionCtx.dispose(),
       webviewCtx.dispose(),
       agentManagerCtx.dispose(),
-      kiloClawCtx.dispose(),
       marketplaceCtx.dispose(),
       shikiWorkerCtx.dispose(),
     ])

@@ -1082,9 +1082,6 @@ export const dict = {
   "session.search.placeholder": "Oturum ara...",
   "session.empty": "Henüz oturum yok. Yeni bir sohbet başlatmak için + tıklayın.",
   "session.tab.local": "Local",
-  "session.tab.cloud": "Cloud",
-  "session.cloud.repoOnly": "Yalnızca bu depo",
-  "session.cloud.import": "Buluttan içe aktar",
   "feedback.button": "Geri Bildirim ve Destek",
   "feedback.dialog.message":
     "Geri bildiriminizi almaktan veya yaşadığınız sorunlarda yardımcı olmaktan mutluluk duyarız.",
@@ -1118,12 +1115,6 @@ export const dict = {
     "Çalışma alanındaki dosyaları izin istemeden düzenler ve komutları çalıştırır.",
   "workStyle.choice.autonomous.bash": "Çalışma alanında terminal komutlarını onay almadan çalıştırabilir.",
   "workStyle.choice.autonomous.visibility": "Ayrıntılar siz genişletene kadar daraltılmış olarak kalır.",
-  "session.cloud.import.title": "Buluttan içe aktar",
-  "session.cloud.import.placeholder": "Oturum kimliği, URL veya kilo import komutu",
-  "session.cloud.import.button": "İçe Aktar",
-  "session.cloud.import.invalid": "Geçersiz oturum kimliği biçimi",
-  "session.cloud.import.legacy": "Bu, artık desteklenmeyen eski bir oturum gibi görünüyor.",
-  "session.cloud.import.failed": "Bulut oturumu içe aktarılamadı",
 
   "workspace.new": "Yeni çalışma alanı",
   "workspace.type.local": "yerel",

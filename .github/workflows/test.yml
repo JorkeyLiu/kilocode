@@ -46,7 +46,6 @@ jobs:
             general:
               - '**'
               - '!.changeset/**'
-              - '!packages/kilo-jetbrains/**'
               - '!packages/kilo-vscode/**'
               - '!packages/kilo-docs/**'
               - '!packages/extensions/zed/**'
@@ -133,7 +132,7 @@ jobs:
 
       - name: Run non-CLI unit tests
         if: matrix.settings.run && matrix.settings.packages
-        run: bun turbo test:ci --filter='!@kilocode/cli' --filter='!@kilocode/kilo-jetbrains'
+        run: bun turbo test:ci --filter='!@kilocode/cli'
 
       - name: Run CLI unit tests
         if: matrix.settings.run
@@ -204,16 +203,6 @@ jobs:
   # kilocode_change end
 
   # kilocode_change start
-  jetbrains:
-    name: jetbrains
-    permissions:
-      contents: read
-      checks: write
-      pull-requests: read
-    uses: ./.github/workflows/test-jetbrains.yml
-  # kilocode_change end
-
-  # kilocode_change start
   unit-required:
     name: unit (linux)
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -233,19 +222,16 @@ jobs:
       - changes
       - unit
       - httpapi
-      - jetbrains
     if: always()
     steps:
       - name: Verify upstream test jobs passed # kilocode_change
         run: |
           echo "unit=${{ needs.unit.result }}"
           echo "httpapi=${{ needs.httpapi.result }}"
-          echo "jetbrains=${{ needs.jetbrains.result }}"
           test "${{ needs.unit.result }}" = "success"
           if [ "${{ needs.changes.outputs.general }}" = "true" ]; then
             test "${{ needs.httpapi.result }}" = "success"
           else
             test "${{ needs.httpapi.result }}" = "skipped"
           fi
-          test "${{ needs.jetbrains.result }}" = "success"
   # kilocode_change end

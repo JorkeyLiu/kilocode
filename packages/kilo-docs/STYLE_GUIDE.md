@@ -186,7 +186,6 @@ Use consistent terms throughout:
 | Kilo Code | The product name |
 | kilo CLI | The command-line interface |
 | VS Code extension | The VS Code extension |
-| JetBrains plugin | The JetBrains IDE plugin |
 | `kilo serve` | The local HTTP server |
 | `kilo run` | The headless execution command |
 | agent | The AI assistant |

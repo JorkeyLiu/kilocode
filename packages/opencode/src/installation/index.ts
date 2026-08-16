@@ -317,9 +317,8 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient | AppProce
 
         // kilocode_change start - curl/unknown fallback: resolve from the public npm
         // dist-tag instead of GitHub /releases/latest, which is polluted by non-CLI
-        // (e.g. JetBrains) releases and returns a tag like "jetbrains/v7.0.4" that
-        // breaks version resolution. Use the public registry directly: a curl-
-        // installed binary is not tied to any project's npm config.
+        // releases and returns a tag that breaks version resolution. Use the public
+        // registry directly: a curl-installed binary is not tied to any project's npm config.
         const response = yield* httpOk.execute(
           HttpClientRequest.get(`https://registry.npmjs.org/${KiloNpm.path}/${InstallationChannel}`).pipe(
             HttpClientRequest.acceptJson,

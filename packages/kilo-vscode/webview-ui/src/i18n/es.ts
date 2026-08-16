@@ -1138,9 +1138,6 @@ export const dict = {
   "session.search.placeholder": "Buscar sesiones...",
   "session.empty": "Aún no hay sesiones. Haz clic en + para iniciar una nueva conversación.",
   "session.tab.local": "Local",
-  "session.tab.cloud": "Nube",
-  "session.cloud.repoOnly": "Solo este repositorio",
-  "session.cloud.import": "Importar desde la nube",
   "feedback.button": "Comentarios y soporte",
   "feedback.dialog.message":
     "Nos encantaría escuchar tus comentarios o ayudarte con cualquier problema que estés experimentando.",
@@ -1174,12 +1171,6 @@ export const dict = {
     "Edita archivos y ejecuta comandos en el espacio de trabajo sin preguntar.",
   "workStyle.choice.autonomous.bash": "Puede ejecutar comandos en el terminal del espacio de trabajo sin aprobación.",
   "workStyle.choice.autonomous.visibility": "Los detalles permanecen contraídos hasta que los despliegues.",
-  "session.cloud.import.title": "Importar desde la nube",
-  "session.cloud.import.placeholder": "ID de sesión, URL o comando kilo import",
-  "session.cloud.import.button": "Importar",
-  "session.cloud.import.invalid": "Formato de ID de sesión no válido",
-  "session.cloud.import.legacy": "Esta parece ser una sesión heredada que ya no es compatible.",
-  "session.cloud.import.failed": "Error al importar la sesión de la nube",
 
   "workspace.new": "Nuevo espacio de trabajo",
   "workspace.type.local": "local",

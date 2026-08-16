@@ -18,7 +18,7 @@ Assign issues by choosing the team with the strongest overlap. The github-triage
 
 Do not add labels to issues. Only assign an owner.
 
-When calling github-triage, pass one of these team values: tui, desktop_web, core, inference, windows, jetbrains, extension
+When calling github-triage, pass one of these team values: tui, desktop_web, core, inference, windows, extension
 
 ## Teams
 
@@ -41,10 +41,6 @@ Kilo Provider, Provider implementation, and billing issues.
 ### Windows
 
 Windows-specific issues, including native Windows behavior, WSL interactions, path handling, shell compatibility, and installation or runtime problems that only happen on Windows.
-
-### Jetbrains
-
-Jetbrains extension related issues.
 
 ### Extension
 

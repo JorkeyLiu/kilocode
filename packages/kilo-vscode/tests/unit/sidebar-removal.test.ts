@@ -247,7 +247,6 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
 
   it("still registers the standalone panel serializers", () => {
     expect(ext).toContain("registerWebviewPanelSerializer(MarketplacePanelProvider.viewType")
-    expect(ext).toContain("registerWebviewPanelSerializer(KiloClawProvider.viewType")
   })
 
   it("no longer registers a Diff Viewer serializer (P3.2 custom surface removal)", () => {
@@ -303,11 +302,12 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
     expect(ext).toContain("const ok = await agentManagerProvider.waitForReady()")
   })
 
-  it("routes cloud-session deep links through readiness", () => {
-    // Finding 1 (P3.1 audit): the cloud-session deep link waits for the chat
-    // tab to be ready before posting openCloudSession.
-    expect(ext).toContain("const ready = await waitForChatReady(tab.waitForReady(), 15_000)")
-    expect(ext).toContain("tab.openCloudSession(sessionId)")
+  it("drops the cloud-session deep link and its readiness delivery (LOCK-003)", () => {
+    // P3.3: cloud session deep links are permanently removed. The linked-model
+    // selection paths (selectKiloModel) remain.
+    expect(ext).not.toContain("openCloudSession")
+    expect(ext).not.toContain("waitForChatReady(tab.waitForReady(), 15_000)")
+    expect(provider).not.toContain("openCloudSession")
   })
 
   it("keeps the readiness-aware chat target resolver and drops the dead review-comments push chain", () => {

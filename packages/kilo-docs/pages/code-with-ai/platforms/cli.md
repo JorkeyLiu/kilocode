@@ -161,12 +161,11 @@ Configuration is managed through:
 
 ## CLI Notifications and Sounds
 
-CLI attention alerts are disabled by default. Enable and configure them in either of these ways:
+CLI attention alerts are disabled by default. Configure them in the TUI configuration:
 
-- Run `kilo console`, open your project, then go to **Settings > CLI > Notifications**.
 - Edit the TUI configuration directly. Use `~/.config/kilo/tui.jsonc` (or `tui.json`) for global settings, or `.kilo/tui.json` (or `tui.jsonc`) for project settings.
 
-The Console exposes the attention, desktop notification, sound, and volume controls. The equivalent TUI configuration is:
+The `attention` section of the TUI configuration controls the master switch, desktop notifications, sounds, and volume:
 
 ```json
 {
@@ -208,7 +207,7 @@ Supported sound names are `default`, `question`, `permission`, `error`, `done`, 
 
 The `attention.sound_pack` setting selects a sound pack registered by a TUI plugin. Setting an arbitrary pack name does not install or load a pack. Per-event file overrides remain the simplest way to customize sounds without a plugin.
 
-There is no notification slash command or command-palette toggle. Use Kilo Console or `tui.json` / `tui.jsonc` so all attention behavior is controlled by the same configuration.
+There is no notification slash command or command-palette toggle. Use `tui.json` / `tui.jsonc` so all attention behavior is controlled by the same configuration.
 
 ## Slash Commands
 

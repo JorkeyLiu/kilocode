@@ -15,7 +15,6 @@ import { useVSCode } from "./vscode"
 import {
   PENDING_TAB_PREFIX,
   addPendingTab,
-  addSessionTab,
   closeOtherTabs,
   closeTab,
   insertSessionTabAfter,
@@ -50,7 +49,6 @@ interface LocalTabsValue {
   select: (id: string) => void
   close: (id: string) => void
   closeOthers: (id: string) => void
-  previewCloud: (id: string) => void
   reorder: (from: string, to: string) => boolean
   move: (id: string, offset: -1 | 1) => number | undefined
   persist: () => void
@@ -69,7 +67,6 @@ export const LocalTabsProvider: ParentComponent = (props) => {
   const init = restoreTabs(saved?.sidebarSessionTabIDs, saved?.sidebarActiveSessionTabID, pending)
   const [ids, setIds] = createSignal(init.ids)
   const [active, setActive] = createSignal(init.active)
-  const [cloud, setCloud] = createSignal<string>()
   const fresh = new Set<string>()
   const current = (): LocalTabState => ({ ids: ids(), active: active() })
   const apply = (next: LocalTabState) => {
@@ -77,7 +74,6 @@ export const LocalTabsProvider: ParentComponent = (props) => {
     if (active() !== next.active) setActive(next.active)
   }
   const focus = (id: string | undefined) => {
-    setCloud(undefined)
     if (!id || isPendingTab(id)) {
       session.clearCurrentSession()
       return
@@ -135,7 +131,6 @@ export const LocalTabsProvider: ParentComponent = (props) => {
     }
     queueMicrotask(() => removed.forEach(deletePendingDraft))
   }
-  const previewCloud = (id: string) => setCloud(id)
   const reorder = (from: string, to: string) => {
     const next = reorderTabs(ids(), from, to)
     if (!next) return false
@@ -180,10 +175,6 @@ export const LocalTabsProvider: ParentComponent = (props) => {
 
   onMount(() => {
     const cleanup = vscode.onMessage((message) => {
-      if (message.type === "openCloudSession") {
-        setCloud(message.sessionId)
-        return
-      }
       if (message.type === "sessionCreated") {
         if (message.draftID && promotePendingDraftDiscard(message.draftID, message.session.id)) return
         const draft = pendingTabForCreated(ids(), message.draftID)
@@ -193,13 +184,6 @@ export const LocalTabsProvider: ParentComponent = (props) => {
         fresh.add(message.session.id)
         apply(next)
         focus(next.active)
-        return
-      }
-      if (message.type === "cloudSessionImported") {
-        const activate = cloud() === message.cloudSessionId
-        fresh.add(message.session.id)
-        apply(activate ? openSessionTab(current(), message.session.id) : addSessionTab(current(), message.session.id))
-        if (activate) setCloud(undefined)
         return
       }
       if (message.type === "sessionsLoaded") {
@@ -247,7 +231,6 @@ export const LocalTabsProvider: ParentComponent = (props) => {
         select,
         close,
         closeOthers,
-        previewCloud,
         reorder,
         move,
         persist,

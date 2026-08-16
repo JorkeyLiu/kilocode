@@ -1090,9 +1090,6 @@ export const dict = {
   "session.search.placeholder": "Buscar sessões...",
   "session.empty": "Nenhuma sessão ainda. Clique + para iniciar uma nova conversa.",
   "session.tab.local": "Local",
-  "session.tab.cloud": "Nuvem",
-  "session.cloud.repoOnly": "Apenas este repositório",
-  "session.cloud.import": "Importar da nuvem",
   "feedback.button": "Feedback e suporte",
   "feedback.dialog.message":
     "Adoraríamos ouvir seu feedback ou ajudar com quaisquer problemas que você esteja enfrentando.",
@@ -1125,12 +1122,6 @@ export const dict = {
     "Edita arquivos e executa comandos no espaço de trabalho sem pedir permissão.",
   "workStyle.choice.autonomous.bash": "Pode executar comandos do terminal no espaço de trabalho sem aprovação.",
   "workStyle.choice.autonomous.visibility": "Os detalhes permanecem recolhidos até você expandi-los.",
-  "session.cloud.import.title": "Importar da nuvem",
-  "session.cloud.import.placeholder": "ID da sessão, URL ou comando kilo import",
-  "session.cloud.import.button": "Importar",
-  "session.cloud.import.invalid": "Formato de ID de sessão inválido",
-  "session.cloud.import.legacy": "Esta parece ser uma sessão legada que não é mais suportada.",
-  "session.cloud.import.failed": "Falha ao importar sessão da nuvem",
 
   "workspace.new": "Novo espaço de trabalho",
   "workspace.type.local": "local",

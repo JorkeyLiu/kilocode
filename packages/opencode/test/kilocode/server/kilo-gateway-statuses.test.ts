@@ -1,7 +1,7 @@
 import { NodeHttpServer } from "@effect/platform-node"
 import { describe, expect } from "bun:test"
 import { Context, Effect, Layer } from "effect"
-import { HttpClient, HttpClientRequest, HttpRouter } from "effect/unstable/http"
+import { HttpClient, HttpRouter } from "effect/unstable/http"
 import { HttpApi, HttpApiBuilder } from "effect/unstable/httpapi"
 import { Auth } from "../../../src/auth"
 import { KiloGatewayApi, KiloGatewayPaths } from "../../../src/kilocode/server/httpapi/groups/kilo-gateway"
@@ -90,10 +90,6 @@ function stub(run: () => Response | Promise<Response>) {
   )
 }
 
-function post(path: string, body: Record<string, unknown>) {
-  return HttpClientRequest.post(path).pipe(HttpClientRequest.bodyJson(body), Effect.flatMap(HttpClient.execute))
-}
-
 describe("Kilo gateway HttpApi statuses", () => {
   it.live("reports locally stored API authentication without a Gateway request", () =>
     Effect.gen(function* () {
@@ -103,131 +99,6 @@ describe("Kilo gateway HttpApi statuses", () => {
 
       expect(response.status).toBe(200)
       expect(yield* response.json).toEqual({ authenticated: true, type: "api" })
-    }),
-  )
-
-  it.live("preserves cloud session list rate limits", () =>
-    Effect.gen(function* () {
-      yield* stub(() => new Response("rate limited", { status: 429 }))
-
-      const response = yield* HttpClient.get(KiloGatewayPaths.cloudSessions)
-
-      expect(response.status).toBe(429)
-      expect(yield* response.json).toEqual({ error: "Cloud sessions fetch failed: 429" })
-    }),
-  )
-
-  it.live("maps cloud session list transport failures to internal errors", () =>
-    Effect.gen(function* () {
-      yield* stub(() => Promise.reject(new TypeError("network error")))
-
-      const response = yield* HttpClient.get(KiloGatewayPaths.cloudSessions)
-
-      expect(response.status).toBe(500)
-      expect(yield* response.json).toEqual({ error: "Internal error" })
-    }),
-  )
-
-  it.live("preserves missing cloud session previews", () =>
-    Effect.gen(function* () {
-      yield* stub(() => new Response("missing", { status: 404 }))
-
-      const response = yield* HttpClient.get(KiloGatewayPaths.cloudSession.replace(":id", "missing"))
-
-      expect(response.status).toBe(404)
-      expect(yield* response.json).toEqual({ error: "Session not found" })
-    }),
-  )
-
-  it.live("preserves cloud session preview server failures", () =>
-    Effect.gen(function* () {
-      yield* stub(() => new Response("failed", { status: 500 }))
-
-      const response = yield* HttpClient.get(KiloGatewayPaths.cloudSession.replace(":id", "failed"))
-
-      expect(response.status).toBe(500)
-      expect(yield* response.json).toEqual({ error: "Failed to fetch session" })
-    }),
-  )
-
-  it.live("maps cloud session preview transport failures to internal errors", () =>
-    Effect.gen(function* () {
-      yield* stub(() => Promise.reject(new TypeError("network error")))
-
-      const response = yield* HttpClient.get(KiloGatewayPaths.cloudSession.replace(":id", "failed"))
-
-      expect(response.status).toBe(500)
-      expect(yield* response.json).toEqual({ error: "Internal error" })
-    }),
-  )
-
-  it.live("preserves cloud session import authentication failures", () =>
-    Effect.gen(function* () {
-      yield* stub(() => new Response("unauthorized", { status: 401 }))
-
-      const response = yield* post(KiloGatewayPaths.cloudSessionImport, { sessionId: "unauthorized" })
-
-      expect(response.status).toBe(401)
-      expect(yield* response.json).toEqual({ error: "Import failed: 401" })
-    }),
-  )
-
-  it.live("maps cloud session import transport failures to internal errors", () =>
-    Effect.gen(function* () {
-      yield* stub(() => Promise.reject(new TypeError("network error")))
-
-      const response = yield* post(KiloGatewayPaths.cloudSessionImport, { sessionId: "failed" })
-
-      expect(response.status).toBe(500)
-      expect(yield* response.json).toEqual({ error: "Internal error" })
-    }),
-  )
-
-  it.live("preserves KiloClaw worker failures", () =>
-    Effect.gen(function* () {
-      yield* stub(() => new Response("worker failed", { status: 500 }))
-
-      const response = yield* HttpClient.get(KiloGatewayPaths.clawStatus)
-
-      expect(response.status).toBe(500)
-      expect(yield* response.json).toEqual({ error: "KiloClaw request failed: 500 worker failed" })
-    }),
-  )
-
-  it.live("normalizes numeric KiloClaw timestamps", () =>
-    Effect.gen(function* () {
-      const started = 1_700_000_000_000
-      yield* stub(() =>
-        Response.json({
-          status: "running",
-          sandboxId: "sandbox",
-          userId: "user",
-          lastStartedAt: started,
-          lastStoppedAt: null,
-        }),
-      )
-
-      const response = yield* HttpClient.get(KiloGatewayPaths.clawStatus)
-
-      expect(response.status).toBe(200)
-      expect(yield* response.json).toEqual({
-        status: "running",
-        sandboxId: "sandbox",
-        userId: "user",
-        lastStartedAt: new Date(started).toISOString(),
-        lastStoppedAt: null,
-      })
-    }),
-  )
-
-  it.live("maps KiloClaw transport failures to bad gateway", () =>
-    Effect.gen(function* () {
-      yield* stub(() => Promise.reject(new TypeError("network error")))
-
-      const response = yield* HttpClient.get(KiloGatewayPaths.clawStatus)
-
-      expect(response.status).toBe(502)
-      expect(yield* response.json).toEqual({ error: "Failed to reach KiloClaw" })
     }),
   )
 })

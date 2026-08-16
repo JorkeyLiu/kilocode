@@ -82,12 +82,6 @@
         "icon": "$(organization)"
       },
       {
-        "command": "kilo-code.new.kiloClawOpen",
-        "title": "KiloClaw",
-        "category": "Kilo Code",
-        "icon": "$(comment-discussion)"
-      },
-      {
         "command": "kilo-code.new.marketplaceButtonClicked",
         "title": "Marketplace",
         "category": "Kilo Code",
@@ -953,6 +947,7 @@
     "test:e2e:real-restart": "KILO_E2E_SCENARIO=real-restart node script/e2e-probe-launch.mjs",
     "test:e2e:sidebar-removal": "KILO_E2E_SCENARIO=sidebar-removal node script/e2e-probe-launch.mjs",
     "test:e2e:worktree-removal": "KILO_E2E_SCENARIO=worktree-removal node script/e2e-probe-launch.mjs",
+    "test:e2e:cloud-claw-removal": "KILO_E2E_SCENARIO=cloud-claw-removal node script/e2e-probe-launch.mjs",
     "test:p0-bench": "node script/e2e-p0-bench-launch.mjs",
     "test:p0-bench:merge": "node script/p0-bench-merge-launch.mjs",
     "snapshot:build": "bun script/dev-snapshot.ts build",

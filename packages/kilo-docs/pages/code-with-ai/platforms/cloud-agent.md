@@ -108,7 +108,7 @@ Remote Connections let you access and control local CLI sessions from the Cloud 
 
 ### How It Works
 
-When remote mode is enabled in the CLI, your active local sessions appear in the Cloud Agents dashboard alongside cloud sessions. The connection is two-way:
+When remote mode is enabled in the CLI, your active local sessions appear in the Cloud Agents dashboard. The connection is two-way:
 
 - **Messages and responses** sync in real-time
 - **Agent questions** appear in both places — answer wherever you are
@@ -147,11 +147,8 @@ Triggers allow you to initiate cloud agent sessions automatically, either via HT
 Triggers are currently in beta and subject to change.
 {% /callout %}
 
-Webhook triggers and scheduled triggers use the same trigger concepts across Cloud
-Agent and KiloClaw, but target different agents. Use Cloud Agent triggers when an
-HTTP event or schedule should start a Cloud Agent session against a repository.
-Use KiloClaw triggers when the event should deliver a chat message to a KiloClaw
-instance.
+Webhook triggers and scheduled triggers start a Cloud Agent session against a
+repository when an HTTP event or schedule fires.
 
 ### Accessing Triggers
 

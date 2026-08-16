@@ -66,7 +66,7 @@ Pick the tier that fits your budget. Frontier gives you the best models for dema
 ## Requirements
 
 {% callout type="warning" title="Version Requirements" %}
-Auto Model requires **VS Code/JetBrains extension v5.2.3+** or **CLI v1.0.15+** for automatic mode-based switching. On older versions, Auto Model tiers will default to a single model for all requests.
+Auto Model requires **VS Code extension v5.2.3+** or **CLI v1.0.15+** for automatic mode-based switching. On older versions, Auto Model tiers will default to a single model for all requests.
 {% /callout %}
 
 ## Getting Started
@@ -75,7 +75,7 @@ Auto Model requires **VS Code/JetBrains extension v5.2.3+** or **CLI v1.0.15+** 
 Select an Auto Model tier from the model dropdown in the Kilo Code chat interface. That's all you need to do.
 {% /callout %}
 
-1. Open Kilo Code in VS Code or JetBrains
+1. Open Kilo Code in VS Code
 2. Click the model selector dropdown
 3. Choose an Auto Model such as `kilo-auto/frontier` or `kilo-auto/balanced`
 4. Start chatting - the right model is selected automatically based on your current mode

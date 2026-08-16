@@ -181,10 +181,6 @@ const HIGH: Array<[Kind, string]> = [
   ["cross-client-contract", "packages/kilo-vscode/src/services/cli-backend/server-manager.ts"],
   ["cross-client-contract", "packages/kilo-vscode/src/services/cli-backend/connection-service.ts"],
   ["cross-client-contract", "packages/kilo-vscode/src/services/cli-backend/sdk-sse-adapter.ts"],
-  ["cross-client-contract", "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/KiloBackendCliManager.kt"],
-  ["cross-client-contract", "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/app/KiloBackendConnectionService.kt"],
-  ["cross-client-contract", "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/workspace/KiloBackendWorkspaceManager.kt"],
-  ["cross-client-contract", "packages/kilo-jetbrains/shared/src/main/kotlin/ai/kilocode/rpc/"],
   ["cross-client-contract", "packages/sdk/js/src/v2/client.ts"],
   // Governance checker itself and the guard/workflow model (globs after the
   // exact effect-boundary/workflow-inventory entries so specific kinds win)
@@ -222,9 +218,6 @@ const MEDIUM: Array<[Kind, string]> = [
   // dir still beat this rule.
   ["arch-adjacent", "packages/kilo-vscode/src/services/cli-backend/"],
   ["arch-adjacent", "packages/kilo-vscode/src/agent-manager/"],
-  ["arch-adjacent", "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/cli/"],
-  ["arch-adjacent", "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/app/"],
-  ["arch-adjacent", "packages/kilo-jetbrains/backend/src/main/kotlin/ai/kilocode/backend/workspace/"],
   ["arch-adjacent", "packages/opencode/src/kilocode/server/"],
   ["arch-adjacent", "packages/opencode/src/kilocode/session/"],
   ["arch-adjacent", "packages/opencode/src/kilocode/config/"],

@@ -1,8 +1,6 @@
 import { cmd } from "../cmd"
 import { UI } from "@/cli/ui"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
-import { createKiloClient } from "@kilocode/sdk/v2" // kilocode_change
-import { importCloudSession, validateCloudFork } from "@/kilocode/cloud-session" // kilocode_change
 import { errorMessage } from "@/util/error"
 import { validateSession } from "./validate-session"
 import { ServerAuth } from "@/server/auth"
@@ -35,10 +33,6 @@ export const AttachCommand = cmd({
         type: "boolean",
         describe: "fork the session when continuing (use with --continue or --session)",
       })
-      .option("cloud-fork", {
-        type: "boolean",
-        describe: "fetch session from cloud and continue locally (use with --session)",
-      })
       .option("password", {
         alias: ["p"],
         type: "string",
@@ -61,15 +55,6 @@ export const AttachCommand = cmd({
         return
       }
 
-      // kilocode_change start
-      const cloudForkError = validateCloudFork(args)
-      if (cloudForkError) {
-        UI.error(cloudForkError)
-        process.exitCode = 1
-        return
-      }
-      // kilocode_change end
-
       const directory = (() => {
         if (!args.dir) return undefined
         try {
@@ -81,24 +66,6 @@ export const AttachCommand = cmd({
         }
       })()
       const headers = ServerAuth.headers({ password: args.password, username: args.username })
-      // kilocode_change start - import cloud session before TUI renders
-      if (args.cloudFork && args.session) {
-        UI.println("Importing session from cloud...")
-        const sdk = createKiloClient({
-          baseUrl: args.url,
-          directory,
-          headers,
-        })
-        const id = await importCloudSession(sdk, args.session).catch(() => undefined)
-        if (!id) {
-          UI.error("Failed to import session from cloud")
-          process.exitCode = 1
-          return
-        }
-        args.session = id
-        args.cloudFork = false
-      }
-      // kilocode_change end
       const config = await TuiConfig.get()
 
       try {

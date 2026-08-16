@@ -11,7 +11,6 @@ import { InstanceRuntime } from "@/project/instance-runtime"
 import { SessionExport } from "@/kilocode/session-export"
 import { KiloShutdown } from "@/kilocode/cli/shutdown"
 import { createHelpCommand } from "@/kilocode/help-command"
-import { KiloConsoleCommand } from "@/kilocode/cli/cmd/console"
 import { RollCallCommand } from "@/kilocode/cli/cmd/roll-call"
 import { ProfileCommand } from "@/kilocode/cli/cmd/profile"
 import { DaemonCommand } from "@/kilocode/cli/cmd/daemon"
@@ -29,7 +28,6 @@ export namespace KiloCli {
   // so this module only owns Kilo command registration.
   export function register<T>(cli: Argv<T>): Argv<T> {
     cli
-      .command(KiloConsoleCommand)
       .command(RollCallCommand)
       .command(ProfileCommand)
       .command(RemoteCommand)

@@ -13,7 +13,7 @@ Kilo Code is your AI pair programmer that works in your IDE, terminal, or browse
 
 New to Kilo Code? Start here to understand the core concepts:
 
-- [**Install Kilo Code**](/docs/getting-started/installing) — Get started in VS Code, JetBrains, CLI, or mobile
+- [**Install Kilo Code**](/docs/getting-started/installing) — Get started in VS Code, CLI, or mobile
 - [**Connect an AI Provider**](/docs/ai-providers) — Set up your preferred model
 - [**Quick Start Guide**](/docs/getting-started/quickstart) — Run your first task in minutes
 
@@ -22,7 +22,6 @@ New to Kilo Code? Start here to understand the core concepts:
 Use Kilo Code wherever you work:
 
 - [**VS Code**](/docs/code-with-ai/platforms/vscode) — The most popular IDE integration
-- [**JetBrains**](/docs/code-with-ai/platforms/jetbrains) — IntelliJ, PyCharm, WebStorm, and more
 - [**CLI**](/docs/code-with-ai/platforms/cli) — Terminal-based AI coding for scripts and automation
 - [**Cloud Agent**](/docs/code-with-ai/platforms/cloud-agent) — Run Kilo in the cloud
 - [**Mobile Apps**](/docs/code-with-ai/platforms/mobile) — iOS and Android support

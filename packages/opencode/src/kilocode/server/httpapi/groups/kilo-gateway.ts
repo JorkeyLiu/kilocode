@@ -5,7 +5,6 @@ import { InstanceContextMiddleware } from "@/server/routes/instance/httpapi/midd
 import {
   WorkspaceRoutingMiddleware,
   WorkspaceRoutingQuery,
-  WorkspaceRoutingQueryFields,
 } from "@/server/routes/instance/httpapi/middleware/workspace-routing"
 import { described } from "@/server/routes/instance/httpapi/groups/metadata"
 
@@ -64,62 +63,6 @@ export const Notification = Schema.Struct({
 
 export const OrganizationBody = Schema.Struct({
   organizationId: Schema.NullOr(Schema.String),
-})
-
-export const ClawStatus = Schema.Struct({
-  status: Schema.NullOr(
-    Schema.Literals([
-      "provisioned",
-      "starting",
-      "restarting",
-      "recovering",
-      "running",
-      "stopped",
-      "destroying",
-      "restoring",
-    ]),
-  ),
-  sandboxId: Schema.optional(Schema.String),
-  flyRegion: Schema.optional(Schema.String),
-  machineSize: Schema.optional(
-    Schema.Struct({
-      cpus: Schema.Finite,
-      memory_mb: Schema.Finite,
-    }),
-  ),
-  openclawVersion: Schema.optional(Schema.NullOr(Schema.String)),
-  lastStartedAt: Schema.optional(Schema.NullOr(Schema.String)),
-  lastStoppedAt: Schema.optional(Schema.NullOr(Schema.String)),
-  channelCount: Schema.optional(Schema.Finite),
-  secretCount: Schema.optional(Schema.Finite),
-  userId: Schema.optional(Schema.String),
-  botName: Schema.optional(Schema.NullOr(Schema.String)),
-})
-
-export const ClawChatCredentials = Schema.NullOr(
-  Schema.Struct({
-    token: Schema.String,
-    expiresAt: Schema.String,
-    kiloChatUrl: Schema.String,
-    eventServiceUrl: Schema.String,
-  }),
-)
-
-export const CloudSession = Schema.Struct({
-  session_id: Schema.String,
-  title: Schema.NullOr(Schema.String),
-  created_at: Schema.String,
-  updated_at: Schema.String,
-  version: Schema.Finite,
-})
-
-export const CloudSessions = Schema.Struct({
-  cliSessions: Schema.Array(CloudSession),
-  nextCursor: Schema.NullOr(Schema.String),
-})
-
-export const CloudSessionImportBody = Schema.Struct({
-  sessionId: Schema.String,
 })
 
 const GroupEntry = Schema.Union([
@@ -213,52 +156,6 @@ export const ImageModel = Schema.Struct({
   description: Schema.optional(Schema.String),
 })
 
-const UnknownRecord = Schema.Record(Schema.String, Schema.Unknown)
-
-export const CloudMessage = Schema.StructWithRest(
-  Schema.Struct({
-    info: Schema.StructWithRest(
-      Schema.Struct({
-        id: Schema.String,
-        sessionID: Schema.String,
-        role: Schema.Literals(["user", "assistant"]),
-        time: Schema.Struct({
-          created: Schema.Finite,
-          completed: Schema.optional(Schema.Finite),
-        }),
-      }),
-      [UnknownRecord],
-    ),
-    parts: Schema.Array(
-      Schema.StructWithRest(
-        Schema.Struct({
-          id: Schema.String,
-          sessionID: Schema.String,
-          messageID: Schema.String,
-          type: Schema.String,
-        }),
-        [UnknownRecord],
-      ),
-    ),
-  }),
-  [UnknownRecord],
-)
-
-export const CloudSessionData = Schema.Struct({
-  info: Schema.StructWithRest(
-    Schema.Struct({
-      id: Schema.String,
-      title: Schema.String,
-      time: Schema.Struct({
-        created: Schema.Finite,
-        updated: Schema.Finite,
-      }),
-    }),
-    [UnknownRecord],
-  ),
-  messages: Schema.Array(CloudMessage),
-})
-
 export const KiloGatewayPaths = {
   modes: `${root}/modes`,
   profile: `${root}/profile`,
@@ -269,11 +166,6 @@ export const KiloGatewayPaths = {
   imageModels: `${root}/models/images`,
   notifications: `${root}/notifications`,
   organization: `${root}/organization`,
-  clawStatus: `${root}/claw/status`,
-  clawChatCredentials: `${root}/claw/chat-credentials`,
-  cloudSessions: `${root}/cloud-sessions`,
-  cloudSession: `${root}/cloud/session/:id`,
-  cloudSessionImport: `${root}/cloud/session/import`,
 } as const
 
 export const KiloGatewayApi = HttpApi.make("kilo")
@@ -382,71 +274,6 @@ export const KiloGatewayApi = HttpApi.make("kilo")
             identifier: "kilo.organization.set",
             summary: "Update Kilo Gateway organization",
             description: "Switch to a different Kilo Gateway organization",
-          }),
-        ),
-        HttpApiEndpoint.get("clawStatus", KiloGatewayPaths.clawStatus, {
-          query: WorkspaceRoutingQuery,
-          success: described(ClawStatus, "Instance status"),
-          error: [HttpApiError.Unauthorized, HttpApiError.ServiceUnavailable],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "kilo.claw.status",
-            summary: "Get KiloClaw instance status",
-            description: "Fetch the user's KiloClaw instance status via the KiloClaw worker",
-          }),
-        ),
-        HttpApiEndpoint.get("clawChatCredentials", KiloGatewayPaths.clawChatCredentials, {
-          query: WorkspaceRoutingQuery,
-          success: described(ClawChatCredentials, "Kilo Chat credentials or null"),
-          error: HttpApiError.Unauthorized,
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "kilo.claw.chatCredentials",
-            summary: "Get KiloClaw chat credentials",
-            description:
-              "Returns the bearer token and endpoint URLs the client uses to talk to the Kilo Chat worker " +
-              "and the Event Service. The bearer is the user's existing long-lived Kilo JWT — kilo-chat and " +
-              "event-service both verify it directly with NEXTAUTH_SECRET, so no separate token mint is needed.",
-          }),
-        ),
-        HttpApiEndpoint.get("cloudSessions", KiloGatewayPaths.cloudSessions, {
-          query: {
-            ...WorkspaceRoutingQueryFields,
-            cursor: Schema.optional(Schema.String),
-            limit: Schema.optional(Schema.String),
-            gitUrl: Schema.optional(Schema.String),
-          },
-          success: described(CloudSessions, "Cloud sessions list"),
-          error: [HttpApiError.BadRequest, HttpApiError.Unauthorized],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "kilo.cloudSessions",
-            summary: "Get cloud sessions",
-            description: "Fetch cloud CLI sessions from Kilo API",
-          }),
-        ),
-        HttpApiEndpoint.get("cloudSession", KiloGatewayPaths.cloudSession, {
-          params: { id: Schema.String },
-          query: WorkspaceRoutingQuery,
-          success: described(CloudSessionData, "Cloud session data"),
-          error: [HttpApiError.Unauthorized, HttpApiError.NotFound],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "kilo.cloud.session.get",
-            summary: "Get cloud session",
-            description: "Fetch full session data from the Kilo cloud for preview",
-          }),
-        ),
-        HttpApiEndpoint.post("cloudSessionImport", KiloGatewayPaths.cloudSessionImport, {
-          query: WorkspaceRoutingQuery,
-          payload: CloudSessionImportBody,
-          success: described(CloudSessionData.fields.info, "Imported session info"),
-          error: [HttpApiError.BadRequest, HttpApiError.Unauthorized, HttpApiError.NotFound],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "kilo.cloud.session.import",
-            summary: "Import session from cloud",
-            description: "Download a cloud-synced session and write it to local storage with fresh IDs.",
           }),
         ),
       )

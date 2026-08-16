@@ -24,7 +24,6 @@ const source = fs.readFileSync(SESSION_FILE, "utf-8")
 
 describe("selectSession keeps the chat in sync with the selection while offline", () => {
   const start = source.indexOf("function selectSession(")
-  const cloudGuard = source.indexOf('id.startsWith("cloud:")', start)
   const setCurrent = source.indexOf("setCurrentSessionID(id)", start)
   const offlineDefer = source.indexOf("if (!server.isConnected()) {", start)
 
@@ -32,9 +31,9 @@ describe("selectSession keeps the chat in sync with the selection while offline"
     expect(start).toBeGreaterThan(-1)
   })
 
-  it("returns early for cloud preview ids before touching the current session", () => {
-    expect(cloudGuard).toBeGreaterThan(start)
-    expect(cloudGuard).toBeLessThan(setCurrent)
+  it("no longer special-cases cloud preview ids in selectSession (LOCK-003)", () => {
+    // Cloud preview selection was removed; selectSession handles only local ids.
+    expect(source.indexOf('id.startsWith("cloud:")', start)).toBe(-1)
   })
 
   it("sets currentSessionID before checking the connection (chat follows selection offline)", () => {

@@ -17,8 +17,3 @@ if (process.versions.bun !== expectedBunVersion) {
   console.warn(`Warning: Bun version ${process.versions.bun} differs from expected ${expectedBunVersion}`);
 }
 '
-
-# kilocode_change start
-# JetBrains plugin is no longer maintained; its typecheck is permanently skipped.
-bun typecheck --filter='!@kilocode/kilo-jetbrains'
-# kilocode_change end

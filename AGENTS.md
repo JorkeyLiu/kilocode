@@ -20,7 +20,7 @@ This repository is independently governed. There is no upstream merge stream and
 - **Dev**: `bun run dev` (runs from root) or `bun run --cwd packages/opencode --conditions=browser src/index.ts`
 - **Dev with params**: `bun dev -- help`
 - **Extension**: `bun run extension` (build + launch VS Code with the extension in dev mode). Pass `--no-build` to skip the build.
-- **Typecheck**: `bun turbo typecheck` (uses `tsgo`, not `tsc`). Includes the JetBrains plugin and requires Java 21; do not run `java -version` as a routine preflight. Only check Java when a Gradle/Java command fails with a Java-version or missing-Java error. If missing, install via SDKMAN: `sdk install java 21-tem && sdk use java 21-tem`. If SDKMAN is not installed, see https://sdkman.io/install.
+- **Typecheck**: `bun turbo typecheck` (uses `tsgo`, not `tsc`).
 - **Test**: `bun test` from `packages/opencode/` (NOT from root -- root blocks tests)
 - **Single test**: `bun test ./test/tool/tool-define.test.ts` from `packages/opencode/`
 - **CLI build artifact size check**: after `bun run script/build.ts --single --skip-install` in `packages/opencode/`, use `du -h dist/*/*/bin/kilo` (scoped package output lives under `dist/@kilocode/`)
@@ -89,7 +89,6 @@ Copy, CSS, isolated components, and faithfully reproducible Storybook UI do not 
 | CLI | From `packages/opencode/`: `bun run typecheck`, `bun test` or targeted `bun test ./path/to/file.test.ts` |
 | VS Code extension | From `packages/kilo-vscode/`: `bun run typecheck`, `bun run lint`, `bun run test:unit` or `bun run test` |
 | Extension build/package | From `packages/kilo-vscode/`: `bun run compile` or `bun run package` when touching build, packaging, SDK, or webview integration paths |
-| JetBrains plugin | From `packages/kilo-jetbrains/`: `./gradlew typecheck`, `./gradlew test`. Requires Java 21; do not run `java -version` as a routine preflight. Check Java only after a Java-version or missing-Java failure. |
 | CI-only guards | Run affected guards documented above, such as `bun run knip` or source link extraction |
 | Architecture docs governance | From repo root: run `bun run script/check-architecture-impact.ts --worktree` before claiming completion or committing — see the Architecture documentation completion gate below; CI validates the PR body `## Documentation Impact` declaration — evidence only, reviewers own semantic accuracy |
 
@@ -120,10 +119,6 @@ All products are clients of the **CLI** (`packages/opencode/`), which contains t
 In each VS Code extension host, one `KiloConnectionService` is created for every Kilo editor tab and the Agent Manager; it lazily starts and reuses one current `kilo serve` backend at a time. Agent Manager sessions run concurrently at the workspace root and share that backend — there is no per-session worktree isolation. State captured by the active service layer, such as Snapshot `trackState`, is shared across those requests; only directory-keyed `InstanceState` data is isolated.
 
 Extension-specific settings should live in the Kilo extension settings, not default VS Code settings, unless they are intentionally VS Code-wide. Experimental flags should follow existing flag patterns, not VS Code settings; they usually belong in the Kilo Experimental settings section.
-
-## Package Instructions
-
-- When a task primarily touches `packages/kilo-jetbrains/`, read `packages/kilo-jetbrains/AGENTS.md` before planning or editing. It covers split-mode architecture, IntelliJ source lookup, threading fundamentals, UI guidelines, and session component architecture.
 
 ## Monorepo Structure
 
@@ -231,4 +226,4 @@ PR descriptions should explain **what** changed, **why** the change is needed, a
 
 ## GitHub Issues
 
-When creating or managing GitHub issues for the VS Code extension or JetBrains plugin via `gh`, load `.kilo/skills/gh-issues/SKILL.md`. It covers templates, project boards (`VS Code Extension`, `Jetbrains Plugin`), title conventions, and the `gh auth refresh -s project` recovery path.
+When creating or managing GitHub issues for the VS Code extension via `gh`, load `.kilo/skills/gh-issues/SKILL.md`. It covers templates, project boards (`VS Code Extension`), title conventions, and the `gh auth refresh -s project` recovery path.

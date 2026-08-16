@@ -13,8 +13,6 @@ import { Filesystem } from "@/util/filesystem"
 import type { GlobalEvent } from "@kilocode/sdk/v2"
 import type { EventSource } from "./context/sdk"
 import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
-import { importCloudSession, localSessionID, validateCloudFork } from "@/kilocode/cloud-session" // kilocode_change
-import { createKiloClient } from "@kilocode/sdk/v2" // kilocode_change
 import { writeHeapSnapshot } from "v8"
 import { KiloTuiThreadDaemon, type StartInput } from "@/kilocode/cli/cmd/tui/thread" // kilocode_change
 import {
@@ -125,10 +123,6 @@ export const TuiThreadCommand = cmd({
         type: "boolean",
         describe: "fork the session when continuing (use with --continue or --session)",
       })
-      .option("cloud-fork", {
-        type: "boolean",
-        describe: "fetch session from cloud and continue locally (use with --session)",
-      })
       .option("prompt", {
         type: "string",
         describe: "prompt to use",
@@ -156,15 +150,6 @@ export const TuiThreadCommand = cmd({
         process.exitCode = 1
         return
       }
-      // kilocode_change start
-      const cloudForkError = validateCloudFork(args)
-      if (cloudForkError) {
-        UI.error(cloudForkError)
-        process.exitCode = 1
-        return
-      }
-      // kilocode_change end
-
       // Resolve relative --project paths from PWD, then use the real cwd after
       // chdir so the thread and worker share the same directory key.
       const next = resolveThreadDirectory(args.project)
@@ -325,30 +310,10 @@ export const TuiThreadCommand = cmd({
       }, 1000).unref?.()
 
       try {
-        // kilocode_change start - import cloud session before TUI renders
-        if (args.cloudFork && args.session) {
-          UI.println("Importing session from cloud...")
-          const sdk = createKiloClient({
-            baseUrl: transport.url,
-            fetch: transport.fetch,
-            headers: transport.headers, // kilocode_change
-            directory: cwd,
-          })
-          const id = await importCloudSession(sdk, args.session).catch(() => undefined)
-          if (!id) {
-            UI.error("Failed to import session from cloud")
-            shutdownAndExit({ reason: "cloud-fork-failed", code: 1 })
-            return
-          }
-          args.session = id
-          args.cloudFork = false
-        }
-        // kilocode_change end
-
         try {
           await validateSession({
             url: transport.url, // kilocode_change
-            sessionID: localSessionID(args), // kilocode_change
+            sessionID: args.session,
             directory: cwd,
             fetch: transport.fetch,
             headers: transport.headers, // kilocode_change
