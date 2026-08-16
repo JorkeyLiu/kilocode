@@ -44,9 +44,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "Закрити вкладку",
   "agentManager.shortcuts.toggleTerminal": "Перемкнути термінал",
   "agentManager.shortcuts.runScript": "Запустити скрипт",
-  "agentManager.run.options": "Параметри запуску",
-  "agentManager.run.configure": "Налаштувати скрипт запуску",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "Відкрити Agent Manager",
   "agentManager.shortcuts.cycleAgentMode": "Наступний режим агента",

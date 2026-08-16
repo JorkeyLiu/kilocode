@@ -8,13 +8,11 @@ import { applyTabOrder } from "../../webview-ui/agent-manager/tab-order"
 function scene(init: {
   order?: Record<string, string[]>
   sessions?: string[]
-  worktreeSessions?: { key: string; ids: string[] }[]
   terminals?: Record<string, string[]>
 }) {
   const state = {
     order: { ...(init.order ?? {}) } as Record<string, string[]>,
     localIds: [...(init.sessions ?? [])],
-    worktreeSessions: init.worktreeSessions ?? [],
     terminals: { ...(init.terminals ?? {}) } as Record<string, string[]>,
     persisted: [] as { key: string; order: string[] }[],
   }
@@ -28,11 +26,6 @@ function scene(init: {
       state.persisted.push({ key, order: [...order] })
     },
     localSessionIDs: () => state.localIds,
-    sessions: () =>
-      state.worktreeSessions.flatMap((w, wi) =>
-        w.ids.map((id, i) => ({ id, createdAt: new Date(1700000000000 + wi * 1000 + i).toISOString() })),
-      ),
-    managedSessions: () => state.worktreeSessions.flatMap((w) => w.ids.map((id) => ({ id, worktreeId: w.key }))),
     terminalIdsFor: (key) => state.terminals[key] ?? [],
   }
   return { state, sync: createTabOrderSync(deps), deps }
@@ -41,14 +34,7 @@ function scene(init: {
 // Simulate how `tabIds()` renders the final tab bar: base composed as
 // `[...sessions, ...terminals]` and `applyTabOrder` layered on top.
 function render(deps: TabOrderSyncDeps, key: string): string[] {
-  const sids =
-    key === deps.LOCAL
-      ? deps.localSessionIDs()
-      : deps
-          .sessions()
-          .filter((s) => deps.managedSessions().some((ms) => ms.id === s.id && ms.worktreeId === key))
-          .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-          .map((s) => s.id)
+  const sids = key === deps.LOCAL ? deps.localSessionIDs() : []
   const base = [...sids, ...deps.terminalIdsFor(key)]
   return applyTabOrder(
     base.map((id) => ({ id })),
@@ -254,8 +240,6 @@ describe("createTabOrderSync persistence filter", () => {
         state.persisted.push({ key, order: clean })
       },
       localSessionIDs: () => state.localIds,
-      sessions: () => [],
-      managedSessions: () => [],
       terminalIdsFor: (key) => state.terminals[key] ?? [],
     })
     filteredSync.append("LOCAL", "pending_1")

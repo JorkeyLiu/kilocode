@@ -418,7 +418,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "สามารถวางรูปภาพหรือ PDF เท่านั้น",
   "prompt.toast.modelAgentRequired.title": "เลือกเอเจนต์และโมเดล",
   "prompt.toast.modelAgentRequired.description": "เลือกเอเจนต์และโมเดลก่อนส่งพร้อมท์",
-  "prompt.toast.worktreeCreateFailed.title": "ไม่สามารถสร้าง worktree",
+
   "prompt.toast.sessionCreateFailed.title": "ไม่สามารถสร้างเซสชัน",
   "prompt.toast.shellSendFailed.title": "ไม่สามารถส่งคำสั่งเชลล์",
   "prompt.toast.commandSendFailed.title": "ไม่สามารถส่งคำสั่ง",
@@ -475,9 +475,6 @@ export const dict = {
   "dialog.project.edit.icon.recommended": "แนะนำ: 128x128px",
   "dialog.project.edit.color": "สี",
   "dialog.project.edit.color.select": "เลือกสี {{color}}",
-  "dialog.project.edit.worktree.startup": "สคริปต์เริ่มต้นพื้นที่ทำงาน",
-  "dialog.project.edit.worktree.startup.description": "ทำงานหลังจากสร้างพื้นที่ทำงานใหม่ (worktree)",
-  "dialog.project.edit.worktree.startup.placeholder": "เช่น bun install",
 
   "context.breakdown.title": "การแบ่งบริบท",
   "context.breakdown.note": 'การแบ่งโดยประมาณของโทเค็นนำเข้า "อื่น ๆ" รวมถึงคำนิยามเครื่องมือและโอเวอร์เฮด',
@@ -540,11 +537,6 @@ export const dict = {
   "toast.permissions.autoaccept.on.description": "สิทธิ์การแก้ไขและจะได้รับเขียนการอนุมัติโดยอัตโนมัติ",
   "toast.permissions.autoaccept.off.title": "หยุดยอมรับการแก้ไขโดยอัตโนมัติ",
   "toast.permissions.autoaccept.off.description": "สิทธิ์การแก้ไขและเขียนจะต้องได้รับการอนุมัติ",
-
-  "toast.workspace.enabled.title": "เปิดใช้งานพื้นที่ทำงานแล้ว",
-  "toast.workspace.enabled.description": "ตอนนี้จะแสดง worktree หลายรายการในแถบด้านข้าง",
-  "toast.workspace.disabled.title": "ปิดใช้งานพื้นที่ทำงานแล้ว",
-  "toast.workspace.disabled.description": "จะแสดงเฉพาะ worktree หลักในแถบด้านข้าง",
 
   "toast.model.none.title": "ไม่ได้เลือกโมเดล",
   "toast.model.none.description": "เชื่อมต่อผู้ให้บริการเพื่อสรุปเซสชันนี้",
@@ -696,9 +688,6 @@ export const dict = {
 
   "session.context.addToContext": "เพิ่ม {{selection}} ไปยังบริบท",
 
-  "session.new.worktree.main": "สาขาหลัก",
-  "session.new.worktree.mainWithBranch": "สาขาหลัก ({{branch}})",
-  "session.new.worktree.create": "สร้าง worktree ใหม่",
   "session.new.lastModified": "แก้ไขล่าสุด",
   "sidebar.session.newSession": "เซสชันใหม่",
   "sidebar.session.newSession.tooltip": "เริ่มการสนทนาใหม่โดยที่ยังคงเซสชันปัจจุบันไว้",
@@ -1706,7 +1695,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "สิ่งรบกวนน้อยลง อ่านง่ายและรวดเร็วขึ้น",
   "migration.whatsNew.features.agentManager.title": "ตัวจัดการตัวแทน",
   "migration.whatsNew.features.agentManager.detail":
-    "อินเทอร์เฟซรวมสำหรับการเรียกใช้เอเจนต์หลายตัวพร้อมกัน แต่ละตัวบน worktree ของตัวเอง — ติดตามความคืบหน้า สลับบริบท และตรวจสอบการเปลี่ยนแปลงได้ในที่เดียว",
+    "อินเทอร์เฟซรวมสำหรับการเรียกใช้เอเจนต์หลายตัวพร้อมกัน — ติดตามความคืบหน้า สลับบริบท และตรวจสอบการเปลี่ยนแปลงได้ในที่เดียว",
   "migration.whatsNew.features.foundation.title": "รากฐานที่ใช้ร่วมกัน",
   "migration.whatsNew.features.foundation.detail":
     "แกนหลักขนาดเล็กและมีประสิทธิภาพเดียวกันในทุกผลิตภัณฑ์ Kilo ประสบการณ์ที่คุ้นเคยไม่ว่าคุณจะเลือกทำงานอย่างไร",
@@ -1789,30 +1778,6 @@ export const dict = {
   "settings.saveBar.save": "บันทึก",
   "settings.saveBar.saving": "กำลังบันทึก…",
   "settings.saveBar.saveFailed": "ไม่สามารถบันทึกการตั้งค่าได้",
-  "diffViewer.source.workspace.label": "สาขา",
-  "diffViewer.source.workspace.tooltip":
-    "การเปลี่ยนแปลงทั้งหมดบนสาขานี้เมื่อเทียบกับสาขาเบส รวมถึงไฟล์ที่ยังไม่ได้คอมมิต (staged, unstaged, untracked) และคอมมิตในเครื่องที่ยังไม่มีในเบส",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "ไฟล์ที่มีการเปลี่ยนแปลงที่คุณได้เพิ่มเข้าสู่พื้นที่ staging ของ git (`git add`) ตามที่จะปรากฏในคอมมิตถัดไป",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "ไฟล์ที่ถูกแก้ไขในแผนผังการทำงานแต่ยังไม่ได้ staged และไฟล์ที่ไม่ได้ติดตาม (ใหม่)",
-  "diffViewer.source.session.label": "เซสชัน",
-  "diffViewer.source.session.tooltip":
-    "ไฟล์ที่ Kilo แก้ไขในช่วงเซสชันปัจจุบัน โดยอิงจากสแน็ปช็อตต่อเทิร์น จะรีเซ็ตเมื่อเริ่มเซสชันใหม่",
-  "diffViewer.group.session": "เซสชัน",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "ปิดใช้งานสแนปช็อตสำหรับที่เก็บนี้ กรุณาแก้ไขไฟล์การกำหนดค่าเพื่อแสดงการเปลี่ยนแปลงของเซสชัน",
-
-  "diffViewer.baseBranch.auto": "Default",
-  "diffViewer.baseBranch.default": "Default",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Search branches",
-  "diffViewer.baseBranch.empty": "No matching branches",
-  "diffViewer.baseBranch.loading": "Loading branches…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "แผนพร้อมแล้ว:",
   "chat.search.placeholder": "ค้นหาในแชท…",
   "chat.search.toggle": "ค้นหาในแชท",

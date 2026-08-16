@@ -20,6 +20,7 @@
     "../../script/e2e-evidence.ts",
     "../../script/e2e-probe-dom.ts",
     "../../script/e2e-probe-restart.ts",
+    "../../script/e2e-probe-worktree.ts",
     "../../script/e2e-pin.ts",
     "../../script/e2e-llm-matrix.ts",
     "../../script/e2e-scripted-model.ts",

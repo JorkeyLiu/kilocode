@@ -30,15 +30,12 @@ export function DialogSessionList() {
   const toast = useToast()
   const [toDelete, setToDelete] = createSignal<string>()
   const [search, setSearch] = createDebouncedSignal("", 150)
-  const [global, setGlobal] = createSignal(false) // kilocode_change - show current worktree by default
+  const [global, setGlobal] = createSignal(false) // kilocode_change - show current directory by default
   const deleteHint = useCommandShortcut("session.delete")
   const quickSwitch1 = useCommandShortcut("session.quick_switch.1")
   const quickSwitch9 = useCommandShortcut("session.quick_switch.9")
 
-  // kilocode_change start - always fetch from experimental endpoint (returns GlobalSession with worktree info)
-  // TODO: extend /experimental/session to accept `scope`/`path` so this dialog can respect the
-  // upstream `session_directory_filter_enabled` KV toggle (via sync.session.query()) while
-  // keeping worktree grouping.
+  // kilocode_change start - always fetch from experimental endpoint (returns GlobalSession)
   const [searchResults, searchActions] = createResource(
     () => ({ query: search(), global: global(), directory: project.instance.directory() }), // kilocode_change
     async (input) => {
@@ -46,8 +43,6 @@ export function DialogSessionList() {
         {
           search: input.query || undefined,
           roots: true,
-          worktrees: true,
-          current: input.global ? undefined : "true",
           directory: input.global ? undefined : input.directory || undefined,
           limit: 30,
         },
@@ -169,7 +164,6 @@ export function DialogSessionList() {
 
   const options = createMemo(() => {
     const today = new Date().toDateString()
-    const all = global() // kilocode_change
     const sessionMap = new Map(
       sessions()
         .filter((x) => x.parentID === undefined)
@@ -215,7 +209,6 @@ export function DialogSessionList() {
           : undefined
       return {
         title: isDeleting ? `Press ${deleteHint()} again to confirm` : x.title,
-        description: all && x.worktreeName ? `(${x.worktreeName})` : undefined, // kilocode_change - worktree label
         bg: isDeleting ? theme.error : undefined,
         value: x.id,
         category,
@@ -243,7 +236,7 @@ export function DialogSessionList() {
 
   return (
     <DialogSelect
-      title={global() ? "Sessions (all worktrees)" : "Sessions (current worktree)"} // kilocode_change
+      title={global() ? "Sessions (all)" : "Sessions (current directory)"} // kilocode_change
       options={options()}
       skipFilter={true}
       current={currentSessionID()}
@@ -342,7 +335,7 @@ export function DialogSessionList() {
         },
         // kilocode_change end
       ]}
-      // kilocode_change start - preserve Ctrl+A worktree scope toggle with the upstream keymap engine
+      // kilocode_change start - preserve Ctrl+A session-scope toggle with the upstream keymap engine
       bindings={[{ key: "ctrl+a", cmd: "session.scope.toggle" }]}
       // kilocode_change end
       footerHints={quickSwitchFooterHints()}

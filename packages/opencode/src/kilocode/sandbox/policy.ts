@@ -375,8 +375,9 @@ export const inherit = Effect.fn("SandboxPolicy.inherit")(function* (
       const parent: Snapshot | undefined = stored ?? (fallback && { ...fallback, version: 0 })
       if (!parent) return
       // Only persist the parent snapshot when it actually belongs to this directory. A fallback
-      // carries confinement from another directory (e.g. forking into a worktree) and must not be
-      // written back under the parent's key here, or it leaks a phantom parent record.
+      // carries confinement from a session created in another directory (e.g. a generic fork or
+      // copy into a different project root) and must not be written back under the parent's key
+      // here, or it leaks a phantom parent record.
       yield* locked(
         sessionID,
         inheritSnapshot(directory, parent, sessionID),

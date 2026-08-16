@@ -1,13 +1,4 @@
-import * as path from "path"
 import * as vscode from "vscode"
-import { inspect } from "util"
-
-export function appendOutput(channel: vscode.OutputChannel, prefix: string, ...args: unknown[]): void {
-  const msg = args
-    .map((item) => (typeof item === "string" ? item : inspect(item, { breakLength: Infinity, depth: 4 })))
-    .join(" ")
-  channel.appendLine(`[${prefix}] ${msg}`)
-}
 
 export function getWorkspaceRoot(): string | undefined {
   const folders = vscode.workspace.workspaceFolders
@@ -34,12 +25,4 @@ export function openFileInEditor(
   void vscode.commands
     .executeCommand("vscode.open", uri, options)
     .then(undefined, (err) => console.error(`[Kilo New] ${prefix}: Failed to open file:`, uri.fsPath, err))
-}
-
-export function openWorkspaceRelativeFile(relativePath: string, line?: number, column?: number): void {
-  const root = getWorkspaceRoot()
-  if (!root) return
-  const resolved = path.resolve(root, relativePath)
-  if (!resolved.startsWith(root + path.sep) && resolved !== root) return
-  openFileInEditor(resolved, line, column, vscode.ViewColumn.Beside, "DiffPanel")
 }

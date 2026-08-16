@@ -41,9 +41,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "タブを閉じる",
   "agentManager.shortcuts.toggleTerminal": "ターミナルの切り替え",
   "agentManager.shortcuts.runScript": "スクリプトを実行",
-  "agentManager.run.options": "実行オプション",
-  "agentManager.run.configure": "実行スクリプトを設定",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "Agent Managerを開く",
   "agentManager.shortcuts.cycleAgentMode": "Next agent mode",

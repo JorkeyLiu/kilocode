@@ -427,7 +427,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Kun bilder eller PDF-er kan limes inn her.",
   "prompt.toast.modelAgentRequired.title": "Velg en agent og modell",
   "prompt.toast.modelAgentRequired.description": "Velg en agent og modell før du sender en forespørsel.",
-  "prompt.toast.worktreeCreateFailed.title": "Kunne ikke opprette worktree",
+
   "prompt.toast.sessionCreateFailed.title": "Kunne ikke opprette sesjon",
   "prompt.toast.shellSendFailed.title": "Kunne ikke sende shell-kommando",
   "prompt.toast.commandSendFailed.title": "Kunne ikke sende kommando",
@@ -485,9 +485,6 @@ export const dict = {
   "dialog.project.edit.color": "Farge",
   "dialog.project.edit.color.select": "Velg fargen {{color}}",
 
-  "dialog.project.edit.worktree.startup": "Oppstartsskript for arbeidsområde",
-  "dialog.project.edit.worktree.startup.description": "Kjører etter at et nytt arbeidsområde (worktree) er opprettet.",
-  "dialog.project.edit.worktree.startup.placeholder": "f.eks. bun install",
   "context.breakdown.title": "Kontekstfordeling",
   "context.breakdown.note": 'Omtrentlig fordeling av input-tokens. "Annet" inkluderer verktøydefinisjoner og overhead.',
   "context.breakdown.system": "System",
@@ -549,11 +546,6 @@ export const dict = {
   "toast.permissions.autoaccept.on.description": "Redigerings- og skrivetillatelser vil bli godkjent automatisk",
   "toast.permissions.autoaccept.off.title": "Sluttet å godta endringer automatisk",
   "toast.permissions.autoaccept.off.description": "Redigerings- og skrivetillatelser vil kreve godkjenning",
-
-  "toast.workspace.enabled.title": "Arbeidsområder aktivert",
-  "toast.workspace.enabled.description": "Flere worktrees vises nå i sidefeltet",
-  "toast.workspace.disabled.title": "Arbeidsområder deaktivert",
-  "toast.workspace.disabled.description": "Kun hoved-worktree vises i sidefeltet",
 
   "toast.model.none.title": "Ingen modell valgt",
   "toast.model.none.description": "Koble til en leverandør for å oppsummere denne sesjonen",
@@ -705,9 +697,6 @@ export const dict = {
 
   "session.context.addToContext": "Legg til {{selection}} i kontekst",
 
-  "session.new.worktree.main": "Hovedgren",
-  "session.new.worktree.mainWithBranch": "Hovedgren ({{branch}})",
-  "session.new.worktree.create": "Opprett nytt worktree",
   "session.new.lastModified": "Sist endret",
   "sidebar.session.newSession": "Ny Økt",
   "sidebar.session.newSession.tooltip": "Start en ny samtale mens den nåværende økten holdes intakt.",
@@ -1731,7 +1720,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Færre forstyrrelser, enklere og raskere å lese.",
   "migration.whatsNew.features.agentManager.title": "Agentbehandling",
   "migration.whatsNew.features.agentManager.detail":
-    "Et samlet grensesnitt for å kjøre flere agenter parallelt, hver på sitt eget worktree — overvåk fremdrift, bytt kontekst og gjennomgå endringer på ett sted.",
+    "Et samlet grensesnitt for å kjøre flere agenter parallelt — overvåk fremdrift, bytt kontekst og gjennomgå endringer på ett sted.",
   "migration.whatsNew.features.foundation.title": "Delt grunnlag",
   "migration.whatsNew.features.foundation.detail":
     "Én liten, effektiv kjerne på tvers av alle Kilo-produkter. En kjent opplevelse uansett hvordan du velger å jobbe.",
@@ -1812,29 +1801,6 @@ export const dict = {
   "settings.saveBar.save": "Lagre",
   "settings.saveBar.saving": "Lagrer…",
   "settings.saveBar.saveFailed": "Kunne ikke lagre innstillinger",
-  "diffViewer.source.workspace.label": "Gren",
-  "diffViewer.source.workspace.tooltip":
-    "Alle endringer på denne grenen sammenlignet med basegrenen. Inkluderer ikke-committede filer (staged, unstaged, usporede) og lokale commits som ennå ikke er i basen.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "Filer med endringer du har lagt til i gits staging-område (`git add`), slik de vil vises i neste commit.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip": "Filer endret i arbeidstreet, men ikke staget ennå, pluss usporet (nye) filer.",
-  "diffViewer.source.session.label": "Økt",
-  "diffViewer.source.session.tooltip":
-    "Filer endret av Kilo i løpet av gjeldende økt, basert på øyeblikksbilder per tur. Tilbakestilles når du starter en ny økt.",
-  "diffViewer.group.session": "Økt",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Snapshots er deaktivert for dette repositoriet. Rediger konfigurasjonsfilene for å vise øktens endringer.",
-
-  "diffViewer.baseBranch.auto": "Default",
-  "diffViewer.baseBranch.default": "Default",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Search branches",
-  "diffViewer.baseBranch.empty": "No matching branches",
-  "diffViewer.baseBranch.loading": "Loading branches…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "Planen er klar:",
   "chat.search.placeholder": "Søk i chat…",
   "chat.search.toggle": "Søk i chat",

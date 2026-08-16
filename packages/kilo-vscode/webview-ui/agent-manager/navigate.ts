@@ -77,13 +77,13 @@ export function adjacentHint(
 
 export function remoteSessions(
   local: string[],
-  managed: { id: string; worktreeId: string | null }[], // worktreeId is a legacy field name from the extension message contract
+  managed: { id: string }[],
   pending: (id: string) => boolean,
 ): string[] {
   return [
     ...new Set([
       ...local.filter((id) => !pending(id)),
-      ...managed.filter((session) => session.worktreeId).map((session) => session.id),
+      ...managed.map((session) => session.id),
     ]),
   ]
 }

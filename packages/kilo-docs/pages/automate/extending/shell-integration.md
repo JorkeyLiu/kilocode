@@ -46,8 +46,8 @@ When using the Kilo Code VS Code extension with the Agent Manager, each agent se
 
 ### Per-Session Terminals
 
-- Each session creates a terminal named **`Agent: {branch}`**, where `{branch}` is the git branch or worktree the session is working in
-- The terminal's working directory is automatically set to the session's worktree directory
+- Each session creates a terminal named **`Agent: local`**, rooted in the workspace directory
+- The terminal's working directory is the session's workspace directory
 - Terminals are standard VS Code integrated terminals — you can interact with them directly
 
 ### Keyboard Shortcuts

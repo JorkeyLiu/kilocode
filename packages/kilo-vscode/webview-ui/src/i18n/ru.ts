@@ -420,7 +420,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Сюда можно вставлять только изображения или PDF.",
   "prompt.toast.modelAgentRequired.title": "Выберите агента и модель",
   "prompt.toast.modelAgentRequired.description": "Выберите агента и модель перед отправкой запроса.",
-  "prompt.toast.worktreeCreateFailed.title": "Не удалось создать worktree",
+
   "prompt.toast.sessionCreateFailed.title": "Не удалось создать сессию",
   "prompt.toast.shellSendFailed.title": "Не удалось отправить команду оболочки",
   "prompt.toast.commandSendFailed.title": "Не удалось отправить команду",
@@ -478,10 +478,6 @@ export const dict = {
   "dialog.project.edit.color": "Цвет",
   "dialog.project.edit.color.select": "Выбрать цвет {{color}}",
 
-  "dialog.project.edit.worktree.startup": "Скрипт запуска рабочего пространства",
-  "dialog.project.edit.worktree.startup.description":
-    "Запускается после создания нового рабочего пространства (worktree).",
-  "dialog.project.edit.worktree.startup.placeholder": "например, bun install",
   "context.breakdown.title": "Разбивка контекста",
   "context.breakdown.note":
     'Приблизительная разбивка входных токенов. "Другое" включает определения инструментов и накладные расходы.',
@@ -544,11 +540,6 @@ export const dict = {
   "toast.permissions.autoaccept.on.description": "Разрешения на редактирование и запись будут автоматически одобрены",
   "toast.permissions.autoaccept.off.title": "Авто-принятие остановлено",
   "toast.permissions.autoaccept.off.description": "Редактирование и запись потребуют подтверждения",
-
-  "toast.workspace.enabled.title": "Рабочие пространства включены",
-  "toast.workspace.enabled.description": "В боковой панели теперь отображаются несколько рабочих деревьев",
-  "toast.workspace.disabled.title": "Рабочие пространства отключены",
-  "toast.workspace.disabled.description": "В боковой панели отображается только главное рабочее дерево",
 
   "toast.model.none.title": "Модель не выбрана",
   "toast.model.none.description": "Подключите провайдера для суммаризации сессии",
@@ -702,9 +693,6 @@ export const dict = {
 
   "session.context.addToContext": "Добавить {{selection}} в контекст",
 
-  "session.new.worktree.main": "Основная ветка",
-  "session.new.worktree.mainWithBranch": "Основная ветка ({{branch}})",
-  "session.new.worktree.create": "Создать новый worktree",
   "session.new.lastModified": "Последнее изменение",
   "sidebar.session.newSession": "Новая сессия",
   "sidebar.session.newSession.tooltip": "Начать новую беседу, сохранив текущую сессию нетронутой.",
@@ -1738,7 +1726,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Меньше отвлекающих факторов, проще и быстрее для чтения.",
   "migration.whatsNew.features.agentManager.title": "Менеджер агентов",
   "migration.whatsNew.features.agentManager.detail":
-    "Единый интерфейс для запуска нескольких агентов параллельно, каждый в своём worktree — отслеживайте прогресс, переключайте контекст и просматривайте изменения в одном месте.",
+    "Единый интерфейс для запуска нескольких агентов параллельно — отслеживайте прогресс, переключайте контекст и просматривайте изменения в одном месте.",
   "migration.whatsNew.features.foundation.title": "Общая основа",
   "migration.whatsNew.features.foundation.detail":
     "Одно компактное и эффективное ядро для всех продуктов Kilo. Знакомый опыт независимо от выбранного способа работы.",
@@ -1821,30 +1809,6 @@ export const dict = {
   "settings.saveBar.save": "Сохранить",
   "settings.saveBar.saving": "Сохранение…",
   "settings.saveBar.saveFailed": "Не удалось сохранить настройки",
-  "diffViewer.source.workspace.label": "Ветка",
-  "diffViewer.source.workspace.tooltip":
-    "Все изменения в этой ветке по сравнению с базовой. Включает незакоммиченные файлы (staged, unstaged, неотслеживаемые) и локальные коммиты, которых ещё нет в базе.",
-  "diffViewer.source.staged.label": "Проиндексировано",
-  "diffViewer.source.staged.tooltip":
-    "Файлы с изменениями, добавленные в индекс git (`git add`), как они появятся в следующем коммите.",
-  "diffViewer.source.unstaged.label": "Непроиндексировано",
-  "diffViewer.source.unstaged.tooltip":
-    "Файлы, изменённые в рабочем дереве, но ещё не проиндексированные, плюс неотслеживаемые (новые) файлы.",
-  "diffViewer.source.session.label": "Сессия",
-  "diffViewer.source.session.tooltip":
-    "Файлы, изменённые Kilo в текущей сессии, на основе снимков по ходу. Сбрасывается при начале новой сессии.",
-  "diffViewer.group.session": "Сессия",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Снимки отключены для этого репозитория. Пожалуйста, отредактируйте файлы конфигурации, чтобы отображать изменения сессии.",
-
-  "diffViewer.baseBranch.auto": "По умолчанию",
-  "diffViewer.baseBranch.default": "По умолчанию",
-  "diffViewer.baseBranch.remote": "Удалённая",
-  "diffViewer.baseBranch.search": "Поиск веток",
-  "diffViewer.baseBranch.empty": "Нет подходящих веток",
-  "diffViewer.baseBranch.loading": "Загрузка веток…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "План готов:",
   "chat.search.placeholder": "Поиск в чате…",
   "chat.search.toggle": "Поиск в чате",

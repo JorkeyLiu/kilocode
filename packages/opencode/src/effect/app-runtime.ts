@@ -45,7 +45,6 @@ import { Project } from "@/project/project"
 import { Vcs } from "@/project/vcs"
 import { Reference } from "@/reference/reference"
 import { Workspace } from "@/control-plane/workspace"
-import { Worktree } from "@/worktree"
 import { Installation } from "@/installation"
 import { MemoryService } from "@kilocode/kilo-memory/effect/service" // kilocode_change
 import { ShareNext } from "@/share/share-next"
@@ -55,7 +54,6 @@ import { memoMap } from "@opencode-ai/core/effect/memo-map"
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Notebook } from "@/kilocode/notebook/service" // kilocode_change
-import { AgentManager } from "@/kilocode/agent-manager/service" // kilocode_change
 import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
 import { EventV2Bridge } from "@/event-v2-bridge"
 import * as CoreEvent from "@opencode-ai/core/event" // kilocode_change
@@ -131,7 +129,6 @@ export function makeCoreLayer(
 // kilocode_change end
 
 const SessionLayer = Layer.mergeAll(
-  AgentManager.defaultLayer, // kilocode_change
   KiloViewers.defaultLayer, // kilocode_change - canonical presence service
   Question.defaultLayer,
   Notebook.defaultLayer, // kilocode_change
@@ -169,7 +166,6 @@ const FeatureLayer = Layer.mergeAll(
   Vcs.defaultLayer,
   Reference.defaultLayer,
   Workspace.defaultLayer,
-  Worktree.appLayer, // kilocode_change - canonical AppLayer service
   Installation.defaultLayer, // kilocode_change - canonical AppLayer service
   MemoryService.layer, // kilocode_change
   ShareNext.defaultLayer, // kilocode_change - canonical AppLayer service

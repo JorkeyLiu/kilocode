@@ -529,7 +529,7 @@ const spacingParts = {
       state: {
         status: "completed",
         input: { command: "pwd", description: "Print current directory" },
-        output: "/Users/marius/Documents/git/kilocode/.kilo/worktrees/zest-kettledrum",
+        output: "/Users/marius/Documents/git/kilocode/src/components",
         title: "pwd",
         metadata: {},
         time: { start: toolNow - 7000, end: toolNow - 6500 },

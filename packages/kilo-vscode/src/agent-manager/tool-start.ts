@@ -15,7 +15,6 @@ export interface ToolRequest {
   sessionID?: string
   directory?: string
   sandboxInheritanceToken?: string
-  mode: "local"
   tasks: ToolTask[]
 }
 
@@ -100,8 +99,6 @@ function task(value: unknown): ToolTask | undefined {
 
 export function parseToolRequest(value: unknown): ToolRequest | undefined {
   if (!record(value)) return undefined
-  const mode = value.mode
-  if (mode !== "local") return undefined
   const tasks = value.tasks
   if (!Array.isArray(tasks) || tasks.length === 0) return undefined
   const limited = tasks.slice(0, 20)
@@ -113,7 +110,6 @@ export function parseToolRequest(value: unknown): ToolRequest | undefined {
     directory: typeof value.directory === "string" ? value.directory : undefined,
     sandboxInheritanceToken:
       typeof value.sandboxInheritanceToken === "string" ? value.sandboxInheritanceToken : undefined,
-    mode: "local",
     tasks: parsed,
   }
 }

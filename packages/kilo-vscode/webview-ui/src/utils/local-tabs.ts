@@ -15,7 +15,7 @@ export interface LocalTabInventory {
   rejected?: ReadonlySet<string>
 }
 
-type TrackedSession = { id: string; worktreeId: string | null }
+type TrackedSession = { id: string }
 type LoadedSession = { id: string; parentID?: string | null }
 
 export function trackedSessionInventory(managed: TrackedSession[], loaded: LoadedSession[]): LocalTabInventory {
@@ -23,7 +23,7 @@ export function trackedSessionInventory(managed: TrackedSession[], loaded: Loade
   const unresolved = new Set(loaded.filter((item) => item.parentID === undefined).map((item) => item.id))
   // Agent Manager durable inventory is root-only: child sessions inherit their
   // root's ownership and must not become independent tracked owners.
-  // - root (parentID === null or absent from loaded): goes to local/external
+  // - root (parentID === null or absent from loaded): goes to local
   // - unresolved (parentID undefined): goes to unresolved (evicted, not forgotten)
   // - child (parentID is a string): goes to rejected (evicted + forgotten)
   const isChild = (id: string) => {
@@ -36,8 +36,7 @@ export function trackedSessionInventory(managed: TrackedSession[], loaded: Loade
     return info.parentID === null
   }
   return {
-    local: managed.filter((item) => !item.worktreeId && isRoot(item.id)).map((item) => item.id),
-    external: new Set(managed.filter((item) => item.worktreeId && isRoot(item.id)).map((item) => item.id)),
+    local: managed.filter((item) => isRoot(item.id)).map((item) => item.id),
     unresolved,
     rejected: new Set(managed.filter((item) => isChild(item.id)).map((item) => item.id)),
   }

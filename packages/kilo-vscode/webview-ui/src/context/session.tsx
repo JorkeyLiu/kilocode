@@ -204,7 +204,7 @@ interface SessionContextValue {
   isErrorHidden: (messageID: string) => boolean
 
   // Move stashed parts into the reactive store for the given message IDs.
-  // Called by VscodeSessionTurn when the virtualizer renders a turn.
+  // Called by TranscriptRowView when the virtualizer renders a turn.
   hydrateParts: (messageIDs: string[]) => void
 
   // Todos for current session
@@ -403,7 +403,7 @@ export const SessionProvider: ParentComponent = (props) => {
   const [loadingMore, setLoadingMore] = createSignal(false)
 
   // Parts stash: holds parts from messagesLoaded outside the reactive store
-  // until a VscodeSessionTurn is rendered by the virtualizer and calls
+  // until a TranscriptRowView is rendered by the virtualizer and calls
   // hydrateParts(). This avoids writing parts for off-screen messages into
   // the store, which would trigger expensive DOM work for invisible content.
   const stash = new PartStash()
@@ -2150,7 +2150,7 @@ export const SessionProvider: ParentComponent = (props) => {
     batch(() => {
       // Reconcile: remove sessions not in the loaded list to prevent stale
       // entries from other projects accumulating in the store.
-      // Sessions whose worktree directories failed to list are preserved —
+      // Sessions whose directories failed to list are preserved —
       // their absence is transient, not a real deletion.
       setStore(
         "sessions",
@@ -2891,7 +2891,7 @@ export const SessionProvider: ParentComponent = (props) => {
     // the tab/Agent Manager selection. These are local signals and need no backend, so
     // they update even while disconnected. Bailing out here when not connected
     // froze the chat on the previous session while the side diff (resolved from
-    // the worktree selection) still moved (the reported "only the diff changes").
+    // the selection) still moved (the reported "only the diff changes").
     agentDrafts.prune(draftSessionID())
     setCloudPreviewId(null)
     setCurrentSessionID(id)
@@ -2902,7 +2902,7 @@ export const SessionProvider: ParentComponent = (props) => {
     // Only the message fetch needs the backend. Defer it while offline and let
     // the reconnect effect replay it. We defer even for cached sessions: the
     // load message is what re-focuses the backend (focusSession, contextSessionID,
-    // SSE tracking, active worktree) and runs the reconcile self-heal, so skipping
+    // SSE tracking, active directory) and runs the reconcile self-heal, so skipping
     // it would leave the extension focused on the previously selected session.
     if (!server.isConnected()) {
       deferredFetch = id

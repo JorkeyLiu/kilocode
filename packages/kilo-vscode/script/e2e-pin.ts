@@ -32,6 +32,11 @@ export interface PinExpectation {
   variant: string
 }
 
+/** The real-session pinned expectation for a send: custom agent + model + variant. */
+export function pinExpect(plan: { customProvider: string; customModel: string }, agent: string, variant: string): PinExpectation {
+  return { agent, provider: plan.customProvider, model: plan.customModel, variant }
+}
+
 /** Backend-generated synthetic user messages are never UI-submitted. */
 export function isSyntheticUser(m: MessageTruth): boolean {
   return m.continuation === true || m.compaction !== undefined

@@ -190,20 +190,14 @@ describe("adjacentHint", () => {
 describe("remoteSessions", () => {
   const pending = (id: string) => id.startsWith("pending:")
 
-  it("returns every real tab without collapsing sessions in the same worktree", () => {
+  it("reports every real local tab and every managed root-local session without duplication", () => {
     const result = remoteSessions(
       ["local-1", "pending:1", "shared"],
-      [
-        { id: "shared", worktreeId: "wt-1" },
-        { id: "worktree-1", worktreeId: "wt-1" },
-        { id: "worktree-2", worktreeId: "wt-1" },
-        { id: "worktree-3", worktreeId: "wt-2" },
-        { id: "closed-local", worktreeId: null },
-      ],
+      [{ id: "shared" }, { id: "managed-1" }, { id: "managed-2" }],
       pending,
     )
 
-    expect(result).toEqual(["local-1", "shared", "worktree-1", "worktree-2", "worktree-3"])
+    expect(result).toEqual(["local-1", "shared", "managed-1", "managed-2"])
   })
 
   it("returns an empty list without open sessions", () => {

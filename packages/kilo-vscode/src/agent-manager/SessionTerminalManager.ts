@@ -27,8 +27,8 @@ export interface Disposable {
 
 /**
  * Manages terminals for agent manager sessions.
- * Each session can have an associated terminal that opens in the session's worktree directory,
- * or the main repo folder for local sessions.
+ * Each session can have an associated terminal that opens in the session's
+ * working directory, or the main repo folder for local sessions.
  */
 export class SessionTerminalManager {
   private static readonly LOCAL_KEY = "__local__"

@@ -247,8 +247,12 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
 
   it("still registers the standalone panel serializers", () => {
     expect(ext).toContain("registerWebviewPanelSerializer(MarketplacePanelProvider.viewType")
-    expect(ext).toContain("registerWebviewPanelSerializer(DiffViewerProvider.viewType")
     expect(ext).toContain("registerWebviewPanelSerializer(KiloClawProvider.viewType")
+  })
+
+  it("no longer registers a Diff Viewer serializer (P3.2 custom surface removal)", () => {
+    expect(ext).not.toContain("DiffViewerProvider")
+    expect(ext).not.toContain("DiffVirtualProvider")
   })
 
   it("keeps the editor/title toolbar contributions intact", () => {
@@ -274,7 +278,6 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
       "kilo-code.new.openInTab",
       "kilo-code.new.agentManagerOpen",
       "kilo-code.new.agentManager.newTab",
-      "kilo-code.new.showChanges",
       "kilo-code.new.showMemory",
       "kilo-code.new.toggleMemory",
     ]) {
@@ -300,19 +303,36 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
     expect(ext).toContain("const ok = await agentManagerProvider.waitForReady()")
   })
 
-  it("routes review comments and cloud-session deep links through readiness", () => {
+  it("routes cloud-session deep links through readiness", () => {
     // Finding 1 (P3.1 audit): the cloud-session deep link waits for the chat
     // tab to be ready before posting openCloudSession.
     expect(ext).toContain("const ready = await waitForChatReady(tab.waitForReady(), 15_000)")
     expect(ext).toContain("tab.openCloudSession(sessionId)")
-    // Finding 2 (P3.1 audit): review comments route through the
-    // readiness-aware resolver instead of a direct Agent Manager post.
-    expect(ext).toContain("void resolveChatTarget().then((target) => {")
-    expect(ext).toContain('target.postMessage({ type: "appendReviewComments", comments, autoSend })')
   })
 
-  it("resolves the diff-viewer session and auto-approve sources from tabs/Agent Manager", () => {
-    expect(ext).toContain("activeTabProvider()?.getCurrentSessionId() ?? agentManagerProvider.getActiveSessionId()")
+  it("keeps the readiness-aware chat target resolver and drops the dead review-comments push chain", () => {
+    // P3.1 readiness resolver remains the chat targeting primitive.
+    expect(ext).toContain("const resolveChatTarget = (): Promise<ChatTarget | undefined> =>")
+    expect(ext).toContain("resolveChatTargetImpl(agentManagerProvider, activeTabProvider)")
+    // P3.2: the DiffViewer-owned comment handler is gone and the producer/buffer
+    // chain became unreferenced (no callers of KiloProvider.appendReviewComments,
+    // no other producers of the extension→webview message). The dead chain was
+    // removed; the retained webview review payload flows (pull-back message.review,
+    // ReviewComments rendering, formatReviewCommentsMarkdown on send) are untouched.
+    expect(provider).not.toContain("appendReviewComments")
+    const promptInput = fs.readFileSync(path.join(ROOT, "webview-ui/src/components/chat/PromptInput.tsx"), "utf-8")
+    expect(promptInput).not.toContain('message.type === "appendReviewComments"')
+    const terminalTab = fs.readFileSync(
+      path.join(ROOT, "webview-ui/agent-manager/terminal/TerminalTab.tsx"),
+      "utf-8",
+    )
+    expect(terminalTab).not.toContain("appendReviewCommentsToTerminal")
+    // The webview-internal review payload behavior that survives: pull-back restores
+    // the composer's review set and sends format the review markdown.
+    expect(promptInput).toContain("if (message.review) replaceReviewComments(message.review)")
+  })
+
+  it("aggregates auto-approve sources from tabs/Agent Manager", () => {
     expect(am).toContain("public getActiveSessionId(): string | undefined")
     // Auto-approve aggregates tab panels + Agent Manager instead of a sidebar provider.
     expect(ext).toContain("for (const [, p] of tabPanels) for (const dir of p.getSessionDirectories().values())")

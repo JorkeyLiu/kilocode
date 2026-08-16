@@ -46,12 +46,7 @@ const reorder = (items: { id: string }[], order: string[]) => {
 const inventory = (local: string[], external: string[] = []) => ({ local, external: new Set(external) })
 const tracked = () =>
   trackedSessionInventory(
-    [
-      { id: "local", worktreeId: null },
-      { id: "worktree", worktreeId: "wt-1" },
-      { id: "sparse", worktreeId: null },
-      { id: "child", worktreeId: "wt-1" },
-    ],
+    [{ id: "local" }, { id: "worktree" }, { id: "sparse" }, { id: "child" }],
     [
       { id: "local", parentID: null },
       { id: "worktree", parentID: null },
@@ -222,12 +217,13 @@ describe("shared close selection", () => {
 
 describe("tracked tab restore", () => {
   it("restores only sessions with known root ancestry", () => {
-    expect(restoreTrackedTabs(tracked(), [], undefined, trackedPending, identity)).toEqual(["local"])
+    expect(restoreTrackedTabs(tracked(), [], undefined, trackedPending, identity)).toEqual(["local", "worktree"])
   })
 
   it("evicts sparse and child sessions from restored tabs", () => {
     expect(restoreTrackedTabs(tracked(), ["local", "sparse", "child"], undefined, trackedPending, identity)).toEqual([
       "local",
+      "worktree",
     ])
   })
 
@@ -268,10 +264,7 @@ describe("tracked tab restore", () => {
 describe("tracked tab reconcile", () => {
   it("evicts sparse sessions without forgetting them", () => {
     const data = trackedSessionInventory(
-      [
-        { id: "local", worktreeId: null },
-        { id: "sparse", worktreeId: null },
-      ],
+      [{ id: "local" }, { id: "sparse" }],
       [{ id: "local", parentID: null }, { id: "sparse" }],
     )
     expect(reconcileTrackedTabs(["local", "sparse"], ["local"], data, trackedPending)).toEqual({
@@ -290,10 +283,10 @@ describe("tracked tab reconcile", () => {
   it("puts child sessions into rejected, not local or external", () => {
     const data = trackedSessionInventory(
       [
-        { id: "root-local", worktreeId: null },
-        { id: "root-wt", worktreeId: "wt-1" },
-        { id: "child-a", worktreeId: null },
-        { id: "child-b", worktreeId: "wt-1" },
+        { id: "root-local" },
+        { id: "root-wt" },
+        { id: "child-a" },
+        { id: "child-b" },
       ],
       [
         { id: "root-local", parentID: null },
@@ -302,14 +295,13 @@ describe("tracked tab reconcile", () => {
         { id: "child-b", parentID: "root-wt" },
       ],
     )
-    expect(data.local).toEqual(["root-local"])
-    expect([...data.external!]).toEqual(["root-wt"])
+    expect(data.local).toEqual(["root-local", "root-wt"])
     expect([...data.rejected!]).toEqual(["child-a", "child-b"])
     expect([...data.unresolved!]).toEqual([])
   })
 
   it("treats loaded sessions without parentID as unresolved, not root", () => {
-    const data = trackedSessionInventory([{ id: "sparse", worktreeId: null }], [{ id: "sparse" }])
+    const data = trackedSessionInventory([{ id: "sparse" }], [{ id: "sparse" }])
     expect(data.local).toEqual([])
     expect([...data.unresolved!]).toEqual(["sparse"])
   })

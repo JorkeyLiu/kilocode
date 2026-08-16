@@ -283,7 +283,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   private webview: vscode.Webview | null = null
   private currentSession: Session | null = null
-  /** Remembers the last selected session so /new can stay in the same worktree after clearSession. */
+  /** Remembers the last selected session so /new stays in the same session context after clearSession. */
   private contextSessionID: string | undefined
   private connectionState: "connecting" | "connected" | "disconnected" | "error" = "connecting"
   private connectionGeneration = 0
@@ -331,7 +331,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private lastReconcileRevision = -1
   private configWarningsShown = false
   private pendingKiloModel: { modelID?: string; agent?: string } | null = null
-  private pendingReviewComments: { comments: unknown[]; autoSend: boolean }[] = []
   private readyResolvers: (() => void)[] = []
   private promptRecoveryQueued = false
   private promptRecovery: Promise<void> | null = null
@@ -347,7 +346,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private readonly refreshes = new Map<string, number>()
   private readonly anacondaDesktop = new AnacondaDesktopBridge()
   private sessionStatusMap = new Map<string, SessionStatus["type"]>() // Latest status used for destructive config warnings.
-  private sessionDirectories = new Map<string, string>() // Per-session directory overrides, such as Agent Manager worktrees.
+  private sessionDirectories = new Map<string, string>() // Per-session directory resolution for permission/question/reload routing.
   private readonly aborts = new SessionAbort()
   private projectID: string | undefined // Current workspace project ID used to filter sessions.
   private loadMessagesAbort: AbortController | null = null // Current load request cancellation.
@@ -403,7 +402,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   private onBeforeMessage: ((msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>) | null = null
 
-  private diffVirtualProvider: import("./DiffVirtualProvider").DiffVirtualProvider | undefined
   private remoteService: RemoteStatusService | null = null
   private unsubscribeRemote: (() => void) | null = null
   private readonly requirements: AgentRequirementsController
@@ -428,7 +426,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       folders: () => vscode.workspace.workspaceFolders?.map((folder) => folder.uri.fsPath),
       project: () => this.projectDirectory,
       sessions: () => this.sessionDirectories,
-      worktrees: this.opts.worktreeDirectories,
       extension: (id) => vscode.extensions.getExtension(id),
       subscribe:
         typeof vscode.extensions.onDidChange === "function"
@@ -517,10 +514,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.projectDirectory = directory
     this.postMessage({ type: "workspaceDirectoryChanged", directory: directory ?? "" })
     this.requirements.clear()
-  }
-
-  public setDiffVirtualProvider(provider: import("./DiffVirtualProvider").DiffVirtualProvider): void {
-    this.diffVirtualProvider = provider
   }
 
   getTelemetryProperties(): Record<string, unknown> {
@@ -734,25 +727,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     return this.handleLoadMessages(sessionID, { preserveStream: true })
   }
 
-  /**
-   * Register a directory override for a session (e.g., worktree path).
-   * When set, all operations for this session use this directory instead of the workspace root.
-   */
-  public setSessionDirectory(sessionId: string, directory: string): void {
-    this.aborts.preserve(sessionId, this.sessionStatusMap.get(sessionId), this.getWorkspaceDirectory(sessionId))
-    this.sessionDirectories.set(sessionId, directory)
-    this.requirements.clear()
-    if (this.connectionState === "connected") void this.fetchAndSendSandboxStatus(sessionId)
-  }
-
-  public clearSessionDirectory(sessionId: string): void {
-    this.aborts.preserve(sessionId, this.sessionStatusMap.get(sessionId), this.getWorkspaceDirectory(sessionId))
-    this.sessionDirectories.delete(sessionId)
-    this.requirements.clear()
-    if (this.connectionState === "connected") void this.fetchAndSendSandboxStatus(sessionId)
-  }
-
-  /** Exposes the session→directory map so callers outside the webview can resolve worktree paths. */
+  /** Exposes the session→directory map so callers outside the webview can resolve session directories. */
   public getSessionDirectories(): ReadonlyMap<string, string> {
     return this.sessionDirectories
   }
@@ -777,7 +752,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   /**
    * Re-fetch and send the full session list to the webview.
-   * Called by AgentManagerProvider after worktree recovery completes.
    *
    * Any deferred refresh (requested before the client was ready) is flushed
    * first through the serialized load chain, so the load enqueued by THIS
@@ -917,7 +891,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.visibleTaskStreams.clear()
           this.flushPendingKiloModel()
           await this.syncWebviewState("webviewReady")
-          this.flushPendingReviewComments()
           this.recoverPendingPrompts()
           this.readyResolvers.splice(0).forEach((r) => r())
           break
@@ -1392,7 +1365,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private handleEditorOpenMessage(message: Parameters<typeof handleEditorAction>[0]): boolean {
     return handleEditorAction(message, {
       dir: () => this.getWorkspaceDirectory(this.currentSession?.id),
-      diff: this.diffVirtualProvider,
       storage: this.extensionContext?.globalStorageUri,
       post: (msg) => this.postMessage(msg),
     })
@@ -1863,10 +1835,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.syncedChildSessions.add(sessionID)
     this.trackedSessionIds.add(sessionID)
 
-    // Inherit the parent's worktree directory so permission responses use
-    // the correct backend Instance. Without this, child sessions in Agent
-    // Manager worktrees fall back to workspace root and fail to find the
-    // pending permission request.
+    // Inherit the parent's directory so permission responses use the correct
+    // backend Instance for child sessions.
     if (!this.sessionDirectories.has(sessionID) && parentSessionID) {
       const dir = this.sessionDirectories.get(parentSessionID)
       if (dir) {
@@ -1924,7 +1894,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       listSessions: client
         ? async (input: { limit: number; cursor?: number }) => {
             const result = await client.experimental.session.list(
-              { directory, worktrees: true, limit: input.limit, cursor: input.cursor },
+              { directory, limit: input.limit, cursor: input.cursor },
               { throwOnError: true },
             )
             const next = result.response.headers.get("x-next-cursor")
@@ -3742,7 +3712,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       currentSessionId: this.currentSession?.id,
       trackedSessionIds: this.trackedSessionIds,
       sessionDirectories: this.sessionDirectories,
-      extraDirectories: this.opts.worktreeDirectories,
       postMessage: (msg) => this.postMessage(msg),
       getWorkspaceDirectory: (sid) => this.getWorkspaceDirectory(sid),
       recordPermissionDirectory: (id, dir) => this.connectionService.recordPermissionDirectory(id, dir),
@@ -3758,7 +3727,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       currentSessionId: this.currentSession?.id,
       trackedSessionIds: this.trackedSessionIds,
       sessionDirectories: this.sessionDirectories,
-      extraDirectories: this.opts.worktreeDirectories,
       postMessage: (msg: unknown) => this.postMessage(msg),
       getWorkspaceDirectory: (sid?: string) => this.getWorkspaceDirectory(sid),
       recordQuestionDirectory: (id: string, dir: string) => this.connectionService.recordQuestionDirectory(id, dir),
@@ -4119,7 +4087,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       const trackedById = Boolean(eventSessionID && this.trackedSessionIds.has(eventSessionID))
       // Directory-scoped events (enable/disable/rebuild/configure/purge) carry no
       // sessionID, so also match any tracked session sharing the event directory —
-      // e.g. a non-active Agent Manager tab on the same worktree.
+      // e.g. a non-active Agent Manager tab in the same workspace.
       const trackedByDir = directory
         ? [...this.sessionDirectories.entries()]
             .filter(([sid, dir]) => this.trackedSessionIds.has(sid) && sameDirectory(directory, dir))
@@ -4383,12 +4351,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.postMessage({ type: "selectKiloModel", ...pending })
   }
 
-  public async appendReviewComments(comments: unknown[], autoSend = false): Promise<void> {
-    this.pendingReviewComments.push({ comments, autoSend })
-
-    this.flushPendingReviewComments()
-  }
-
   public async showMemory(sessionID?: string): Promise<void> {
     await this.memory.show(sessionID ?? this.currentSession?.id)
   }
@@ -4402,17 +4364,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to toggle memory:", error)
       void vscode.window.showErrorMessage(getErrorMessage(error) || "Failed to toggle memory")
-    }
-  }
-
-  private flushPendingReviewComments(): void {
-    if (!this.webview || !this.isWebviewReady || this.pendingReviewComments.length === 0) return
-
-    const pending = this.pendingReviewComments
-    this.pendingReviewComments = []
-
-    for (const entry of pending) {
-      this.postMessage({ type: "appendReviewComments", comments: entry.comments, autoSend: entry.autoSend })
     }
   }
 

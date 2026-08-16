@@ -93,11 +93,11 @@ flowchart LR
 
 | Step | What happens | Why it matters |
 |---|---|---|
-| Send request | Editor client includes directory with local API request | CLI can distinguish workspace root from worktree directory |
+| Send request | Editor client includes directory with local API request | CLI can distinguish workspace root from other directory contexts |
 | Select state | `InstanceStore` normalizes directory and selects directory-keyed local runtime instance | Sessions for alternate directories keep isolated runtime state |
 | Return events | Server publishes event with directory metadata through shared `/global/event` SSE stream | Editor client routes event to matching directory and session view |
 
-This distinction matters for Agent Manager worktrees and JetBrains workspace caches. Directory-keyed state stays isolated. Process-wide event stream and server-owned service state remain shared; snapshot slow-track guard is one example. Authentication, provider routing, SSE, and snapshots appear in later sections.
+This distinction matters for directory-scoped workspace requests and JetBrains workspace caches. Directory-keyed state stays isolated. Process-wide event stream and server-owned service state remain shared; snapshot slow-track guard is one example. Authentication, provider routing, SSE, and snapshots appear in later sections.
 
 ## Authentication boundaries
 
@@ -216,7 +216,7 @@ Snapshot baselines use separate git directory per project worktree:
 ${Global.Path.data}/snapshot/<project-id>/<worktree-hash>
 ```
 
-Snapshot implementation state is directory-keyed through `InstanceState`. One `Snapshot.Service` also owns process-shared slow-snapshot guard state outside directory cache. This distinction matters when multiple Agent Manager worktrees use same `kilo serve` process.
+Snapshot implementation state is directory-keyed through `InstanceState`. One `Snapshot.Service` also owns process-shared slow-snapshot guard state outside directory cache. This distinction matters when multiple root-local VS Code sessions share one `kilo serve` process.
 
 Slow initial tracking has guarded behavior:
 
@@ -350,7 +350,7 @@ Source development can serve built Console assets from package output or build t
 | Cache | CLI bridge caches worker entry by directory and disposes it with instance |
 | Status | `GET /indexing/status` and `indexing.status` bus event expose progress |
 | Tool | `semantic_search` is registered only after indexing reports readiness |
-| Worktrees | Agent Manager `.kilo/worktrees/` and legacy `.kilocode/worktrees/` paths return disabled status |
+| Worktree checkouts | Indexing runs per normalized directory; linked-worktree checkouts mirror baseline files from the primary checkout internally |
 | Empty VS Code window | Extension sets `KILO_DISABLE_CODEBASE_INDEXING=vscode-no-workspace`; bridge reports disabled status |
 | Embeddings | Supports Kilo, OpenAI, Ollama, OpenAI-compatible, Gemini, Mistral, Vercel AI Gateway, Bedrock, OpenRouter, and Voyage configuration |
 | Vector stores | Supports Qdrant and LanceDB |

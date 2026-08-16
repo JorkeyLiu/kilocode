@@ -42,8 +42,6 @@ export interface Store {
 // ---------------------------------------------------------------------------
 
 export interface SessionProvider {
-  setSessionDirectory(id: string, directory: string): void
-  clearSessionDirectory(id: string): void
   getSessionDirectories(): ReadonlyMap<string, string>
   getSessionInfo?(id: string): Promise<Session | undefined>
   trackSession(id: string): void
@@ -54,7 +52,7 @@ export interface SessionProvider {
   recoverPendingPrompts(): void
   /** Register a callback invoked when a plan follow-up session is adopted.
    *  The callback receives the new session and its directory so the Agent Manager
-   *  can route it to the correct worktree instead of LOCAL. */
+   *  can route it correctly instead of LOCAL. */
   onFollowupAdopted(cb: (session: Session, directory: string) => void): void
   acknowledgeDraft(draftID: string, sessionID: string): void
   abortSessions(ids: readonly string[]): Promise<void>
@@ -109,15 +107,10 @@ export interface Host {
    */
   openPanel(opts: {
     onBeforeMessage: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>
-    /** @deprecated Legacy parameter; worktree directories are no longer created. Kept for KiloProvider compatibility. */
-    worktreeDirectories?: () => string[]
   }): PanelContext
 
   /** Get the workspace/project root path. */
   workspacePath(): string | undefined
-
-  /** Read the user's automatic branch naming preferences. */
-  autoBranchNaming(): { enabled: boolean; prefix: string }
 
   /** Per-workspace durable storage (VS Code workspaceState in the adapter). */
   readonly workspaceStore: Store
@@ -125,14 +118,8 @@ export interface Host {
   /** Show an error notification. */
   showError(msg: string): void
 
-  /** Open a text document in an editor (e.g. setup script). */
-  openDocument(path: string): Promise<void>
-
   /** Open a file at a specific location in the editor. */
   openFile(path: string, line?: number, column?: number): void
-
-  /** Open a folder (optionally in a new window). */
-  openFolder(path: string, newWindow: boolean): void
 
   /** Create an output channel for logging. */
   createOutput(name: string): OutputHandle
@@ -151,9 +138,6 @@ export interface Host {
 
   /** Open a URL in the user's default browser. */
   openExternal(url: string): void
-
-  /** Ask VS Code's git extension to re-scan repositories (e.g. after worktree ref migration). */
-  refreshGit(): void
 
   /** Dispose all host resources. */
   dispose(): void

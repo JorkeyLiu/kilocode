@@ -422,7 +422,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Kun billeder eller PDF'er kan indsættes her.",
   "prompt.toast.modelAgentRequired.title": "Vælg en agent og model",
   "prompt.toast.modelAgentRequired.description": "Vælg en agent og model før du sender en forespørgsel.",
-  "prompt.toast.worktreeCreateFailed.title": "Kunne ikke oprette worktree",
+
   "prompt.toast.sessionCreateFailed.title": "Kunne ikke oprette session",
   "prompt.toast.shellSendFailed.title": "Kunne ikke sende shell-kommando",
   "prompt.toast.commandSendFailed.title": "Kunne ikke sende kommando",
@@ -480,9 +480,6 @@ export const dict = {
   "dialog.project.edit.color": "Farve",
   "dialog.project.edit.color.select": "Vælg farven {{color}}",
 
-  "dialog.project.edit.worktree.startup": "Opstartsscript for arbejdsområde",
-  "dialog.project.edit.worktree.startup.description": "Køres efter oprettelse af et nyt arbejdsområde (worktree).",
-  "dialog.project.edit.worktree.startup.placeholder": "f.eks. bun install",
   "context.breakdown.title": "Kontekstfordeling",
   "context.breakdown.note":
     'Omtrentlig fordeling af input-tokens. "Andre" inkluderer værktøjsdefinitioner og overhead.',
@@ -545,11 +542,6 @@ export const dict = {
   "toast.permissions.autoaccept.on.description": "Redigerings- og skrivetilladelser vil automatisk blive godkendt",
   "toast.permissions.autoaccept.off.title": "Stoppede automatisk accept af ændringer",
   "toast.permissions.autoaccept.off.description": "Redigerings- og skrivetilladelser vil kræve godkendelse",
-
-  "toast.workspace.enabled.title": "Arbejdsområder aktiveret",
-  "toast.workspace.enabled.description": "Flere worktrees vises nu i sidepanelet",
-  "toast.workspace.disabled.title": "Arbejdsområder deaktiveret",
-  "toast.workspace.disabled.description": "Kun hoved-worktree vises i sidepanelet",
 
   "toast.model.none.title": "Ingen model valgt",
   "toast.model.none.description": "Forbind en udbyder for at opsummere denne session",
@@ -700,9 +692,6 @@ export const dict = {
   "session.messages.jumpToLatest": "Gå til seneste",
   "session.context.addToContext": "Tilføj {{selection}} til kontekst",
 
-  "session.new.worktree.main": "Hovedgren",
-  "session.new.worktree.mainWithBranch": "Hovedgren ({{branch}})",
-  "session.new.worktree.create": "Opret nyt worktree",
   "session.new.lastModified": "Sidst ændret",
   "sidebar.session.newSession": "Ny Session",
   "sidebar.session.newSession.tooltip": "Start en frisk samtale, mens den nuværende session holdes intakt.",
@@ -1734,7 +1723,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Færre distraktioner, nemmere og hurtigere at læse.",
   "migration.whatsNew.features.agentManager.title": "Agentstyring",
   "migration.whatsNew.features.agentManager.detail":
-    "En samlet brugerflade til at køre flere agenter parallelt, hver på sit eget worktree — overvåg fremskridt, skift kontekst og gennemgå ændringer ét sted.",
+    "En samlet brugerflade til at køre flere agenter parallelt — overvåg fremskridt, skift kontekst og gennemgå ændringer ét sted.",
   "migration.whatsNew.features.foundation.title": "Fælles fundament",
   "migration.whatsNew.features.foundation.detail":
     "Én lille, effektiv kerne på tværs af alle Kilo-produkter. En velkendt oplevelse uanset hvordan du vælger at arbejde.",
@@ -1818,30 +1807,6 @@ export const dict = {
   "settings.saveBar.save": "Gem",
   "settings.saveBar.saving": "Gemmer…",
   "settings.saveBar.saveFailed": "Kunne ikke gemme indstillinger",
-  "diffViewer.source.workspace.label": "Gren",
-  "diffViewer.source.workspace.tooltip":
-    "Alle ændringer på denne gren sammenlignet med basegrenen. Omfatter ikke-commitede filer (stagede, ikke-stagede, usporede) og lokale commits, som endnu ikke er i basen.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "Filer med ændringer, du har tilføjet til gits staging-område (`git add`), som de vil fremgå i den næste commit.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "Filer ændret i dit arbejdsbibliotek, men ikke stagede endnu, samt ikke-sporede (nye) filer.",
-  "diffViewer.source.session.label": "Session",
-  "diffViewer.source.session.tooltip":
-    "Filer ændret af Kilo i den aktuelle session, baseret på snapshots pr. tur. Nulstilles, når du starter en ny session.",
-  "diffViewer.group.session": "Session",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Snapshots er deaktiveret for dette repository. Rediger dine konfigurationsfiler for at vise sessionens ændringer.",
-
-  "diffViewer.baseBranch.auto": "Default",
-  "diffViewer.baseBranch.default": "Default",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Search branches",
-  "diffViewer.baseBranch.empty": "No matching branches",
-  "diffViewer.baseBranch.loading": "Loading branches…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "Planen er klar:",
   "chat.search.placeholder": "Søg i chat…",
   "chat.search.toggle": "Søg i chat",

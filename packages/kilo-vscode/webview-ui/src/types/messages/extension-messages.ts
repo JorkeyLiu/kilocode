@@ -1,7 +1,5 @@
 import type { ProviderAuthAuthorization, ProviderAuthMethod } from "@kilocode/sdk/v2/client"
-import type { DiffSourceCapabilities, DiffSourceDescriptor } from "../../../../src/diff/sources/types"
 import type { PartBatch, PartRemove, PartUpdate } from "../../../../src/shared/stream-messages"
-import type { SessionMode } from "../../context/worktree-mode"
 import type { MarketplaceItem, MarketplaceInstalledMetadata, MarketplaceRelevanceMetadata } from "../marketplace"
 import type { ConnectionState, ServerInfo, SessionStatus } from "./connection"
 import type { FileAttachment, Part } from "./parts"
@@ -24,19 +22,11 @@ import type { BrowserSettings, Config, FeatureFlags, IndexingStatus, KiloEmbeddi
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
 import type { ProfileData } from "./profile"
 import type {
-  BranchInfo,
-  ExternalWorktreeInfo,
   LocalGitStats,
   ManagedSessionState,
-  PRStatus,
   ReviewComment,
-  RunStatus,
-  SectionState,
   SessionTimingEntry,
   TerminalFont,
-  WorktreeErrorCode,
-  WorktreeFileDiff,
-  WorktreeState,
 } from "./agent-manager"
 import type {
   MigrationCompleteMessage,
@@ -304,19 +294,6 @@ export interface SetChatBoxMessage {
 export interface AppendChatBoxMessage {
   type: "appendChatBoxMessage"
   text: string
-}
-
-export interface AppendReviewCommentsMessage {
-  type: "appendReviewComments"
-  comments: ReviewComment[]
-  autoSend?: boolean
-}
-
-export interface AppendReviewCommentsToTerminalMessage {
-  type: "appendReviewCommentsToTerminal"
-  comments: ReviewComment[]
-  autoSend?: boolean
-  targetTerminalId: string
 }
 
 export interface TriggerTaskMessage {
@@ -625,16 +602,6 @@ export interface WorkStyleApplyFailedMessage {
   rollbackFailed: boolean
 }
 
-// Agent Manager worktree session metadata
-export interface AgentManagerSessionMetaMessage {
-  type: "agentManager.sessionMeta"
-  sessionId: string
-  mode: SessionMode
-  branch?: string
-  path?: string
-  parentBranch?: string
-}
-
 // Agent Manager repo info (current branch of the main workspace)
 export interface AgentManagerRepoInfoMessage {
   type: "agentManager.repoInfo"
@@ -642,22 +609,9 @@ export interface AgentManagerRepoInfoMessage {
   defaultBranch?: string
 }
 
-// Agent Manager worktree setup progress
-export interface AgentManagerWorktreeSetupMessage {
-  type: "agentManager.worktreeSetup"
-  status: "creating" | "starting" | "ready" | "error"
-  message: string
-  sessionId?: string
-  branch?: string
-  worktreeId?: string
-  errorCode?: WorktreeErrorCode
-}
-
-// Agent Manager session added to an existing worktree (no setup overlay needed)
 export interface AgentManagerSessionAddedMessage {
   type: "agentManager.sessionAdded"
   sessionId: string
-  worktreeId: string
 }
 
 // Agent Manager session forked from an existing session
@@ -665,26 +619,17 @@ export interface AgentManagerSessionForkedMessage {
   type: "agentManager.sessionForked"
   sessionId: string
   forkedFromId: string
-  worktreeId?: string
 }
 
 // Full state push from extension to webview
 export interface AgentManagerStateMessage {
   type: "agentManager.state"
-  worktrees: WorktreeState[]
   sessions: ManagedSessionState[]
   timing?: Record<string, SessionTimingEntry>
-  sections?: SectionState[]
-  staleWorktreeIds?: string[]
   tabOrder?: Record<string, string[]>
-  worktreeOrder?: string[]
   sessionsCollapsed?: boolean
   sidebarCollapsed?: boolean
   isGitRepo?: boolean
-  defaultBaseBranch?: string
-  runStatuses?: RunStatus[]
-  runScriptConfigured?: boolean
-  runScriptPath?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -693,8 +638,8 @@ export interface AgentManagerStateMessage {
 
 export interface AgentManagerTerminalCreatedMessage {
   type: "agentManager.terminal.created"
-  /** null for LOCAL, worktree id otherwise */
-  worktreeId: string | null
+  /** Local workspace slot id (always null for root-local). */
+  slotId: string | null
   terminalId: string
   title: string
   wsUrl: string
@@ -715,10 +660,6 @@ export interface AgentManagerTerminalErrorMessage {
   type: "agentManager.terminal.error"
   terminalId?: string
   message: string
-}
-
-export interface AgentManagerRunStatusMessage extends RunStatus {
-  type: "agentManager.runStatus"
 }
 
 // Resolved keybindings for agent manager actions
@@ -800,37 +741,10 @@ export interface ModelSelectionsLoadedMessage {
   selections: Record<string, ModelSelection>
 }
 
-export interface AgentManagerBranchesMessage {
-  type: "agentManager.branches"
-  branches: BranchInfo[]
-  defaultBranch: string
-}
-
-export interface AgentManagerExternalWorktreesMessage {
-  type: "agentManager.externalWorktrees"
-  worktrees: ExternalWorktreeInfo[]
-}
-
-// Agent Manager Import tab: result feedback (extension → webview)
-export interface AgentManagerImportResultMessage {
-  type: "agentManager.importResult"
-  success: boolean
-  message: string
-  errorCode?: WorktreeErrorCode
-}
-
 // Agent Manager: Local workspace git stats push (extension → webview)
 export interface AgentManagerLocalStatsMessage {
   type: "agentManager.localStats"
   stats: LocalGitStats
-}
-
-// Agent Manager: PR status push (extension → webview)
-export interface AgentManagerPRStatusMessage {
-  type: "agentManager.prStatus"
-  worktreeId: string
-  pr: PRStatus | null
-  error?: "gh_missing" | "gh_auth" | "fetch_failed"
 }
 
 // Set the model for a session (extension → webview, used during multi-version creation)
@@ -845,7 +759,6 @@ export interface AgentManagerSetSessionModelMessage {
 export interface AgentManagerSendInitialMessage {
   type: "agentManager.sendInitialMessage"
   sessionId: string
-  worktreeId: string
   text?: string
   providerID?: string
   modelID?: string
@@ -866,72 +779,6 @@ export interface EnhancePromptErrorMessage {
   type: "enhancePromptError"
   error: string
   requestId: string
-}
-
-export interface DiffViewerDiffsMessage {
-  type: "diffViewer.diffs"
-  diffs: WorktreeFileDiff[]
-}
-
-export interface DiffViewerLoadingMessage {
-  type: "diffViewer.loading"
-  loading: boolean
-}
-
-export interface DiffViewerRevertFileResultMessage {
-  type: "diffViewer.revertFileResult"
-  file: string
-  status: "success" | "error"
-  message: string
-}
-
-export interface DiffViewerDiffFileMessage {
-  type: "diffViewer.diffFile"
-  file: string
-  diff: WorktreeFileDiff | null
-}
-
-export interface DiffViewerMarkdownRenderMessage {
-  type: "diffViewer.markdownRender"
-  render: boolean
-}
-
-export interface SetAvailableSourcesMessage {
-  type: "setAvailableSources"
-  descriptors: DiffSourceDescriptor[]
-  currentId: string
-}
-
-export interface DiffViewerCapabilitiesMessage {
-  type: "diffViewer.capabilities"
-  capabilities: DiffSourceCapabilities
-}
-
-/**
- * Well-known notice kinds surfaced by a diff source. The webview maps these
- * to translated user-facing messages. `undefined` clears any active notice.
- */
-export type DiffViewerNotice = "snapshots-disabled"
-
-export interface DiffViewerNoticeMessage {
-  type: "diffViewer.notice"
-  notice: DiffViewerNotice | undefined
-}
-
-/**
- * Branch list and current base state for the workspace source's base picker.
- * Sent in response to `diffViewer.requestBranches`. `currentBase` is the
- * active base (override when set, otherwise `autoBase`); `isAuto` is true
- * when no override is active.
- */
-export interface DiffViewerBranchesLoadedMessage {
-  type: "diffViewer.branches"
-  branches: BranchInfo[]
-  defaultBranch: string
-  autoBase: string | undefined
-  currentBase: string | undefined
-  isAuto: boolean
-  currentBranch: string | undefined
 }
 
 export interface ExtensionDataReadyMessage {
@@ -1130,13 +977,10 @@ export type ExtensionMessage =
   | WorkStyleLoadedMessage
   | WorkStyleAppliedMessage
   | WorkStyleApplyFailedMessage
-  | AgentManagerSessionMetaMessage
   | AgentManagerRepoInfoMessage
-  | AgentManagerWorktreeSetupMessage
   | AgentManagerSessionAddedMessage
   | AgentManagerSessionForkedMessage
   | AgentManagerStateMessage
-  | AgentManagerRunStatusMessage
   | AgentManagerKeybindingsMessage
   | AutoApproveStateMessage
   | SandboxStatusMessage
@@ -1147,8 +991,6 @@ export type ExtensionMessage =
   | AgentManagerSendInitialMessage
   | SetChatBoxMessage
   | AppendChatBoxMessage
-  | AppendReviewCommentsMessage
-  | AppendReviewCommentsToTerminalMessage
   | TriggerTaskMessage
   | VariantsLoadedMessage
   | CloudSessionDataLoadedMessage
@@ -1156,12 +998,8 @@ export type ExtensionMessage =
   | CloudSessionImportFailedMessage
   | OpenCloudSessionMessage
   | SelectKiloModelMessage
-  | AgentManagerBranchesMessage
-  | AgentManagerExternalWorktreesMessage
-  | AgentManagerImportResultMessage
   | AgentManagerLocalStatsMessage
   | WorkspaceDirectoryChangedMessage
-  | AgentManagerPRStatusMessage
   | AgentManagerTerminalCreatedMessage
   | AgentManagerTerminalFontChangedMessage
   | AgentManagerTerminalClosedMessage
@@ -1175,15 +1013,6 @@ export type ExtensionMessage =
   // legacy-migration end
   | EnhancePromptResultMessage
   | EnhancePromptErrorMessage
-  | DiffViewerDiffsMessage
-  | DiffViewerLoadingMessage
-  | DiffViewerRevertFileResultMessage
-  | DiffViewerDiffFileMessage
-  | DiffViewerMarkdownRenderMessage
-  | SetAvailableSourcesMessage
-  | DiffViewerCapabilitiesMessage
-  | DiffViewerNoticeMessage
-  | DiffViewerBranchesLoadedMessage
   | MarketplaceDataMessage
   | MarketplaceInstallResultMessage
   | MarketplaceRemoveResultMessage

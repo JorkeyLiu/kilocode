@@ -130,7 +130,7 @@ Extension (Node.js)                          CLI Backend (child process)
 - **`KiloConnectionService`** (`src/services/cli-backend/connection-service.ts`) is created once during extension activation and shared across Kilo editor tabs and Agent Manager. It owns the current server process, HTTP client, and SSE connection.
 - **`ServerManager`** (`src/services/cli-backend/server-manager.ts`) lazily spawns the CLI binary, reuses its current process, and can start a replacement if that process exits.
 - Every **Open in Tab** Kilo panel and the Agent Manager chat provider reuse this connection. Multiple **`KiloProvider`** instances subscribe to it, with SSE events filtered per-webview via a `trackedSessionIds` Set. Agent Manager terminals may use additional PTY/WebSocket channels to the same backend, not separate `kilo serve` processes.
-- Backend state follows where it is allocated, not the worktree shown in a panel. Snapshot repository state uses directory-keyed `InstanceState`, while `trackState` is created once in the active Snapshot service closure. For these shared VS Code session paths, its slow-track `asked` guard spans worktree requests; choosing **Continue with snapshots** resets `asked` only when continued tracking returns a snapshot hash.
+- Backend state follows where it is allocated, not the panel shown in an editor tab. Snapshot repository state uses directory-keyed `InstanceState`, while `trackState` is created once in the active Snapshot service closure. For these shared VS Code session paths, its slow-track `asked` guard spans the root-local requests; choosing **Continue with snapshots** resets `asked` only when continued tracking returns a snapshot hash.
 
 ### Builds
 
@@ -169,7 +169,7 @@ Key patterns:
 
 ## Agent Manager
 
-The Agent Manager is a feature within this extension (not a separate product). It opens as an **editor tab** (`Cmd+Shift+M`) and provides multi-session orchestration — running multiple independent AI sessions in parallel, each optionally isolated in its own git worktree. Since the P3.1 sidebar removal, it is the primary chat entry point together with "Open in Tab" editor panels.
+The Agent Manager is a feature within this extension (not a separate product). It opens as an **editor tab** (`Cmd+Shift+M`) and provides multi-session orchestration — running multiple independent AI sessions in parallel at the workspace root. Since the P3.1 sidebar removal, it is the primary chat entry point together with "Open in Tab" editor panels.
 
 ### How It Compares to Open-in-Tab Editor Panels
 
@@ -177,17 +177,17 @@ The Agent Manager is a feature within this extension (not a separate product). I
 |---|---|---|
 | Location | Editor tab | Editor tab (full panel) |
 | Sessions | Single session at a time | Multiple parallel sessions with tabbed UI |
-| Git isolation | Uses workspace root | Each session can get its own worktree branch |
-| State | No dedicated state file | `.kilo/agent-manager.json` |
+| Working directory | Uses workspace root | Uses workspace root — sessions share it, no isolation |
+| State | No dedicated state file | Webview-local UI state (VS Code webview state API) |
 | Terminals | None | Dedicated VS Code terminal per session |
-| Setup scripts | None | Configurable `.kilo/setup-script` runs per worktree |
-| Multi-version | Not supported | Up to 4 parallel worktrees with the same prompt |
+| Setup scripts | None | None |
+| Multi-version | Not supported | Not supported — all sessions are independent tasks |
 
 ### Architecture
 
-Agent Manager local worktree sessions use the current shared `kilo serve` process owned by `KiloConnectionService`; no session starts its own backend. Their CLI requests pass the worktree path as `directory`, which resolves directory-scoped backend state. Setup scripts, terminal PTYs, git subprocesses, and a separately opened VS Code window are separate process or extension-host boundaries, not per-worktree `kilo serve` instances.
+Agent Manager root-local sessions use the current shared `kilo serve` process owned by `KiloConnectionService`; no session starts its own backend. Their CLI requests pass the workspace root as `directory`, which resolves directory-scoped backend state. Terminal PTYs, git subprocesses, and the extension host are separate process or extension-host boundaries, not per-session `kilo serve` instances. Because every session runs in the same workspace directory, concurrent sessions can conflict on file edits; sessions targeting distinct areas of work are the safe pattern.
 
-Extension-side code lives in `src/agent-manager/`, webview code in `webview-ui/agent-manager/`. The webview reuses the shared chat provider chain and `ChatView` component, adding a `WorktreeModeProvider` and a split layout.
+Extension-side code lives in `src/agent-manager/`, webview code in `webview-ui/agent-manager/`. The webview reuses the shared chat provider chain and `ChatView` component with a root-local tab layout; there is no worktree-mode context provider.
 
 ## Webview UI (kilo-ui)
 
@@ -251,7 +251,7 @@ Follow monorepo root AGENTS.md style guide:
 
 ## File Size Caps (maxLines)
 
-Large files in `src/agent-manager/` have `maxLines` caps enforced by `tests/unit/agent-manager-arch.test.ts`. **Do not raise these caps.** If adding a feature would exceed a cap, extract logic into a vscode-free helper module and call it from the provider. See `fork-session.ts` and `format-keybinding.ts` for examples of this pattern.
+Large files in `src/agent-manager/` have `maxLines` caps enforced by `tests/unit/agent-manager-arch.test.ts`. **Do not raise these caps.** If adding a feature would exceed a cap, extract logic into a vscode-free helper module and call it from the provider. See `format-keybinding.ts` for an example of this pattern.
 
 ## Markdown Tables
 

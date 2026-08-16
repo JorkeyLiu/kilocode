@@ -471,7 +471,7 @@ export class KiloConnectionService {
 
   /**
    * Register a callback that returns workspace directories tracked by a
-   * KiloProvider (root + worktree dirs). Used by getKnownDirectories() to
+   * KiloProvider (root + session dirs). Used by getKnownDirectories() to
    * cover all active Instance directories across every provider.
    */
   registerDirectoryProvider(provider: DirectoryProvider): () => void {

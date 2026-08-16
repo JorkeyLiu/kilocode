@@ -19,7 +19,7 @@ describe("Agent Manager MCP warmup", () => {
 
     const result = await startSession(
       client as never,
-      "/repo/.kilo/worktrees/feature",
+      "/repo/session-feature",
       async () => {
         calls.push(["session"])
         return "created"
@@ -28,7 +28,7 @@ describe("Agent Manager MCP warmup", () => {
     )
 
     expect(result).toBe("created")
-    expect(calls[0]).toEqual(["warm", { directory: "/repo/.kilo/worktrees/feature" }, { throwOnError: true }])
+    expect(calls[0]).toEqual(["warm", { directory: "/repo/session-feature" }, { throwOnError: true }])
     expect(calls[1]).toEqual(["session"])
   })
 
@@ -46,7 +46,7 @@ describe("Agent Manager MCP warmup", () => {
 
     const result = await startSession(
       client as never,
-      "/repo/.kilo/worktrees/feature",
+      "/repo/session-feature",
       async () => {
         calls.push("session")
         return "created"
@@ -70,15 +70,15 @@ describe("Agent Manager MCP warmup", () => {
 
     const result = await startSession(
       client as never,
-      "/repo/.kilo/worktrees/feature",
+      "/repo/session-feature",
       async () => "created",
       (...args) => logs.push(args),
     )
     await tick()
 
     expect(result).toBe("created")
-    expect(logs[0]).toEqual(["[MCPWarmup] Starting for /repo/.kilo/worktrees/feature"])
-    expect(logs[1]?.[0]).toBe("[MCPWarmup] Failed for /repo/.kilo/worktrees/feature:")
+    expect(logs[0]).toEqual(["[MCPWarmup] Starting for /repo/session-feature"])
+    expect(logs[1]?.[0]).toBe("[MCPWarmup] Failed for /repo/session-feature:")
     expect(logs[1]?.[1]).toBeInstanceOf(Error)
   })
 })

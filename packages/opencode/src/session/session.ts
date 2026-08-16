@@ -247,7 +247,6 @@ export type ProjectInfo = Types.DeepMutable<Schema.Schema.Type<typeof ProjectInf
 export const GlobalInfo = Schema.Struct({
   ...Info.fields,
   project: Schema.NullOr(ProjectInfo),
-  worktreeName: Schema.optional(Schema.String), // kilocode_change - basename of the specific worktree directory
 }).annotate({ identifier: "GlobalSession" })
 export type GlobalInfo = Types.DeepMutable<Schema.Schema.Type<typeof GlobalInfo>>
 
@@ -309,12 +308,8 @@ export type ListInput = {
 }
 
 export type GlobalListInput = {
-  // kilocode_change start - worktree-family filters for the Agent Manager
   projectID?: string
   directory?: string
-  directories?: string[]
-  currentDirectory?: string
-  // kilocode_change end
   roots?: boolean
   start?: number
   cursor?: number
@@ -661,7 +656,7 @@ export const layer: Layer.Layer<
       })
     })
 
-    // kilocode_change start - preserve Kilo's cross-project worktree-family filtering
+    // kilocode_change start - delegate cross-project listing to KiloSession.listGlobal
     const listGlobal = Effect.fn("Session.listGlobal")((input?: GlobalListInput) =>
       KiloSession.listGlobal<GlobalInfo>({ ...input, fromRow }).pipe(Effect.provideService(Database.Service, database)),
     )
@@ -1181,12 +1176,10 @@ function listByProject(
     )
 }
 
-// kilocode_change start - delegate to KiloSession.listGlobal (adds projectID worktree family + directories[])
+// kilocode_change start - delegate to KiloSession.listGlobal
 export function listGlobal(input?: {
   projectID?: string
   directory?: string
-  directories?: string[]
-  currentDirectory?: string
   roots?: boolean
   start?: number
   cursor?: number

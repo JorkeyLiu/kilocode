@@ -422,7 +422,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Ovdje se mogu zalijepiti samo slike ili PDF-ovi.",
   "prompt.toast.modelAgentRequired.title": "Odaberi agenta i model",
   "prompt.toast.modelAgentRequired.description": "Odaberi agenta i model prije slanja upita.",
-  "prompt.toast.worktreeCreateFailed.title": "Neuspješno kreiranje worktree-a",
+
   "prompt.toast.sessionCreateFailed.title": "Neuspješno kreiranje sesije",
   "prompt.toast.shellSendFailed.title": "Neuspješno slanje shell naredbe",
   "prompt.toast.commandSendFailed.title": "Neuspješno slanje komande",
@@ -479,9 +479,6 @@ export const dict = {
   "dialog.project.edit.icon.recommended": "Preporučeno: 128x128px",
   "dialog.project.edit.color": "Boja",
   "dialog.project.edit.color.select": "Odaberi boju {{color}}",
-  "dialog.project.edit.worktree.startup": "Skripta za pokretanje radnog prostora",
-  "dialog.project.edit.worktree.startup.description": "Pokreće se nakon kreiranja novog radnog prostora (worktree).",
-  "dialog.project.edit.worktree.startup.placeholder": "npr. bun install",
 
   "context.breakdown.title": "Razlaganje konteksta",
   "context.breakdown.note":
@@ -541,11 +538,6 @@ export const dict = {
 
   "toast.theme.title": "Tema promijenjena",
   "toast.scheme.title": "Šema boja",
-
-  "toast.workspace.enabled.title": "Radni prostori omogućeni",
-  "toast.workspace.enabled.description": "Više worktree-ova se sada prikazuje u bočnoj traci",
-  "toast.workspace.disabled.title": "Radni prostori onemogućeni",
-  "toast.workspace.disabled.description": "Samo glavni worktree se prikazuje u bočnoj traci",
 
   "toast.permissions.autoaccept.on.title": "Automatsko prihvatanje izmjena",
   "toast.permissions.autoaccept.on.description": "Dozvole za izmjene i pisanje biće automatski odobrene",
@@ -704,9 +696,6 @@ export const dict = {
 
   "session.context.addToContext": "Dodaj {{selection}} u kontekst",
 
-  "session.new.worktree.main": "Glavna grana",
-  "session.new.worktree.mainWithBranch": "Glavna grana ({{branch}})",
-  "session.new.worktree.create": "Kreiraj novi worktree",
   "session.new.lastModified": "Posljednja izmjena",
   "sidebar.session.newSession": "Nova Sesija",
   "sidebar.session.newSession.tooltip": "Započnite novi razgovor držeći trenutnu sesiju netaknutom.",
@@ -1741,7 +1730,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Manje distrakcija, lakše i brže za čitanje.",
   "migration.whatsNew.features.agentManager.title": "Upravljač agentima",
   "migration.whatsNew.features.agentManager.detail":
-    "Jedinstveni interfejs za pokretanje više agenata paralelno, svaki na svom worktree-u — pratite napredak, mijenjajte kontekst i pregledajte promjene na jednom mjestu.",
+    "Jedinstveni interfejs za pokretanje više agenata paralelno — pratite napredak, mijenjajte kontekst i pregledajte promjene na jednom mjestu.",
   "migration.whatsNew.features.foundation.title": "Zajednički temelj",
   "migration.whatsNew.features.foundation.detail":
     "Jedno malo, efikasno jezgro kroz sve Kilo proizvode. Poznato iskustvo bez obzira na to kako odaberete raditi.",
@@ -1824,30 +1813,6 @@ export const dict = {
   "settings.saveBar.save": "Spremi",
   "settings.saveBar.saving": "Spremanje…",
   "settings.saveBar.saveFailed": "Postavke nije moguće spremiti",
-  "diffViewer.source.workspace.label": "Grana",
-  "diffViewer.source.workspace.tooltip":
-    "Sve promjene na ovoj grani u poređenju s osnovnom granom. Uključuje nekomitovane datoteke (staged, unstaged, nepraćene) i lokalne commitove koji još nisu u osnovi.",
-  "diffViewer.source.staged.label": "Pripremljeno",
-  "diffViewer.source.staged.tooltip":
-    "Datoteke s promjenama koje ste dodali u git pripremno područje (`git add`), kako će se pojaviti u sljedećem commitu.",
-  "diffViewer.source.unstaged.label": "Nepripremljeno",
-  "diffViewer.source.unstaged.tooltip":
-    "Datoteke izmijenjene u radnom stablu ali još nisu pripremljene, plus nepraćene (nove) datoteke.",
-  "diffViewer.source.session.label": "Sesija",
-  "diffViewer.source.session.tooltip":
-    "Datoteke koje je Kilo promijenio tokom trenutne sesije, na osnovu snapshota po koraku. Resetuje se kada pokrenete novu sesiju.",
-  "diffViewer.group.session": "Sesija",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Snapshotovi su onemogućeni za ovaj repozitorij. Uredite konfiguracijske datoteke da biste prikazali promjene sesije.",
-
-  "diffViewer.baseBranch.auto": "Default",
-  "diffViewer.baseBranch.default": "Default",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Search branches",
-  "diffViewer.baseBranch.empty": "No matching branches",
-  "diffViewer.baseBranch.loading": "Loading branches…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "Plan je spreman:",
   "chat.search.placeholder": "Pretraži chat…",
   "chat.search.toggle": "Pretraži chat",

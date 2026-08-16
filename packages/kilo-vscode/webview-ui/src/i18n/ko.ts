@@ -420,7 +420,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "이미지나 PDF만 붙여넣을 수 있습니다.",
   "prompt.toast.modelAgentRequired.title": "에이전트 및 모델 선택",
   "prompt.toast.modelAgentRequired.description": "프롬프트를 보내기 전에 에이전트와 모델을 선택하세요.",
-  "prompt.toast.worktreeCreateFailed.title": "작업 트리 생성 실패",
+
   "prompt.toast.sessionCreateFailed.title": "세션 생성 실패",
   "prompt.toast.shellSendFailed.title": "셸 명령 전송 실패",
   "prompt.toast.commandSendFailed.title": "명령 전송 실패",
@@ -478,9 +478,6 @@ export const dict = {
   "dialog.project.edit.color": "색상",
   "dialog.project.edit.color.select": "{{color}} 색상 선택",
 
-  "dialog.project.edit.worktree.startup": "작업 공간 시작 스크립트",
-  "dialog.project.edit.worktree.startup.description": "새 작업 공간(작업 트리)을 만든 뒤 실행됩니다.",
-  "dialog.project.edit.worktree.startup.placeholder": "예: bun install",
   "context.breakdown.title": "컨텍스트 분석",
   "context.breakdown.note": '입력 토큰의 대략적인 분석입니다. "기타"에는 도구 정의 및 오버헤드가 포함됩니다.',
   "context.breakdown.system": "시스템",
@@ -542,11 +539,6 @@ export const dict = {
   "toast.permissions.autoaccept.on.description": "편집 및 쓰기 권한이 자동으로 승인됩니다",
   "toast.permissions.autoaccept.off.title": "편집 자동 수락 중지됨",
   "toast.permissions.autoaccept.off.description": "편집 및 쓰기 권한 승인이 필요합니다",
-
-  "toast.workspace.enabled.title": "작업 공간 활성화됨",
-  "toast.workspace.enabled.description": "이제 사이드바에 여러 작업 트리가 표시됩니다",
-  "toast.workspace.disabled.title": "작업 공간 비활성화됨",
-  "toast.workspace.disabled.description": "사이드바에 메인 작업 트리만 표시됩니다",
 
   "toast.model.none.title": "선택된 모델 없음",
   "toast.model.none.description": "이 세션을 요약하려면 공급자를 연결하세요",
@@ -696,9 +688,6 @@ export const dict = {
   "session.messages.jumpToLatest": "최신으로 이동",
   "session.context.addToContext": "컨텍스트에 {{selection}} 추가",
 
-  "session.new.worktree.main": "메인 브랜치",
-  "session.new.worktree.mainWithBranch": "메인 브랜치 ({{branch}})",
-  "session.new.worktree.create": "새 작업 트리 생성",
   "session.new.lastModified": "최근 수정",
   "sidebar.session.newSession": "새 세션",
   "sidebar.session.newSession.tooltip": "현재 세션을 그대로 유지하면서 새로운 대화를 시작합니다.",
@@ -1709,7 +1698,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "불필요한 요소를 줄여 더 쉽고 빠르게 읽을 수 있습니다.",
   "migration.whatsNew.features.agentManager.title": "에이전트 관리자",
   "migration.whatsNew.features.agentManager.detail":
-    "여러 에이전트를 각자의 작업 트리에서 병렬로 실행할 수 있는 통합 인터페이스 — 진행 상황 모니터링, 컨텍스트 전환, 변경 사항 검토를 한 곳에서 수행합니다.",
+    "여러 에이전트를 병렬로 실행할 수 있는 통합 인터페이스 — 진행 상황 모니터링, 컨텍스트 전환, 변경 사항 검토를 한 곳에서 수행합니다.",
   "migration.whatsNew.features.foundation.title": "공유 기반",
   "migration.whatsNew.features.foundation.detail":
     "모든 Kilo 제품에 걸쳐 하나의 작고 효율적인 코어. 어떤 방식으로 작업하든 익숙한 경험을 제공합니다.",
@@ -1792,30 +1781,6 @@ export const dict = {
   "settings.saveBar.save": "저장",
   "settings.saveBar.saving": "저장 중…",
   "settings.saveBar.saveFailed": "설정을 저장할 수 없습니다",
-  "diffViewer.source.workspace.label": "브랜치",
-  "diffViewer.source.workspace.tooltip":
-    "베이스 브랜치와 비교한 이 브랜치의 모든 변경 사항. 커밋되지 않은 파일(staged, unstaged, 추적되지 않음)과 아직 베이스에 반영되지 않은 로컬 커밋을 포함합니다.",
-  "diffViewer.source.staged.label": "스테이징됨",
-  "diffViewer.source.staged.tooltip":
-    "git 스테이징 영역에 추가한(`git add`) 변경사항이 있는 파일입니다. 다음 커밋에 포함됩니다.",
-  "diffViewer.source.unstaged.label": "스테이징 안 됨",
-  "diffViewer.source.unstaged.tooltip":
-    "작업 트리에서 수정되었지만 아직 스테이징되지 않은 파일과 추적되지 않는(새) 파일입니다.",
-  "diffViewer.source.session.label": "세션",
-  "diffViewer.source.session.tooltip":
-    "현재 세션 동안 Kilo가 변경한 파일로, 턴별 스냅샷을 기반으로 합니다. 새 세션을 시작하면 초기화됩니다.",
-  "diffViewer.group.session": "세션",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "이 리포지토리에서 스냅샷이 비활성화되어 있습니다. 세션 변경 사항을 표시하려면 구성 파일을 편집하세요.",
-
-  "diffViewer.baseBranch.auto": "기본",
-  "diffViewer.baseBranch.default": "기본",
-  "diffViewer.baseBranch.remote": "원격",
-  "diffViewer.baseBranch.search": "브랜치 검색",
-  "diffViewer.baseBranch.empty": "일치하는 브랜치 없음",
-  "diffViewer.baseBranch.loading": "브랜치 로딩 중…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "계획이 준비되었습니다:",
   "chat.search.placeholder": "채팅 검색…",
   "chat.search.toggle": "채팅 검색",

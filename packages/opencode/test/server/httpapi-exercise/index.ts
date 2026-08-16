@@ -314,23 +314,6 @@ const scenarios: Scenario[] = [
       body: { error: { code: "not_found", message: "Notebook not found" } },
     }))
     .json(404, object, "status"),
-  http.protected.get("/kilocode/agent-manager", "kilocode.agentManager.list").json(200, array),
-  http.protected
-    .post("/kilocode/agent-manager/{requestID}/reply", "kilocode.agentManager.reply")
-    .at((ctx) => ({
-      path: route("/kilocode/agent-manager/{requestID}/reply", { requestID: "amr_httpapi_reply" }),
-      headers: ctx.headers(),
-      body: { result: { operation: "overview", overview: { sections: [], ungrouped: [] } } },
-    }))
-    .json(404, object, "status"),
-  http.protected
-    .post("/kilocode/agent-manager/{requestID}/reject", "kilocode.agentManager.reject")
-    .at((ctx) => ({
-      path: route("/kilocode/agent-manager/{requestID}/reject", { requestID: "amr_httpapi_reject" }),
-      headers: ctx.headers(),
-      body: { error: { code: "unknown_session", message: "Managed session not found" } },
-    }))
-    .json(404, object, "status"),
   // kilocode_change end
   http.protected
     .post("/question/{requestID}/reply", "question.reply.invalid")
@@ -567,48 +550,6 @@ const scenarios: Scenario[] = [
     }))
     .json(200, array, "status"),
   http.protected.get("/experimental/tool/ids", "tool.ids").json(200, array),
-  http.protected.get("/experimental/worktree", "worktree.list").json(200, array),
-  http.protected
-    .post("/experimental/worktree", "worktree.create")
-    .mutating()
-    .at((ctx) => ({ path: "/experimental/worktree", headers: ctx.headers(), body: { name: "api-dsl" } }))
-    .jsonEffect(
-      200,
-      (body, ctx) =>
-        Effect.gen(function* () {
-          object(body)
-          check(typeof body.directory === "string", "created worktree should include directory")
-          yield* ctx.worktreeRemove(body.directory)
-        }),
-      "status",
-    ),
-  http.protected
-    .post("/experimental/worktree", "worktree.create.invalid")
-    .at((ctx) => ({ path: "/experimental/worktree", headers: ctx.headers(), body: { name: 1 } }))
-    .status(400),
-  http.protected
-    .delete("/experimental/worktree", "worktree.remove")
-    .mutating()
-    .seeded((ctx) => ctx.worktree({ name: "api-remove" }))
-    .at((ctx) => ({ path: "/experimental/worktree", headers: ctx.headers(), body: { directory: ctx.state.directory } }))
-    .json(200, (body) => {
-      check(body === true, "worktree remove should return true")
-    }),
-  http.protected
-    .post("/experimental/worktree/reset", "worktree.reset")
-    .mutating()
-    .seeded((ctx) => ctx.worktree({ name: "api-reset" }))
-    .at((ctx) => ({
-      path: "/experimental/worktree/reset",
-      headers: ctx.headers(),
-      body: { directory: ctx.state.directory },
-    }))
-    .jsonEffect(200, (body, ctx) =>
-      Effect.gen(function* () {
-        check(body === true, "worktree reset should return true")
-        yield* ctx.worktreeRemove(ctx.state.directory)
-      }),
-    ),
   http.protected
     .get("/experimental/session", "experimental.session.list")
     .at((ctx) => ({ path: "/experimental/session?roots=false&archived=false", headers: ctx.headers() }))

@@ -63,17 +63,12 @@ describe("DataBridge shape (perf regression guard)", () => {
   })
 })
 
-describe("DataBridge openDiff wiring (regression guard)", () => {
-  const openDiffBlock = () => {
-    const match = src.match(/const\s+openDiff\s*=\s*\(diff:\s*\{[\s\S]*?\n\s*\}\n\n\s*const\s+openUrl/)
-    expect(match).toBeTruthy()
-    return match![0]
-  }
-
-  it("wires openDiff to the openDiffVirtual webview message", () => {
-    expect(openDiffBlock()).toMatch(
-      /postMessage\(\{\s*type:\s*["']openDiffVirtual["']\s*,\s*diff\s*,\s*initialDiffStyle:\s*["']split["']\s*\}\)/,
-    )
-    expect(src).toContain("onOpenDiff={openDiff}")
+describe("DataBridge openDiff wiring (P3.2 removal guard)", () => {
+  it("no longer wires openDiff to the removed openDiffVirtual webview message", () => {
+    // P3.2 removed the custom Diff Virtual panel; the DataBridge must not
+    // post the dead openDiffVirtual message or provide onOpenDiff to kilo-ui.
+    expect(src).not.toMatch(/const\s+openDiff\s*=/)
+    expect(src).not.toContain("onOpenDiff")
+    expect(src).not.toContain("openDiffVirtual")
   })
 })

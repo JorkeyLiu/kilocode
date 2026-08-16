@@ -346,6 +346,105 @@ export function writeRealCompletedSeed(
  * the seeded rule fires (matching the P0 H-6 fixture, which uses git: true).
  * Run-owned only: the repo lives in the scratch workspace the harness deletes.
  */
+/**
+ * Run-owned workspace seed for the P3.2 worktree-removal E2E scenario.
+ * Deliberately MINIMAL — it proves root-local Agent Manager orchestration and
+ * the H-12 checkpoint rollback against a REAL served backend, with NO managed
+ * worktree surface:
+ *
+ *   - .kilo/kilo.json — the custom provider e2e-local/e2e-model pointing at the
+ *     run-owned scripted model server (variants low/medium/high for the real
+ *     ThinkingSelector), one custom primary agent (the harness picks it like
+ *     the proven real-completed Phase 0), the default/small/subagent model
+ *     pins (LOCK-006: no implicit generation can fall back to the gateway),
+ *     and the H-12 `edit` allow rule for the tracked rollback file,
+ *   - rollback.txt — the H-12 tracked file with KNOWN bytes, committed by
+ *     initWorkspaceGit so the write tool's snapshot/revert has the exact
+ *     pre-edit state to restore,
+ *   - .kilo/node_modules + .kilo/package-lock.json — the no-op dependency
+ *     guard (same rationale as writeRealCompletedSeed).
+ *
+ * No git worktree feature is used anywhere: the workspace is a plain single
+ * git repo whose root == the run-owned workspace, exactly the root-local
+ * (no-worktree) mode the retained Agent Manager runs in.
+ */
+export function writeWorktreeRemovalSeed(workspace: string, port: number): string {
+  const configFile = join(workspace, ".kilo", "kilo.json")
+  mkdirSync(dirname(configFile), { recursive: true })
+  writeFileSync(
+    configFile,
+    JSON.stringify(
+      {
+        $schema: "https://app.kilo.ai/config.json",
+        provider: {
+          "e2e-local": {
+            npm: "@ai-sdk/openai-compatible",
+            name: "E2E Local",
+            options: {
+              baseURL: `http://127.0.0.1:${port}/v1`,
+              apiKey: "e2e-fixture-key",
+              timeout: false,
+              headerTimeout: false,
+              firstChunkTimeout: false,
+            },
+            models: {
+              "e2e-model": {
+                name: "E2E Model",
+                variants: { low: {}, medium: {}, high: {} },
+              },
+            },
+          },
+        },
+        agent: {
+          "e2e-agent": {
+            displayName: "E2E Agent",
+            description: "E2E worktree-removal custom agent",
+            mode: "primary",
+            model: "e2e-local/e2e-model",
+          },
+        },
+        model: "e2e-local/e2e-model",
+        // LOCK-006: every implicit generation resolves to the run-owned
+        // provider (small_model routes the native title agent, subagent_model
+        // pins the task-tool delegated child away from the kilo gateway).
+        small_model: "e2e-local/e2e-model",
+        subagent_model: "e2e-local/e2e-model",
+        // H-12: allow the write tool ONLY on the tracked rollback file (the
+        // pattern is relative to the git worktree == workspace, exactly what
+        // the write tool asks for). No other edit rule is seeded.
+        permission: {
+          edit: { [SCRIPTED.rollbackFile]: "allow" },
+        },
+      },
+      null,
+      2,
+    ),
+  )
+
+  // No-op dependency guard (same rationale as writeRealCompletedSeed): prevent
+  // the detached Npm.install("@kilocode/plugin") fiber from reifying into the
+  // run-owned .kilo config dir.
+  const kiloDir = join(workspace, ".kilo")
+  mkdirSync(join(kiloDir, "node_modules"), { recursive: true })
+  writeFileSync(
+    join(kiloDir, "package-lock.json"),
+    JSON.stringify({
+      name: "kilo-e2e-workspace",
+      version: "0.0.0",
+      lockfileVersion: 3,
+      packages: { "": { dependencies: { "@kilocode/plugin": "0.0.0" } } },
+    }),
+  )
+
+  // H-12: the tracked rollback file with KNOWN bytes, committed by
+  // initWorkspaceGit so the write tool's snapshot/revert has the exact
+  // pre-edit state to restore.
+  const rollbackFile = join(workspace, SCRIPTED.rollbackFile)
+  writeFileSync(rollbackFile, SCRIPTED.rollbackOriginal)
+
+  return configFile
+}
+
 export function initWorkspaceGit(workspace: string): void {
   const git = (args: string[]) =>
     spawnSync("git", args, {

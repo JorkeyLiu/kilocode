@@ -2,7 +2,6 @@ import * as vscode from "vscode"
 import { buildPreviewPath, getPreviewCommand, getPreviewDir, parseImage, trimEntries } from "../image-preview"
 import { escapeGlob, isAbsolutePath } from "../path-utils"
 import { validateFiles } from "./file-links"
-import type { DiffVirtualFile, DiffVirtualProvider } from "../DiffVirtualProvider"
 
 type EditorOpenMessage = {
   type?: string
@@ -16,13 +15,6 @@ type EditorOpenMessage = {
 function openExternal(url: unknown): void {
   if (typeof url !== "string") return
   void vscode.env.openExternal(vscode.Uri.parse(url))
-}
-
-function openDiffVirtual(provider: DiffVirtualProvider | undefined, diff: unknown, initialDiffStyle?: unknown): void {
-  if (!provider || !diff) return
-  const file = diff as DiffVirtualFile
-  file.initialDiffStyle = initialDiffStyle === "split" ? "split" : "unified"
-  provider.open(file)
 }
 
 function previewImage(dir: vscode.Uri | undefined, dataUrl: string, filename: string): void {
@@ -65,8 +57,6 @@ function previewImage(dir: vscode.Uri | undefined, dataUrl: string, filename: st
 export function handleEditorAction(
   message: EditorOpenMessage & {
     url?: unknown
-    diff?: unknown
-    initialDiffStyle?: unknown
     dataUrl?: string
     filename?: string
     id?: string
@@ -74,7 +64,6 @@ export function handleEditorAction(
   },
   opts: {
     dir: () => string
-    diff?: DiffVirtualProvider
     storage?: vscode.Uri
     post?: (msg: unknown) => void
   },
@@ -101,10 +90,6 @@ export function handleEditorAction(
   }
   if (message.type === "openExternal") {
     openExternal(message.url)
-    return true
-  }
-  if (message.type === "openDiffVirtual") {
-    openDiffVirtual(opts.diff, message.diff, message.initialDiffStyle)
     return true
   }
   if (message.type === "previewImage") {
@@ -142,7 +127,7 @@ function show(uri: vscode.Uri, line?: number, column?: number): void {
  * Fallback when the exact path does not exist: search the session directory by
  * filename. Opens the file directly on a single match, prompts on multiple,
  * warns on none. The search is scoped to `dir` (the active session's directory)
- * via a RelativePattern so it can't cross into another worktree/branch.
+ * via a RelativePattern so it can't cross into another directory/branch.
  */
 function findFallback(dir: string, filePath: string, line?: number, column?: number): void {
   const name = filePath.split(/[\\/]/).pop() || filePath

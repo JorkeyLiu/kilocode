@@ -10,7 +10,6 @@ import type { Host, PanelContext, OutputHandle, SessionProvider, Disposable, Sto
 import type { KiloConnectionService } from "../services/cli-backend"
 import { KiloProvider } from "../KiloProvider"
 import { PLATFORM, SNAPSHOT_INITIALIZATION } from "./constants"
-import { DiffVirtualProvider } from "../DiffVirtualProvider"
 import { buildWebviewHtml } from "../utils"
 import { isP0PerfEnabled } from "../perf/perf-instrument"
 import { openFileInEditor, getWorkspaceRoot } from "../review-utils"
@@ -19,7 +18,6 @@ import type { AutoApproveController } from "../commands/toggle-auto-approve"
 import type { RemoteStatusService } from "../services/RemoteStatusService"
 
 export class VscodeHost implements Host {
-  private diffVirtual: DiffVirtualProvider | undefined
   private autoApprove: AutoApproveController | undefined
 
   constructor(
@@ -29,17 +27,12 @@ export class VscodeHost implements Host {
     private readonly remoteService: RemoteStatusService,
   ) {}
 
-  setDiffVirtualProvider(provider: DiffVirtualProvider): void {
-    this.diffVirtual = provider
-  }
-
   setAutoApproveController(ctrl: AutoApproveController): void {
     this.autoApprove = ctrl
   }
 
   openPanel(opts: {
     onBeforeMessage: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>
-    worktreeDirectories?: () => string[]
   }): PanelContext {
     const panel = vscode.window.createWebviewPanel(
       "kilo-code.new.AgentManagerPanel",
@@ -59,7 +52,6 @@ export class VscodeHost implements Host {
     panel: vscode.WebviewPanel,
     opts: {
       onBeforeMessage: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>
-      worktreeDirectories?: () => string[]
     },
   ): PanelContext {
     return this.wirePanel(panel, opts)
@@ -69,7 +61,6 @@ export class VscodeHost implements Host {
     panel: vscode.WebviewPanel,
     opts: {
       onBeforeMessage: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>
-      worktreeDirectories?: () => string[]
     },
   ): PanelContext {
     panel.webview.options = {
@@ -100,12 +91,8 @@ export class VscodeHost implements Host {
       platform: PLATFORM,
       snapshotInitialization: SNAPSHOT_INITIALIZATION,
       slimEditMetadata: true,
-      worktreeDirectories: () => opts.worktreeDirectories?.() ?? [],
       disableViewedRegistration: true,
     })
-    if (this.diffVirtual) {
-      provider.setDiffVirtualProvider(this.diffVirtual)
-    }
     provider.setRemoteService(this.remoteService)
     provider.attachToWebview(panel.webview, {
       onBeforeMessage: opts.onBeforeMessage,
@@ -117,8 +104,6 @@ export class VscodeHost implements Host {
     if (this.autoApprove) provider.setAutoApproveController(this.autoApprove)
 
     const sessions: SessionProvider = {
-      setSessionDirectory: (id, dir) => provider.setSessionDirectory(id, dir),
-      clearSessionDirectory: (id) => provider.clearSessionDirectory(id),
       getSessionDirectories: () => provider.getSessionDirectories(),
       getSessionInfo: (id) => provider.getSessionInfo(id),
       trackSession: (id) => provider.trackSession(id),
@@ -178,14 +163,6 @@ export class VscodeHost implements Host {
     return getWorkspaceRoot()
   }
 
-  autoBranchNaming(): { enabled: boolean; prefix: string } {
-    const cfg = vscode.workspace.getConfiguration("kilo-code.new.agentManager")
-    return {
-      enabled: cfg.get("autoBranchNaming", true),
-      prefix: cfg.get("branchPrefix", ""),
-    }
-  }
-
   /** Per-workspace durable store backed by VS Code workspaceState. */
   get workspaceStore(): Store {
     return this.context.workspaceState
@@ -195,22 +172,8 @@ export class VscodeHost implements Host {
     void vscode.window.showErrorMessage(msg)
   }
 
-  async openDocument(path: string): Promise<void> {
-    try {
-      const doc = await vscode.workspace.openTextDocument(path)
-      await vscode.window.showTextDocument(doc)
-    } catch {
-      // Silently ignore — file may not exist
-    }
-  }
-
   openFile(path: string, line?: number, column?: number): void {
     openFileInEditor(path, line, column, vscode.ViewColumn.Active, "AgentManagerProvider")
-  }
-
-  openFolder(path: string, newWindow: boolean): void {
-    const uri = vscode.Uri.file(path)
-    void vscode.commands.executeCommand("vscode.openFolder", uri, newWindow)
   }
 
   createOutput(name: string): OutputHandle {
@@ -240,10 +203,6 @@ export class VscodeHost implements Host {
 
   openExternal(url: string): void {
     void vscode.env.openExternal(vscode.Uri.parse(url))
-  }
-
-  refreshGit(): void {
-    void vscode.commands.executeCommand("git.refresh")
   }
 
   dispose(): void {}

@@ -22,11 +22,11 @@ Automated AI code reviews for every pull request:
 
 Manage and orchestrate multiple AI agents:
 
-- [**Agent Manager**](/docs/automate/agent-manager) — Control panel for running agents
+- [**Agent Manager**](/docs/automate/agent-manager) — Control panel for running agents in parallel
+- [**Agent Manager Workflows**](/docs/automate/agent-manager-workflows) — Patterns for coordinating parallel sessions
 - Same providers, settings, and extension features as other Kilo chat surfaces
-- Local and cloud session history
-- Worktree-isolated and multi-version sessions
-- Continue work from branches, PRs, external worktrees, or existing local sessions
+- Parallel root-local sessions with per-session tabs and terminals
+- Snapshot-based review and rollback at any point in a conversation
 
 ## MCP (Model Context Protocol)
 

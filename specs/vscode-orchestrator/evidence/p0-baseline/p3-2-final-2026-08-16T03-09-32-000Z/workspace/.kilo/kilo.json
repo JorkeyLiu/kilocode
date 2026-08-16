@@ -1,0 +1,42 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "provider": {
+    "e2e-local": {
+      "npm": "@ai-sdk/openai-compatible",
+      "name": "E2E Local",
+      "options": {
+        "baseURL": "http://127.0.0.1:54731/v1",
+        "apiKey": "e2e-fixture-key",
+        "timeout": false,
+        "headerTimeout": false,
+        "firstChunkTimeout": false
+      },
+      "models": {
+        "e2e-model": {
+          "name": "E2E Model",
+          "variants": {
+            "low": {},
+            "medium": {},
+            "high": {}
+          }
+        }
+      }
+    }
+  },
+  "agent": {
+    "e2e-agent": {
+      "displayName": "E2E Agent",
+      "description": "E2E worktree-removal custom agent",
+      "mode": "primary",
+      "model": "e2e-local/e2e-model"
+    }
+  },
+  "model": "e2e-local/e2e-model",
+  "small_model": "e2e-local/e2e-model",
+  "subagent_model": "e2e-local/e2e-model",
+  "permission": {
+    "edit": {
+      "rollback.txt": "allow"
+    }
+  }
+}

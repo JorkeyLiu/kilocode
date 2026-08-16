@@ -78,7 +78,7 @@ async function against(dir: string, base: string): Promise<{ content: string; tr
   const files = [status.out.trim(), listed(untracked.out)].filter(Boolean).join("\n")
   const body = [diff.out.trim(), extra.content.trim()].filter(Boolean).join("\n\n")
   const changed = files.trim() || body.trim()
-  if (!changed) return done(dir, `Base: ${base}\n\nNo changes in worktree diff.`)
+  if (!changed) return done(dir, `Base: ${base}\n\nNo changes in diff.`)
 
   const truncated = status.truncated || diff.truncated || untracked.truncated || extra.truncated
   const note = truncated ? "\n\nOutput truncated." : ""

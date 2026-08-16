@@ -418,7 +418,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Only images or PDFs can be pasted here.",
   "prompt.toast.modelAgentRequired.title": "Select an agent and model",
   "prompt.toast.modelAgentRequired.description": "Choose an agent and model before sending a prompt.",
-  "prompt.toast.worktreeCreateFailed.title": "Failed to create worktree",
+
   "prompt.toast.sessionCreateFailed.title": "Failed to create session",
   "prompt.toast.shellSendFailed.title": "Failed to send shell command",
   "prompt.toast.commandSendFailed.title": "Failed to send command",
@@ -475,9 +475,6 @@ export const dict = {
   "dialog.project.edit.icon.recommended": "Recommended: 128x128px",
   "dialog.project.edit.color": "Color",
   "dialog.project.edit.color.select": "Select {{color}} color",
-  "dialog.project.edit.worktree.startup": "Workspace startup script",
-  "dialog.project.edit.worktree.startup.description": "Runs after creating a new workspace (worktree).",
-  "dialog.project.edit.worktree.startup.placeholder": "e.g. bun install",
 
   "context.breakdown.title": "Context Breakdown",
   "context.breakdown.note": 'Approximate breakdown of input tokens. "Other" includes tool definitions and overhead.',
@@ -536,11 +533,6 @@ export const dict = {
 
   "toast.theme.title": "Theme switched",
   "toast.scheme.title": "Color scheme",
-
-  "toast.workspace.enabled.title": "Workspaces enabled",
-  "toast.workspace.enabled.description": "Multiple worktrees are now shown in the sidebar",
-  "toast.workspace.disabled.title": "Workspaces disabled",
-  "toast.workspace.disabled.description": "Only the main worktree is shown in the sidebar",
 
   "toast.permissions.autoaccept.on.title": "Auto-accepting edits",
   "toast.permissions.autoaccept.on.description": "Edit and write permissions will be automatically approved",
@@ -699,9 +691,6 @@ export const dict = {
 
   "session.context.addToContext": "Add {{selection}} to context",
 
-  "session.new.worktree.main": "Main branch",
-  "session.new.worktree.mainWithBranch": "Main branch ({{branch}})",
-  "session.new.worktree.create": "Create new worktree",
   "session.new.lastModified": "Last modified",
 
   "session.header.search.placeholder": "Search {{project}}",
@@ -1726,7 +1715,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Fewer distractions, easier and quicker to read.",
   "migration.whatsNew.features.agentManager.title": "Agent Manager",
   "migration.whatsNew.features.agentManager.detail":
-    "A unified interface for running multiple agents in parallel, each on its own worktree — monitor progress, switch context, and review changes in one place.",
+    "A unified interface for running multiple agents in parallel — monitor progress, switch context, and review changes in one place.",
   "migration.whatsNew.features.foundation.title": "Shared Foundation",
   "migration.whatsNew.features.foundation.detail":
     "One small, efficient core across every Kilo product. A familiar experience however you choose to work.",
@@ -1809,31 +1798,6 @@ export const dict = {
   "settings.saveBar.save": "Save",
   "settings.saveBar.saving": "Saving…",
   "settings.saveBar.saveFailed": "Couldn't save settings",
-
-  "diffViewer.source.workspace.label": "Branch",
-  "diffViewer.source.workspace.tooltip":
-    "All changes on this branch compared to the base branch. Includes uncommitted files (staged, unstaged, untracked) and local commits not yet in the base.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "Files with changes you've added to git's staging area (`git add`), as they will appear in the next commit.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "Files modified in your working tree but not yet staged, plus untracked (new) files.",
-  "diffViewer.source.session.label": "Session",
-  "diffViewer.source.session.tooltip":
-    "Files changed by Kilo during the current session, based on per-turn snapshots. Resets when you start a new session.",
-  "diffViewer.group.session": "Session",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Snapshots are disabled for this repository. Please edit your configuration files in order to display session changes.",
-
-  "diffViewer.baseBranch.auto": "Default",
-  "diffViewer.baseBranch.default": "Default",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Search branches",
-  "diffViewer.baseBranch.empty": "No matching branches",
-  "diffViewer.baseBranch.loading": "Loading branches…",
-  "diffViewer.baseBranch.none": "—",
 
   "plan.exit.ready": "Plan is ready:",
   "chat.search.placeholder": "Search chat…",

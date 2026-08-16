@@ -420,7 +420,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "ここでは画像またはPDFのみ貼り付け可能です。",
   "prompt.toast.modelAgentRequired.title": "エージェントとモデルを選択",
   "prompt.toast.modelAgentRequired.description": "プロンプトを送信する前にエージェントとモデルを選択してください。",
-  "prompt.toast.worktreeCreateFailed.title": "ワークツリーの作成に失敗しました",
+
   "prompt.toast.sessionCreateFailed.title": "セッションの作成に失敗しました",
   "prompt.toast.shellSendFailed.title": "シェルコマンドの送信に失敗しました",
   "prompt.toast.commandSendFailed.title": "コマンドの送信に失敗しました",
@@ -478,10 +478,6 @@ export const dict = {
   "dialog.project.edit.color": "色",
   "dialog.project.edit.color.select": "{{color}}の色を選択",
 
-  "dialog.project.edit.worktree.startup": "ワークスペース起動スクリプト",
-  "dialog.project.edit.worktree.startup.description":
-    "新しいワークスペース (ワークツリー) を作成した後に実行されます。",
-  "dialog.project.edit.worktree.startup.placeholder": "例: bun install",
   "context.breakdown.title": "コンテキストの内訳",
   "context.breakdown.note": '入力トークンのおおよその内訳です。"その他"にはツールの定義やオーバーヘッドが含まれます。',
   "context.breakdown.system": "システム",
@@ -538,10 +534,6 @@ export const dict = {
 
   "toast.theme.title": "テーマが切り替わりました",
   "toast.scheme.title": "配色",
-  "toast.workspace.enabled.title": "ワークスペースが有効になりました",
-  "toast.workspace.enabled.description": "サイドバーに複数のワークツリーが表示されます",
-  "toast.workspace.disabled.title": "ワークスペースが無効になりました",
-  "toast.workspace.disabled.description": "サイドバーにはメインのワークツリーのみ表示されます",
 
   "toast.permissions.autoaccept.on.title": "編集を自動承認中",
   "toast.permissions.autoaccept.on.description": "編集と書き込みの権限は自動的に承認されます",
@@ -697,9 +689,6 @@ export const dict = {
   "session.messages.jumpToLatest": "最新へジャンプ",
   "session.context.addToContext": "{{selection}}をコンテキストに追加",
 
-  "session.new.worktree.main": "メインブランチ",
-  "session.new.worktree.mainWithBranch": "メインブランチ ({{branch}})",
-  "session.new.worktree.create": "新しいワークツリーを作成",
   "session.new.lastModified": "最終更新",
   "sidebar.session.newSession": "新規セッション",
   "sidebar.session.newSession.tooltip": "現在のセッションを維持したまま、新しい会話を開始します。",
@@ -1726,7 +1715,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "不要な要素を排除し、より読みやすく素早く操作できます。",
   "migration.whatsNew.features.agentManager.title": "エージェントマネージャー",
   "migration.whatsNew.features.agentManager.detail":
-    "複数のエージェントを並列実行するための統合インターフェース。それぞれ独自のワークツリー上で動作し、進捗の確認、コンテキストの切り替え、変更のレビューを一箇所で行えます。",
+    "複数のエージェントを並列実行するための統合インターフェース。進捗の確認、コンテキストの切り替え、変更のレビューを一箇所で行えます。",
   "migration.whatsNew.features.foundation.title": "共通基盤",
   "migration.whatsNew.features.foundation.detail":
     "すべてのKilo製品で共有される小さく効率的なコア。どのような作業スタイルでも馴染みのある体験を提供します。",
@@ -1809,30 +1798,6 @@ export const dict = {
   "settings.saveBar.save": "保存",
   "settings.saveBar.saving": "保存中…",
   "settings.saveBar.saveFailed": "設定を保存できませんでした",
-  "diffViewer.source.workspace.label": "ブランチ",
-  "diffViewer.source.workspace.tooltip":
-    "ベースブランチと比較したこのブランチのすべての変更。未コミットのファイル（staged、unstaged、未追跡）とベースにまだ反映されていないローカルコミットを含みます。",
-  "diffViewer.source.staged.label": "ステージ済み",
-  "diffViewer.source.staged.tooltip":
-    "git のステージングエリアに追加（`git add`）した変更のあるファイル。次のコミットに含まれる内容です。",
-  "diffViewer.source.unstaged.label": "未ステージ",
-  "diffViewer.source.unstaged.tooltip":
-    "作業ツリーで変更されたがまだステージングされていないファイルと、追跡されていない（新しい）ファイル。",
-  "diffViewer.source.session.label": "セッション",
-  "diffViewer.source.session.tooltip":
-    "現在のセッション中に Kilo が変更したファイル。ターンごとのスナップショットに基づきます。新しいセッションを開始するとリセットされます。",
-  "diffViewer.group.session": "セッション",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "このリポジトリではスナップショットが無効になっています。セッションの変更を表示するには、構成ファイルを編集してください。",
-
-  "diffViewer.baseBranch.auto": "デフォルト",
-  "diffViewer.baseBranch.default": "デフォルト",
-  "diffViewer.baseBranch.remote": "リモート",
-  "diffViewer.baseBranch.search": "ブランチを検索",
-  "diffViewer.baseBranch.empty": "一致するブランチがありません",
-  "diffViewer.baseBranch.loading": "ブランチを読み込み中…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "プランの準備ができました:",
   "chat.search.placeholder": "チャットを検索…",
   "chat.search.toggle": "チャットを検索",

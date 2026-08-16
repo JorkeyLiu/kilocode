@@ -1,0 +1,261 @@
+{
+  "schema": "kilo-e2e-evidence/1",
+  "run": {
+    "fixtureId": "e2e-probe-bebcebce",
+    "scenario": "worktree-removal",
+    "startedAt": "2026-08-15T18:00:48.756Z",
+    "completedAt": "2026-08-15T18:02:18.781Z",
+    "durationMs": 90025,
+    "probePid": 26194,
+    "success": true,
+    "provenance": "focused E2E harness (packages/kilo-vscode), fixture-gated, run-owned evidence",
+    "env": {
+      "KILO_E2E_SCENARIO": "worktree-removal"
+    }
+  },
+  "destination": "/Users/jorkeyliu/workspace/repos/kilocode/specs/vscode-orchestrator/evidence/p0-baseline/p3-2-worktree-removal-2026-08-15T18-00-47-000Z",
+  "required": [
+    "llm-matrix-worktree-removal-final.json",
+    "llm-requests-worktree-removal.json",
+    "llm-requests.jsonl",
+    "p32-snap-1.json",
+    "p32-snap-10.json",
+    "p32-snap-11.json",
+    "p32-snap-12.json",
+    "p32-snap-13.json",
+    "p32-snap-14.json",
+    "p32-snap-15.json",
+    "p32-snap-2.json",
+    "p32-snap-3.json",
+    "p32-snap-4.json",
+    "p32-snap-5.json",
+    "p32-snap-6.json",
+    "p32-snap-7.json",
+    "p32-snap-8.json",
+    "p32-snap-9.json",
+    "plan.json",
+    "runner-pid",
+    "workspace/.kilo/kilo.json",
+    "workspace/rollback.txt",
+    "worktree-removal-dom-evidence",
+    "worktree-removal-runtime-evidence"
+  ],
+  "files": [
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/llm-matrix-worktree-removal-final.json",
+      "sourceRel": "scratch/llm-matrix-worktree-removal-final.json",
+      "dest": "llm-matrix-worktree-removal-final.json",
+      "bytes": 334,
+      "sha256": "8c15d863e4b053030893a8b8228b136a58e74b4fde2595beb93c8306f2b5eb91"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/llm-requests-worktree-removal.json",
+      "sourceRel": "scratch/llm-requests-worktree-removal.json",
+      "dest": "llm-requests-worktree-removal.json",
+      "bytes": 1314,
+      "sha256": "1c90c3e0c33e0a23aa671d372c4649c392bcf23d6377ace7503f347e723035e2"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/llm-requests.jsonl",
+      "sourceRel": "scratch/llm-requests.jsonl",
+      "dest": "llm-requests.jsonl",
+      "bytes": 789,
+      "sha256": "7930dbbef3c1bee82e4f9d5d39156443aefe5a710aa4aee148c201a2c16b5ffd"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-1.json",
+      "sourceRel": "scratch/p32-snap-1.json",
+      "dest": "p32-snap-1.json",
+      "bytes": 1253,
+      "sha256": "3805cdfd9c66df009a48e9d772357c971fd34411e68f8d6eb79d1718b6c1ee3f"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-10.json",
+      "sourceRel": "scratch/p32-snap-10.json",
+      "dest": "p32-snap-10.json",
+      "bytes": 3253,
+      "sha256": "cac26563dbdaa54f0aee6d7cd90768cf537c51550fa20f96e471cc4e44868f41"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-11.json",
+      "sourceRel": "scratch/p32-snap-11.json",
+      "dest": "p32-snap-11.json",
+      "bytes": 3253,
+      "sha256": "ce3556031a9d2d867744493c5c9ed3055c389f990053abf62360ef9c7c83d58f"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-12.json",
+      "sourceRel": "scratch/p32-snap-12.json",
+      "dest": "p32-snap-12.json",
+      "bytes": 3767,
+      "sha256": "c52e51b7b090bc8e05bad20f783606a1da49b3cf672161f9b19e7416356c3f87"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-13.json",
+      "sourceRel": "scratch/p32-snap-13.json",
+      "dest": "p32-snap-13.json",
+      "bytes": 3767,
+      "sha256": "be7625333091988cca4e05b951133ccd6dcb26a5420e3264578270350e4c3b05"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-14.json",
+      "sourceRel": "scratch/p32-snap-14.json",
+      "dest": "p32-snap-14.json",
+      "bytes": 3432,
+      "sha256": "f98052769ac6787a63847332f5377833f7eba36cb2a318c4d7410a32dcb6a2dc"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-15.json",
+      "sourceRel": "scratch/p32-snap-15.json",
+      "dest": "p32-snap-15.json",
+      "bytes": 3432,
+      "sha256": "dd90b5f13fb7dcff26479a0d5878c4814431291250d566e3f72de3ad52309631"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-2.json",
+      "sourceRel": "scratch/p32-snap-2.json",
+      "dest": "p32-snap-2.json",
+      "bytes": 1376,
+      "sha256": "b5b976a4b0ee75ccae4dc5bcdfa390b0c14c43a623fffe97ae0d89e5ff3f3a73"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-3.json",
+      "sourceRel": "scratch/p32-snap-3.json",
+      "dest": "p32-snap-3.json",
+      "bytes": 1348,
+      "sha256": "3caa995726599c3c505de79fac8c4e97bce8e000388fa80d799b33226effbf74"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-4.json",
+      "sourceRel": "scratch/p32-snap-4.json",
+      "dest": "p32-snap-4.json",
+      "bytes": 2652,
+      "sha256": "2ba9d316d250514feb799c434934956788d760511dc32d5226ac0ccb6e93a01b"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-5.json",
+      "sourceRel": "scratch/p32-snap-5.json",
+      "dest": "p32-snap-5.json",
+      "bytes": 2852,
+      "sha256": "c3f23205f3a0d75c45c3a601d0d0feed8cc7619288f503022cf1569d95277f01"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-6.json",
+      "sourceRel": "scratch/p32-snap-6.json",
+      "dest": "p32-snap-6.json",
+      "bytes": 2822,
+      "sha256": "8be64987608cd4d4aeeec062639bd9d77ca009c04a8217f390f07064afd1d8a1"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-7.json",
+      "sourceRel": "scratch/p32-snap-7.json",
+      "dest": "p32-snap-7.json",
+      "bytes": 2774,
+      "sha256": "eca6c9888cfa1cc66b2d4eeff30eacd08e83b72361d6d7331d95565e50ba6f36"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-8.json",
+      "sourceRel": "scratch/p32-snap-8.json",
+      "dest": "p32-snap-8.json",
+      "bytes": 3299,
+      "sha256": "1f8b2fa38fd7e7c7b99a0d696c5a27fd8fcc51cca00caace45862cc7ebc559ac"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/p32-snap-9.json",
+      "sourceRel": "scratch/p32-snap-9.json",
+      "dest": "p32-snap-9.json",
+      "bytes": 3331,
+      "sha256": "73119e849207ab454d89e5b06ffe884570f7a0e3a0e627560b74c2008180aaf8"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/plan.json",
+      "sourceRel": "scratch/plan.json",
+      "dest": "plan.json",
+      "bytes": 1195,
+      "sha256": "7e37cf5a5741bfc23fab5cea933ecdd523ea56ea59e817e78af6266c34445d98"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/runner-alive",
+      "sourceRel": "scratch/runner-alive",
+      "dest": "runner-alive",
+      "bytes": 7,
+      "sha256": "03494afd4248c42f5fa1237bf2eeebe751ab8d9c977d55405fcb17469dbd91f8"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/runner-done",
+      "sourceRel": "scratch/runner-done",
+      "dest": "runner-done",
+      "bytes": 2,
+      "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/runner-pid",
+      "sourceRel": "scratch/runner-pid",
+      "dest": "runner-pid",
+      "bytes": 5,
+      "sha256": "5862e9458f7a65fea30c51417dc77f8594698597354de6fcba8d0406d0f3c7a2"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/workspace/.kilo/kilo.json",
+      "sourceRel": "workspace/.kilo/kilo.json",
+      "dest": "workspace/.kilo/kilo.json",
+      "bytes": 956,
+      "sha256": "1bb6d2cf44bc4ff0a2b1ec95d55af7055517f8f8efad5a3727ba5ff0947df716"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/workspace/.kilo/package-lock.json",
+      "sourceRel": "workspace/.kilo/package-lock.json",
+      "dest": "workspace/.kilo/package-lock.json",
+      "bytes": 129,
+      "sha256": "f259e669c975607abe83b2b1fa91498a03bc9215e563f560bfb9765edb199587"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/workspace/rollback.txt",
+      "sourceRel": "workspace/rollback.txt",
+      "dest": "workspace/rollback.txt",
+      "bytes": 20,
+      "sha256": "ae1e8e9806f3ae10147819d2d8ef2ccc64c0297057dfe25abfaa4f26b5a7cb72"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/worktree-removal-dom-evidence",
+      "sourceRel": "scratch/worktree-removal-dom-evidence",
+      "dest": "worktree-removal-dom-evidence",
+      "bytes": 1179687,
+      "sha256": "200deacd84416abe1fb0c0d4f3a02c96bd9b41a1fa1e7a49eff255d16741c550"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/worktree-removal-ready",
+      "sourceRel": "scratch/worktree-removal-ready",
+      "dest": "worktree-removal-ready",
+      "bytes": 18,
+      "sha256": "8ab06a146e54768d979a389ec778fde8ed10f923ab19681836cfc6cec14289cc"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/worktree-removal-runtime-evidence",
+      "sourceRel": "scratch/worktree-removal-runtime-evidence",
+      "dest": "worktree-removal-runtime-evidence",
+      "bytes": 4219,
+      "sha256": "1d90f19323d57455ee9527e56a7c0bef03ce38bb955d633edabd767333118aea"
+    },
+    {
+      "source": "launcher:probe stdout+stderr",
+      "sourceRel": "launcher:run.log",
+      "dest": "run.log",
+      "bytes": 1082299,
+      "sha256": "c2fab3971e640ccebde90e8976453456f6ec6f7ec12e5f9cf5af339a753880d3"
+    }
+  ],
+  "missing": [],
+  "malformed": [],
+  "notes": [],
+  "captureLog": {
+    "source": "launcher:probe stdout+stderr",
+    "sourceRel": "launcher:run.log",
+    "dest": "run.log",
+    "bytes": 1082299,
+    "sha256": "c2fab3971e640ccebde90e8976453456f6ec6f7ec12e5f9cf5af339a753880d3"
+  },
+  "status": "complete",
+  "validated": true,
+  "finalizedAt": "2026-08-15T18:02:23.735Z"
+}

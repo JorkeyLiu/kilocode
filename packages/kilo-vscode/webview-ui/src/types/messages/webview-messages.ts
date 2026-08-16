@@ -1,10 +1,8 @@
 import type { InstallMarketplaceItemOptions, MarketplaceFilters, MarketplaceItem } from "../marketplace"
 import type { FileAttachment } from "./parts"
 import type { MessageLoadMode } from "./sessions"
-import type { PermissionFileDiff } from "./permissions"
 import type { ModelSelection, ProviderConfig } from "./providers"
 import type { Config } from "./config"
-import type { ModelAllocation, ReviewComment } from "./agent-manager"
 import type { ReviewMessageData } from "../../../../src/shared/review-comments"
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
 import type { AnacondaDesktopWebviewMessage } from "../../../../src/shared/anaconda-desktop-messages"
@@ -534,58 +532,16 @@ export interface SyncSessionRequest {
   parentSessionID?: string
 }
 
-// Agent Manager worktree messages
-export interface CreateWorktreeSessionRequest {
-  type: "agentManager.createWorktreeSession"
-  text: string
-  providerID?: string
-  modelID?: string
-  agent?: string
-  files?: FileAttachment[]
-}
-
 export interface TelemetryRequest {
   type: "telemetry"
   event: string
   properties?: Record<string, unknown>
 }
 
-// Delete a worktree and dissociate its sessions
-export interface DeleteWorktreeRequest {
-  type: "agentManager.deleteWorktree"
-  worktreeId: string
-}
-
-// Remove a stale worktree entry from state without touching disk
-export interface RemoveStaleWorktreeRequest {
-  type: "agentManager.removeStaleWorktree"
-  worktreeId: string
-}
-
-// Promote a session: create a worktree and move the session into it
-export interface PromoteSessionRequest {
-  type: "agentManager.promoteSession"
-  sessionId: string
-}
-
-// Open an unassigned session locally (clear any worktree directory override)
-export interface OpenLocallyRequest {
-  type: "agentManager.openLocally"
-  sessionId: string
-}
-
-// Add a new session to an existing worktree
-export interface AddSessionToWorktreeRequest {
-  type: "agentManager.addSessionToWorktree"
-  worktreeId: string
-  sessionId?: string
-}
-
 // Fork an existing session (copies conversation history)
 export interface ForkSessionRequest {
   type: "agentManager.forkSession"
   sessionId: string
-  worktreeId?: string
   messageId?: string
 }
 
@@ -595,30 +551,23 @@ export interface SidebarForkSessionRequest {
   messageId?: string
 }
 
-// Stop and remove a Local or worktree session from Agent Manager
+// Stop and remove a session from Agent Manager
 export interface CloseSessionRequest {
   type: "agentManager.closeSession"
   sessionId: string
 }
 
-/** Persist a non-worktree session to agent-manager.json (worktreeId = null). */
+/** Persist a session to the managed-session registry. */
 export interface PersistSessionRequest {
   type: "agentManager.persistSession"
   sessionId: string
   draftID?: string
 }
 
-/** Remove a non-worktree session from agent-manager.json. */
+/** Remove a session from the managed-session registry. */
 export interface ForgetSessionRequest {
   type: "agentManager.forgetSession"
   sessionId: string
-}
-
-// Rename a worktree's display label
-export interface RenameWorktreeRequest {
-  type: "agentManager.renameWorktree"
-  worktreeId: string
-  label: string
 }
 
 export interface RequestRepoInfoMessage {
@@ -627,25 +576,6 @@ export interface RequestRepoInfoMessage {
 
 export interface RequestStateMessage {
   type: "agentManager.requestState"
-}
-
-// Configure worktree setup script
-export interface ConfigureSetupScriptRequest {
-  type: "agentManager.configureSetupScript"
-}
-
-export interface ConfigureRunScriptRequest {
-  type: "agentManager.configureRunScript"
-}
-
-export interface RunScriptRequest {
-  type: "agentManager.runScript"
-  worktreeId: string
-}
-
-export interface StopRunScriptRequest {
-  type: "agentManager.stopRunScript"
-  worktreeId: string
 }
 
 // Show terminal for a session
@@ -659,12 +589,6 @@ export interface ShowLocalTerminalRequest {
   type: "agentManager.showLocalTerminal"
 }
 
-// Open a worktree directory in VS Code
-export interface OpenWorktreeRequest {
-  type: "agentManager.openWorktree"
-  worktreeId: string
-}
-
 // Copy text to the system clipboard via the extension host
 export interface CopyToClipboardRequest {
   type: "agentManager.copyToClipboard"
@@ -676,10 +600,10 @@ export interface ShowExistingLocalTerminalRequest {
   type: "agentManager.showExistingLocalTerminal"
 }
 
-// Create a new xterm terminal tab in the given worktree context (null = local)
+// Create a new xterm terminal tab in the local workspace
 export interface AgentManagerTerminalCreateRequest {
   type: "agentManager.terminal.create"
-  worktreeId: string | null
+  slotId: string | null
 }
 
 // Close a terminal tab
@@ -696,7 +620,7 @@ export interface AgentManagerTerminalResizeRequest {
   rows: number
 }
 
-// Open a file in the selected worktree for a specific session
+// Open a file in the selected session
 export interface AgentManagerOpenFileRequest {
   type: "agentManager.openFile"
   sessionId: string
@@ -705,38 +629,10 @@ export interface AgentManagerOpenFileRequest {
   column?: number
 }
 
-// Create multiple worktree sessions for the same prompt (multi-version mode)
-export interface CreateMultiVersionRequest {
-  type: "agentManager.createMultiVersion"
-  text?: string
-  name?: string
-  versions: number
-  providerID?: string
-  modelID?: string
-  agent?: string
-  files?: FileAttachment[]
-  baseBranch?: string
-  branchName?: string
-  // Per-version model allocations for multi-model comparison mode.
-  // When set, each entry expands to `count` versions with that model.
-  // Overrides `versions`, `providerID`, and `modelID`.
-  variant?: string
-  modelAllocations?: ModelAllocation[]
-  // When set, start each created worktree session with the sandbox override
-  // reconciled to this state. Only sent when sandbox controls are available.
-  sandbox?: boolean
-}
-
-// Persist tab order for a context (worktree ID or "local")
+// Persist tab order for a context
 export interface SetTabOrderRequest {
   type: "agentManager.setTabOrder"
   key: string
-  order: string[]
-}
-
-// Persist sidebar worktree order
-export interface SetWorktreeOrderRequest {
-  type: "agentManager.setWorktreeOrder"
   order: string[]
 }
 
@@ -750,45 +646,6 @@ export interface SetSessionsCollapsedRequest {
 export interface SetSidebarCollapsedRequest {
   type: "agentManager.setSidebarCollapsed"
   collapsed: boolean
-}
-
-export interface RequestBranchesMessage {
-  type: "agentManager.requestBranches"
-}
-
-export interface RequestExternalWorktreesMessage {
-  type: "agentManager.requestExternalWorktrees"
-}
-
-export interface ImportFromBranchRequest {
-  type: "agentManager.importFromBranch"
-  branch: string
-}
-
-export interface ImportFromPRRequest {
-  type: "agentManager.importFromPR"
-  url: string
-}
-
-export interface ImportExternalWorktreeRequest {
-  type: "agentManager.importExternalWorktree"
-  path: string
-  branch: string
-}
-
-export interface ImportAllExternalWorktreesRequest {
-  type: "agentManager.importAllExternalWorktrees"
-}
-
-// Agent Manager: PR messages (webview → extension)
-export interface RefreshPRMessage {
-  type: "agentManager.refreshPR"
-  worktreeId: string
-}
-
-export interface OpenPRMessage {
-  type: "agentManager.openPR"
-  worktreeId: string
 }
 
 // Variant persistence (webview → extension)
@@ -808,72 +665,6 @@ export interface EnhancePromptRequest {
   type: "enhancePrompt"
   text: string
   requestId: string
-}
-
-// Open the standalone changes viewer tab
-export interface OpenChangesRequest {
-  type: "openChanges"
-  /**
-   * When set, opens the viewer scoped to a single turn (identified by the
-   * user message ID). The source picker is hidden and polling is disabled
-   * for this mode.
-   */
-  turnId?: string
-}
-
-// Open diff virtual (permission diff) in the lightweight diff virtual panel
-export interface OpenDiffVirtualRequest {
-  type: "openDiffVirtual"
-  diff: PermissionFileDiff
-  initialDiffStyle: "unified" | "split"
-}
-
-export interface DiffViewerSendCommentsRequest {
-  type: "diffViewer.sendComments"
-  comments: ReviewComment[]
-  autoSend: boolean
-}
-
-export interface DiffViewerSetDiffStyleRequest {
-  type: "diffViewer.setDiffStyle"
-  style: "unified" | "split"
-}
-
-export interface DiffViewerSetMarkdownRenderRequest {
-  type: "diffViewer.setMarkdownRender"
-  render: boolean
-}
-
-export interface DiffViewerRevertFileRequest {
-  type: "diffViewer.revertFile"
-  file: string
-}
-
-export interface DiffViewerRequestFileRequest {
-  type: "diffViewer.requestFile"
-  file: string
-}
-
-export interface DiffViewerCloseRequest {
-  type: "diffViewer.close"
-}
-
-export interface DiffViewerRequestBranchesRequest {
-  type: "diffViewer.requestBranches"
-}
-
-/**
- * Override the workspace source's base branch. Pass `branch: undefined` to
- * clear the override and fall back to the auto-resolved base.
- */
-export interface DiffViewerSetBaseBranchRequest {
-  type: "diffViewer.setBaseBranch"
-  branch: string | undefined
-}
-
-export interface DiffVirtualSetMarkdownRenderRequest {
-  type: "diffVirtual.setMarkdownRender"
-  render: boolean
 }
 
 export interface RetryConnectionRequest {
@@ -1080,47 +871,6 @@ export interface RequestModelSelectionsMessage {
   type: "requestModelSelections"
 }
 
-// Section CRUD messages (webview → extension)
-export interface CreateSectionRequest {
-  type: "agentManager.createSection"
-  name: string
-  color?: string
-  worktreeIds?: string[]
-}
-
-export interface RenameSectionRequest {
-  type: "agentManager.renameSection"
-  sectionId: string
-  name: string
-}
-
-export interface DeleteSectionRequest {
-  type: "agentManager.deleteSection"
-  sectionId: string
-}
-
-export interface SetSectionColorRequest {
-  type: "agentManager.setSectionColor"
-  sectionId: string
-  color: string | null
-}
-
-export interface ToggleSectionCollapsedRequest {
-  type: "agentManager.toggleSectionCollapsed"
-  sectionId: string
-}
-
-export interface MoveToSectionRequest {
-  type: "agentManager.moveToSection"
-  worktreeIds: string[]
-  sectionId: string | null
-}
-
-export interface MoveSectionRequest {
-  type: "agentManager.moveSection"
-  sectionId: string
-  dir: -1 | 1
-}
 
 export interface FetchMarketplaceDataMessage {
   type: "fetchMarketplaceData"
@@ -1242,48 +992,26 @@ export type WebviewMessage =
   | ResetAllSettingsRequest
   | SettingsTabChangedMessage
   | SyncSessionRequest
-  | CreateWorktreeSessionRequest
-  | DeleteWorktreeRequest
-  | RemoveStaleWorktreeRequest
-  | PromoteSessionRequest
-  | OpenLocallyRequest
-  | AddSessionToWorktreeRequest
   | ForkSessionRequest
   | SidebarForkSessionRequest
   | CloseSessionRequest
   | PersistSessionRequest
   | ForgetSessionRequest
-  | RenameWorktreeRequest
   | TelemetryRequest
   | RequestRepoInfoMessage
   | RequestStateMessage
-  | ConfigureSetupScriptRequest
-  | ConfigureRunScriptRequest
-  | RunScriptRequest
-  | StopRunScriptRequest
   | ShowTerminalRequest
   | ShowLocalTerminalRequest
-  | OpenWorktreeRequest
   | CopyToClipboardRequest
   | ShowExistingLocalTerminalRequest
   | AgentManagerOpenFileRequest
-  | CreateMultiVersionRequest
   | SetTabOrderRequest
-  | SetWorktreeOrderRequest
   | SetSessionsCollapsedRequest
   | SetSidebarCollapsedRequest
   | PersistVariantRequest
   | RequestVariantsMessage
   | RequestCloudSessionDataMessage
   | ImportAndSendMessage
-  | RequestBranchesMessage
-  | RequestExternalWorktreesMessage
-  | ImportFromBranchRequest
-  | ImportFromPRRequest
-  | ImportExternalWorktreeRequest
-  | ImportAllExternalWorktreesRequest
-  | RefreshPRMessage
-  | OpenPRMessage
   // legacy-migration start
   | RequestMigrationDataMessage
   | StartMigrationMessage
@@ -1292,17 +1020,6 @@ export type WebviewMessage =
   | FinalizeLegacyMigrationMessage
   // legacy-migration end
   | EnhancePromptRequest
-  | OpenChangesRequest
-  | OpenDiffVirtualRequest
-  | DiffViewerSendCommentsRequest
-  | DiffViewerSetDiffStyleRequest
-  | DiffViewerSetMarkdownRenderRequest
-  | DiffViewerRevertFileRequest
-  | DiffViewerRequestFileRequest
-  | DiffViewerCloseRequest
-  | DiffViewerRequestBranchesRequest
-  | DiffViewerSetBaseBranchRequest
-  | DiffVirtualSetMarkdownRenderRequest
   | RetryConnectionRequest
   | ReloadRequest
   | PreviewImageRequest
@@ -1347,13 +1064,6 @@ export type WebviewMessage =
   | MemoryShowMessage
   | MemoryOperationMessage
   | MemoryPromptMessage
-  | CreateSectionRequest
-  | RenameSectionRequest
-  | DeleteSectionRequest
-  | SetSectionColorRequest
-  | ToggleSectionCollapsedRequest
-  | MoveToSectionRequest
-  | MoveSectionRequest
   | OpenContentRequest
   | AgentManagerTerminalCreateRequest
   | AgentManagerTerminalCloseRequest

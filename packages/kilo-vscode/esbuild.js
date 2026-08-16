@@ -218,12 +218,6 @@ async function main() {
   // Build Marketplace webview (SolidJS, standalone catalog panel)
   const marketplaceCtx = await createBrowserWebviewContext("webview-ui/marketplace/index.tsx", "dist/marketplace.js")
 
-  // Build Diff Viewer webview (SolidJS, reuses Agent Manager diff components)
-  const diffViewerCtx = await createBrowserWebviewContext("webview-ui/diff-viewer/index.tsx", "dist/diff-viewer.js")
-
-  // Build Diff Virtual webview (lightweight single-file diff for permission approval)
-  const diffVirtualCtx = await createBrowserWebviewContext("webview-ui/diff-virtual/index.tsx", "dist/diff-virtual.js")
-
   // Build webview
   const webviewCtx = await createBrowserWebviewContext("webview-ui/src/index.tsx", "dist/webview.js")
 
@@ -235,8 +229,6 @@ async function main() {
       extensionCtx.watch(),
       webviewCtx.watch(),
       agentManagerCtx.watch(),
-      diffViewerCtx.watch(),
-      diffVirtualCtx.watch(),
       kiloClawCtx.watch(),
       marketplaceCtx.watch(),
       shikiWorkerCtx.watch(),
@@ -248,16 +240,12 @@ async function main() {
       agentManagerCtx.rebuild(),
       kiloClawCtx.rebuild(),
       marketplaceCtx.rebuild(),
-      diffViewerCtx.rebuild(),
-      diffVirtualCtx.rebuild(),
       shikiWorkerCtx.rebuild(),
     ])
     await Promise.all([
       extensionCtx.dispose(),
       webviewCtx.dispose(),
       agentManagerCtx.dispose(),
-      diffViewerCtx.dispose(),
-      diffVirtualCtx.dispose(),
       kiloClawCtx.dispose(),
       marketplaceCtx.dispose(),
       shikiWorkerCtx.dispose(),

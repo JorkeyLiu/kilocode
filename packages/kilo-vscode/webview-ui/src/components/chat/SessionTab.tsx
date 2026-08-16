@@ -43,7 +43,7 @@ export const SessionTab: Component<{
         <span class="am-tab-title">
           <Show when={props.busy}>
             <span class="am-tab-icon">
-              <Spinner class="am-worktree-spinner" />
+              <Spinner class="am-tab-spinner" />
             </span>
           </Show>
           <span class="am-tab-label">{props.title}</span>

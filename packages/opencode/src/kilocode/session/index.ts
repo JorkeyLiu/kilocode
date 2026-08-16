@@ -16,8 +16,6 @@ import * as Log from "@opencode-ai/core/util/log"
 import type { ProviderMetadata, Usage } from "@opencode-ai/llm"
 import type { Provider } from "@/provider/provider"
 import { ENV_FEATURE } from "@kilocode/kilo-gateway"
-import { existsSync } from "fs"
-import path from "path"
 import { KiloSessionEvent, type KiloSessionCloseReason } from "./event"
 
 export namespace KiloSession {
@@ -106,28 +104,8 @@ export namespace KiloSession {
   }
 
   // ---------------------------------------------------------------------------
-  // Project family resolution (worktree-aware)
+  // Session listing filters (current workspace-directory semantics)
   // ---------------------------------------------------------------------------
-
-  function family(
-    id: string,
-    rows: Array<Pick<typeof ProjectTable.$inferSelect, "id" | "worktree" | "sandboxes">>,
-    directories: string[] = [],
-  ): string[] {
-    const current = rows.find((row) => row.id === id)
-    const root = current?.worktree ? Filesystem.resolve(current.worktree) : undefined
-    // Combine the stored root with Git's current sibling worktrees.
-    const roots = new Set([...(root && root !== "/" ? [root] : []), ...directories.map(Filesystem.resolve)])
-    if (roots.size === 0) return [id]
-
-    // Match both each project's recorded root and its saved worktrees.
-    const ids = rows.flatMap((row) => {
-      const dirs = [row.worktree, ...row.sandboxes].map(Filesystem.resolve)
-      return dirs.some((dir) => roots.has(dir)) ? [row.id] : []
-    })
-    // Always keep the requested ID and remove duplicates.
-    return [...new Set([id, ...ids])]
-  }
 
   export function filters(input: { projectID: ProjectV2.ID; directory?: string }): SQL[] {
     const dir = input.directory ? Filesystem.resolve(input.directory) : undefined
@@ -305,8 +283,6 @@ export namespace KiloSession {
     fromRow: (row: SessionRow) => Omit<T, "project">
     projectID?: string
     directory?: string
-    directories?: string[]
-    currentDirectory?: string
     roots?: boolean
     start?: number
     cursor?: number
@@ -317,27 +293,8 @@ export namespace KiloSession {
     return Effect.gen(function* () {
       const { db } = yield* Database.Service
       const conditions: SQL[] = []
-      const dirs = [...new Set((input.directories ?? []).map((dir) => Filesystem.resolve(dir)))]
 
-      if (input.projectID) {
-        const projects = yield* db
-          .select({ id: ProjectTable.id, worktree: ProjectTable.worktree, sandboxes: ProjectTable.sandboxes })
-          .from(ProjectTable)
-          .all()
-          .pipe(Effect.orDie)
-        const ids = family(input.projectID, projects, dirs)
-        if (ids.length === 1 && ids[0] === input.projectID) {
-          conditions.push(eq(SessionTable.project_id, ProjectV2.ID.make(input.projectID)))
-        } else {
-          conditions.push(
-            inArray(
-              SessionTable.project_id,
-              ids.map((id) => ProjectV2.ID.make(id)),
-            ),
-          )
-        }
-      }
-
+      if (input.projectID) conditions.push(eq(SessionTable.project_id, ProjectV2.ID.make(input.projectID)))
       if (input.directory) conditions.push(eq(SessionTable.directory, Filesystem.resolve(input.directory)))
       if (input.roots) conditions.push(isNull(SessionTable.parent_id))
       if (input.start) conditions.push(gte(SessionTable.time_updated, input.start))
@@ -346,25 +303,6 @@ export namespace KiloSession {
       if (!input.archived) conditions.push(isNull(SessionTable.time_archived))
 
       const limit = input.limit ?? 100
-      const sorted = [...dirs].sort((a, b) => b.length - a.length)
-      const nested = (root: string, dir: string): boolean => {
-        if (dir === root || !Filesystem.contains(root, dir)) return false
-        if (existsSync(path.join(dir, ".git"))) return true
-        const parent = path.dirname(dir)
-        return parent !== dir && nested(root, parent)
-      }
-      const worktree = (dir: string) => {
-        for (const root of sorted) {
-          if (!Filesystem.contains(root, dir) || nested(root, dir)) continue
-          const rel = path.relative(root, dir)
-          const parts = rel.split(path.sep)
-          if ((parts[0] === ".kilo" || parts[0] === ".kilocode") && parts[1] === "worktrees" && parts[2]) {
-            return path.join(root, parts[0], parts[1], parts[2])
-          }
-          return root
-        }
-      }
-      const current = input.currentDirectory ? worktree(Filesystem.resolve(input.currentDirectory)) : undefined
 
       const query =
         conditions.length > 0
@@ -373,21 +311,13 @@ export namespace KiloSession {
               .from(SessionTable)
               .where(and(...conditions))
           : db.select().from(SessionTable)
-      const ordered = query.orderBy(desc(SessionTable.time_updated), desc(SessionTable.id))
-      const rows = yield* (dirs.length ? ordered.all() : ordered.limit(limit).all()).pipe(Effect.orDie)
+      const rows = yield* query
+        .orderBy(desc(SessionTable.time_updated), desc(SessionTable.id))
+        .limit(limit)
+        .all()
+        .pipe(Effect.orDie)
 
-      const list =
-        dirs.length > 0
-          ? rows.filter((row) => {
-              const dir = Filesystem.resolve(row.directory)
-              const root = worktree(dir)
-              if (!root) return false
-              if (input.currentDirectory) return root === current
-              return true
-            })
-          : rows
-
-      const ids = [...new Set(list.slice(0, limit).map((row) => row.project_id))]
+      const ids = [...new Set(rows.map((row) => row.project_id))]
       const projects = new Map<string, ProjectInfo>()
 
       if (ids.length > 0) {
@@ -406,7 +336,7 @@ export namespace KiloSession {
         }
       }
 
-      return list.slice(0, limit).map((row) => {
+      return rows.map((row) => {
         const project = projects.get(row.project_id) ?? null
         return { ...input.fromRow(row), project } as T & { project: ProjectInfo | null }
       })

@@ -157,12 +157,12 @@ describe("registerToggleAutoApprove", () => {
       () => ["/workspace"],
     )
 
-    await ctrl.approve(asked("perm_worktree", "ses_worktree"), "/workspace/.kilo/worktrees/feature")
-    await ctrl.approve(asked("perm_child", "ses_child"), "/workspace/.kilo/worktrees/feature")
+    await ctrl.approve(asked("perm_worktree", "ses_worktree"), "/workspace/session-feature")
+    await ctrl.approve(asked("perm_child", "ses_child"), "/workspace/session-feature")
 
     expect(replies).toEqual([
-      { requestID: "perm_worktree", directory: "/workspace/.kilo/worktrees/feature", reply: "once" },
-      { requestID: "perm_child", directory: "/workspace/.kilo/worktrees/feature", reply: "once" },
+      { requestID: "perm_worktree", directory: "/workspace/session-feature", reply: "once" },
+      { requestID: "perm_child", directory: "/workspace/session-feature", reply: "once" },
     ])
   })
 
@@ -171,7 +171,7 @@ describe("registerToggleAutoApprove", () => {
     const replies: unknown[] = []
     const conn = connection(
       client({ reply: async (args) => replies.push(args) }),
-      new Map([["perm_shared", "/workspace/.kilo/worktrees/shared"]]),
+      new Map([["perm_shared", "/workspace/session-shared"]]),
     )
     const ctrl = registerToggleAutoApprove(
       context(),
@@ -183,7 +183,7 @@ describe("registerToggleAutoApprove", () => {
     await ctrl.approve(asked("perm_shared", "ses_child"))
 
     expect(replies).toEqual([
-      { requestID: "perm_shared", directory: "/workspace/.kilo/worktrees/shared", reply: "once" },
+      { requestID: "perm_shared", directory: "/workspace/session-shared", reply: "once" },
     ])
   })
 

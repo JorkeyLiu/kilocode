@@ -1,5 +1,5 @@
 import { GitOps } from "../agent-manager/GitOps"
-import { resolveLocalDiffTarget } from "../diff/shared/target"
+import { resolveLocalDiffTarget } from "../agent-manager/git-diff-target"
 
 let shared: GitOps | undefined
 

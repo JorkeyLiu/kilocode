@@ -41,9 +41,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "Lukk fane",
   "agentManager.shortcuts.toggleTerminal": "Veksle terminal",
   "agentManager.shortcuts.runScript": "Kjør skript",
-  "agentManager.run.options": "Kjøringsalternativer",
-  "agentManager.run.configure": "Konfigurer kjøreskript",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "Åpne Agent Manager",
   "agentManager.shortcuts.cycleAgentMode": "Next agent mode",

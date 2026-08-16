@@ -427,7 +427,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Seules les images ou les PDF peuvent être collés ici.",
   "prompt.toast.modelAgentRequired.title": "Sélectionnez un agent et un modèle",
   "prompt.toast.modelAgentRequired.description": "Choisissez un agent et un modèle avant d'envoyer un message.",
-  "prompt.toast.worktreeCreateFailed.title": "Échec de la création de l'arbre de travail",
+
   "prompt.toast.sessionCreateFailed.title": "Échec de la création de la session",
   "prompt.toast.shellSendFailed.title": "Échec de l'envoi de la commande shell",
   "prompt.toast.commandSendFailed.title": "Échec de l'envoi de la commande",
@@ -485,10 +485,6 @@ export const dict = {
   "dialog.project.edit.color": "Couleur",
   "dialog.project.edit.color.select": "Sélectionner la couleur {{color}}",
 
-  "dialog.project.edit.worktree.startup": "Script de démarrage de l'espace de travail",
-  "dialog.project.edit.worktree.startup.description":
-    "S'exécute après la création d'un nouvel espace de travail (arbre de travail).",
-  "dialog.project.edit.worktree.startup.placeholder": "p. ex. bun install",
   "context.breakdown.title": "Répartition du contexte",
   "context.breakdown.note":
     "Répartition approximative des jetons d'entrée. \"Autre\" inclut les définitions d'outils et les frais généraux.",
@@ -553,11 +549,6 @@ export const dict = {
   "toast.permissions.autoaccept.off.title": "Arrêt acceptation auto des modifications",
   "toast.permissions.autoaccept.off.description":
     "Les permissions de modification et d'écriture nécessiteront une approbation",
-
-  "toast.workspace.enabled.title": "Espaces de travail activés",
-  "toast.workspace.enabled.description": "Plusieurs worktrees sont désormais affichés dans la barre latérale",
-  "toast.workspace.disabled.title": "Espaces de travail désactivés",
-  "toast.workspace.disabled.description": "Seul le worktree principal est affiché dans la barre latérale",
 
   "toast.model.none.title": "Aucun modèle sélectionné",
   "toast.model.none.description": "Connectez un fournisseur pour résumer cette session",
@@ -711,9 +702,6 @@ export const dict = {
   "session.messages.jumpToLatest": "Aller au dernier",
   "session.context.addToContext": "Ajouter {{selection}} au contexte",
 
-  "session.new.worktree.main": "Branche principale",
-  "session.new.worktree.mainWithBranch": "Branche principale ({{branch}})",
-  "session.new.worktree.create": "Créer un nouvel arbre de travail",
   "session.new.lastModified": "Dernière modification",
   "sidebar.session.newSession": "Nouvelle Session",
   "sidebar.session.newSession.tooltip":
@@ -1778,7 +1766,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Moins de distractions, plus facile et plus rapide à lire.",
   "migration.whatsNew.features.agentManager.title": "Gestionnaire d'agents",
   "migration.whatsNew.features.agentManager.detail":
-    "Une interface unifiée pour exécuter plusieurs agents en parallèle, chacun sur son propre arbre de travail — surveillez la progression, changez de contexte et examinez les modifications depuis un seul endroit.",
+    "Une interface unifiée pour exécuter plusieurs agents en parallèle — surveillez la progression, changez de contexte et examinez les modifications depuis un seul endroit.",
   "migration.whatsNew.features.foundation.title": "Base partagée",
   "migration.whatsNew.features.foundation.detail":
     "Un noyau petit et efficace partagé par tous les produits Kilo. Une expérience familière quelle que soit votre façon de travailler.",
@@ -1864,30 +1852,6 @@ export const dict = {
   "settings.saveBar.save": "Enregistrer",
   "settings.saveBar.saving": "Enregistrement…",
   "settings.saveBar.saveFailed": "Impossible d'enregistrer les paramètres",
-  "diffViewer.source.workspace.label": "Branche",
-  "diffViewer.source.workspace.tooltip":
-    "Toutes les modifications de cette branche par rapport à la branche de base. Inclut les fichiers non commités (staged, unstaged, non suivis) et les commits locaux qui ne sont pas encore dans la branche de base.",
-  "diffViewer.source.staged.label": "Indexé",
-  "diffViewer.source.staged.tooltip":
-    "Fichiers avec des modifications que vous avez ajoutées à la zone de staging de git (`git add`), tels qu'ils apparaîtront dans le prochain commit.",
-  "diffViewer.source.unstaged.label": "Non indexé",
-  "diffViewer.source.unstaged.tooltip":
-    "Fichiers modifiés dans votre arborescence de travail mais pas encore indexés, plus les fichiers non suivis (nouveaux).",
-  "diffViewer.source.session.label": "Session",
-  "diffViewer.source.session.tooltip":
-    "Fichiers modifiés par Kilo pendant la session actuelle, basé sur des snapshots par tour. Réinitialisé lors du démarrage d'une nouvelle session.",
-  "diffViewer.group.session": "Session",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Les instantanés sont désactivés pour ce dépôt. Veuillez modifier vos fichiers de configuration pour afficher les changements de la session.",
-
-  "diffViewer.baseBranch.auto": "Par défaut",
-  "diffViewer.baseBranch.default": "Par défaut",
-  "diffViewer.baseBranch.remote": "Distante",
-  "diffViewer.baseBranch.search": "Rechercher des branches",
-  "diffViewer.baseBranch.empty": "Aucune branche correspondante",
-  "diffViewer.baseBranch.loading": "Chargement des branches…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "Le plan est prêt :",
   "chat.search.placeholder": "Rechercher dans la conversation…",
   "chat.search.toggle": "Rechercher dans la conversation",

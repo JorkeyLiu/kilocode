@@ -179,6 +179,21 @@ describe("evidenceInventory (required artifact set)", () => {
     expect(rels).not.toContain("scratch:llm-requests.jsonl")
     expect(rels).not.toContain("scratch:llm-matrix-tab-close-final.json")
   })
+
+  it("requires the P3.2 worktree-removal decision-critical set", () => {
+    const { required } = evidenceInventory(new Set(["worktree-removal"]))
+    const rels = required.map((s) => `${s.base}:${s.rel}`)
+    expect(rels).toContain("scratch:plan.json")
+    expect(rels).toContain("scratch:runner-pid")
+    expect(rels).toContain("scratch:worktree-removal-runtime-evidence")
+    expect(rels).toContain("scratch:worktree-removal-dom-evidence")
+    expect(rels).toContain("scratch:llm-requests.jsonl")
+    expect(rels).toContain("scratch:llm-requests-worktree-removal.json")
+    expect(rels).toContain("scratch:llm-matrix-worktree-removal-final.json")
+    expect(rels).toContain("scratch:p32-snap-*.json")
+    expect(rels).toContain("workspace:.kilo/kilo.json")
+    expect(rels).toContain("workspace:rollback.txt")
+  })
 })
 
 describe("expandGlob (snapshot expansion)", () => {

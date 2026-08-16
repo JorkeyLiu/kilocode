@@ -2,8 +2,7 @@ import { describe, expect, it } from "bun:test"
 import * as fs from "fs/promises"
 import * as os from "os"
 import * as path from "path"
-import { imageMime, loadImage, MAX_IMAGE_BYTES, readImageFile } from "../../src/diff/shared/image"
-import { parseRawOids } from "../../src/diff/sources/git-status"
+import { imageMime, loadImage, MAX_IMAGE_BYTES, readImageFile } from "../../src/agent-manager/diff-media"
 
 describe("diff images", () => {
   it("recognizes every image format handled by the VS Code image preview", () => {
@@ -24,14 +23,6 @@ describe("diff images", () => {
     expect(imageMime("ASSETS/LOGO.PNG")).toBe("image/png")
     expect(imageMime("archive.zip")).toBeUndefined()
     expect(imageMime("photo.tiff")).toBeUndefined()
-  })
-
-  it("parses image blob identities from a single raw diff", () => {
-    const before = "1".repeat(40)
-    const after = "2".repeat(40)
-    const refs = parseRawOids(`:100644 100644 ${before} ${after} M\tassets/banner.png\n`)
-
-    expect(refs.get("assets/banner.png")).toEqual({ before, after })
   })
 
   it("encodes image sides without converting bytes to text", async () => {

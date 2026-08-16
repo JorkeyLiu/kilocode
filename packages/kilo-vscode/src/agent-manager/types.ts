@@ -8,8 +8,7 @@
  */
 
 import type { SnapshotFileDiff } from "@kilocode/sdk/v2/client"
-import type { DiffImage } from "../diff/types"
-import type { RunStatus } from "./run/manager"
+import type { DiffImage } from "./diff-media"
 import type { TerminalFont } from "./terminal-font"
 import type { SessionTimingMap } from "./session-timing"
 
@@ -20,7 +19,7 @@ export type { SessionTimingEntry } from "./session-timing"
 // Shared payload types
 // ---------------------------------------------------------------------------
 
-export type WorktreeDiffEntry = SnapshotFileDiff & {
+export type LocalDiffEntry = SnapshotFileDiff & {
   before?: string
   after?: string
   tracked?: boolean
@@ -47,21 +46,17 @@ interface LocalStatsMessage {
 
 interface StateMessage {
   type: "agentManager.state"
-  worktrees: never[]
   sessions: ManagedSession[]
   timing?: SessionTimingMap
   tabOrder?: Record<string, string[]>
   sessionsCollapsed?: boolean
   sidebarCollapsed?: boolean
   isGitRepo?: boolean
-  runStatuses?: RunStatus[]
-  runScriptConfigured?: boolean
-  runScriptPath?: string
 }
 
 interface TerminalCreatedMessage {
   type: "agentManager.terminal.created"
-  worktreeId: string | null // legacy field name
+  slotId: string | null
   terminalId: string
   title: string
   wsUrl: string
@@ -134,10 +129,6 @@ interface ActionOutMessage {
   action: string
 }
 
-interface RunStatusMessage extends RunStatus {
-  type: "agentManager.runStatus"
-}
-
 /** All messages the Agent Manager extension sends to the webview. */
 export type AgentManagerOutMessage =
   | LocalStatsMessage
@@ -150,7 +141,6 @@ export type AgentManagerOutMessage =
   | KeybindingsMessage
   | RepoInfoMessage
   | ActionOutMessage
-  | RunStatusMessage
   | TerminalCreatedMessage
   | TerminalClosedMessage
   | TerminalErrorMessage
@@ -165,31 +155,17 @@ interface CloseSessionIn {
   sessionId: string
 }
 
-/** Persist a session to agent-manager.json. */
+/** Persist a session to the managed-session registry. */
 interface PersistSessionIn {
   type: "agentManager.persistSession"
   sessionId: string
   draftID?: string
 }
 
-/** Remove a session from agent-manager.json. */
+/** Remove a session from the managed-session registry. */
 interface ForgetSessionIn {
   type: "agentManager.forgetSession"
   sessionId: string
-}
-
-interface ConfigureRunScriptIn {
-  type: "agentManager.configureRunScript"
-}
-
-interface RunScriptIn {
-  type: "agentManager.runScript"
-  worktreeId: string // legacy field name
-}
-
-interface StopRunScriptIn {
-  type: "agentManager.stopRunScript"
-  worktreeId: string // legacy field name
 }
 
 interface ShowTerminalIn {
@@ -379,7 +355,7 @@ interface AbortIn {
 
 interface TerminalCreateIn {
   type: "agentManager.terminal.create"
-  worktreeId: string | null // legacy field name
+  slotId: string | null
 }
 
 interface TerminalCloseIn {
@@ -400,9 +376,6 @@ export type AgentManagerInMessage =
   | PersistSessionIn
   | ForgetSessionIn
   | ForkSessionIn
-  | ConfigureRunScriptIn
-  | RunScriptIn
-  | StopRunScriptIn
   | ShowTerminalIn
   | ShowLocalTerminalIn
   | CopyToClipboardIn

@@ -462,7 +462,7 @@ export const layer = Layer.effect(
         yield* fs
           .writeFileString(
             gitignore,
-            // kilocode_change start - added pnpm-lock.yaml, yarn.lock, agent-manager.json (not in upstream)
+            // kilocode_change start - added pnpm-lock.yaml, yarn.lock (not in upstream)
             [
               "node_modules",
               "package.json",
@@ -471,7 +471,6 @@ export const layer = Layer.effect(
               "bun.lock",
               "yarn.lock",
               ".gitignore",
-              "agent-manager.json",
             ].join("\n"),
             // kilocode_change end
           )

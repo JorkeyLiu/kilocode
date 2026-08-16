@@ -420,7 +420,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Buraya sadece görsel veya PDF yapıştırılabilir.",
   "prompt.toast.modelAgentRequired.title": "Bir ajan ve model seçin",
   "prompt.toast.modelAgentRequired.description": "Komut göndermeden önce bir ajan ve model seçin.",
-  "prompt.toast.worktreeCreateFailed.title": "Çalışma ağacı oluşturulamadı",
+
   "prompt.toast.sessionCreateFailed.title": "Oturum oluşturulamadı",
   "prompt.toast.shellSendFailed.title": "Kabuk komutu gönderilemedi",
   "prompt.toast.commandSendFailed.title": "Komut gönderilemedi",
@@ -477,9 +477,6 @@ export const dict = {
   "dialog.project.edit.icon.recommended": "Önerilen: 128x128px",
   "dialog.project.edit.color": "Renk",
   "dialog.project.edit.color.select": "{{color}} rengini seç",
-  "dialog.project.edit.worktree.startup": "Çalışma alanı başlatma betiği",
-  "dialog.project.edit.worktree.startup.description": "Yeni bir çalışma alanı (worktree) oluşturduktan sonra çalışır.",
-  "dialog.project.edit.worktree.startup.placeholder": "örneğin bun install",
 
   "context.breakdown.title": "Bağlam Dökümü",
   "context.breakdown.note": 'Girdi tokenlerinin yaklaşık dökümü. "Diğer" araç tanımları ve ek yükleri içerir.',
@@ -538,11 +535,6 @@ export const dict = {
 
   "toast.theme.title": "Tema değiştirildi",
   "toast.scheme.title": "Renk şeması",
-
-  "toast.workspace.enabled.title": "Çalışma alanları etkinleştirildi",
-  "toast.workspace.enabled.description": "Kenar çubuğunda birden fazla çalışma ağacı gösterilecek",
-  "toast.workspace.disabled.title": "Çalışma alanları devre dışı bırakıldı",
-  "toast.workspace.disabled.description": "Kenar çubuğunda yalnızca ana çalışma ağacı gösterilecek",
 
   "toast.permissions.autoaccept.on.title": "Düzenlemeler otomatik kabul ediliyor",
   "toast.permissions.autoaccept.on.description": "Düzenleme ve yazma izinleri otomatik olarak onaylanacak",
@@ -703,9 +695,6 @@ export const dict = {
 
   "session.context.addToContext": "{{selection}} bağlama ekle",
 
-  "session.new.worktree.main": "Ana dal",
-  "session.new.worktree.mainWithBranch": "Ana dal ({{branch}})",
-  "session.new.worktree.create": "Yeni çalışma ağacı oluştur",
   "session.new.lastModified": "Son değişiklik",
   "sidebar.session.newSession": "Yeni Oturum",
   "sidebar.session.newSession.tooltip": "Mevcut oturumu koruyarak yeni bir konuşma başlatın.",
@@ -1711,7 +1700,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Daha az dikkat dağıtıcı, daha kolay ve hızlı okuma.",
   "migration.whatsNew.features.agentManager.title": "Ajan Yöneticisi",
   "migration.whatsNew.features.agentManager.detail":
-    "Birden fazla ajanı paralel olarak çalıştırmak için birleşik bir arayüz, her biri kendi worktree'sinde — ilerlemeyi izleyin, bağlam değiştirin ve değişiklikleri tek bir yerden inceleyin.",
+    "Birden fazla ajanı paralel olarak çalıştırmak için birleşik bir arayüz — ilerlemeyi izleyin, bağlam değiştirin ve değişiklikleri tek bir yerden inceleyin.",
   "migration.whatsNew.features.foundation.title": "Paylaşılan Temel",
   "migration.whatsNew.features.foundation.detail":
     "Her Kilo ürününde küçük ve verimli bir çekirdek. Nasıl çalışmayı tercih ederseniz edin, tanıdık bir deneyim.",
@@ -1837,30 +1826,6 @@ export const dict = {
   "settings.agentBehaviour.permissions.hint":
     "Kurallar sırayla değerlendirilir — son eşleşen kural kazanır. Bu, CLI arka ucundan çözümlenen kural kümesidir.",
   "settings.agentBehaviour.editMode.save": "Tamam",
-  "diffViewer.source.workspace.label": "Dal",
-  "diffViewer.source.workspace.tooltip":
-    "Bu daldaki tüm değişiklikler, temel dal ile karşılaştırıldığında. Commitlenmemiş dosyaları (staged, unstaged, izlenmeyen) ve temelde henüz bulunmayan yerel commitleri içerir.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "git'in hazırlama alanına eklediğin (`git add`) değişiklikleri içeren dosyalar. Bir sonraki commit'te görüneceği gibi.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "Çalışma ağacında değiştirilmiş ancak henüz staged edilmemiş dosyalar, artı takip edilmeyen (yeni) dosyalar.",
-  "diffViewer.source.session.label": "Oturum",
-  "diffViewer.source.session.tooltip":
-    "Geçerli oturum sırasında Kilo tarafından değiştirilen dosyalar, tur başı anlık görüntülere dayanır. Yeni bir oturum başlatıldığında sıfırlanır.",
-  "diffViewer.group.session": "Oturum",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Bu depoda anlık görüntüler devre dışı bırakılmıştır. Oturum değişikliklerini görüntülemek için yapılandırma dosyalarınızı düzenleyin.",
-
-  "diffViewer.baseBranch.auto": "Default",
-  "diffViewer.baseBranch.default": "Default",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Search branches",
-  "diffViewer.baseBranch.empty": "No matching branches",
-  "diffViewer.baseBranch.loading": "Loading branches…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "Plan hazır:",
   "chat.search.placeholder": "Sohbette ara…",
   "chat.search.toggle": "Sohbette ara",

@@ -79,11 +79,11 @@ Snapshots respect your `.gitignore` rules. Files ignored by Git (such as `node_m
 {% tabs %}
 {% tab label="VSCode" %}
 
-Checkpoints are integrated directly into your chat interface. Each agent turn that modified files shows a collapsible diff summary listing the changed files with addition/deletion counts.
+Checkpoints are integrated directly into your chat interface. Each agent turn that modified files shows a **modified files** label with the file count.
 
 ### Viewing Changes
 
-Click the diff summary on any agent turn to expand it and see which files were modified. Click an individual file to open a side-by-side diff in the VS Code editor.
+Include the current git changes as context in the prompt input with `@git-changes`, or open the files in the native VS Code diff editor to review them.
 
 ### Reverting with "Revert to here"
 
@@ -133,7 +133,6 @@ Checkpoints are captured automatically at each step of a task. In the CLI termin
 
 - **Full revert**: Revert your workspace to any point in the conversation
 - **Undo a revert**: Restore the state before the last revert
-- **Per-file revert**: Selectively undo changes to specific files while keeping others
 
 {% /tab %}
 {% /tabs %}
@@ -176,9 +175,9 @@ When you click "Redo All" (unrevert):
 
 Snapshot data is stored per-project and is periodically cleaned up. A background process runs `git gc --prune=7.days` every hour, which removes unreachable snapshot objects older than 7 days. Because snapshots are stored as raw tree hashes (not refs or commits), older snapshots may be pruned by garbage collection even if a session still references them.
 
-### Worktree Isolation
+### Snapshot Isolation
 
-When using the Agent Manager with git worktrees, each worktree gets its own isolated snapshot repository. This prevents snapshot data from one worktree interfering with another while sharing underlying Git objects for storage efficiency.
+Snapshot repositories are keyed by project and directory. When you work in a linked git worktree checkout (for example, opening the CLI directly in a git worktree), that checkout gets its own isolated snapshot repository, so snapshot data from one checkout never interferes with another. This is a generic git-worktree capability of the CLI; Agent Manager itself does not create worktrees — its sessions all share the workspace directory and therefore the workspace's snapshot repository.
 
 ## Git Installation
 

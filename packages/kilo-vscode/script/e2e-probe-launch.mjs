@@ -17,12 +17,13 @@
  *   KILO_E2E_SCENARIO=real-overflow     node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=sidebar-removal   node script/e2e-probe-launch.mjs
+ *   KILO_E2E_SCENARIO=worktree-removal  node script/e2e-probe-launch.mjs
  *
  * KILO_E2E_SCENARIO (all | tab-close | child-task-order | variant-memory |
  * topic-navigation | real-session | real-completed | real-overflow |
- * real-restart | sidebar-removal, default all) is forwarded to the probe and
- * the extension-host runner via the environment; the probe validates it
- * before VS Code launches.
+ * real-restart | sidebar-removal | worktree-removal, default all) is
+ * forwarded to the probe and the extension-host runner via the environment;
+ * the probe validates it before VS Code launches.
  *
  * Durable evidence handoff (KILO_E2E_EVIDENCE_DIR, test-only): when the env
  * var is set, this launcher owns the capture log and the atomic finalize:

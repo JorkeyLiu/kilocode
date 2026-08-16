@@ -9,7 +9,6 @@ import { Popover } from "@kilocode/kilo-ui/popover"
 import { Spinner } from "@kilocode/kilo-ui/spinner"
 import { TooltipKeybind } from "@kilocode/kilo-ui/tooltip"
 import { formatRelativeDate } from "../src/utils/date"
-import { colorCss } from "./section-colors"
 import type { SidebarSearchItem } from "./sidebar-search"
 
 export interface SidebarSearchMenuRef {
@@ -108,7 +107,6 @@ export const SidebarSearchMenu: Component<SidebarSearchMenuProps> = (props) => {
                   data-kind={item.kind}
                   data-state={item.state}
                   data-session-id={item.kind === "session" ? item.sessionId : undefined}
-                  data-worktree-id={item.kind === "worktree" ? item.worktreeId : undefined}
                 >
                   <span class="am-sidebar-search-icon">
                     <Show when={!working} fallback={<Spinner class="am-sidebar-search-spinner" />}>
@@ -121,21 +119,13 @@ export const SidebarSearchMenu: Component<SidebarSearchMenuProps> = (props) => {
                           </svg>
                         }
                       >
-                        <Icon name={item.kind === "worktree" ? "branch" : "speech-bubble"} size="small" />
+                        <Icon name="speech-bubble" size="small" />
                       </Show>
                     </Show>
                   </span>
                   <span class="am-sidebar-search-copy">
                     <span class="am-sidebar-search-title">{item.title}</span>
                     <span class="am-sidebar-search-meta">
-                      <Show when={item.section}>
-                        {(section) => (
-                          <span
-                            class="am-sidebar-search-swatch"
-                            style={{ background: colorCss(section().color) ?? "var(--border-weak-base)" }}
-                          />
-                        )}
-                      </Show>
                       <span>{item.meta.join(" · ")}</span>
                     </span>
                   </span>

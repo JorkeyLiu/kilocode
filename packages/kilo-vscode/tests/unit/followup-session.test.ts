@@ -27,13 +27,13 @@ describe("followup-session", () => {
 
   it("matches pending follow-ups by normalized directory before expiry", () => {
     const pending = {
-      dir: "c:/repo/.kilo/worktrees/feature",
+      dir: "c:/repo/session-feature",
       time: 1,
     }
 
-    expect(matchFollowup({ pending, dir: "C:\\repo\\.kilo\\worktrees\\feature\\", now: 2 })).toBe(true)
-    expect(matchFollowup({ pending, dir: "c:/repo/.kilo/worktrees/other", now: 2 })).toBe(false)
-    expect(matchFollowup({ pending, dir: "c:/repo/.kilo/worktrees/feature", now: 30_002 })).toBe(false)
+    expect(matchFollowup({ pending, dir: "C:\\repo\\session-feature\\", now: 2 })).toBe(true)
+    expect(matchFollowup({ pending, dir: "c:/repo/session-other", now: 2 })).toBe(false)
+    expect(matchFollowup({ pending, dir: "c:/repo/session-feature", now: 30_002 })).toBe(false)
   })
 
   it("matches a subagent session when directory and time match", () => {

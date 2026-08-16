@@ -191,7 +191,7 @@
 }
 
 /* ============================================
-   VscodeSessionTurn layout
+   Transcript turn layout
    ============================================ */
 
 /* Virtua positions turns absolutely based on measured box size, so flex `gap`
@@ -240,14 +240,9 @@
   line-height: var(--line-height-normal);
 }
 
-.vscode-session-turn-diffs {
-  width: 100%;
-}
-
 /* Treat every chat host as a readable document. User messages, assistant
    prose, tool calls, diffs, and the composer all share one centered lane. */
 .chat-view .vscode-session-turn-user,
-.chat-view .vscode-session-turn-diffs,
 .chat-view .error-card,
 .chat-view [data-component="tool-part-wrapper"] {
   width: 100%;
@@ -331,21 +326,13 @@
   margin-inline: 0;
 }
 
-.vscode-session-turn-diffs-trigger {
+.vscode-session-turn-diffs {
   display: inline-flex;
-  align-items: center;
+  align-items: baseline;
   gap: 6px;
-  padding: 0;
-  margin: 0;
-  background: transparent;
-  border: none;
-  color: inherit;
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
 }
 
-.vscode-session-turn-diffs-trigger [data-slot="session-turn-diffs-label"] {
+.vscode-session-turn-diffs [data-slot="session-turn-diffs-label"] {
   color: var(--text-strong);
   font-family: var(--font-family-sans);
   font-size: var(--font-size-base);
@@ -353,30 +340,12 @@
   line-height: var(--line-height-large);
 }
 
-.vscode-session-turn-diffs-trigger [data-slot="session-turn-diffs-chevron"] {
-  display: inline-flex;
-  align-items: center;
-  color: var(--icon-weaker);
-  opacity: 0;
-  transition: opacity 0.15s ease;
-}
-
-.vscode-session-turn-diffs-trigger:hover [data-slot="session-turn-diffs-chevron"],
-.vscode-session-turn-diffs-trigger:focus-visible [data-slot="session-turn-diffs-chevron"] {
-  opacity: 1;
-}
-
-.vscode-session-turn-diffs-trigger [data-slot="session-turn-diffs-count"] {
+.vscode-session-turn-diffs [data-slot="session-turn-diffs-count"] {
   color: var(--text-weak);
   font-family: var(--font-family-sans);
   font-size: var(--font-size-small);
   line-height: var(--line-height-large);
   font-variant-numeric: tabular-nums;
-}
-
-.vscode-session-turn-diffs-trigger [data-slot="session-turn-diffs-meta"] {
-  display: inline-flex;
-  align-items: center;
 }
 
 /* ============================================

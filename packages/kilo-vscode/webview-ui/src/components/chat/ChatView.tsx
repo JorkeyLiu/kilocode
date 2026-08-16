@@ -21,7 +21,7 @@ import { useSession } from "../../context/session"
 import { useLocalTabs } from "../../context/local-tabs"
 import { useVSCode } from "../../context/vscode"
 import { useLanguage } from "../../context/language"
-import { useWorktreeMode } from "../../context/worktree-mode"
+import { useAgentManager } from "../../context/agent-manager"
 import { useServer } from "../../context/server"
 import { useAgentRequirements } from "../../context/agent-requirements"
 import { TranscriptSearchProvider } from "../../context/transcript-search"
@@ -43,13 +43,13 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   const session = useSession()
   const vscode = useVSCode()
   const language = useLanguage()
-  const worktreeMode = useWorktreeMode()
+  const inAgentManager = useAgentManager()
   const server = useServer()
   const tabs = useLocalTabs()
   const requirements = useAgentRequirements()
   // Non-Agent-Manager (editor-tab chat) behaviors: session tab strip and
   // message-list live-region announcements.
-  const isSidebar = () => worktreeMode === undefined
+  const isSidebar = () => !inAgentManager
   const pendingSessionID = () => props.pendingSessionID ?? tabs?.pending()
 
   const id = () => session.currentSessionID()

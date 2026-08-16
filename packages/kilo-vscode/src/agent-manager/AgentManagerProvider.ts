@@ -19,9 +19,6 @@ import { GitOps } from "./GitOps"
 import { SessionTerminalManager } from "./SessionTerminalManager"
 import { createTerminalHost } from "./terminal-host"
 import { TerminalRouter } from "./terminal-routing"
-import { startVscodeRunTask } from "./run/task"
-import { RunController } from "./run/controller"
-import { handleRunMessage } from "./run/message"
 import { AgentManagerVisiblePresence } from "./am-visible-presence"
 import { createLocalDiff, diffSummary as localDiffSummary } from "./local-diff"
 import { parseToolRequest, startFromTool, type ToolRequest } from "./tool-start"
@@ -41,7 +38,6 @@ export class AgentManagerProvider implements Disposable {
   private outputChannel: OutputHandle
   private terminalManager: SessionTerminalManager
   private terminalRouter: TerminalRouter
-  private run: RunController
   private stateReady: Promise<void> | undefined
   private statsPoller: GitStatsPoller
   private gitOps: GitOps
@@ -89,24 +85,13 @@ export class AgentManagerProvider implements Disposable {
     this.unsubFont = watchTerminalFont((font) => {
       this.postToWebview({ type: "agentManager.terminal.fontChanged", font })
     })
-    this.run = new RunController({
-      root: () => this.getRoot(),
-      open: (file) => this.host.openDocument(file),
-      start: startVscodeRunTask,
-      post: (status) => this.postToWebview({ type: "agentManager.runStatus", ...status }),
-      error: (message) => this.postToWebview({ type: "error", message }),
-      log: (msg) => this.outputChannel.appendLine(`[RunScript] ${msg}`),
-      refresh: () => this.pushState(),
-    })
     const semaphore = new Semaphore(3)
     this.gitOps = new GitOps({ log: (...args) => this.log(...args), semaphore })
     const local = createLocalDiff(this.gitOps, (...args) => this.log(...args))
     this.statsPoller = new GitStatsPoller({
-      getWorktrees: () => [],
       getWorkspaceRoot: () => this.getRoot(),
       localDiff: (dir, base) => localDiffSummary(this.gitOps, dir, base, (...args) => this.log(...args)),
       semaphore,
-      onStats: () => {},
       onLocalStats: (stats) => {
         const msg = { type: "agentManager.localStats" as const, stats }
         this.cachedLocalStats = msg
@@ -178,7 +163,6 @@ export class AgentManagerProvider implements Disposable {
     this.attachPanel(
       this.host.openPanel({
         onBeforeMessage: (msg) => this.onMessage(msg),
-        worktreeDirectories: () => [],
       }),
     )
   }
@@ -381,7 +365,6 @@ export class AgentManagerProvider implements Disposable {
     m: AgentManagerInMessage,
     msg: Record<string, unknown>,
   ): Record<string, unknown> | null | undefined {
-    if (handleRunMessage(this.run, m)) return null
     if (m.type === "agentManager.showTerminal") {
       this.terminalManager.showTerminal(m.sessionId)
       return null
@@ -535,7 +518,6 @@ export class AgentManagerProvider implements Disposable {
             source: PLATFORM,
             sessionId: session.id,
             tool: true,
-            mode: "local",
           })
           return true
         },
@@ -570,7 +552,7 @@ export class AgentManagerProvider implements Disposable {
     this.pushState()
   }
 
-  /** Fork a session via the CLI backend (local-only, no worktree). */
+  /** Fork a session via the CLI backend (local-only). */
   private async onForkSession(sessionId: string, messageId?: string): Promise<void> {
     let client: KiloClient
     try {
@@ -635,17 +617,14 @@ export class AgentManagerProvider implements Disposable {
   }
 
   private pushState(): void {
-    const run = this.run.state()
     this.postToWebview({
       type: "agentManager.state",
-      worktrees: [],
       sessions: [...this.managedSessions.values()],
       timing: this.timing.snapshot(),
       tabOrder: this.tabOrder,
       sessionsCollapsed: this.sessionsCollapsed,
       sidebarCollapsed: this.sidebarCollapsed,
       isGitRepo: true,
-      ...run,
     })
 
     this.statsPoller.setEnabled(this.panel !== undefined)
@@ -759,10 +738,6 @@ export class AgentManagerProvider implements Disposable {
   /** Expose the active session id so shared commands (e.g. Show Changes) can target the focused session. */
   public getActiveSessionId(): string | undefined {
     return this.activeSessionId
-  }
-
-  public getWorktreeDirectories(): string[] {
-    return []
   }
 
   public postMessage(message: unknown): void {
@@ -927,7 +902,6 @@ export class AgentManagerProvider implements Disposable {
     this.visiblePresence.clear()
     this.statsPoller.stop()
     this.gitOps.dispose()
-    this.run.dispose()
     this.terminalManager.dispose()
     await this.terminalRouter.dispose()
     const panel = this.panel

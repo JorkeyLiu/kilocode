@@ -1,14 +1,11 @@
-import path from "path"
-import { eq, inArray, sql } from "drizzle-orm"
+import { eq, sql } from "drizzle-orm"
 import { Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import type { MessageV2 } from "@/session/message-v2"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import type { MessageID, PartID, SessionID } from "@/session/schema"
 import { Filesystem } from "@/util/filesystem"
-import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { ProjectV2 } from "@opencode-ai/core/project"
-import { AbsolutePath } from "@opencode-ai/core/schema"
 
 export namespace RecallSearch {
   const BATCH = 128
@@ -184,7 +181,6 @@ export namespace RecallSearch {
 
     yield* abort(input.signal)
     const { db } = yield* Database.Service
-    const projects = (yield* family(input.projectID)).map((id) => ProjectV2.ID.make(id))
     const rows = yield* db
       .select({
         id: SessionTable.id,
@@ -193,7 +189,7 @@ export namespace RecallSearch {
         updated: SessionTable.time_updated,
       })
       .from(SessionTable)
-      .where(inArray(SessionTable.project_id, projects))
+      .where(eq(SessionTable.project_id, ProjectV2.ID.make(input.projectID)))
       .all()
       .pipe(Effect.orDie)
     const items = new Map<SessionID, Item>()
@@ -316,25 +312,6 @@ export namespace RecallSearch {
     if (info.role === "user") return info.id < messageID
     return info.parentID < messageID
   }
-
-  const family = Effect.fn("RecallSearch.family")(function* (id: string) {
-    const { db } = yield* Database.Service
-    const row = yield* db
-      .select({ worktree: ProjectTable.worktree })
-      .from(ProjectTable)
-      .where(eq(ProjectTable.id, ProjectV2.ID.make(id)))
-      .get()
-      .pipe(Effect.orDie)
-    const root = row?.worktree ? Filesystem.resolve(row.worktree) : undefined
-    if (!root || root === path.parse(root).root) return [id]
-    const ids = (yield* db
-      .select({ id: ProjectTable.id })
-      .from(ProjectTable)
-      .where(eq(ProjectTable.worktree, AbsolutePath.make(root)))
-      .all()
-      .pipe(Effect.orDie)).map((item) => item.id)
-    return ids.length ? ids : [id]
-  })
 
   function parse(query: string) {
     const value = query.trim()

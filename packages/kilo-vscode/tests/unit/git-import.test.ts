@@ -4,11 +4,7 @@ import {
   localBranchName,
   parseForEachRefOutput,
   buildBranchList,
-  parseWorktreeList,
-  checkedOutBranchesFromWorktreeList,
   classifyPRError,
-  classifyWorktreeError,
-  validateGitRef,
 } from "../../src/agent-manager/git-import"
 
 // ---------------------------------------------------------------------------
@@ -233,97 +229,6 @@ describe("buildBranchList", () => {
 })
 
 // ---------------------------------------------------------------------------
-// parseWorktreeList
-// ---------------------------------------------------------------------------
-
-describe("parseWorktreeList", () => {
-  it("parses standard worktree entries", () => {
-    const raw = [
-      "worktree /home/user/repo",
-      "HEAD abc123",
-      "branch refs/heads/main",
-      "",
-      "worktree /home/user/repo/.worktrees/feat",
-      "HEAD def456",
-      "branch refs/heads/feat/cool",
-      "",
-    ].join("\n")
-
-    const entries = parseWorktreeList(raw)
-    expect(entries).toHaveLength(2)
-    expect(entries[0]).toEqual({ path: "/home/user/repo", branch: "main", bare: false, detached: false })
-    expect(entries[1]).toEqual({
-      path: "/home/user/repo/.worktrees/feat",
-      branch: "feat/cool",
-      bare: false,
-      detached: false,
-    })
-  })
-
-  it("detects bare worktree", () => {
-    const raw = "worktree /home/user/repo\nHEAD abc\nbare\n\n"
-    const entries = parseWorktreeList(raw)
-    expect(entries[0].bare).toBe(true)
-  })
-
-  it("detects detached HEAD", () => {
-    const raw = "worktree /home/user/repo/.wt/fix\nHEAD abc123\ndetached\n\n"
-    const entries = parseWorktreeList(raw)
-    expect(entries[0].detached).toBe(true)
-    expect(entries[0].branch).toBe("(detached)")
-  })
-
-  it("handles empty output", () => {
-    expect(parseWorktreeList("")).toEqual([])
-    expect(parseWorktreeList("\n\n")).toEqual([])
-  })
-
-  it("handles missing branch line with unknown", () => {
-    const raw = "worktree /some/path\nHEAD abc\n\n"
-    const entries = parseWorktreeList(raw)
-    expect(entries[0].branch).toBe("unknown")
-  })
-})
-
-// ---------------------------------------------------------------------------
-// checkedOutBranchesFromWorktreeList
-// ---------------------------------------------------------------------------
-
-describe("checkedOutBranchesFromWorktreeList", () => {
-  it("returns branches from non-bare non-detached entries", () => {
-    const raw = [
-      "worktree /repo",
-      "HEAD abc",
-      "branch refs/heads/main",
-      "",
-      "worktree /repo/.wt/feat",
-      "HEAD def",
-      "branch refs/heads/feat/x",
-      "",
-      "worktree /repo/.wt/detached",
-      "HEAD ghi",
-      "detached",
-      "",
-    ].join("\n")
-
-    const branches = checkedOutBranchesFromWorktreeList(raw)
-    expect(branches.has("main")).toBe(true)
-    expect(branches.has("feat/x")).toBe(true)
-    expect(branches.has("(detached)")).toBe(false)
-    expect(branches.size).toBe(2)
-  })
-
-  it("excludes bare entries", () => {
-    const raw = "worktree /repo\nHEAD abc\nbare\n\n"
-    expect(checkedOutBranchesFromWorktreeList(raw).size).toBe(0)
-  })
-
-  it("handles empty input", () => {
-    expect(checkedOutBranchesFromWorktreeList("").size).toBe(0)
-  })
-})
-
-// ---------------------------------------------------------------------------
 // classifyPRError
 // ---------------------------------------------------------------------------
 
@@ -346,96 +251,5 @@ describe("classifyPRError", () => {
 
   it("returns unknown for unrecognized errors", () => {
     expect(classifyPRError("something went wrong")).toBe("unknown")
-  })
-})
-
-// ---------------------------------------------------------------------------
-// validateGitRef
-// ---------------------------------------------------------------------------
-
-describe("validateGitRef", () => {
-  it("accepts simple branch names", () => {
-    expect(() => validateGitRef("main", "branch")).not.toThrow()
-    expect(() => validateGitRef("feat/cool", "branch")).not.toThrow()
-    expect(() => validateGitRef("fix-123", "branch")).not.toThrow()
-    expect(() => validateGitRef("v1.2.3", "branch")).not.toThrow()
-  })
-
-  it("accepts usernames with dots, hyphens, underscores", () => {
-    expect(() => validateGitRef("some-user", "owner")).not.toThrow()
-    expect(() => validateGitRef("user.name", "owner")).not.toThrow()
-    expect(() => validateGitRef("user_name", "owner")).not.toThrow()
-  })
-
-  it("rejects values starting with a dash (git flag injection)", () => {
-    expect(() => validateGitRef("--upload-pack=evil", "ref")).toThrow('Unsafe ref: "--upload-pack=evil"')
-    expect(() => validateGitRef("-b", "ref")).toThrow('Unsafe ref: "-b"')
-  })
-
-  it("rejects empty strings", () => {
-    expect(() => validateGitRef("", "ref")).toThrow('Unsafe ref: ""')
-  })
-
-  it("rejects values with spaces", () => {
-    expect(() => validateGitRef("bad name", "ref")).toThrow()
-  })
-
-  it("rejects values with shell metacharacters", () => {
-    expect(() => validateGitRef("$(whoami)", "ref")).toThrow()
-    expect(() => validateGitRef("foo;rm -rf /", "ref")).toThrow()
-    expect(() => validateGitRef("foo`id`", "ref")).toThrow()
-    expect(() => validateGitRef("foo|bar", "ref")).toThrow()
-  })
-
-  it("rejects values with newlines", () => {
-    expect(() => validateGitRef("foo\nbar", "ref")).toThrow()
-  })
-
-  it("rejects values containing .. (git ref traversal)", () => {
-    expect(() => validateGitRef("foo/../bar", "ref")).toThrow()
-    expect(() => validateGitRef("..hidden", "ref")).toThrow()
-  })
-})
-
-// ---------------------------------------------------------------------------
-// classifyWorktreeError
-// ---------------------------------------------------------------------------
-
-describe("classifyWorktreeError", () => {
-  it("detects git not found from spawn ENOENT", () => {
-    expect(classifyWorktreeError("spawn git ENOENT")).toBe("git_not_found")
-    expect(
-      classifyWorktreeError(
-        "Error: spawn git ENOENT at ChildProcess._handle.onexit (node:internal/child_process:285:19)",
-      ),
-    ).toBe("git_not_found")
-  })
-
-  it("detects git not found from PATH message", () => {
-    expect(
-      classifyWorktreeError("Git is not installed or not found in PATH. Please install Git and restart VS Code."),
-    ).toBe("git_not_found")
-  })
-
-  it("detects not a git repository", () => {
-    expect(
-      classifyWorktreeError(
-        "This folder is not a git repository. Initialize a repository or open a git project to use worktrees.",
-      ),
-    ).toBe("not_git_repo")
-  })
-
-  it("detects Git LFS missing", () => {
-    expect(
-      classifyWorktreeError(
-        "This repository uses Git LFS, but git-lfs was not found. Please install Git LFS to use this repository.",
-      ),
-    ).toBe("lfs_missing")
-  })
-
-  it("returns undefined for unrecognized errors", () => {
-    expect(classifyWorktreeError('Branch "foo" already exists')).toBeUndefined()
-    expect(classifyWorktreeError("Failed to create worktree: fatal: unknown error")).toBeUndefined()
-    expect(classifyWorktreeError("something went wrong")).toBeUndefined()
   })
 })

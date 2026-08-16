@@ -41,9 +41,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "關閉分頁",
   "agentManager.shortcuts.toggleTerminal": "切換終端機",
   "agentManager.shortcuts.runScript": "執行指令碼",
-  "agentManager.run.options": "執行選項",
-  "agentManager.run.configure": "設定執行指令碼",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "開啟 Agent Manager",
   "agentManager.shortcuts.cycleAgentMode": "Next agent mode",

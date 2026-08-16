@@ -99,9 +99,9 @@ Terminal command blocks stay expanded by default in the VS Code chat UI. Choose 
 
 Valid values are `expanded` and `collapsed`.
 
-### Markdown Diff Rendering
+### Reviewing Changes
 
-Markdown files in Kilo diff viewers can be shown as rendered Markdown instead of a raw text diff. Use the eye/code toggle in a Markdown file header, or set `kilo-code.new.diff.renderMarkdown` to `true` to render Markdown files by default.
+File changes made by the agent appear as per-turn diff summaries in the chat. Open files in the native VS Code diff editor, include current git changes as context with `@git-changes`, and roll back any turn with the snapshot-based **Revert to here** control. See [Checkpoints](/docs/code-with-ai/features/checkpoints) for the full rollback story.
 
 ### Export and Import
 

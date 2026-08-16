@@ -423,7 +423,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Tylko obrazy lub pliki PDF mogą być tutaj wklejane.",
   "prompt.toast.modelAgentRequired.title": "Wybierz agenta i model",
   "prompt.toast.modelAgentRequired.description": "Wybierz agenta i model przed wysłaniem zapytania.",
-  "prompt.toast.worktreeCreateFailed.title": "Nie udało się utworzyć drzewa roboczego",
+
   "prompt.toast.sessionCreateFailed.title": "Nie udało się utworzyć sesji",
   "prompt.toast.shellSendFailed.title": "Nie udało się wysłać polecenia powłoki",
   "prompt.toast.commandSendFailed.title": "Nie udało się wysłać polecenia",
@@ -481,10 +481,6 @@ export const dict = {
   "dialog.project.edit.color": "Kolor",
   "dialog.project.edit.color.select": "Wybierz kolor {{color}}",
 
-  "dialog.project.edit.worktree.startup": "Skrypt uruchamiania przestrzeni roboczej",
-  "dialog.project.edit.worktree.startup.description":
-    "Uruchamiany po utworzeniu nowej przestrzeni roboczej (drzewa roboczego).",
-  "dialog.project.edit.worktree.startup.placeholder": "np. bun install",
   "context.breakdown.title": "Podział kontekstu",
   "context.breakdown.note": 'Przybliżony podział tokenów wejściowych. "Inne" obejmuje definicje narzędzi i narzut.',
   "context.breakdown.system": "System",
@@ -546,11 +542,6 @@ export const dict = {
   "toast.permissions.autoaccept.on.description": "Uprawnienia do edycji i zapisu będą automatycznie zatwierdzane",
   "toast.permissions.autoaccept.off.title": "Zatrzymano automatyczne akceptowanie edycji",
   "toast.permissions.autoaccept.off.description": "Uprawnienia do edycji i zapisu będą wymagały zatwierdzenia",
-
-  "toast.workspace.enabled.title": "Przestrzenie robocze włączone",
-  "toast.workspace.enabled.description": "Kilka worktree jest teraz wyświetlanych na pasku bocznym",
-  "toast.workspace.disabled.title": "Przestrzenie robocze wyłączone",
-  "toast.workspace.disabled.description": "Tylko główny worktree jest wyświetlany na pasku bocznym",
 
   "toast.model.none.title": "Nie wybrano modelu",
   "toast.model.none.description": "Połącz dostawcę, aby podsumować tę sesję",
@@ -702,9 +693,6 @@ export const dict = {
 
   "session.context.addToContext": "Dodaj {{selection}} do kontekstu",
 
-  "session.new.worktree.main": "Główna gałąź",
-  "session.new.worktree.mainWithBranch": "Główna gałąź ({{branch}})",
-  "session.new.worktree.create": "Utwórz nowe drzewo robocze",
   "session.new.lastModified": "Ostatnio zmodyfikowano",
   "sidebar.session.newSession": "Nowa Sesja",
   "sidebar.session.newSession.tooltip": "Rozpocznij nową konwersację, zachowując obecną sesję bez zmian.",
@@ -1742,7 +1730,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Mniej rozpraszaczy, łatwiejszy i szybszy do czytania.",
   "migration.whatsNew.features.agentManager.title": "Menedżer agentów",
   "migration.whatsNew.features.agentManager.detail":
-    "Zunifikowany interfejs do uruchamiania wielu agentów równolegle, każdy na własnym drzewie roboczym — monitoruj postęp, przełączaj kontekst i przeglądaj zmiany w jednym miejscu.",
+    "Zunifikowany interfejs do uruchamiania wielu agentów równolegle — monitoruj postęp, przełączaj kontekst i przeglądaj zmiany w jednym miejscu.",
   "migration.whatsNew.features.foundation.title": "Wspólny fundament",
   "migration.whatsNew.features.foundation.detail":
     "Jedno małe, wydajne jądro we wszystkich produktach Kilo. Znajome doświadczenie niezależnie od sposobu pracy.",
@@ -1825,30 +1813,6 @@ export const dict = {
   "settings.saveBar.save": "Zapisz",
   "settings.saveBar.saving": "Zapisywanie…",
   "settings.saveBar.saveFailed": "Nie można zapisać ustawień",
-  "diffViewer.source.workspace.label": "Gałąź",
-  "diffViewer.source.workspace.tooltip":
-    "Wszystkie zmiany na tej gałęzi w porównaniu z gałęzią bazową. Obejmuje niezacommitowane pliki (staged, unstaged, nieśledzone) oraz lokalne commity, których jeszcze nie ma w bazie.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "Pliki ze zmianami dodanymi do obszaru przygotowania git (`git add`), tak jak pojawią się w następnym commicie.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "Pliki zmodyfikowane w drzewie roboczym, ale jeszcze nieprzygotowane, plus nieśledzone (nowe) pliki.",
-  "diffViewer.source.session.label": "Sesja",
-  "diffViewer.source.session.tooltip":
-    "Pliki zmienione przez Kilo w trakcie bieżącej sesji, na podstawie snapshotów na turę. Resetowane przy rozpoczęciu nowej sesji.",
-  "diffViewer.group.session": "Sesja",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Migawki są wyłączone dla tego repozytorium. Edytuj pliki konfiguracyjne, aby wyświetlać zmiany sesji.",
-
-  "diffViewer.baseBranch.auto": "Default",
-  "diffViewer.baseBranch.default": "Default",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Search branches",
-  "diffViewer.baseBranch.empty": "No matching branches",
-  "diffViewer.baseBranch.loading": "Loading branches…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "Plan jest gotowy:",
   "chat.search.placeholder": "Szukaj w czacie…",
   "chat.search.toggle": "Szukaj w czacie",

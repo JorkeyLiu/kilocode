@@ -1,0 +1,93 @@
+{
+  "requestedAt": "2026-08-15T18:01:50.776Z",
+  "sessions": [
+    {
+      "id": "ses_ff969d093ffepEdfWQzUXccrRu",
+      "title": "E2E Title",
+      "agent": "e2e-agent",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": null,
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "createdAt": 1786816900972,
+      "updatedAt": 1786816908019
+    }
+  ],
+  "messages": {
+    "ses_ff969d093ffepEdfWQzUXccrRu": [
+      {
+        "id": "msg_006962f51001rpsB1dRy7sVrUl",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_ROLLBACK_EDIT: edit the tracked file"
+      },
+      {
+        "id": "msg_006963157001vsc9f1eS3laHp2",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "",
+        "tools": [
+          {
+            "tool": "write",
+            "status": "completed",
+            "callID": "call_e2e_rollback_1",
+            "output": "Wrote file successfully.",
+            "title": "rollback.txt",
+            "metadata": {
+              "diagnostics": {},
+              "filepath": "/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/workspace/rollback.txt",
+              "exists": true,
+              "filediff": {
+                "file": "/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/workspace/rollback.txt",
+                "additions": 1,
+                "deletions": 1,
+                "patch": "Index: /private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/workspace/rollback.txt\n===================================================================\n--- /private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/workspace/rollback.txt\n+++ /private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-FeztTn/workspace/rollback.txt\n@@ -1,1 +1,1 @@\n-E2E_ROLLBACK_ORIGINAL\n+E2E_ROLLBACK_EDITED\n"
+              },
+              "truncated": false
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "statuses": {
+    "ses_ff969d093ffepEdfWQzUXccrRu": "busy"
+  },
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {},
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {
+    "ses_ff969d093ffepEdfWQzUXccrRu": []
+  }
+}

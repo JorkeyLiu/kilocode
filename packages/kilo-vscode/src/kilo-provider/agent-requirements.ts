@@ -54,7 +54,6 @@ export type RequirementDirectoryInput = {
   workspaceDirectories?: readonly string[]
   projectDirectory?: string | null
   sessionDirectories: ReadonlyMap<string, string>
-  worktreeDirectories?: () => readonly string[]
 }
 
 export type VSCodeExtensionLookup = (id: string) => unknown
@@ -78,7 +77,6 @@ export function requirementDirectory(input: RequirementDirectoryInput): string |
     ...(input.workspaceDirectories ?? []),
     input.projectDirectory ?? undefined,
     ...input.sessionDirectories.values(),
-    ...(input.worktreeDirectories?.() ?? []),
   ].filter((dir): dir is string => !!dir)
 
   return dirs.find((dir) => sameDirectory(dir, input.requested))

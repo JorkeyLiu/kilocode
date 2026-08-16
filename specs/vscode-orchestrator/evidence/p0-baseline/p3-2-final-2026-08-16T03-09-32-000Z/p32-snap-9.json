@@ -1,0 +1,116 @@
+{
+  "requestedAt": "2026-08-16T03:11:12.871Z",
+  "sessions": [
+    {
+      "id": "ses_ff77329c2ffe0A4MB3YuhomWGJ",
+      "title": "E2E Title",
+      "agent": "e2e-agent",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": null,
+      "summary": {
+        "additions": 1,
+        "deletions": 1,
+        "files": 1
+      },
+      "createdAt": 1786849842749,
+      "updatedAt": 1786849867256
+    }
+  ],
+  "messages": {
+    "ses_ff77329c2ffe0A4MB3YuhomWGJ": [
+      {
+        "id": "msg_0088cd625001JS6sJ1kCfW4kfL",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_ROLLBACK_EDIT: edit the tracked file"
+      },
+      {
+        "id": "msg_0088cd82c001i4wUvmKVFHgCIy",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "",
+        "tools": [
+          {
+            "tool": "write",
+            "status": "completed",
+            "callID": "call_e2e_rollback_1",
+            "output": "Wrote file successfully.",
+            "title": "rollback.txt",
+            "metadata": {
+              "diagnostics": {},
+              "filepath": "/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/workspace/rollback.txt",
+              "exists": true,
+              "filediff": {
+                "file": "/private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/workspace/rollback.txt",
+                "additions": 1,
+                "deletions": 1,
+                "patch": "Index: /private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/workspace/rollback.txt\n===================================================================\n--- /private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/workspace/rollback.txt\n+++ /private/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/workspace/rollback.txt\n@@ -1,1 +1,1 @@\n-E2E_ROLLBACK_ORIGINAL\n+E2E_ROLLBACK_EDITED\n"
+              },
+              "truncated": false
+            }
+          }
+        ]
+      },
+      {
+        "id": "msg_0088d0278001MUnvvbtKuYfHon",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "E2E_ROLLBACK_EDIT_COMPLETED"
+      },
+      {
+        "id": "msg_0088d2a950013KgrgppHOpz83R",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_ROLLBACK_SUMMARY: summarize the edit"
+      },
+      {
+        "id": "msg_0088d2b3a001tfkeqeAahdDHhv",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "E2E_ROLLBACK_SUMMARY_COMPLETED"
+      }
+    ]
+  },
+  "statuses": {
+    "ses_ff77329c2ffe0A4MB3YuhomWGJ": "busy"
+  },
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {},
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {
+    "ses_ff77329c2ffe0A4MB3YuhomWGJ": []
+  }
+}

@@ -432,7 +432,7 @@ export const dict = {
   "prompt.toast.modelAgentRequired.title": "Wählen Sie einen Agenten und ein Modell",
   "prompt.toast.modelAgentRequired.description":
     "Wählen Sie einen Agenten und ein Modell, bevor Sie eine Eingabe senden.",
-  "prompt.toast.worktreeCreateFailed.title": "Worktree konnte nicht erstellt werden",
+
   "prompt.toast.sessionCreateFailed.title": "Sitzung konnte nicht erstellt werden",
   "prompt.toast.shellSendFailed.title": "Shell-Befehl konnte nicht gesendet werden",
   "prompt.toast.commandSendFailed.title": "Befehl konnte nicht gesendet werden",
@@ -490,10 +490,6 @@ export const dict = {
   "dialog.project.edit.color": "Farbe",
   "dialog.project.edit.color.select": "{{color}}-Farbe auswählen",
 
-  "dialog.project.edit.worktree.startup": "Startup-Skript für Arbeitsbereich",
-  "dialog.project.edit.worktree.startup.description":
-    "Wird nach dem Erstellen eines neuen Arbeitsbereichs (Worktree) ausgeführt.",
-  "dialog.project.edit.worktree.startup.placeholder": "z. B. bun install",
   "context.breakdown.title": "Kontext-Aufschlüsselung",
   "context.breakdown.note":
     'Ungefähre Aufschlüsselung der Eingabe-Token. "Andere" beinhaltet Werkzeugdefinitionen und Overhead.',
@@ -551,10 +547,6 @@ export const dict = {
 
   "toast.theme.title": "Thema gewechselt",
   "toast.scheme.title": "Farbschema",
-  "toast.workspace.enabled.title": "Arbeitsbereiche aktiviert",
-  "toast.workspace.enabled.description": "Mehrere Worktrees werden jetzt in der Seitenleiste angezeigt",
-  "toast.workspace.disabled.title": "Arbeitsbereiche deaktiviert",
-  "toast.workspace.disabled.description": "Nur der Haupt-Worktree wird in der Seitenleiste angezeigt",
 
   "toast.permissions.autoaccept.on.title": "Änderungen werden automatisch akzeptiert",
   "toast.permissions.autoaccept.on.description": "Bearbeitungs- und Schreibrechte werden automatisch genehmigt",
@@ -712,9 +704,6 @@ export const dict = {
   "session.messages.jumpToLatest": "Zum neuesten springen",
   "session.context.addToContext": "{{selection}} zum Kontext hinzufügen",
 
-  "session.new.worktree.main": "Haupt-Branch",
-  "session.new.worktree.mainWithBranch": "Haupt-Branch ({{branch}})",
-  "session.new.worktree.create": "Neuen Worktree erstellen",
   "session.new.lastModified": "Zuletzt geändert",
   "sidebar.session.newSession": "Neue Sitzung",
   "sidebar.session.newSession.tooltip": "Starte eine neue Unterhaltung, während die aktuelle Sitzung intakt bleibt.",
@@ -1769,7 +1758,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Weniger Ablenkungen, einfacher und schneller zu lesen.",
   "migration.whatsNew.features.agentManager.title": "Agentenverwaltung",
   "migration.whatsNew.features.agentManager.detail":
-    "Eine einheitliche Oberfläche zum parallelen Ausführen mehrerer Agenten, jeweils in einem eigenen Worktree — Fortschritt überwachen, Kontext wechseln und Änderungen an einem Ort überprüfen.",
+    "Eine einheitliche Oberfläche zum parallelen Ausführen mehrerer Agenten — Fortschritt überwachen, Kontext wechseln und Änderungen an einem Ort überprüfen.",
   "migration.whatsNew.features.foundation.title": "Gemeinsame Grundlage",
   "migration.whatsNew.features.foundation.detail":
     "Ein kleiner, effizienter Kern über alle Kilo-Produkte hinweg. Ein vertrautes Erlebnis, egal wie Sie arbeiten.",
@@ -1853,30 +1842,6 @@ export const dict = {
   "settings.saveBar.save": "Speichern",
   "settings.saveBar.saving": "Speichern…",
   "settings.saveBar.saveFailed": "Einstellungen konnten nicht gespeichert werden",
-  "diffViewer.source.workspace.label": "Branch",
-  "diffViewer.source.workspace.tooltip":
-    "Alle Änderungen in diesem Branch im Vergleich zum Base-Branch. Enthält nicht committete Dateien (gestaged, ungestaged, nicht getrackt) und lokale Commits, die noch nicht im Base-Branch sind.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "Dateien mit Änderungen, die du zu gits Staging-Bereich hinzugefügt hast (`git add`), wie sie im nächsten Commit erscheinen werden.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "Dateien, die in deinem Arbeitsbaum geändert, aber noch nicht gestaged wurden, plus nicht verfolgte (neue) Dateien.",
-  "diffViewer.source.session.label": "Sitzung",
-  "diffViewer.source.session.tooltip":
-    "Von Kilo während der aktuellen Sitzung geänderte Dateien, basierend auf Snapshots pro Runde. Wird beim Start einer neuen Sitzung zurückgesetzt.",
-  "diffViewer.group.session": "Sitzung",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Snapshots sind für dieses Repository deaktiviert. Bitte bearbeite deine Konfigurationsdateien, um die Sitzungsänderungen anzuzeigen.",
-
-  "diffViewer.baseBranch.auto": "Standard",
-  "diffViewer.baseBranch.default": "Standard",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Branches suchen",
-  "diffViewer.baseBranch.empty": "Keine passenden Branches",
-  "diffViewer.baseBranch.loading": "Branches werden geladen…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "Plan ist bereit:",
   "chat.search.placeholder": "Chat durchsuchen…",
   "chat.search.toggle": "Chat durchsuchen",

@@ -50,7 +50,7 @@ describe("buildMentionResults", () => {
       type: "git-changes",
       value: "git-changes",
       label: "Git changes",
-      description: "Current session/worktree changes",
+      description: "Current session changes",
     })
   })
 

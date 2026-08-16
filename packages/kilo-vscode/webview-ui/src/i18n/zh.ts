@@ -413,7 +413,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "这里只能粘贴图片或 PDF 文件。",
   "prompt.toast.modelAgentRequired.title": "请选择智能体和模型",
   "prompt.toast.modelAgentRequired.description": "发送提示前请先选择智能体和模型。",
-  "prompt.toast.worktreeCreateFailed.title": "创建工作树失败",
+
   "prompt.toast.sessionCreateFailed.title": "创建会话失败",
   "prompt.toast.shellSendFailed.title": "发送 shell 命令失败",
   "prompt.toast.commandSendFailed.title": "发送命令失败",
@@ -470,9 +470,6 @@ export const dict = {
   "dialog.project.edit.color": "颜色",
   "dialog.project.edit.color.select": "选择{{color}}颜色",
 
-  "dialog.project.edit.worktree.startup": "工作区启动脚本",
-  "dialog.project.edit.worktree.startup.description": "在创建新的工作区 (worktree) 后运行。",
-  "dialog.project.edit.worktree.startup.placeholder": "例如 bun install",
   "context.breakdown.title": "上下文拆分",
   "context.breakdown.note": "输入 token 的大致拆分。“其他”包含工具定义和开销。",
   "context.breakdown.system": "系统",
@@ -529,11 +526,6 @@ export const dict = {
 
   "toast.theme.title": "主题已切换",
   "toast.scheme.title": "颜色方案",
-
-  "toast.workspace.enabled.title": "工作区已启用",
-  "toast.workspace.enabled.description": "侧边栏现在显示多个工作树",
-  "toast.workspace.disabled.title": "工作区已禁用",
-  "toast.workspace.disabled.description": "侧边栏只显示主工作树",
 
   "toast.permissions.autoaccept.on.title": "自动接受编辑",
   "toast.permissions.autoaccept.on.description": "编辑和写入权限将自动获批",
@@ -684,9 +676,6 @@ export const dict = {
   "session.messages.jumpToLatest": "跳转到最新",
   "session.context.addToContext": "将 {{selection}} 添加到上下文",
 
-  "session.new.worktree.main": "主分支",
-  "session.new.worktree.mainWithBranch": "主分支（{{branch}}）",
-  "session.new.worktree.create": "创建新的 worktree",
   "session.new.lastModified": "最后修改",
   "sidebar.session.newSession": "新会话",
   "sidebar.session.newSession.tooltip": "在保持当前会话完整的同时开始全新的对话。",
@@ -1663,7 +1652,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "更少干扰，更易阅读，更快上手。",
   "migration.whatsNew.features.agentManager.title": "代理管理器",
   "migration.whatsNew.features.agentManager.detail":
-    "一个统一的界面，可以并行运行多个智能体，每个智能体各自使用独立的 worktree——在同一个地方监控进度、切换上下文和审查变更。",
+    "一个统一的界面，可以并行运行多个智能体——在同一个地方监控进度、切换上下文和审查变更。",
   "migration.whatsNew.features.foundation.title": "共享基础",
   "migration.whatsNew.features.foundation.detail":
     "所有 Kilo 产品共享一个小巧高效的核心。无论你选择哪种方式工作，都能获得熟悉的体验。",
@@ -1744,26 +1733,6 @@ export const dict = {
   "settings.saveBar.save": "保存",
   "settings.saveBar.saving": "保存中…",
   "settings.saveBar.saveFailed": "无法保存设置",
-  "diffViewer.source.workspace.label": "分支",
-  "diffViewer.source.workspace.tooltip":
-    "此分支相对于基础分支的所有更改。包括未提交的文件（已暂存、未暂存、未跟踪）以及尚未合入基础分支的本地提交。",
-  "diffViewer.source.staged.label": "已暂存",
-  "diffViewer.source.staged.tooltip": "已使用 `git add` 添加到 git 暂存区的已修改文件，将出现在下一次提交中。",
-  "diffViewer.source.unstaged.label": "未暂存",
-  "diffViewer.source.unstaged.tooltip": "在工作树中已修改但尚未暂存的文件，以及未跟踪（新）的文件。",
-  "diffViewer.source.session.label": "会话",
-  "diffViewer.source.session.tooltip": "Kilo 在当前会话中更改的文件，基于每轮快照。开始新会话时重置。",
-  "diffViewer.group.session": "会话",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled": "此仓库的快照已禁用。请编辑配置文件以显示会话变更。",
-
-  "diffViewer.baseBranch.auto": "默认",
-  "diffViewer.baseBranch.default": "默认",
-  "diffViewer.baseBranch.remote": "远程",
-  "diffViewer.baseBranch.search": "搜索分支",
-  "diffViewer.baseBranch.empty": "没有匹配的分支",
-  "diffViewer.baseBranch.loading": "正在加载分支…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "计划已准备就绪：",
   "chat.search.placeholder": "搜索聊天…",
   "chat.search.toggle": "搜索聊天",

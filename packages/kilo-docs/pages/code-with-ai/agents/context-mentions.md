@@ -36,7 +36,6 @@ You can also add file mentions by dragging and dropping:
 |---|---|---|
 | **Explorer / Editor tabs** | Drag a file or folder from VS Code's Explorer or an editor tab into the chat input | Inserts an `@/relative/path` mention |
 | **Multiple files** | Drag several files at once | Inserts space-separated `@` mentions |
-| **Agent Manager diff headers** | Drag a file header from the Agent Manager's diff panel into chat | Inserts an `@file` mention |
 | **Images** | Hold **Shift** while dragging an image file from your OS file manager into the chat input | Attaches the image |
 
 {% callout type="info" %}

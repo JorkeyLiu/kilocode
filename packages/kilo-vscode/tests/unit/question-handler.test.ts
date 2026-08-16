@@ -27,7 +27,6 @@ function ctx(
   opts: {
     tracked?: string[]
     dirs?: Map<string, string>
-    extra?: string[]
     pending?: Record<string, QuestionRequest[]>
     errors?: { list?: Record<string, unknown>; reply?: unknown; reject?: unknown }
     changeOnList?: string
@@ -78,7 +77,6 @@ function ctx(
     currentSessionId: "ses-root",
     trackedSessionIds: new Set(opts.tracked ?? ["ses-root"]),
     sessionDirectories: dirs,
-    extraDirectories: () => opts.extra ?? [],
     postMessage: (msg) => messages.push(msg),
     getWorkspaceDirectory: (sessionID) => dirs.get(sessionID ?? "") ?? "/workspace",
     recordQuestionDirectory: (id, dir) => questionDirs.set(id, dir),
@@ -104,9 +102,9 @@ describe("question handlers", () => {
   it("routes replies through the recorded request directory", async () => {
     const { fake, replies, questionDirs } = ctx({
       tracked: ["ses-worktree"],
-      dirs: new Map([["ses-worktree", "/workspace/.kilo/worktrees/current"]]),
+      dirs: new Map([["ses-worktree", "/workspace/session-current"]]),
     })
-    questionDirs.set("req-1", "/workspace/.kilo/worktrees/origin")
+    questionDirs.set("req-1", "/workspace/session-origin")
 
     const ok = await handleQuestionReply(fake, "req-1", [["Continue"]], "ses-worktree")
 
@@ -115,7 +113,7 @@ describe("question handlers", () => {
       {
         requestID: "req-1",
         answers: [["Continue"]],
-        directory: "/workspace/.kilo/worktrees/origin",
+        directory: "/workspace/session-origin",
       },
     ])
     expect(questionDirs.has("req-1")).toBe(false)
@@ -124,21 +122,21 @@ describe("question handlers", () => {
   it("routes rejects through the recorded request directory", async () => {
     const { fake, rejects, questionDirs } = ctx({
       tracked: ["ses-worktree"],
-      dirs: new Map([["ses-worktree", "/workspace/.kilo/worktrees/current"]]),
+      dirs: new Map([["ses-worktree", "/workspace/session-current"]]),
     })
-    questionDirs.set("req-2", "/workspace/.kilo/worktrees/origin")
+    questionDirs.set("req-2", "/workspace/session-origin")
 
     const ok = await handleQuestionReject(fake, "req-2", "ses-worktree")
 
     expect(ok).toBe(true)
-    expect(rejects).toEqual([{ requestID: "req-2", directory: "/workspace/.kilo/worktrees/origin" }])
+    expect(rejects).toEqual([{ requestID: "req-2", directory: "/workspace/session-origin" }])
     expect(questionDirs.has("req-2")).toBe(false)
   })
 
   it("falls back to the question session directory when no request route is known", async () => {
     const { fake, replies } = ctx({
       tracked: ["ses-worktree"],
-      dirs: new Map([["ses-worktree", "/workspace/.kilo/worktrees/current"]]),
+      dirs: new Map([["ses-worktree", "/workspace/session-current"]]),
     })
 
     const ok = await handleQuestionReply(fake, "req-3", [["Continue"]], "ses-worktree")
@@ -148,7 +146,7 @@ describe("question handlers", () => {
       {
         requestID: "req-3",
         answers: [["Continue"]],
-        directory: "/workspace/.kilo/worktrees/current",
+        directory: "/workspace/session-current",
       },
     ])
   })
@@ -158,7 +156,7 @@ describe("question handlers", () => {
       cause: { status: 404, body: { name: "NotFoundError" } },
     })
     const { fake, messages, questionDirs } = ctx({ errors: { reply: error } })
-    questionDirs.set("req-stale", "/workspace/.kilo/worktrees/origin")
+    questionDirs.set("req-stale", "/workspace/session-origin")
 
     const ok = await handleQuestionReply(fake, "req-stale", [["Continue"]], "ses-root")
 
@@ -171,10 +169,10 @@ describe("question handlers", () => {
     const error = new Error("Question request not found", {
       cause: { status: 404, body: { name: "NotFoundError" } },
     })
-    const dir = "/workspace/.kilo/worktrees/origin"
+    const dir = "/workspace/session-origin"
     const { fake, messages, questionDirs } = ctx({
       tracked: ["ses-root"],
-      extra: [dir],
+      dirs: new Map([["ses-root", dir]]),
       pending: { [dir]: [pending("req-misrouted", "ses-root")] },
       errors: { reply: error },
     })
@@ -206,9 +204,9 @@ describe("question handlers", () => {
     const error = new Error("Question request not found", {
       cause: { status: 404, body: { _tag: "NotFound" } },
     })
-    const dir = "/workspace/.kilo/worktrees/failing"
+    const dir = "/workspace/session-failing"
     const { fake, messages } = ctx({
-      extra: [dir],
+      dirs: new Map([["ses-root", dir]]),
       errors: { list: { [dir]: new Error("temporary failure") }, reply: error },
     })
     const spy = spyOn(console, "error").mockImplementation(() => {})
@@ -227,23 +225,23 @@ describe("question handlers", () => {
     })
     const { fake, messages, questionDirs } = ctx({ errors: { reject: error } })
     const spy = spyOn(console, "error").mockImplementation(() => {})
-    questionDirs.set("req-error", "/workspace/.kilo/worktrees/origin")
+    questionDirs.set("req-error", "/workspace/session-origin")
 
     const ok = await handleQuestionReject(fake, "req-error", "ses-root")
     spy.mockRestore()
 
     expect(ok).toBe(false)
-    expect(questionDirs.get("req-error")).toBe("/workspace/.kilo/worktrees/origin")
+    expect(questionDirs.get("req-error")).toBe("/workspace/session-origin")
     expect(messages).toContainEqual({ type: "questionError", requestID: "req-error" })
   })
 })
 
 describe("question recovery", () => {
   it("records the directory that owns each recovered question", async () => {
-    const dir = "/workspace/.kilo/worktrees/late"
+    const dir = "/workspace/session-late"
     const { fake, queries, messages, questionDirs } = ctx({
       tracked: ["ses-worktree"],
-      extra: [dir],
+      dirs: new Map([["ses-worktree", dir]]),
       pending: { [dir]: [pending("req-1", "ses-worktree")] },
     })
 
@@ -259,7 +257,7 @@ describe("question recovery", () => {
 
   it("deduplicates recovered questions across directories", async () => {
     const item = pending("req-1", "ses-worktree")
-    const dir = "/workspace/.kilo/worktrees/feature"
+    const dir = "/workspace/session-feature"
     const { fake, messages } = ctx({
       tracked: ["ses-worktree"],
       dirs: new Map([["ses-worktree", dir]]),
@@ -299,7 +297,7 @@ describe("question recovery", () => {
   })
 
   it("prunes scanned routes while preserving routes from failed directories", async () => {
-    const dir = "/workspace/.kilo/worktrees/failing"
+    const dir = "/workspace/session-failing"
     const error = new Error("temporary failure")
     const { fake, questionDirs } = ctx({
       tracked: ["ses-worktree"],

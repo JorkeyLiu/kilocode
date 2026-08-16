@@ -5,8 +5,8 @@
  *
  * Uses VS Code webview state API (getState/setState) for persistence.
  * Schema-versioned; one-time migration from legacy extension state
- * (agentManager.state push / .kilo/agent-manager.json) is guarded by
- * a migration marker so repeated imports do not occur.
+ * (agentManager.state push) is guarded by a migration marker so repeated
+ * imports do not occur.
  */
 
 export const LOCAL_UI_STATE_VERSION = 1
@@ -129,8 +129,8 @@ export function saveLocalUIState(
 // ---------------------------------------------------------------------------
 
 export interface LegacyImportSource {
-  /** Managed sessions from extension state (worktreeId is a legacy field name; null = local). */
-  managedSessions: { id: string; worktreeId?: string | null }[]
+  /** Managed sessions from extension state. */
+  managedSessions: { id: string }[]
   /** Tab order from extension state. */
   tabOrder?: Record<string, string[]>
   /** Sidebar collapsed from extension state. */
@@ -141,7 +141,7 @@ export interface LegacyImportSource {
  * Import LOCAL tab data from legacy extension state.
  *
  * Rules:
- *  - Only imports sessions with `worktreeId === null` (truly local).
+ *  - Imports the managed local sessions.
  *  - Uses `tabOrder[LOCAL]` for ordering when available.
  *  - Does NOT delete or rename any state files.
  */
@@ -149,8 +149,7 @@ export function importLegacyLocalTabs(
   source: LegacyImportSource,
   LOCAL: string,
 ): Pick<LocalUIState, "openTabIds" | "activeTabId" | "sidebarCollapsed"> {
-  const localSessions = source.managedSessions.filter((s) => !s.worktreeId) // worktreeId is legacy; null means local
-  const localIds = new Set(localSessions.map((s) => s.id))
+  const localIds = new Set(source.managedSessions.map((s) => s.id))
 
   // Use extension tab order for LOCAL when available, filtering to local sessions only
   const extOrder = source.tabOrder?.[LOCAL]

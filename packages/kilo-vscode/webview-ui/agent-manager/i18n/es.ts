@@ -41,9 +41,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "Cerrar pestaña",
   "agentManager.shortcuts.toggleTerminal": "Alternar terminal",
   "agentManager.shortcuts.runScript": "Ejecutar script",
-  "agentManager.run.options": "Opciones de ejecución",
-  "agentManager.run.configure": "Configurar script de ejecución",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "Abrir Agent Manager",
   "agentManager.shortcuts.cycleAgentMode": "Next agent mode",

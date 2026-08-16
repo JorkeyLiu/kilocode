@@ -5,7 +5,6 @@ import { provideTmpdirInstance } from "../fixture/fixture"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { AgentManagerTool } from "../../src/kilocode/tool/agent-manager"
 import { AgentManagerEvent, type AgentManagerStart } from "../../src/kilocode/agent-manager/event"
-import { AgentManager } from "../../src/kilocode/agent-manager/service"
 import { Bus } from "../../src/bus"
 import { Tool } from "../../src/tool/tool"
 import * as ToolJsonSchema from "../../src/tool/json-schema"
@@ -63,14 +62,13 @@ const agent: Agent.Info = {
 }
 
 // Default provider is `test`, so resolution should prefer test, then kilo, then others.
-function makeRuntime(defaultProviderID = "test", host: Partial<AgentManager.Interface> = {}) {
+function makeRuntime(defaultProviderID = "test") {
   return ManagedRuntime.make(
     Layer.mergeAll(
       Truncate.defaultLayer,
       Layer.mock(Agent.Service, { get: () => Effect.succeed(agent) }),
       Bus.defaultLayer,
       CrossSpawnSpawner.defaultLayer,
-      Layer.mock(AgentManager.Service, host),
       Layer.mock(Provider.Service, {
         list: () => Effect.succeed(providers),
         defaultModel: () => Effect.succeed({ providerID: defaultProviderID, modelID: "reasoning/model" }) as never,
@@ -141,7 +139,7 @@ function publish(
           Queue.offerUnsafe(events, item.properties),
         )
         yield* Effect.addFinalizer(() => Effect.sync(off))
-        yield* tool.execute({ mode: "local", tasks: [task] }, { ...ctx, messages, ask: () => Effect.void })
+        yield* tool.execute({ tasks: [task] }, { ...ctx, messages, ask: () => Effect.void })
         const event = yield* Queue.take(events).pipe(Effect.timeout("2 seconds"))
         return event.tasks[0]
       }),
@@ -158,15 +156,7 @@ describe("agent_manager tool", () => {
     expect(schema.anyOf).toBeUndefined()
     expect(schema.oneOf).toBeUndefined()
     expect(schema.allOf).toBeUndefined()
-    expect(Object.keys(schema.properties ?? {})).toEqual([
-      "mode",
-      "versions",
-      "tasks",
-      "action",
-      "filter",
-      "sessionID",
-      "prompt",
-    ])
+    expect(Object.keys(schema.properties ?? {})).toEqual(["tasks"])
   })
 
   test("asks for agent_manager permission", async () => {
@@ -176,7 +166,7 @@ describe("agent_manager tool", () => {
     await runtime.runPromise(
       provideTmpdirInstance(() =>
         tool.execute(
-          { mode: "local", tasks: [{ prompt: "Fix issue" }] },
+          { tasks: [{ prompt: "Fix issue" }] },
           { ...ctx, ask: (input: unknown) => Effect.sync(() => calls.push(input)) },
         ),
       ).pipe(Effect.scoped),
@@ -185,118 +175,11 @@ describe("agent_manager tool", () => {
     expect(calls).toEqual([
       {
         permission: "agent_manager",
-        patterns: ["local"],
-        always: ["local"],
-        metadata: { mode: "local", count: 1 },
+        patterns: ["start"],
+        always: ["start"],
+        metadata: { count: 1 },
       },
     ])
-  })
-
-  test("lists the compact overview with a separate read-only permission pattern", async () => {
-    const requests: unknown[] = []
-    const rt = makeRuntime("test", {
-      request: (input) =>
-        Effect.sync(() => {
-          requests.push(input)
-          return {
-            operation: "overview" as const,
-            overview: {
-              sections: [],
-              ungrouped: [
-                {
-                  id: "wt-1",
-                  name: "Fix auth",
-                  branch: "fix/auth",
-                  session: { id: SessionID.make("ses_target"), name: "Fix auth", activity: "idle" as const },
-                },
-              ],
-            },
-          }
-        }),
-    })
-    const tool = await rt.runPromise(
-      Effect.gen(function* () {
-        return yield* Tool.init(yield* AgentManagerTool)
-      }),
-    )
-    const permissions: unknown[] = []
-
-    const result = await rt.runPromise(
-      provideTmpdirInstance(() =>
-        tool.execute(
-          { action: "list" },
-          { ...ctx, ask: (input: unknown) => Effect.sync(() => permissions.push(input)) },
-        ),
-      ).pipe(Effect.scoped),
-    )
-
-    expect(permissions).toEqual([
-      {
-        permission: "agent_manager",
-        patterns: ["overview"],
-        always: ["overview"],
-        metadata: { action: "list" },
-      },
-    ])
-    expect(requests).toEqual([{ operation: "overview", sessionID: ctx.sessionID, filter: undefined }])
-    expect(JSON.parse(result.output)).toEqual({
-      sections: [],
-      ungrouped: [
-        {
-          id: "wt-1",
-          name: "Fix auth",
-          branch: "fix/auth",
-          session: { id: "ses_target", name: "Fix auth", activity: "idle" },
-        },
-      ],
-    })
-    expect(result.metadata).toEqual(expect.objectContaining({ action: "list", count: 1 }))
-    await rt.dispose()
-  })
-
-  test("prompts one existing session with a separate mutation permission pattern", async () => {
-    const requests: unknown[] = []
-    const rt = makeRuntime("test", {
-      request: (input) =>
-        Effect.sync(() => {
-          requests.push(input)
-          return { operation: "prompt" as const, sessionID: SessionID.make("ses_target"), delivered: true as const }
-        }),
-    })
-    const tool = await rt.runPromise(
-      Effect.gen(function* () {
-        return yield* Tool.init(yield* AgentManagerTool)
-      }),
-    )
-    const permissions: unknown[] = []
-    const result = await rt.runPromise(
-      provideTmpdirInstance(() =>
-        tool.execute(
-          { action: "prompt", sessionID: SessionID.make("ses_target"), prompt: "  Continue the fix  " },
-          { ...ctx, ask: (input: unknown) => Effect.sync(() => permissions.push(input)) },
-        ),
-      ).pipe(Effect.scoped),
-    )
-
-    expect(permissions).toEqual([
-      {
-        permission: "agent_manager",
-        patterns: ["prompt"],
-        always: ["prompt"],
-        metadata: { action: "prompt", sessionID: "ses_target" },
-      },
-    ])
-    expect(requests).toEqual([
-      {
-        operation: "prompt",
-        sessionID: ctx.sessionID,
-        targetSessionID: "ses_target",
-        prompt: "Continue the fix",
-      },
-    ])
-    expect(result.output).toContain("accepted it asynchronously")
-    expect(result.metadata).toEqual(expect.objectContaining({ action: "prompt", sessionID: "ses_target" }))
-    await rt.dispose()
   })
 
   test("inherits the latest invoking model and variant when omitted", async () => {
@@ -364,7 +247,6 @@ describe("agent_manager tool", () => {
 
           yield* tool.execute(
             {
-              mode: "local",
               tasks: [{ prompt: "Fix issue", model: "test/reasoning/model", variant: "high" }],
             },
             { ...ctx, ask: () => Effect.void },
@@ -421,7 +303,7 @@ describe("agent_manager tool", () => {
     const result = await runtime.runPromise(
       provideTmpdirInstance(() =>
         tool.execute(
-          { mode: "local", tasks: [{ prompt: "Fix", model: "reasoning supreme" }] },
+          { tasks: [{ prompt: "Fix", model: "reasoning supreme" }] },
           { ...ctx, ask: () => Effect.void },
         ),
       ).pipe(Effect.scoped),
@@ -437,7 +319,7 @@ describe("agent_manager tool", () => {
     const result = await runtime.runPromise(
       provideTmpdirInstance(() =>
         tool.execute(
-          { mode: "local", tasks: [{ prompt: "Fix", name: "Smoke", model: "Shared", variant: "high" }] },
+          { tasks: [{ prompt: "Fix", name: "Smoke", model: "Shared", variant: "high" }] },
           { ...ctx, ask: () => Effect.void },
         ),
       ).pipe(Effect.scoped),
@@ -470,7 +352,6 @@ describe("agent_manager tool", () => {
       provideTmpdirInstance(() =>
         tool.execute(
           {
-            mode: "local",
             tasks: [{ prompt: "Fix issue", model: "test/reasoning/model", variant: "toString" }],
           },
           { ...ctx, ask: (input: unknown) => Effect.sync(() => calls.push(input)) },
@@ -490,7 +371,7 @@ describe("agent_manager tool", () => {
     const result = await runtime.runPromise(
       provideTmpdirInstance(() =>
         tool.execute(
-          { mode: "local", tasks: [{ prompt: "Fix issue", variant: "toString" }] },
+          { tasks: [{ prompt: "Fix issue", variant: "toString" }] },
           {
             ...ctx,
             messages: [message("msg_current", "test", "reasoning/model", "low")],
@@ -511,7 +392,7 @@ describe("agent_manager tool", () => {
     const result = await runtime.runPromise(
       provideTmpdirInstance(() =>
         tool.execute(
-          { mode: "local", tasks: [{ prompt: "Fix issue", model: "__proto__/constructor" }] },
+          { tasks: [{ prompt: "Fix issue", model: "__proto__/constructor" }] },
           { ...ctx, ask: () => Effect.void },
         ),
       ).pipe(Effect.scoped),
@@ -528,7 +409,7 @@ describe("agent_manager tool", () => {
       runtime.runPromise(
         provideTmpdirInstance(() =>
           tool.execute(
-            { mode: "local", tasks: [{ name: "Prepared session", model: "test/reasoning/model" }] },
+            { tasks: [{ name: "Prepared session", model: "test/reasoning/model" }] },
             { ...ctx, ask: () => Effect.void },
           ),
         ).pipe(Effect.scoped),
@@ -542,9 +423,9 @@ describe("agent_manager tool", () => {
     await expect(
       runtime.runPromise(
         provideTmpdirInstance(() =>
-          tool.execute({ mode: "local", tasks: [{}] }, { ...ctx, ask: () => Effect.void }),
+          tool.execute({ tasks: [{}] }, { ...ctx, ask: () => Effect.void }),
         ).pipe(Effect.scoped),
       ),
-    ).rejects.toThrow("Each task must include prompt, name, or branchName")
+    ).rejects.toThrow("Each task must include prompt or name")
   })
 })

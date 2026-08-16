@@ -56,7 +56,7 @@ import { FeedbackProvider } from "../src/context/feedback"
 import { MemoryProvider } from "../src/context/memory"
 import { SessionProvider, useSession } from "../src/context/session"
 import { AgentRequirementsProvider } from "../src/context/agent-requirements"
-import { WorktreeModeProvider } from "../src/context/worktree-mode"
+import { AgentManagerProvider } from "../src/context/agent-manager"
 import { ChatView } from "../src/components/chat"
 import { SpeechToTextPrewarm } from "../src/components/speech-to-text/SpeechToTextPrewarm"
 import HistoryView from "../src/components/history/HistoryView"
@@ -92,7 +92,6 @@ import { useTabScroll } from "./tab-scroll"
 import type { SidebarSearchMenuRef } from "./SidebarSearchMenu"
 import { SidebarSearchMenu } from "./SidebarSearchMenu"
 import { createSidebarSearch, type SidebarSearchItem } from "./sidebar-search"
-import { createNewTaskDrafts } from "./new-task-drafts"
 import { initialMessage, seedInitialVariant } from "./initial-message"
 import { createSidebarCollapse } from "./sidebar-collapse"
 import { SidebarToggleButton } from "./SidebarToggleButton"
@@ -153,8 +152,7 @@ const AgentManagerContent: Component = () => {
   const [repoBranch, setRepoBranch] = createSignal<string | undefined>()
   const [sessionsLoaded, setSessionsLoaded] = createSignal(false)
   const [isGitRepo, setIsGitRepo] = createSignal(true)
-  // worktreeId is a legacy field name from the extension message contract.
-  const [managedSessions, setManagedSessions] = createSignal<{ id: string; worktreeId: string | null }[]>([])
+  const [managedSessions, setManagedSessions] = createSignal<{ id: string }[]>([])
 
   const DEFAULT_SIDEBAR_WIDTH = 260
   const MIN_SIDEBAR_WIDTH = 200
@@ -242,7 +240,7 @@ const AgentManagerContent: Component = () => {
   const releaseTabs = () => setTabWidths(false)
   // Tab ordering: context key → ordered session ID array (recovered from extension state)
   const [tabOrder, setTabOrder] = createSignal<Record<string, string[]>>({})
-  // Pin new tabs at the tail (see tab-order-sync); strip ephemeral ids so agent-manager.json stays clean.
+  // Pin new tabs at the tail (see tab-order-sync); strip ephemeral terminal ids so the durable tab order stays clean.
   const persistTabOrder = (key: string, order: string[]) => {
     const durable = order.filter((id) => !isTerminalTabId(id))
     vscode.postMessage({ type: "agentManager.setTabOrder", key, order: durable })
@@ -253,8 +251,6 @@ const AgentManagerContent: Component = () => {
     setOrder: setTabOrder,
     persist: persistTabOrder,
     localSessionIDs,
-    sessions: session.sessions,
-    managedSessions,
     terminalIdsFor: (key) => terms.forSelection(key).map((t) => t.id),
   })
   const appendToTabOrder = tabOrderSync.append
@@ -452,8 +448,6 @@ const AgentManagerContent: Component = () => {
   const scrollIntoView = (el: HTMLElement) => el.scrollIntoView({ block: "nearest", behavior: "smooth" })
 
   const sidebarSearch = createSidebarSearch({
-    worktrees: () => [],
-    sections: () => [],
     local: localSessions,
     localBranch: repoBranch,
     selection,
@@ -461,8 +455,6 @@ const AgentManagerContent: Component = () => {
     statuses: session.allStatusMap,
     permissions: session.permissions,
     questions: session.questions,
-    label: () => "",
-    sessions: () => [],
     pending: isPending,
     busy: () => false,
     localBusy: isLocalBusy,
@@ -564,8 +556,6 @@ const AgentManagerContent: Component = () => {
     }
     window.addEventListener("focus", onWindowFocus)
 
-    const drafts = createNewTaskDrafts()
-
     // Add created sessions as local tabs (both direct from the prompt and
     // backend follow-ups). Dedups HTTP + SSE firing together.
     const createdSessions = new Set<string>()
@@ -616,17 +606,16 @@ const AgentManagerContent: Component = () => {
 
       if (msg.type === "agentManager.sessionAdded") {
         // Session stays in LOCAL tab context.
-        const ev = msg as { type: string; sessionId: string; worktreeId: string } // worktreeId is legacy
+        const ev = msg as { type: string; sessionId: string }
         coverBottomPage()
         if (!localSessionIDs().includes(ev.sessionId)) appendToTabOrder(LOCAL, ev.sessionId)
         tabMgr.open(LOCAL, ev.sessionId)
-        drafts.apply(ev.worktreeId, ev.sessionId)
         session.selectSession(ev.sessionId)
       }
 
       if (msg.type === "agentManager.sessionForked") {
         // Forked session stays in LOCAL tab context.
-        const ev = msg as { type: string; sessionId: string; forkedFromId: string; worktreeId?: string } // worktreeId is legacy
+        const ev = msg as { type: string; sessionId: string; forkedFromId: string }
         tabOrderSync.insertAfter(LOCAL, ev.forkedFromId, ev.sessionId)
         setLocalSessionIDs((prev) => {
           const idx = prev.indexOf(ev.forkedFromId)
@@ -719,7 +708,6 @@ const AgentManagerContent: Component = () => {
       window.removeEventListener("message", handler)
       window.removeEventListener("keydown", preventDefaults, true)
       window.removeEventListener("focus", onWindowFocus)
-      drafts.cleanup()
       unsubCreate()
       unsubSessions()
       unsubTerminals()
@@ -1013,7 +1001,7 @@ const AgentManagerContent: Component = () => {
             }
           }}
         />
-        {/* Session list — worktree cards/sections removed */}
+        {/* Session list — root-local concurrent sessions */}
         <div class="am-section am-section-grow">
           <div class="am-section-header">
             <span class="am-section-label">{t("agentManager.section.sessions")}</span>
@@ -1262,11 +1250,11 @@ export const AgentManagerApp: Component = () => {
                                     <AgentRequirementsProvider>
                                       <MemoryProvider>
                                         <FeedbackProvider>
-                                          <WorktreeModeProvider>
+                                          <AgentManagerProvider>
                                             <DataBridge>
                                               <AgentManagerContent />
                                             </DataBridge>
-                                          </WorktreeModeProvider>
+                                          </AgentManagerProvider>
                                         </FeedbackProvider>
                                       </MemoryProvider>
                                     </AgentRequirementsProvider>

@@ -415,7 +415,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "يمكن لصق الصور أو ملفات PDF فقط هنا.",
   "prompt.toast.modelAgentRequired.title": "حدد وكيلاً ونموذجاً",
   "prompt.toast.modelAgentRequired.description": "اختر وكيلاً ونموذجاً قبل إرسال الموجه.",
-  "prompt.toast.worktreeCreateFailed.title": "فشل إنشاء شجرة العمل",
+
   "prompt.toast.sessionCreateFailed.title": "فشل إنشاء الجلسة",
   "prompt.toast.shellSendFailed.title": "فشل إرسال أمر shell",
   "prompt.toast.commandSendFailed.title": "فشل إرسال الأمر",
@@ -473,9 +473,6 @@ export const dict = {
   "dialog.project.edit.color": "لون",
   "dialog.project.edit.color.select": "اختر لون {{color}}",
 
-  "dialog.project.edit.worktree.startup": "سكريبت بدء تشغيل مساحة العمل",
-  "dialog.project.edit.worktree.startup.description": "يتم تشغيله بعد إنشاء مساحة عمل جديدة (شجرة عمل).",
-  "dialog.project.edit.worktree.startup.placeholder": "مثال: bun install",
   "context.breakdown.title": "تفصيل السياق",
   "context.breakdown.note": 'تفصيل تقريبي لرموز الإدخال. يشمل "أخرى" تعريفات الأدوات والنفقات العامة.',
   "context.breakdown.system": "النظام",
@@ -537,11 +534,6 @@ export const dict = {
   "toast.permissions.autoaccept.on.description": "سيتم الموافقة تلقائيًا على أذونات التحرير والكتابة",
   "toast.permissions.autoaccept.off.title": "توقف قبول التعديلات تلقائيًا",
   "toast.permissions.autoaccept.off.description": "ستتطلب أذونات التحرير والكتابة موافقة",
-
-  "toast.workspace.enabled.title": "تم تمكين مساحات العمل",
-  "toast.workspace.enabled.description": "الآن يتم عرض عدة worktrees في الشريط الجانبي",
-  "toast.workspace.disabled.title": "تم تعطيل مساحات العمل",
-  "toast.workspace.disabled.description": "يتم عرض worktree الرئيسي فقط في الشريط الجانبي",
 
   "toast.model.none.title": "لم يتم تحديد نموذج",
   "toast.model.none.description": "قم بتوصيل موفر لتلخيص هذه الجلسة",
@@ -691,9 +683,6 @@ export const dict = {
 
   "session.context.addToContext": "إضافة {{selection}} إلى السياق",
 
-  "session.new.worktree.main": "الفرع الرئيسي",
-  "session.new.worktree.mainWithBranch": "الفرع الرئيسي ({{branch}})",
-  "session.new.worktree.create": "إنشاء شجرة عمل جديدة",
   "session.new.lastModified": "آخر تعديل",
   "sidebar.session.newSession": "جلسة جديدة",
   "sidebar.session.newSession.tooltip": "ابدأ محادثة جديدة مع الاحتفاظ بالجلسة الحالية كما هي.",
@@ -1701,7 +1690,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "أقل تشتيتًا، أسهل وأسرع في القراءة.",
   "migration.whatsNew.features.agentManager.title": "مدير الوكلاء",
   "migration.whatsNew.features.agentManager.detail":
-    "واجهة موحدة لتشغيل عدة وكلاء بالتوازي، كل منهم في شجرة عمل خاصة — راقب التقدم، وبدّل السياق، وراجع التغييرات في مكان واحد.",
+    "واجهة موحدة لتشغيل عدة وكلاء بالتوازي — راقب التقدم، وبدّل السياق، وراجع التغييرات في مكان واحد.",
   "migration.whatsNew.features.foundation.title": "أساس مشترك",
   "migration.whatsNew.features.foundation.detail":
     "نواة صغيرة وفعالة واحدة عبر كل منتجات Kilo. تجربة مألوفة بغض النظر عن طريقة عملك.",
@@ -1784,30 +1773,6 @@ export const dict = {
   "settings.saveBar.save": "حفظ",
   "settings.saveBar.saving": "جارٍ الحفظ…",
   "settings.saveBar.saveFailed": "تعذر حفظ الإعدادات",
-  "diffViewer.source.workspace.label": "الفرع",
-  "diffViewer.source.workspace.tooltip":
-    "جميع التغييرات على هذا الفرع مقارنة بالفرع الأساسي. يشمل الملفات غير الملتزمة (staged و unstaged وغير المتتبعة) والالتزامات المحلية التي لم تُضف بعد إلى الأساس.",
-  "diffViewer.source.staged.label": "مُهيّأ",
-  "diffViewer.source.staged.tooltip":
-    "الملفات التي أضفت تغييراتها إلى منطقة التهيئة في git (`git add`)، كما ستظهر في الالتزام التالي.",
-  "diffViewer.source.unstaged.label": "غير مُهيّأ",
-  "diffViewer.source.unstaged.tooltip":
-    "الملفات المعدّلة في شجرة العمل ولكن لم يتم تهيئتها بعد، بالإضافة إلى الملفات غير المتتبعة (الجديدة).",
-  "diffViewer.source.session.label": "الجلسة",
-  "diffViewer.source.session.tooltip":
-    "الملفات التي غيّرها Kilo خلال الجلسة الحالية، بناءً على لقطات لكل دور. يُعاد ضبطها عند بدء جلسة جديدة.",
-  "diffViewer.group.session": "الجلسة",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "اللقطات معطّلة لهذا المستودع. يُرجى تعديل ملفات الإعدادات لعرض تغييرات الجلسة.",
-
-  "diffViewer.baseBranch.auto": "افتراضي",
-  "diffViewer.baseBranch.default": "افتراضي",
-  "diffViewer.baseBranch.remote": "بعيد",
-  "diffViewer.baseBranch.search": "البحث في الفروع",
-  "diffViewer.baseBranch.empty": "لا توجد فروع مطابقة",
-  "diffViewer.baseBranch.loading": "جارٍ تحميل الفروع…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "الخطة جاهزة:",
   "chat.search.placeholder": "البحث في المحادثة…",
   "chat.search.toggle": "البحث في المحادثة",

@@ -177,7 +177,7 @@
   flex-shrink: 0;
 }
 
-.session-tab-bar .am-worktree-spinner {
+.session-tab-bar .am-tab-spinner {
   width: 16px;
   height: 16px;
 }

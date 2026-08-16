@@ -2,11 +2,9 @@
 import { Effect, Schema } from "effect"
 import { EffectBridge } from "../effect/bridge"
 import * as Tool from "./tool"
-import { Git } from "../git"
 import { Instance } from "../kilocode/instance"
 import { Locale } from "../util/locale"
 import { Filesystem } from "../util/filesystem" // kilocode_change
-import { WorktreeFamily } from "../kilocode/worktree-family" // kilocode_change
 import { Session } from "../session/session" // kilocode_change
 import { SessionID } from "../session/schema" // kilocode_change
 import { RecallSearch } from "../kilocode/session/recall-search" // kilocode_change
@@ -31,7 +29,6 @@ const Parameters = Schema.Struct({
 export const RecallTool = Tool.define(
   "kilo_local_recall",
   Effect.gen(function* () {
-    const git = yield* Git.Service
     const sessions = yield* Session.Service // kilocode_change
     return {
       description: DESCRIPTION,
@@ -40,9 +37,9 @@ export const RecallTool = Tool.define(
         Effect.gen(function* () {
           const bridge = yield* EffectBridge.make()
           if (params.mode === "search") {
-            return yield* Effect.promise(() => search(params, ctx, bridge, git))
+            return yield* Effect.promise(() => search(params, ctx, bridge))
           }
-          return yield* Effect.promise(() => read(params, ctx, bridge, git, sessions))
+          return yield* Effect.promise(() => read(params, ctx, bridge, sessions))
         }).pipe(Effect.orDie),
     }
   }),
@@ -52,7 +49,6 @@ async function search(
   params: { query?: string; limit?: number },
   ctx: Tool.Context,
   bridge: EffectBridge.Shape,
-  git: Git.Interface,
 ) {
   if (!params.query) {
     throw new Error("The 'query' parameter is required when mode is 'search'")
@@ -68,13 +64,13 @@ async function search(
     },
   })
 
-  const dirs = await bridge.promise(WorktreeFamily.list().pipe(Effect.provideService(Git.Service, git))) // kilocode_change
+  const root = Filesystem.resolve(Instance.directory) // kilocode_change - workspace root, no worktree family
   const boundary = KiloSessionPromptQueue.active(ctx.sessionID) ?? RecallSearch.active(ctx.messages, ctx.messageID)
   const found = await bridge.promise(
     RecallSearch.search({
       query: params.query,
       projectID: Instance.project.id,
-      directories: dirs,
+      directories: [root],
       limit: params.limit,
       signal: ctx.abort,
       excludeSessionID: ctx.sessionID,
@@ -114,7 +110,6 @@ async function read(
   params: { sessionID?: string },
   ctx: Tool.Context,
   bridge: EffectBridge.Shape,
-  git: Git.Interface,
   sessions: Session.Interface,
 ) {
   if (!params.sessionID) {
@@ -127,10 +122,10 @@ async function read(
   const session = await bridge.promise(sessions.get(SessionID.make(params.sessionID))).catch(() => {
     throw new Error("Session not found. Use search mode first to find valid session IDs.")
   })
-  const dirs = await bridge.promise(WorktreeFamily.list().pipe(Effect.provideService(Git.Service, git))) // kilocode_change
   // kilocode_change start
+  const root = Filesystem.resolve(Instance.directory)
   const dir = Filesystem.resolve(session.directory)
-  if (!dirs.some((root) => Filesystem.contains(root, dir))) {
+  if (!Filesystem.contains(root, dir)) {
     throw new Error(
       `Session "${RecallSearch.inert(session.id)}" belongs to a different workspace and cannot be read from this directory.`,
     )

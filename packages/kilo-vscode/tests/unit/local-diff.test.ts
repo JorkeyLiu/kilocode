@@ -11,15 +11,14 @@ import {
   MAX_DETAIL_BYTES,
 } from "../../src/agent-manager/local-diff"
 import { GitOps } from "../../src/agent-manager/GitOps"
-import { WorktreeDiffReverter } from "../../src/diff/shared/reverter"
-import { resolveLocalDiffTarget } from "../../src/diff/shared/target"
+import { resolveLocalDiffTarget, DiffReverter } from "../../src/agent-manager/git-diff-target"
 
 function git(): GitOps {
   return new GitOps({ log: () => undefined })
 }
 
-function reverter(ops: GitOps): WorktreeDiffReverter {
-  return new WorktreeDiffReverter(
+function reverter(ops: GitOps): DiffReverter {
+  return new DiffReverter(
     ops,
     async (target, file) => {
       const entry = await diffFile(ops, target.directory, target.baseBranch, file)
@@ -120,8 +119,8 @@ describe("diffSummary", () => {
       const entry = result.find((e) => e.file === "seed.txt")
       expect(entry?.status).toBe("modified")
       // Pin the export contract: resolveBase("HEAD") must resolve to a real
-      // candidate branch when one exists locally — the sidebar diff viewer
-      // relies on this to compute the base for local worktree diffs.
+      // candidate branch when one exists locally — the local diff flow
+      // relies on this to compute the base for local diffs.
       expect(await resolveBase(git(), dir, "HEAD")).toBe("main")
     })
   })
@@ -367,7 +366,7 @@ describe("diffFile", () => {
     })
   })
 
-  it("keeps summary snapshots isolated by worktree", async () => {
+  it("keeps summary snapshots isolated by directory", async () => {
     await withRepo(async (first, firstBase) => {
       await withRepo(async (second, secondBase) => {
         await fs.writeFile(path.join(first, "seed.txt"), "seed\nfirst\n")
@@ -576,7 +575,7 @@ describe("resolveLocalDiffTarget + revertFile", () => {
     await withRepo(async (dir, base) => {
       await fs.writeFile(path.join(dir, "seed.txt"), "seed\nchanged\n")
       const ops = git()
-      const diff = new WorktreeDiffReverter(
+      const diff = new DiffReverter(
         ops,
         async () => {
           throw new Error("status failed")

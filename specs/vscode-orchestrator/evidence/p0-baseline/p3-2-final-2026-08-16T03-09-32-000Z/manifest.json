@@ -1,0 +1,261 @@
+{
+  "schema": "kilo-e2e-evidence/1",
+  "run": {
+    "fixtureId": "e2e-probe-47f91b0f",
+    "scenario": "worktree-removal",
+    "startedAt": "2026-08-16T03:09:52.097Z",
+    "completedAt": "2026-08-16T03:11:34.257Z",
+    "durationMs": 102160,
+    "probePid": 16444,
+    "success": true,
+    "provenance": "focused E2E harness (packages/kilo-vscode), fixture-gated, run-owned evidence",
+    "env": {
+      "KILO_E2E_SCENARIO": "worktree-removal"
+    }
+  },
+  "destination": "/Users/jorkeyliu/workspace/repos/kilocode/specs/vscode-orchestrator/evidence/p0-baseline/p3-2-final-2026-08-16T03-09-32-000Z",
+  "required": [
+    "llm-matrix-worktree-removal-final.json",
+    "llm-requests-worktree-removal.json",
+    "llm-requests.jsonl",
+    "p32-snap-1.json",
+    "p32-snap-10.json",
+    "p32-snap-11.json",
+    "p32-snap-12.json",
+    "p32-snap-13.json",
+    "p32-snap-14.json",
+    "p32-snap-15.json",
+    "p32-snap-2.json",
+    "p32-snap-3.json",
+    "p32-snap-4.json",
+    "p32-snap-5.json",
+    "p32-snap-6.json",
+    "p32-snap-7.json",
+    "p32-snap-8.json",
+    "p32-snap-9.json",
+    "plan.json",
+    "runner-pid",
+    "workspace/.kilo/kilo.json",
+    "workspace/rollback.txt",
+    "worktree-removal-dom-evidence",
+    "worktree-removal-runtime-evidence"
+  ],
+  "files": [
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/llm-matrix-worktree-removal-final.json",
+      "sourceRel": "scratch/llm-matrix-worktree-removal-final.json",
+      "dest": "llm-matrix-worktree-removal-final.json",
+      "bytes": 334,
+      "sha256": "d1db00e34acea3bc7d29409309e53b23a97f2c8ff8367fffe156bbe8ff93e285"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/llm-requests-worktree-removal.json",
+      "sourceRel": "scratch/llm-requests-worktree-removal.json",
+      "dest": "llm-requests-worktree-removal.json",
+      "bytes": 1314,
+      "sha256": "46a20c0ec3fd10a386c96c69c92b36b2c58cda0213e8e214137291eb7eb633b1"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/llm-requests.jsonl",
+      "sourceRel": "scratch/llm-requests.jsonl",
+      "dest": "llm-requests.jsonl",
+      "bytes": 789,
+      "sha256": "2ae4a838f4bddd3c2a116242f41703b5b5000ac223919a9bd5e6efbaf81fab39"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-1.json",
+      "sourceRel": "scratch/p32-snap-1.json",
+      "dest": "p32-snap-1.json",
+      "bytes": 1225,
+      "sha256": "782fb7e57e2769fbcab8ab5cacaa17ac3bb786b9908f53b08ce68a10ff03320e"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-10.json",
+      "sourceRel": "scratch/p32-snap-10.json",
+      "dest": "p32-snap-10.json",
+      "bytes": 3253,
+      "sha256": "4321baa141099367f6891d0db583a788fb8ce7443ac7cd8b641690bb02291d4d"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-11.json",
+      "sourceRel": "scratch/p32-snap-11.json",
+      "dest": "p32-snap-11.json",
+      "bytes": 3253,
+      "sha256": "6a63e94b0ad51c4fbcebd4ddd13a15f8aecac08d60960657bf2e80285b5573e4"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-12.json",
+      "sourceRel": "scratch/p32-snap-12.json",
+      "dest": "p32-snap-12.json",
+      "bytes": 3767,
+      "sha256": "8125e42cc83bce4a2fa6c823a4cd1fb5275a70e8ccff12931ffce63a8dd3de3f"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-13.json",
+      "sourceRel": "scratch/p32-snap-13.json",
+      "dest": "p32-snap-13.json",
+      "bytes": 3767,
+      "sha256": "0ab9162ff0bf1f14176cccb17385c34f08da67aa57e304368f4da8294bda3bb3"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-14.json",
+      "sourceRel": "scratch/p32-snap-14.json",
+      "dest": "p32-snap-14.json",
+      "bytes": 3432,
+      "sha256": "afea270662a4d226d4ab0197e2a1ea396bdee1ff71abf9449ea48af55774fe1e"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-15.json",
+      "sourceRel": "scratch/p32-snap-15.json",
+      "dest": "p32-snap-15.json",
+      "bytes": 3432,
+      "sha256": "e564b4011f8033ed98a1bd260d2566d458d50448035ba0c34aadfadfd524547c"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-2.json",
+      "sourceRel": "scratch/p32-snap-2.json",
+      "dest": "p32-snap-2.json",
+      "bytes": 1376,
+      "sha256": "61b4a14e258c797a6909d48b36c2463439c1ea0b253fa5e643e52794e1fbe387"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-3.json",
+      "sourceRel": "scratch/p32-snap-3.json",
+      "dest": "p32-snap-3.json",
+      "bytes": 1348,
+      "sha256": "6372b9f5cc59445af89f1d5cb5d18ace150bb2ac4fae8852666a66c3630506ea"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-4.json",
+      "sourceRel": "scratch/p32-snap-4.json",
+      "dest": "p32-snap-4.json",
+      "bytes": 2652,
+      "sha256": "29fbe7b52d01de1f3808ccd7c54108795fcd02ea7c9963cb4d5cd7090b912d07"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-5.json",
+      "sourceRel": "scratch/p32-snap-5.json",
+      "dest": "p32-snap-5.json",
+      "bytes": 2852,
+      "sha256": "c4f786d6ce2656c03d1e125e64f31bb330b35b329c23686f1def44da7d96738e"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-6.json",
+      "sourceRel": "scratch/p32-snap-6.json",
+      "dest": "p32-snap-6.json",
+      "bytes": 2822,
+      "sha256": "c9747857729a5b321847343dea9f6b7a414056d8730796f5e55cffd37ca1163f"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-7.json",
+      "sourceRel": "scratch/p32-snap-7.json",
+      "dest": "p32-snap-7.json",
+      "bytes": 2774,
+      "sha256": "e24ba26beeed4a5c823119228fbd0e1993259e9ff606b7a9d5d655d4360720a9"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-8.json",
+      "sourceRel": "scratch/p32-snap-8.json",
+      "dest": "p32-snap-8.json",
+      "bytes": 3299,
+      "sha256": "ae4891b39114ba27af24f3a49f57ad0a5ba269f14958a4145ce3d79d04fdda31"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/p32-snap-9.json",
+      "sourceRel": "scratch/p32-snap-9.json",
+      "dest": "p32-snap-9.json",
+      "bytes": 3301,
+      "sha256": "dce06ee5c6cd66831b50111149e5dc4e7912aefbba5f8663b3e06508f07d79ee"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/plan.json",
+      "sourceRel": "scratch/plan.json",
+      "dest": "plan.json",
+      "bytes": 1195,
+      "sha256": "7d23826f66513a0a493ee38c0da5f965207855d12aaa8833e9b0e597e798216d"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/runner-alive",
+      "sourceRel": "scratch/runner-alive",
+      "dest": "runner-alive",
+      "bytes": 7,
+      "sha256": "03494afd4248c42f5fa1237bf2eeebe751ab8d9c977d55405fcb17469dbd91f8"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/runner-done",
+      "sourceRel": "scratch/runner-done",
+      "dest": "runner-done",
+      "bytes": 2,
+      "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/runner-pid",
+      "sourceRel": "scratch/runner-pid",
+      "dest": "runner-pid",
+      "bytes": 5,
+      "sha256": "ad6fc94e2a663a8989f7238cc0e2427eb8b8ff0a464fff43d68ee9e1ac82aac4"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/workspace/.kilo/kilo.json",
+      "sourceRel": "workspace/.kilo/kilo.json",
+      "dest": "workspace/.kilo/kilo.json",
+      "bytes": 956,
+      "sha256": "539f474bfc49d8e0666a6a0b86da886a9ca09dfd004fc61f1d6561311fcaeb14"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/workspace/.kilo/package-lock.json",
+      "sourceRel": "workspace/.kilo/package-lock.json",
+      "dest": "workspace/.kilo/package-lock.json",
+      "bytes": 129,
+      "sha256": "f259e669c975607abe83b2b1fa91498a03bc9215e563f560bfb9765edb199587"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/workspace/rollback.txt",
+      "sourceRel": "workspace/rollback.txt",
+      "dest": "workspace/rollback.txt",
+      "bytes": 20,
+      "sha256": "ae1e8e9806f3ae10147819d2d8ef2ccc64c0297057dfe25abfaa4f26b5a7cb72"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/worktree-removal-dom-evidence",
+      "sourceRel": "scratch/worktree-removal-dom-evidence",
+      "dest": "worktree-removal-dom-evidence",
+      "bytes": 1170891,
+      "sha256": "7e3285e8822a837929c3cd31dd17544f0249962039f76bce630bb2566bf52b87"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/worktree-removal-ready",
+      "sourceRel": "scratch/worktree-removal-ready",
+      "dest": "worktree-removal-ready",
+      "bytes": 18,
+      "sha256": "0fcd69689f3539dae1307124b0c4254860fb7cdbada3980906fe991c172abc6d"
+    },
+    {
+      "source": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-aNMnhO/worktree-removal-runtime-evidence",
+      "sourceRel": "scratch/worktree-removal-runtime-evidence",
+      "dest": "worktree-removal-runtime-evidence",
+      "bytes": 4219,
+      "sha256": "3b52fb90f856250a6503835e8835bade3a432496a757cf5f3081cc4d94f5ba95"
+    },
+    {
+      "source": "launcher:probe stdout+stderr",
+      "sourceRel": "launcher:run.log",
+      "dest": "run.log",
+      "bytes": 1083732,
+      "sha256": "6f538ed7b37085b96775dec345c493ba980bf375990c5f3bf2c3eb2f20edc0c2"
+    }
+  ],
+  "missing": [],
+  "malformed": [],
+  "notes": [],
+  "captureLog": {
+    "source": "launcher:probe stdout+stderr",
+    "sourceRel": "launcher:run.log",
+    "dest": "run.log",
+    "bytes": 1083732,
+    "sha256": "6f538ed7b37085b96775dec345c493ba980bf375990c5f3bf2c3eb2f20edc0c2"
+  },
+  "status": "complete",
+  "validated": true,
+  "finalizedAt": "2026-08-16T03:11:39.416Z"
+}

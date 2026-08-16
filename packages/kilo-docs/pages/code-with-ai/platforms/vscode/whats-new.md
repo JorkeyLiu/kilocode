@@ -5,7 +5,7 @@ description: "The Kilo Code extension has been rebuilt from the ground up on the
 
 # What's New in Kilo Code
 
-The Kilo Code extension has been completely rebuilt on a portable, open-source core shared across VS Code, the CLI, and Cloud Agents. This is the biggest update since launch: faster execution with parallel tool calls and subagents, the new Agent Manager for running multiple agents side by side, inline code review with line-level comments, multi-model comparisons, and access to 500+ models.
+The Kilo Code extension has been completely rebuilt on a portable, open-source core shared across VS Code, the CLI, and Cloud Agents. This is the biggest update since launch: faster execution with parallel tool calls and subagents, the new Agent Manager for running multiple agents side by side, inline code review with line-level comments, snapshot-based rollback, and access to 500+ models.
 
 Whether you're writing features in VS Code, debugging over SSH, or reviewing code on Slack, Kilo now goes with you. Read the [full announcement on the Kilo Blog](https://blog.kilo.ai/p/new-kilo-for-vs-code-is-live) for everything that's new.
 
@@ -60,9 +60,8 @@ Modes have been renamed to Agents in the new extension. You can set the default 
 
 ### Where is the diff view for file changes?
 
-Each message that caused file changes shows a **diff badge** in the chat — click it to open the Diff Viewer and review what changed.
-The Agent Manager also includes a built-in diff reviewer that shows every change file by file, in unified or split view.
-For Markdown files, use the eye/code toggle in the file header to switch between rendered Markdown and the raw diff.
+Each agent turn that caused file changes shows a **modified files** summary in the chat, with the file count. You can include the current git changes as context with `@git-changes` in the prompt input, review files through the native VS Code diff editor, and roll back any turn with the snapshot-based **Revert to here** control.
+The Agent Manager shows the same inline diff summaries in every session, with **Revert to here** rollback at any point in the conversation.
 
 ### How do I do code reviews in the new extension?
 

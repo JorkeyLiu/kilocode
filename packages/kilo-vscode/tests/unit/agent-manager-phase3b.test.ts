@@ -218,30 +218,21 @@ describe("Phase 3B — saveLocalUIState", () => {
 // ---------------------------------------------------------------------------
 
 describe("Phase 3B — importLegacyLocalTabs", () => {
-  it("imports only local sessions (worktreeId === null)", () => {
+  it("imports every managed session as a root-local tab", () => {
     const result = importLegacyLocalTabs(
       {
-        managedSessions: [
-          { id: "local-1", worktreeId: null },
-          { id: "local-2", worktreeId: null },
-          { id: "wt-1", worktreeId: "wt-aaa" },
-          { id: "wt-2", worktreeId: "wt-bbb" },
-        ],
+        managedSessions: [{ id: "local-1" }, { id: "local-2" }, { id: "wt-1" }, { id: "wt-2" }],
       },
       LOCAL,
     )
-    expect(result.openTabIds).toEqual(["local-1", "local-2"])
+    expect(result.openTabIds).toEqual(["local-1", "local-2", "wt-1", "wt-2"])
     expect(result.activeTabId).toBe("local-1")
   })
 
   it("uses extension tabOrder[LOCAL] for ordering", () => {
     const result = importLegacyLocalTabs(
       {
-        managedSessions: [
-          { id: "a", worktreeId: null },
-          { id: "b", worktreeId: null },
-          { id: "c", worktreeId: null },
-        ],
+        managedSessions: [{ id: "a" }, { id: "b" }, { id: "c" }],
         tabOrder: { [LOCAL]: ["c", "a", "b"] },
       },
       LOCAL,
@@ -252,11 +243,7 @@ describe("Phase 3B — importLegacyLocalTabs", () => {
   it("appends local sessions not in tab order", () => {
     const result = importLegacyLocalTabs(
       {
-        managedSessions: [
-          { id: "a", worktreeId: null },
-          { id: "b", worktreeId: null },
-          { id: "extra", worktreeId: null },
-        ],
+        managedSessions: [{ id: "a" }, { id: "b" }, { id: "extra" }],
         tabOrder: { [LOCAL]: ["a", "b"] },
       },
       LOCAL,
@@ -264,25 +251,21 @@ describe("Phase 3B — importLegacyLocalTabs", () => {
     expect(result.openTabIds).toEqual(["a", "b", "extra"])
   })
 
-  it("does not import worktree-owned sessions even if in tab order", () => {
+  it("keeps all managed sessions when tab order lists them", () => {
     const result = importLegacyLocalTabs(
       {
-        managedSessions: [
-          { id: "local-1", worktreeId: null },
-          { id: "wt-1", worktreeId: "wt-aaa" },
-        ],
+        managedSessions: [{ id: "local-1" }, { id: "wt-1" }],
         tabOrder: { [LOCAL]: ["wt-1", "local-1"] },
       },
       LOCAL,
     )
-    expect(result.openTabIds).toEqual(["local-1"])
-    // wt-1 is filtered out even though it was in the tab order
+    expect(result.openTabIds).toEqual(["wt-1", "local-1"])
   })
 
   it("imports sidebarCollapsed", () => {
     const result = importLegacyLocalTabs(
       {
-        managedSessions: [{ id: "s1", worktreeId: null }],
+        managedSessions: [{ id: "s1" }],
         sidebarCollapsed: true,
       },
       LOCAL,
@@ -293,17 +276,17 @@ describe("Phase 3B — importLegacyLocalTabs", () => {
   it("defaults sidebarCollapsed to false when absent", () => {
     const result = importLegacyLocalTabs(
       {
-        managedSessions: [{ id: "s1", worktreeId: null }],
+        managedSessions: [{ id: "s1" }],
       },
       LOCAL,
     )
     expect(result.sidebarCollapsed).toBe(false)
   })
 
-  it("returns empty when no local sessions exist", () => {
+  it("returns empty when no managed sessions exist", () => {
     const result = importLegacyLocalTabs(
       {
-        managedSessions: [{ id: "wt-1", worktreeId: "wt-aaa" }],
+        managedSessions: [],
       },
       LOCAL,
     )

@@ -1,9 +1,9 @@
 /**
  * Bounded-concurrency gate for git/gh child processes.
  *
- * Shared across GitOps and PRStatusPoller so that all polling loops
- * (GitStatsPoller, PRStatusPoller, diff watcher) compete for the same
- * slots. Prevents process storms when many worktrees are active.
+ * Shared across GitOps and the git stats poller so that all polling loops
+ * (GitStatsPoller, local diff reads) compete for the same
+ * slots. Prevents process storms when many sessions are active.
  */
 export class Semaphore {
   private running = 0

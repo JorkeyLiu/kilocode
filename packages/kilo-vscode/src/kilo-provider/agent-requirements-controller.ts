@@ -43,7 +43,6 @@ export type AgentRequirementsControllerOptions = {
   folders: () => readonly string[] | undefined
   project: () => string | null | undefined
   sessions: () => ReadonlyMap<string, string>
-  worktrees?: () => readonly string[]
   extension: (id: string) => unknown
   subscribe?: (listener: () => void) => Disposable
   error: (error: unknown) => string
@@ -111,7 +110,6 @@ export class AgentRequirementsController {
       workspaceDirectories: this.opts.folders(),
       projectDirectory: this.opts.project(),
       sessionDirectories: this.opts.sessions(),
-      worktreeDirectories: this.opts.worktrees,
     })
   }
 

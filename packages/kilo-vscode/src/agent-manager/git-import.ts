@@ -20,16 +20,7 @@ export interface PRInfo {
   title: string
 }
 
-interface WorktreeEntry {
-  path: string
-  branch: string
-  bare: boolean
-  detached: boolean
-}
-
 type PRErrorKind = "not_found" | "gh_missing" | "gh_auth" | "unknown"
-
-export type WorktreeSetupErrorCode = "git_not_found" | "not_git_repo" | "lfs_missing" | "no_commits"
 
 export function parsePRUrl(url: string): PRUrlParts | null {
   let normalized = url.trim()
@@ -101,40 +92,6 @@ export function buildBranchList(
   return branches
 }
 
-export function parseWorktreeList(raw: string): WorktreeEntry[] {
-  const entries: WorktreeEntry[] = []
-  for (const block of raw.split("\n\n")) {
-    if (!block.trim()) continue
-    const lines = block.split("\n")
-    const wtPath = lines.find((l) => l.startsWith("worktree "))?.slice(9)
-    if (!wtPath) continue
-
-    const branchLine = lines.find((l) => l.startsWith("branch "))
-    const bare = lines.some((l) => l === "bare")
-    const detached = lines.some((l) => l === "detached")
-    const branch = branchLine ? branchLine.slice(7).replace("refs/heads/", "") : detached ? "(detached)" : "unknown"
-
-    entries.push({ path: wtPath, branch, bare, detached })
-  }
-  return entries
-}
-
-export function checkedOutBranchesFromWorktreeList(raw: string): Set<string> {
-  const result = new Set<string>()
-  for (const entry of parseWorktreeList(raw)) {
-    if (!entry.bare && !entry.detached) result.add(entry.branch)
-  }
-  return result
-}
-
-const SAFE_GIT_REF = /^[a-zA-Z0-9._\-/]+$/
-
-export function validateGitRef(value: string, label: string): void {
-  if (!value || !SAFE_GIT_REF.test(value) || value.startsWith("-") || value.includes("..")) {
-    throw new Error(`Unsafe ${label}: "${value}"`)
-  }
-}
-
 /**
  * Normalize a filesystem path for cross-platform comparison.
  * Converts backslashes to forward slashes, strips trailing slashes,
@@ -152,12 +109,4 @@ export function classifyPRError(msg: string): PRErrorKind {
   if (msg.includes("not logged") || msg.includes("auth login")) return "gh_auth"
   if (msg.includes("not found") || msg.includes("Could not resolve")) return "not_found"
   return "unknown"
-}
-
-export function classifyWorktreeError(msg: string): WorktreeSetupErrorCode | undefined {
-  if (msg.includes("ENOENT") || msg.includes("not found in PATH")) return "git_not_found"
-  if (msg.includes("not a git repository")) return "not_git_repo"
-  if (msg.includes("Git LFS") && msg.includes("not found")) return "lfs_missing"
-  if (msg.includes("no commits yet")) return "no_commits"
-  return undefined
 }

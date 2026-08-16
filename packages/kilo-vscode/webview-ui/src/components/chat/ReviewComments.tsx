@@ -7,7 +7,7 @@ import { Tooltip } from "@kilocode/kilo-ui/tooltip"
 import { useDialog } from "@kilocode/kilo-ui/context/dialog"
 import { useLanguage } from "../../context/language"
 import { useVSCode } from "../../context/vscode"
-import { useWorktreeMode } from "../../context/worktree-mode"
+import { useAgentManager } from "../../context/agent-manager"
 import type { ReviewComment } from "../../types/messages"
 import { fileName } from "./prompt-input-utils"
 
@@ -22,13 +22,13 @@ interface ReviewCommentsProps {
 export const ReviewComments: Component<ReviewCommentsProps> = (props) => {
   const language = useLanguage()
   const vscode = useVSCode()
-  const worktree = useWorktreeMode()
+  const inAgentManager = useAgentManager()
   const dialog = useDialog()
   const side = (item: ReviewComment) => (item.side === "deletions" ? "-" : "+")
   const title = (item: ReviewComment) => `${fileName(item.file)} ${side(item)}${item.line}`
 
   const open = (item: ReviewComment) => {
-    if (worktree && props.sessionID) {
+    if (inAgentManager && props.sessionID) {
       vscode.postMessage({
         type: "agentManager.openFile",
         sessionId: props.sessionID,

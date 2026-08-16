@@ -69,7 +69,7 @@ export class TerminalRouter {
   handle(m: AgentManagerInMessage): boolean {
     if (!isTerminalMessage(m)) return false
     if (m.type === "agentManager.terminal.create") {
-      void this.handleCreate(m.worktreeId)
+      void this.handleCreate(m.slotId)
       return true
     }
     if (m.type === "agentManager.terminal.close") {
@@ -88,9 +88,8 @@ export class TerminalRouter {
     return this.manager.dispose()
   }
 
-  private async handleCreate(worktreeId: string | null): Promise<void> {
-    // worktreeId is a legacy field name from the message contract
-    const cwd = this.resolveCwd(worktreeId)
+  private async handleCreate(slotId: string | null): Promise<void> {
+    const cwd = this.resolveCwd(slotId)
     if (!cwd) {
       this.deps.post({
         type: "agentManager.terminal.error",
@@ -98,12 +97,12 @@ export class TerminalRouter {
       })
       return
     }
-    const title = `Terminal ${this.nextOrdinal(worktreeId)}`
+    const title = `Terminal ${this.nextOrdinal(slotId)}`
     try {
-      const created = await this.manager.create({ worktreeId, cwd, title })
+      const created = await this.manager.create({ slotId, cwd, title })
       this.deps.post({
         type: "agentManager.terminal.created",
-        worktreeId: created.worktreeId,
+        slotId: created.slotId,
         terminalId: created.terminalId,
         title: created.title,
         wsUrl: created.wsUrl,
@@ -120,14 +119,14 @@ export class TerminalRouter {
    * Resolve the cwd for a terminal.
    * Always returns the workspace root (local-only mode).
    */
-  private resolveCwd(_worktreeId: string | null): string | undefined {
+  private resolveCwd(_slotId: string | null): string | undefined {
     return this.deps.getRoot()
   }
 
   /** Per-context counter so default titles are "Terminal 1", "Terminal 2"…
    *  Not persisted; a webview reload resets counts. */
-  private nextOrdinal(worktreeId: string | null): number {
-    const key = worktreeId ?? "__local__"
+  private nextOrdinal(slotId: string | null): number {
+    const key = slotId ?? "__local__"
     const next = (this.ordinals.get(key) ?? 0) + 1
     this.ordinals.set(key, next)
     return next

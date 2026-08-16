@@ -1,15 +1,8 @@
 import * as nodePath from "path"
-import * as os from "os"
 import * as fs from "fs/promises"
 import { spawn } from "../util/process"
 import simpleGit from "simple-git"
-import {
-  parseWorktreeList,
-  normalizePath,
-  parseForEachRefOutput,
-  buildBranchList,
-  type BranchListItem,
-} from "./git-import"
+import { parseForEachRefOutput, buildBranchList, type BranchListItem } from "./git-import"
 import type { Semaphore } from "./semaphore"
 
 interface GitOpsOptions {
@@ -18,23 +11,6 @@ interface GitOpsOptions {
   runGit?: (args: string[], cwd: string) => Promise<string>
   /** Shared concurrency gate for child process spawning. */
   semaphore?: Semaphore
-}
-
-export interface ApplyConflict {
-  file?: string
-  reason: string
-}
-
-interface ApplyCheckResult {
-  ok: boolean
-  conflicts: ApplyConflict[]
-  message: string
-}
-
-interface ApplyPatchResult {
-  ok: boolean
-  conflicts: ApplyConflict[]
-  message: string
 }
 
 interface ExecOptions {
@@ -250,9 +226,9 @@ export class GitOps {
 
   /**
    * List local branches and `origin/*` remotes sorted by last commit date,
-   * with the resolved default branch flagged. Mirrors WorktreeManager's
-   * `listBranches` shape but takes `cwd` per call so it works outside the
-   * worktree context (e.g. for the diff viewer's base branch picker).
+   * with the resolved default branch flagged. Mirrors the removed worktree
+   * manager's `listBranches` shape but takes `cwd` per call so it works outside
+   * the repo root (e.g. for Agent Manager local git stats).
    */
   async listBranches(cwd: string): Promise<{ branches: BranchListItem[]; defaultBranch: string }> {
     const def = (await this.resolveDefaultBranch(cwd)) ?? ""
@@ -271,17 +247,6 @@ export class GitOps {
     })
     const { locals, remotes, dates } = parseForEachRefOutput(raw)
     return { branches: buildBranchList(locals, remotes, dates, def), defaultBranch: def }
-  }
-
-  /** Return the set of worktree paths for the repo, excluding bare entries. */
-  async listWorktreePaths(cwd: string): Promise<Map<string, string>> {
-    const raw = await this.raw(["worktree", "list", "--porcelain"], cwd)
-    const result = new Map<string, string>()
-    for (const entry of parseWorktreeList(raw)) {
-      if (entry.bare) continue
-      result.set(normalizePath(entry.path), entry.branch)
-    }
-    return result
   }
 
   /**
@@ -358,56 +323,9 @@ export class GitOps {
   }
 
   /**
-   * Build a binary-safe patch of all working-tree changes relative to the
-   * merge-base with `baseBranch`. Optionally scoped to `selectedFiles`.
-   */
-  async buildWorktreePatch(sourcePath: string, baseBranch: string, selectedFiles?: string[]): Promise<string> {
-    const tmp = await fs.mkdtemp(nodePath.join(os.tmpdir(), "kilo-apply-"))
-    const index = nodePath.join(tmp, "index")
-    const env = { ...process.env, GIT_INDEX_FILE: index }
-    const files = (selectedFiles ?? [])
-      .map((file) => file.trim())
-      .filter((file) => file.length > 0 && !nodePath.isAbsolute(file) && !file.split(/[\\/]/).includes(".."))
-    const pathspec = files.length > 0 ? files : ["."]
-
-    try {
-      const base = (await this.raw(["merge-base", "HEAD", baseBranch], sourcePath)).trim()
-      const baseTree = (await this.raw(["rev-parse", `${base}^{tree}`], sourcePath)).trim()
-
-      const read = await this.exec(["read-tree", "HEAD"], sourcePath, { env })
-      if (read.code !== 0) {
-        throw new Error(read.stderr.trim() || "Failed to initialize temporary index")
-      }
-
-      const add = await this.exec(["add", "-A", "--", ...pathspec], sourcePath, { env })
-      if (add.code !== 0) {
-        throw new Error(add.stderr.trim() || "Failed to stage worktree snapshot")
-      }
-
-      const treeResult = await this.exec(["write-tree"], sourcePath, { env })
-      if (treeResult.code !== 0) {
-        throw new Error(treeResult.stderr.trim() || "Failed to snapshot worktree index")
-      }
-
-      const tree = treeResult.stdout.trim()
-      const diff = await this.exec(
-        ["diff", "--binary", "--full-index", "--find-renames", "--no-color", baseTree, tree],
-        sourcePath,
-      )
-      if (diff.code !== 0) {
-        throw new Error(diff.stderr.trim() || "Failed to generate patch")
-      }
-
-      return diff.stdout
-    } finally {
-      await fs.rm(tmp, { recursive: true, force: true })
-    }
-  }
-
-  /**
-   * Revert a single file in a worktree back to the merge-base state.
+   * Revert a single file in the working tree back to the merge-base state.
    * For modified/deleted files: restores the file from the merge-base commit.
-   * For added (new) files: removes the file from the worktree.
+   * For added (new) files: removes the file from the working tree.
    */
   async revertFile(
     cwd: string,
@@ -431,7 +349,7 @@ export class GitOps {
       const root = await fs.realpath(cwd)
       const resolved = await fs.realpath(full).catch(() => full)
       if (resolved !== root && !resolved.startsWith(root + nodePath.sep)) {
-        return { ok: false, message: "File path outside worktree" }
+        return { ok: false, message: "File path outside the workspace" }
       }
       await fs.rm(full, { force: true })
       // Also remove from git index in case it was staged
@@ -451,80 +369,6 @@ export class GitOps {
       await this.raw(["reset", "HEAD", "--", file], cwd).catch(() => "")
     }
     return { ok: true, message: "Reverted file to base" }
-  }
-
-  async checkApplyPatch(targetPath: string, patch: string): Promise<ApplyCheckResult> {
-    if (!patch.trim()) {
-      return { ok: true, conflicts: [], message: "No changes to apply" }
-    }
-
-    const result = await this.exec(["apply", "--3way", "--check", "--whitespace=nowarn", "-"], targetPath, {
-      stdin: patch,
-    })
-    if (result.code === 0) {
-      return { ok: true, conflicts: [], message: "Patch applies cleanly" }
-    }
-
-    const output = [result.stderr, result.stdout].filter(Boolean).join("\n")
-    const message = output.trim() || "Patch does not apply cleanly"
-    const conflicts = this.parseApplyConflicts(output)
-    return { ok: false, conflicts, message }
-  }
-
-  async applyPatch(targetPath: string, patch: string): Promise<ApplyPatchResult> {
-    if (!patch.trim()) {
-      return { ok: true, conflicts: [], message: "No changes to apply" }
-    }
-
-    const result = await this.exec(["apply", "--3way", "--whitespace=nowarn", "-"], targetPath, { stdin: patch })
-    if (result.code === 0) {
-      return { ok: true, conflicts: [], message: "Patch applied" }
-    }
-
-    const output = [result.stderr, result.stdout].filter(Boolean).join("\n")
-    const message = output.trim() || "Failed to apply patch"
-    const conflicts = this.parseApplyConflicts(output)
-    return { ok: false, conflicts, message }
-  }
-
-  private parseApplyConflicts(output: string): ApplyConflict[] {
-    const lines = output
-      .split(/\r?\n/g)
-      .map((line) => line.trim())
-      .filter(Boolean)
-
-    const seen = new Set<string>()
-    const conflicts: ApplyConflict[] = []
-
-    for (const line of lines) {
-      const patchFailed = /^error:\s+patch failed:\s+(.+?):\d+$/i.exec(line)
-      if (patchFailed) {
-        const file = patchFailed[1]!
-        const reason = "patch failed"
-        const key = `${file}:${reason}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        conflicts.push({ file, reason })
-        continue
-      }
-
-      const fileReason =
-        /^error:\s+(.+?):\s+(does not match index|patch does not apply|cannot read the current contents.*)$/i.exec(line)
-      if (fileReason) {
-        const file = fileReason[1]!
-        const reason = fileReason[2]!
-        const key = `${file}:${reason}`
-        if (seen.has(key)) continue
-        seen.add(key)
-        conflicts.push({ file, reason })
-        continue
-      }
-    }
-
-    if (conflicts.length > 0) return conflicts
-    const first = lines[0]
-    if (first) return [{ reason: first }]
-    return [{ reason: "Patch does not apply cleanly" }]
   }
 
   /**

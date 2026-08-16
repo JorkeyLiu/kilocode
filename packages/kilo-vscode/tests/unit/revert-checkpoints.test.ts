@@ -3,7 +3,10 @@ import fs from "node:fs"
 import path from "node:path"
 
 const ROOT = path.resolve(import.meta.dir, "../..")
-const TURN_FILE = path.join(ROOT, "webview-ui/src/components/chat/VscodeSessionTurn.tsx")
+// P3.2: the turn renderer is TranscriptRowView (VscodeSessionTurn was removed
+// with the custom diff surface); the H-12 revert contract is asserted against
+// the production component.
+const TURN_FILE = path.join(ROOT, "webview-ui/src/components/chat/TranscriptRow.tsx")
 const PROVIDER_FILE = path.join(ROOT, "src/KiloProvider.ts")
 
 const src = fs.readFileSync(TURN_FILE, "utf-8")
@@ -19,12 +22,12 @@ function method(name: string, next: string) {
 
 describe("message revert checkpoints", () => {
   it("keeps revert actions available after a session is already reverted", () => {
-    expect(src).toMatch(/onRevert=\{\s*assistantMessages\(\)\.length > 0\s*\? \(\) =>/)
+    expect(src).toMatch(/onRevert=\{\s*row\(\)\.answered\s*\? \(\) =>/)
     expect(src).not.toMatch(/onRevert=\{[\s\S]*?&& !session\.revert\(\)[\s\S]*?\? \(\) =>/)
   })
 
   it("only marks revert disabled while the agent is busy", () => {
-    expect(src).toMatch(/data-revert-disabled=\{\s*assistantMessages\(\)\.length > 0 && session\.status\(\) !== "idle"/)
+    expect(src).toMatch(/data-revert-disabled=\{\s*row\(\)\.answered && session\.status\(\) !== "idle"/)
     expect(src).not.toMatch(/data-revert-disabled=\{[\s\S]*?!session\.revert\(\)/)
   })
 })

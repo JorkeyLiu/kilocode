@@ -277,7 +277,7 @@ export const TaskHeader: Component<TaskHeaderProps> = (props) => {
             <span
               data-slot="task-header-title-trigger"
               data-renamable={canRename() ? "" : undefined}
-              title={canRename() ? language.t("agentManager.worktree.doubleClickRename") : title()}
+              title={canRename() ? language.t("agentManager.session.doubleClickRename") : title()}
               tabIndex={canRename() ? 0 : undefined}
               role={canRename() ? "button" : undefined}
               onDblClick={startRename}

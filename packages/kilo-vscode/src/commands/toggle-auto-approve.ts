@@ -4,13 +4,13 @@ import type { KiloConnectionService } from "../services/cli-backend/connection-s
 
 /**
  * Callback that resolves the correct working directory for a session.
- * For worktree sessions this returns the worktree path; otherwise the workspace root.
+ * For tracked sessions this returns the session's directory; otherwise the workspace root.
  */
 export type DirectoryResolver = (sessionId?: string) => string
 
 /**
  * Returns every unique directory the extension tracks
- * (workspace root + all registered worktree paths).
+ * (workspace root + all registered session directories).
  */
 export type AllDirectories = () => string[]
 type Asked = Extract<Event, { type: "permission.asked" }>

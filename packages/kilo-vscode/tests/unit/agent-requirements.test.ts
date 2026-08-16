@@ -43,7 +43,6 @@ function controller(
     api?: KiloClient | null
     posts?: unknown[]
     sessions?: ReadonlyMap<string, string>
-    worktrees?: () => readonly string[]
     extensions?: ReadonlySet<string>
     subscribe?: (listener: () => void) => { dispose(): void }
   } = {},
@@ -58,7 +57,6 @@ function controller(
     folders: () => [root, "/workspace"],
     project: () => root,
     sessions: () => input.sessions ?? new Map(),
-    worktrees: input.worktrees,
     extension: (id) => input.extensions?.has(id),
     subscribe: input.subscribe,
     error: (error) => (error instanceof Error ? error.message : String(error)),
@@ -71,21 +69,19 @@ describe("agent requirement helpers", () => {
     expect(requirementKey("other", "/repo/subdir")).not.toBe(requirementKey("demo", "/repo/subdir"))
   })
 
-  it("scopes requests to active workspace, session, and worktree directories", () => {
-    const sessions = new Map([["session-1", "/repo/.kilo/worktrees/one"]])
+  it("scopes requests to active workspace, session, and project directories", () => {
+    const sessions = new Map([["session-1", "/repo/session-one"]])
     const base = {
       workspaceDirectory: root,
       workspaceDirectories: ["/workspace"],
       projectDirectory: root,
       sessionDirectories: sessions,
-      worktreeDirectories: () => ["/repo/.kilo/worktrees/two"],
     }
 
     expect(requirementDirectory({ ...base, requested: "/repo" })).toBe(root)
-    expect(requirementDirectory({ ...base, requested: "/repo/.kilo/worktrees/one", sessionID: "session-1" })).toBe(
-      "/repo/.kilo/worktrees/one",
+    expect(requirementDirectory({ ...base, requested: "/repo/session-one", sessionID: "session-1" })).toBe(
+      "/repo/session-one",
     )
-    expect(requirementDirectory({ ...base, requested: "/repo/.kilo/worktrees/two" })).toBe("/repo/.kilo/worktrees/two")
     expect(requirementDirectory({ ...base, requested: "/other" })).toBeUndefined()
   })
 

@@ -427,7 +427,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Solo se pueden pegar imágenes o PDFs aquí.",
   "prompt.toast.modelAgentRequired.title": "Selecciona un agente y modelo",
   "prompt.toast.modelAgentRequired.description": "Elige un agente y modelo antes de enviar un prompt.",
-  "prompt.toast.worktreeCreateFailed.title": "Fallo al crear el árbol de trabajo",
+
   "prompt.toast.sessionCreateFailed.title": "Fallo al crear la sesión",
   "prompt.toast.shellSendFailed.title": "Fallo al enviar comando de shell",
   "prompt.toast.commandSendFailed.title": "Fallo al enviar comando",
@@ -485,10 +485,6 @@ export const dict = {
   "dialog.project.edit.color": "Color",
   "dialog.project.edit.color.select": "Seleccionar color {{color}}",
 
-  "dialog.project.edit.worktree.startup": "Script de inicio del espacio de trabajo",
-  "dialog.project.edit.worktree.startup.description":
-    "Se ejecuta después de crear un nuevo espacio de trabajo (árbol de trabajo).",
-  "dialog.project.edit.worktree.startup.placeholder": "p. ej. bun install",
   "context.breakdown.title": "Desglose de Contexto",
   "context.breakdown.note":
     'Desglose aproximado de tokens de entrada. "Otro" incluye definiciones de herramientas y sobrecarga.',
@@ -551,11 +547,6 @@ export const dict = {
   "toast.permissions.autoaccept.on.description": "Los permisos de edición y escritura serán aprobados automáticamente",
   "toast.permissions.autoaccept.off.title": "Se dejó de aceptar ediciones automáticamente",
   "toast.permissions.autoaccept.off.description": "Los permisos de edición y escritura requerirán aprobación",
-
-  "toast.workspace.enabled.title": "Espacios de trabajo habilitados",
-  "toast.workspace.enabled.description": "Ahora se muestran varios worktrees en la barra lateral",
-  "toast.workspace.disabled.title": "Espacios de trabajo deshabilitados",
-  "toast.workspace.disabled.description": "Solo se muestra el worktree principal en la barra lateral",
 
   "toast.model.none.title": "Ningún modelo seleccionado",
   "toast.model.none.description": "Conecta un proveedor para resumir esta sesión",
@@ -707,9 +698,6 @@ export const dict = {
   "session.messages.jumpToLatest": "Ir al último",
   "session.context.addToContext": "Añadir {{selection}} al contexto",
 
-  "session.new.worktree.main": "Rama principal",
-  "session.new.worktree.mainWithBranch": "Rama principal ({{branch}})",
-  "session.new.worktree.create": "Crear nuevo árbol de trabajo",
   "session.new.lastModified": "Última modificación",
   "sidebar.session.newSession": "Nueva Sesión",
   "sidebar.session.newSession.tooltip": "Inicia una nueva conversación manteniendo intacta la sesión actual.",
@@ -1760,7 +1748,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Menos distracciones, más fácil y rápido de leer.",
   "migration.whatsNew.features.agentManager.title": "Administrador de agentes",
   "migration.whatsNew.features.agentManager.detail":
-    "Una interfaz unificada para ejecutar múltiples agentes en paralelo, cada uno en su propio worktree — supervisa el progreso, cambia de contexto y revisa cambios en un solo lugar.",
+    "Una interfaz unificada para ejecutar múltiples agentes en paralelo — supervisa el progreso, cambia de contexto y revisa cambios en un solo lugar.",
   "migration.whatsNew.features.foundation.title": "Base compartida",
   "migration.whatsNew.features.foundation.detail":
     "Un núcleo pequeño y eficiente en todos los productos Kilo. Una experiencia familiar sin importar cómo elijas trabajar.",
@@ -1843,30 +1831,6 @@ export const dict = {
   "settings.saveBar.save": "Guardar",
   "settings.saveBar.saving": "Guardando…",
   "settings.saveBar.saveFailed": "No se pudieron guardar los ajustes",
-  "diffViewer.source.workspace.label": "Rama",
-  "diffViewer.source.workspace.tooltip":
-    "Todos los cambios de esta rama respecto a la rama base. Incluye archivos sin commitear (staged, unstaged y no rastreados) y commits locales que todavía no están en la base.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "Archivos con cambios que has añadido al área de preparación de git (`git add`), tal como aparecerán en el próximo commit.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "Archivos modificados en tu árbol de trabajo pero que aún no están en el área de preparación, más archivos no rastreados (nuevos).",
-  "diffViewer.source.session.label": "Sesión",
-  "diffViewer.source.session.tooltip":
-    "Archivos modificados por Kilo durante la sesión actual, basado en snapshots por turno. Se reinicia al empezar una nueva sesión.",
-  "diffViewer.group.session": "Sesión",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Las instantáneas están deshabilitadas para este repositorio. Edita tus archivos de configuración para mostrar los cambios de la sesión.",
-
-  "diffViewer.baseBranch.auto": "Predeterminada",
-  "diffViewer.baseBranch.default": "Predeterminada",
-  "diffViewer.baseBranch.remote": "Remota",
-  "diffViewer.baseBranch.search": "Buscar ramas",
-  "diffViewer.baseBranch.empty": "Sin ramas que coincidan",
-  "diffViewer.baseBranch.loading": "Cargando ramas…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "El plan está listo:",
   "chat.search.placeholder": "Buscar en el chat…",
   "chat.search.toggle": "Buscar en el chat",

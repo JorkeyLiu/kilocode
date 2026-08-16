@@ -274,7 +274,7 @@ describe("KiloProvider.handleAbort", () => {
       },
       "/repo",
     )
-    provider.setSessionDirectory("s1", "/repo/worktree")
+    internal.sessionDirectories.set("s1", "/repo/worktree")
 
     await internal.handleAbort("s1")
 
@@ -285,21 +285,18 @@ describe("KiloProvider.handleAbort", () => {
     expect(sent.at(-1)).toMatchObject({ type: "sessionStatus", sessionID: "s1", status: "idle" })
   })
 
-  it("preserves the original owner when the status event lacks a directory", async () => {
+  it("aborts the resolved session directory when the status event lacks a directory", async () => {
     const client = createClient()
     const { provider, internal } = makeProvider(client)
     internal.handleEvent({
       type: "session.status",
       properties: { sessionID: "s1", status: { type: "busy" } },
     })
-    provider.setSessionDirectory("s1", "/repo/worktree")
+    internal.sessionDirectories.set("s1", "/repo/worktree")
 
     await internal.handleAbort("s1")
 
-    expect(client.aborted).toEqual([
-      { sessionID: "s1", directory: "/repo" },
-      { sessionID: "s1", directory: "/repo/worktree" },
-    ])
+    expect(client.aborted).toEqual([{ sessionID: "s1", directory: "/repo/worktree" }])
   })
 
   it("attempts every owner and stays busy when one abort fails", async () => {
@@ -313,7 +310,7 @@ describe("KiloProvider.handleAbort", () => {
       },
       "/repo",
     )
-    provider.setSessionDirectory("s1", "/repo/worktree")
+    internal.sessionDirectories.set("s1", "/repo/worktree")
 
     await internal.handleAbort("s1")
 
@@ -337,8 +334,8 @@ describe("KiloProvider.handleAbort", () => {
       },
       "/repo",
     )
-    provider.setSessionDirectory("s1", "/repo/worktree")
-    provider.setSessionDirectory("s2", "/repo/other")
+    internal.sessionDirectories.set("s1", "/repo/worktree")
+    internal.sessionDirectories.set("s2", "/repo/other")
 
     const stopped = provider.abortSessions(["s1", "s2", "s2"])
     provider.dispose()
@@ -455,10 +452,10 @@ describe("KiloProvider sandbox toggle", () => {
     const client = createClient()
     const { internal } = makeProvider(client)
 
-    await internal.fetchAndSendSandboxDefault("/repo/.kilo/worktrees/wt-1")
+    await internal.fetchAndSendSandboxDefault("/repo/session-wt-1")
 
-    expect(client.configReads).toEqual([{ directory: "/repo/.kilo/worktrees/wt-1" }])
-    expect(client.sandboxSupport).toEqual([{ directory: "/repo/.kilo/worktrees/wt-1" }])
+    expect(client.configReads).toEqual([{ directory: "/repo/session-wt-1" }])
+    expect(client.sandboxSupport).toEqual([{ directory: "/repo/session-wt-1" }])
   })
 
   it("waits for a blank toggle before creating the first prompt session", async () => {

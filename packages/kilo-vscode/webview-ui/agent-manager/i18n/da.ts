@@ -42,9 +42,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "Luk fane",
   "agentManager.shortcuts.toggleTerminal": "Skift terminal",
   "agentManager.shortcuts.runScript": "Kør script",
-  "agentManager.run.options": "Kørselsindstillinger",
-  "agentManager.run.configure": "Konfigurer kørselsscript",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "Åbn Agent Manager",
   "agentManager.shortcuts.cycleAgentMode": "Next agent mode",

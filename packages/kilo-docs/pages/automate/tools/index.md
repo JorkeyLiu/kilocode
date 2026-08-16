@@ -90,7 +90,7 @@ These tools help manage the conversation and task flow:
 - `todoread` - Reads the current session TODO list
 - `plan` - Enters structured planning mode
 - `skill` - Invokes a reusable skill (Markdown instruction module)
-- `agent_manager` - Starts Agent Manager local or worktree sessions in VS Code
+- `agent_manager` - Starts Agent Manager sessions in VS Code
 
 ## Tool Calling Mechanism
 

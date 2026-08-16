@@ -44,9 +44,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "Sekmeyi kapat",
   "agentManager.shortcuts.toggleTerminal": "Terminali aç/kapat",
   "agentManager.shortcuts.runScript": "Betiği çalıştır",
-  "agentManager.run.options": "Çalıştırma seçenekleri",
-  "agentManager.run.configure": "Çalıştırma betiğini yapılandır",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "Agent Manager'ı Aç",
   "agentManager.shortcuts.cycleAgentMode": "Sonraki agent modu",

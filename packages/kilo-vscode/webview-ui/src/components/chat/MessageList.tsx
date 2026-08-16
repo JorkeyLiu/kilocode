@@ -3,7 +3,7 @@
 /**
  * MessageList component
  * Scrollable turn-based message list with virtualization.
- * Each user message is rendered as a VscodeSessionTurn — a custom component that
+ * Each user message is rendered as a TranscriptRowView — a custom component that
  * renders all assistant parts as a flat, verbose list with no context grouping,
  * and fully expands sub-agent (task tool) parts inline.
  * Shows recent sessions in the empty state for quick resumption.
@@ -29,7 +29,7 @@ import { useServer } from "../../context/server"
 import { useLanguage } from "../../context/language"
 import { useI18n } from "@kilocode/kilo-ui/context/i18n"
 import { useProvider } from "../../context/provider"
-import { useWorktreeMode } from "../../context/worktree-mode"
+import { useAgentManager } from "../../context/agent-manager"
 import { WelcomeEmptyState } from "./WelcomeEmptyState"
 import { TranscriptRowView } from "./TranscriptRow"
 import type { ErrorDisplayProps } from "./ErrorDisplay"
@@ -105,11 +105,11 @@ export const MessageList: Component<MessageListProps> = (props) => {
   const provider = useProvider()
   const i18n = useI18n()
   const data = useData()
-  // Only present inside Agent Manager (see worktree-mode.tsx). Agent Manager
+  // Only present inside Agent Manager (see agent-manager.tsx). Agent Manager
   // never calls registerExpandedTaskTool(), so its "task" cards always fall
   // back to kilo-ui's default hideDetails renderer, which never shows a
   // task's result text — indexing it there would produce a phantom match.
-  const inAgentManager = !!useWorktreeMode()
+  const inAgentManager = useAgentManager()
 
   // Mirrors message-part.tsx's own (unexported) relativizeProjectPath/
   // getDirectory exactly, so the directory text indexed here matches what

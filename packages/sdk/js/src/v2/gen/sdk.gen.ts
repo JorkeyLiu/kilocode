@@ -7,9 +7,6 @@ import type {
   AgentBuilderPreviewResponses,
   AgentBuilderSaveErrors,
   AgentBuilderSaveResponses,
-  AgentManagerFailure,
-  AgentManagerRequestId,
-  AgentManagerResult,
   AgentPartInput,
   AnacondaDesktopOpenErrors,
   AnacondaDesktopOpenResponses,
@@ -40,8 +37,6 @@ import type {
   BackgroundProcessStopResponses,
   BackgroundProcessStopSessionErrors,
   BackgroundProcessStopSessionResponses,
-  BranchNameGenerateErrors,
-  BranchNameGenerateResponses,
   CommandListErrors,
   CommandListResponses,
   CommitMessageGenerateErrors,
@@ -181,12 +176,6 @@ import type {
   KiloCloudSessionImportResponses,
   KiloCloudSessionsErrors,
   KiloCloudSessionsResponses,
-  KilocodeAgentManagerListErrors,
-  KilocodeAgentManagerListResponses,
-  KilocodeAgentManagerRejectErrors,
-  KilocodeAgentManagerRejectResponses,
-  KilocodeAgentManagerReplyErrors,
-  KilocodeAgentManagerReplyResponses,
   KilocodeAgentRequirementsErrors,
   KilocodeAgentRequirementsResponses,
   KilocodeHeapSnapshotErrors,
@@ -516,23 +505,6 @@ import type {
   VcsGetResponses,
   VcsStatusErrors,
   VcsStatusResponses,
-  WorktreeCreateErrors,
-  WorktreeCreateInput,
-  WorktreeCreateResponses,
-  WorktreeDiffErrors,
-  WorktreeDiffFileErrors,
-  WorktreeDiffFileResponses,
-  WorktreeDiffResponses,
-  WorktreeDiffSummaryErrors,
-  WorktreeDiffSummaryResponses,
-  WorktreeListErrors,
-  WorktreeListResponses,
-  WorktreeRemoveErrors,
-  WorktreeRemoveInput,
-  WorktreeRemoveResponses,
-  WorktreeResetErrors,
-  WorktreeResetInput,
-  WorktreeResetResponses,
 } from "./types.gen.js"
 
 export type Options<TData extends TDataShape = TDataShape, ThrowOnError extends boolean = boolean> = Options2<
@@ -904,8 +876,6 @@ export class Session extends HeyApiClient {
       directory?: string
       workspace?: string
       projectID?: string
-      worktrees?: boolean
-      current?: "true" | "false"
       roots?: boolean | "true" | "false"
       start?: number
       cursor?: number
@@ -923,8 +893,6 @@ export class Session extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "query", key: "projectID" },
-            { in: "query", key: "worktrees" },
-            { in: "query", key: "current" },
             { in: "query", key: "roots" },
             { in: "query", key: "start" },
             { in: "query", key: "cursor" },
@@ -2119,247 +2087,6 @@ export class Tool extends HeyApiClient {
     )
     return (options?.client ?? this.client).get<ToolIdsResponses, ToolIdsErrors, ThrowOnError>({
       url: "/experimental/tool/ids",
-      ...options,
-      ...params,
-    })
-  }
-}
-
-export class Worktree extends HeyApiClient {
-  /**
-   * Remove worktree
-   *
-   * Remove a git worktree and delete its branch.
-   */
-  public remove<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      worktreeRemoveInput?: WorktreeRemoveInput
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "worktreeRemoveInput", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).delete<WorktreeRemoveResponses, WorktreeRemoveErrors, ThrowOnError>({
-      url: "/experimental/worktree",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * List worktrees
-   *
-   * List all git worktrees for the current project and whether Kilo manages them.
-   */
-  public list<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<WorktreeListResponses, WorktreeListErrors, ThrowOnError>({
-      url: "/experimental/worktree",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Create worktree
-   *
-   * Create a new git worktree for the current project and run any configured startup scripts.
-   */
-  public create<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      worktreeCreateInput?: WorktreeCreateInput
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "worktreeCreateInput", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<WorktreeCreateResponses, WorktreeCreateErrors, ThrowOnError>({
-      url: "/experimental/worktree",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Reset worktree
-   *
-   * Reset a worktree branch to the primary default branch.
-   */
-  public reset<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      worktreeResetInput?: WorktreeResetInput
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { key: "worktreeResetInput", map: "body" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<WorktreeResetResponses, WorktreeResetErrors, ThrowOnError>({
-      url: "/experimental/worktree/reset",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Get worktree diff
-   *
-   * Get file diffs for a worktree compared to its base branch. Includes uncommitted changes.
-   */
-  public diff<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      base?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "query", key: "base" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<WorktreeDiffResponses, WorktreeDiffErrors, ThrowOnError>({
-      url: "/experimental/worktree/diff",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Get worktree diff summary
-   *
-   * Get lightweight file diff metadata for a worktree compared to its base branch.
-   */
-  public diffSummary<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      base?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "query", key: "base" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<WorktreeDiffSummaryResponses, WorktreeDiffSummaryErrors, ThrowOnError>({
-      url: "/experimental/worktree/diff/summary",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Get worktree diff detail
-   *
-   * Get full diff contents for one worktree file compared to its base branch.
-   */
-  public diffFile<ThrowOnError extends boolean = false>(
-    parameters: {
-      directory?: string
-      workspace?: string
-      base?: string
-      file: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "query", key: "base" },
-            { in: "query", key: "file" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<WorktreeDiffFileResponses, WorktreeDiffFileErrors, ThrowOnError>({
-      url: "/experimental/worktree/diff/file",
       ...options,
       ...params,
     })
@@ -6398,51 +6125,6 @@ export class BackgroundProcess extends HeyApiClient {
   }
 }
 
-export class BranchName extends HeyApiClient {
-  /**
-   * Generate branch name
-   *
-   * Generate a task-focused branch name from the current conversation.
-   */
-  public generate<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-      prompt?: string
-      providerID?: string
-      modelID?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "prompt" },
-            { in: "body", key: "providerID" },
-            { in: "body", key: "modelID" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<BranchNameGenerateResponses, BranchNameGenerateErrors, ThrowOnError>({
-      url: "/session/{sessionID}/branch-name",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
 export class CommitMessage extends HeyApiClient {
   /**
    * Generate commit message
@@ -7544,128 +7226,6 @@ export class Notebook extends HeyApiClient {
   }
 }
 
-export class AgentManager extends HeyApiClient {
-  /**
-   * List pending Agent Manager requests
-   *
-   * List pending native Agent Manager orchestration requests for the routed workspace.
-   */
-  public list<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<
-      KilocodeAgentManagerListResponses,
-      KilocodeAgentManagerListErrors,
-      ThrowOnError
-    >({
-      url: "/kilocode/agent-manager",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Reply to an Agent Manager request
-   *
-   * Complete a pending Agent Manager orchestration request with a structured result.
-   */
-  public reply<ThrowOnError extends boolean = false>(
-    parameters: {
-      requestID: AgentManagerRequestId
-      directory?: string
-      workspace?: string
-      result?: AgentManagerResult
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "requestID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "result" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      KilocodeAgentManagerReplyResponses,
-      KilocodeAgentManagerReplyErrors,
-      ThrowOnError
-    >({
-      url: "/kilocode/agent-manager/{requestID}/reply",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Reject an Agent Manager request
-   *
-   * Complete a pending Agent Manager orchestration request with a structured host error.
-   */
-  public reject<ThrowOnError extends boolean = false>(
-    parameters: {
-      requestID: AgentManagerRequestId
-      directory?: string
-      workspace?: string
-      error?: AgentManagerFailure
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "requestID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "error" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      KilocodeAgentManagerRejectResponses,
-      KilocodeAgentManagerRejectErrors,
-      ThrowOnError
-    >({
-      url: "/kilocode/agent-manager/{requestID}/reject",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
 export class SessionImport extends HeyApiClient {
   /**
    * Insert project for session import
@@ -8209,11 +7769,6 @@ export class Kilocode extends HeyApiClient {
   private _notebook?: Notebook
   get notebook(): Notebook {
     return (this._notebook ??= new Notebook({ client: this.client }))
-  }
-
-  private _agentManager?: AgentManager
-  get agentManager(): AgentManager {
-    return (this._agentManager ??= new AgentManager({ client: this.client }))
   }
 
   private _sessionImport?: SessionImport
@@ -10082,11 +9637,6 @@ export class KiloClient extends HeyApiClient {
     return (this._tool ??= new Tool({ client: this.client }))
   }
 
-  private _worktree?: Worktree
-  get worktree(): Worktree {
-    return (this._worktree ??= new Worktree({ client: this.client }))
-  }
-
   private _find?: Find
   get find(): Find {
     return (this._find ??= new Find({ client: this.client }))
@@ -10185,11 +9735,6 @@ export class KiloClient extends HeyApiClient {
   private _backgroundProcess?: BackgroundProcess
   get backgroundProcess(): BackgroundProcess {
     return (this._backgroundProcess ??= new BackgroundProcess({ client: this.client }))
-  }
-
-  private _branchName?: BranchName
-  get branchName(): BranchName {
-    return (this._branchName ??= new BranchName({ client: this.client }))
   }
 
   private _commitMessage?: CommitMessage

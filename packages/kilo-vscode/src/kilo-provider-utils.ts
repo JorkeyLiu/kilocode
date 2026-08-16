@@ -268,7 +268,7 @@ export interface SessionRefreshContext {
 }
 
 /**
- * Load one page of sessions via the experimental worktree-aware list endpoint.
+ * Load one page of sessions via the experimental directory-aware list endpoint.
  * Without a cursor this is a full refresh (page 1) that re-fetches everything
  * loaded so far; with a cursor it appends the next page.
  * Sets pendingSessionRefresh when the HTTP client isn't ready yet.
@@ -300,10 +300,10 @@ export async function loadSessions(ctx: SessionRefreshContext, cursor?: number):
     hasMore: page.cursor !== null,
   })
 
-  // Pin the canonical projectID to the workspace-root session. With
-  // worktrees:true, sessions[0] is the most-recently-updated session across the
-  // whole worktree family, so its projectID may belong to a worktree rather than
-  // the root — KiloProvider filters SSE events by this ID, so a worktree ID would
+  // Pin the canonical projectID to the workspace-root session. sessions[0]
+  // is the most-recently-updated session across the whole family, so its
+  // projectID may belong to a session in another directory rather than the
+  // root — KiloProvider filters SSE events by this ID, so a non-root ID would
   // drop root-project events. Fall back to sessions[0] only when no root match.
   const root = ctx.root ? page.sessions.find((s) => sameDirectory(s.directory, ctx.root!))?.projectID : undefined
   return root ?? page.sessions[0]?.projectID

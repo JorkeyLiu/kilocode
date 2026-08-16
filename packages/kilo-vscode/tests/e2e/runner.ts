@@ -82,6 +82,15 @@
  *                           disconnect through the real SDK (H-5 cleanup), and
  *                           the H-12 rollback phase (Revert-to-here / Redo All
  *                           on the same served session after the reopen).
+ *   - worktree-removal   => P3.2 focused scenario: the extension host asserts
+ *                           the loaded manifest + runtime command table expose
+ *                           no managed worktree or custom Diff Viewer surface,
+ *                           seeds two root-local sessions A + B through the
+ *                           production session-open path (no worktree
+ *                           dimension), and proves no worktree state is created
+ *                           in the run-owned workspace; this runner loop then
+ *                           services the bounded H-12 rollback snapshot markers
+ *                           (`p32-snap-N`) against the shared served backend.
  *   Scenarios are independent: each seeds only its own fixtures and coordinates
  *   through scenario-specific markers (tab-close-done, child-phase1-done /
  *   child-phase2-ready / child-phase2-done, variant-ready, topic-nav-done /
@@ -90,7 +99,8 @@
  *   real-snap-N.json / real-reopen-request / real-reopen-ready,
  *   real-completed-ready / rc-snap-N-request / rc-snap-N.json /
  *   real-completed-reopen-request / real-completed-reopen-ready /
- *   real-completed-mcp-disconnect-request / real-completed-mcp-disconnect-done).
+ *   real-completed-mcp-disconnect-request / real-completed-mcp-disconnect-done,
+ *   worktree-removal-ready / p32-snap-N-request / p32-snap-N.json).
  *   `ready`, `done`, `runner-done` are process-level harness gates, not scenario
  *   state.
  *
@@ -100,7 +110,7 @@
  */
 
 import * as vscode from "vscode"
-import { existsSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Message, SessionInfo } from "../../webview-ui/src/types/messages/sessions"
 import type { ToolPart } from "../../webview-ui/src/types/messages/parts"
@@ -403,7 +413,6 @@ async function seedTopicFixtures(
   await post(vscodeApi, {
     type: "agentManager.sessionAdded",
     sessionId: plan.topicRootId,
-    worktreeId: "local",
   })
   await post(vscodeApi, {
     type: "sessionCreated",
@@ -433,7 +442,6 @@ async function seedTopicFixtures(
   await post(vscodeApi, {
     type: "agentManager.sessionAdded",
     sessionId: activeId,
-    worktreeId: "local",
   })
 
   // Survival handshake: flush the real backend refresh, then re-seed
@@ -456,6 +464,7 @@ interface ScenarioFlags {
   runRealOverflow: boolean
   runRealRestart: boolean
   runSidebarRemoval: boolean
+  runWorktreeRemoval: boolean
 }
 
 /**
@@ -493,6 +502,12 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // opens an "Open in Tab" editor panel (no synthetic fixtures, no CDP DOM
     // driving — all assertions run extension-host-side).
     runSidebarRemoval: scenario === "sidebar-removal",
+    // P3.2 worktree-removal is focused-only: it asserts runtime manifest /
+    // command-table absence of the managed-worktree + custom Diff Viewer
+    // surfaces, seeds two root-local sessions, and drives the bounded H-12
+    // rollback phase against the run-owned scripted provider (real backend
+    // sessions — never part of `all`).
+    runWorktreeRemoval: scenario === "worktree-removal",
   }
 }
 
@@ -516,11 +531,12 @@ export async function run(): Promise<void> {
     "real-overflow",
     "real-restart",
     "sidebar-removal",
+    "worktree-removal",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal | worktree-removal (default: all)",
     )
   }
   const {
@@ -533,6 +549,7 @@ export async function run(): Promise<void> {
     runRealOverflow,
     runRealRestart,
     runSidebarRemoval,
+    runWorktreeRemoval,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -586,6 +603,20 @@ export async function run(): Promise<void> {
     await assertSidebarRemoval(vscode, ext, scratch, fixtureId)
   }
 
+  // --- P3.2 worktree-removal scenario (focused only) ---
+  // Proves the loaded manifest + runtime command table expose no managed
+  // worktree or custom Diff Viewer surface, that root-local Agent Manager
+  // orchestration survives with two root-local sessions, and that no worktree
+  // state is created in the run-owned workspace. All assertions run
+  // extension-host-side and are recorded into
+  // `<scratch>/worktree-removal-runtime-evidence`; the harness then drives the
+  // seeded two-session controllability and the bounded H-12 rollback over
+  // CDP (see assertWorktreeRemovalLifecycle in script/e2e-probe.ts).
+  if (runWorktreeRemoval) {
+    await assertWorktreeRemoval(vscode, ext, scratch, fixtureId)
+    await serviceWorktreeRemovalBoundary(vscode, scratch, fixtureId)
+  }
+
   // --- Tab-close scenario fixtures (TA, TB, TC) — independent of child/variant ---
   // Seeds three session tabs in a known order [TA, TB, TC] with TA active, using
   // the same production session-open path as the child scenario (sessionAdded
@@ -611,7 +642,6 @@ export async function run(): Promise<void> {
     await post(vscode, {
       type: "agentManager.sessionAdded",
       sessionId: plan.tabAId,
-      worktreeId: "local",
     })
 
     // 3. Register the first tab in the local inventory, then open the other two
@@ -633,7 +663,6 @@ export async function run(): Promise<void> {
     await post(vscode, {
       type: "agentManager.sessionAdded",
       sessionId: plan.tabAId,
-      worktreeId: "local",
     })
 
     // 5. Deterministic survival handshake (same as the child scenario): flush
@@ -671,7 +700,6 @@ export async function run(): Promise<void> {
     await post(vscode, {
       type: "agentManager.sessionAdded",
       sessionId: plan.sourceId,
-      worktreeId: "local",
     })
 
     // 3. Register the source in the local session inventory (sessionAdded alone
@@ -692,7 +720,6 @@ export async function run(): Promise<void> {
     await post(vscode, {
       type: "agentManager.sessionAdded",
       sessionId: plan.sourceId,
-      worktreeId: "local",
     })
 
     // 6. A's transcript contains the production task tool part pointing at C.
@@ -743,7 +770,6 @@ export async function run(): Promise<void> {
     await post(vscode, {
       type: "agentManager.sessionAdded",
       sessionId: plan.sourceId,
-      worktreeId: "local",
     })
     writeFileSync(join(scratch, "child-phase2-ready"), fixtureId)
 
@@ -765,7 +791,6 @@ export async function run(): Promise<void> {
     await post(vscode, {
       type: "agentManager.sessionAdded",
       sessionId: plan.variantId,
-      worktreeId: "local",
     })
     await post(vscode, {
       type: "messagesLoaded",
@@ -991,6 +1016,342 @@ async function assertSidebarRemoval(
   writeFileSync(join(scratch, "sidebar-removal-ready"), fixtureId)
 }
 
+/** Forbidden P3.2 surface regex (managed worktree / run-script / transfer / custom diff). */
+const FORBIDDEN_SURFACE = /worktree|runScript|setupScript|gitTransfer|diffViewer|diff-viewer|diff-virtual|showChanges|apply|import/i
+
+/** Forbidden managed-worktree / custom-diff identifiers (mirrors the static P3.2 contract). */
+const FORBIDDEN_IDS = [
+  "WorktreeManager",
+  "WorktreeStateManager",
+  "WorktreeDiffController",
+  "PRStatusPoller",
+  "SetupScriptService",
+  "SetupScriptRunner",
+  "WorktreeDiffEntry",
+  "WorktreeDiffReverter",
+  "git-transfer",
+  "worktree-mode",
+  "WorktreeModeProvider",
+  "useWorktreeMode",
+  "BranchSelect",
+  "VscodeSessionTurn",
+  "multi-model-utils",
+  "MAX_MULTI_VERSIONS",
+  "ModelAllocation",
+  "ExternalWorktreeInfo",
+  "WorktreeErrorCode",
+  "AgentManagerPRStatusMessage",
+  "agentManager.worktree.",
+  "agentManager.run.",
+  "agentManager.apply",
+  "agentManager.import",
+  "agentManager.branches",
+  "DiffVirtualProvider",
+  "DiffViewerProvider",
+  "diff-viewer",
+  "diff-virtual",
+  "autoBranchNaming",
+  "branchPrefix",
+  "showChanges",
+]
+
+/**
+ * P3.2 manifest absence check (part 1 of assertWorktreeRemoval): the loaded
+ * contributes must expose no forbidden managed-worktree or custom Diff Viewer
+ * surface — no worktree/diff-viewer view ids, containers, commands,
+ * keybindings, menus, settings, or identifiers (identifier-based, mirroring
+ * tests/unit/worktree-removal.test.ts). Throws on any violation and returns
+ * the manifest evidence for the durable runtime-evidence file.
+ */
+function assertNoForbiddenContributions(contributes: Record<string, unknown>): {
+  declaredCommands: string[]
+  contributedViewIds: string[]
+  configProps: string[]
+  forbidden: Record<string, string[]>
+} {
+  const views = (contributes.views ?? {}) as Record<string, Array<{ id?: string }>>
+  const viewHits: string[] = []
+  for (const group of Object.values(views)) {
+    for (const view of group) {
+      if (view.id && FORBIDDEN_SURFACE.test(view.id)) viewHits.push(view.id)
+    }
+  }
+  const containers = (contributes.viewsContainers ?? {}) as Record<string, Array<{ id?: string }>>
+  const containerHits: string[] = []
+  for (const group of Object.values(containers)) {
+    for (const c of group) {
+      if (c.id && FORBIDDEN_SURFACE.test(c.id)) containerHits.push(c.id)
+    }
+  }
+  const declaredCommands: string[] = ((contributes.commands ?? []) as Array<{ command: string }>).map((c) => c.command)
+  const commandHits = declaredCommands.filter((c) => FORBIDDEN_SURFACE.test(c))
+  const bindingHits = ((contributes.keybindings ?? []) as Array<{ command?: string }>)
+    .map((b) => b.command ?? "")
+    .filter((c) => FORBIDDEN_SURFACE.test(c))
+  const menuHits = Object.values((contributes.menus ?? {}) as Record<string, Array<{ command?: string }>>)
+    .flat()
+    .map((m) => m.command ?? "")
+    .filter((c) => FORBIDDEN_SURFACE.test(c))
+  const configProps = Object.keys(
+    ((contributes.configuration ?? {}) as { properties?: Record<string, unknown> }).properties ?? {},
+  )
+  const settingHits = configProps.filter((k) => FORBIDDEN_SURFACE.test(k))
+  const identifierHits = FORBIDDEN_IDS.filter((id) => JSON.stringify(contributes).includes(id))
+  const forbidden = { viewHits, containerHits, commandHits, bindingHits, menuHits, settingHits, identifierHits }
+  if (Object.values(forbidden).some((hits) => hits.length > 0)) {
+    throw new Error(`probe runner: loaded manifest still exposes a forbidden P3.2 surface (${JSON.stringify(forbidden)})`)
+  }
+  return {
+    declaredCommands,
+    contributedViewIds: Object.values(views).flat().map((v) => v.id ?? ""),
+    configProps,
+    forbidden,
+  }
+}
+
+/**
+ * P3.2 runtime command-table check (part 2 of assertWorktreeRemoval): the
+ * RUNTIME command table must contain no registered kilo-code worktree /
+ * run-script / transfer / diff-viewer command — removed feature initialization
+ * must be absent (LOCK-PERF-3) — while the retained root-local surface
+ * commands exist (agentManagerOpen / openInTab / agentManager.newTab). Throws
+ * on any violation and returns the runtime evidence.
+ */
+async function assertNoForbiddenRuntimeCommands(vscodeApi: typeof vscode): Promise<{
+  kiloCommands: string[]
+  runtimeForbidden: string[]
+}> {
+  const kiloCommands = (await vscodeApi.commands.getCommands(true)).filter((c) => c.startsWith("kilo-code."))
+  const runtimeForbidden = kiloCommands.filter((c) => FORBIDDEN_SURFACE.test(c))
+  if (runtimeForbidden.length > 0) {
+    throw new Error(`probe runner: runtime command table still registers forbidden P3.2 commands: ${runtimeForbidden.join(", ")}`)
+  }
+  for (const retained of ["kilo-code.new.agentManagerOpen", "kilo-code.new.openInTab", "kilo-code.new.agentManager.newTab"]) {
+    if (!kiloCommands.includes(retained)) {
+      throw new Error(`probe runner: retained root-local command missing at runtime: ${retained}`)
+    }
+  }
+  return { kiloCommands, runtimeForbidden }
+}
+
+/**
+ * P3.2 no-worktree-state check (part 3 of assertWorktreeRemoval): the
+ * run-owned workspace must contain no `.kilo/worktrees/`, no
+ * `.kilo/agent-manager.json` (the removed WorktreeStateManager's state file),
+ * no `.kilo/setup-script*` files, and no `worktreeId`/`"worktrees"` content
+ * markers in the run-owned workspace .kilo state. Throws on any finding and
+ * returns the state evidence.
+ */
+function assertNoWorktreeState(workspace: string): {
+  worktreesDir: boolean
+  agentManagerJson: boolean
+  stateMarkers: string[]
+  setupScripts: string[]
+} {
+  const kiloDir = join(workspace, ".kilo")
+  const stateMarkers: string[] = []
+  const scan = (dir: string): void => {
+    let entries: string[] = []
+    try {
+      entries = readdirSync(dir)
+    } catch {
+      return
+    }
+    for (const name of entries) {
+      if (name === "node_modules" || name === ".git") continue
+      const full = join(dir, name)
+      let stat
+      try {
+        stat = statSync(full)
+      } catch {
+        continue
+      }
+      if (stat.isDirectory()) scan(full)
+      else if (stat.size < 1_000_000) {
+        const content = readFileSync(full, "utf8")
+        if (content.includes("worktreeId") || content.includes('"worktrees"')) stateMarkers.push(full)
+      }
+    }
+  }
+  scan(kiloDir)
+  const setupScripts = ["setup-script", "setup-script.sh", "setup-script.ps1"]
+    .map((name) => join(kiloDir, name))
+    .filter((p) => existsSync(p))
+  const state = {
+    worktreesDir: existsSync(join(kiloDir, "worktrees")),
+    agentManagerJson: existsSync(join(kiloDir, "agent-manager.json")),
+    stateMarkers,
+    setupScripts,
+  }
+  if (state.worktreesDir || state.agentManagerJson || state.stateMarkers.length > 0 || state.setupScripts.length > 0) {
+    throw new Error(`probe runner: runtime created worktree state in the run-owned workspace (${JSON.stringify(state)})`)
+  }
+  return state
+}
+
+/**
+ * P3.2 root-local seeding (part 4 of assertWorktreeRemoval): two root-local
+ * sessions A + B seed through the production session-open path (sessionAdded
+ * carries NO worktree dimension — the removed worktreeId field is gone from
+ * the production message type).
+ */
+async function seedRootLocalSessions(
+  vscodeApi: typeof vscode,
+  plan: ReturnType<typeof planIds>,
+  iso: string,
+): Promise<void> {
+  const wtrSessions = [session(plan.sourceId, plan.sourceTitle, iso), session(plan.siblingId, plan.siblingTitle, iso)]
+  await post(vscodeApi, {
+    type: "sessionsLoaded",
+    sessions: wtrSessions,
+  } satisfies SessionsLoadedMessage)
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.sourceId,
+  })
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: wtrSessions[0],
+  } satisfies SessionCreatedMessage)
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: wtrSessions[1],
+  } satisfies SessionCreatedMessage)
+  for (const s of wtrSessions) {
+    await post(vscodeApi, {
+      type: "messagesLoaded",
+      sessionID: s.id,
+      messages: buildTopicTranscript(s.id),
+    } satisfies MessagesLoadedMessage)
+  }
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.sourceId,
+  })
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  await post(vscodeApi, {
+    type: "sessionsLoaded",
+    sessions: wtrSessions,
+    preserveSessionIds: wtrSessions.map((s) => s.id),
+  } satisfies SessionsLoadedMessage)
+}
+
+/**
+ * P3.2 worktree-removal assertions (extension-host side), split into bounded
+ * parts (complexity cap):
+ *   1. assertNoForbiddenContributions — the loaded manifest contributes no
+ *      forbidden managed-worktree or custom Diff Viewer surface,
+ *   2. assertNoForbiddenRuntimeCommands — the runtime command table registers
+ *      no removed-feature command (LOCK-PERF-3) and keeps the retained
+ *      root-local surface commands,
+ *   3. assertNoWorktreeState — no worktree state is created in the run-owned
+ *      workspace,
+ *   4. the Agent Manager panel still reports readiness and two root-local
+ *      sessions A + B seed through the production session-open path (no
+ *      worktree dimension on the message).
+ * Writes `<scratch>/worktree-removal-runtime-evidence` (durable runtime facts)
+ * and `<scratch>/worktree-removal-ready`. Throws on any assertion failure so
+ * the Extension Host run exits non-zero.
+ */
+async function assertWorktreeRemoval(
+  vscodeApi: typeof vscode,
+  ext: vscode.Extension<unknown>,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  const contributes = (ext.packageJSON?.contributes ?? {}) as Record<string, unknown>
+  const manifest = assertNoForbiddenContributions(contributes)
+  const runtime = await assertNoForbiddenRuntimeCommands(vscodeApi)
+  const workspace = join(scratch, "workspace")
+  const state = assertNoWorktreeState(workspace)
+
+  const amReady = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
+  if (!amReady) throw new Error("probe runner: Agent Manager readiness lost before P3.2 worktree-removal seeding")
+  const plan = planIds(fixtureId)
+  await seedRootLocalSessions(vscodeApi, plan, new Date().toISOString())
+
+  writeFileSync(
+    join(scratch, "worktree-removal-runtime-evidence"),
+    JSON.stringify(
+      {
+        scenario: "worktree-removal",
+        collectedAt: new Date().toISOString(),
+        pid: process.pid,
+        fixtureId,
+        manifest: {
+          contributedCommandCount: manifest.declaredCommands.length,
+          contributedCommands: manifest.declaredCommands,
+          contributedViewIds: manifest.contributedViewIds,
+          contributedConfigurationProperties: manifest.configProps,
+          forbidden: manifest.forbidden,
+        },
+        runtime: {
+          kiloCommandTotal: runtime.kiloCommands.length,
+          forbiddenCommandHits: runtime.runtimeForbidden,
+          retainedCommands: {
+            agentManagerOpen: runtime.kiloCommands.includes("kilo-code.new.agentManagerOpen"),
+            openInTab: runtime.kiloCommands.includes("kilo-code.new.openInTab"),
+            agentManagerNewTab: runtime.kiloCommands.includes("kilo-code.new.agentManager.newTab"),
+          },
+        },
+        state: {
+          workspace,
+          worktreesDir: state.worktreesDir,
+          agentManagerJson: state.agentManagerJson,
+          stateMarkers: state.stateMarkers,
+          setupScripts: state.setupScripts,
+        },
+        seeded: {
+          sessionA: plan.sourceId,
+          sessionB: plan.siblingId,
+          panelReady: amReady,
+          messageHasNoWorktreeId: true,
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  writeFileSync(join(scratch, "worktree-removal-ready"), fixtureId)
+}
+
+
+/**
+ * Extension-host service loop for the P3.2 worktree-removal scenario:
+ *   1. resets the generation-request store (the seeding already settled the
+ *      real session list — a SECOND settle here would fire a backend refresh
+ *      with the empty served list that reconciles the seeded root-local
+ *      sessions out of the webview store, so none is issued),
+ *   2. backend truth for the bounded H-12 phase: on each `p32-snap-N-request`
+ *      marker, executes the env-gated backendSnapshot fixture command against
+ *      the shared served backend and writes `p32-snap-N.json` (the harness
+ *      asserts the write/revert/redo facts on it),
+ *   3. writes the aggregate LLM request evidence before stopping.
+ * Stops when the harness writes the `done` marker (success or abort).
+ */
+async function serviceWorktreeRemovalBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  await resetLlmRequests(vscodeApi)
+  writeFileSync(join(scratch, "worktree-removal-service-ready"), fixtureId)
+
+  let snap = 1
+  const deadline = Date.now() + WORKTREE_REMOVAL_SERVICE_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    const req = join(scratch, `p32-snap-${snap}-request`)
+    if (existsSync(req)) {
+      const snapshot = await vscodeApi.commands.executeCommand(CMD_SNAPSHOT)
+      writeFileSync(join(scratch, `p32-snap-${snap}.json`), JSON.stringify(snapshot, null, 2))
+      snap += 1
+    }
+    await sleep(200)
+  }
+  await writeLlmRequestsEvidence(vscodeApi, scratch, "worktree-removal")
+}
+
 /**
  * Extension-host service loop for the real-session scenario:
  *   1. backend truth: on each `real-snap-N-request` marker, executes the
@@ -1080,6 +1441,24 @@ async function serviceRealSessionBoundary(vscodeApi: typeof vscode, scratch: str
  */
 const REAL_COMPLETED_SERVICE_BUDGET = 5_400_000
 
+/**
+ * Service-window budget for the P3.2 worktree-removal scenario (ms), derived
+ * from the declared worst-case phase budgets in script/e2e-probe.ts
+ * assertWorktreeRemovalLifecycle so a valid slow/retry-heavy run is never
+ * abandoned while the harness is still inside its own declared budgets:
+ *   - seeded two-session phase: ready 120s + tabs 20s + switching 2 × 30s +
+ *     sidebar 30s + tab closes 3 × 30s = ~320s
+ *   - Phase 0 (agent + variant picks): 5 × 30s = 150s
+ *   - H-12 rollback (reused assertRealRollbackPhase): 2 sendTurn phases
+ *     (edit + summary, 2 × 362s = 724s) + transcript text 3 × 60s + revert
+ *     click 90s + revert fact 90s + file bytes 2 × 30s + banner 60s + banner
+ *     file 30s + Redo All click 60s + unrevert fact 90s + banner gone 30s =
+ *     1,414s
+ *   Total: ~1,884s; margin ≈ 10% → 2,100s (35 min). The global probe watchdog
+ *   (KILO_E2E_TIMEOUT) stays the outer bound; this deadline only guarantees
+ *   the service loop outlives every declared phase budget.
+ */
+const WORKTREE_REMOVAL_SERVICE_BUDGET = 2_100_000
 /**
  * Extension-host service loop for the real-completed scenario:
  *   1. backend truth: on each `rc-snap-N-request` marker, executes the

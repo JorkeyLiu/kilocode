@@ -15,12 +15,6 @@ import {
 import { AnacondaDesktopApi } from "./anaconda-desktop"
 import { Result as AgentRequirementResult } from "@/kilocode/agent-requirements"
 import {
-  Failure as AgentManagerFailure,
-  Request as AgentManagerRequest,
-  RequestID as AgentManagerRequestID,
-  Result as AgentManagerResult,
-} from "@/kilocode/agent-manager/protocol"
-import {
   Failure as NotebookFailure,
   Request as NotebookRequest,
   RequestID as NotebookRequestID,
@@ -46,8 +40,6 @@ export const AgentRequirementQuery = Schema.Struct({
 })
 export const NotebookReplyPayload = Schema.Struct({ result: NotebookResult })
 export const NotebookRejectPayload = Schema.Struct({ error: NotebookFailure })
-export const AgentManagerReplyPayload = Schema.Struct({ result: AgentManagerResult })
-export const AgentManagerRejectPayload = Schema.Struct({ error: AgentManagerFailure })
 
 // LOCK-001/003: canonical custom-provider deletion route. The endpoint lives in
 // an instance-authorized group (Authorization + InstanceContextMiddleware +
@@ -111,9 +103,6 @@ export const KilocodePaths = {
   notebookList: `${root}/notebook`,
   notebookReply: `${root}/notebook/:requestID/reply`,
   notebookReject: `${root}/notebook/:requestID/reject`,
-  agentManagerList: `${root}/agent-manager`,
-  agentManagerReply: `${root}/agent-manager/:requestID/reply`,
-  agentManagerReject: `${root}/agent-manager/:requestID/reject`,
   sessionModelUsage: `/session/:sessionID/model-usage`,
   customProviderDelete: "/custom-provider/:providerID/delete",
   customProviderSave: "/custom-provider/:providerID/save",
@@ -203,42 +192,6 @@ export const KilocodeApi = HttpApi.make("kilocode")
             identifier: "kilocode.notebook.reject",
             summary: "Reject a notebook request",
             description: "Complete a pending native notebook request with a structured host error.",
-          }),
-        ),
-        HttpApiEndpoint.get("agentManagerList", KilocodePaths.agentManagerList, {
-          query: WorkspaceRoutingQuery,
-          success: described(Schema.Array(AgentManagerRequest), "Pending Agent Manager host requests"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "kilocode.agentManager.list",
-            summary: "List pending Agent Manager requests",
-            description: "List pending native Agent Manager orchestration requests for the routed workspace.",
-          }),
-        ),
-        HttpApiEndpoint.post("agentManagerReply", KilocodePaths.agentManagerReply, {
-          params: { requestID: AgentManagerRequestID },
-          query: WorkspaceRoutingQuery,
-          payload: AgentManagerReplyPayload,
-          success: described(Schema.Boolean, "Agent Manager reply accepted"),
-          error: [HttpApiError.BadRequest, HttpApiError.NotFound],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "kilocode.agentManager.reply",
-            summary: "Reply to an Agent Manager request",
-            description: "Complete a pending Agent Manager orchestration request with a structured result.",
-          }),
-        ),
-        HttpApiEndpoint.post("agentManagerReject", KilocodePaths.agentManagerReject, {
-          params: { requestID: AgentManagerRequestID },
-          query: WorkspaceRoutingQuery,
-          payload: AgentManagerRejectPayload,
-          success: described(Schema.Boolean, "Agent Manager rejection accepted"),
-          error: HttpApiError.NotFound,
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "kilocode.agentManager.reject",
-            summary: "Reject an Agent Manager request",
-            description: "Complete a pending Agent Manager orchestration request with a structured host error.",
           }),
         ),
         HttpApiEndpoint.get("sessionModelUsage", KilocodePaths.sessionModelUsage, {

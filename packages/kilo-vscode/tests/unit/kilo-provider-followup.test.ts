@@ -159,10 +159,10 @@ describe("KiloProvider follow-up sessions", () => {
       adopted.push({ id: session.id, dir: directory })
     })
 
-    internal.pendingFollowup = { dir: "/repo/.kilo/worktrees/feat", time: Date.now() }
-    service.emit(created({ id: "ses-wt", directory: "/repo/.kilo/worktrees/feat" }))
+    internal.pendingFollowup = { dir: "/repo/session-feat", time: Date.now() }
+    service.emit(created({ id: "ses-wt", directory: "/repo/session-feat" }))
     await Promise.resolve()
 
-    expect(adopted).toEqual([{ id: "ses-wt", dir: "/repo/.kilo/worktrees/feat" }])
+    expect(adopted).toEqual([{ id: "ses-wt", dir: "/repo/session-feat" }])
   })
 })

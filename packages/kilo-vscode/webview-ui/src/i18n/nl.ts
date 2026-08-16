@@ -425,7 +425,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Hier kunnen alleen afbeeldingen of PDF's worden geplakt.",
   "prompt.toast.modelAgentRequired.title": "Selecteer een agent en model",
   "prompt.toast.modelAgentRequired.description": "Kies een agent en model voordat u een prompt verzendt.",
-  "prompt.toast.worktreeCreateFailed.title": "Aanmaken worktree mislukt",
+
   "prompt.toast.sessionCreateFailed.title": "Aanmaken sessie mislukt",
   "prompt.toast.shellSendFailed.title": "Verzenden shell-commando mislukt",
   "prompt.toast.commandSendFailed.title": "Verzenden commando mislukt",
@@ -482,10 +482,6 @@ export const dict = {
   "dialog.project.edit.icon.recommended": "Aanbevolen: 128x128px",
   "dialog.project.edit.color": "Kleur",
   "dialog.project.edit.color.select": "Selecteer {{color}} kleur",
-  "dialog.project.edit.worktree.startup": "Werkruimte opstartscript",
-  "dialog.project.edit.worktree.startup.description":
-    "Wordt uitgevoerd na het aanmaken van een nieuwe werkruimte (worktree).",
-  "dialog.project.edit.worktree.startup.placeholder": "bijv. bun install",
 
   "context.breakdown.title": "Contextspecificatie",
   "context.breakdown.note": 'Geschatte specificatie van invoertokens. "Overige" omvat tooldefinities en overhead.',
@@ -544,11 +540,6 @@ export const dict = {
 
   "toast.theme.title": "Thema omgeschakeld",
   "toast.scheme.title": "Kleurenschema",
-
-  "toast.workspace.enabled.title": "Werkruimtes ingeschakeld",
-  "toast.workspace.enabled.description": "Meerdere worktrees worden nu weergegeven in de zijbalk",
-  "toast.workspace.disabled.title": "Werkruimtes uitgeschakeld",
-  "toast.workspace.disabled.description": "Alleen de hoofd-worktree wordt weergegeven in de zijbalk",
 
   "toast.permissions.autoaccept.on.title": "Bewerkingen automatisch accepteren",
   "toast.permissions.autoaccept.on.description": "Bewerk- en schrijfrechten worden automatisch goedgekeurd",
@@ -706,9 +697,6 @@ export const dict = {
 
   "session.context.addToContext": "Voeg {{selection}} toe aan context",
 
-  "session.new.worktree.main": "Main-branch",
-  "session.new.worktree.mainWithBranch": "Main-branch ({{branch}})",
-  "session.new.worktree.create": "Nieuwe worktree aanmaken",
   "session.new.lastModified": "Laatst gewijzigd",
   "sidebar.session.newSession": "Nieuwe Sessie",
   "sidebar.session.newSession.tooltip": "Start een nieuw gesprek terwijl je de huidige sessie intact houdt.",
@@ -1723,7 +1711,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Minder afleiding, makkelijker en sneller te lezen.",
   "migration.whatsNew.features.agentManager.title": "Agentenbeheer",
   "migration.whatsNew.features.agentManager.detail":
-    "Een uniforme interface voor het parallel uitvoeren van meerdere agents, elk op zijn eigen worktree — monitor de voortgang, wissel van context en bekijk wijzigingen op één plek.",
+    "Een uniforme interface voor het parallel uitvoeren van meerdere agents — monitor de voortgang, wissel van context en bekijk wijzigingen op één plek.",
   "migration.whatsNew.features.foundation.title": "Gedeelde Basis",
   "migration.whatsNew.features.foundation.detail":
     "Één kleine, efficiënte kern voor elk Kilo-product. Een vertrouwde ervaring, hoe je ook wilt werken.",
@@ -1849,30 +1837,6 @@ export const dict = {
   "settings.agentBehaviour.permissions.hint":
     "Regels worden op volgorde geëvalueerd — de laatst overeenkomende regel wint. Dit is de opgeloste regelset van de CLI backend.",
   "settings.agentBehaviour.editMode.save": "Klaar",
-  "diffViewer.source.workspace.label": "Branch",
-  "diffViewer.source.workspace.tooltip":
-    "Alle wijzigingen in deze branch vergeleken met de base branch. Inclusief niet-gecommitte bestanden (staged, unstaged, ungetrackt) en lokale commits die nog niet in de base zitten.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "Bestanden met wijzigingen die je hebt toegevoegd aan het staging-gebied van git (`git add`), zoals ze in de volgende commit zullen verschijnen.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "Bestanden gewijzigd in je werkboom maar nog niet gestaged, plus niet-gevolgde (nieuwe) bestanden.",
-  "diffViewer.source.session.label": "Sessie",
-  "diffViewer.source.session.tooltip":
-    "Bestanden die door Kilo tijdens de huidige sessie zijn gewijzigd, gebaseerd op snapshots per beurt. Wordt gereset bij het starten van een nieuwe sessie.",
-  "diffViewer.group.session": "Sessie",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Snapshots zijn uitgeschakeld voor deze repository. Bewerk je configuratiebestanden om de sessiewijzigingen weer te geven.",
-
-  "diffViewer.baseBranch.auto": "Default",
-  "diffViewer.baseBranch.default": "Default",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Search branches",
-  "diffViewer.baseBranch.empty": "No matching branches",
-  "diffViewer.baseBranch.loading": "Loading branches…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "Plan is klaar:",
   "chat.search.placeholder": "Chat doorzoeken…",
   "chat.search.toggle": "Chat doorzoeken",

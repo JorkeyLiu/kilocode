@@ -117,6 +117,7 @@ const DOM_EVIDENCE: Record<string, string[]> = {
   "real-completed": ["real-completed-dom-evidence"],
   "real-overflow": ["real-overflow-dom-evidence"],
   "real-restart": ["rr-dom-evidence"],
+  "worktree-removal": ["worktree-removal-dom-evidence"],
 }
 
 /** Backend-snapshot file prefixes per real scenario (written by the runner loop). */
@@ -125,6 +126,7 @@ const SNAP_PREFIXES: Record<string, string[]> = {
   "real-completed": ["rc-snap-"],
   "real-overflow": ["of-snap-"],
   "real-restart": ["rr-snap-", "rr-c-snap-"],
+  "worktree-removal": ["p32-snap-"],
 }
 
 /** The scenario readiness marker written by the extension-host runner. */
@@ -133,6 +135,7 @@ const READY_MARKERS: Record<string, string[]> = {
   "real-completed": ["real-completed-ready"],
   "real-overflow": ["real-overflow-ready"],
   "real-restart": ["rr-ready"],
+  "worktree-removal": ["worktree-removal-ready"],
 }
 
 /** Env vars worth recording in the manifest (whitelist — never arbitrary config). */
@@ -225,7 +228,7 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
     { rel: "runner-done", base: "scratch" },
     { rel: "ready", base: "scratch" },
   ]
-  const real = new Set(["real-session", "real-completed", "real-overflow", "real-restart"])
+  const real = new Set(["real-session", "real-completed", "real-overflow", "real-restart", "worktree-removal"])
 
   for (const scenario of scenarios) {
     for (const dom of DOM_EVIDENCE[scenario] ?? []) {
@@ -294,10 +297,21 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
       { rel: ".kilo/package-lock.json", base: "workspace" },
     )
   }
+  // P3.2 worktree-removal: the extension-host runtime evidence (manifest +
+  // command-table + no-worktree-state facts) and the H-12 tracked rollback
+  // file are decision-critical; the served config seed is the same one the
+  // backend loaded (already required above via the `real` set).
+  if (scenarios.has("worktree-removal")) {
+    required.push(
+      { rel: "worktree-removal-runtime-evidence", base: "scratch" },
+      { rel: "rollback.txt", base: "workspace" },
+    )
+    optional.push({ rel: ".kilo/package-lock.json", base: "workspace" })
+  }
   if (scenarios.has("real-restart")) {
     optional.push({ rel: "e2e-custom-called.txt", base: "workspace" })
   }
-  if (scenarios.has("real-session") || scenarios.has("real-overflow")) {
+  if (scenarios.has("real-session") || scenarios.has("real-overflow") || scenarios.has("worktree-removal")) {
     optional.push({ rel: ".kilo/package-lock.json", base: "workspace" })
   }
   return { required, optional }

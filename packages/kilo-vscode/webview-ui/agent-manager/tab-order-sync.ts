@@ -17,21 +17,13 @@ export interface TabOrderSyncDeps {
   persist: (key: string, value: string[]) => void
   /** State accessors used to rebuild the base order `[sessions, terminals]`. */
   localSessionIDs: () => string[]
-  sessions: () => { id: string; createdAt: string }[]
-  managedSessions: () => { id: string; worktreeId?: string | null }[] // worktreeId is a legacy field name
   terminalIdsFor: (key: string) => string[]
 }
 
 export function createTabOrderSync(deps: TabOrderSyncDeps) {
   const baseFor = (key: string): string[] => {
-    const sids =
-      key === deps.LOCAL
-        ? deps.localSessionIDs()
-        : deps
-            .sessions()
-            .filter((s) => deps.managedSessions().some((ms) => ms.id === s.id && ms.worktreeId === key)) // worktreeId is legacy
-            .sort((a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime())
-            .map((s) => s.id)
+    // All sessions and terminals live in the LOCAL context — no other keys.
+    const sids = key === deps.LOCAL ? deps.localSessionIDs() : []
     return [...sids, ...deps.terminalIdsFor(key)]
   }
 

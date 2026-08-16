@@ -41,9 +41,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "ปิดแท็บ",
   "agentManager.shortcuts.toggleTerminal": "สลับเทอร์มินัล",
   "agentManager.shortcuts.runScript": "เรียกใช้สคริปต์",
-  "agentManager.run.options": "ตัวเลือกการเรียกใช้",
-  "agentManager.run.configure": "กำหนดค่าสคริปต์การเรียกใช้",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "เปิด Agent Manager",
   "agentManager.shortcuts.cycleAgentMode": "Next agent mode",

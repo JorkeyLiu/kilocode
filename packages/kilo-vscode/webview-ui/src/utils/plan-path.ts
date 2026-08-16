@@ -5,7 +5,7 @@
  * - Absolute paths inside `root` are returned as a repo-relative path.
  * - Absolute paths outside `root` are returned as-is (absolute).
  *
- * `root` is the workspace/worktree directory string from the server context.
+ * `root` is the workspace/directory string from the server context.
  * Both Unix and Windows separators are normalised before comparison.
  */
 export function planDisplayPath(plan: string, root: string): string {

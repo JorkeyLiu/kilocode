@@ -14,7 +14,6 @@ export interface PermissionContext {
   readonly currentSessionId: string | undefined
   readonly trackedSessionIds: Set<string>
   readonly sessionDirectories: ReadonlyMap<string, string>
-  readonly extraDirectories?: () => string[]
   postMessage(msg: unknown): void
   getWorkspaceDirectory(sessionId?: string): string
   recordPermissionDirectory(requestID: string, directory: string): void
@@ -23,8 +22,8 @@ export interface PermissionContext {
   prunePermissionDirectories(active: Set<string>, dirs?: Set<string>): void
 }
 
-export function recoveryDirs(workspace: string, dirs: ReadonlyMap<string, string>, extra: string[] = []) {
-  return [...new Set([workspace, ...dirs.values(), ...extra])]
+export function recoveryDirs(workspace: string, dirs: ReadonlyMap<string, string>) {
+  return [...new Set([workspace, ...dirs.values()])]
 }
 
 export function recoverablePermissions(perms: RecoverablePermission[], tracked: Set<string>, seen: Set<string>) {
@@ -128,7 +127,7 @@ export async function handlePermissionResponse(
 export async function fetchAndSendPendingPermissions(ctx: PermissionContext): Promise<void> {
   if (!ctx.client) return
   try {
-    const dirs = recoveryDirs(ctx.getWorkspaceDirectory(), ctx.sessionDirectories, ctx.extraDirectories?.() ?? [])
+    const dirs = recoveryDirs(ctx.getWorkspaceDirectory(), ctx.sessionDirectories)
 
     const seen = new Set<string>()
     const valid = new Set<string>()

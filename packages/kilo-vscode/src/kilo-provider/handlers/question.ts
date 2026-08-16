@@ -13,7 +13,6 @@ export interface QuestionContext {
   readonly currentSessionId: string | undefined
   readonly trackedSessionIds: Set<string>
   readonly sessionDirectories: ReadonlyMap<string, string>
-  readonly extraDirectories?: () => string[]
   postMessage(msg: unknown): void
   getWorkspaceDirectory(sessionId?: string): string
   recordQuestionDirectory(requestID: string, directory: string): void
@@ -68,7 +67,6 @@ export async function fetchAndSendPendingQuestions(ctx: QuestionContext): Promis
       const dirs = new Set<string>([
         ctx.getWorkspaceDirectory(),
         ...ctx.sessionDirectories.values(),
-        ...(ctx.extraDirectories?.() ?? []),
       ])
       const revision = ctx.getQuestionRevision()
       const seen = new Set<string>()

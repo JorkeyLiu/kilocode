@@ -441,8 +441,6 @@ describe("openChildSession — real three-store coordination (LOCK-002)", () => 
       setOrder,
       persist: (_key, value) => persisted.push([...value]),
       localSessionIDs: local,
-      sessions: () => [],
-      managedSessions: () => [],
       terminalIdsFor: () => [],
     })
     const deps: OpenChildSessionDeps = {

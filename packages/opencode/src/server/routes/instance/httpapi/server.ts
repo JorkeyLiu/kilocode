@@ -38,7 +38,6 @@ import { Provider } from "@/provider/provider"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { Question } from "@/question"
 import { Notebook } from "@/kilocode/notebook/service" // kilocode_change
-import { AgentManager } from "@/kilocode/agent-manager/service" // kilocode_change
 import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
 import { Session } from "@/session/session"
 import { SessionCompaction } from "@/session/compaction"
@@ -61,7 +60,6 @@ import { SyncEvent } from "@/sync"
 import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
 import { Vcs } from "@/project/vcs"
-import { Worktree } from "@/worktree"
 import { Workspace } from "@/control-plane/workspace"
 import { MemoryService } from "@kilocode/kilo-memory/effect/service" // kilocode_change
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"

@@ -55,20 +55,19 @@ describe("Agent Manager terminal font", () => {
         getClient: () => client,
         getServerConfig: () => ({ baseUrl: "http://127.0.0.1:4096", password: "secret" }),
         getRoot: () => "/workspace",
-        getWorktreePath: () => undefined,
         log: () => undefined,
         post: resolve,
         getTerminalFont: () => font,
       })
 
-      expect(router.handle({ type: "agentManager.terminal.create", worktreeId: null })).toBe(true)
+      expect(router.handle({ type: "agentManager.terminal.create", slotId: null })).toBe(true)
     })
 
     const created = await message
     expect(created.type).toBe("agentManager.terminal.created")
     if (created.type !== "agentManager.terminal.created") return
     expect(created.font).toEqual(font)
-    expect(created.worktreeId).toBeNull()
+    expect(created.slotId).toBeNull()
     expect(created.wsUrl).toContain("/pty/pty-1/connect")
   })
 
@@ -84,7 +83,7 @@ describe("Agent Manager terminal font", () => {
       })
       const message = {
         type: "agentManager.terminal.created",
-        worktreeId: null,
+        slotId: null,
         terminalId: "terminal-1",
         title: "Terminal 1",
         wsUrl: "ws://127.0.0.1/pty/pty-1/connect",

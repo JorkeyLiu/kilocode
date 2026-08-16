@@ -121,11 +121,6 @@
         }
       },
       {
-        "command": "kilo-code.new.showChanges",
-        "title": "Show Changes",
-        "category": "Kilo Code"
-      },
-      {
         "command": "kilo-code.new.openMigrationWizard",
         "title": "Migrate Settings from Legacy Version",
         "category": "Kilo Code"
@@ -784,18 +779,6 @@
           "default": false,
           "description": "Enable chat textarea autocomplete"
         },
-        "kilo-code.new.agentManager.autoBranchNaming": {
-          "type": "boolean",
-          "default": true,
-          "scope": "application",
-          "description": "Automatically name new Agent Manager branches when the conversation describes a clear task. Explicitly named and published branches are never renamed."
-        },
-        "kilo-code.new.agentManager.branchPrefix": {
-          "type": "string",
-          "default": "",
-          "scope": "application",
-          "description": "Prefix for automatically named Agent Manager branches, for example 'marius/' or 'feature/'. Explicit branch names are unchanged."
-        },
         "kilo-code.new.indexing.showButtonWhenDisabled": {
           "type": "boolean",
           "default": true,
@@ -926,11 +909,6 @@
             "Onboarding was skipped without changing work style settings"
           ],
           "description": "Preferred agent work style. Set to Unset to show the onboarding flow again."
-        },
-        "kilo-code.new.diff.renderMarkdown": {
-          "type": "boolean",
-          "default": false,
-          "description": "Render Markdown files in Kilo diff viewers by default. Toggle this from a Markdown file header in the diff viewer."
         }
       }
     }
@@ -955,7 +933,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
-    "lint": "eslint src webview-ui script/e2e-probe.ts script/e2e-evidence.ts script/e2e-probe-dom.ts script/e2e-probe-restart.ts script/e2e-pin.ts script/e2e-llm-matrix.ts script/e2e-scripted-model.ts script/e2e-completed-seed.ts script/e2e-restart-seed.ts script/e2e-p0-bench.ts script/p0-bench-merge.ts script/p0-bench tests/e2e",
+    "lint": "eslint src webview-ui script/e2e-probe.ts script/e2e-evidence.ts script/e2e-probe-dom.ts script/e2e-probe-restart.ts script/e2e-probe-worktree.ts script/e2e-pin.ts script/e2e-llm-matrix.ts script/e2e-scripted-model.ts script/e2e-completed-seed.ts script/e2e-restart-seed.ts script/e2e-p0-bench.ts script/p0-bench-merge.ts script/p0-bench tests/e2e",
     "test": "vscode-test",
     "test:unit": "bun test tests/unit/ --dots",
     "rebuild-sdk": "bun run --cwd ../sdk/js build",
@@ -974,6 +952,7 @@
     "test:e2e:real-overflow": "KILO_E2E_SCENARIO=real-overflow node script/e2e-probe-launch.mjs",
     "test:e2e:real-restart": "KILO_E2E_SCENARIO=real-restart node script/e2e-probe-launch.mjs",
     "test:e2e:sidebar-removal": "KILO_E2E_SCENARIO=sidebar-removal node script/e2e-probe-launch.mjs",
+    "test:e2e:worktree-removal": "KILO_E2E_SCENARIO=worktree-removal node script/e2e-probe-launch.mjs",
     "test:p0-bench": "node script/e2e-p0-bench-launch.mjs",
     "test:p0-bench:merge": "node script/p0-bench-merge-launch.mjs",
     "snapshot:build": "bun script/dev-snapshot.ts build",

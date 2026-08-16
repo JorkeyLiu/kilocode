@@ -16,38 +16,23 @@ const ROOT = path.resolve(import.meta.dir, "../..")
 const KILO_PROVIDER_FILE = path.join(ROOT, "src/KiloProvider.ts")
 const CSS_FILES = [
   path.join(ROOT, "webview-ui/agent-manager/agent-manager.css"),
-  path.join(ROOT, "webview-ui/agent-manager/agent-manager-review.css"),
 ]
 const TSX_FILES = [
   path.join(ROOT, "webview-ui/agent-manager/AgentManagerApp.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/SidebarSessionList.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/sortable-tab.tsx"),
-  path.join(ROOT, "webview-ui/diff-viewer/FullScreenDiffView.tsx"),
-  path.join(ROOT, "webview-ui/diff-viewer/ImageDiffView.tsx"),
-  path.join(ROOT, "webview-ui/diff-viewer/MarkdownDiffView.tsx"),
-  path.join(ROOT, "webview-ui/diff-viewer/MarkdownAnnotationLayer.tsx"),
-  path.join(ROOT, "webview-ui/diff-viewer/markdown-comment-ranges.ts"),
-  path.join(ROOT, "webview-ui/diff-viewer/DiffEndMarker.tsx"),
-  path.join(ROOT, "webview-ui/diff-viewer/FileTree.tsx"),
-  path.join(ROOT, "webview-ui/diff-viewer/review-annotations.ts"),
-  path.join(ROOT, "webview-ui/diff-viewer/review-annotation-speech.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/SidebarSearchMenu.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/SidebarToggleButton.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/tab-rendering.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/terminal/TerminalTab.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/terminal/SortableTerminalTab.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/terminal/render.tsx"),
-  path.join(ROOT, "webview-ui/diff-virtual/DiffVirtualApp.tsx"),
   // Shared components that consume agent-manager CSS classes (e.g. am-dropdown,
-  // am-branch-item) used by both the agent manager and the diff viewer.
-  path.join(ROOT, "webview-ui/src/components/shared/BranchSelect.tsx"),
+  // am-branch-item) used by the agent manager.
   path.join(ROOT, "webview-ui/src/components/chat/TabDnd.tsx"),
-  path.join(ROOT, "webview-ui/diff-viewer/BaseBranchPicker.tsx"),
 ]
 const TSX_FILE = TSX_FILES[0]!
 const PROVIDER_FILE = path.join(ROOT, "src/agent-manager/AgentManagerProvider.ts")
-const SETUP_SCRIPT_RUNNER_FILE = path.join(ROOT, "src/agent-manager/SetupScriptRunner.ts")
-const RUN_MESSAGE_FILE = path.join(ROOT, "src/agent-manager/run/message.ts")
 const TERMINAL_ROUTING_FILE = path.join(ROOT, "src/agent-manager/terminal-routing.ts")
 
 function readAllCss(): string {
@@ -288,15 +273,12 @@ describe("Agent Manager Provider — onMessage routing", () => {
   // -- onMessage dispatches all expected message types -----------------------
 
   it("provider routing handles all documented agentManager.* message types", () => {
-    const text =
-      provider() + fs.readFileSync(RUN_MESSAGE_FILE, "utf-8") + fs.readFileSync(TERMINAL_ROUTING_FILE, "utf-8")
-    // Phase 4C: removed createWorktree, deleteWorktree, and other worktree-only messages
+    const text = provider() + fs.readFileSync(TERMINAL_ROUTING_FILE, "utf-8")
+    // Phase 4C: removed createWorktree, deleteWorktree, and other worktree-only messages;
+    // P3.2 removed the run-script subsystem.
     const expected = [
       "agentManager.persistSession",
       "agentManager.forgetSession",
-      "agentManager.configureRunScript",
-      "agentManager.runScript",
-      "agentManager.stopRunScript",
       "agentManager.showTerminal",
       "agentManager.showLocalTerminal",
       "agentManager.showExistingLocalTerminal",
@@ -370,8 +352,9 @@ describe("Agent Manager Provider — onMessage routing", () => {
   })
 
   // Phase 4C: onDiffMessage and onImportMessage were removed from AgentManagerProvider.
-  // The Agent Manager diff/review surface and its worktree diff controller no longer
-  // exist — the sidebar Diff Viewer owns all diff rendering via DiffViewerProvider.
+  // The Agent Manager worktree diff controller and the custom Diff Viewer
+  // (P3.2) are both gone; local git diff data now flows through Agent Manager
+  // local stats and git-changes prompt context only.
 })
 
 // ---------------------------------------------------------------------------
@@ -526,9 +509,6 @@ const VSCODE_ALLOWED: Record<string, { note: string }> = {
   // Thin adapter: wraps vscode.window terminal APIs behind TerminalHost interface
   "terminal-host.ts": {
     note: "vscode adapter for SessionTerminalManager",
-  },
-  "run/task.ts": {
-    note: "vscode adapter for Agent Manager run scripts",
   },
   // Reads terminal.integrated.* and editor.font* config for xterm font settings
   "terminal-font.ts": {

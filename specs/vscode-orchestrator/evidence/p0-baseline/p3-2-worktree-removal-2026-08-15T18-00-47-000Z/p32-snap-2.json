@@ -1,0 +1,67 @@
+{
+  "requestedAt": "2026-08-15T18:01:45.811Z",
+  "sessions": [
+    {
+      "id": "ses_ff969d093ffepEdfWQzUXccrRu",
+      "title": "E2E Title",
+      "agent": "e2e-agent",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": null,
+      "createdAt": 1786816900972,
+      "updatedAt": 1786816901358
+    }
+  ],
+  "messages": {
+    "ses_ff969d093ffepEdfWQzUXccrRu": [
+      {
+        "id": "msg_006962f51001rpsB1dRy7sVrUl",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_ROLLBACK_EDIT: edit the tracked file"
+      },
+      {
+        "id": "msg_006963157001vsc9f1eS3laHp2",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": "⠋ Initializing snapshot…"
+      }
+    ]
+  },
+  "statuses": {
+    "ses_ff969d093ffepEdfWQzUXccrRu": "busy"
+  },
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {},
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {
+    "ses_ff969d093ffepEdfWQzUXccrRu": []
+  }
+}

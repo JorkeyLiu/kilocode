@@ -22,8 +22,6 @@ export type Event =
   | EventSuggestionAccepted
   | EventSuggestionDismissed
   | EventKilocodeAgentManagerStart
-  | EventKilocodeAgentManagerRequested
-  | EventKilocodeAgentManagerCancelled
   | EventKilocodeNotebookRequested
   | EventKilocodeNotebookCancelled
   | EventLspClientDiagnostics
@@ -97,17 +95,15 @@ export type Event =
   | EventSessionIdle
   | EventSessionCompacted
   | EventCommandExecuted
-  | EventProjectDirectoriesUpdated
-  | EventProjectUpdated
   | EventLspUpdated
   | EventFileEdited
   | EventFileWatcherUpdated
+  | EventProjectDirectoriesUpdated
+  | EventProjectUpdated
   | EventVcsBranchUpdated
   | EventWorkspaceReady
   | EventWorkspaceFailed
   | EventWorkspaceStatus
-  | EventWorktreeReady
-  | EventWorktreeFailed
   | EventAccountAdded
   | EventAccountRemoved
   | EventAccountSwitched
@@ -248,32 +244,6 @@ export type SuggestionRequest = {
     callID: string
   }
 }
-
-export type AgentManagerRequestId = string
-
-export type AgentManagerFilterState = "idle" | "busy" | "retry" | "offline" | "waiting"
-
-export type AgentManagerOverviewFilter = {
-  sectionIDs?: Array<string>
-  states?: Array<AgentManagerFilterState>
-}
-
-export type AgentManagerOverviewRequest = {
-  id: AgentManagerRequestId
-  sessionID: string
-  operation: "overview"
-  filter?: AgentManagerOverviewFilter
-}
-
-export type AgentManagerPromptRequest = {
-  id: AgentManagerRequestId
-  sessionID: string
-  operation: "prompt"
-  targetSessionID: string
-  prompt: string
-}
-
-export type AgentManagerRequest = AgentManagerOverviewRequest | AgentManagerPromptRequest
 
 export type NotebookRequestId = string
 
@@ -1029,8 +999,6 @@ export type GlobalEvent = {
     | EventSuggestionAccepted
     | EventSuggestionDismissed
     | EventKilocodeAgentManagerStart
-    | EventKilocodeAgentManagerRequested
-    | EventKilocodeAgentManagerCancelled
     | EventKilocodeNotebookRequested
     | EventKilocodeNotebookCancelled
     | EventLspClientDiagnostics
@@ -1104,17 +1072,15 @@ export type GlobalEvent = {
     | EventSessionIdle
     | EventSessionCompacted
     | EventCommandExecuted
-    | EventProjectDirectoriesUpdated
-    | EventProjectUpdated
     | EventLspUpdated
     | EventFileEdited
     | EventFileWatcherUpdated
+    | EventProjectDirectoriesUpdated
+    | EventProjectUpdated
     | EventVcsBranchUpdated
     | EventWorkspaceReady
     | EventWorkspaceFailed
     | EventWorkspaceStatus
-    | EventWorktreeReady
-    | EventWorktreeFailed
     | EventAccountAdded
     | EventAccountRemoved
     | EventAccountSwitched
@@ -1873,61 +1839,6 @@ export type ToolList = Array<ToolListItem>
 
 export type ToolIds = Array<string>
 
-export type WorktreeListItem = {
-  directory: string
-  managed: boolean
-}
-
-export type WorktreeError = {
-  name:
-    | "WorktreeNotGitError"
-    | "WorktreeNameGenerationFailedError"
-    | "WorktreeCreateFailedError"
-    | "WorktreeStartCommandFailedError"
-    | "WorktreeRemoveFailedError"
-    | "WorktreeResetFailedError"
-    | "WorktreeListFailedError"
-  data: {
-    message: string
-  }
-}
-
-export type WorktreeCreateInput = {
-  name?: string
-  /**
-   * Additional startup script to run after the project's start command
-   */
-  startCommand?: string
-}
-
-export type Worktree = {
-  name: string
-  branch?: string
-  directory: string
-}
-
-export type WorktreeRemoveInput = {
-  directory: string
-}
-
-export type WorktreeResetInput = {
-  directory: string
-}
-
-export type WorktreeDiffItem = {
-  file?: string
-  patch?: string
-  additions: number
-  deletions: number
-  status?: "added" | "deleted" | "modified"
-  before: string
-  after: string
-  tracked: boolean
-  generatedLike: boolean
-  summarized: boolean
-  stamp: string
-}
-
 export type SnapshotSummaryFileDiff = {
   file?: string
   additions: number
@@ -1993,7 +1904,6 @@ export type GlobalSession = {
     diff?: string
   }
   project: ProjectSummary | null
-  worktreeName?: string
 }
 
 export type McpResource = {
@@ -3280,87 +3190,6 @@ export type NotebookFailure = {
   currentRevision?: string
 }
 
-export type AgentManagerActivity = "idle" | "busy" | "retry" | "offline"
-
-export type AgentManagerAttention = Array<"permission" | "question">
-
-export type AgentManagerSessionSummary = {
-  id: string
-  name: string
-  activity: AgentManagerActivity
-  attention?: AgentManagerAttention
-}
-
-export type AgentManagerGitSummary = {
-  additions: number
-  deletions: number
-  ahead: number
-  behind: number
-}
-
-export type AgentManagerPullRequestSummary = {
-  number: number
-  state: "open" | "draft" | "merged" | "closed"
-  checks: "success" | "failure" | "pending" | "none"
-  review?: "approved" | "changes_requested" | "pending"
-  unresolvedComments?: number
-}
-
-export type AgentManagerWorktreeSummary = {
-  id: string
-  name: string
-  branch: string
-  session?: AgentManagerSessionSummary
-  sessions?: Array<AgentManagerSessionSummary>
-  git?: AgentManagerGitSummary
-  pullRequest?: AgentManagerPullRequestSummary
-}
-
-export type AgentManagerSectionSummary = {
-  id: string
-  name: string
-  worktrees: Array<AgentManagerWorktreeSummary>
-}
-
-export type AgentManagerLocalSummary = {
-  branch?: string
-  sessions: Array<AgentManagerSessionSummary>
-  git?: AgentManagerGitSummary
-}
-
-export type AgentManagerOverview = {
-  sections: Array<AgentManagerSectionSummary>
-  ungrouped: Array<AgentManagerWorktreeSummary>
-  local?: AgentManagerLocalSummary
-}
-
-export type AgentManagerOverviewResult = {
-  operation: "overview"
-  overview: AgentManagerOverview
-}
-
-export type AgentManagerPromptResult = {
-  operation: "prompt"
-  sessionID: string
-  delivered: true
-}
-
-export type AgentManagerResult = AgentManagerOverviewResult | AgentManagerPromptResult
-
-export type AgentManagerFailure = {
-  code:
-    | "cancelled"
-    | "cross_workspace"
-    | "disconnected"
-    | "host_error"
-    | "stale_session"
-    | "timeout"
-    | "unavailable_session"
-    | "unknown_session"
-    | "workspace_unavailable"
-  message: string
-}
-
 export type CustomProviderDeleteResult = {
   success: boolean
 }
@@ -3704,34 +3533,15 @@ export type EventKilocodeAgentManagerStart = {
     requestID: string
     sessionID: string
     sandboxInheritanceToken?: string
-    mode: "worktree" | "local"
-    versions?: boolean
     tasks: Array<{
       prompt?: string
       name?: string
-      branchName?: string
       model?: {
         providerID: string
         modelID: string
       }
       variant?: string
     }>
-  }
-}
-
-export type EventKilocodeAgentManagerRequested = {
-  id: string
-  type: "kilocode.agent_manager.requested"
-  properties: AgentManagerRequest
-}
-
-export type EventKilocodeAgentManagerCancelled = {
-  id: string
-  type: "kilocode.agent_manager.cancelled"
-  properties: {
-    requestID: AgentManagerRequestId
-    sessionID: string
-    reason: "cancelled" | "disposed" | "timeout"
   }
 }
 
@@ -4759,6 +4569,31 @@ export type EventCommandExecuted = {
   }
 }
 
+export type EventLspUpdated = {
+  id: string
+  type: "lsp.updated"
+  properties: {
+    [key: string]: unknown
+  }
+}
+
+export type EventFileEdited = {
+  id: string
+  type: "file.edited"
+  properties: {
+    file: string
+  }
+}
+
+export type EventFileWatcherUpdated = {
+  id: string
+  type: "file.watcher.updated"
+  properties: {
+    file: string
+    event: "add" | "change" | "unlink"
+  }
+}
+
 export type EventProjectDirectoriesUpdated = {
   id: string
   type: "project.directories.updated"
@@ -4795,31 +4630,6 @@ export type EventProjectUpdated = {
   }
 }
 
-export type EventLspUpdated = {
-  id: string
-  type: "lsp.updated"
-  properties: {
-    [key: string]: unknown
-  }
-}
-
-export type EventFileEdited = {
-  id: string
-  type: "file.edited"
-  properties: {
-    file: string
-  }
-}
-
-export type EventFileWatcherUpdated = {
-  id: string
-  type: "file.watcher.updated"
-  properties: {
-    file: string
-    event: "add" | "change" | "unlink"
-  }
-}
-
 export type EventVcsBranchUpdated = {
   id: string
   type: "vcs.branch.updated"
@@ -4850,23 +4660,6 @@ export type EventWorkspaceStatus = {
   properties: {
     workspaceID: string
     status: "connected" | "connecting" | "disconnected" | "error"
-  }
-}
-
-export type EventWorktreeReady = {
-  id: string
-  type: "worktree.ready"
-  properties: {
-    name: string
-    branch?: string
-  }
-}
-
-export type EventWorktreeFailed = {
-  id: string
-  type: "worktree.failed"
-  properties: {
-    message: string
   }
 }
 
@@ -6938,206 +6731,6 @@ export type ToolIdsResponses = {
 
 export type ToolIdsResponse = ToolIdsResponses[keyof ToolIdsResponses]
 
-export type WorktreeRemoveData = {
-  body?: WorktreeRemoveInput
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/experimental/worktree"
-}
-
-export type WorktreeRemoveErrors = {
-  /**
-   * WorktreeError | InvalidRequestError
-   */
-  400: WorktreeError | InvalidRequestError
-}
-
-export type WorktreeRemoveError = WorktreeRemoveErrors[keyof WorktreeRemoveErrors]
-
-export type WorktreeRemoveResponses = {
-  /**
-   * Worktree removed
-   */
-  200: boolean
-}
-
-export type WorktreeRemoveResponse = WorktreeRemoveResponses[keyof WorktreeRemoveResponses]
-
-export type WorktreeListData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/experimental/worktree"
-}
-
-export type WorktreeListErrors = {
-  /**
-   * WorktreeError | InvalidRequestError
-   */
-  400: WorktreeError | InvalidRequestError
-}
-
-export type WorktreeListError = WorktreeListErrors[keyof WorktreeListErrors]
-
-export type WorktreeListResponses = {
-  /**
-   * List of worktrees
-   */
-  200: Array<WorktreeListItem>
-}
-
-export type WorktreeListResponse = WorktreeListResponses[keyof WorktreeListResponses]
-
-export type WorktreeCreateData = {
-  body?: WorktreeCreateInput
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/experimental/worktree"
-}
-
-export type WorktreeCreateErrors = {
-  /**
-   * WorktreeError | InvalidRequestError
-   */
-  400: WorktreeError | InvalidRequestError
-}
-
-export type WorktreeCreateError = WorktreeCreateErrors[keyof WorktreeCreateErrors]
-
-export type WorktreeCreateResponses = {
-  /**
-   * Worktree created
-   */
-  200: Worktree
-}
-
-export type WorktreeCreateResponse = WorktreeCreateResponses[keyof WorktreeCreateResponses]
-
-export type WorktreeResetData = {
-  body?: WorktreeResetInput
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/experimental/worktree/reset"
-}
-
-export type WorktreeResetErrors = {
-  /**
-   * WorktreeError | InvalidRequestError
-   */
-  400: WorktreeError | InvalidRequestError
-}
-
-export type WorktreeResetError = WorktreeResetErrors[keyof WorktreeResetErrors]
-
-export type WorktreeResetResponses = {
-  /**
-   * Worktree reset
-   */
-  200: boolean
-}
-
-export type WorktreeResetResponse = WorktreeResetResponses[keyof WorktreeResetResponses]
-
-export type WorktreeDiffData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-    base?: string
-  }
-  url: "/experimental/worktree/diff"
-}
-
-export type WorktreeDiffErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type WorktreeDiffError = WorktreeDiffErrors[keyof WorktreeDiffErrors]
-
-export type WorktreeDiffResponses = {
-  /**
-   * File diffs
-   */
-  200: Array<SnapshotFileDiff>
-}
-
-export type WorktreeDiffResponse = WorktreeDiffResponses[keyof WorktreeDiffResponses]
-
-export type WorktreeDiffSummaryData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-    base?: string
-  }
-  url: "/experimental/worktree/diff/summary"
-}
-
-export type WorktreeDiffSummaryErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type WorktreeDiffSummaryError = WorktreeDiffSummaryErrors[keyof WorktreeDiffSummaryErrors]
-
-export type WorktreeDiffSummaryResponses = {
-  /**
-   * Diff summary items
-   */
-  200: Array<WorktreeDiffItem>
-}
-
-export type WorktreeDiffSummaryResponse = WorktreeDiffSummaryResponses[keyof WorktreeDiffSummaryResponses]
-
-export type WorktreeDiffFileData = {
-  body?: never
-  path?: never
-  query: {
-    directory?: string
-    workspace?: string
-    base?: string
-    file: string
-  }
-  url: "/experimental/worktree/diff/file"
-}
-
-export type WorktreeDiffFileErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type WorktreeDiffFileError = WorktreeDiffFileErrors[keyof WorktreeDiffFileErrors]
-
-export type WorktreeDiffFileResponses = {
-  /**
-   * Diff detail item
-   */
-  200: WorktreeDiffItem
-}
-
-export type WorktreeDiffFileResponse = WorktreeDiffFileResponses[keyof WorktreeDiffFileResponses]
-
 export type ExperimentalSessionListData = {
   body?: never
   path?: never
@@ -7145,8 +6738,6 @@ export type ExperimentalSessionListData = {
     directory?: string
     workspace?: string
     projectID?: string
-    worktrees?: boolean
-    current?: "true" | "false"
     roots?: boolean | "true" | "false"
     start?: number
     cursor?: number
@@ -11112,42 +10703,6 @@ export type BackgroundProcessStopSessionResponses = {
 export type BackgroundProcessStopSessionResponse =
   BackgroundProcessStopSessionResponses[keyof BackgroundProcessStopSessionResponses]
 
-export type BranchNameGenerateData = {
-  body?: {
-    prompt: string
-    providerID?: string
-    modelID?: string
-  }
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/branch-name"
-}
-
-export type BranchNameGenerateErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type BranchNameGenerateError = BranchNameGenerateErrors[keyof BranchNameGenerateErrors]
-
-export type BranchNameGenerateResponses = {
-  /**
-   * Generated branch name or null when the task is not clear yet
-   */
-  200: {
-    branch: string | null
-  }
-}
-
-export type BranchNameGenerateResponse = BranchNameGenerateResponses[keyof BranchNameGenerateResponses]
-
 export type CommitMessageGenerateData = {
   body?: {
     /**
@@ -12726,109 +12281,6 @@ export type KilocodeNotebookRejectResponses = {
 }
 
 export type KilocodeNotebookRejectResponse = KilocodeNotebookRejectResponses[keyof KilocodeNotebookRejectResponses]
-
-export type KilocodeAgentManagerListData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/kilocode/agent-manager"
-}
-
-export type KilocodeAgentManagerListErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type KilocodeAgentManagerListError = KilocodeAgentManagerListErrors[keyof KilocodeAgentManagerListErrors]
-
-export type KilocodeAgentManagerListResponses = {
-  /**
-   * Pending Agent Manager host requests
-   */
-  200: Array<AgentManagerRequest>
-}
-
-export type KilocodeAgentManagerListResponse =
-  KilocodeAgentManagerListResponses[keyof KilocodeAgentManagerListResponses]
-
-export type KilocodeAgentManagerReplyData = {
-  body?: {
-    result: AgentManagerResult
-  }
-  path: {
-    requestID: AgentManagerRequestId
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/kilocode/agent-manager/{requestID}/reply"
-}
-
-export type KilocodeAgentManagerReplyErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * Not found
-   */
-  404: NotFoundError
-}
-
-export type KilocodeAgentManagerReplyError = KilocodeAgentManagerReplyErrors[keyof KilocodeAgentManagerReplyErrors]
-
-export type KilocodeAgentManagerReplyResponses = {
-  /**
-   * Agent Manager reply accepted
-   */
-  200: boolean
-}
-
-export type KilocodeAgentManagerReplyResponse =
-  KilocodeAgentManagerReplyResponses[keyof KilocodeAgentManagerReplyResponses]
-
-export type KilocodeAgentManagerRejectData = {
-  body?: {
-    error: AgentManagerFailure
-  }
-  path: {
-    requestID: AgentManagerRequestId
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/kilocode/agent-manager/{requestID}/reject"
-}
-
-export type KilocodeAgentManagerRejectErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-  /**
-   * Not found
-   */
-  404: NotFoundError
-}
-
-export type KilocodeAgentManagerRejectError = KilocodeAgentManagerRejectErrors[keyof KilocodeAgentManagerRejectErrors]
-
-export type KilocodeAgentManagerRejectResponses = {
-  /**
-   * Agent Manager rejection accepted
-   */
-  200: boolean
-}
-
-export type KilocodeAgentManagerRejectResponse =
-  KilocodeAgentManagerRejectResponses[keyof KilocodeAgentManagerRejectResponses]
 
 export type KilocodeSessionModelUsageData = {
   body?: never

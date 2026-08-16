@@ -253,7 +253,7 @@ export function createTerminalHandlers(deps: TerminalHandlerDeps) {
   const requestNew = () => {
     const sel = deps.getSelection()
     if (sel === null) return
-    deps.postMessage({ type: "agentManager.terminal.create", worktreeId: sel === deps.LOCAL ? null : sel }) // worktreeId is a legacy field name in the message contract
+    deps.postMessage({ type: "agentManager.terminal.create", slotId: sel === deps.LOCAL ? null : sel })
   }
 
   const closeTerminal = (terminalId: string) => {
@@ -330,8 +330,7 @@ export function createTerminalMessageHandler(deps: TerminalMessageHandlerDeps) {
   return (msg: ExtensionMessage): boolean => {
     if (msg.type === "agentManager.terminal.created") {
       // Always store in LOCAL context and set selection to LOCAL.
-      // worktreeId is a legacy field name in the message contract.
-      deps.state.add(msg.worktreeId, {
+      deps.state.add(msg.slotId, {
         id: msg.terminalId,
         title: msg.title,
         wsUrl: msg.wsUrl,

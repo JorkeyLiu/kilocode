@@ -41,7 +41,6 @@ function deps(overrides: Partial<ToolDeps> = {}): ToolDeps {
 describe("agent manager tool start", () => {
   it("parses tool start events defensively", () => {
     const parsed = parseToolRequest({
-      mode: "local",
       tasks: [
         {
           prompt: "one",
@@ -53,7 +52,6 @@ describe("agent manager tool start", () => {
     expect(parsed?.requestID.startsWith("am-")).toBe(true)
     expect(parsed?.sessionID).toBeUndefined()
     expect(parsed?.directory).toBeUndefined()
-    expect(parsed?.mode).toBe("local")
     expect(parsed?.tasks).toEqual([
       {
         prompt: "one",
@@ -63,23 +61,26 @@ describe("agent manager tool start", () => {
     ])
     expect(
       parseToolRequest({
-        mode: "local",
         tasks: [{ prompt: "one", model: { providerID: "", modelID: "model" }, variant: "high" }],
       }),
     ).toBeUndefined()
-    expect(parseToolRequest({ mode: "local", tasks: [{ prompt: "one", variant: "high" }] })).toBeUndefined()
+    expect(parseToolRequest({ tasks: [{ prompt: "one", variant: "high" }] })).toBeUndefined()
     expect(
       parseToolRequest({
-        mode: "local",
         tasks: [{ name: "Prepared session", model: { providerID: "test", modelID: "model" } }],
       }),
     ).toBeUndefined()
-    expect(parseToolRequest({ mode: "local", tasks: [] })).toBeUndefined()
-    expect(parseToolRequest({ mode: "local", tasks: [{}] })).toBeUndefined()
+    expect(parseToolRequest({ tasks: [] })).toBeUndefined()
+    expect(parseToolRequest({ tasks: [{}] })).toBeUndefined()
   })
 
-  it("rejects mode:worktree in parseToolRequest", () => {
-    expect(parseToolRequest({ mode: "worktree", tasks: [{ prompt: "one" }] })).toBeUndefined()
+  it("accepts any request without a mode field (worktree mode removed)", () => {
+    // The mode field was removed with the managed-worktree infrastructure
+    // (P3.2): all tool requests are root-local, so there is no worktree mode
+    // to reject and no mode to require.
+    expect(parseToolRequest({ tasks: [{ prompt: "one" }] })).toBeDefined()
+    expect(parseToolRequest({ mode: "worktree", tasks: [{ prompt: "one" }] })).toBeDefined()
+    expect(parseToolRequest({ mode: "local", tasks: [{ prompt: "one" }] })).toBeDefined()
   })
 
   it("starts local sessions via createLocalSession", async () => {
@@ -87,7 +88,6 @@ describe("agent manager tool start", () => {
     const c = deps({ createLocalSession })
     const req: ToolRequest = {
       requestID: "am-1",
-      mode: "local",
       tasks: [
         {
           prompt: "Do work",
@@ -119,7 +119,6 @@ describe("agent manager tool start", () => {
     })
     const req: ToolRequest = {
       requestID: "am-duplicate",
-      mode: "local",
       tasks: [{ prompt: "Do work" }],
     }
 
@@ -142,7 +141,6 @@ describe("agent manager tool start", () => {
     })
     const req: ToolRequest = {
       requestID: "am-first",
-      mode: "local",
       tasks: [{ prompt: "Task one" }],
     }
 
@@ -156,7 +154,6 @@ describe("agent manager tool start", () => {
     const c = deps({ createLocalSession: mock(async () => false) })
     await startFromTool(c, {
       requestID: "am-fail",
-      mode: "local",
       tasks: [{ prompt: "Do work" }],
     })
     expect(c.error).toHaveBeenCalledWith(expect.stringContaining("Failed to start"))
@@ -168,7 +165,6 @@ describe("agent manager tool start", () => {
 
     await startFromTool(c, {
       requestID: "am-dir",
-      mode: "local",
       directory: "/repo/other",
       tasks: [{ prompt: "Do work" }],
     })

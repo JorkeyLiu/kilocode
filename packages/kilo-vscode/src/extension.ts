@@ -3,9 +3,6 @@ import { KiloProvider } from "./KiloProvider"
 import { AgentManagerProvider } from "./agent-manager/AgentManagerProvider"
 import { VscodeHost } from "./agent-manager/vscode-host"
 import { KiloClawProvider } from "./kiloclaw/KiloClawProvider"
-import { DiffViewerProvider } from "./diff/DiffViewerProvider"
-import { DiffSourceCatalog } from "./diff/sources/catalog"
-import { DiffVirtualProvider } from "./DiffVirtualProvider"
 import { SettingsEditorProvider } from "./SettingsEditorProvider"
 import { MarketplacePanelProvider } from "./MarketplacePanelProvider"
 import { MarketplaceNotifier } from "./services/marketplace/notifier"
@@ -249,14 +246,7 @@ export function activate(context: vscode.ExtensionContext) {
   const ensureChatTab = async (): Promise<KiloProvider> => {
     const tab = activeTabProvider()
     if (tab) return tab
-    return openKiloInNewTab(
-      context,
-      connectionService,
-      agentManagerProvider,
-      diffVirtualProvider,
-      remoteService,
-      autoApprove,
-    )
+    return openKiloInNewTab(context, connectionService, agentManagerProvider, remoteService, autoApprove)
   }
 
   // Ensure Agent Manager navigation keybindings work when a VS Code terminal has focus.
@@ -319,7 +309,6 @@ export function activate(context: vscode.ExtensionContext) {
         }
         const ctx = agentManagerHost.wrapExistingPanel(panel, {
           onBeforeMessage: (msg) => agentManagerProvider.handleMessage(msg),
-          worktreeDirectories: () => agentManagerProvider.getWorktreeDirectories(),
         })
         agentManagerProvider.deserializePanel(ctx)
         return Promise.resolve()
@@ -346,7 +335,6 @@ export function activate(context: vscode.ExtensionContext) {
         })
         tabProvider.setRemoteService(remoteService)
         tabProvider.setAutoApproveController(autoApprove)
-        tabProvider.setDiffVirtualProvider(diffVirtualProvider)
         tabProvider.resolveWebviewPanel(panel)
         tabPanels.set(panel, tabProvider)
         panel.onDidDispose(
@@ -362,31 +350,6 @@ export function activate(context: vscode.ExtensionContext) {
       },
     }),
   )
-
-  const diffSourceCatalog = new DiffSourceCatalog(connectionService)
-  context.subscriptions.push(diffSourceCatalog)
-  const diffViewerProvider = new DiffViewerProvider(context.extensionUri, connectionService, diffSourceCatalog, {
-    // P3.1: the sidebar provider no longer owns the focused session. Resolve the
-    // session from the active editor tab, falling back to the Agent Manager's
-    // active session; the Diff Viewer itself stays a P3.2-preserved surface.
-    sessionIdProvider: () => activeTabProvider()?.getCurrentSessionId() ?? agentManagerProvider.getActiveSessionId(),
-  })
-  diffViewerProvider.setCommentHandler((comments, autoSend) => {
-    // P3.1: route review comments through the readiness-aware resolver. The
-    // Agent Manager embeds the same ChatView/PromptInput as the editor tabs,
-    // so the message is identical either way — but posting into a closed or
-    // not-yet-ready Agent Manager panel used to drop the comments silently.
-    void resolveChatTarget().then((target) => {
-      if (!target) return
-      target.postMessage({ type: "appendReviewComments", comments, autoSend })
-    })
-  })
-  context.subscriptions.push(diffViewerProvider)
-
-  // Create diff virtual provider (lightweight single-file diff for permission approval)
-  const diffVirtualProvider = new DiffVirtualProvider(context.extensionUri)
-  agentManagerHost.setDiffVirtualProvider(diffVirtualProvider)
-  context.subscriptions.push(diffVirtualProvider)
 
   // Create standalone editor providers (open in editor area, not sidebar)
   const settingsEditorProvider = new SettingsEditorProvider(context.extensionUri, connectionService, context)
@@ -418,15 +381,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.window.registerWebviewPanelSerializer(MarketplacePanelProvider.viewType, {
       deserializeWebviewPanel(panel: vscode.WebviewPanel) {
         marketplacePanelProvider.deserializePanel(panel)
-        return Promise.resolve()
-      },
-    }),
-  )
-
-  context.subscriptions.push(
-    vscode.window.registerWebviewPanelSerializer(DiffViewerProvider.viewType, {
-      deserializeWebviewPanel(panel: vscode.WebviewPanel) {
-        diffViewerProvider.deserializePanel(panel)
         return Promise.resolve()
       },
     }),
@@ -529,7 +483,6 @@ export function activate(context: vscode.ExtensionContext) {
         context,
         connectionService,
         agentManagerProvider,
-        diffVirtualProvider,
         remoteService,
         autoApprove,
       )
@@ -551,21 +504,8 @@ export function activate(context: vscode.ExtensionContext) {
       remoteService.toggle().catch((err) => console.error("[Kilo New] toggleRemote command failed:", err))
     }),
     vscode.commands.registerCommand("kilo-code.new.openInTab", () => {
-      return openKiloInNewTab(
-        context,
-        connectionService,
-        agentManagerProvider,
-        diffVirtualProvider,
-        remoteService,
-        autoApprove,
-      )
+      return openKiloInNewTab(context, connectionService, agentManagerProvider, remoteService, autoApprove)
     }),
-    vscode.commands.registerCommand(
-      "kilo-code.new.showChanges",
-      (arg?: { sessionId?: string; turnId?: string; initialSourceId?: string }) => {
-        diffViewerProvider.openFromCommand(arg)
-      },
-    ),
     vscode.commands.registerCommand("kilo-code.new.agentManager.previousSession", () => {
       agentManagerProvider.postMessage({ type: "action", action: "sessionPrevious" })
     }),
@@ -658,7 +598,7 @@ export function activate(context: vscode.ExtensionContext) {
       // P3.1: reload is a backend instance reload, so it runs directly on the
       // shared connection instead of a (removed) sidebar webview. Target the
       // active surface's session directory — the active editor tab, else the
-      // Agent Manager's active session — so worktree-scoped backend state
+      // Agent Manager's active session — so directory-scoped backend state
       // reloads where the user is working; fall back to the first workspace
       // root/cwd (matching the removed sidebar provider's reload semantics).
       try {
@@ -821,7 +761,6 @@ async function openKiloInNewTab(
   context: vscode.ExtensionContext,
   connectionService: KiloConnectionService,
   agentManagerProvider: AgentManagerProvider,
-  diffVirtualProvider: DiffVirtualProvider,
   remoteService: RemoteStatusService,
   autoApprove: ReturnType<typeof registerToggleAutoApprove>,
 ): Promise<KiloProvider> {
@@ -850,7 +789,6 @@ async function openKiloInNewTab(
   })
   tabProvider.setRemoteService(remoteService)
   tabProvider.setAutoApproveController(autoApprove)
-  tabProvider.setDiffVirtualProvider(diffVirtualProvider)
   tabProvider.resolveWebviewPanel(panel)
   tabPanels.set(panel, tabProvider)
 

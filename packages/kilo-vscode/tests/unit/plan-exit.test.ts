@@ -47,7 +47,8 @@ describe("planDisplayPath", () => {
 describe("plan_exit renderer uses openFile not openDiff (source)", () => {
   const ROOT = path.resolve(import.meta.dir, "../..")
   const FILE = path.join(ROOT, "webview-ui/src/components/chat/AssistantMessage.tsx")
-  const TURN_FILE = path.join(ROOT, "webview-ui/src/components/chat/VscodeSessionTurn.tsx")
+  // P3.2: turn rendering is TranscriptRowView (VscodeSessionTurn removed).
+  const TURN_FILE = path.join(ROOT, "webview-ui/src/components/chat/TranscriptRow.tsx")
   const src = fs.readFileSync(FILE, "utf-8")
   const turnSrc = fs.readFileSync(TURN_FILE, "utf-8")
 

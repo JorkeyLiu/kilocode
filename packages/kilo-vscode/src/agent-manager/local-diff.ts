@@ -1,9 +1,7 @@
 import * as fs from "fs/promises"
-import { binaryFile } from "../diff/shared/binary"
-import { imageMime, loadImage, readImageFile } from "../diff/shared/image"
-import { resolveInside } from "../diff/shared/path"
+import { binaryFile, imageMime, loadImage, readImageFile, resolveInside } from "./diff-media"
 import type { GitOps } from "./GitOps"
-import type { WorktreeDiffEntry } from "./types"
+import type { LocalDiffEntry } from "./types"
 
 type Status = "added" | "deleted" | "modified"
 
@@ -33,8 +31,8 @@ const MAX_UNTRACKED_BYTES = 1_000_000
 export const MAX_DETAIL_BYTES = 20_000_000
 
 /**
- * Local, Node.js-side replacement for the server's `WorktreeDiff.summary()` and
- * `WorktreeDiff.detail()` routes. Keeps Agent Manager polling out of the Bun
+ * Local, Node.js-side replacement for the server's removed worktree diff
+ * routes. Keeps Agent Manager polling out of the Bun
  * `kilo serve` process, which leaks native memory on every `Bun.spawn` on
  * Windows (oven-sh/bun#18265).
  *
@@ -232,7 +230,7 @@ async function list(git: GitOps, dir: string, anc: string, log?: Log): Promise<M
   return result
 }
 
-function summarize(meta: Meta): WorktreeDiffEntry {
+function summarize(meta: Meta): LocalDiffEntry {
   const image = imageMime(meta.file) !== undefined
   return {
     file: meta.file,
@@ -253,10 +251,10 @@ function summarize(meta: Meta): WorktreeDiffEntry {
 /**
  * Hot polling path. Returns one summarized entry per changed file (tracked or
  * untracked) relative to `merge-base HEAD base`. No file contents are read —
- * `before`/`after`/`patch` are empty strings. Matches the shape the server's
- * `WorktreeDiff.summary` emits.
+ * `before`/`after`/`patch` are empty strings. Matches the shape the removed
+ * server-side worktree diff summary emitted.
  */
-export async function diffSummary(git: GitOps, dir: string, base: string, log?: Log): Promise<WorktreeDiffEntry[]> {
+export async function diffSummary(git: GitOps, dir: string, base: string, log?: Log): Promise<LocalDiffEntry[]> {
   const anc = await ancestor(git, dir, base, log)
   if (!anc) return []
   const items = await list(git, dir, anc, log)
@@ -267,7 +265,7 @@ export function createLocalDiff(git: GitOps, log?: Log) {
   const states = new Map<string, { anc: string; metas: Map<string, Meta> }>()
 
   return {
-    summary: async (dir: string, base: string): Promise<WorktreeDiffEntry[]> => {
+    summary: async (dir: string, base: string): Promise<LocalDiffEntry[]> => {
       const id = `${dir}\0${base}`
       const anc = await ancestor(git, dir, base, log)
       if (!anc) {
@@ -281,7 +279,7 @@ export function createLocalDiff(git: GitOps, log?: Log) {
       if (states.size > 8) states.delete(states.keys().next().value!)
       return items.map(summarize)
     },
-    file: async (dir: string, base: string, file: string): Promise<WorktreeDiffEntry | null> => {
+    file: async (dir: string, base: string, file: string): Promise<LocalDiffEntry | null> => {
       const state = states.get(`${dir}\0${base}`)
       if (!state) return diffFile(git, dir, base, file, log)
       const meta = state.metas.get(file)
@@ -410,7 +408,7 @@ export async function diffFile(
   base: string,
   file: string,
   log?: Log,
-): Promise<WorktreeDiffEntry | null> {
+): Promise<LocalDiffEntry | null> {
   const anc = await ancestor(git, dir, base, log)
   if (!anc) return null
   const meta = await detailMeta(git, dir, anc, file)
@@ -418,7 +416,7 @@ export async function diffFile(
   return materialize(git, dir, anc, meta, log)
 }
 
-async function materialize(git: GitOps, dir: string, anc: string, meta: Meta, log?: Log): Promise<WorktreeDiffEntry> {
+async function materialize(git: GitOps, dir: string, anc: string, meta: Meta, log?: Log): Promise<LocalDiffEntry> {
   const mime = imageMime(meta.file)
   if (meta.binary && !mime) return summarize(meta)
   const beforeBytes = meta.status === "added" ? 0 : await blobSize(git, dir, anc, meta.file)

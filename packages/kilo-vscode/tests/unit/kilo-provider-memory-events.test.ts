@@ -10,6 +10,7 @@ type Internals = {
   webview: { postMessage(message: unknown): Promise<unknown> } | null
   handleEvent(event: unknown, directory?: string): void
   memory: { idle(): Promise<void> }
+  sessionDirectories: Map<string, string>
 }
 
 function status(root: string) {
@@ -64,7 +65,7 @@ describe("KiloProvider memory events", () => {
     item.currentSession = { id: "ses_active" }
     item.trackedSessionIds.add("ses_active")
     item.trackedSessionIds.add("ses_bg")
-    provider.setSessionDirectory("ses_bg", "/worktree")
+    item.sessionDirectories.set("ses_bg", "/worktree")
 
     item.handleEvent(
       {
@@ -111,8 +112,8 @@ describe("KiloProvider memory events", () => {
     item.currentSession = { id: "ses_active" }
     item.trackedSessionIds.add("ses_active")
     item.trackedSessionIds.add("ses_bg")
-    provider.setSessionDirectory("ses_active", "/repo")
-    provider.setSessionDirectory("ses_bg", "/repo")
+    item.sessionDirectories.set("ses_active", "/repo")
+    item.sessionDirectories.set("ses_bg", "/repo")
 
     item.handleEvent(
       {

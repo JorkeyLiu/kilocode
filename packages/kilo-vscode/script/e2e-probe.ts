@@ -83,6 +83,23 @@
  *                           runner, detects the persisted marker, and the
  *                           restored panel resumes the same session/artifact
  *                           from the same XDG scratch.
+ *   - worktree-removal     => only the P3.2 runtime-absence + root-local +
+ *                           bounded-H-12 scenario: the extension host proves
+ *                           the loaded manifest and the RUNTIME command table
+ *                           expose no managed worktree or custom Diff Viewer
+ *                           surface, the Agent Manager panel is ready with two
+ *                           root-local sessions seeded through the production
+ *                           session-open path (no worktree dimension), the
+ *                           harness drives both tabs and proves them
+ *                           controllable with no worktree markers in the
+ *                           sidebar DOM, no `.kilo/worktrees` /
+ *                           `.kilo/agent-manager.json` / setup-script state is
+ *                           created anywhere in the run-owned workspace/XDG
+ *                           tree, and the bounded H-12 rollback (REUSED
+ *                           assertRealRollbackPhase against the run-owned
+ *                           scripted provider) proves Revert-to-here restores
+ *                           the exact original bytes and Redo All restores the
+ *                           edited bytes through the retained chat UI.
  *   Any other value fails fast before VS Code launches. Focused runs:
  *     KILO_E2E_SCENARIO=tab-close         node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=child-task-order  node script/e2e-probe-launch.mjs
@@ -92,6 +109,7 @@
  *     KILO_E2E_SCENARIO=real-completed    node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=real-overflow     node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=worktree-removal  node script/e2e-probe-launch.mjs
  *   (package shortcuts: `bun run test:e2e:tab-close`,
  *   `bun run test:e2e:child-task-order`,
  *   `bun run test:e2e:variant-memory`,
@@ -99,7 +117,8 @@
  *   `bun run test:e2e:real-session`,
  *   `bun run test:e2e:real-completed`,
  *   `bun run test:e2e:real-overflow`,
- *   `bun run test:e2e:real-restart`.)
+ *   `bun run test:e2e:real-restart`,
+ *   `bun run test:e2e:worktree-removal`.)
  *
  * Scenarios are independent: each seeds only its own fixtures and coordinates
  * through scenario-specific markers (tab-close-done, child-phase1-done /
@@ -158,7 +177,7 @@ import { build } from "esbuild"
 import { spawnSync } from "node:child_process"
 import { createServer, type Socket } from "node:net"
 import { randomBytes } from "node:crypto"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
@@ -166,7 +185,7 @@ import type { BackendSnapshot, SessionTruth } from "../src/agent-manager/fixture
 import { createScriptedModel, SCRIPTED, type ScriptedModelHandle } from "./e2e-scripted-model"
 import { writeRealCompletedSeed, writeRealOverflowSeed, initWorkspaceGit, type CompletedSeedPaths } from "./e2e-completed-seed"
 import { writeRealRestartSeed, RESTART_ARTIFACT_CONTENT } from "./e2e-restart-seed"
-import { isWrongPin, pinnedReason, pinReport, type PinExpectation } from "./e2e-pin"
+import { isWrongPin, pinExpect, pinnedReason, pinReport, type PinExpectation } from "./e2e-pin"
 import { assertRunOwnedLlmRequests, readLlmRequests } from "./e2e-llm-matrix"
 import { evidenceDirFor, runEvidenceHandoff } from "./e2e-evidence"
 import {
@@ -214,6 +233,17 @@ import {
   type SidebarTopicState,
 } from "./e2e-probe-dom"
 import { assertRealRestartReload, runRealRestartBoundaries } from "./e2e-probe-restart"
+import {
+  REAL_ROLLBACK_PROMPT,
+  REAL_ROLLBACK_SUMMARY_PROMPT,
+  assertRealRollbackPhase,
+  assertWorktreeRemovalLifecycle,
+  completedTool,
+  prepareWorktreeRemoval,
+  realRootSession,
+  waitForDock,
+  waitForNoDock,
+} from "./e2e-probe-worktree"
 
 if (process.versions.bun) {
   console.error(
@@ -249,7 +279,9 @@ const timeoutMs = Number(
         ? 1_200_000
         : process.env.KILO_E2E_SCENARIO === "real-restart"
           ? 6_000_000
-          : 300_000),
+          : process.env.KILO_E2E_SCENARIO === "worktree-removal"
+            ? 6_000_000
+            : 300_000),
 )
 
 // LOCK-002: scenario selection. `all` (default) runs every scenario in one VS
@@ -272,6 +304,7 @@ const SCENARIO_VALUES = [
   "real-overflow",
   "real-restart",
   "sidebar-removal",
+  "worktree-removal",
 ] as const
 function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -284,7 +317,8 @@ function parseScenarios(value: string): Set<string> {
     value === "real-completed" ||
     value === "real-overflow" ||
     value === "real-restart" ||
-    value === "sidebar-removal"
+    value === "sidebar-removal" ||
+    value === "worktree-removal"
   ) {
     return new Set([value])
   }
@@ -1177,11 +1211,6 @@ function userText(snap: BackendSnapshot, id: string): string {
   return user?.text ?? ""
 }
 
-/** The real-session pinned expectation for a send: custom agent + model + variant. */
-function pinExpect(plan: E2EPlan, agent: string, variant: string): PinExpectation {
-  return { agent, provider: plan.customProvider, model: plan.customModel, variant }
-}
-
 /**
  * Real-webview E2E for the first parity cluster. Drives the REAL Agent Manager
  * webview — prompt input, Send/Stop buttons, ModeSwitcher, ThinkingSelector,
@@ -1422,57 +1451,6 @@ const REAL_SKILL_PROMPT = `${SCRIPTED.skillMarker}: load the e2e skill`
 const REAL_MCP_PROMPT = `${SCRIPTED.mcpMarker}: call the mcp echo tool`
 const REAL_PERMISSION_PROMPT = `${SCRIPTED.permissionMarker}: read the ask.txt file`
 const REAL_QUESTION_PROMPT = `${SCRIPTED.questionMarker}: ask me a question`
-const REAL_ROLLBACK_PROMPT = `${SCRIPTED.rollbackMarker}: edit the tracked file`
-const REAL_ROLLBACK_SUMMARY_PROMPT = `${SCRIPTED.rollbackSummaryMarker}: summarize the edit`
-
-/** The root (non-child) session in the real-completed scenario. */
-function realRootSession(s: BackendSnapshot): SessionTruth | undefined {
-  return s.sessions.find((x) => !x.parentID)
-}
-
-/** Completed tool-part of one session transcript (all messages). */
-function completedTool(s: BackendSnapshot, sessionID: string, tool: string) {
-  return (s.messages[sessionID] ?? []).flatMap((m) => m.tools ?? []).find((t) => t.tool === tool)
-}
-
-/** Poll until the given webview DOM selector matches at least one element. */
-async function waitForDock(frame: Frame, selector: string, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const hit = await frame
-      .locator(selector)
-      .count()
-      .catch(() => 0)
-    if (hit > 0) {
-      console.log(`[probe] PASS ${label}`)
-      return
-    }
-    if (Date.now() > deadline) {
-      const body = await frame.locator("body").innerText().catch(() => "<unreadable>")
-      throw new Error(`probe: ${label} failed: selector "${selector}" not found.\nbody:\n${body.slice(0, 1200)}`)
-    }
-    await sleep(250)
-  }
-}
-
-/** Poll until the given webview DOM selector matches nothing. */
-async function waitForNoDock(frame: Frame, selector: string, timeoutMs: number, label: string): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const hit = await frame
-      .locator(selector)
-      .count()
-      .catch(() => 0)
-    if (hit === 0) {
-      console.log(`[probe] PASS ${label}`)
-      return
-    }
-    if (Date.now() > deadline) {
-      throw new Error(`probe: ${label} failed: selector "${selector}" still present`)
-    }
-    await sleep(250)
-  }
-}
 
 /** Click the real PermissionDock "Allow once" button (production kilo-ui Button). */
 async function clickPermissionAllowOnce(frame: Frame, timeoutMs: number): Promise<void> {
@@ -1583,162 +1561,6 @@ async function waitForMcpChildPids(serverPath: string, timeoutMs: number, label:
  * served-backend revert/checkpoint facts and lifecycle correctness. Returns
  * the revert boundary user-message id for the caller's evidence.
  */
-async function assertRealRollbackPhase(
-  rf: Frame,
-  snap: ReturnType<typeof snapshotClient>,
-  model: ScriptedModelHandle,
-  workspace: string,
-  timeout: number,
-  plan: E2EPlan,
-  sendTurn: (
-    target: Frame,
-    prompt: string,
-    probe: (s: BackendSnapshot) => string | undefined,
-    label: string,
-  ) => Promise<BackendSnapshot>,
-): Promise<string> {
-    // The reopened panel (rf) is still showing the root session (opened in
-    // Phase 7), so the two rollback turns go through the FRESH webview document
-    // against the same served backend session. The tracked rollback file is
-    // committed in the run-owned git workspace; the production write tool edits
-    // it, Revert-to-here runs production SessionRevert+Snapshot and restores the
-    // exact initial bytes, the RevertBanner renders the per-file diff, and Redo
-    // All invokes the production unrevert path and restores the edited bytes.
-    //
-    // The fresh webview document re-resolves its model from scratch: until the
-    // served config/catalog resolve, the model selector falls through to the
-    // gateway KILO_AUTO free model (kilo/kilo-auto/free) — the only live
-    // gateway-fallback window in the real scenarios — so BEFORE the first send
-    // on this document, explicitly wait for the visible custom agent + variant
-    // and the visible custom model selection (LOCK-006/LOCK-012).
-    await waitForAgentOption(rf, plan.customAgentLabel, timeout)
-    await pickAgent(rf, plan.customAgentLabel, timeout)
-    await waitForLabel(rf, ".mode-switcher-trigger-label", plan.customAgentLabel, timeout, "custom agent selected (reopened panel)")
-    await pickVariant(rf, plan.customVariantA, timeout)
-    await waitForLabel(rf, ".thinking-selector-trigger-label", plan.customVariantA, timeout, "variant Low selected (reopened panel)")
-    await waitForModelSelected(rf, plan.customProvider, plan.customModel, timeout, "custom model visibly selected (reopened panel)")
-
-    const rollbackFile = join(workspace, SCRIPTED.rollbackFile)
-    const readRollback = () => (existsSync(rollbackFile) ? readFileSync(rollbackFile, "utf8") : "<missing>")
-
-    // 9a. Turn 1: the real write tool edits the tracked file (production path).
-    await sendTurn(
-      rf,
-      REAL_ROLLBACK_PROMPT,
-      (s) => {
-        const root = realRootSession(s)
-        if (!root) return "root session missing"
-        const tool = completedTool(s, root.id, "write")
-        if (!tool) {
-          const pending = (s.pending?.permissions ?? []).filter((p) => p.sessionID === root.id)
-          return (
-            `write tool part missing; session=${s.statuses[root.id] ?? "idle"}` +
-            (pending.length > 0 ? `; pending-permissions=${JSON.stringify(pending)}` : "; no pending permissions")
-          )
-        }
-        if (tool.status !== "completed") return `write status=${tool.status}`
-        if (!tool.output?.includes("Wrote file successfully")) {
-          return `write output=${JSON.stringify(tool.output?.slice(0, 300))}`
-        }
-        if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
-        return undefined
-      },
-      "H-12 write: completed write tool part in the backend",
-    )
-    if (readRollback() !== SCRIPTED.rollbackEdited) {
-      throw new Error(`probe: H-12 tracked file not edited after the write turn: ${JSON.stringify(readRollback())}`)
-    }
-    console.log(`[probe] PASS H-12 tracked file edited: ${rollbackFile} = ${JSON.stringify(SCRIPTED.rollbackEdited)}`)
-    await expectTranscriptText(rf, SCRIPTED.rollbackFinal, 60_000, "H-12 panel shows the edit completion text")
-
-    // 9b. Turn 2: a plain-text summary turn so the revert boundary covers TWO
-    // user turns and the real RevertBanner renders its "Redo All" action.
-    const snapSummary = await sendTurn(
-      rf,
-      REAL_ROLLBACK_SUMMARY_PROMPT,
-      (s) => {
-        const root = realRootSession(s)
-        if (!root) return "root session missing"
-        const users = (s.messages[root.id] ?? []).filter((m) => m.role === "user")
-        if (users.length < 2) return `expected at least 2 user messages, got ${users.length}`
-        if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
-        return undefined
-      },
-      "H-12 summary: second user turn completes and the session is idle",
-    )
-    await expectTranscriptText(rf, SCRIPTED.rollbackSummaryFinal, 60_000, "H-12 panel shows the summary text")
-
-    // The revert boundary is the FIRST rollback user message (the edit turn).
-    const summaryRoot = realRootSession(snapSummary)
-    const editUserMsg = (summaryRoot ? snapSummary.messages[summaryRoot.id] ?? [] : []).find(
-      (m) => m.role === "user" && m.text.includes(SCRIPTED.rollbackMarker),
-    )
-    if (!editUserMsg || !editUserMsg.id) {
-      throw new Error("probe: H-12 edit user message missing from the backend transcript")
-    }
-    const editMessageID = editUserMsg.id
-    console.log(`[probe] H-12 revert boundary user message: ${editMessageID}`)
-
-    // 9c. Click the real user-message "Revert to here" button (hover-revealed
-    // production control; the same DOM a user clicks).
-    await clickRevertToHere(rf, editMessageID, 30_000)
-
-    // 9d. Backend: active revert/checkpoint fact + exact initial bytes restored.
-    await snap.waitFor(
-      (s) => {
-        const root = realRootSession(s)
-        if (!root) return "root session missing"
-        const rev = root.revert
-        if (!rev) return "session.revert missing (Revert-to-here did not set the checkpoint)"
-        if (rev.messageID !== editMessageID) {
-          return `session.revert.messageID=${JSON.stringify(rev.messageID)} expected ${editMessageID}`
-        }
-        if (!rev.snapshot) return "session.revert.snapshot missing (no checkpoint hash)"
-        const diffs = root.summary?.diffs ?? []
-        if (!diffs.some((d) => d.file === SCRIPTED.rollbackFile)) {
-          return `session.summary.diffs missing ${SCRIPTED.rollbackFile}: ${JSON.stringify(diffs)}`
-        }
-        return undefined
-      },
-      90_000,
-      "H-12 backend revert/checkpoint fact + summary diff",
-    )
-    await waitForFileBytes(rollbackFile, SCRIPTED.rollbackOriginal, 30_000, "H-12 exact initial bytes restored")
-    console.log(
-      `[probe] PASS H-12 restored bytes: ${rollbackFile} = ${JSON.stringify(SCRIPTED.rollbackOriginal)}`,
-    )
-
-    // 9e. UI: the RevertBanner is visible with the per-file diff row.
-    await waitForDock(rf, ".revert-banner", 60_000, "H-12 RevertBanner visible")
-    await expectBannerFile(rf, SCRIPTED.rollbackFile, 30_000, "H-12 RevertBanner lists the reverted file")
-
-    // 9f. Click the real "Redo All" button (production unrevert path).
-    const redoAll = rf
-      .locator('.revert-banner-actions [data-component="button"]')
-      .filter({ hasText: "Redo All" })
-      .first()
-    await redoAll.waitFor({ state: "visible", timeout: 30_000 })
-    await redoAll.click({ timeout: 30_000 })
-    console.log("[probe] clicked RevertBanner Redo All (production unrevert path)")
-
-    // 9g. Backend: checkpoint cleared, edited bytes restored, session idle/clean.
-    await snap.waitFor(
-      (s) => {
-        const root = realRootSession(s)
-        if (!root) return "root session missing"
-        if (root.revert) return "session.revert still set after Redo All"
-        if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
-        return undefined
-      },
-      90_000,
-      "H-12 Redo All clears the backend checkpoint and the session stays idle",
-    )
-    await waitForFileBytes(rollbackFile, SCRIPTED.rollbackEdited, 30_000, "H-12 edited bytes restored by Redo All")
-    await waitForNoDock(rf, ".revert-banner", 30_000, "H-12 RevertBanner gone after Redo All")
-    await expectTranscriptText(rf, SCRIPTED.rollbackSummaryFinal, 60_000, "H-12 reverted turns re-shown in the transcript")
-    console.log("[probe] PASS H-12 rollback lifecycle passed")
-    return editMessageID
-}
 
 async function assertRealCompletedLifecycle(
   browser: Browser,
@@ -2382,6 +2204,21 @@ async function assertRealOverflowLifecycle(
   console.log("[probe] real-overflow lifecycle passed")
 }
 
+// ---------------------------------------------------------------------------
+// P3.2 worktree-removal scenario — runtime absence + root-local + bounded H-12
+// ---------------------------------------------------------------------------
+
+/**
+ * Read-only recursive scan for managed-worktree state markers in a run-owned
+ * directory tree (never deletes). Flags exactly what the removed features
+ * persisted: managed checkouts under `.kilo/worktrees/`, the old
+ * WorktreeStateManager's `.kilo/agent-manager.json`, setup-script files, and
+ * `worktreeId` / `"worktrees"` content markers in JSON/Markdown files. Skips
+ * node_modules and .git (never a managed-worktree surface). Core-schema
+ * singular `worktree` fields (Session/Project roots) are NOT flagged — only
+ * the removed managed-worktree identifiers.
+ */
+
 /** real-session only: create the run-owned hang server and write the config seed. */
 async function prepareRealSession(
   workspace: string,
@@ -2464,6 +2301,7 @@ async function runScenario(
   workspace: string,
   completed?: { handle: ScriptedModelHandle; mcpServerFile: string },
   overflowModel?: ScriptedModelHandle,
+  wtModel?: ScriptedModelHandle,
 ): Promise<void> {
   if (scenarios.has("tab-close")) {
     await assertTabCloseSuccessor(browser, plan, scratch)
@@ -2496,6 +2334,11 @@ async function runScenario(
     console.log("[probe] real-overflow lifecycle assertion passed")
   }
   if (scenarios.has("sidebar-removal")) console.log("[probe] sidebar-removal assertions ran in the Extension Host runner")
+  if (scenarios.has("worktree-removal")) {
+    if (!wtModel) throw new Error("probe: worktree-removal preparation missing")
+    await assertWorktreeRemovalLifecycle(browser, plan, scratch, workspace, wtModel)
+    console.log("[probe] worktree-removal lifecycle assertion passed")
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2581,6 +2424,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has("real-completed")) return "real-completed-ready"
   if (scenarios.has("real-overflow")) return "real-overflow-ready"
   if (scenarios.has("real-restart")) return "rr-ready"
+  if (scenarios.has("worktree-removal")) return "worktree-removal-ready"
   return "ready"
 }
 
@@ -2815,6 +2659,11 @@ async function main() {
   // exist BEFORE VS Code launches — the scripted model and the session/artifact
   // survive every restart boundary.
   const restartModel = await prepareRealRestart(workspace, scenarios.has("real-restart"))
+  // P3.2 worktree-removal only: the run-owned scripted model server + the
+  // MINIMAL workspace seed (config + H-12 edit rule + tracked rollback file +
+  // no-op dependency guard, plain single git repo) must also exist BEFORE VS
+  // Code launches so the lazily-spawned CLI backend loads them at startup.
+  const wtModel = await prepareWorktreeRemoval(workspace, scenarios.has("worktree-removal"))
   try {
     const runnerOut = join(scratch, "runner.cjs")
     await build({
@@ -2874,7 +2723,7 @@ async function main() {
             `topicRoot=${plan.topicRootId} topicChild=${plan.topicChildId} topicSibling=${plan.topicSiblingId} ` +
             `realAgent=${plan.customAgent} realAgentB=${plan.customAgentB} realModel=${plan.customProvider}/${plan.customModel}`,
         )
-        await runScenario(browser, scenarios, plan, scratch, workspace, completed, overflowModel)
+        await runScenario(browser, scenarios, plan, scratch, workspace, completed, overflowModel, wtModel)
       } finally {
         // Unblock the extension-host runner on success AND failure so VS Code
         // always exits under program control (no detached processes).
@@ -2889,7 +2738,7 @@ async function main() {
   }
 
   // Release the run-owned scripted/hang listeners before process settle + scratch deletion.
-  await closeHandles({ hang, completed, overflowModel, restartModel })
+  await closeHandles({ hang, completed, overflowModel, restartModel, wtModel })
 
   // VS Code exits only after the runner sees the `done` marker (or times out).
   // Await it before touching the scratch dir so the unique user-data/extensions
@@ -2952,12 +2801,14 @@ async function closeHandles(opts: {
   completed: { handle: { close: () => Promise<void> } } | undefined
   overflowModel: { close: () => Promise<void> } | undefined
   restartModel: { close: () => Promise<void> } | undefined
+  wtModel: { close: () => Promise<void> } | undefined
 }) {
-  const { hang, completed, overflowModel, restartModel } = opts
+  const { hang, completed, overflowModel, restartModel, wtModel } = opts
   if (hang) await hang.close().catch((err) => console.error("[probe] hang server close failed:", err))
   if (completed) await completed.handle.close().catch((err) => console.error("[probe] scripted model close failed:", err))
   if (overflowModel) await overflowModel.close().catch((err) => console.error("[probe] overflow scripted model close failed:", err))
   if (restartModel) await restartModel.close().catch((err) => console.error("[probe] restart scripted model close failed:", err))
+  if (wtModel) await wtModel.close().catch((err) => console.error("[probe] worktree-removal scripted model close failed:", err))
 }
 
 async function verifyCleanup(userData: string, cdpPort: number, scratch: string) {

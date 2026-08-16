@@ -77,15 +77,6 @@ import { isEnterKeyCommitNotIme } from "../../utils/ime-enter"
 import { MEMORY_USAGE, parseMemoryCommand } from "../../utils/memory-command"
 import { useMemory } from "../../context/memory"
 
-function mergeReviewComments(current: ReviewComment[], incoming: ReviewComment[]): ReviewComment[] {
-  if (incoming.length === 0) return current
-  const map = new Map(current.map((item) => [item.id, item]))
-  for (const item of incoming) {
-    map.set(item.id, item)
-  }
-  return [...map.values()]
-}
-
 function finishPending(id: string | undefined): boolean {
   if (!id) return false
   finishPendingSend(id)
@@ -664,17 +655,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         textareaRef.focus()
         textareaRef.scrollTop = textareaRef.scrollHeight
         syncHighlightScroll()
-      }
-    }
-
-    if (message.type === "appendReviewComments") {
-      const empty = !text().trim() && reviewComments().length === 0 && imageAttach.images().length === 0
-      const merged = mergeReviewComments(reviewComments(), message.comments)
-      replaceReviewComments(merged)
-      if (message.autoSend && empty && !isDisabled() && !props.blocked?.()) {
-        void handleSend()
-      } else {
-        textareaRef?.focus()
       }
     }
 

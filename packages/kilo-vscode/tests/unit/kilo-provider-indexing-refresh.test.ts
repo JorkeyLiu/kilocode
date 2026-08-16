@@ -22,6 +22,7 @@ type Internals = {
   fetchAndSendSkills: () => Promise<void>
   fetchAndSendCommands: () => Promise<void>
   fetchAndSendIndexingStatus: () => Promise<void>
+  sessionDirectories: Map<string, string>
 }
 
 function createConnection() {
@@ -142,7 +143,7 @@ describe("KiloProvider indexing refresh", () => {
   })
 
   it("fetchAndSendIndexingStatus uses current session directory header", async () => {
-    const worktree = "/repo/.kilo/.kilocode/worktrees/feature"
+    const worktree = "/repo/session-feature"
     const calls: { input: RequestInfo | URL; init?: RequestInit }[] = []
     const original = globalThis.fetch
 
@@ -173,7 +174,7 @@ describe("KiloProvider indexing refresh", () => {
         } as never,
       )
       const internal = provider as unknown as Internals
-      provider.setSessionDirectory("ses_worktree", worktree)
+      internal.sessionDirectories.set("ses_worktree", worktree)
       internal.currentSession = { id: "ses_worktree" }
 
       await internal.fetchAndSendIndexingStatus()
@@ -197,7 +198,7 @@ describe("KiloProvider indexing refresh", () => {
       } as never,
     )
     const internal = provider as unknown as Internals
-    provider.setSessionDirectory("ses_worktree", "C:/Repo/Work")
+    internal.sessionDirectories.set("ses_worktree", "C:/Repo/Work")
     internal.currentSession = { id: "ses_worktree" }
 
     const desc = Object.getOwnPropertyDescriptor(process, "platform")

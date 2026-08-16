@@ -22,11 +22,6 @@ export class SessionAbort {
     if (![...dirs].some((entry) => sameDirectory(entry, dir))) dirs.add(dir)
   }
 
-  preserve(sessionID: string, status: SessionStatus["type"] | undefined, dir: string) {
-    if (!status || status === "idle" || this.active.has(sessionID)) return
-    this.observe(sessionID, status, dir)
-  }
-
   async stop(client: KiloClient, sessionID: string, fallback: string) {
     const known = this.active.has(sessionID)
     const dirs = [...(this.active.get(sessionID) ?? [])]

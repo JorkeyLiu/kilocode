@@ -24,7 +24,7 @@ Key features include:
 - **[JSONC config files](/docs/getting-started/settings)** — Portable settings in `kilo.jsonc` instead of VS Code settings
 - **[Granular permissions](/docs/getting-started/settings/auto-approving-actions)** — Per-tool permission rules with glob patterns
 - **[Agents](/docs/code-with-ai/agents/using-agents)** — Customizable agents (`.kilo/agents/*.md`) replacing the modes system
-- **[Agent Manager](/docs/automate/agent-manager)** — Enhanced with diff panel, multi-model comparison, PR import, and code review annotations
+- **[Agent Manager](/docs/automate/agent-manager)** — Parallel root-local sessions with per-session tabs and terminals
 - **[Autocomplete](/docs/code-with-ai/features/autocomplete)** — FIM-based with Codestral, status bar cost tracking
 - **[Workflows](/docs/customize/workflows)** — Repeatable prompt templates as `.md` files
 - **[Skills](/docs/customize/skills)** — Load specialized domain knowledge from SKILL.md files

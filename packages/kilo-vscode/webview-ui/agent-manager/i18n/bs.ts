@@ -41,9 +41,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "Zatvori karticu",
   "agentManager.shortcuts.toggleTerminal": "Prebaci terminal",
   "agentManager.shortcuts.runScript": "Pokreni skriptu",
-  "agentManager.run.options": "Opcije pokretanja",
-  "agentManager.run.configure": "Konfiguriši skriptu za pokretanje",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "Otvori Agent Manager",
   "agentManager.shortcuts.cycleAgentMode": "Next agent mode",

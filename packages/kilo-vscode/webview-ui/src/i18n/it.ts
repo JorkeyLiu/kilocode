@@ -335,7 +335,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Qui puoi incollare solo immagini o PDF.",
   "prompt.toast.modelAgentRequired.title": "Seleziona agente e modello",
   "prompt.toast.modelAgentRequired.description": "Scegli un agente e un modello prima di inviare un prompt.",
-  "prompt.toast.worktreeCreateFailed.title": "Creazione worktree non riuscita",
+
   "prompt.toast.sessionCreateFailed.title": "Creazione sessione non riuscita",
   "prompt.toast.shellSendFailed.title": "Invio comando shell non riuscito",
   "prompt.toast.commandSendFailed.title": "Invio comando non riuscito",
@@ -384,10 +384,7 @@ export const dict = {
   "dialog.project.edit.icon.recommended": "Consigliato: 128x128px",
   "dialog.project.edit.color": "Colore",
   "dialog.project.edit.color.select": "Seleziona colore {{color}}",
-  "dialog.project.edit.worktree.startup": "Script di avvio workspace",
-  "dialog.project.edit.worktree.startup.description":
-    "Viene eseguito dopo la creazione di un nuovo workspace (worktree).",
-  "dialog.project.edit.worktree.startup.placeholder": "es. bun install",
+
   "context.breakdown.title": "Suddivisione contesto",
   "context.breakdown.note":
     'Suddivisione approssimativa dei token di input. "Altro" include definizioni dei tool e overhead.',
@@ -440,10 +437,7 @@ export const dict = {
   "toast.language.description": "Lingua impostata su {{language}}",
   "toast.theme.title": "Tema cambiato",
   "toast.scheme.title": "Schema colori",
-  "toast.workspace.enabled.title": "Workspace abilitati",
-  "toast.workspace.enabled.description": "Ora nella barra laterale sono mostrati più worktree",
-  "toast.workspace.disabled.title": "Workspace disabilitati",
-  "toast.workspace.disabled.description": "Nella barra laterale viene mostrato solo il worktree principale",
+
   "toast.permissions.autoaccept.on.title": "Accettazione automatica modifiche attiva",
   "toast.permissions.autoaccept.on.description": "Le richieste di autorizzazione saranno approvate automaticamente",
   "toast.permissions.autoaccept.off.title": "Accettazione automatica modifiche interrotta",
@@ -574,9 +568,7 @@ export const dict = {
   "session.messages.loading": "Caricamento messaggi...",
   "session.messages.jumpToLatest": "Vai al più recente",
   "session.context.addToContext": "Aggiungi {{selection}} al contesto",
-  "session.new.worktree.main": "Branch principale",
-  "session.new.worktree.mainWithBranch": "Branch principale ({{branch}})",
-  "session.new.worktree.create": "Crea nuovo worktree",
+
   "session.new.lastModified": "Ultima modifica",
   "session.header.search.placeholder": "Cerca {{project}}",
   "session.header.searchFiles": "Cerca file",
@@ -1538,7 +1530,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Meno distrazioni, lettura più semplice e rapida.",
   "migration.whatsNew.features.agentManager.title": "Agent Manager",
   "migration.whatsNew.features.agentManager.detail":
-    "Un'interfaccia unificata per eseguire più agenti in parallelo, ognuno nel proprio worktree: monitora avanzamento, cambia contesto e rivedi modifiche in un unico posto.",
+    "Un'interfaccia unificata per eseguire più agenti in parallelo: monitora avanzamento, cambia contesto e rivedi modifiche in un unico posto.",
   "migration.whatsNew.features.foundation.title": "Fondamenta condivise",
   "migration.whatsNew.features.foundation.detail":
     "Un core piccolo ed efficiente per ogni prodotto Kilo. Un'esperienza familiare comunque tu scelga di lavorare.",
@@ -1623,30 +1615,6 @@ export const dict = {
   "settings.agentBehaviour.variantOverride.description": "Sostituisci la variante del modello per questo agente",
 
   // Diff viewer
-  "diffViewer.source.workspace.label": "Branch",
-  "diffViewer.source.workspace.tooltip":
-    "Tutte le modifiche in questo branch rispetto al branch base. Include file non sottoposti a commit (staged, unstaged, untracked) e commit locali non ancora nel base.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "File con modifiche aggiunte all'area di staging di git (`git add`), come appariranno nel prossimo commit.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "File modificati nel working tree ma non ancora sottoposti a staging, più file non tracciati (nuovi).",
-  "diffViewer.source.session.label": "Sessione",
-  "diffViewer.source.session.tooltip":
-    "File modificati da Kilo durante la sessione corrente, basati su snapshot per turno. Si resetta quando inizi una nuova sessione.",
-  "diffViewer.group.session": "Sessione",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Gli snapshot sono disabilitati per questa repository. Modifica i file di configurazione per visualizzare le modifiche della sessione.",
-  "diffViewer.baseBranch.auto": "Predefinito",
-  "diffViewer.baseBranch.default": "Predefinito",
-  "diffViewer.baseBranch.remote": "Remoto",
-  "diffViewer.baseBranch.search": "Cerca branch",
-  "diffViewer.baseBranch.empty": "Nessun branch corrispondente",
-  "diffViewer.baseBranch.loading": "Caricamento branch...",
-  "diffViewer.baseBranch.none": "—",
-
   // Session outcomes
   "session.outcome.incomplete": "Il turno è terminato con {{count}} to-do rimanenti.",
   "session.outcome.limit": "La risposta ha raggiunto il limite di output e potrebbe essere incompleta.",

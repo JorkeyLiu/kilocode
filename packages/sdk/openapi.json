@@ -1244,502 +1244,6 @@
         ]
       }
     },
-    "/experimental/worktree": {
-      "get": {
-        "tags": ["experimental"],
-        "operationId": "worktree.list",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "List of worktrees",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/WorktreeListItem"
-                  },
-                  "description": "List of worktrees"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "WorktreeError | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/WorktreeError"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "description": "List all git worktrees for the current project and whether Kilo manages them.",
-        "summary": "List worktrees",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.worktree.list({\n  ...\n})"
-          }
-        ]
-      },
-      "post": {
-        "tags": ["experimental"],
-        "operationId": "worktree.create",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Worktree created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Worktree"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "WorktreeError | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/WorktreeError"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "description": "Create a new git worktree for the current project and run any configured startup scripts.",
-        "summary": "Create worktree",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WorktreeCreateInput"
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.worktree.create({\n  ...\n})"
-          }
-        ]
-      },
-      "delete": {
-        "tags": ["experimental"],
-        "operationId": "worktree.remove",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Worktree removed",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "boolean",
-                  "description": "Worktree removed"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "WorktreeError | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/WorktreeError"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "description": "Remove a git worktree and delete its branch.",
-        "summary": "Remove worktree",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WorktreeRemoveInput"
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.worktree.remove({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/worktree/reset": {
-      "post": {
-        "tags": ["experimental"],
-        "operationId": "worktree.reset",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Worktree reset",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "boolean",
-                  "description": "Worktree reset"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "WorktreeError | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/WorktreeError"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "description": "Reset a worktree branch to the primary default branch.",
-        "summary": "Reset worktree",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/WorktreeResetInput"
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.worktree.reset({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/worktree/diff": {
-      "get": {
-        "tags": ["experimental"],
-        "operationId": "worktree.diff",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "base",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "File diffs",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/SnapshotFileDiff"
-                  },
-                  "description": "File diffs"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "BadRequest | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "description": "Get file diffs for a worktree compared to its base branch. Includes uncommitted changes.",
-        "summary": "Get worktree diff",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.worktree.diff({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/worktree/diff/summary": {
-      "get": {
-        "tags": ["experimental"],
-        "operationId": "worktree.diffSummary",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "base",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Diff summary items",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/WorktreeDiffItem"
-                  },
-                  "description": "Diff summary items"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "BadRequest | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "description": "Get lightweight file diff metadata for a worktree compared to its base branch.",
-        "summary": "Get worktree diff summary",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.worktree.diffSummary({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/experimental/worktree/diff/file": {
-      "get": {
-        "tags": ["experimental"],
-        "operationId": "worktree.diffFile",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "base",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "file",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": true
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Diff detail item",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/WorktreeDiffItem"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "BadRequest | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          }
-        },
-        "description": "Get full diff contents for one worktree file compared to its base branch.",
-        "summary": "Get worktree diff detail",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.worktree.diffFile({\n  ...\n})"
-          }
-        ]
-      }
-    },
     "/experimental/session": {
       "get": {
         "tags": ["experimental"],
@@ -1766,23 +1270,6 @@
             "in": "query",
             "schema": {
               "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "worktrees",
-            "in": "query",
-            "schema": {
-              "type": "boolean"
-            },
-            "required": false
-          },
-          {
-            "name": "current",
-            "in": "query",
-            "schema": {
-              "type": "string",
-              "enum": ["true", "false"]
             },
             "required": false
           },
@@ -11432,106 +10919,6 @@
         ]
       }
     },
-    "/session/{sessionID}/branch-name": {
-      "post": {
-        "tags": ["branch-name"],
-        "operationId": "branchName.generate",
-        "parameters": [
-          {
-            "name": "sessionID",
-            "in": "path",
-            "schema": {
-              "type": "string",
-              "pattern": "^ses.*"
-            },
-            "required": true
-          },
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Generated branch name or null when the task is not clear yet",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "branch": {
-                      "anyOf": [
-                        {
-                          "type": "string"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    }
-                  },
-                  "required": ["branch"],
-                  "additionalProperties": false,
-                  "description": "Generated branch name or null when the task is not clear yet"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Generate a task-focused branch name from the current conversation.",
-        "summary": "Generate branch name",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "prompt": {
-                    "type": "string"
-                  },
-                  "providerID": {
-                    "type": "string"
-                  },
-                  "modelID": {
-                    "type": "string"
-                  }
-                },
-                "required": ["prompt"],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.branchName.generate({\n  ...\n})"
-          }
-        ]
-      }
-    },
     "/commit-message": {
       "post": {
         "tags": ["commit-message"],
@@ -15488,249 +14875,6 @@
           {
             "lang": "js",
             "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.kilocode.notebook.reject({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/kilocode/agent-manager": {
-      "get": {
-        "tags": ["kilocode"],
-        "operationId": "kilocode.agentManager.list",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Pending Agent Manager host requests",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AgentManagerRequest"
-                  },
-                  "description": "Pending Agent Manager host requests"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          }
-        },
-        "description": "List pending native Agent Manager orchestration requests for the routed workspace.",
-        "summary": "List pending Agent Manager requests",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.kilocode.agentManager.list({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/kilocode/agent-manager/{requestID}/reply": {
-      "post": {
-        "tags": ["kilocode"],
-        "operationId": "kilocode.agentManager.reply",
-        "parameters": [
-          {
-            "name": "requestID",
-            "in": "path",
-            "schema": {
-              "$ref": "#/components/schemas/AgentManagerRequestID"
-            },
-            "required": true
-          },
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Agent Manager reply accepted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "boolean",
-                  "description": "Agent Manager reply accepted"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "BadRequest | InvalidRequestError",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "anyOf": [
-                    {
-                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
-                    },
-                    {
-                      "$ref": "#/components/schemas/InvalidRequestError"
-                    }
-                  ]
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Complete a pending Agent Manager orchestration request with a structured result.",
-        "summary": "Reply to an Agent Manager request",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "result": {
-                    "$ref": "#/components/schemas/AgentManagerResult"
-                  }
-                },
-                "required": ["result"],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.kilocode.agentManager.reply({\n  ...\n})"
-          }
-        ]
-      }
-    },
-    "/kilocode/agent-manager/{requestID}/reject": {
-      "post": {
-        "tags": ["kilocode"],
-        "operationId": "kilocode.agentManager.reject",
-        "parameters": [
-          {
-            "name": "requestID",
-            "in": "path",
-            "schema": {
-              "$ref": "#/components/schemas/AgentManagerRequestID"
-            },
-            "required": true
-          },
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Agent Manager rejection accepted",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "boolean",
-                  "description": "Agent Manager rejection accepted"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NotFoundError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Complete a pending Agent Manager orchestration request with a structured host error.",
-        "summary": "Reject an Agent Manager request",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "type": "object",
-                "properties": {
-                  "error": {
-                    "$ref": "#/components/schemas/AgentManagerFailure"
-                  }
-                },
-                "required": ["error"],
-                "additionalProperties": false
-              }
-            }
-          }
-        },
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.kilocode.agentManager.reject({\n  ...\n})"
           }
         ]
       }
@@ -22570,12 +21714,6 @@
             "$ref": "#/components/schemas/EventKilocodeAgent_managerStart"
           },
           {
-            "$ref": "#/components/schemas/EventKilocodeAgent_managerRequested"
-          },
-          {
-            "$ref": "#/components/schemas/EventKilocodeAgent_managerCancelled"
-          },
-          {
             "$ref": "#/components/schemas/EventKilocodeNotebookRequested"
           },
           {
@@ -22795,12 +21933,6 @@
             "$ref": "#/components/schemas/EventCommandExecuted"
           },
           {
-            "$ref": "#/components/schemas/EventProjectDirectoriesUpdated"
-          },
-          {
-            "$ref": "#/components/schemas/EventProjectUpdated"
-          },
-          {
             "$ref": "#/components/schemas/EventLspUpdated"
           },
           {
@@ -22808,6 +21940,12 @@
           },
           {
             "$ref": "#/components/schemas/EventFileWatcherUpdated"
+          },
+          {
+            "$ref": "#/components/schemas/EventProjectDirectoriesUpdated"
+          },
+          {
+            "$ref": "#/components/schemas/EventProjectUpdated"
           },
           {
             "$ref": "#/components/schemas/EventVcsBranchUpdated"
@@ -22820,12 +21958,6 @@
           },
           {
             "$ref": "#/components/schemas/EventWorkspaceStatus"
-          },
-          {
-            "$ref": "#/components/schemas/EventWorktreeReady"
-          },
-          {
-            "$ref": "#/components/schemas/EventWorktreeFailed"
           },
           {
             "$ref": "#/components/schemas/EventAccountAdded"
@@ -23285,93 +22417,6 @@
         },
         "required": ["id", "sessionID", "text", "actions"],
         "additionalProperties": false
-      },
-      "AgentManagerRequestID": {
-        "type": "string"
-      },
-      "AgentManagerFilterState": {
-        "type": "string",
-        "enum": ["idle", "busy", "retry", "offline", "waiting"]
-      },
-      "AgentManagerOverviewFilter": {
-        "type": "object",
-        "properties": {
-          "sectionIDs": {
-            "type": "array",
-            "items": {
-              "type": "string",
-              "minLength": 1,
-              "maxLength": 200
-            },
-            "maxItems": 100
-          },
-          "states": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AgentManagerFilterState"
-            },
-            "maxItems": 5
-          }
-        },
-        "additionalProperties": false
-      },
-      "AgentManagerOverviewRequest": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/AgentManagerRequestID"
-          },
-          "sessionID": {
-            "type": "string",
-            "pattern": "^ses"
-          },
-          "operation": {
-            "type": "string",
-            "enum": ["overview"]
-          },
-          "filter": {
-            "$ref": "#/components/schemas/AgentManagerOverviewFilter"
-          }
-        },
-        "required": ["id", "sessionID", "operation"],
-        "additionalProperties": false
-      },
-      "AgentManagerPromptRequest": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "$ref": "#/components/schemas/AgentManagerRequestID"
-          },
-          "sessionID": {
-            "type": "string",
-            "pattern": "^ses"
-          },
-          "operation": {
-            "type": "string",
-            "enum": ["prompt"]
-          },
-          "targetSessionID": {
-            "type": "string",
-            "pattern": "^ses"
-          },
-          "prompt": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 100000
-          }
-        },
-        "required": ["id", "sessionID", "operation", "targetSessionID", "prompt"],
-        "additionalProperties": false
-      },
-      "AgentManagerRequest": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/AgentManagerOverviewRequest"
-          },
-          {
-            "$ref": "#/components/schemas/AgentManagerPromptRequest"
-          }
-        ]
       },
       "NotebookRequestID": {
         "type": "string"
@@ -25641,12 +24686,6 @@
                 "$ref": "#/components/schemas/EventKilocodeAgent_managerStart"
               },
               {
-                "$ref": "#/components/schemas/EventKilocodeAgent_managerRequested"
-              },
-              {
-                "$ref": "#/components/schemas/EventKilocodeAgent_managerCancelled"
-              },
-              {
                 "$ref": "#/components/schemas/EventKilocodeNotebookRequested"
               },
               {
@@ -25866,12 +24905,6 @@
                 "$ref": "#/components/schemas/EventCommandExecuted"
               },
               {
-                "$ref": "#/components/schemas/EventProjectDirectoriesUpdated"
-              },
-              {
-                "$ref": "#/components/schemas/EventProjectUpdated"
-              },
-              {
                 "$ref": "#/components/schemas/EventLspUpdated"
               },
               {
@@ -25879,6 +24912,12 @@
               },
               {
                 "$ref": "#/components/schemas/EventFileWatcherUpdated"
+              },
+              {
+                "$ref": "#/components/schemas/EventProjectDirectoriesUpdated"
+              },
+              {
+                "$ref": "#/components/schemas/EventProjectUpdated"
               },
               {
                 "$ref": "#/components/schemas/EventVcsBranchUpdated"
@@ -25891,12 +24930,6 @@
               },
               {
                 "$ref": "#/components/schemas/EventWorkspaceStatus"
-              },
-              {
-                "$ref": "#/components/schemas/EventWorktreeReady"
-              },
-              {
-                "$ref": "#/components/schemas/EventWorktreeFailed"
               },
               {
                 "$ref": "#/components/schemas/EventAccountAdded"
@@ -28006,138 +27039,6 @@
           "type": "string"
         }
       },
-      "WorktreeListItem": {
-        "type": "object",
-        "properties": {
-          "directory": {
-            "type": "string"
-          },
-          "managed": {
-            "type": "boolean"
-          }
-        },
-        "required": ["directory", "managed"],
-        "additionalProperties": false
-      },
-      "WorktreeError": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string",
-            "enum": [
-              "WorktreeNotGitError",
-              "WorktreeNameGenerationFailedError",
-              "WorktreeCreateFailedError",
-              "WorktreeStartCommandFailedError",
-              "WorktreeRemoveFailedError",
-              "WorktreeResetFailedError",
-              "WorktreeListFailedError"
-            ]
-          },
-          "data": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": ["message"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["name", "data"],
-        "additionalProperties": false
-      },
-      "WorktreeCreateInput": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "startCommand": {
-            "type": "string",
-            "description": "Additional startup script to run after the project's start command"
-          }
-        },
-        "additionalProperties": false
-      },
-      "Worktree": {
-        "type": "object",
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "branch": {
-            "type": "string"
-          },
-          "directory": {
-            "type": "string"
-          }
-        },
-        "required": ["name", "directory"],
-        "additionalProperties": false
-      },
-      "WorktreeRemoveInput": {
-        "type": "object",
-        "properties": {
-          "directory": {
-            "type": "string"
-          }
-        },
-        "required": ["directory"],
-        "additionalProperties": false
-      },
-      "WorktreeResetInput": {
-        "type": "object",
-        "properties": {
-          "directory": {
-            "type": "string"
-          }
-        },
-        "required": ["directory"],
-        "additionalProperties": false
-      },
-      "WorktreeDiffItem": {
-        "type": "object",
-        "properties": {
-          "file": {
-            "type": "string"
-          },
-          "patch": {
-            "type": "string"
-          },
-          "additions": {
-            "type": "number"
-          },
-          "deletions": {
-            "type": "number"
-          },
-          "status": {
-            "type": "string",
-            "enum": ["added", "deleted", "modified"]
-          },
-          "before": {
-            "type": "string"
-          },
-          "after": {
-            "type": "string"
-          },
-          "tracked": {
-            "type": "boolean"
-          },
-          "generatedLike": {
-            "type": "boolean"
-          },
-          "summarized": {
-            "type": "boolean"
-          },
-          "stamp": {
-            "type": "string"
-          }
-        },
-        "required": ["additions", "deletions", "before", "after", "tracked", "generatedLike", "summarized", "stamp"],
-        "additionalProperties": false
-      },
       "SnapshotSummaryFileDiff": {
         "type": "object",
         "properties": {
@@ -28348,9 +27249,6 @@
                 "type": "null"
               }
             ]
-          },
-          "worktreeName": {
-            "type": "string"
           }
         },
         "required": ["id", "slug", "projectID", "directory", "title", "version", "time", "project"],
@@ -32327,268 +31225,6 @@
         "required": ["code", "message"],
         "additionalProperties": false
       },
-      "AgentManagerActivity": {
-        "type": "string",
-        "enum": ["idle", "busy", "retry", "offline"]
-      },
-      "AgentManagerAttention": {
-        "type": "array",
-        "items": {
-          "type": "string",
-          "enum": ["permission", "question"]
-        },
-        "maxItems": 2
-      },
-      "AgentManagerSessionSummary": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "pattern": "^ses"
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "activity": {
-            "$ref": "#/components/schemas/AgentManagerActivity"
-          },
-          "attention": {
-            "$ref": "#/components/schemas/AgentManagerAttention"
-          }
-        },
-        "required": ["id", "name", "activity"],
-        "additionalProperties": false
-      },
-      "AgentManagerGitSummary": {
-        "type": "object",
-        "properties": {
-          "additions": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "deletions": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "ahead": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "behind": {
-            "type": "integer",
-            "minimum": 0
-          }
-        },
-        "required": ["additions", "deletions", "ahead", "behind"],
-        "additionalProperties": false
-      },
-      "AgentManagerPullRequestSummary": {
-        "type": "object",
-        "properties": {
-          "number": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "state": {
-            "type": "string",
-            "enum": ["open", "draft", "merged", "closed"]
-          },
-          "checks": {
-            "type": "string",
-            "enum": ["success", "failure", "pending", "none"]
-          },
-          "review": {
-            "type": "string",
-            "enum": ["approved", "changes_requested", "pending"]
-          },
-          "unresolvedComments": {
-            "type": "integer",
-            "minimum": 0
-          }
-        },
-        "required": ["number", "state", "checks"],
-        "additionalProperties": false
-      },
-      "AgentManagerWorktreeSummary": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "branch": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "session": {
-            "$ref": "#/components/schemas/AgentManagerSessionSummary"
-          },
-          "sessions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AgentManagerSessionSummary"
-            },
-            "minItems": 2,
-            "maxItems": 100
-          },
-          "git": {
-            "$ref": "#/components/schemas/AgentManagerGitSummary"
-          },
-          "pullRequest": {
-            "$ref": "#/components/schemas/AgentManagerPullRequestSummary"
-          }
-        },
-        "required": ["id", "name", "branch"],
-        "additionalProperties": false
-      },
-      "AgentManagerSectionSummary": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 200
-          },
-          "name": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "worktrees": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AgentManagerWorktreeSummary"
-            },
-            "maxItems": 100
-          }
-        },
-        "required": ["id", "name", "worktrees"],
-        "additionalProperties": false
-      },
-      "AgentManagerLocalSummary": {
-        "type": "object",
-        "properties": {
-          "branch": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 500
-          },
-          "sessions": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AgentManagerSessionSummary"
-            },
-            "maxItems": 100
-          },
-          "git": {
-            "$ref": "#/components/schemas/AgentManagerGitSummary"
-          }
-        },
-        "required": ["sessions"],
-        "additionalProperties": false
-      },
-      "AgentManagerOverview": {
-        "type": "object",
-        "properties": {
-          "sections": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AgentManagerSectionSummary"
-            },
-            "maxItems": 100
-          },
-          "ungrouped": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AgentManagerWorktreeSummary"
-            },
-            "maxItems": 100
-          },
-          "local": {
-            "$ref": "#/components/schemas/AgentManagerLocalSummary"
-          }
-        },
-        "required": ["sections", "ungrouped"],
-        "additionalProperties": false
-      },
-      "AgentManagerOverviewResult": {
-        "type": "object",
-        "properties": {
-          "operation": {
-            "type": "string",
-            "enum": ["overview"]
-          },
-          "overview": {
-            "$ref": "#/components/schemas/AgentManagerOverview"
-          }
-        },
-        "required": ["operation", "overview"],
-        "additionalProperties": false
-      },
-      "AgentManagerPromptResult": {
-        "type": "object",
-        "properties": {
-          "operation": {
-            "type": "string",
-            "enum": ["prompt"]
-          },
-          "sessionID": {
-            "type": "string",
-            "pattern": "^ses"
-          },
-          "delivered": {
-            "type": "boolean",
-            "enum": [true]
-          }
-        },
-        "required": ["operation", "sessionID", "delivered"],
-        "additionalProperties": false
-      },
-      "AgentManagerResult": {
-        "anyOf": [
-          {
-            "$ref": "#/components/schemas/AgentManagerOverviewResult"
-          },
-          {
-            "$ref": "#/components/schemas/AgentManagerPromptResult"
-          }
-        ]
-      },
-      "AgentManagerFailure": {
-        "type": "object",
-        "properties": {
-          "code": {
-            "type": "string",
-            "enum": [
-              "cancelled",
-              "cross_workspace",
-              "disconnected",
-              "host_error",
-              "stale_session",
-              "timeout",
-              "unavailable_session",
-              "unknown_session",
-              "workspace_unavailable"
-            ]
-          },
-          "message": {
-            "type": "string",
-            "minLength": 1,
-            "maxLength": 10000
-          }
-        },
-        "required": ["code", "message"],
-        "additionalProperties": false
-      },
       "CustomProviderDeleteResult": {
         "type": "object",
         "properties": {
@@ -33663,13 +32299,6 @@
               "sandboxInheritanceToken": {
                 "type": "string"
               },
-              "mode": {
-                "type": "string",
-                "enum": ["worktree", "local"]
-              },
-              "versions": {
-                "type": "boolean"
-              },
               "tasks": {
                 "type": "array",
                 "items": {
@@ -33679,9 +32308,6 @@
                       "type": "string"
                     },
                     "name": {
-                      "type": "string"
-                    },
-                    "branchName": {
                       "type": "string"
                     },
                     "model": {
@@ -33707,56 +32333,7 @@
                 "maxItems": 20
               }
             },
-            "required": ["requestID", "sessionID", "mode", "tasks"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
-      "EventKilocodeAgent_managerRequested": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["kilocode.agent_manager.requested"]
-          },
-          "properties": {
-            "$ref": "#/components/schemas/AgentManagerRequest"
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
-      "EventKilocodeAgent_managerCancelled": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["kilocode.agent_manager.cancelled"]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "requestID": {
-                "$ref": "#/components/schemas/AgentManagerRequestID"
-              },
-              "sessionID": {
-                "type": "string",
-                "pattern": "^ses"
-              },
-              "reason": {
-                "type": "string",
-                "enum": ["cancelled", "disposed", "timeout"]
-              }
-            },
-            "required": ["requestID", "sessionID", "reason"],
+            "required": ["requestID", "sessionID", "tasks"],
             "additionalProperties": false
           }
         },
@@ -37552,6 +36129,76 @@
         "required": ["id", "type", "properties"],
         "additionalProperties": false
       },
+      "EventLspUpdated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["lsp.updated"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {}
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
+      "EventFileEdited": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["file.edited"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              }
+            },
+            "required": ["file"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
+      "EventFileWatcherUpdated": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["file.watcher.updated"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string"
+              },
+              "event": {
+                "type": "string",
+                "enum": ["add", "change", "unlink"]
+              }
+            },
+            "required": ["file", "event"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
       "EventProjectDirectoriesUpdated": {
         "type": "object",
         "properties": {
@@ -37660,76 +36307,6 @@
         "required": ["id", "type", "properties"],
         "additionalProperties": false
       },
-      "EventLspUpdated": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["lsp.updated"]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {}
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
-      "EventFileEdited": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["file.edited"]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "file": {
-                "type": "string"
-              }
-            },
-            "required": ["file"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
-      "EventFileWatcherUpdated": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["file.watcher.updated"]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "file": {
-                "type": "string"
-              },
-              "event": {
-                "type": "string",
-                "enum": ["add", "change", "unlink"]
-              }
-            },
-            "required": ["file", "event"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
       "EventVcsBranchUpdated": {
         "type": "object",
         "properties": {
@@ -37824,57 +36401,6 @@
               }
             },
             "required": ["workspaceID", "status"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
-      "EventWorktreeReady": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["worktree.ready"]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "name": {
-                "type": "string"
-              },
-              "branch": {
-                "type": "string"
-              }
-            },
-            "required": ["name"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
-      "EventWorktreeFailed": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["worktree.failed"]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": ["message"],
             "additionalProperties": false
           }
         },
@@ -43043,10 +41569,6 @@
     {
       "name": "background-process",
       "description": "Kilo background process routes."
-    },
-    {
-      "name": "branch-name",
-      "description": "Kilo branch name routes."
     },
     {
       "name": "commit-message",

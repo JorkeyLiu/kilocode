@@ -1,18 +1,14 @@
 import { Show, type Component, createMemo } from "solid-js"
 import { Diff } from "@kilocode/kilo-ui/diff"
 import { DiffChanges } from "@kilocode/kilo-ui/diff-changes"
-import { IconButton } from "@kilocode/kilo-ui/icon-button"
-import { Tooltip } from "@kilocode/kilo-ui/tooltip"
 import { normalize } from "@kilocode/kilo-ui/session-diff"
 import type { PermissionFileDiff } from "../../types/messages"
-import { useVSCode } from "../../context/vscode"
 
 interface PermissionDiffProps {
   filediff: PermissionFileDiff
 }
 
 export const PermissionDiff: Component<PermissionDiffProps> = (props) => {
-  const vscode = useVSCode()
   const filename = createMemo(() => {
     const parts = props.filediff.file.split("/")
     return parts[parts.length - 1] ?? props.filediff.file
@@ -29,14 +25,6 @@ export const PermissionDiff: Component<PermissionDiffProps> = (props) => {
     if (!fd.patch) return
     return normalize(fd)
   })
-
-  const openInTab = () => {
-    vscode.postMessage({
-      type: "openDiffVirtual",
-      diff: props.filediff,
-      initialDiffStyle: "unified",
-    })
-  }
 
   return (
     <div data-slot="permission-diff">
@@ -66,9 +54,6 @@ export const PermissionDiff: Component<PermissionDiffProps> = (props) => {
         </div>
         <div data-slot="permission-diff-actions">
           <DiffChanges changes={props.filediff} />
-          <Tooltip value="View in new tab">
-            <IconButton size="small" icon="expand" onClick={openInTab} aria-label="View diff in new tab" />
-          </Tooltip>
         </div>
       </div>
       <div data-slot="permission-diff-content">

@@ -41,9 +41,7 @@ export const dict = {
   "agentManager.shortcuts.closeTab": "탭 닫기",
   "agentManager.shortcuts.toggleTerminal": "터미널 전환",
   "agentManager.shortcuts.runScript": "스크립트 실행",
-  "agentManager.run.options": "실행 옵션",
-  "agentManager.run.configure": "실행 스크립트 구성",
-  "agentManager.worktree.doubleClickRename": "Double-click to rename",
+  "agentManager.session.doubleClickRename": "Double-click to rename",
 
   "agentManager.shortcuts.openAgentManager": "Agent Manager 열기",
   "agentManager.shortcuts.cycleAgentMode": "Next agent mode",

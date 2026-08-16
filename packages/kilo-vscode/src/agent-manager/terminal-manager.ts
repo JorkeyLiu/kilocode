@@ -41,7 +41,7 @@ export interface TerminalManagerDeps {
 interface Entry {
   terminalId: string
   ptyID: string
-  worktreeId: string | null // legacy field name; round-tripped to webview
+  slotId: string | null // round-tripped to webview
   cwd: string
   title: string
 }
@@ -65,14 +65,14 @@ export class TerminalManager {
    *
    * Returns the attach info the webview needs: our synthetic terminal ID,
    * the title, and the signed WebSocket URL pointing at the PTY's connect
-   * endpoint. The worktreeId is round-tripped (legacy field name) so the
-   * webview can route the tab back into the correct Agent Manager context.
+   * endpoint. The slotId is round-tripped so the webview can route the tab
+   * back into the correct Agent Manager context.
    */
   async create(params: {
-    worktreeId: string | null // legacy field name
+    slotId: string | null
     cwd: string
     title: string
-  }): Promise<{ terminalId: string; worktreeId: string | null; title: string; wsUrl: string }> {
+  }): Promise<{ terminalId: string; slotId: string | null; title: string; wsUrl: string }> {
     const client = this.deps.getClient()
     const { data, error } = await client.pty.create({
       directory: params.cwd,
@@ -87,14 +87,14 @@ export class TerminalManager {
     const entry: Entry = {
       terminalId,
       ptyID: data.id,
-      worktreeId: params.worktreeId,
+      slotId: params.slotId,
       cwd: params.cwd,
       title: data.title ?? params.title,
     }
     this.entries.set(terminalId, entry)
     const wsUrl = this.deps.buildWsUrl(entry.ptyID, entry.cwd)
     this.deps.log(`Terminal created: ${terminalId} -> pty ${entry.ptyID} cwd=${entry.cwd}`)
-    return { terminalId, worktreeId: entry.worktreeId, title: entry.title, wsUrl }
+    return { terminalId, slotId: entry.slotId, title: entry.title, wsUrl }
   }
 
   /** Forward a resize event to the backend PTY. Missing terminals are a no-op. */

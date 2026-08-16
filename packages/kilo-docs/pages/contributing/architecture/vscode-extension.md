@@ -58,7 +58,7 @@ Chat now opens through the preserved editor surfaces:
 | Agent Manager | `Cmd/Ctrl+Shift+M` (`kilo-code.new.agentManagerOpen`) — multi-session orchestration panel |
 | Open in Tab | `kilo-code.new.openInTab` / the editor-title "Open in Tab" button — a `kilo-code.new.TabPanel` webview with the shared chat UI |
 
-Commands that previously fell back to the sidebar chat now resolve a chat target at runtime: the active editor-tab `KiloProvider` when one is focused, otherwise the Agent Manager panel (opened on demand). The decision rules live in the vscode-free `services/code-actions/chat-target.ts` helper. Delivery is readiness-gated: toolbar/code/terminal/review-comment posts wait for the chosen surface's webview to report ready and are skipped when it never does, and the cloud-session deep link waits for a newly created/restored tab's readiness (bounded) before posting `openCloudSession`, surfacing a warning instead of silently dropping the message. Deep links (cloud session / linked model selection) open or reuse an editor tab. The Diff Viewer session source and the auto-approve directory source resolve from active tabs and the Agent Manager instead of a sidebar provider. No surrogate hidden sidebar provider or duplicate state owner is created.
+Commands that previously fell back to the sidebar chat now resolve a chat target at runtime: the active editor-tab `KiloProvider` when one is focused, otherwise the Agent Manager panel (opened on demand). The decision rules live in the vscode-free `services/code-actions/chat-target.ts` helper. Delivery is readiness-gated: toolbar/code/terminal/review-comment posts wait for the chosen surface's webview to report ready and are skipped when it never does, and the cloud-session deep link waits for a newly created/restored tab's readiness (bounded) before posting `openCloudSession`, surfacing a warning instead of silently dropping the message. Deep links (cloud session / linked model selection) open or reuse an editor tab. The auto-approve directory source and shared commands that target the focused session resolve from active tabs and the Agent Manager instead of a sidebar provider. No surrogate hidden sidebar provider or duplicate state owner is created.
 
 **Rollback path.** This removal is a breaking product change, not a flag-gated migration. The only supported rollback is reverting the P3.1 removal commit(s) in git (the removed manifest contributions, `registerWebviewViewProvider`, `KiloProvider.viewType`/`resolveWebviewView`/`setSidebarVisible`, and the `sidebarTitle.*` wrapper commands are all preserved in git history); no runtime shim or compatibility surface is retained. After a revert, verify the `sidebar-removal` E2E scenario and the manifest-level absence contract (`tests/unit/sidebar-removal.test.ts`) fail, confirming the surface is actually restored.
 
@@ -70,7 +70,7 @@ Shared service has more consumers than chat tabs:
 |---|---|
 | Chat | Editor-tab providers and the Agent Manager's embedded chat |
 | Panels | Settings, profile and marketplace surfaces, sub-agent viewers, Agent Manager, KiloClaw |
-| Diff | Diff Viewer, Diff Virtual, and diff source catalog |
+| Diffs | Inline permission diffs in chat, RevertBanner session revert, and local git-change summaries |
 | Editor assistance | Autocomplete and commit-message generation |
 | Integrations | Browser automation MCP registration and KiloClaw bootstrap |
 
@@ -96,23 +96,23 @@ Global SSE carries wrapped events for multiple directories. Connection service b
 
 ## Agent Manager
 
-Agent Manager is extension feature, not separate product. It opens as editor tab and manages parallel sessions, optional worktrees, terminals, setup scripts, and extra editor windows. With the P3.1 sidebar removal, Agent Manager is the primary chat entry point (alongside "Open in Tab" editor panels). Worktree diff/review rendering was removed from the Agent Manager; the Diff Viewer webview owns all diff rendering.
+Agent Manager is an extension feature, not a separate product. It opens as an editor tab and runs multiple independent AI sessions in parallel at the workspace root. With the P3.1 sidebar removal, Agent Manager is the primary chat entry point (alongside "Open in Tab" editor panels). There is no per-session worktree isolation, no setup/run scripts, and no branch/PR import; all sessions share the workspace directory.
 
 | Aspect | Agent Manager |
 |---|---|
 | Primary use | Multi-session orchestration (single-chat surfaces live in editor tabs / the Agent Manager) |
-| Git isolation | Optional worktree per session |
+| Working directory | Workspace root — all sessions share it, no isolation |
 | Backend | Shared `kilo serve` process |
-| Request routing | Session worktree path passed as SDK `directory` |
-| CLI instance key | Normalized worktree directory |
+| Request routing | Workspace root passed as SDK `directory` |
+| CLI instance key | Normalized workspace directory |
 
 Agent Manager request path is:
 
 ```text
-session worktree path -> SDK directory -> CLI directory-routing middleware -> InstanceStore directory key
+workspace root -> SDK directory -> CLI directory-routing middleware -> InstanceStore directory key
 ```
 
-Agent Manager persists state in `.kilo/agent-manager.json` and worktrees under `.kilo/worktrees/`. Startup migration moves Agent Manager-owned data from legacy `.kilocode/` paths when target items do not already exist and repairs git worktree refs.
+Agent Manager persists presentation state (open tabs, active tab, sidebar) through the VS Code webview state API, versioned in `webview-ui/agent-manager/local-ui-state.ts`. There is no `.kilo/agent-manager.json` state file and no `.kilo/worktrees/` directory; the removed worktree manager wrote both. Startup migration handles legacy webview state keys only.
 
 ### Durable session runtime timer
 
@@ -121,7 +121,7 @@ The right-bottom working indicator in Agent Manager shows a session's cumulative
 | Aspect | Behavior |
 |---|---|
 | Owner | Extension host (`src/agent-manager/session-timing.ts`), a vscode-free module driven by `session.status` SSE events |
-| Durable storage | VS Code `workspaceState` via the Host `Store` contract (`VscodeHost.workspaceStore`) — a versioned key, not `.kilo/agent-manager.json` |
+| Durable storage | VS Code `workspaceState` via the Host `Store` contract (`VscodeHost.workspaceStore`) — a versioned key |
 | Counting | Only non-idle statuses count (busy, retry, offline). Idle settles the segment; duplicate events are idempotent |
 | Persistence | Writes on status boundaries only, never per display tick |
 | Shutdown | `AgentManagerProvider.disposeAsync()` settles active segments and awaits the durable write, so normal shutdown does not count later downtime |
@@ -132,7 +132,7 @@ An abnormal crash can leave a stale active-segment marker persisted; the backend
 
 ## State boundaries
 
-Directory-keyed CLI state is isolated by worktree path. Process-owned state remains shared because all Agent Manager sessions use one CLI process. Snapshot implementation state is directory-keyed, but slow-snapshot prompt guard belongs to shared `Snapshot.Service` scope. Managed Agent Manager prompts pass `snapshotInitialization: "wait"` so slow baseline setup waits without interrupting concurrently started sessions.
+Directory-keyed CLI state is isolated by the workspace directory path. Process-owned state remains shared because all Agent Manager sessions use one CLI process and share the workspace directory. Snapshot implementation state is directory-keyed, but slow-snapshot prompt guard belongs to shared `Snapshot.Service` scope. Managed Agent Manager prompts pass `snapshotInitialization: "wait"` so slow baseline setup waits without interrupting concurrently started sessions.
 
 ## Shared model state (model.json)
 
@@ -155,7 +155,7 @@ VS Code extension has two terminal paths:
 
 | Surface | Owner | Use |
 |---|---|---|
-| VS Code integrated terminal | VS Code host | Shell terminals and setup-script execution surfaced through editor |
+| VS Code integrated terminal | VS Code host | Generic shell terminals surfaced through the editor |
 | CLI PTY WebSocket tab | Agent Manager and `kilo serve` server | Server-created PTY session streamed over loopback WebSocket |
 
 Agent Manager PTY WebSocket URL uses `auth_token=<base64 kilo:password>` query mode because browser WebSocket API cannot attach Basic header. Webview CSP permits loopback HTTP and WebSocket origins for active server port. CLI also exposes scope-bound short-lived PTY ticket API as alternate browser WebSocket auth mode.
@@ -199,8 +199,6 @@ Speech-to-text captures audio locally, then sends completed recording through sh
 | Editor chat webview (Open in Tab) | `webview-ui/src/index.tsx` | `dist/webview.js` |
 | Agent Manager webview | `webview-ui/agent-manager/index.tsx` | `dist/agent-manager.js` |
 | KiloClaw webview | `webview-ui/kiloclaw/index.tsx` | `dist/kiloclaw.js` |
-| Diff Viewer webview | `webview-ui/diff-viewer/index.tsx` | `dist/diff-viewer.js` |
-| Diff Virtual webview | `webview-ui/diff-virtual/index.tsx` | `dist/diff-virtual.js` |
 | Shared Shiki worker | synthetic worker entry | `dist/shiki-worker.js` |
 
 Extension host bundle targets Node/CommonJS. Browser webviews and shared worker use esbuild browser bundles. Run `bun run typecheck`, `bun run lint`, and targeted unit tests from `packages/kilo-vscode/` after changing this area. `typecheck` and `lint` also cover the E2E sources without launching VS Code.

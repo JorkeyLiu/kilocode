@@ -23,7 +23,7 @@ export const GIT_CHANGES_RESULT: MentionResult = {
   type: "git-changes",
   value: GIT_CHANGES_MENTION,
   label: "Git changes",
-  description: "Current session/worktree changes",
+  description: "Current session changes",
 }
 
 export const FILE_PICKER_RESULT: MentionResult = {

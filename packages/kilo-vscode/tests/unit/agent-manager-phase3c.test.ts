@@ -2,17 +2,18 @@
  * Phase 3C — directory routing tests.
  *
  * Proves:
- *  1. Agent Manager tool mode:local delegates to createLocalSession and
- *     does not call worktree-specific operations.
- *  2. Run controller sets WORKSPACE_PATH (worktree-only WORKTREE_PATH removed).
+ *  1. Agent Manager tool requests delegate to createLocalSession and
+ *     do not call worktree-specific operations.
+ *  2. The run controller (run/controller.ts) is removed with the
+ *     managed-worktree run-script infra.
  *  3. Terminal routing resolves all terminals to workspace root.
- *  4. parseToolRequest only accepts mode:"local".
+ *  4. parseToolRequest accepts root-local requests.
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest"
 
 // ---------------------------------------------------------------------------
-// 1. tool-start.ts — local mode delegates to createLocalSession
+// 1. tool-start.ts — root-local requests delegate to createLocalSession
 // ---------------------------------------------------------------------------
 
 import { startFromTool, parseToolRequest, type ToolDeps, type ToolRequest } from "../../src/agent-manager/tool-start"
@@ -38,14 +39,13 @@ function createToolDeps(overrides: Partial<ToolDeps> = {}): ToolDeps {
   }
 }
 
-describe("Phase 3C — tool mode:local uses workspace root", () => {
+describe("Phase 3C — tool requests use workspace root", () => {
   it("delegates each task to createLocalSession", async () => {
     const createLocalSession = vi.fn().mockResolvedValue(true)
     const deps = createToolDeps({ createLocalSession })
 
     const req: ToolRequest = {
       requestID: "req-1",
-      mode: "local",
       tasks: [{ prompt: "task one" }, { prompt: "task two" }],
     }
 
@@ -74,7 +74,6 @@ describe("Phase 3C — tool mode:local uses workspace root", () => {
 
     const req: ToolRequest = {
       requestID: "req-fail",
-      mode: "local",
       tasks: [{ prompt: "failing task" }],
     }
 
@@ -95,7 +94,6 @@ describe("Phase 3C — tool mode:local uses workspace root", () => {
 
     const req: ToolRequest = {
       requestID: "req-order",
-      mode: "local",
       tasks: [{ prompt: "test" }],
     }
 
@@ -115,7 +113,6 @@ describe("Phase 3C — tool mode:local uses workspace root", () => {
 
     const req: ToolRequest = {
       requestID: "req-dup",
-      mode: "local",
       tasks: [{ prompt: "test" }],
     }
 
@@ -127,27 +124,15 @@ describe("Phase 3C — tool mode:local uses workspace root", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 2. run/controller.ts — WORKSPACE_PATH env (WORKTREE_PATH removed)
+// 2. run/controller.ts — removed with the managed-worktree run-script infra
 // ---------------------------------------------------------------------------
 
-describe("Phase 3C — run controller WORKSPACE_PATH env", () => {
-  it("run-script source sets WORKSPACE_PATH", () => {
+describe("Phase 3C — run controller removed", () => {
+  it("run/ directory is gone (no WORKSPACE_PATH or WORKTREE_PATH env plumbing)", () => {
     const fs = require("fs")
     const path = require("path")
-    const controllerPath = path.resolve(__dirname, "../../src/agent-manager/run/controller.ts")
-    const content = fs.readFileSync(controllerPath, "utf-8")
-
-    expect(content).toContain("WORKSPACE_PATH")
-    expect(content).toMatch(/WORKSPACE_PATH:\s*cwd/)
-  })
-
-  it("WORKTREE_PATH was removed (no worktree env var)", () => {
-    const fs = require("fs")
-    const path = require("path")
-    const controllerPath = path.resolve(__dirname, "../../src/agent-manager/run/controller.ts")
-    const content = fs.readFileSync(controllerPath, "utf-8")
-
-    expect(content).not.toContain("WORKTREE_PATH")
+    const runDir = path.resolve(__dirname, "../../src/agent-manager/run")
+    expect(fs.existsSync(runDir)).toBe(false)
   })
 })
 
@@ -170,28 +155,28 @@ function createTerminalDeps(overrides: Partial<TerminalRoutingDeps> = {}): Termi
 }
 
 describe("Phase 3C — terminal routing resolves ALL to root", () => {
-  it("terminal create with null worktreeId uses workspace root as cwd", async () => {
+  it("terminal create with null slotId uses workspace root as cwd", async () => {
     const getRoot = vi.fn().mockReturnValue("/workspace")
     const router = new TerminalRouter({
       ...createTerminalDeps(),
       getRoot,
     })
 
-    await router.handle({ type: "agentManager.terminal.create", worktreeId: null })
+    await router.handle({ type: "agentManager.terminal.create", slotId: null })
 
     expect(getRoot).toHaveBeenCalled()
   })
 
-  it("terminal create with any worktreeId also uses workspace root", async () => {
+  it("terminal create with any slotId also uses workspace root", async () => {
     const getRoot = vi.fn().mockReturnValue("/workspace")
     const router = new TerminalRouter({
       ...createTerminalDeps(),
       getRoot,
     })
 
-    await router.handle({ type: "agentManager.terminal.create", worktreeId: "wt-1" })
+    await router.handle({ type: "agentManager.terminal.create", slotId: "local" })
 
-    // Should use root regardless of worktreeId
+    // Should use root regardless of slotId
     expect(getRoot).toHaveBeenCalled()
   })
 
@@ -202,35 +187,23 @@ describe("Phase 3C — terminal routing resolves ALL to root", () => {
 })
 
 // ---------------------------------------------------------------------------
-// 4. Session send routing — parseToolRequest only accepts mode:local
+// 4. Session send routing — parseToolRequest is root-local
 // ---------------------------------------------------------------------------
 
-describe("Phase 3C — session send routing for local mode", () => {
-  it("parseToolRequest rejects non-local modes", () => {
-    const result = parseToolRequest({ mode: "invalid", tasks: [{ prompt: "test" }] })
-    expect(result).toBeUndefined()
-  })
-
-  it("parseToolRequest accepts mode:local", () => {
-    const result = parseToolRequest({ requestID: "r1", mode: "local", tasks: [{ prompt: "test" }] })
+describe("Phase 3C — session send routing", () => {
+  it("parseToolRequest accepts tasks without a mode (root-local)", () => {
+    const result = parseToolRequest({ requestID: "r1", tasks: [{ prompt: "test" }] })
     expect(result).toBeDefined()
-    expect(result!.mode).toBe("local")
-  })
-
-  it("parseToolRequest rejects mode:worktree (removed)", () => {
-    const result = parseToolRequest({ requestID: "r1", mode: "worktree", tasks: [{ prompt: "test" }] })
-    expect(result).toBeUndefined()
   })
 
   it("parseToolRequest rejects empty tasks", () => {
-    const result = parseToolRequest({ requestID: "r1", mode: "local", tasks: [] })
+    const result = parseToolRequest({ requestID: "r1", tasks: [] })
     expect(result).toBeUndefined()
   })
 
   it("parseToolRequest accepts tasks with model", () => {
     const result = parseToolRequest({
       requestID: "r1",
-      mode: "local",
       tasks: [{ prompt: "test", model: { providerID: "openai", modelID: "gpt-4" } }],
     })
     expect(result).toBeDefined()

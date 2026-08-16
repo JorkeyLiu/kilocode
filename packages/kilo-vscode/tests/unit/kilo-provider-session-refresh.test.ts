@@ -18,6 +18,7 @@ type ProviderInternals = {
   webview: { postMessage: (message: unknown) => Promise<unknown> } | null
   initializeConnection: () => Promise<void>
   handleLoadSessions: (cursor?: number) => Promise<void>
+  sessionDirectories: Map<string, string>
 }
 
 function createContext(overrides?: Partial<SessionRefreshContext>): SessionRefreshContext & { sent: unknown[] } {
@@ -259,8 +260,8 @@ describe("KiloProvider pending session refresh", () => {
     const provider = new KiloProvider({} as never, connection as never)
     const internal = provider as unknown as ProviderInternals
 
-    // A worktree directory override must NOT trigger a per-directory list call.
-    provider.setSessionDirectory("ses_1", "/worktree")
+    // A tracked session directory must NOT trigger a per-directory list call.
+    internal.sessionDirectories.set("ses_1", "/worktree")
 
     await internal.handleLoadSessions()
     expect(internal.pendingSessionRefresh).toBe(true)

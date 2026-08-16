@@ -421,7 +421,7 @@ export const dict = {
   "prompt.toast.pasteUnsupported.description": "Сюди можна вставляти лише зображення або PDF.",
   "prompt.toast.modelAgentRequired.title": "Виберіть агента і модель",
   "prompt.toast.modelAgentRequired.description": "Перед надсиланням запиту виберіть агента і модель.",
-  "prompt.toast.worktreeCreateFailed.title": "Не вдалося створити робоче дерево",
+
   "prompt.toast.sessionCreateFailed.title": "Не вдалося створити сесію",
   "prompt.toast.shellSendFailed.title": "Не вдалося надіслати команду оболонки",
   "prompt.toast.commandSendFailed.title": "Не вдалося надіслати команду",
@@ -478,9 +478,6 @@ export const dict = {
   "dialog.project.edit.icon.recommended": "Рекомендовано: 128x128px",
   "dialog.project.edit.color": "Колір",
   "dialog.project.edit.color.select": "Вибрати колір {{color}}",
-  "dialog.project.edit.worktree.startup": "Скрипт запуску робочого дерева",
-  "dialog.project.edit.worktree.startup.description": "Виконується після створення нового робочого дерева.",
-  "dialog.project.edit.worktree.startup.placeholder": "напр. bun install",
 
   "context.breakdown.title": "Розбивка контексту",
   "context.breakdown.note":
@@ -541,11 +538,6 @@ export const dict = {
 
   "toast.theme.title": "Тему змінено",
   "toast.scheme.title": "Кольорова схема",
-
-  "toast.workspace.enabled.title": "Робочі дерева увімкнено",
-  "toast.workspace.enabled.description": "На бічній панелі тепер відображаються кілька робочих дерев",
-  "toast.workspace.disabled.title": "Робочі дерева вимкнено",
-  "toast.workspace.disabled.description": "На бічній панелі відображається лише основне робоче дерево",
 
   "toast.permissions.autoaccept.on.title": "Редагування приймаються автоматично",
   "toast.permissions.autoaccept.on.description": "Дозволи на редагування і запис схвалюватимуться автоматично",
@@ -705,9 +697,6 @@ export const dict = {
 
   "session.context.addToContext": "Додати {{selection}} до контексту",
 
-  "session.new.worktree.main": "Основна гілка",
-  "session.new.worktree.mainWithBranch": "Основна гілка ({{branch}})",
-  "session.new.worktree.create": "Створити нове робоче дерево",
   "session.new.lastModified": "Останнє змінення",
   "sidebar.session.newSession": "Нова сесія",
   "sidebar.session.newSession.tooltip": "Почати нову розмову, зберігши поточну сесію незмінною.",
@@ -1710,7 +1699,7 @@ export const dict = {
   "migration.whatsNew.features.interface.detail": "Менше відволікань, легше і швидше читати.",
   "migration.whatsNew.features.agentManager.title": "Менеджер агентів",
   "migration.whatsNew.features.agentManager.detail":
-    "Єдиний інтерфейс для запуску кількох агентів паралельно, кожен у власному робочому дереві — стежте за прогресом, перемикайте контекст і переглядайте зміни з одного місця.",
+    "Єдиний інтерфейс для запуску кількох агентів паралельно — стежте за прогресом, перемикайте контекст і переглядайте зміни з одного місця.",
   "migration.whatsNew.features.foundation.title": "Спільна основа",
   "migration.whatsNew.features.foundation.detail":
     "Малий та ефективний ядерний модуль у кожному продукті Kilo. Знайомий досвід незалежно від того, як ви вважаєте за краще працювати.",
@@ -1837,30 +1826,6 @@ export const dict = {
   "settings.agentBehaviour.permissions.hint":
     "Правила оцінюються по порядку — останнє відповідне правило має пріоритет. Це розрахований набір правил з CLI бекенду.",
   "settings.agentBehaviour.editMode.save": "Готово",
-  "diffViewer.source.workspace.label": "Гілка",
-  "diffViewer.source.workspace.tooltip":
-    "Усі зміни в цій гілці порівняно з базовою. Включає незакомічені файли (staged, unstaged, невідстежувані) та локальні коміти, яких ще немає в базі.",
-  "diffViewer.source.staged.label": "Staged",
-  "diffViewer.source.staged.tooltip":
-    "Файли зі змінами, доданими до області підготовки git (`git add`), як вони з'являться в наступному коміті.",
-  "diffViewer.source.unstaged.label": "Unstaged",
-  "diffViewer.source.unstaged.tooltip":
-    "Файли, змінені в робочому дереві, але ще не підготовлені, плюс невідстежувані (нові) файли.",
-  "diffViewer.source.session.label": "Сесія",
-  "diffViewer.source.session.tooltip":
-    "Файли, змінені Kilo під час поточної сесії, на основі знімків по ходу. Скидається при старті нової сесії.",
-  "diffViewer.group.session": "Сесія",
-  "diffViewer.group.git": "Git",
-  "diffViewer.notice.snapshotsDisabled":
-    "Знімки вимкнено для цього репозиторію. Будь ласка, відредагуйте файли конфігурації, щоб відображати зміни сесії.",
-
-  "diffViewer.baseBranch.auto": "Default",
-  "diffViewer.baseBranch.default": "Default",
-  "diffViewer.baseBranch.remote": "Remote",
-  "diffViewer.baseBranch.search": "Search branches",
-  "diffViewer.baseBranch.empty": "No matching branches",
-  "diffViewer.baseBranch.loading": "Loading branches…",
-  "diffViewer.baseBranch.none": "—",
   "plan.exit.ready": "План готовий:",
   "chat.search.placeholder": "Пошук у чаті…",
   "chat.search.toggle": "Пошук у чаті",
