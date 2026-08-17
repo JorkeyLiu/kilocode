@@ -23,13 +23,12 @@ Configure how Kilo Code behaves and responds:
 - [**Skills**](/docs/customize/skills) - Extend Kilo's capabilities with reusable skill definitions
 - [**Prompt Engineering**](/docs/customize/prompt-engineering) - Write effective prompts for better results
 
-## Context & Indexing
+## Context
 
 Help Kilo understand your codebase better:
 
-- [**Codebase Indexing**](/docs/customize/context/codebase-indexing) - Build a semantic index of your code for better context awareness
-- [**Context Condensing**](/docs/customize/context/context-condensing) - Summarize older context to stay within limits
-- [**AGENTS.md**](/docs/customize/agents-md) - Store project context, decisions, and important information
+- [**Context Recovery**](/docs/customize/context/context-condensing) — Automatic overflow recovery for long conversations
+- [**AGENTS.md**](/docs/customize/agents-md) — Store project context, decisions, and important information
 
 ## Getting Started
 
@@ -37,7 +36,6 @@ New to customization? Here's where to start:
 
 1. **Start with Custom Instructions** — Set up instructions in the [Custom Instructions](/docs/customize/custom-instructions) section to guide Kilo Code's behavior
 2. **Explore Custom Modes** — Try the built-in modes first, then create your own
-3. **Enable Codebase Indexing** — Help Kilo understand your project structure
 
 ## Best Practices
 

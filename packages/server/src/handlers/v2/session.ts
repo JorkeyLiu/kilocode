@@ -95,30 +95,6 @@ export const sessionHandlers = HttpApiBuilder.group(V2Api, "v2.session", (handle
         }),
       )
       .handle(
-        "compact",
-        Effect.fn(function* (ctx) {
-          yield* session.compact({ sessionID: ctx.params.sessionID }).pipe(
-            Effect.catchTag("Session.NotFoundError", (error) =>
-              Effect.fail(
-                new SessionNotFoundError({
-                  sessionID: error.sessionID,
-                  message: `Session not found: ${error.sessionID}`,
-                }),
-              ),
-            ),
-            Effect.catchTag("Session.OperationUnavailableError", (error) =>
-              Effect.fail(
-                new ServiceUnavailableError({
-                  message: `V2 session ${error.operation} is not available yet`,
-                  service: `v2.session.${error.operation}`,
-                }),
-              ),
-            ),
-          )
-          return HttpApiSchema.NoContent.make()
-        }),
-      )
-      .handle(
         "wait",
         Effect.fn(function* (ctx) {
           yield* session.wait(ctx.params.sessionID).pipe(

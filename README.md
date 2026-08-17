@@ -115,7 +115,6 @@ Learn more about [agents and custom agents](https://kilo.ai/docs/code-with-ai/ag
 ### What it does
 
 - **Code generation** from natural language, across multiple files.
-- **Inline autocomplete** with ghost-text suggestions and tab to accept.
 - **Self-checking** so the agent reviews and corrects its own work.
 - **Terminal and browser control** to run commands and automate the web.
 - **MCP marketplace** to find and wire up MCP servers that extend what the agent can do.

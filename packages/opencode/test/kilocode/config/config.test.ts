@@ -16,7 +16,6 @@ import { ConfigMarkdown } from "../../../src/config/markdown"
 import { ConfigParse } from "../../../src/config/parse"
 import { Env } from "../../../src/env"
 import { Git } from "../../../src/git"
-import { KiloIndexing } from "../../../src/kilocode/indexing"
 import { KilocodeConfig } from "../../../src/kilocode/config/config"
 import { provideTestInstance } from "../../fixture/fixture"
 import { Filesystem } from "../../../src/util/filesystem"
@@ -73,17 +72,6 @@ function decode(input: unknown): Config.Info {
       urls: config.skills.urls && [...config.skills.urls],
     },
   }
-}
-
-const cfg: Partial<Config.Info> = {
-  plugin: ["@kilocode/kilo-indexing"],
-  indexing: {
-    provider: "ollama",
-    vectorStore: "qdrant",
-    ollama: {
-      baseUrl: "http://127.0.0.1:1",
-    },
-  },
 }
 
 afterEach(async () => {
@@ -150,137 +138,6 @@ describe("global config updates", () => {
     }
   })
 })
-
-describe("kilocode indexing config", () => {
-  test("ignores retired semantic indexing flags in existing configs", async () => {
-    await using tmp = await tmpdir({ git: true })
-    await writeConfig(tmp.path, {
-      experimental: { semantic_indexing: true, batch_tool: true },
-    })
-
-    await provideTestInstance({
-      directory: tmp.path,
-      fn: async () => {
-        const config = await load()
-        expect(config.experimental?.batch_tool).toBe(true)
-        expect(config.experimental).not.toHaveProperty("semantic_indexing")
-      },
-    })
-  })
-
-  test("keeps global indexing enabled in global config", async () => {
-    await using globalTmp = await tmpdir()
-    await using tmp = await tmpdir()
-
-    const prev = Global.Path.config
-    ;(Global.Path as { config: string }).config = globalTmp.path
-    await clear()
-    await disposeAllInstances()
-
-    try {
-      await writeConfig(globalTmp.path, {
-        $schema: "https://app.kilo.ai/config.json",
-        indexing: {
-          enabled: true,
-          provider: "ollama",
-        },
-      })
-
-      await provideTestInstance({
-        directory: tmp.path,
-        fn: async () => {
-          const config = await load()
-          const global = await Effect.runPromise(
-            Config.Service.use((svc) => svc.getGlobal()).pipe(Effect.scoped, Effect.provide(layer)),
-          )
-          expect(config.indexing?.provider).toBe("ollama")
-          expect(config.indexing?.enabled).toBeUndefined()
-          expect(global.indexing?.enabled).toBe(true)
-        },
-      })
-    } finally {
-      ;(Global.Path as { config: string }).config = prev
-      await clear()
-      await disposeAllInstances()
-    }
-  })
-
-  test("uses global indexing enabled when project enablement is unset", async () => {
-    await using globalTmp = await tmpdir()
-    await using tmp = await tmpdir({ git: true, config: cfg })
-
-    const prev = Global.Path.config
-    ;(Global.Path as { config: string }).config = globalTmp.path
-    await clear()
-    await disposeAllInstances()
-
-    try {
-      await writeConfig(globalTmp.path, {
-        $schema: "https://app.kilo.ai/config.json",
-        indexing: {
-          enabled: true,
-        },
-      })
-
-      await provideTestInstance({
-        directory: tmp.path,
-        fn: async () => {
-          const global = await Effect.runPromise(
-            Config.Service.use((svc) => svc.getGlobal()).pipe(Effect.scoped, Effect.provide(layer)),
-          )
-          const config = await load()
-          const input = KiloIndexing.input(config.indexing, global.indexing)
-          expect(input.enabled).toBe(true)
-        },
-      })
-    } finally {
-      ;(Global.Path as { config: string }).config = prev
-      await clear()
-      await disposeAllInstances()
-    }
-  })
-
-  test("project indexing enabled overrides global enablement", async () => {
-    const input = KiloIndexing.input({ enabled: false }, { enabled: true })
-    expect(input.enabled).toBe(false)
-    expect(KiloIndexing.input(undefined, { enabled: true }).enabled).toBe(true)
-    expect(KiloIndexing.input({ enabled: true }, { enabled: false }).enabled).toBe(true)
-  })
-
-  test("creates missing project config as .kilo/kilo.jsonc", async () => {
-    await using tmp = await tmpdir({ git: true })
-
-    await provideTestInstance({
-      directory: tmp.path,
-      fn: async () => {
-        await saveProject({ indexing: { enabled: true } })
-      },
-    })
-
-    expect(await Bun.file(path.join(tmp.path, ".kilo", "kilo.jsonc")).exists()).toBe(true)
-    expect(await Bun.file(path.join(tmp.path, ".kilo", "kilo.json")).exists()).toBe(false)
-  })
-
-  test("accepts delete sentinels for indexing model overrides", () => {
-    const patch = decode({ indexing: { model: null, dimension: null } })
-    const merged = KilocodeConfig.mergeConfig(
-      {
-        indexing: {
-          provider: "openai",
-          model: "text-embedding-3-large",
-          dimension: 3072,
-        },
-      },
-      patch,
-    )
-    const input = KiloIndexing.input(patch.indexing)
-
-    expect(merged.indexing).toEqual({ provider: "openai" })
-    expect(input.modelId).toBeUndefined()
-    expect(input.modelDimension).toBeUndefined()
-  })
-})
-
 describe("kilocode sandbox config", () => {
   test("prevents project config from weakening sandbox policy", async () => {
     await using globalTmp = await tmpdir()
@@ -428,6 +285,28 @@ describe("custom provider model config", () => {
       await clear()
       await disposeAllInstances()
     }
+  })
+})
+
+describe("retired product config keys", () => {
+  test("ignores retired compaction and indexing keys so existing configs still load", async () => {
+    await using tmp = await tmpdir({ git: true })
+    await writeConfig(tmp.path, {
+      model: "test/model",
+      compaction: { auto: false, threshold_percent: 75 },
+      indexing: { enabled: true, provider: "ollama" },
+    })
+
+    await provideTestInstance({
+      directory: tmp.path,
+      fn: async () => {
+        const config = await load()
+        // Config loads and the retired product surfaces are absent.
+        expect(config.model).toBe("test/model")
+        expect(config).not.toHaveProperty("compaction")
+        expect(config).not.toHaveProperty("indexing")
+      },
+    })
   })
 })
 
@@ -650,7 +529,7 @@ describe("linked worktree config", () => {
       await Bun.write(path.join(worktree, "kilo.json"), JSON.stringify({ model: "test/worktree" }))
       await Bun.write(
         path.join(primary.path, ".kilo", "kilo.jsonc"),
-        JSON.stringify({ username: "primary-dir", indexing: { enabled: true } }),
+        JSON.stringify({ username: "primary-dir" }),
       )
       await Bun.write(path.join(worktree, ".kilo", "kilo.jsonc"), JSON.stringify({ username: "worktree-dir" }))
 
@@ -658,7 +537,6 @@ describe("linked worktree config", () => {
 
       expect(config.model).toBe("test/worktree")
       expect(config.username).toBe("worktree-dir")
-      expect(config.indexing?.enabled).toBe(true)
     } finally {
       await $`git worktree remove --force ${worktree}`.cwd(primary.path).quiet().nothrow()
     }

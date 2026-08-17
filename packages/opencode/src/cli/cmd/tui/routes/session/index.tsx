@@ -62,7 +62,6 @@ import type { SkillTool } from "@/tool/skill"
 // kilocode_change start
 import type { BackgroundProcessTool } from "@/kilocode/tool/background-process"
 import type { InteractiveTerminalTool } from "@/kilocode/tool/interactive-terminal"
-import type { SemanticSearchTool } from "@/kilocode/tool/semantic-search"
 // kilocode_change end
 import { useRenderer, useTerminalDimensions, type JSX } from "@opentui/solid"
 import { useSDK } from "@tui/context/sdk"
@@ -110,7 +109,6 @@ import { RoutedModelMeta } from "@/kilocode/cli/cmd/tui/routes/session/routed-mo
 
 import { formatMarkdownTables } from "../../util/markdown"
 import { submitFeedback } from "@/kilocode/cli/cmd/tui/feedback"
-import { MemoryMessageMeta, MemorySessionTui } from "@/kilocode/cli/cmd/tui/routes/session/memory" // kilocode_change
 // kilocode_change end
 import { nextThinkingMode, reasoningSummary, useThinkingMode, type ThinkingMode } from "../../context/thinking"
 import { getScrollAcceleration } from "../../util/scroll"
@@ -153,7 +151,6 @@ const sessionBindingCommands = [
   "session.rename",
   "session.timeline",
   "session.fork",
-  "session.compact",
   "session.unshare",
   "session.undo",
   "session.redo",
@@ -337,7 +334,6 @@ export function Session() {
   const scrollAcceleration = createMemo(() => getScrollAcceleration(tuiConfig))
   const toast = useToast()
   const sdk = useSDK()
-  const memory = MemorySessionTui.verbose({ sessionID: () => route.sessionID }) // kilocode_change
   const editor = useEditorContext()
 
   // kilocode_change start - background processes are scoped to the visible session
@@ -466,8 +462,6 @@ export function Session() {
       kv.set(keys.lastSeenAt, Date.now())
     })
   })
-
-  onCleanup(MemorySessionTui.attach({ event, toast, sessionID: route.sessionID })) // kilocode_change
 
   const exit = useExit()
 
@@ -678,32 +672,6 @@ export function Session() {
             sessionID={route.sessionID}
           />
         ))
-      },
-    },
-    {
-      title: "Compact session",
-      value: "session.compact",
-      category: "Session",
-      slash: {
-        name: "compact",
-        aliases: ["summarize"],
-      },
-      run: () => {
-        const selectedModel = local.model.current()
-        if (!selectedModel) {
-          toast.show({
-            variant: "warning",
-            message: "Connect a provider to summarize this session",
-            duration: 3000,
-          })
-          return
-        }
-        void sdk.client.session.summarize({
-          sessionID: route.sessionID,
-          modelID: selectedModel.modelID,
-          providerID: selectedModel.providerID,
-        })
-        dialog.clear()
       },
     },
     {
@@ -1440,7 +1408,6 @@ export function Session() {
                           last={lastAssistant()?.id === message.id}
                           message={message as AssistantMessage}
                           parts={sync.data.part[message.id] ?? []}
-                          memory={memory /* kilocode_change */}
                         />
                       </Match>
                     </Switch>
@@ -1655,7 +1622,6 @@ function AssistantMessage(props: {
   message: AssistantMessage
   parts: Part[]
   last: boolean
-  memory(): boolean // kilocode_change
 }) {
   const ctx = use()
   const local = useLocal()
@@ -1769,8 +1735,6 @@ function AssistantMessage(props: {
                 <span style={{ fg: theme.textMuted }}> · {Locale.duration(duration())}</span>
               </Show>
               {/* kilocode_change start */}
-              <MemoryMessageMeta parts={props.parts} color={theme.textMuted} verbose={props.memory} />{" "}
-              {/* kilocode_change end */}
               <Show when={props.message.error?.name === "MessageAbortedError"}>
                 <span style={{ fg: theme.textMuted }}> · interrupted</span>
               </Show>
@@ -2007,9 +1971,6 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         </Match>
         <Match when={props.part.tool === "interactive_terminal"}>
           <InteractiveTerminal {...toolprops} />
-        </Match>
-        <Match when={props.part.tool === "semantic_search"}>
-          <SemanticSearch {...toolprops} />
         </Match>
         {/* kilocode_change end */}
         <Match when={props.part.tool === "webfetch"}>
@@ -2594,21 +2555,6 @@ function InteractiveTerminal(props: ToolProps<typeof InteractiveTerminalTool>) {
   )
 }
 
-function SemanticSearch(props: ToolProps<typeof SemanticSearchTool>) {
-  const pathFormatter = usePathFormatter()
-  const meta = createMemo(() => props.metadata as { results?: { length: number }[] })
-  const args = createMemo(() => props.input as { query?: string; path?: string })
-  const count = createMemo(() => meta().results?.length ?? 0)
-
-  return (
-    <InlineTool icon="✱" pending="Searching codebase..." complete={args().query} part={props.part}>
-      Codebase Search "{args().query}" <Show when={args().path}>in {pathFormatter.format(args().path)} </Show>
-      <Show when={count() > 0}>
-        ({count()} {count() === 1 ? "result" : "results"})
-      </Show>
-    </InlineTool>
-  )
-}
 // kilocode_change end
 
 function Task(props: ToolProps<typeof TaskTool>) {

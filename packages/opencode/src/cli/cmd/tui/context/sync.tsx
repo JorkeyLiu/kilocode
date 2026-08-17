@@ -37,7 +37,6 @@ import { appendTerminalOutput } from "@/kilocode/interactive-terminal/output" //
 import { useToast } from "@tui/ui/toast" // kilocode_change
 import * as Log from "@opencode-ai/core/util/log"
 import { emptyConsoleState, type ConsoleState } from "@opencode-ai/core/v1/config/console-state"
-import type { IndexingStatus } from "@kilocode/kilo-indexing/status" // kilocode_change
 import path from "path"
 import { useKV } from "./kv"
 import { aggregateFailures } from "./aggregate-failures"
@@ -103,7 +102,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       }
       formatter: FormatterStatus[]
       vcs: VcsInfo | undefined
-      indexing: IndexingStatus // kilocode_change
     }>({
       provider_next: {
         all: [],
@@ -139,7 +137,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
       mcp_resource: {},
       formatter: [],
       vcs: undefined,
-      indexing: { state: "Disabled", message: "Indexing disabled.", processedFiles: 0, totalFiles: 0, percent: 0 }, // kilocode_change
     })
 
     const event = useEvent()
@@ -533,10 +530,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
           })
           break
         }
-        case "indexing.status": {
-          setStore("indexing", reconcile(event.properties.status))
-          break
-        }
         // kilocode_change end
       }
     })
@@ -864,9 +857,6 @@ export const { use: useSync, provider: SyncProvider } = createSimpleContext({
                 })
               })
               .catch(() => {}),
-            sdk.client.indexing
-              .status({ workspace })
-              .then((x) => setStore("indexing", reconcile(x.data ?? store.indexing))),
             // kilocode_change end
           ]).then(() => {
             setStore("status", "complete")

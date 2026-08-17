@@ -65,7 +65,6 @@ import { Git } from "@/git" // kilocode_change
 import { BackgroundJob } from "@/background/job"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import * as ToolNetwork from "@/kilocode/sandbox/network" // kilocode_change
-import { MemoryService } from "@kilocode/kilo-memory/effect/service" // kilocode_change
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
@@ -167,7 +166,7 @@ export const layer: Layer.Layer<
     const agent = yield* Agent.Service
     // kilocode_change start
     const notebook = Option.getOrUndefined(yield* Effect.serviceOption(Notebook.Service))
-    const kiloToolInfos = yield* KiloToolRegistry.infos(notebook).pipe(Effect.provide(MemoryService.layer))
+    const kiloToolInfos = yield* KiloToolRegistry.infos(notebook)
     // kilocode_change end
 
     const state = yield* InstanceState.make<State>(
@@ -270,9 +269,6 @@ export const layer: Layer.Layer<
 
         // kilocode_change start
         const cfg = yield* config.get()
-        const global = yield* config.getGlobal()
-        const indexing = KiloToolRegistry.indexing(cfg, global)
-        // kilocode_change end
         const questionEnabled = ["app", "cli", "desktop", "vscode"].includes(flags.client) || flags.enableQuestionTool // kilocode_change: add vscode client
 
         const tool = yield* Effect.all({
@@ -300,36 +296,32 @@ export const layer: Layer.Layer<
         const kilo = yield* KiloToolRegistry.build(kiloToolInfos, {
           agent: agents,
           truncate,
-          indexing: indexing ?? false,
         })
         // kilocode_change end
 
         return {
           custom,
           // kilocode_change start
-          builtin: KiloToolRegistry.describe(
-            [
-              tool.invalid,
-              ...(questionEnabled ? [tool.question] : []),
-              tool.shell,
-              tool.read,
-              tool.glob,
-              tool.grep,
-              tool.edit,
-              tool.write,
-              tool.task,
-              tool.fetch,
-              tool.todo,
-              tool.search,
-              ...(flags.experimentalScout ? [tool.clone, tool.overview] : []), // kilocode_change
-              tool.skill,
-              tool.patch,
-              tool.plan,
-              ...KiloToolRegistry.extra(kilo, cfg),
-              ...(flags.experimentalLspTool ? [tool.lsp] : []),
-            ],
-            kilo,
-          ),
+          builtin: [
+            tool.invalid,
+            ...(questionEnabled ? [tool.question] : []),
+            tool.shell,
+            tool.read,
+            tool.glob,
+            tool.grep,
+            tool.edit,
+            tool.write,
+            tool.task,
+            tool.fetch,
+            tool.todo,
+            tool.search,
+            ...(flags.experimentalScout ? [tool.clone, tool.overview] : []), // kilocode_change
+            tool.skill,
+            tool.patch,
+            tool.plan,
+            ...KiloToolRegistry.extra(kilo, cfg),
+            ...(flags.experimentalLspTool ? [tool.lsp] : []),
+          ],
           // kilocode_change end
           task: tool.task,
           read: tool.read,
@@ -393,10 +385,9 @@ export const layer: Layer.Layer<
 
         return true
       })
-      const kiloFiltered = yield* KiloToolRegistry.applyVisibility(filtered) // kilocode_change
 
       return yield* Effect.forEach(
-        kiloFiltered, // kilocode_change
+        filtered, // kilocode_change
         Effect.fnUntraced(function* (tool: Tool.Def) {
           using _ = log.time(tool.id)
           const output = {

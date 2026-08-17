@@ -231,7 +231,6 @@ const MigrationWizard: Component<MigrationWizardProps> = (props) => {
   const [migrateDefaultModel, setMigrateDefaultModel] = createSignal(true)
   const [migrateAutoApproval, setMigrateAutoApproval] = createSignal(true)
   const [migrateLanguage, setMigrateLanguage] = createSignal(true)
-  const [migrateAutocomplete, setMigrateAutocomplete] = createSignal(true)
 
   // Progress tracking
   const [progressEntries, setProgressEntries] = createSignal<ProgressEntry[]>([])
@@ -277,7 +276,6 @@ const MigrationWizard: Component<MigrationWizardProps> = (props) => {
         settings.alwaysAllowSubtasks !== undefined,
     )
     setMigrateLanguage(Boolean(settings.language))
-    setMigrateAutocomplete(Boolean(settings.autocomplete))
   }
 
   onMount(() => {
@@ -385,7 +383,6 @@ const MigrationWizard: Component<MigrationWizardProps> = (props) => {
     settings: {
       autoApproval: autoApprovalSelections(),
       language: migrateLanguage(),
-      autocomplete: migrateAutocomplete(),
     },
   })
 
@@ -412,9 +409,6 @@ const MigrationWizard: Component<MigrationWizardProps> = (props) => {
       ).flatMap(([enabled, item]) => (enabled ? [{ item, group: "autoApproval", status: "pending" as const }] : [])),
       ...(selected.settings.language && legacySettings()?.language
         ? [{ item: "Language preference", group: "language", status: "pending" as const }]
-        : []),
-      ...(selected.settings.autocomplete && legacySettings()?.autocomplete
-        ? [{ item: "Autocomplete settings", group: "autocomplete", status: "pending" as const }]
         : []),
     ]
     setProgressEntries(entries)
@@ -451,7 +445,6 @@ const MigrationWizard: Component<MigrationWizardProps> = (props) => {
               settings: {
                 autoApproval: emptyAutoApproval(),
                 language: false,
-                autocomplete: false,
               },
             },
           })
@@ -513,7 +506,6 @@ const MigrationWizard: Component<MigrationWizardProps> = (props) => {
   }
 
   const hasLanguageData = () => Boolean(legacySettings()?.language)
-  const hasAutocompleteData = () => Boolean(legacySettings()?.autocomplete)
   const hasSessions = () => sessions().length > 0
 
   const hasAnySelection = () =>
@@ -523,8 +515,7 @@ const MigrationWizard: Component<MigrationWizardProps> = (props) => {
     (migrateSessions() && hasSessions()) ||
     (migrateDefaultModel() && Boolean(defaultModel())) ||
     (migrateAutoApproval() && hasAnyAutoApprovalData()) ||
-    (migrateLanguage() && hasLanguageData()) ||
-    (migrateAutocomplete() && hasAutocompleteData())
+    (migrateLanguage() && hasLanguageData())
 
   const hasNothingToShow = () =>
     supportedProviderCount() === 0 &&
@@ -533,8 +524,7 @@ const MigrationWizard: Component<MigrationWizardProps> = (props) => {
     !hasSessions() &&
     !defaultModel() &&
     !hasAnyAutoApprovalData() &&
-    !hasLanguageData() &&
-    !hasAutocompleteData()
+    !hasLanguageData()
 
   // Group-level status for progress display
   const groupStatus = (group: string): ProgressEntry["status"] => {
@@ -869,27 +859,6 @@ const MigrationWizard: Component<MigrationWizardProps> = (props) => {
                   </Show>
                   <div class="migration-wizard__item-text">
                     <div class="label">{language.t("migration.select.language")}</div>
-                  </div>
-                </div>
-              </Show>
-
-              {/* Autocomplete */}
-              <Show when={hasAutocompleteData()}>
-                <div class="migration-wizard__item">
-                  <Show when={phase() === "selecting"} fallback={<StatusIcon group="autocomplete" />}>
-                    <label class="migration-wizard__checkbox">
-                      <input
-                        type="checkbox"
-                        checked={migrateAutocomplete()}
-                        onChange={(e) => setMigrateAutocomplete(e.currentTarget.checked)}
-                      />
-                      <span class="migration-wizard__checkmark">
-                        <CheckmarkSvg />
-                      </span>
-                    </label>
-                  </Show>
-                  <div class="migration-wizard__item-text">
-                    <div class="label">{language.t("migration.select.autocomplete")}</div>
                   </div>
                 </div>
               </Show>

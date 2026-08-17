@@ -2,8 +2,6 @@ import type { PermissionConfig } from "./permissions"
 import type { AgentConfig } from "./agents"
 import type { ProviderConfig } from "./providers"
 
-type SdkIndexingStatus = import("@kilocode/sdk/v2/client").IndexingStatus
-
 export interface McpConfig {
   type?: "local" | "remote"
   command?: string[] | string
@@ -25,12 +23,6 @@ export interface CommandConfig {
 export interface SkillsConfig {
   paths?: string[]
   urls?: string[]
-}
-
-export interface CompactionConfig {
-  auto?: boolean
-  threshold_percent?: number | null
-  prune?: boolean
 }
 
 export interface WatcherConfig {
@@ -58,62 +50,6 @@ export interface SandboxConfig {
   writable_paths?: string[]
   allowed_hosts?: string[]
 }
-
-export interface CommitMessageConfig {
-  prompt?: string
-}
-
-export type IndexingProvider =
-  | "kilo"
-  | "openai"
-  | "ollama"
-  | "openai-compatible"
-  | "gemini"
-  | "mistral"
-  | "vercel-ai-gateway"
-  | "bedrock"
-  | "openrouter"
-  | "voyage"
-
-export interface IndexingConfig {
-  enabled?: boolean
-  provider?: IndexingProvider
-  model?: string | null
-  dimension?: number | null
-  vectorStore?: "lancedb" | "qdrant"
-  kilo?: { apiKey?: string; baseUrl?: string; organizationId?: string }
-  openai?: { apiKey?: string }
-  ollama?: { baseUrl?: string }
-  "openai-compatible"?: { baseUrl?: string; apiKey?: string }
-  gemini?: { apiKey?: string }
-  mistral?: { apiKey?: string }
-  "vercel-ai-gateway"?: { apiKey?: string }
-  bedrock?: { region?: string; profile?: string }
-  openrouter?: { apiKey?: string; specificProvider?: string }
-  voyage?: { apiKey?: string }
-  qdrant?: { url?: string; apiKey?: string }
-  lancedb?: { directory?: string }
-  searchMinScore?: number
-  searchMaxResults?: number
-  embeddingBatchSize?: number
-  scannerMaxBatchRetries?: number
-}
-
-export type KiloEmbeddingModel = {
-  id: string
-  name: string
-  dimension: number
-  scoreThreshold: number
-  note?: string
-}
-
-export type KiloEmbeddingModelCatalog = {
-  defaultModel: string
-  models: KiloEmbeddingModel[]
-  aliases: Record<string, string>
-}
-
-export type IndexingStatus = SdkIndexingStatus
 
 export interface BrowserSettings {
   enabled: boolean
@@ -152,16 +88,12 @@ export interface Config {
   watcher?: WatcherConfig
   formatter?: false | Record<string, unknown>
   lsp?: false | Record<string, unknown>
-  compaction?: CompactionConfig
-  commit_message?: CommitMessageConfig
   tools?: Record<string, boolean>
   auto_collapse_reasoning?: boolean
   experimental?: ExperimentalConfig
   sandbox?: SandboxConfig
-  indexing?: IndexingConfig
 }
 
 export interface FeatureFlags {
-  indexing: boolean
   sandboxControls: boolean
 }

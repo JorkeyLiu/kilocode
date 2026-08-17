@@ -104,9 +104,7 @@ kilo run --auto "fix the failing tests in test/auth.test.ts"
 
 Now that you've completed your first task, try these capabilities:
 
-- **[Autocomplete](/docs/code-with-ai/features/autocomplete)** — Get inline code suggestions as you type in your editor
 - **[Agents](/docs/code-with-ai/agents/using-agents)** — Switch between specialized agents for coding, architecture, debugging, and more
-- **[Git](/docs/code-with-ai/features/git-commit-generation)** — Auto-generate commit messages from your changes
 
 {% callout type="tip" %}
 **Accelerate development:** Check out multiple copies of your repository and run Kilo Code on all of them in parallel (using git to resolve any conflicts, same as with human devs). This can dramatically speed up development on large projects.

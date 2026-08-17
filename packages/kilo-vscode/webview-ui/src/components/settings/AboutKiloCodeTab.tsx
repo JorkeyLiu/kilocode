@@ -18,7 +18,7 @@ export interface AboutKiloCodeTabProps {
 const AboutKiloCodeTab: Component<AboutKiloCodeTabProps> = (props) => {
   const language = useLanguage()
   const vscode = useVSCode()
-  const { updateConfig, updateGlobalConfig } = useConfig()
+  const { updateConfig } = useConfig()
   const [importing, setImporting] = createSignal(false)
   const [exporting, setExporting] = createSignal(false)
   let epoch = 0
@@ -28,20 +28,7 @@ const AboutKiloCodeTab: Component<AboutKiloCodeTabProps> = (props) => {
   }
 
   const importConfig = (config: Config) => {
-    const enabled = config.indexing?.enabled
-    if (enabled === undefined) {
-      updateConfig(config)
-      return
-    }
-
-    const indexing = { ...config.indexing }
-    delete indexing.enabled
-    const next = { ...config }
-    if (Object.keys(indexing).length > 0) next.indexing = indexing
-    else delete next.indexing
-
-    updateConfig(next)
-    updateGlobalConfig({ indexing: { enabled } })
+    updateConfig(config)
   }
 
   // Listen for globalConfigLoaded response

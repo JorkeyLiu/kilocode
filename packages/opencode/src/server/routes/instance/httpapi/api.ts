@@ -24,11 +24,9 @@ import { WorkspaceApi } from "./groups/workspace"
 import { V2Api } from "@opencode-ai/server/api"
 // kilocode_change start - Kilo HttpApi groups
 import { AgentBuilderApi } from "@/kilocode/server/httpapi/groups/agent-builder"
-import { CommitMessageApi } from "@/kilocode/server/httpapi/groups/commit-message"
 import { BackgroundProcessApi } from "@/kilocode/server/httpapi/groups/background-process"
 import { ConfigConsoleApi } from "@/kilocode/server/httpapi/groups/config-console"
 import { EnhancePromptApi } from "@/kilocode/server/httpapi/groups/enhance-prompt"
-import { IndexingApi } from "@/kilocode/server/httpapi/groups/indexing"
 import { InstanceReloadApi } from "@/kilocode/server/httpapi/groups/instance-reload"
 import { InteractiveTerminalApi } from "@/kilocode/server/httpapi/groups/interactive-terminal"
 import { KiloGatewayApi } from "@/kilocode/server/httpapi/groups/kilo-gateway"
@@ -39,7 +37,6 @@ import { SandboxApi } from "@/kilocode/server/httpapi/groups/sandbox"
 import { SessionImportApi } from "@/kilocode/server/httpapi/groups/session-import"
 import { SuggestionApi } from "@/kilocode/server/httpapi/groups/suggestion"
 import { TelemetryApi } from "@/kilocode/server/httpapi/groups/telemetry"
-import { MemoryApi } from "@/kilocode/server/httpapi/groups/memory" // kilocode_change
 // kilocode_change end
 // GlobalEventSchema snapshots the registry after event-producing groups register their variants.
 import { GlobalApi } from "./groups/global"
@@ -74,10 +71,8 @@ export const InstanceHttpApi = HttpApi.make("opencode-instance")
   // kilocode_change start - Kilo HttpApi groups
   .addHttpApi(AgentBuilderApi)
   .addHttpApi(BackgroundProcessApi)
-  .addHttpApi(CommitMessageApi)
   .addHttpApi(ConfigConsoleApi)
   .addHttpApi(EnhancePromptApi)
-  .addHttpApi(IndexingApi)
   .addHttpApi(InstanceReloadApi)
   .addHttpApi(InteractiveTerminalApi)
   .addHttpApi(KiloGatewayApi)
@@ -88,7 +83,6 @@ export const InstanceHttpApi = HttpApi.make("opencode-instance")
   .addHttpApi(SessionImportApi)
   .addHttpApi(SuggestionApi)
   .addHttpApi(TelemetryApi)
-  .addHttpApi(MemoryApi)
   // kilocode_change end
   .middleware(SchemaErrorMiddleware)
 

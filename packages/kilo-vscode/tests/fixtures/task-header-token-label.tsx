@@ -21,7 +21,6 @@ globalThis.acquireVsCodeApi = () => ({
 const { render } = await import("solid-js/web")
 const { VSCodeProvider } = await import("../../webview-ui/src/context/vscode")
 const { SessionContext } = await import("../../webview-ui/src/context/session")
-const { MemoryContext } = await import("../../webview-ui/src/context/memory")
 const { LanguageContext } = await import("../../webview-ui/src/context/language")
 const { TranscriptSearchProvider } = await import("../../webview-ui/src/context/transcript-search")
 const { TaskHeader } = await import("../../webview-ui/src/components/chat/TaskHeader")
@@ -31,27 +30,6 @@ const language = {
   setLocale: () => {},
   userOverride: () => "",
   t: (key: string) => key,
-}
-
-const memory = {
-  status: () => undefined,
-  show: () => undefined,
-  loading: () => false,
-  pending: () => false,
-  error: () => undefined,
-  enabled: () => false,
-  sessionTokens: () => 0,
-  totalTokens: () => 0,
-  activity: () => [],
-  refresh: () => {},
-  showMemory: () => {},
-  enable: () => {},
-  disable: () => {},
-  auto: () => {},
-  verbose: () => {},
-  rebuild: () => {},
-  remember: () => {},
-  forget: () => {},
 }
 
 const sessionFor = (contextUsage: { tokens: number; percentage: number | null }) => ({
@@ -73,7 +51,6 @@ const sessionFor = (contextUsage: { tokens: number; percentage: number | null })
   contextUsage: () => contextUsage,
   modelUsage: () => undefined,
   todos: () => [],
-  compact: () => {},
   renameSession: () => {},
   revertSession: () => {},
 })
@@ -85,11 +62,9 @@ const mount = (session: ReturnType<typeof sessionFor>) => {
       <VSCodeProvider>
         <LanguageContext.Provider value={language as never}>
           <TranscriptSearchProvider>
-            <MemoryContext.Provider value={memory as never}>
-              <SessionContext.Provider value={session as never}>
-                <TaskHeader />
-              </SessionContext.Provider>
-            </MemoryContext.Provider>
+            <SessionContext.Provider value={session as never}>
+              <TaskHeader />
+            </SessionContext.Provider>
           </TranscriptSearchProvider>
         </LanguageContext.Provider>
       </VSCodeProvider>

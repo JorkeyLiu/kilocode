@@ -11,7 +11,6 @@ import {
 import { ConfigPlugin } from "@/config/plugin"
 import { ConfigPluginV1 } from "@opencode-ai/core/v1/config/plugin"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
-import { isIndexingPlugin } from "@kilocode/kilo-indexing/detect" // kilocode_change
 import { isAtomicChatPlugin } from "@/kilocode/atomic-chat-feature" // kilocode_change
 
 export namespace PluginLoader {
@@ -161,7 +160,6 @@ export namespace PluginLoader {
 
     // Deprecated plugin packages are silently ignored because they are now built in.
     if (plan.deprecated) return { retry: false }
-    if (isIndexingPlugin(candidate.plan.spec)) return { retry: false } // kilocode_change
     if (isAtomicChatPlugin(candidate.plan.spec)) return { retry: false } // kilocode_change
     report?.start?.(candidate, retry)
 

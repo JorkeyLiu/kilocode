@@ -63,7 +63,6 @@ const TIPS = [
   themeTip,
   "Press {highlight}Ctrl+X N{/highlight} or {highlight}/new{/highlight} to start a fresh conversation session",
   "Use {highlight}/sessions{/highlight} or {highlight}Ctrl+X L{/highlight} to list and continue previous conversations",
-  "Run {highlight}/compact{/highlight} to summarize long sessions near context limits",
   "Press {highlight}Ctrl+X X{/highlight} or {highlight}/export{/highlight} to save the conversation as Markdown",
   "Press {highlight}Ctrl+X Y{/highlight} to copy the assistant's last message to clipboard",
   "Press {highlight}Ctrl+P{/highlight} to see all available actions and commands",

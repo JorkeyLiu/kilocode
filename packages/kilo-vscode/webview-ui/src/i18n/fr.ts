@@ -136,8 +136,6 @@ export const dict = {
   "revert.banner.redo.all": "Tout rétablir",
   "revert.banner.hint": "You can redo these changes until you send a new message",
   "revert.disabled.agentBusy": "Attendre la fin de l'agent",
-  "command.session.compact": "Compacter la session",
-  "command.session.compact.description": "Résumer la session pour réduire la taille du contexte",
   "command.session.fork": "Bifurquer à partir du message",
   "command.session.fork.description": "Créer une nouvelle session à partir d'un message précédent",
   "command.session.share": "Partager la session",
@@ -387,7 +385,6 @@ export const dict = {
   "prompt.action.resetModel": "Réinitialiser le modèle par défaut",
   "prompt.action.enhanceDescription":
     "Le bouton 'Améliorer la requête' aide à améliorer votre demande en fournissant un contexte supplémentaire, des clarifications ou des reformulations. Essayez de taper une demande ici et cliquez à nouveau sur le bouton pour voir comment cela fonctionne.",
-  "prompt.action.indexing": "Paramètres d'indexation",
   "prompt.action.sandbox.enable": "Activer le sandbox",
   "prompt.action.sandbox.disable": "Désactiver le sandbox",
   "prompt.action.sandbox.enabled":
@@ -637,14 +634,18 @@ export const dict = {
   "notification.permission.titleSubagent": "Permission requise (sous-agent)",
   "notification.permission.description": "{{sessionTitle}} dans {{projectName}} a besoin d'une permission",
   "ui.permission.manageAutoApprove": "Gérer les règles d'approbation automatique",
-  "ui.permission.configProtected.edit": "Les modifications de fichiers de configuration nécessitent toujours une approbation",
+  "ui.permission.configProtected.edit":
+    "Les modifications de fichiers de configuration nécessitent toujours une approbation",
   "ui.permission.configProtected.access": "L'accès à la configuration Kilo nécessite toujours une approbation",
-  "ui.permission.configProtected.scope": "Les approbations enregistrées ne s'appliquent qu'à {{agent}} et à ces chemins exacts.",
+  "ui.permission.configProtected.scope":
+    "Les approbations enregistrées ne s'appliquent qu'à {{agent}} et à ces chemins exacts.",
   "ui.permission.configProtected.thisAgent": "cet agent",
   "ui.permission.configProtected.addToAllowed": "Enregistrer l'approbation pour cet agent et ces chemins exacts",
-  "ui.permission.configProtected.removeFromAllowed": "Supprimer l'approbation enregistrée pour cet agent et ces chemins exacts",
+  "ui.permission.configProtected.removeFromAllowed":
+    "Supprimer l'approbation enregistrée pour cet agent et ces chemins exacts",
   "ui.permission.configProtected.addToDenied": "Enregistrer le refus pour cet agent et ces chemins exacts",
-  "ui.permission.configProtected.removeFromDenied": "Supprimer le refus enregistré pour cet agent et ces chemins exacts",
+  "ui.permission.configProtected.removeFromDenied":
+    "Supprimer le refus enregistré pour cet agent et ces chemins exacts",
   "ui.permission.doomLoop.prompt": "Boucle potentielle détectée pour l’outil {{tool}}. Continuer l’exécution ?",
   "ui.permission.doomLoop.rule": "Continuer les appels à {{tool}}",
   "ui.permission.rule.addToAllowed": "Ajouter à la liste des autorisés",
@@ -788,46 +789,6 @@ export const dict = {
 
   "settings.general.row.releaseNotes.title": "Notes de version",
   "settings.general.row.releaseNotes.description": 'Afficher des pop-ups "Quoi de neuf" après les mises à jour',
-
-  "settings.indexing.dimension.description":
-    "Laissez vide pour détecter automatiquement la dimension d'embedding à partir du modèle.",
-  "settings.indexing.dimension.placeholder": "Auto",
-  "settings.indexing.dimension.title": "Dimension vectorielle",
-  "settings.indexing.enable.description": "Activer ou désactiver l'indexation sémantique de la base de code.",
-  "settings.indexing.showButton.title": "Afficher le bouton lorsque l’indexation est désactivée",
-  "settings.indexing.showButton.description":
-    "Affichez le bouton d’indexation sous le champ de saisie lorsque l’indexation est désactivée. S’il est masqué, ouvrez Paramètres > Indexation pour activer l’indexation.",
-  "settings.indexing.enable.title": "Activer l'indexation",
-  "settings.indexing.globalEnable.title": "Activer globalement",
-  "settings.indexing.globalEnable.description": "Activer l'indexation pour chaque espace de travail.",
-  "settings.indexing.projectEnable.title": "Activer pour ce projet",
-  "settings.indexing.projectEnable.description":
-    "Activer l'indexation pour cet espace de travail lorsque l'indexation globale est désactivée.",
-  "settings.indexing.projectEnable.disabledTooltip":
-    "L'indexation globale est activée, ce projet est donc déjà pris en compte.",
-  "settings.indexing.lancedbDirectory.description": "Répertoire optionnel pour le stockage local LanceDB.",
-  "settings.indexing.lancedbDirectory.placeholder": "Laissez vide pour la valeur par défaut",
-  "settings.indexing.lancedbDirectory.title": "Répertoire LanceDB",
-  "settings.indexing.model.description": "Remplacer le modèle d'embedding par défaut pour le fournisseur sélectionné.",
-  "settings.indexing.model.title": "Modèle d'embedding",
-  "settings.indexing.provider.description":
-    "Choisissez le fournisseur utilisé pour générer les embeddings pour la recherche sémantique.",
-  "settings.indexing.kiloModel.title": "Préréglage de modèle Kilo",
-  "settings.indexing.kiloModel.description": "Choisissez un modèle d'embedding hébergé par Kilo pris en charge.",
-  "settings.indexing.kiloSignIn.title": "Connexion à Kilo requise",
-  "settings.indexing.kiloSignIn.description": "Connectez-vous à Kilo pour utiliser les embeddings hébergés.",
-  "settings.indexing.provider.title": "Fournisseur d'embedding",
-  "settings.indexing.providerField.description": "Paramètre de connexion spécifique au fournisseur.",
-  "settings.indexing.qdrantApiKey.description": "Clé API optionnelle pour l'instance Qdrant.",
-  "settings.indexing.qdrantApiKey.placeholder": "Clé API optionnelle",
-  "settings.indexing.qdrantApiKey.title": "Clé API Qdrant",
-  "settings.indexing.qdrantUrl.description": "URL du serveur pour l'instance Qdrant.",
-  "settings.indexing.qdrantUrl.title": "URL Qdrant",
-  "settings.indexing.status.title": "Statut",
-  "settings.indexing.title": "Indexation",
-  "settings.indexing.tuning.description": "Paramètre avancé de recherche et de traitement par lots.",
-  "settings.indexing.vectorStore.description": "Choisissez où les embeddings indexés sont stockés.",
-  "settings.indexing.vectorStore.title": "Stockage vectoriel",
 
   "settings.updates.row.startup.title": "Vérifier les mises à jour au démarrage",
   "settings.updates.row.startup.description": "Vérifier automatiquement les mises à jour au lancement d'Kilo",
@@ -1249,11 +1210,7 @@ export const dict = {
   "settings.browser.title": "Navigateur",
   "settings.checkpoints.title": "Points de contrôle",
   "settings.display.title": "Affichage",
-  "settings.autocomplete.title": "Autocomplétion",
-  "settings.autocomplete.model.title": "Modèle d'autocomplétion",
-  "settings.autocomplete.model.description": "Sélectionnez le modèle utilisé pour les complétions de code en ligne",
   "settings.notifications.title": "Notifications",
-  "settings.context.title": "Contexte",
 
   "settings.experimental.title": "Expérimental",
   "settings.language.title": "Langue",
@@ -1373,16 +1330,6 @@ export const dict = {
   "common.add": "Ajouter",
   "common.choose": "Choisir…",
 
-  "settings.autocomplete.autoTrigger.title": "Activer la complétion automatique en ligne",
-  "settings.autocomplete.autoTrigger.description":
-    "Afficher automatiquement les suggestions de complétion lors de la saisie",
-  "settings.autocomplete.smartKeybinding.title": "Activer le raccourci intelligent de tâche en ligne",
-  "settings.autocomplete.smartKeybinding.description":
-    "Utiliser un raccourci intelligent pour déclencher les tâches en ligne",
-  "settings.autocomplete.chatAutocomplete.title": "Activer l'autocomplétion du chat",
-  "settings.autocomplete.chatAutocomplete.description": "Afficher les suggestions d'autocomplétion dans le chat",
-  "settings.autocomplete.modelsHint":
-    "Pour choisir le modèle utilisé pour l'autocomplétion, consultez les paramètres des Modèles.",
   "settings.notifications.agent.title": "Achèvement de l'agent",
   "settings.notifications.agent.description": "Afficher une notification lorsque l'agent termine une tâche",
   "settings.notifications.permissions.title": "Demandes d'autorisation",
@@ -1644,68 +1591,6 @@ export const dict = {
     "Prévenir les actions identiques répétées. Déclenché lorsque le même appel d'outil se répète avec une entrée identique.",
   "settings.checkpoints.enable.title": "Activer les instantanés",
   "settings.checkpoints.enable.description": "Créer des points de contrôle avant les modifications de fichiers",
-  "settings.context.autoCompaction.title": "Compaction automatique",
-  "settings.context.autoCompaction.description":
-    "Compacter automatiquement le contexte avant qu'il n'atteigne la limite",
-  "settings.context.compaction.title": "Compactage",
-  "settings.context.compactionLimit.title": "Limite de compactage automatique",
-  "settings.context.compactionLimit.description":
-    "Compacter lorsque le contexte atteint ce pourcentage de la fenêtre du modèle. Laissez vide pour utiliser uniquement la marge de sécurité.",
-  "settings.context.prune.title": "Élaguer les anciennes sorties",
-  "settings.context.prune.description": "Supprimer les anciennes sorties d'outils pendant la compaction",
-  "settings.context.watcherPatterns": "Motifs d'ignorance de l'observateur",
-  "settings.context.watcherPatterns.description": "Motifs glob pour les fichiers que l'observateur doit ignorer",
-
-  "settings.context.memory.title": "Mémoire",
-  "settings.context.memory.project.title": "Mémoire du projet",
-  "settings.context.memory.autoSave.title": "Enregistrement automatique de la mémoire du projet",
-  "settings.context.memory.autoSave.description":
-    "Enregistrer automatiquement les faits durables du projet à partir des tours terminés lorsque la mémoire est activée.",
-  "settings.context.memory.index.title": "Index de mémoire",
-  "settings.context.memory.status.notLoaded": "Non chargée",
-  "settings.context.memory.status.disabled": "Désactivée",
-  "settings.context.memory.status.enabledTokensOps":
-    "Activée - ~{{session}} tokens de contexte initial dans cette session - ~{{tokens}} tokens dans l’index stocké - dernière opération {{ops}}",
-  "settings.context.memory.index.path": "{{path}}/index.kmem",
-  "settings.context.memory.index.enable": "Activez la mémoire pour créer les fichiers de mémoire du projet.",
-  "settings.context.memory.inspect": "Inspecter",
-  "settings.context.memory.rebuild": "Reconstruire l’index de mémoire",
-  "chat.memory.status.loading": "Chargement de l’état de la mémoire",
-  "chat.memory.status.active": "Mémoire active pour cette session",
-  "chat.memory.project.enabled": "Mémoire du projet activée",
-  "chat.memory.project.disabled": "Mémoire du projet désactivée",
-  "chat.memory.command.failed": "La commande de mémoire a échoué",
-  "chat.memory.inspect": "Inspecter la mémoire",
-  "chat.memory.remember": "Mémoriser",
-  "chat.memory.forget": "Oublier",
-  "chat.memory.rebuild": "Reconstruire l’index",
-  "chat.memory.disable": "Désactiver la mémoire",
-  "chat.memory.enable": "Activer la mémoire",
-  "chat.memory.verbose": "Détaillé",
-  "chat.memory.activity.idle": "Aucune activité de mémoire pour cette session",
-  "chat.memory.activity.loaded": "{{tokens}} jetons chargés",
-  "chat.memory.activity.recalled": "{{count}} rappelés",
-  "chat.memory.activity.saved": "{{count}} enregistrés",
-  "chat.memory.activity.loaded.item": "chargé : {{item}}",
-  "chat.memory.activity.recalled.item": "rappelé : {{item}}",
-  "chat.memory.activity.saved.item": "enregistré : {{item}}",
-  "chat.memory.badge.recalled": "Mémoire rappelée",
-  "chat.memory.badge.items": "{{count}} éléments",
-
-  "settings.commitMessage.title": "Commit Message",
-  "settings.commitMessage.override.title": "Utiliser un prompt personnalisé",
-  "settings.commitMessage.override.description":
-    "Remplacer le prompt par défaut pour le commit message. Lorsque cette option est activée, votre prompt personnalisé remplace entièrement le prompt intégré pour les conventional commits.",
-  "settings.commitMessage.prompt.title": "prompt personnalisé",
-  "settings.commitMessage.prompt.description":
-    "prompt système envoyé à l'IA lors de la génération des commit messages. Cela remplace entièrement le prompt par défaut.",
-  "settings.commitMessage.prompt.placeholder":
-    "par ex. Générer des commit messages en espagnol en suivant le format conventional commits. Retourner UNIQUEMENT le commit message.",
-
-  "settings.commitMessage.language.sync": "Synchronisation avec la langue UI",
-  "settings.commitMessage.language.title": "Langue",
-  "settings.commitMessage.language.description":
-    "Choisissez la langue à utiliser pour les messages de commit générés par l'IA:",
 
   "settings.display.username.title": "Nom d'utilisateur",
   "settings.display.username.description": "Nom d'utilisateur personnalisé dans les conversations",
@@ -1787,7 +1672,6 @@ export const dict = {
   "migration.select.defaultModel": "Modèle par défaut",
   "migration.select.autoApproval": "Approbation automatique",
   "migration.select.language": "Langue de l'interface",
-  "migration.select.autocomplete": "Paramètres de saisie semi-automatique",
 
   // Migrate — completion
   "migration.complete.summary": "{{success}} éléments sur {{total}} migrés avec succès.",

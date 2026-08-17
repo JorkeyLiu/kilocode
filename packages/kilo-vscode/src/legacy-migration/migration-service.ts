@@ -25,7 +25,6 @@ import type {
   LegacyCustomMode,
   LegacyMcpServer,
   LegacySettings,
-  LegacyAutocompleteSettings,
   LegacyPromptComponent,
   LegacyMigrationData,
   MigrationSelections,
@@ -101,8 +100,7 @@ export async function detectLegacyData(context: vscode.ExtensionContext): Promis
     settings.alwaysAllowMcp !== undefined ||
     settings.alwaysAllowModeSwitch !== undefined ||
     settings.alwaysAllowSubtasks !== undefined ||
-    Boolean(settings.language) ||
-    Boolean(settings.autocomplete)
+    Boolean(settings.language)
 
   const hasData =
     providers.length > 0 || mcpServers.length > 0 || modes.length > 0 || hasSettings || sessions.length > 0
@@ -303,14 +301,6 @@ export async function migrate(
     const result = await migrateLanguage(legacySettings.language)
     results.push(result)
     onProgress("Language preference", result.status, result.message)
-  }
-
-  // Migrate autocomplete settings
-  if (selections.settings.autocomplete && legacySettings.autocomplete) {
-    onProgress("Autocomplete settings", "migrating")
-    const result = await migrateAutocomplete(legacySettings.autocomplete)
-    results.push(result)
-    onProgress("Autocomplete settings", result.status, result.message)
   }
 
   return results
@@ -687,33 +677,6 @@ async function migrateAutoApproval(
   return results
 }
 
-async function migrateAutocomplete(settings: LegacyAutocompleteSettings): Promise<MigrationResultItem> {
-  try {
-    const config = vscode.workspace.getConfiguration("kilo-code.new.autocomplete")
-    if (settings.enableAutoTrigger !== undefined) {
-      await config.update("enableAutoTrigger", settings.enableAutoTrigger, vscode.ConfigurationTarget.Global)
-    }
-    if (settings.enableSmartInlineTaskKeybinding !== undefined) {
-      await config.update(
-        "enableSmartInlineTaskKeybinding",
-        settings.enableSmartInlineTaskKeybinding,
-        vscode.ConfigurationTarget.Global,
-      )
-    }
-    if (settings.enableChatAutocomplete !== undefined) {
-      await config.update("enableChatAutocomplete", settings.enableChatAutocomplete, vscode.ConfigurationTarget.Global)
-    }
-    return { item: "Autocomplete settings", category: "settings", status: "success" }
-  } catch (err) {
-    return {
-      item: "Autocomplete settings",
-      category: "settings",
-      status: "error",
-      message: getMigrationErrorMessage(err),
-    }
-  }
-}
-
 // Maps legacy locale codes to their new-extension equivalents.
 // Legacy used IETF BCP-47 tags (zh-CN, pt-BR) while the new extension uses short codes.
 // Entries absent from this map have no equivalent in the new extension.
@@ -942,16 +905,6 @@ function readLegacyCustomModePrompts(context: vscode.ExtensionContext): Record<s
 }
 
 function readLegacySettings(context: vscode.ExtensionContext): LegacySettings {
-  const raw = context.globalState.get<Record<string, unknown>>("ghostServiceSettings")
-  const autocomplete: LegacyAutocompleteSettings | undefined =
-    raw && typeof raw === "object"
-      ? {
-          enableAutoTrigger: raw.enableAutoTrigger as boolean | undefined,
-          enableSmartInlineTaskKeybinding: raw.enableSmartInlineTaskKeybinding as boolean | undefined,
-          enableChatAutocomplete: raw.enableChatAutocomplete as boolean | undefined,
-        }
-      : undefined
-
   return {
     autoApprovalEnabled: context.globalState.get<boolean>("kilo-code.autoApprovalEnabled"),
     allowedCommands: context.globalState.get<string[]>("kilo-code.allowedCommands"),
@@ -965,17 +918,7 @@ function readLegacySettings(context: vscode.ExtensionContext): LegacySettings {
     alwaysAllowModeSwitch: context.globalState.get<boolean>("alwaysAllowModeSwitch"),
     alwaysAllowSubtasks: context.globalState.get<boolean>("alwaysAllowSubtasks"),
     language: context.globalState.get<string>("kilo-code.language"),
-    autocomplete: hasAutocompleteData(autocomplete) ? autocomplete : undefined,
   }
-}
-
-function hasAutocompleteData(s: LegacyAutocompleteSettings | undefined): s is LegacyAutocompleteSettings {
-  if (!s) return false
-  return (
-    s.enableAutoTrigger !== undefined ||
-    s.enableSmartInlineTaskKeybinding !== undefined ||
-    s.enableChatAutocomplete !== undefined
-  )
 }
 
 /**

@@ -13,15 +13,11 @@ import AutoApproveTab from "./AutoApproveTab"
 import BrowserTab from "./BrowserTab"
 import CheckpointsTab from "./CheckpointsTab"
 import DisplayTab from "./DisplayTab"
-import AutocompleteTab from "./AutocompleteTab"
 import NotificationsTab from "./NotificationsTab"
-import ContextTab from "./ContextTab"
 
-import CommitMessageTab from "./CommitMessageTab"
 import ExperimentalTab from "./ExperimentalTab"
 import LanguageTab from "./LanguageTab"
 import AboutKiloCodeTab from "./AboutKiloCodeTab"
-import IndexingTab from "./IndexingTab"
 import SandboxingTab from "./SandboxingTab"
 import * as Sandboxing from "./sandboxing"
 import { useServer } from "../../context/server"
@@ -82,11 +78,6 @@ const Settings: Component<SettingsProps> = (props) => {
       },
     ),
   )
-
-  createEffect(() => {
-    if (features().indexing || active() !== "indexing") return
-    onTabChange("providers")
-  })
 
   createEffect(() => {
     if (loading() || sandboxing() || active() !== "sandboxing") return
@@ -166,29 +157,10 @@ const Settings: Component<SettingsProps> = (props) => {
             <Icon name="eye" />
             <span class="label">{language.t("settings.display.title")}</span>
           </Tabs.Trigger>
-          <Tabs.Trigger value="autocomplete" aria-label={language.t("settings.autocomplete.title")}>
-            <Icon name="code-lines" />
-            <span class="label">{language.t("settings.autocomplete.title")}</span>
-          </Tabs.Trigger>
           <Tabs.Trigger value="notifications" aria-label={language.t("settings.notifications.title")}>
             <Icon name="circle-check" />
             <span class="label">{language.t("settings.notifications.title")}</span>
           </Tabs.Trigger>
-          <Tabs.Trigger value="context" aria-label={language.t("settings.context.title")}>
-            <Icon name="server" />
-            <span class="label">{language.t("settings.context.title")}</span>
-          </Tabs.Trigger>
-
-          <Tabs.Trigger value="commitMessage" aria-label={language.t("settings.commitMessage.title")}>
-            <Icon name="edit" />
-            <span class="label">{language.t("settings.commitMessage.title")}</span>
-          </Tabs.Trigger>
-          <Show when={features().indexing}>
-            <Tabs.Trigger value="indexing" aria-label={language.t("settings.indexing.title")}>
-              <Icon name="database" />
-              <span class="label">{language.t("settings.indexing.title")}</span>
-            </Tabs.Trigger>
-          </Show>
           <Tabs.Trigger value="experimental" aria-label={language.t("settings.experimental.title")}>
             <Icon name="settings-gear" />
             <span class="label">{language.t("settings.experimental.title")}</span>
@@ -237,29 +209,10 @@ const Settings: Component<SettingsProps> = (props) => {
           <h3>{language.t("settings.display.title")}</h3>
           <DisplayTab />
         </Tabs.Content>
-        <Tabs.Content value="autocomplete">
-          <h3>{language.t("settings.autocomplete.title")}</h3>
-          <AutocompleteTab onNavigateToModels={() => onTabChange("models")} />
-        </Tabs.Content>
         <Tabs.Content value="notifications">
           <h3>{language.t("settings.notifications.title")}</h3>
           <NotificationsTab />
         </Tabs.Content>
-        <Tabs.Content value="context">
-          <h3>{language.t("settings.context.title")}</h3>
-          <ContextTab />
-        </Tabs.Content>
-
-        <Tabs.Content value="commitMessage">
-          <h3>{language.t("settings.commitMessage.title")}</h3>
-          <CommitMessageTab />
-        </Tabs.Content>
-        <Show when={features().indexing}>
-          <Tabs.Content value="indexing">
-            <h3>{language.t("settings.indexing.title")}</h3>
-            <IndexingTab />
-          </Tabs.Content>
-        </Show>
         <Tabs.Content value="experimental">
           <h3>{language.t("settings.experimental.title")}</h3>
           <ExperimentalTab />

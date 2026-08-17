@@ -214,16 +214,6 @@ export interface LegacyMcpServer {
 }
 
 // ---------------------------------------------------------------------------
-// Autocomplete settings (stored in globalState under "ghostServiceSettings")
-// ---------------------------------------------------------------------------
-
-export interface LegacyAutocompleteSettings {
-  enableAutoTrigger?: boolean
-  enableSmartInlineTaskKeybinding?: boolean
-  enableChatAutocomplete?: boolean
-}
-
-// ---------------------------------------------------------------------------
 // Settings (stored in VS Code globalState under "kilo-code.*" keys)
 // ---------------------------------------------------------------------------
 
@@ -240,7 +230,6 @@ export interface LegacySettings {
   alwaysAllowModeSwitch?: boolean
   alwaysAllowSubtasks?: boolean
   language?: string
-  autocomplete?: LegacyAutocompleteSettings
 }
 
 // ---------------------------------------------------------------------------
@@ -334,7 +323,6 @@ export interface MigrationAutoApprovalSelections {
 export interface MigrationSettingsSelections {
   autoApproval: MigrationAutoApprovalSelections
   language: boolean
-  autocomplete: boolean
 }
 
 export interface MigrationSessionSelection {

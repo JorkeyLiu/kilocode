@@ -5,8 +5,6 @@
 // equivalents in @kilocode/sdk. All API types (Session, Event, Agent,
 // McpStatus, Config, etc.) should be imported from "@kilocode/sdk/v2/client".
 
-import type { IndexingStatus as SdkIndexingStatus } from "@kilocode/sdk/v2/client"
-
 /** Connection config used by the extension to reach the local CLI server */
 export interface ServerConfig {
   baseUrl: string
@@ -44,8 +42,6 @@ interface ProfileData {
   balance: KilocodeBalance | null
   currentOrgId: string | null
 }
-
-export type IndexingStatus = SdkIndexingStatus
 
 /** VS Code editor context sent alongside messages to the CLI backend */
 interface WorktreeFileDiff {

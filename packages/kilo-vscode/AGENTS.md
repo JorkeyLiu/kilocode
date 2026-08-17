@@ -112,7 +112,7 @@ bun run package:vsix -- --target <target>
 
 ### Extension ↔ CLI Backend
 
-The extension is a client of the CLI. Activation creates one shared `KiloConnectionService`; on its first connection, which autocomplete may prewarm, `ServerManager` spawns `bin/kilo serve --port 0`, captures the dynamically assigned port from stdout, and communicates over HTTP + SSE. The current child process is reused unless it exits. A random password is generated and passed via `KILO_SERVER_PASSWORD` env var for basic auth.
+The extension is a client of the CLI. Activation creates one shared `KiloConnectionService`; on its first connection, `ServerManager` spawns `bin/kilo serve --port 0`, captures the dynamically assigned port from stdout, and communicates over HTTP + SSE. The current child process is reused unless it exits. A random password is generated and passed via `KILO_SERVER_PASSWORD` env var for basic auth.
 
 ```
 Extension (Node.js)                          CLI Backend (child process)

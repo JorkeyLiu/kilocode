@@ -9,8 +9,8 @@ description: "Learn how to use the Kilo Code chat interface effectively"
 **Bottom line:** Kilo Code is an AI coding assistant. You chat with it in plain English, and it writes, edits, and explains code for you.
 {% /callout %}
 
-{% callout type="note" title="Prefer quick completions?" %}
-If you're typing code in the editor and want AI to finish your line or block, check out [Autocomplete](/docs/code-with-ai/features/autocomplete) instead. Chat is best for larger tasks, explanations, and multi-file changes.
+{% callout type="note" %}
+Chat is the primary way to interact with Kilo Code. Describe what you want in plain English, and the AI writes, edits, and explains code for you.
 {% /callout %}
 
 ## Quick Setup
@@ -47,11 +47,12 @@ Open your terminal and run `kilo` to launch the interactive terminal interface (
 - **One task at a time** - Break complex work into manageable steps
 - **Include examples** - Show the style or format you want
 
-{% callout type="info" title="Chat vs Autocomplete" %}
-**Use chat** when you need to describe what you want, ask questions, or make changes across multiple files.
+**What makes requests work:**
 
-**Use [autocomplete](/docs/code-with-ai/features/autocomplete)** when you're already typing code and want the AI to finish your thought inline.
-{% /callout %}
+- **Be specific** - "Fix the bug in `calculateTotal` that returns incorrect results" beats "Fix the code"
+- **Use @ mentions** - Reference files and code directly with `@filename`
+- **One task at a time** - Break complex work into manageable steps
+- **Include examples** - Show the style or format you want
 
 ## The Chat Interface
 
@@ -124,7 +125,7 @@ Type `@` in the TUI to get file autocomplete suggestions, or mention file paths 
 | Assuming Kilo knows context | Use `@` to reference specific files |
 | Multiple unrelated tasks | Submit one focused request at a time |
 | Technical jargon overload | Clear, straightforward language works best |
-| Using chat for tiny code changes. | Use [autocomplete](/docs/code-with-ai/features/autocomplete) for inline completions |
+| Using chat for tiny code changes. | Be specific about what you want the agent to do |
 
 **Why it matters:** Kilo Code works best when you communicate like you're talking to a smart teammate who needs clear direction.
 

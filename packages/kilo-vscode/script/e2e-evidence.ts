@@ -316,6 +316,15 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
     required.push({ rel: "cloud-claw-removal-runtime-evidence", base: "scratch" })
     optional.push({ rel: "cloud-claw-removal-ready", base: "scratch" })
   }
+  // P3.4 p3-4-removal: the extension-host runtime evidence (manifest +
+  // command-table + bundle-list + workspace-state absence facts, zero model
+  // requests, retained readiness) is decision-critical; no LLM evidence exists
+  // because this scenario never issues model requests. The ready marker is
+  // optional (copied when present).
+  if (scenarios.has("p3-4-removal")) {
+    required.push({ rel: "p3-4-removal-runtime-evidence", base: "scratch" })
+    optional.push({ rel: "p3-4-removal-ready", base: "scratch" })
+  }
   if (scenarios.has("real-restart")) {
     optional.push({ rel: "e2e-custom-called.txt", base: "workspace" })
   }
@@ -345,7 +354,10 @@ function needsParse(dest: string): boolean {
 /** Validate the file parses (JSON whole-file, or every JSONL line). Returns the failure or null. */
 export function parseFailure(dest: string, bytes: Buffer): string | null {
   if (dest === "llm-requests.jsonl") {
-    const lines = bytes.toString("utf8").split("\n").filter((line) => line.trim() !== "")
+    const lines = bytes
+      .toString("utf8")
+      .split("\n")
+      .filter((line) => line.trim() !== "")
     if (lines.length === 0) return "empty JSONL store (no generation request recorded)"
     for (const line of lines) {
       try {
@@ -487,7 +499,13 @@ export function collectEvidence(opts: CollectOptions): EvidenceManifest {
   const missingRequired = missing.length
   const malformedRequired = malformed.length
   const validated = missingRequired === 0 && malformedRequired === 0
-  const status: EvidenceStatus = !success ? "failed" : !validated ? (malformedRequired > 0 ? "malformed" : "missing") : "complete"
+  const status: EvidenceStatus = !success
+    ? "failed"
+    : !validated
+      ? malformedRequired > 0
+        ? "malformed"
+        : "missing"
+      : "complete"
 
   const run: EvidenceRunInfo = {
     fixtureId,

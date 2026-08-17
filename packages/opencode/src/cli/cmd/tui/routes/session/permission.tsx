@@ -20,7 +20,6 @@ import { ConfigProtection } from "@/kilocode/permission/config-paths"
 import { ProtectedFiles } from "@/kilocode/permission/protected-files"
 import { splitDiffHunks } from "@/kilocode/tui/diff"
 import { normalizeUrls } from "@/kilocode/util/url"
-import { MemoryPermissionRegistry } from "@/kilocode/cli/cmd/tui/routes/session/memory-permission"
 // kilocode_change end
 import { KILO_BASE_MODE, useBindings, useCommandShortcut } from "../../keymap"
 import { usePathFormatter } from "../../context/path-format"
@@ -477,10 +476,6 @@ export function PermissionPrompt(props: { request: PermissionRequest; directory?
                 ),
               }
             }
-
-            const custom = MemoryPermissionRegistry.render(permission, props.request) // kilocode_change
-            if (custom) return custom // kilocode_change
-
             return {
               icon: "⚙",
               title: `Call tool ${permission}`,

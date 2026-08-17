@@ -1,19 +1,18 @@
 ---
 title: "Using Kilo for Free"
-description: "How to use Kilo Code for free — Auto Free, finding free models, free autocomplete, and free background tasks"
+description: "How to use Kilo Code for free — Auto Free, finding free models, and free background tasks"
 ---
 
 # Using Kilo for Free
 
-Kilo Code can be used completely free of charge. There are three places where Kilo uses AI model inference, and each can be configured to use free models.
+Kilo Code can be used completely free of charge. There are two places where Kilo uses AI model inference, and each can be configured to use free models.
 
 ## Where Kilo Uses Models
 
 1. **Agentic interactions** — Conversations with coding agents in IDE extensions (VS Code), CLI, and cloud services like App Builder and Code Reviewer
-2. **Autocomplete** — In-editor code completions as you type (IDE extensions only)
-3. **Background tasks** — Automatic session titles and context summarization
+2. **Background tasks** — Automatic session titles and context summarization
 
-Each of these consumes credits by default. **To use Kilo entirely for free, configure all three to use free models.**
+Each of these consumes credits by default. **To use Kilo entirely for free, configure both to use free models.**
 
 ## Free Agentic Usage
 
@@ -57,18 +56,6 @@ Kilo's cloud services — App Builder, Code Reviewer, and others — also suppor
 Available free models change over time as Kilo partners with different inference providers. Subscribe to our blog or join our [Discord](https://kilo.ai/discord) for updates.
 {% /callout %}
 
-## Free Autocomplete
-
-Kilo's autocomplete feature provides AI-powered code completions as you type in IDE extensions.
-
-By default, autocomplete routes through the Kilo provider and uses credits. If you run out of credits without a free alternative configured, autocomplete stops working — but your main coding workflow is unaffected.
-
-### How to Get It Free
-
-Add your own Mistral AI API key via **BYOK (Bring Your Own Key)** on the Kilo Gateway. Mistral offers a free tier for Codestral. When you configure a BYOK key, autocomplete requests use your key directly — at no cost on your Kilo balance.
-
-See the [Mistral Setup Guide](/docs/code-with-ai/features/autocomplete/mistral-setup) for step-by-step instructions.
-
 ## Free Background Tasks
 
 Kilo uses a small model in the background for tasks like session titling. By default this is Auto Small, which consumes credits. If the small model is unavailable, Kilo falls back to your primary model — which may also consume credits if it's a paid model.
@@ -90,6 +77,4 @@ Replace `your-preferred-free-model` with any free model from the model picker.
 ## Related Resources
 
 - [Auto Model](/docs/code-with-ai/agents/auto-model) — Smart model routing including the free tier
-- [Mistral Setup Guide](/docs/code-with-ai/features/autocomplete/mistral-setup) — Free autocomplete via BYOK
-- [Autocomplete](/docs/code-with-ai/features/autocomplete) — Full autocomplete documentation
 - [CLI Documentation](/docs/code-with-ai/platforms/cli) — Complete CLI reference

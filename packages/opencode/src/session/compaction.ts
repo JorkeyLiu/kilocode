@@ -151,10 +151,7 @@ function buildPrompt(input: { previousSummary?: string; context: string[] }) {
 
 // kilocode_change start
 function preserveRecentBudget(input: { cfg: ConfigV1.Info; model: Provider.Model; outputTokenMax?: number }) {
-  return (
-    input.cfg.compaction?.preserve_recent_tokens ??
-    Math.min(MAX_PRESERVE_RECENT_TOKENS, Math.max(MIN_PRESERVE_RECENT_TOKENS, Math.floor(usable(input) * 0.25)))
-  )
+  return Math.min(MAX_PRESERVE_RECENT_TOKENS, Math.max(MIN_PRESERVE_RECENT_TOKENS, Math.floor(usable(input) * 0.25)))
 }
 // kilocode_change end
 
@@ -265,7 +262,7 @@ export const layer = Layer.effect(
       cfg: ConfigV1.Info
       model: Provider.Model
     }) {
-      const limit = input.cfg.compaction?.tail_turns ?? DEFAULT_TAIL_TURNS
+      const limit = DEFAULT_TAIL_TURNS
       if (limit <= 0) return { head: input.messages, tail_start_id: undefined }
       // kilocode_change start
       const budget = preserveRecentBudget({
@@ -324,10 +321,9 @@ export const layer = Layer.effect(
       sessionID: SessionID
       reason?: PruneReason
     }) {
-      const cfg = yield* config.get()
       const reason = input.reason ?? "normal"
-      if (cfg.compaction?.prune === false) return
-      if (reason === "normal" && cfg.compaction?.prune !== true) return
+      // Automatic overflow safeguard only: never prune old tool outputs on a normal turn.
+      if (reason === "normal") return
       log.info("pruning", { reason })
 
       const msgs = yield* session

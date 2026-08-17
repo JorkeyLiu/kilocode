@@ -30,7 +30,6 @@ describe("sitemap.xml", () => {
     expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/vscode/whats-new")
     expect(xml).toContain("https://kilo.ai/docs/code-with-ai/platforms/cli")
     expect(xml).toContain("https://kilo.ai/docs/automate/tools")
-    expect(xml).toContain("https://kilo.ai/docs/automate/tools/semantic-search")
   })
 
   it("excludes removed legacy product pages", () => {
@@ -44,6 +43,11 @@ describe("sitemap.xml", () => {
       "/automate/tools/read-file",
       "/code-with-ai/features/fast-edits",
       "/ai-providers/vscode-lm",
+      "/code-with-ai/features/autocomplete",
+      "/code-with-ai/features/autocomplete/mistral-setup",
+      "/code-with-ai/features/git-commit-generation",
+      "/customize/context/codebase-indexing",
+      "/automate/tools/semantic-search",
     ]
 
     for (const route of removed) expect(xml).not.toContain(`https://kilo.ai/docs${route}`)

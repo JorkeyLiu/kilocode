@@ -19,7 +19,6 @@
   <!-- packages/kilo-vscode/src/kilo-provider/config-file.ts -->
   <!-- packages/opencode/src/config/config.ts -->
 - <https://app.kilo.ai/credits>
-  <!-- packages/kilo-vscode/src/services/autocomplete/AutocompleteServiceManager.ts -->
   <!-- packages/kilo-vscode/webview-ui/src/components/profile/ProfileView.tsx -->
 - <https://app.kilo.ai/profile>
   <!-- packages/kilo-vscode/webview-ui/src/components/profile/ProfileView.tsx -->
@@ -51,8 +50,6 @@
   <!-- packages/opencode/src/kilocode/provider/error.ts -->
 - <https://docs.github.com/en/actions/how-tos/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services>
   <!-- packages/opencode/src/cli/cmd/github.handler.ts -->
-- <https://docs.inceptionlabs.ai/capabilities/next-edit>
-  <!-- packages/opencode/src/kilocode/server/httpapi/groups/kilo-gateway.ts -->
 - <https://docs.mistral.ai/studio-api/conversations/reasoning>
   <!-- packages/opencode/src/provider/transform.ts -->
 - <https://docs.venice.ai/overview/guides/reasoning-models#reasoning-effort>

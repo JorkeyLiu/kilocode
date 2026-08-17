@@ -137,7 +137,7 @@ When network restriction is on, Kilo blocks:
 - Direct outbound sockets from model-originated shell commands and their child processes
 - HTTP and HTTPS requests from commands and built-in HTTP tools unless the destination is configured in `sandbox.allowed_hosts`
 - Local and remote MCP tool calls and typed resource reads, plus custom or plugin tools that Kilo cannot prove will remain offline
-- Built-in tools such as codebase search, semantic search, and LSP that may use opaque or indirect network access
+- Built-in tools such as codebase search and LSP that may use opaque or indirect network access
 
 Network restriction does not block:
 

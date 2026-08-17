@@ -76,11 +76,6 @@ type CreateInput = {
   location: Location.Ref
 }
 
-type CompactInput = {
-  sessionID: SessionSchema.ID
-  prompt?: Prompt
-}
-
 export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Session.NotFoundError", {
   sessionID: SessionSchema.ID,
 }) {}
@@ -88,7 +83,7 @@ export class NotFoundError extends Schema.TaggedErrorClass<NotFoundError>()("Ses
 export class OperationUnavailableError extends Schema.TaggedErrorClass<OperationUnavailableError>()(
   "Session.OperationUnavailableError",
   {
-    operation: Schema.Literals(["move", "shell", "skill", "switchAgent", "switchModel", "compact", "wait"]),
+    operation: Schema.Literals(["move", "shell", "skill", "switchAgent", "switchModel", "wait"]),
   },
 ) {}
 
@@ -152,7 +147,6 @@ export interface Interface {
     skill: string
     resume?: boolean
   }) => Effect.Effect<void, OperationUnavailableError>
-  readonly compact: (input: CompactInput) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly wait: (id: SessionSchema.ID) => Effect.Effect<void, NotFoundError | OperationUnavailableError>
   readonly resume: (sessionID: SessionSchema.ID) => Effect.Effect<void, NotFoundError | SessionRunner.RunError>
 }
@@ -391,10 +385,6 @@ export const layer = Layer.effect(
       }),
       switchModel: Effect.fn("V2Session.switchModel")(function* () {
         return yield* new OperationUnavailableError({ operation: "switchModel" })
-      }),
-      compact: Effect.fn("V2Session.compact")(function* (input) {
-        yield* result.get(input.sessionID)
-        return yield* new OperationUnavailableError({ operation: "compact" })
       }),
       wait: Effect.fn("V2Session.wait")(function* (sessionID) {
         yield* result.get(sessionID)

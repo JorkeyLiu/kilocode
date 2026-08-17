@@ -553,10 +553,6 @@ describe("session HttpApi", () => {
         expect(context.status).toBe(404)
         expect(yield* responseJson(context)).toEqual(expected)
 
-        const compact = yield* request(`/api/session/${missing}/compact`, { method: "POST", headers })
-        expect(compact.status).toBe(404)
-        expect(yield* responseJson(compact)).toEqual(expected)
-
         const wait = yield* request(`/api/session/${missing}/wait`, { method: "POST", headers })
         expect(wait.status).toBe(404)
         expect(yield* responseJson(wait)).toEqual(expected)
@@ -638,14 +634,6 @@ describe("session HttpApi", () => {
         const test = yield* TestInstance
         const headers = { "x-kilo-directory": test.directory }
         const session = yield* createSession({ title: "v2 unavailable" })
-
-        const compact = yield* request(`/api/session/${session.id}/compact`, { method: "POST", headers })
-        expect(compact.status).toBe(503)
-        expect(yield* responseJson(compact)).toEqual({
-          _tag: "ServiceUnavailableError",
-          message: "V2 session compact is not available yet",
-          service: "v2.session.compact",
-        })
 
         const wait = yield* request(`/api/session/${session.id}/wait`, { method: "POST", headers })
         expect(wait.status).toBe(503)

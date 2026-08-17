@@ -141,8 +141,6 @@ export const dict = {
   "revert.banner.redo.all": "Alle wiederholen",
   "revert.banner.hint": "You can redo these changes until you send a new message",
   "revert.disabled.agentBusy": "Warten bis der Agent fertig ist",
-  "command.session.compact": "Sitzung komprimieren",
-  "command.session.compact.description": "Sitzung zusammenfassen, um die Kontextgröße zu reduzieren",
   "command.session.fork": "Von Nachricht abzweigen",
   "command.session.fork.description": "Neue Sitzung aus einer früheren Nachricht erstellen",
   "command.session.share": "Sitzung teilen",
@@ -644,9 +642,11 @@ export const dict = {
   "ui.permission.configProtected.scope": "Gespeicherte Genehmigungen gelten nur für {{agent}} und diese exakten Pfade.",
   "ui.permission.configProtected.thisAgent": "diesen Agenten",
   "ui.permission.configProtected.addToAllowed": "Genehmigung für diesen Agenten und diese exakten Pfade speichern",
-  "ui.permission.configProtected.removeFromAllowed": "Gespeicherte Genehmigung für diesen Agenten und diese exakten Pfade entfernen",
+  "ui.permission.configProtected.removeFromAllowed":
+    "Gespeicherte Genehmigung für diesen Agenten und diese exakten Pfade entfernen",
   "ui.permission.configProtected.addToDenied": "Ablehnung für diesen Agenten und diese exakten Pfade speichern",
-  "ui.permission.configProtected.removeFromDenied": "Gespeicherte Ablehnung für diesen Agenten und diese exakten Pfade entfernen",
+  "ui.permission.configProtected.removeFromDenied":
+    "Gespeicherte Ablehnung für diesen Agenten und diese exakten Pfade entfernen",
   "ui.permission.doomLoop.prompt": "Potenzielle Schleife beim Tool {{tool}} erkannt. Weiter ausführen?",
   "ui.permission.doomLoop.rule": "{{tool}}-Aufrufe fortsetzen",
   "ui.permission.rule.addToAllowed": "Zur Erlaubt-Liste hinzufügen",
@@ -871,47 +871,6 @@ export const dict = {
   "settings.general.sounds.permissions.description": "Ton abspielen, wenn eine Berechtigung erforderlich ist",
   "settings.general.sounds.errors.title": "Fehler",
   "settings.general.sounds.errors.description": "Ton abspielen, wenn ein Fehler auftritt",
-
-  "prompt.action.indexing": "Indizierungseinstellungen",
-  "settings.indexing.dimension.description":
-    "Leer lassen, um die Embedding-Dimension automatisch aus dem Modell zu erkennen.",
-  "settings.indexing.dimension.placeholder": "Auto",
-  "settings.indexing.dimension.title": "Vektordimension",
-  "settings.indexing.enable.description": "Semantische Codebasis-Indizierung ein- oder ausschalten.",
-  "settings.indexing.showButton.title": "Schaltfläche anzeigen, wenn die Indizierung deaktiviert ist",
-  "settings.indexing.showButton.description":
-    "Zeigt die Schaltfläche für die Indizierung unter dem Eingabefeld an, solange die Indizierung deaktiviert ist. Wenn die Schaltfläche ausgeblendet ist, öffnen Sie Einstellungen > Indizierung, um die Indizierung zu aktivieren.",
-  "settings.indexing.enable.title": "Indizierung aktivieren",
-  "settings.indexing.globalEnable.title": "Global aktivieren",
-  "settings.indexing.globalEnable.description": "Indizierung für jeden Workspace aktivieren.",
-  "settings.indexing.projectEnable.title": "Für dieses Projekt aktivieren",
-  "settings.indexing.projectEnable.description":
-    "Indizierung für diesen Workspace aktivieren, wenn die globale Indizierung deaktiviert ist.",
-  "settings.indexing.projectEnable.disabledTooltip":
-    "Die globale Indizierung ist aktiviert, dieses Projekt wird also bereits erfasst.",
-  "settings.indexing.lancedbDirectory.description": "Optionaler Ordner für den lokalen LanceDB-Speicher.",
-  "settings.indexing.lancedbDirectory.placeholder": "Leer lassen für Standard",
-  "settings.indexing.lancedbDirectory.title": "LanceDB-Ordner",
-  "settings.indexing.model.description": "Das Standard-Embedding-Modell für den ausgewählten Anbieter überschreiben.",
-  "settings.indexing.model.title": "Embedding-Modell",
-  "settings.indexing.provider.description":
-    "Wählen Sie den Anbieter, der für die Generierung von Embeddings für die semantische Suche verwendet wird.",
-  "settings.indexing.kiloModel.title": "Kilo-Modellvoreinstellung",
-  "settings.indexing.kiloModel.description": "Wählen Sie ein unterstütztes von Kilo gehostetes Embedding-Modell.",
-  "settings.indexing.kiloSignIn.title": "Kilo-Anmeldung erforderlich",
-  "settings.indexing.kiloSignIn.description": "Melden Sie sich bei Kilo an, um gehostete Embeddings zu verwenden.",
-  "settings.indexing.provider.title": "Embedding-Anbieter",
-  "settings.indexing.providerField.description": "Anbieterspezifische Verbindungseinstellung.",
-  "settings.indexing.qdrantApiKey.description": "Optionaler API-Schlüssel für die Qdrant-Instanz.",
-  "settings.indexing.qdrantApiKey.placeholder": "Optionaler API-Schlüssel",
-  "settings.indexing.qdrantApiKey.title": "Qdrant API-Schlüssel",
-  "settings.indexing.qdrantUrl.description": "Server-URL für die Qdrant-Instanz.",
-  "settings.indexing.qdrantUrl.title": "Qdrant URL",
-  "settings.indexing.status.title": "Status",
-  "settings.indexing.title": "Indizierung",
-  "settings.indexing.tuning.description": "Erweiterter Such- und Batch-Parameter.",
-  "settings.indexing.vectorStore.description": "Wählen Sie, wo indizierte Embeddings gespeichert werden.",
-  "settings.indexing.vectorStore.title": "Vektorspeicher",
 
   "settings.shortcuts.title": "Tastenkombinationen",
   "settings.shortcuts.reset.button": "Auf Standard zurücksetzen",
@@ -1245,11 +1204,7 @@ export const dict = {
   "settings.browser.title": "Browser",
   "settings.checkpoints.title": "Prüfpunkte",
   "settings.display.title": "Anzeige",
-  "settings.autocomplete.title": "Autovervollständigung",
-  "settings.autocomplete.model.title": "Autocomplete-Modell",
-  "settings.autocomplete.model.description": "Wählen Sie das Modell für Inline-Code-Vervollständigungen",
   "settings.notifications.title": "Benachrichtigungen",
-  "settings.context.title": "Kontext",
 
   "settings.experimental.title": "Experimentell",
   "settings.language.title": "Sprache",
@@ -1369,16 +1324,6 @@ export const dict = {
   "common.add": "Hinzufügen",
   "common.choose": "Auswählen…",
 
-  "settings.autocomplete.autoTrigger.title": "Automatische Inline-Vervollständigung aktivieren",
-  "settings.autocomplete.autoTrigger.description":
-    "Inline-Vervollständigungsvorschläge beim Tippen automatisch anzeigen",
-  "settings.autocomplete.smartKeybinding.title": "Intelligente Inline-Aufgaben-Tastenkombination aktivieren",
-  "settings.autocomplete.smartKeybinding.description":
-    "Eine intelligente Tastenkombination zum Auslösen von Inline-Aufgaben verwenden",
-  "settings.autocomplete.chatAutocomplete.title": "Chat-Textfeld-Autovervollständigung aktivieren",
-  "settings.autocomplete.chatAutocomplete.description": "Autovervollständigungsvorschläge im Chat-Textfeld anzeigen",
-  "settings.autocomplete.modelsHint":
-    "Um zu wählen, welches Modell für die Autovervollständigung verwendet wird, siehe Modelleinstellungen.",
   "settings.notifications.agent.title": "Agent-Abschluss",
   "settings.notifications.agent.description": "Benachrichtigung anzeigen, wenn der Agent eine Aufgabe abschließt",
   "settings.notifications.permissions.title": "Berechtigungsanfragen",
@@ -1636,67 +1581,6 @@ export const dict = {
   "settings.checkpoints.enable.title": "Snapshots aktivieren",
   "settings.checkpoints.enable.description":
     "Prüfpunkte vor Dateibearbeitungen erstellen, um vorherige Zustände wiederherstellen zu können",
-  "settings.context.autoCompaction.title": "Automatische Komprimierung",
-  "settings.context.autoCompaction.description": "Kontext automatisch komprimieren, bevor er das Limit erreicht",
-  "settings.context.compaction.title": "Komprimierung",
-  "settings.context.compactionLimit.title": "Limit für automatische Komprimierung",
-  "settings.context.compactionLimit.description":
-    "Komprimieren, wenn der Kontext diesen Prozentsatz des Modellfensters erreicht. Leer lassen, um nur den Sicherheitspuffer zu verwenden.",
-  "settings.context.prune.title": "Alte Ausgaben bereinigen",
-  "settings.context.prune.description": "Alte Werkzeugausgaben während der Komprimierung entfernen",
-  "settings.context.watcherPatterns": "Datei-Watcher-Ignorierungsmuster",
-  "settings.context.watcherPatterns.description": "Glob-Muster für Dateien, die der Watcher ignorieren soll",
-
-  "settings.context.memory.title": "Speicher",
-  "settings.context.memory.project.title": "Projektspeicher",
-  "settings.context.memory.autoSave.title": "Projektspeicher automatisch speichern",
-  "settings.context.memory.autoSave.description":
-    "Dauerhafte Projektfakten aus abgeschlossenen Durchläufen automatisch speichern, wenn Speicher aktiviert ist.",
-  "settings.context.memory.index.title": "Speicherindex",
-  "settings.context.memory.status.notLoaded": "Nicht geladen",
-  "settings.context.memory.status.disabled": "Deaktiviert",
-  "settings.context.memory.status.enabledTokensOps":
-    "Aktiviert - ~{{session}} Startkontext-Tokens in dieser Sitzung - ~{{tokens}} Tokens im gespeicherten Index - letzte Operation {{ops}}",
-  "settings.context.memory.index.path": "{{path}}/index.kmem",
-  "settings.context.memory.index.enable": "Aktivieren Sie den Speicher, um Projektspeicherdateien zu erstellen.",
-  "settings.context.memory.inspect": "Prüfen",
-  "settings.context.memory.rebuild": "Speicherindex neu erstellen",
-  "chat.memory.status.loading": "Speicherstatus wird geladen",
-  "chat.memory.status.active": "Speicher in dieser Sitzung aktiv",
-  "chat.memory.project.enabled": "Projektspeicher aktiviert",
-  "chat.memory.project.disabled": "Projektspeicher deaktiviert",
-  "chat.memory.command.failed": "Speicherbefehl fehlgeschlagen",
-  "chat.memory.inspect": "Speicher prüfen",
-  "chat.memory.remember": "Merken",
-  "chat.memory.forget": "Vergessen",
-  "chat.memory.rebuild": "Index neu erstellen",
-  "chat.memory.disable": "Speicher deaktivieren",
-  "chat.memory.enable": "Speicher aktivieren",
-  "chat.memory.verbose": "Ausführlich",
-  "chat.memory.activity.idle": "Keine Speicheraktivität in dieser Sitzung",
-  "chat.memory.activity.loaded": "{{tokens}} Token geladen",
-  "chat.memory.activity.recalled": "{{count}} abgerufen",
-  "chat.memory.activity.saved": "{{count}} gespeichert",
-  "chat.memory.activity.loaded.item": "geladen: {{item}}",
-  "chat.memory.activity.recalled.item": "abgerufen: {{item}}",
-  "chat.memory.activity.saved.item": "gespeichert: {{item}}",
-  "chat.memory.badge.recalled": "Speicher abgerufen",
-  "chat.memory.badge.items": "{{count}} Elemente",
-
-  "settings.commitMessage.title": "Commit Message",
-  "settings.commitMessage.override.title": "Benutzerdefinierten prompt verwenden",
-  "settings.commitMessage.override.description":
-    "Den Standard-prompt für die commit message überschreiben. Wenn diese Option aktiviert ist, ersetzt Ihr benutzerdefinierter prompt den integrierten prompt für conventional commits vollständig.",
-  "settings.commitMessage.prompt.title": "Benutzerdefinierter prompt",
-  "settings.commitMessage.prompt.description":
-    "System-prompt, der beim Generieren von commit messages an die KI gesendet wird. Dies ersetzt den Standard-prompt vollständig.",
-  "settings.commitMessage.prompt.placeholder":
-    "z. B. Generiere commit messages auf Spanisch nach dem conventional commits Format. Gib NUR die commit message zurück.",
-
-  "settings.commitMessage.language.sync": "Synchronisieren mit Benutzeroberflächensprache",
-  "settings.commitMessage.language.title": "Sprache",
-  "settings.commitMessage.language.description":
-    "Wählen Sie, welche Sprache für KI-generierte Commit-Nachrichten verwendet werden soll:",
 
   "settings.display.username.title": "Benutzername",
   "settings.display.username.description": "Benutzerdefinierter Benutzername in Gesprächen",
@@ -1779,7 +1663,6 @@ export const dict = {
   "migration.select.defaultModel": "Standardmodell",
   "migration.select.autoApproval": "Automatische Genehmigung",
   "migration.select.language": "UI-Sprache",
-  "migration.select.autocomplete": "Einstellungen für Autovervollständigung",
 
   // Migrate — completion
   "migration.complete.summary": "{{success}} von {{total}} Elementen erfolgreich migriert.",

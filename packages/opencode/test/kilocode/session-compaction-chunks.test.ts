@@ -237,7 +237,7 @@ function fakeRuntime(outputTokenMax?: number, error?: MessageV2.Assistant["error
         Layer.provide(bus),
         Layer.provide(
           Layer.mock(Config.Service)({
-            get: () => Effect.succeed({ ...{}, compaction: { reserved: 1_000 } }),
+            get: () => Effect.succeed({}),
           }),
         ),
       ),
@@ -314,7 +314,7 @@ function liveRuntime(layer: Layer.Layer<LLM.Service>, context = 10_000) {
       Layer.provide(bus),
       Layer.provide(
         Layer.mock(Config.Service)({
-          get: () => Effect.succeed({ ...{}, compaction: { reserved: 1_000 } }),
+          get: () => Effect.succeed({}),
         }),
       ),
     ),

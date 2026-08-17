@@ -7,14 +7,11 @@ description: "Guide for migrating to Kilo Code from other AI coding tools"
 
 Quickly migrate your custom rules from Cursor or Windsurf to Kilo Code. The process typically takes just a few minutes per project.
 
-{% callout type="info" title="Two Workflow Approaches"%}
+{% callout type="info" title="Chat-driven Workflow"%}
 
-Kilo Code supports **two complementary workflows**—choose the one that fits your style, or use both:
+Kilo Code uses a **chat-driven workflow**. Describe what you want in the chat panel or CLI and the AI generates complete implementations, refactors, or fixes. Use `@` mentions to reference files and keep requests focused on one task at a time.
 
-1. **Autocomplete (Ghost)**: Tab-to-accept inline suggestions as you type, similar to Cursor and Windsurf. Enable via Settings → Ghost.
-2. **Chat-driven**: Describe what you want in the chat panel and the AI generates complete implementations.
-
-Many developers combine both approaches: autocomplete for quick completions while typing, and chat for larger refactors or multi-file changes. See [Choosing Your Workflow](#choosing-your-workflow) for details.
+See [Choosing Your Workflow](#choosing-your-workflow) for details.
 
 {% /callout %}
 
@@ -319,7 +316,6 @@ After migration:
 - [ ] **Update team docs:** Document new `.kilocode/rules/` location
 - [ ] **Commit to version control:** `git add .kilocode/`
 - [ ] **Remove old directories:** Delete `.cursor/` or `.windsurf/` folders once verified
-- [ ] **Set up autocomplete:** If you used Cursor/Windsurf autocomplete, enable Ghost (Settings → Ghost) for the same Tab-to-accept experience
 
 ## Troubleshooting
 
@@ -376,31 +372,13 @@ Cursor's nested directories don't map to Kilo Code. Flatten with descriptive nam
 
 ### Choosing Your Workflow
 
-Kilo Code supports **both autocomplete and chat-driven workflows**. Choose the approach that fits your coding style, or combine them:
+Kilo Code uses a **chat-driven workflow**. Describe what you want in plain English, and the AI generates complete implementations, refactors, or fixes. Review and approve changes before they're applied.
 
-**Autocomplete (Ghost) — Tab-to-accept inline suggestions:**
+- **Be specific** in your requests — include file paths, function names, and expected behavior
+- **Use `@` mentions** to reference specific files and terminal output
+- **Break complex work** into focused sub-tasks
 
-1. Open Settings → Ghost
-2. Enable Ghost autocomplete
-3. Configure your preferred model for completions
-4. Start typing and press Tab to accept suggestions
-
-This works the same way as Cursor and Windsurf's autocomplete. Ghost provides context-aware suggestions as you type.
-
-**Chat-driven — describe what you want:**
-
-- Open the chat panel and describe your intent: "Add error handling to this function" or "Create a React component for user profiles"
-- The AI generates complete implementations, refactors, or fixes
-- Review and approve changes before they're applied
-
-**Combining both workflows:**
-
-Many developers use both approaches together:
-
-- **Autocomplete** for quick completions while writing new code
-- **Chat** for larger refactors, bug fixes, or multi-file changes
-
-There's no "right" workflow—use whatever helps you code faster
+For details, see the [Chat Interface](/docs/code-with-ai/agents/chat-interface) documentation.
 
 ## Advanced: Creating Custom Modes
 

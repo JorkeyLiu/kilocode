@@ -21,16 +21,12 @@ export type Event =
   | EventSuggestionShown
   | EventSuggestionAccepted
   | EventSuggestionDismissed
+  | EventLspClientDiagnostics
   | EventKilocodeAgentManagerStart
   | EventKilocodeNotebookRequested
   | EventKilocodeNotebookCancelled
-  | EventLspClientDiagnostics
   | EventKiloSessionsRemoteStatusChanged
-  | EventMemoryStatus1
-  | EventMemoryUpdated1
-  | EventMemoryError1
-  | EventIndexingStatus
-  | EventIndexingWarning
+  | EventModelsDevRefreshed
   | EventServerConnected
   | EventGlobalDisposed
   | EventGlobalConfigUpdated
@@ -85,7 +81,6 @@ export type Event =
   | EventMessagePartDelta
   | EventSessionDiff
   | EventSessionError
-  | EventModelsDevRefreshed
   | EventInstallationUpdated
   | EventInstallationUpdateAvailable
   | EventPermissionAsked
@@ -305,21 +300,6 @@ export type NotebookExecuteRequest = {
 }
 
 export type NotebookRequest = NotebookReadRequest | NotebookEditRequest | NotebookExecuteRequest
-
-export type IndexingStatusState = "Disabled" | "In Progress" | "Complete" | "Error" | "Standby"
-
-export type IndexingStatus = {
-  state: IndexingStatusState
-  message: string
-  processedFiles: number
-  totalFiles: number
-  percent: number
-}
-
-export type IndexingWarning = {
-  code: "qdrant.version-incompatible" | "qdrant.version-unavailable"
-  message: string
-}
 
 export type SnapshotFileDiff = {
   file?: string
@@ -876,7 +856,6 @@ export type EventTuiCommandExecute = {
       | "session.new"
       | "session.share"
       | "session.interrupt"
-      | "session.compact"
       | "session.page.up"
       | "session.page.down"
       | "session.line.up"
@@ -998,16 +977,12 @@ export type GlobalEvent = {
     | EventSuggestionShown
     | EventSuggestionAccepted
     | EventSuggestionDismissed
+    | EventLspClientDiagnostics
     | EventKilocodeAgentManagerStart
     | EventKilocodeNotebookRequested
     | EventKilocodeNotebookCancelled
-    | EventLspClientDiagnostics
     | EventKiloSessionsRemoteStatusChanged
-    | EventMemoryStatus
-    | EventMemoryUpdated
-    | EventMemoryError
-    | EventIndexingStatus
-    | EventIndexingWarning
+    | EventModelsDevRefreshed
     | EventServerConnected
     | EventGlobalDisposed
     | EventGlobalConfigUpdated
@@ -1062,7 +1037,6 @@ export type GlobalEvent = {
     | EventMessagePartDelta
     | EventSessionDiff
     | EventSessionError
-    | EventModelsDevRefreshed
     | EventInstallationUpdated
     | EventInstallationUpdateAvailable
     | EventPermissionAsked
@@ -1163,70 +1137,6 @@ export type ReferenceConfigEntry =
 
 export type ReferenceConfig = {
   [key: string]: ReferenceConfigEntry
-}
-
-export type IndexingConfig = {
-  enabled?: boolean
-  provider?:
-    | "kilo"
-    | "openai"
-    | "ollama"
-    | "openai-compatible"
-    | "gemini"
-    | "mistral"
-    | "vercel-ai-gateway"
-    | "bedrock"
-    | "openrouter"
-    | "voyage"
-  model?: string | null
-  dimension?: number | null
-  vectorStore?: "lancedb" | "qdrant"
-  kilo?: {
-    apiKey?: string
-    baseUrl?: string
-    organizationId?: string
-  }
-  openai?: {
-    apiKey?: string
-  }
-  ollama?: {
-    baseUrl?: string
-  }
-  "openai-compatible"?: {
-    baseUrl?: string
-    apiKey?: string
-  }
-  gemini?: {
-    apiKey?: string
-  }
-  mistral?: {
-    apiKey?: string
-  }
-  "vercel-ai-gateway"?: {
-    apiKey?: string
-  }
-  bedrock?: {
-    region?: string
-    profile?: string
-  }
-  openrouter?: {
-    apiKey?: string
-    specificProvider?: string
-  }
-  voyage?: {
-    apiKey?: string
-  }
-  qdrant?: {
-    url?: string
-    apiKey?: string
-  }
-  lancedb?: {
-    directory?: string
-  }
-  searchMinScore?: number
-  searchMaxResults?: number
-  embeddingBatchSize?: number
-  scannerMaxBatchRetries?: number
 }
 
 export type PermissionActionConfig = "ask" | "allow" | "deny"
@@ -1528,7 +1438,6 @@ export type Config = {
   enabled_providers?: Array<string>
   remote_control?: boolean
   auto_collapse_reasoning?: boolean
-  indexing?: IndexingConfig
   console?: {
     /**
      * Width of the Kilo Console project context sidebar in pixels
@@ -1651,23 +1560,9 @@ export type Config = {
   enterprise?: {
     url?: string
   }
-  commit_message?: {
-    prompt?: string
-  }
   tool_output?: {
     max_lines?: number
     max_bytes?: number
-  }
-  compaction?: {
-    auto?: boolean
-    /**
-     * Percentage of the model input/context window that triggers automatic compaction. The reserved safety buffer still applies if it would compact sooner.
-     */
-    threshold_percent?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    prune?: boolean
-    tail_turns?: number
-    preserve_recent_tokens?: number
-    reserved?: number
   }
   experimental?: {
     disable_paste_summary?: boolean
@@ -2800,7 +2695,6 @@ export type EventTuiCommandExecute2 = {
       | "session.new"
       | "session.share"
       | "session.interrupt"
-      | "session.compact"
       | "session.page.up"
       | "session.page.down"
       | "session.line.up"
@@ -2865,10 +2759,6 @@ export type BackgroundProcessLogs = {
   id: string
   sessionID: string
   output: string
-}
-
-export type CommitMessageNoChangesError = {
-  message: string
 }
 
 export type ConfigOverlayResponse = {
@@ -3020,20 +2910,6 @@ export type TuiKeybindInfo = {
 
 export type TuiKeybindListResponse = {
   keybinds: Array<TuiKeybindInfo>
-}
-
-export type KiloEmbeddingModelCatalog = {
-  defaultModel: string
-  models: Array<{
-    id: string
-    name: string
-    dimension: number
-    scoreThreshold: number
-    note?: string
-  }>
-  aliases: {
-    [key: string]: string
-  }
 }
 
 export type ConflictError = {
@@ -3272,22 +3148,6 @@ export type KilocodeSessionImportResult = {
   skipped?: boolean
 }
 
-export type MemoryApiClientError = {
-  name: "MemoryApiClientError"
-  data: {
-    code: string
-    message: string
-  }
-}
-
-export type MemoryApiServerError = {
-  name: "MemoryApiServerError"
-  data: {
-    code: string
-    message: string
-  }
-}
-
 export type UnauthorizedError = {
   _tag: "UnauthorizedError"
   message: string
@@ -3522,6 +3382,15 @@ export type EventSuggestionDismissed = {
   }
 }
 
+export type EventLspClientDiagnostics = {
+  id: string
+  type: "lsp.client.diagnostics"
+  properties: {
+    serverID: string
+    path: string
+  }
+}
+
 export type EventKilocodeAgentManagerStart = {
   id: string
   type: "kilocode.agent_manager.start"
@@ -3557,15 +3426,6 @@ export type EventKilocodeNotebookCancelled = {
   }
 }
 
-export type EventLspClientDiagnostics = {
-  id: string
-  type: "lsp.client.diagnostics"
-  properties: {
-    serverID: string
-    path: string
-  }
-}
-
 export type EventKiloSessionsRemoteStatusChanged = {
   id: string
   type: "kilo-sessions.remote-status-changed"
@@ -3575,129 +3435,12 @@ export type EventKiloSessionsRemoteStatusChanged = {
   }
 }
 
-export type EventMemoryStatus = {
+export type EventModelsDevRefreshed = {
   id: string
-  type: "memory.status"
+  type: "models-dev.refreshed"
   properties: {
-    directory: string
-    sessionID?: string
-    enabled: boolean
-    state: "idle" | "checking" | "injecting" | "updating" | "skipped" | "error"
-    reason?: string
-    project: {
-      bytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      estimatedTokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      truncated: boolean
-      updatedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    }
-    consolidation?: {
-      trigger: "explicit" | "turn-close" | "rebuild"
-      operationCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    }
-    detail?: {
-      type: "saved" | "skipped" | "recalled"
-      message: string
-      reason?: string
-      duplicateOf?: string
-      tokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      operationCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      added?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      skippedCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      sources?: Array<string>
-      files?: Array<string>
-    }
+    [key: string]: unknown
   }
-}
-
-export type EventMemoryUpdated = {
-  id: string
-  type: "memory.updated"
-  properties: {
-    directory: string
-    sessionID?: string
-    enabled: boolean
-    state: "idle" | "checking" | "injecting" | "updating" | "skipped" | "error"
-    reason?: string
-    project: {
-      bytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      estimatedTokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      truncated: boolean
-      updatedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    }
-    consolidation?: {
-      trigger: "explicit" | "turn-close" | "rebuild"
-      operationCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    }
-    detail?: {
-      type: "saved" | "skipped" | "recalled"
-      message: string
-      reason?: string
-      duplicateOf?: string
-      tokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      operationCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      added?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      skippedCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      sources?: Array<string>
-      files?: Array<string>
-    }
-  }
-}
-
-export type EventMemoryError = {
-  id: string
-  type: "memory.error"
-  properties: {
-    directory: string
-    sessionID?: string
-    enabled: boolean
-    state: "idle" | "checking" | "injecting" | "updating" | "skipped" | "error"
-    reason?: string
-    project: {
-      bytes: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      estimatedTokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      truncated: boolean
-      updatedAt?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    }
-    consolidation?: {
-      trigger: "explicit" | "turn-close" | "rebuild"
-      operationCount: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      cost: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      tokens: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    }
-    detail?: {
-      type: "saved" | "skipped" | "recalled"
-      message: string
-      reason?: string
-      duplicateOf?: string
-      tokens?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      operationCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      added?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      removed?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      skippedCount?: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-      sources?: Array<string>
-      files?: Array<string>
-    }
-  }
-}
-
-export type EventIndexingStatus = {
-  id: string
-  type: "indexing.status"
-  properties: {
-    status: IndexingStatus
-  }
-}
-
-export type EventIndexingWarning = {
-  id: string
-  type: "indexing.warning"
-  properties: IndexingWarning
 }
 
 export type EventServerConnected = {
@@ -4449,14 +4192,6 @@ export type EventSessionError = {
       | ContextOverflowError
       | ApiError
       | AgentRequirementError
-  }
-}
-
-export type EventModelsDevRefreshed = {
-  id: string
-  type: "models-dev.refreshed"
-  properties: {
-    [key: string]: unknown
   }
 }
 
@@ -5937,117 +5672,6 @@ export type QuestionV2Reply = {
    * User answers in order of questions (each answer is an array of selected labels)
    */
   answers: Array<QuestionV2Answer>
-}
-
-export type EventMemoryStatus1 = {
-  id: string
-  type: "memory.status"
-  properties: {
-    directory: string
-    sessionID?: string
-    enabled: boolean
-    state: "idle" | "checking" | "injecting" | "updating" | "skipped" | "error"
-    reason?: string
-    project: {
-      bytes: number | "NaN" | "Infinity" | "-Infinity"
-      estimatedTokens: number | "NaN" | "Infinity" | "-Infinity"
-      truncated: boolean
-      updatedAt?: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    consolidation?: {
-      trigger: "explicit" | "turn-close" | "rebuild"
-      operationCount: number | "NaN" | "Infinity" | "-Infinity"
-      cost: number | "NaN" | "Infinity" | "-Infinity"
-      tokens: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    detail?: {
-      type: "saved" | "skipped" | "recalled"
-      message: string
-      reason?: string
-      duplicateOf?: string
-      tokens?: number | "NaN" | "Infinity" | "-Infinity"
-      operationCount?: number | "NaN" | "Infinity" | "-Infinity"
-      added?: number | "NaN" | "Infinity" | "-Infinity"
-      removed?: number | "NaN" | "Infinity" | "-Infinity"
-      skippedCount?: number | "NaN" | "Infinity" | "-Infinity"
-      sources?: Array<string>
-      files?: Array<string>
-    }
-  }
-}
-
-export type EventMemoryUpdated1 = {
-  id: string
-  type: "memory.updated"
-  properties: {
-    directory: string
-    sessionID?: string
-    enabled: boolean
-    state: "idle" | "checking" | "injecting" | "updating" | "skipped" | "error"
-    reason?: string
-    project: {
-      bytes: number | "NaN" | "Infinity" | "-Infinity"
-      estimatedTokens: number | "NaN" | "Infinity" | "-Infinity"
-      truncated: boolean
-      updatedAt?: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    consolidation?: {
-      trigger: "explicit" | "turn-close" | "rebuild"
-      operationCount: number | "NaN" | "Infinity" | "-Infinity"
-      cost: number | "NaN" | "Infinity" | "-Infinity"
-      tokens: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    detail?: {
-      type: "saved" | "skipped" | "recalled"
-      message: string
-      reason?: string
-      duplicateOf?: string
-      tokens?: number | "NaN" | "Infinity" | "-Infinity"
-      operationCount?: number | "NaN" | "Infinity" | "-Infinity"
-      added?: number | "NaN" | "Infinity" | "-Infinity"
-      removed?: number | "NaN" | "Infinity" | "-Infinity"
-      skippedCount?: number | "NaN" | "Infinity" | "-Infinity"
-      sources?: Array<string>
-      files?: Array<string>
-    }
-  }
-}
-
-export type EventMemoryError1 = {
-  id: string
-  type: "memory.error"
-  properties: {
-    directory: string
-    sessionID?: string
-    enabled: boolean
-    state: "idle" | "checking" | "injecting" | "updating" | "skipped" | "error"
-    reason?: string
-    project: {
-      bytes: number | "NaN" | "Infinity" | "-Infinity"
-      estimatedTokens: number | "NaN" | "Infinity" | "-Infinity"
-      truncated: boolean
-      updatedAt?: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    consolidation?: {
-      trigger: "explicit" | "turn-close" | "rebuild"
-      operationCount: number | "NaN" | "Infinity" | "-Infinity"
-      cost: number | "NaN" | "Infinity" | "-Infinity"
-      tokens: number | "NaN" | "Infinity" | "-Infinity"
-    }
-    detail?: {
-      type: "saved" | "skipped" | "recalled"
-      message: string
-      reason?: string
-      duplicateOf?: string
-      tokens?: number | "NaN" | "Infinity" | "-Infinity"
-      operationCount?: number | "NaN" | "Infinity" | "-Infinity"
-      added?: number | "NaN" | "Infinity" | "-Infinity"
-      removed?: number | "NaN" | "Infinity" | "-Infinity"
-      skippedCount?: number | "NaN" | "Infinity" | "-Infinity"
-      sources?: Array<string>
-      files?: Array<string>
-    }
-  }
 }
 
 export type ModelV2Info1 = {
@@ -9200,44 +8824,6 @@ export type SessionShareResponses = {
 
 export type SessionShareResponse = SessionShareResponses[keyof SessionShareResponses]
 
-export type SessionSummarizeData = {
-  body?: {
-    providerID: string
-    modelID: string
-    auto?: boolean
-  }
-  path: {
-    sessionID: string
-  }
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/session/{sessionID}/summarize"
-}
-
-export type SessionSummarizeErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * NotFoundError
-   */
-  404: NotFoundError
-}
-
-export type SessionSummarizeError = SessionSummarizeErrors[keyof SessionSummarizeErrors]
-
-export type SessionSummarizeResponses = {
-  /**
-   * Summarized session
-   */
-  200: boolean
-}
-
-export type SessionSummarizeResponse = SessionSummarizeResponses[keyof SessionSummarizeResponses]
-
 export type SessionPromptAsyncData = {
   body?: {
     messageID?: string
@@ -10699,48 +10285,6 @@ export type BackgroundProcessStopSessionResponses = {
 export type BackgroundProcessStopSessionResponse =
   BackgroundProcessStopSessionResponses[keyof BackgroundProcessStopSessionResponses]
 
-export type CommitMessageGenerateData = {
-  body?: {
-    /**
-     * Workspace/repo path
-     */
-    path: string
-    selectedFiles?: Array<string>
-    previousMessage?: string
-    language?: string
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/commit-message"
-}
-
-export type CommitMessageGenerateErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-  /**
-   * CommitMessageNoChangesError
-   */
-  422: CommitMessageNoChangesError
-}
-
-export type CommitMessageGenerateError = CommitMessageGenerateErrors[keyof CommitMessageGenerateErrors]
-
-export type CommitMessageGenerateResponses = {
-  /**
-   * Generated commit message
-   */
-  200: {
-    message: string
-  }
-}
-
-export type CommitMessageGenerateResponse = CommitMessageGenerateResponses[keyof CommitMessageGenerateResponses]
-
 export type ConfigOverlayData = {
   body?: never
   path?: never
@@ -11176,90 +10720,6 @@ export type EnhancePromptEnhanceResponses = {
 
 export type EnhancePromptEnhanceResponse = EnhancePromptEnhanceResponses[keyof EnhancePromptEnhanceResponses]
 
-export type IndexingStatusData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/indexing/status"
-}
-
-export type IndexingStatusErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type IndexingStatusError = IndexingStatusErrors[keyof IndexingStatusErrors]
-
-export type IndexingStatusResponses = {
-  /**
-   * Indexing status
-   */
-  200: IndexingStatus
-}
-
-export type IndexingStatusResponse = IndexingStatusResponses[keyof IndexingStatusResponses]
-
-export type IndexingWarningsData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/indexing/warnings"
-}
-
-export type IndexingWarningsErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type IndexingWarningsError = IndexingWarningsErrors[keyof IndexingWarningsErrors]
-
-export type IndexingWarningsResponses = {
-  /**
-   * Indexing warnings
-   */
-  200: Array<IndexingWarning>
-}
-
-export type IndexingWarningsResponse = IndexingWarningsResponses[keyof IndexingWarningsResponses]
-
-export type IndexingModelsData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/indexing/models"
-}
-
-export type IndexingModelsErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type IndexingModelsError = IndexingModelsErrors[keyof IndexingModelsErrors]
-
-export type IndexingModelsResponses = {
-  /**
-   * Kilo embedding model catalog
-   */
-  200: KiloEmbeddingModelCatalog
-}
-
-export type IndexingModelsResponse = IndexingModelsResponses[keyof IndexingModelsResponses]
-
 export type InstanceReloadData = {
   body?: never
   path?: never
@@ -11593,102 +11053,6 @@ export type KiloModesResponses = {
 }
 
 export type KiloModesResponse = KiloModesResponses[keyof KiloModesResponses]
-
-export type KiloFimData = {
-  body?: {
-    prefix: string
-    suffix: string
-    provider?: string
-    model?: string
-    maxTokens?: number
-    temperature?: number
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/kilo/fim"
-}
-
-export type KiloFimErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type KiloFimError = KiloFimErrors[keyof KiloFimErrors]
-
-export type KiloFimResponses = {
-  /**
-   * Streaming FIM completion response
-   */
-  200: {
-    choices?: Array<{
-      delta?: {
-        content?: string
-      }
-      text?: string
-    }>
-    usage?: {
-      prompt_tokens?: number
-      completion_tokens?: number
-    }
-    cost?: number
-  }
-}
-
-export type KiloFimResponse = KiloFimResponses[keyof KiloFimResponses]
-
-export type KiloEditData = {
-  body?: {
-    provider?: string
-    model?: string
-    maxTokens?: number
-    currentFilePath: string
-    currentFileContent: string
-    cursorLine: number
-    cursorCharacter: number
-    editableRegionStartLine: number
-    editableRegionEndLine: number
-    recentlyViewedSnippets: Array<{
-      filepath: string
-      content: string
-    }>
-    editDiffHistory: Array<string>
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/kilo/edit"
-}
-
-export type KiloEditErrors = {
-  /**
-   * BadRequest | InvalidRequestError
-   */
-  400: EffectHttpApiErrorBadRequest | InvalidRequestError
-}
-
-export type KiloEditError = KiloEditErrors[keyof KiloEditErrors]
-
-export type KiloEditResponses = {
-  /**
-   * Next Edit completion
-   */
-  200: {
-    content: string
-    usage?: {
-      prompt_tokens?: number
-      completion_tokens?: number
-    }
-  }
-}
-
-export type KiloEditResponse = KiloEditResponses[keyof KiloEditResponses]
 
 export type KiloAudioTranscriptionsData = {
   body?: {
@@ -13094,659 +12458,6 @@ export type TelemetrySetEnabledResponses = {
 
 export type TelemetrySetEnabledResponse = TelemetrySetEnabledResponses[keyof TelemetrySetEnabledResponses]
 
-export type MemoryStatusData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/status"
-}
-
-export type MemoryStatusErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryStatusError = MemoryStatusErrors[keyof MemoryStatusErrors]
-
-export type MemoryStatusResponses = {
-  /**
-   * Memory status
-   */
-  200: {
-    root: string
-    state: {
-      version: 1
-      enabled: boolean
-      scope: "project"
-      autoInject: boolean
-      autoConsolidate: boolean
-      verbose: boolean
-      capture: {
-        mode: "selective"
-        turnClose: boolean
-        explicit: boolean
-        maxOpsPerRun: number
-        minIntervalMs: number
-        timeoutMs: number
-      }
-      limits: {
-        maxProjectIndexBytes: number
-        maxSessionFiles: number
-        maxRecentSessions: number
-        maxConsolidationInputBytes: number
-        maxLineChars: number
-        maxSessionLineChars: number
-      }
-      stats: {
-        lastInjectedAt: number
-        lastInjectedBytes: number
-        lastInjectedTokens: number
-        lastInjectedSessionID: string
-        lastTypedConsolidationAt: number
-        lastSessionSavedAt: number
-        lastConsolidationCost: number
-        lastConsolidationTokens: number
-        lastOperationCount: number
-        lastRecallAt: number
-        lastRecallCount: number
-        lastRecallSessionID: string
-      }
-    }
-    exists: {
-      state: boolean
-      index: boolean
-    }
-    index: {
-      bytes: number
-      estimatedTokens: number
-      preview: string
-    }
-  }
-}
-
-export type MemoryStatusResponse = MemoryStatusResponses[keyof MemoryStatusResponses]
-
-export type MemoryShowData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/show"
-}
-
-export type MemoryShowErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryShowError = MemoryShowErrors[keyof MemoryShowErrors]
-
-export type MemoryShowResponses = {
-  /**
-   * Memory source and index
-   */
-  200: {
-    root: string
-    state: {
-      version: 1
-      enabled: boolean
-      scope: "project"
-      autoInject: boolean
-      autoConsolidate: boolean
-      verbose: boolean
-      capture: {
-        mode: "selective"
-        turnClose: boolean
-        explicit: boolean
-        maxOpsPerRun: number
-        minIntervalMs: number
-        timeoutMs: number
-      }
-      limits: {
-        maxProjectIndexBytes: number
-        maxSessionFiles: number
-        maxRecentSessions: number
-        maxConsolidationInputBytes: number
-        maxLineChars: number
-        maxSessionLineChars: number
-      }
-      stats: {
-        lastInjectedAt: number
-        lastInjectedBytes: number
-        lastInjectedTokens: number
-        lastInjectedSessionID: string
-        lastTypedConsolidationAt: number
-        lastSessionSavedAt: number
-        lastConsolidationCost: number
-        lastConsolidationTokens: number
-        lastOperationCount: number
-        lastRecallAt: number
-        lastRecallCount: number
-        lastRecallSessionID: string
-      }
-    }
-    sources: {
-      project: string
-      environment: string
-      corrections: string
-    }
-    index: string
-    items: string
-    changes: string
-    decisions: string
-  }
-}
-
-export type MemoryShowResponse = MemoryShowResponses[keyof MemoryShowResponses]
-
-export type MemoryEnableData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/enable"
-}
-
-export type MemoryEnableErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryEnableError = MemoryEnableErrors[keyof MemoryEnableErrors]
-
-export type MemoryEnableResponses = {
-  /**
-   * Memory enabled
-   */
-  200: {
-    root: string
-    state: {
-      version: 1
-      enabled: boolean
-      scope: "project"
-      autoInject: boolean
-      autoConsolidate: boolean
-      verbose: boolean
-      capture: {
-        mode: "selective"
-        turnClose: boolean
-        explicit: boolean
-        maxOpsPerRun: number
-        minIntervalMs: number
-        timeoutMs: number
-      }
-      limits: {
-        maxProjectIndexBytes: number
-        maxSessionFiles: number
-        maxRecentSessions: number
-        maxConsolidationInputBytes: number
-        maxLineChars: number
-        maxSessionLineChars: number
-      }
-      stats: {
-        lastInjectedAt: number
-        lastInjectedBytes: number
-        lastInjectedTokens: number
-        lastInjectedSessionID: string
-        lastTypedConsolidationAt: number
-        lastSessionSavedAt: number
-        lastConsolidationCost: number
-        lastConsolidationTokens: number
-        lastOperationCount: number
-        lastRecallAt: number
-        lastRecallCount: number
-        lastRecallSessionID: string
-      }
-    }
-    index: {
-      text: string
-      bytes: number
-      tokens: number
-      truncated: boolean
-    }
-  }
-}
-
-export type MemoryEnableResponse = MemoryEnableResponses[keyof MemoryEnableResponses]
-
-export type MemoryDisableData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/disable"
-}
-
-export type MemoryDisableErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryDisableError = MemoryDisableErrors[keyof MemoryDisableErrors]
-
-export type MemoryDisableResponses = {
-  /**
-   * Memory disabled
-   */
-  200: {
-    root: string
-    state: {
-      version: 1
-      enabled: boolean
-      scope: "project"
-      autoInject: boolean
-      autoConsolidate: boolean
-      verbose: boolean
-      capture: {
-        mode: "selective"
-        turnClose: boolean
-        explicit: boolean
-        maxOpsPerRun: number
-        minIntervalMs: number
-        timeoutMs: number
-      }
-      limits: {
-        maxProjectIndexBytes: number
-        maxSessionFiles: number
-        maxRecentSessions: number
-        maxConsolidationInputBytes: number
-        maxLineChars: number
-        maxSessionLineChars: number
-      }
-      stats: {
-        lastInjectedAt: number
-        lastInjectedBytes: number
-        lastInjectedTokens: number
-        lastInjectedSessionID: string
-        lastTypedConsolidationAt: number
-        lastSessionSavedAt: number
-        lastConsolidationCost: number
-        lastConsolidationTokens: number
-        lastOperationCount: number
-        lastRecallAt: number
-        lastRecallCount: number
-        lastRecallSessionID: string
-      }
-    }
-  }
-}
-
-export type MemoryDisableResponse = MemoryDisableResponses[keyof MemoryDisableResponses]
-
-export type MemoryConfigureData = {
-  body?: {
-    autoConsolidate?: boolean
-    verbose?: boolean
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/configure"
-}
-
-export type MemoryConfigureErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryConfigureError = MemoryConfigureErrors[keyof MemoryConfigureErrors]
-
-export type MemoryConfigureResponses = {
-  /**
-   * Memory configured
-   */
-  200: {
-    root: string
-    state: {
-      version: 1
-      enabled: boolean
-      scope: "project"
-      autoInject: boolean
-      autoConsolidate: boolean
-      verbose: boolean
-      capture: {
-        mode: "selective"
-        turnClose: boolean
-        explicit: boolean
-        maxOpsPerRun: number
-        minIntervalMs: number
-        timeoutMs: number
-      }
-      limits: {
-        maxProjectIndexBytes: number
-        maxSessionFiles: number
-        maxRecentSessions: number
-        maxConsolidationInputBytes: number
-        maxLineChars: number
-        maxSessionLineChars: number
-      }
-      stats: {
-        lastInjectedAt: number
-        lastInjectedBytes: number
-        lastInjectedTokens: number
-        lastInjectedSessionID: string
-        lastTypedConsolidationAt: number
-        lastSessionSavedAt: number
-        lastConsolidationCost: number
-        lastConsolidationTokens: number
-        lastOperationCount: number
-        lastRecallAt: number
-        lastRecallCount: number
-        lastRecallSessionID: string
-      }
-    }
-  }
-}
-
-export type MemoryConfigureResponse = MemoryConfigureResponses[keyof MemoryConfigureResponses]
-
-export type MemoryRebuildData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/rebuild"
-}
-
-export type MemoryRebuildErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryRebuildError = MemoryRebuildErrors[keyof MemoryRebuildErrors]
-
-export type MemoryRebuildResponses = {
-  /**
-   * Memory rebuilt
-   */
-  200: {
-    root: string
-    state: {
-      version: 1
-      enabled: boolean
-      scope: "project"
-      autoInject: boolean
-      autoConsolidate: boolean
-      verbose: boolean
-      capture: {
-        mode: "selective"
-        turnClose: boolean
-        explicit: boolean
-        maxOpsPerRun: number
-        minIntervalMs: number
-        timeoutMs: number
-      }
-      limits: {
-        maxProjectIndexBytes: number
-        maxSessionFiles: number
-        maxRecentSessions: number
-        maxConsolidationInputBytes: number
-        maxLineChars: number
-        maxSessionLineChars: number
-      }
-      stats: {
-        lastInjectedAt: number
-        lastInjectedBytes: number
-        lastInjectedTokens: number
-        lastInjectedSessionID: string
-        lastTypedConsolidationAt: number
-        lastSessionSavedAt: number
-        lastConsolidationCost: number
-        lastConsolidationTokens: number
-        lastOperationCount: number
-        lastRecallAt: number
-        lastRecallCount: number
-        lastRecallSessionID: string
-      }
-    }
-    index: {
-      text: string
-      bytes: number
-      tokens: number
-      truncated: boolean
-    }
-  }
-}
-
-export type MemoryRebuildResponse = MemoryRebuildResponses[keyof MemoryRebuildResponses]
-
-export type MemoryRememberData = {
-  body?: {
-    text: string
-    key?: string
-    file?: "project.md" | "environment.md" | "corrections.md"
-    section?: string
-    sessionID?: string
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/remember"
-}
-
-export type MemoryRememberErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryRememberError = MemoryRememberErrors[keyof MemoryRememberErrors]
-
-export type MemoryRememberResponses = {
-  /**
-   * Memory operation result
-   */
-  200: {
-    operationCount: number
-    added: number
-    removed: number
-    skipped: Array<{
-      reason: "self_referential" | "out_of_scope" | "secret"
-      text?: string
-    }>
-    index: {
-      text: string
-      bytes: number
-      tokens: number
-      truncated: boolean
-    }
-  }
-}
-
-export type MemoryRememberResponse = MemoryRememberResponses[keyof MemoryRememberResponses]
-
-export type MemoryCorrectData = {
-  body?: {
-    text: string
-    key?: string
-    sessionID?: string
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/correct"
-}
-
-export type MemoryCorrectErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryCorrectError = MemoryCorrectErrors[keyof MemoryCorrectErrors]
-
-export type MemoryCorrectResponses = {
-  /**
-   * Memory correction result
-   */
-  200: {
-    operationCount: number
-    added: number
-    removed: number
-    skipped: Array<{
-      reason: "self_referential" | "out_of_scope" | "secret"
-      text?: string
-    }>
-    index: {
-      text: string
-      bytes: number
-      tokens: number
-      truncated: boolean
-    }
-  }
-}
-
-export type MemoryCorrectResponse = MemoryCorrectResponses[keyof MemoryCorrectResponses]
-
-export type MemoryForgetData = {
-  body?: {
-    query: string
-    sessionID?: string
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/forget"
-}
-
-export type MemoryForgetErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryForgetError = MemoryForgetErrors[keyof MemoryForgetErrors]
-
-export type MemoryForgetResponses = {
-  /**
-   * Memory forget result
-   */
-  200: {
-    operationCount: number
-    added: number
-    removed: number
-    skipped: Array<{
-      reason: "self_referential" | "out_of_scope" | "secret"
-      text?: string
-    }>
-    index: {
-      text: string
-      bytes: number
-      tokens: number
-      truncated: boolean
-    }
-  }
-}
-
-export type MemoryForgetResponse = MemoryForgetResponses[keyof MemoryForgetResponses]
-
-export type MemoryPurgeData = {
-  body?: {
-    confirm: true
-  }
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/memory/purge"
-}
-
-export type MemoryPurgeErrors = {
-  /**
-   * MemoryApiClientError | InvalidRequestError
-   */
-  400: MemoryApiClientError | InvalidRequestError
-  /**
-   * MemoryApiServerError
-   */
-  503: MemoryApiServerError
-}
-
-export type MemoryPurgeError = MemoryPurgeErrors[keyof MemoryPurgeErrors]
-
-export type MemoryPurgeResponses = {
-  /**
-   * Memory purged
-   */
-  200: {
-    root: string
-    purged: boolean
-  }
-}
-
-export type MemoryPurgeResponse = MemoryPurgeResponses[keyof MemoryPurgeResponses]
-
 export type V2HealthGetData = {
   body?: never
   path?: never
@@ -13901,45 +12612,6 @@ export type V2SessionPromptResponses = {
 }
 
 export type V2SessionPromptResponse = V2SessionPromptResponses[keyof V2SessionPromptResponses]
-
-export type V2SessionCompactData = {
-  body?: never
-  path: {
-    sessionID: string
-  }
-  query?: never
-  url: "/api/session/{sessionID}/compact"
-}
-
-export type V2SessionCompactErrors = {
-  /**
-   * InvalidRequestError
-   */
-  400: InvalidRequestError
-  /**
-   * UnauthorizedError
-   */
-  401: UnauthorizedError
-  /**
-   * SessionNotFoundError
-   */
-  404: SessionNotFoundError
-  /**
-   * ServiceUnavailableError
-   */
-  503: ServiceUnavailableError
-}
-
-export type V2SessionCompactError = V2SessionCompactErrors[keyof V2SessionCompactErrors]
-
-export type V2SessionCompactResponses = {
-  /**
-   * <No Content>
-   */
-  204: void
-}
-
-export type V2SessionCompactResponse = V2SessionCompactResponses[keyof V2SessionCompactResponses]
 
 export type V2SessionWaitData = {
   body?: never

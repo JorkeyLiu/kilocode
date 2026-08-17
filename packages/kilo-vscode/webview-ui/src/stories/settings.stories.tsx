@@ -8,7 +8,6 @@ import type { Meta, StoryObj } from "storybook-solidjs-vite"
 import { StoryProviders, mockSessionValue } from "./StoryProviders"
 import { useDialog } from "@kilocode/kilo-ui/context/dialog"
 import { SessionContext } from "../context/session"
-import { KiloEmbeddingModelsContext } from "../context/kilo-embedding-models"
 import Settings from "../components/settings/Settings"
 import ProvidersTab from "../components/settings/ProvidersTab"
 import ProviderConnectDialog from "../components/settings/ProviderConnectDialog"
@@ -19,7 +18,6 @@ import AutoApproveTab from "../components/settings/AutoApproveTab"
 import ModeEditView from "../components/settings/ModeEditView"
 import McpEditView from "../components/settings/McpEditView"
 import type { AgentConfig, CommandConfig, Config } from "../types/messages"
-import IndexingTab from "../components/settings/IndexingTab"
 import { SidebarEmptyState } from "../components/chat/SidebarEmptyState"
 import { WorkStyleContext, type WorkStyleContextValue } from "../context/work-style"
 import { getVSCodeAPI } from "../context/vscode"
@@ -576,131 +574,6 @@ export const ModeEditPermissions: Story = {
   },
 }
 
-export const IndexingProviderBlurRace: Story = {
-  name: "IndexingTab",
-  render: () => {
-    const [saved, setSaved] = createSignal<Record<string, unknown>>({})
-    const cfg: Config = {
-      indexing: {
-        provider: "openai",
-        model: "text-embedding-3-large",
-        dimension: 3072,
-        openai: { apiKey: "" },
-        gemini: { apiKey: "" },
-      },
-    }
-    return (
-      <>
-        <StoryProviders
-          config={cfg}
-          onConfigChange={(next: Config) => setSaved((next.indexing ?? {}) as Record<string, unknown>)}
-        >
-          <div style={{ width: "420px", "max-height": "700px", overflow: "auto" }}>
-            <IndexingTab />
-          </div>
-        </StoryProviders>
-        <pre data-testid="indexing-provider-save">{JSON.stringify(saved(), null, 2)}</pre>
-      </>
-    )
-  },
-}
-
-export const IndexingScopeSwitch: Story = {
-  name: "IndexingTab - global and local scopes",
-  render: () => {
-    const [global, setGlobal] = createSignal<Record<string, unknown>>({})
-    const [project, setProject] = createSignal<Record<string, unknown>>({})
-    const globalConfig: Config = {
-      indexing: {
-        enabled: true,
-        provider: "openai",
-        model: "text-embedding-3-large",
-        dimension: 3072,
-        vectorStore: "qdrant",
-        openai: { apiKey: "global-secret" },
-        qdrant: { url: "http://global:6333", apiKey: "global-qdrant" },
-        searchMinScore: 0.4,
-      },
-    }
-    const projectConfig: Config = {
-      indexing: {
-        model: null,
-        qdrant: { apiKey: "project-qdrant" },
-      },
-    }
-    return (
-      <>
-        <StoryProviders
-          config={globalConfig}
-          globalConfig={globalConfig}
-          projectConfig={projectConfig}
-          onGlobalConfigChange={(next) => setGlobal((next.indexing ?? {}) as Record<string, unknown>)}
-          onProjectConfigChange={(next) => setProject((next.indexing ?? {}) as Record<string, unknown>)}
-        >
-          <div style={{ width: "420px", "max-height": "700px", overflow: "auto" }}>
-            <IndexingTab />
-          </div>
-        </StoryProviders>
-        <pre data-testid="indexing-global-save">{JSON.stringify(global(), null, 2)}</pre>
-        <pre data-testid="indexing-project-save">{JSON.stringify(project(), null, 2)}</pre>
-      </>
-    )
-  },
-}
-
-export const IndexingKiloModelPreset: Story = {
-  name: "IndexingTab - Kilo stale custom model fallback",
-  render: () => {
-    const cfg: Config = {
-      indexing: {
-        provider: "kilo",
-        model: "custom/model",
-        dimension: 2048,
-      },
-    }
-    const catalog = {
-      defaultModel: "provider/model",
-      models: [
-        { id: "provider/model", name: "Provider Model", dimension: 1024, scoreThreshold: 0.4 },
-        { id: "provider/compact", name: "Provider Compact", dimension: 512, scoreThreshold: 0.35 },
-      ],
-      aliases: {},
-    }
-    return (
-      <StoryProviders config={cfg}>
-        <KiloEmbeddingModelsContext.Provider value={{ catalog: () => catalog }}>
-          <div style={{ "max-height": "700px", overflow: "auto" }}>
-            <IndexingTab />
-          </div>
-        </KiloEmbeddingModelsContext.Provider>
-      </StoryProviders>
-    )
-  },
-}
-
-export const IndexingKiloCatalogLoading: Story = {
-  name: "IndexingTab - Kilo catalog loading",
-  render: () => {
-    const [saved, setSaved] = createSignal<Record<string, unknown>>({})
-    const cfg: Config = {
-      indexing: {},
-    }
-    return (
-      <>
-        <StoryProviders
-          config={cfg}
-          kiloAuth
-          onConfigChange={(next: Config) => setSaved((next.indexing ?? {}) as Record<string, unknown>)}
-        >
-          <div style={{ "max-height": "700px", overflow: "auto" }}>
-            <IndexingTab />
-          </div>
-        </StoryProviders>
-        <pre data-testid="indexing-kilo-loading-save">{JSON.stringify(saved(), null, 2)}</pre>
-      </>
-    )
-  },
-}
 
 /** LOCK-078/LOCK-010: ProviderConnectDialog in manageApiKey mode with deterministic credential response. */
 export const ProviderConnectManageApiKey: Story = {

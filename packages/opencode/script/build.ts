@@ -21,7 +21,6 @@ import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
 // kilocode_change start
 import { stageBubblewrap } from "./kilocode/bubblewrap"
-import { LanceDBRuntime } from "../src/kilocode/lancedb"
 import { KiloSandboxWorker } from "./kilocode/kilo-sandbox-worker"
 import { KiloSandboxNetwork } from "./kilocode/kilo-sandbox-network"
 // kilocode_change end
@@ -232,7 +231,6 @@ for (const item of targets) {
   const workerPath = "./src/cli/cmd/tui/worker.ts"
   // kilocode_change start
   const sessionExportWorkerPath = "./src/kilocode/session-export/worker.ts"
-  const indexingWorkerPath = "./src/kilocode/indexing-worker.ts"
   // kilocode_change end
 
   // Use platform-specific bunfs root path based on target OS
@@ -245,7 +243,7 @@ for (const item of targets) {
     plugins: [plugin],
     // kilocode_change start - skip sourcemaps for release builds (each .js.map adds ~50 MB per target → ~600 MB total)
     sourcemap: Script.release ? "none" : "external",
-    external: ["node-gyp", ...LanceDBRuntime.external],
+    external: ["node-gyp"],
     // kilocode_change end
     format: "esm",
     minify: true,
@@ -272,7 +270,7 @@ for (const item of targets) {
     },
     // kilocode_change start - packages/app was removed; no embedded web UI
     files: {},
-    entrypoints: ["./src/index.ts", parserWorker, workerPath, sessionExportWorkerPath, indexingWorkerPath],
+    entrypoints: ["./src/index.ts", parserWorker, workerPath, sessionExportWorkerPath],
     // kilocode_change end
     define: {
       KILO_VERSION: `'${Script.version}'`,
@@ -281,7 +279,6 @@ for (const item of targets) {
       KILO_WORKER_PATH: workerPath,
       // kilocode_change start
       KILO_SESSION_EXPORT_WORKER_PATH: sessionExportWorkerPath,
-      KILO_INDEXING_WORKER_PATH: indexingWorkerPath,
       KILO_SANDBOX_MUTATION_WORKER_PATH: JSON.stringify(KiloSandboxWorker.filename),
       KILO_SANDBOX_NETWORK_RELAY_PATH: item.os === "linux" ? JSON.stringify(KiloSandboxNetwork.relay) : "undefined",
       KILO_SANDBOX_SECCOMP_PATH: item.os === "linux" ? JSON.stringify(KiloSandboxNetwork.seccomp) : "undefined",

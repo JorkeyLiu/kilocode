@@ -10,32 +10,6 @@ This section contains questions about credits, billing, and pricing in Kilo Code
 
 ## Credits
 
-### Why am I seeing requests for "Codestral 2508"?
-
-Kilo Code uses Codestral 2508 (a model by Mistral AI) as the dedicated engine for our Autocomplete feature. It is optimized for speed and low latency, making it perfect for real-time code suggestions.
-
-#### Why is it running in the background?
-
-Because Autocomplete needs to be ready the moment you start typing, the model stays active in the background whenever the feature is enabled. This occurs even if you aren't currently using the Kilo Chat.
-
-#### How much does it cost?
-
-You can use Codestral for Autocomplete without consuming Kilo credits by adding your own Mistral Codestral API key via BYOK (Bring Your Own Key). Mistral offers a free tier for Codestral.
-
-**Setup Guide:** [Setting Up Mistral for Free Autocomplete](/docs/code-with-ai/features/autocomplete/mistral-setup)
-
-#### How to Disable These Requests
-
-If you prefer not to have background requests running, you can turn off the feature entirely:
-
-1. Open your **Kilo Settings**.
-2. Navigate to the **Autocomplete** tab.
-3. Toggle the feature to **Off**.
-
-{% callout type="note" %}
-Disabling this will stop all ghost-text suggestions in your editor.
-{% /callout %}
-
 ### Why do I have credits, but Kilo shows a low balance or warning?
 
 Kilo credits are not shared between Personal and Organization environments.

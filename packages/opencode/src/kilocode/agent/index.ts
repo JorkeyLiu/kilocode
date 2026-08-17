@@ -161,7 +161,6 @@ function askGuard(mcp: Record<string, "allow" | "ask" | "deny"> = {}) {
     webfetch: "allow",
     websearch: "allow",
     codebase_search: "allow",
-    semantic_search: "allow",
     external_directory: {
       [Truncate.GLOB]: "allow",
     },
@@ -214,7 +213,6 @@ function planGuard(worktree: string, mcp: Record<string, "allow" | "ask" | "deny
     webfetch: "allow",
     websearch: "allow",
     codebase_search: "allow",
-    semantic_search: "allow",
     external_directory: {
       [Truncate.GLOB]: "allow",
       [path.join(Global.Path.data, "plans", "*")]: "allow",
@@ -248,8 +246,6 @@ export function prepare(cfg: Config.Info): KiloData {
     ...(Flag.KILO_CLIENT === "vscode" && cfg.experimental?.native_notebook_tools === true
       ? { notebook_read: "ask" as const, notebook_edit: "ask" as const, notebook_execute: "ask" as const }
       : {}),
-    kilo_memory_recall: "ask",
-    kilo_memory_save: "ask",
   })
   return { mcpRules, defaultsPatch }
 }
@@ -338,7 +334,6 @@ export function telemetryOptions(_cfg: Config.Info) {
 // - Rename build → code
 // - Patch plan with readOnlyBash, mcpRules, .kilo paths
 // - Patch explore with codebase_search and conditional prompt
-// - Patch appropriate agents with semantic_search
 // - Add debug, orchestrator, ask agents
 export function patchAgents(
   agents: Record<
@@ -379,7 +374,6 @@ export function patchAgents(
         defaults,
         agents.build.permission,
         user,
-        Permission.fromConfig({ semantic_search: "allow" }),
       ),
     }
     delete agents.build
@@ -416,7 +410,6 @@ export function patchAgents(
           webfetch: "allow",
           websearch: "allow",
           codebase_search: "allow",
-          semantic_search: "allow",
           read: "allow",
           external_directory: {
             // Mirror upstream explore's shape: the outer "*": "deny" above wins
@@ -447,7 +440,6 @@ export function patchAgents(
       Permission.fromConfig({
         question: "allow",
         plan_enter: "allow",
-        semantic_search: "allow",
       }),
       user,
     ),

@@ -843,13 +843,6 @@ const scenarios: Scenario[] = [
     }))
     .status(400, undefined, "none"),
   http.protected
-    .post("/api/session/{sessionID}/compact", "v2.session.compact")
-    .at((ctx) => ({
-      path: route("/api/session/{sessionID}/compact", { sessionID: "ses_httpapi_missing" }),
-      headers: ctx.headers(),
-    }))
-    .status(404, undefined, "status"),
-  http.protected
     .post("/api/session/{sessionID}/wait", "v2.session.wait")
     .at((ctx) => ({
       path: route("/api/session/{sessionID}/wait", { sessionID: "ses_httpapi_missing" }),
@@ -1255,67 +1248,6 @@ const scenarios: Scenario[] = [
       "status",
     ),
   http.protected
-    .post("/session/{sessionID}/summarize", "session.summarize")
-    .preserveDatabase()
-    .withLlm()
-    .seeded((ctx) =>
-      Effect.gen(function* () {
-        const session = yield* ctx.session({ title: "Summarize session" })
-        yield* ctx.message(session.id, { text: "summarize this work" })
-        const summary = [
-          "## Goal",
-          "- Exercise session summarize.",
-          "",
-          "## Constraints & Preferences",
-          "- Use fake LLM.",
-          "",
-          "## Progress",
-          "### Done",
-          "- Summary generated.",
-          "",
-          "### In Progress",
-          "- (none)",
-          "",
-          "### Blocked",
-          "- (none)",
-          "",
-          "## Key Decisions",
-          "- Keep route local.",
-          "",
-          "## Next Steps",
-          "- (none)",
-          "",
-          "## Critical Context",
-          "- Test fixture.",
-          "",
-          "## Relevant Files",
-          "- test/server/httpapi-exercise/index.ts: scenario",
-        ].join("\n")
-        yield* ctx.llmText(summary)
-        yield* ctx.llmText(summary)
-        return session
-      }),
-    )
-    .at((ctx) => ({
-      path: route("/session/{sessionID}/summarize", { sessionID: ctx.state.id }),
-      headers: ctx.headers(),
-      body: { providerID: "test", modelID: "test-model", auto: false },
-    }))
-    .jsonEffect(
-      200,
-      (body, ctx) =>
-        Effect.gen(function* () {
-          check(body === true, "summarize should return true")
-          const messages = yield* ctx.messages(ctx.state.id)
-          check(
-            messages.some((message) => message.info.role === "assistant" && message.info.summary === true),
-            "summarize should create a summary assistant message",
-          )
-          yield* ctx.llmWait(1)
-        }),
-      "status",
-    ),
-  http.protected
     .post("/session/{sessionID}/revert", "session.revert")
     .mutating()
     .seeded((ctx) =>
@@ -1453,7 +1385,6 @@ const llmScenarios = new Set([
   "session.prompt",
   "session.prompt_async",
   "session.command",
-  "session.summarize",
 ])
 
 const main = Effect.gen(function* () {

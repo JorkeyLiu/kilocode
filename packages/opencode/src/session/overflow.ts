@@ -12,9 +12,7 @@ export function usable(input: { cfg: ConfigV1.Info; model: Provider.Model; outpu
   const context = input.model.limit.context
   if (context === 0) return 0
 
-  const reserved =
-    input.cfg.compaction?.reserved ??
-    Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
+  const reserved = Math.min(COMPACTION_BUFFER, ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
   return input.model.limit.input
     ? Math.max(0, input.model.limit.input - reserved)
     : Math.max(0, context - ProviderTransform.maxOutputTokens(input.model, input.outputTokenMax))
@@ -26,7 +24,6 @@ export function isOverflow(input: {
   model: Provider.Model
   outputTokenMax?: number
 }) {
-  if (input.cfg.compaction?.auto === false) return false
   if (input.model.limit.context === 0) return false
 
   const count = KiloSessionOverflow.count(input.tokens) // kilocode_change

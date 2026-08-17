@@ -552,22 +552,6 @@ export function make(input: {
         return promptResponse(response.info, params.messageId)
       }
 
-      if (command.name === "compact") {
-        yield* request(
-          () =>
-            input.sdk.session.summarize(
-              {
-                sessionID: current.id,
-                directory: current.cwd,
-                providerID: selected.providerID,
-                modelID: selected.modelID,
-              },
-              { throwOnError: true },
-            ),
-          "session",
-        )
-      }
-
       yield* sendUsageUpdate(input.usage, input.sdk, input.connection, current.id, current.cwd)
       return promptResponse(undefined, params.messageId)
     }),

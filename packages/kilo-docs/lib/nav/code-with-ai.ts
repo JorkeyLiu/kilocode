@@ -92,19 +92,10 @@ export const CodeWithAiNav: NavSection[] = [
   {
     title: "Productivity Tools",
     links: [
-      {
-        href: "/code-with-ai/features/autocomplete",
-        children: "Autocomplete",
-        subLinks: [{ href: "/code-with-ai/features/autocomplete/mistral-setup", children: "Mistral Setup" }],
-      },
       { href: "/code-with-ai/features/code-actions", children: "Code Actions" },
       {
         href: "/code-with-ai/features/enhance-prompt",
         children: "Enhance Prompt",
-      },
-      {
-        href: "/code-with-ai/features/git-commit-generation",
-        children: "Git Commit Generation",
       },
       { href: "/code-with-ai/features/speech-to-text", children: "Voice Transcription" },
       { href: "/code-with-ai/features/message-feedback", children: "Message Feedback" },

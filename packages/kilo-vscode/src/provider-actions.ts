@@ -227,7 +227,7 @@ async function refreshConfig(ctx: ActionContext, setCachedConfig: SetCachedConfi
     ctx.client.global.config.get({ throwOnError: true }),
   ])
   if (!config) return
-  const features = configFeatures(config)
+  const features = configFeatures()
   setCachedConfig({ type: "configLoaded", config, globalConfig: global, features })
   ctx.postMessage({ type: "configUpdated", config, globalConfig: global, features })
 }

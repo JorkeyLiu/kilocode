@@ -63,13 +63,12 @@ describe("stripNullPatch (LOCK-003)", () => {
     })
   })
 
-  it("preserves schema-valid indexing model/dimension null overrides", () => {
+  it("strips null and undefined recursively including nested leaves", () => {
     expect(stripNullPatch({ indexing: { model: null, dimension: null, searchMinScore: undefined } })).toEqual({
-      indexing: { model: null, dimension: null },
+      indexing: {},
     })
   })
 })
-
 describe("isRecord", () => {
   it("distinguishes records from arrays and nulls", () => {
     expect(isRecord({})).toBe(true)

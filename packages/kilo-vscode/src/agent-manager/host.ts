@@ -56,8 +56,6 @@ export interface SessionProvider {
   onFollowupAdopted(cb: (session: Session, directory: string) => void): void
   acknowledgeDraft(draftID: string, sessionID: string): void
   abortSessions(ids: readonly string[]): Promise<void>
-  showMemory(sessionID?: string): Promise<void>
-  toggleMemory(sessionID?: string): Promise<void>
   dispose(): void
 }
 

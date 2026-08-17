@@ -1,6 +1,31 @@
 # Kilo CLI Configuration Reference
 
-All config lives in `kilo.json` (or `kilo.jsonc`). Precedence low-to-high: remote well-known, global (`~/.config/kilo/kilo.json`), env `KILO_CONFIG`, project `./kilo.json`, `.kilo/kilo.json`, `KILO_CONFIG_CONTENT`, managed (see Config File Locations). Deep-merged; later wins.
+All config lives in `kilo.json` (or `kilo.jsonc`). Sources are deep-merged in this order (low-to-high precedence); later sources override earlier ones for scalar values. Objects deep-merge; arrays generally replace, with two verified exceptions: `instructions` arrays are concatenated and deduplicated across all sources, and `plugin` entries are deduplicated by plugin identity. The final step is a **permission-only** overlay (`KILO_PERMISSION`) that merges only the `permission` key and does not affect any other field.
+
+### General-config sources (low → high precedence)
+
+1. **Legacy migration** — `.opencode` → `.kilo` conversions: custom modes, workflows (converted to commands), rules/instructions, MCP servers, `.kilocodeignore` patterns. Lowest precedence in the chain.
+2. **Organization agent modes** — fetched from legacy org config via Kilo OAuth, if authenticated.
+3. **Remote well-known** — for each auth entry with `type === "wellknown"`, fetches `<url>/.well-known/opencode` (and optionally its `remote_config` URL). Scope: global. Trusted.
+4. **Global config files** in `~/.config/kilo/` (or `$XDG_CONFIG_HOME/kilo/`), loaded in order: `config.json` (legacy), `kilo.json`, `kilo.jsonc`, `opencode.json` (legacy), `opencode.jsonc` (legacy). A legacy TOML `config` file is auto-migrated to `config.json` and deleted. Scope: global. Trusted.
+5. **`KILO_CONFIG`** env var — loads the file at the explicit path. Scope: global. Trusted.
+6. **Project root-level config files** — walks CWD up to the git worktree root, discovering `kilo.json`, `kilo.jsonc`, `opencode.json` (legacy), `opencode.jsonc` (legacy) at each directory level (NOT inside `.kilo`/`.kilocode` directories). Scope: local. Untrusted (tokens confined to project root).
+7. **Config directories pass** — iterates directories in this order, loading `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` plus commands, agents, modes, and plugins from each:
+   1. XDG global config dir (`~/.config/kilo/`)
+   2. Primary worktree fallback dirs (`.kilocode`/`.kilo` in the primary checkout, for linked git worktrees only)
+   3. Project config dirs (`.kilocode`/`.kilo` walking CWD up to worktree root)
+   4. Home config dirs (`~/.kilocode/`, `~/.kilo/`)
+   5. `KILO_CONFIG_DIR` env var (if set)
+   
+   Scope depends on directory: XDG global and `KILO_CONFIG_DIR` are global/trusted; project and home dirs are local/untrusted (tokens confined to project root).
+8. **`KILO_CONFIG_CONTENT`** env var — inline JSON string. Scope: local. Trusted.
+9. **Active org config** — fetched from `<url>/api/config` if the user has an active organization. Scope: global. Trusted.
+10. **Managed config dir** — platform-specific read-only directory: Linux: `/etc/kilo/`, macOS: `/Library/Application Support/kilo/`, Windows: `%ProgramData%\kilo\`. Loads `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`. Scope: global. Trusted.
+11. **macOS managed preferences** — `.mobileconfig` profiles deployed via MDM (`ai.opencode.managed.plist` under `/Library/Managed Preferences/`). macOS only. Scope: global. Trusted. This is the **last general-config source**.
+
+### Permission overlay (highest overall precedence)
+
+12. **`KILO_PERMISSION`** env var — a permission-only overlay. Merges only the `permission` key via `mergeDeep`; no other config fields are affected. This is the **absolute highest-precedence** source in the entire chain — it overrides the `permission` key from all general-config sources above.
 
 This also covers where Kilo looks for config files, commands, agents, and skills across project, global, and legacy paths such as `.kilo/`, `.kilocode/`, and `~/.config/kilo/`, plus the VS Code extension's Agent Manager.
 
@@ -74,7 +99,7 @@ Agent Manager runs sessions locally in the current workspace root. Parallel Agen
 
 ## Permissions
 
-Scalar form applies to all patterns. Object form maps glob patterns to actions. Evaluated top-to-bottom; first match wins.
+Scalar form applies to all patterns. Object form maps glob patterns to actions. All rules across sources are flattened; the **last matching rule wins** (`findLast`). Put broad patterns first, specific overrides after.
 
 ```jsonc
 {
@@ -95,7 +120,7 @@ Scalar form applies to all patterns. Object form maps glob patterns to actions. 
 
 Actions: `"allow"`, `"ask"`, `"deny"`. Set `null` to delete an inherited key.
 
-Tool permissions: `read`, `edit`, `glob`, `grep`, `list`, `bash`, `task`, `webfetch`, `websearch`, `semantic_search`, `kilo_memory_save`, `kilo_memory_recall`, `lsp`, `skill`, `external_directory`, `todowrite`, `todoread`, `question`, `doom_loop`.
+Tool permissions: `read`, `edit`, `glob`, `grep`, `list`, `bash`, `task`, `webfetch`, `websearch`, `lsp`, `skill`, `external_directory`, `todowrite`, `todoread`, `question`, `doom_loop`.
 
 ## MCP Servers
 
@@ -223,8 +248,6 @@ Skills are markdown files at `skills/<name>/SKILL.md` (or `skill/<name>/SKILL.md
 | `share` | `"manual"\|"auto"\|"disabled"` | Session sharing mode |
 | `autoupdate` | `boolean\|"notify"` | Auto-update behavior |
 | `username` | `string` | Display name override |
-| `compaction.auto` | `boolean` | Auto-compact when context full (default: true) |
-| `compaction.prune` | `boolean` | Prune old tool outputs (default: true) |
 
 ## TUI Settings (Ctrl+P Command Palette)
 
@@ -251,7 +274,6 @@ Custom themes: place JSON files in `~/.config/kilo/themes/` or `.kilo/themes/`.
 | Rename session | `ctrl+r` | `/rename` |
 | Jump to message | `<leader>g` | `/timeline` |
 | Fork from message | — | `/fork` |
-| Compact/summarize | `<leader>c` | `/compact`, `/summarize` |
 | Undo message | `<leader>u` | `/undo` |
 | Redo | `<leader>r` | `/redo` |
 | Copy last response | `<leader>y` | `/copy` |
@@ -289,17 +311,23 @@ Notification settings are managed through `attention` in `tui.json` / `tui.jsonc
 |---|---|
 | Project | `./kilo.json`, `./kilo.jsonc`, `./opencode.json` (legacy), `./opencode.jsonc` (legacy) |
 | Global | `~/.config/kilo/kilo.json`, `~/.config/kilo/kilo.jsonc`, `~/.config/kilo/opencode.json` (legacy), `~/.config/kilo/opencode.jsonc` (legacy), `~/.config/kilo/config.json` (legacy) |
-| Managed | Linux: `/etc/kilo/`, macOS: `/Library/Application Support/kilo/`, Windows: `%ProgramData%\kilo\` — loads `kilo.json`, `kilo.jsonc`, `opencode.json`, `opencode.jsonc` (enterprise, highest priority) |
+| Managed | Linux: `/etc/kilo/`, macOS: `/Library/Application Support/kilo/`, Windows: `%ProgramData%\kilo\` — loads `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` (enterprise; second-highest general-config precedence — only macOS MDM `.mobileconfig` preferences load later, and `KILO_PERMISSION` overrides the `permission` key last) |
 
-Each config directory (`.kilo/` and legacy `.kilocode/`) can also contain `kilo.json`, `kilo.jsonc`, `opencode.json`, or `opencode.jsonc`.
+Each config directory (`.kilo/` and legacy `.kilocode/`) can also contain `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, or `opencode.json`.
 
 ### Config directories
 
-Two directory names are scanned: `.kilo` (canonical) and `.kilocode` (legacy fallback). Both are checked at each level, and `.kilo` wins when both define the same entry. `.opencode` directories are not loaded.
+Two directory names are scanned: `.kilo` (canonical) and `.kilocode` (legacy fallback). Both are checked at each level, and `.kilo` wins when both define the same entry. `.opencode` directories are not loaded. Files within each directory are loaded in `ALL_CONFIG_FILES` order: `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`.
 
-- **Project**: walks up from CWD to the git root, checking both directories at each level
-- **Home**: `~/.kilo/` and `~/.kilocode/`
-- **XDG global**: `~/.config/kilo/` (always loaded, lowest file-based precedence)
+The config directories pass iterates in this order:
+
+1. **XDG global**: `~/.config/kilo/` (always loaded, lowest file-based precedence)
+2. **Primary worktree fallback**: `.kilocode`/`.kilo` in the primary checkout root (for linked git worktrees only — not present in single-checkout projects)
+3. **Project**: walks up from CWD to the git root, checking both `.kilocode` and `.kilo` at each level
+4. **Home**: `~/.kilocode/`, `~/.kilo/`
+5. **`KILO_CONFIG_DIR`**: extra config directory from the env var (if set)
+
+XDG global and `KILO_CONFIG_DIR` directories are treated as global/trusted. Project and home directories are treated as local/untrusted (tokens confined to project root).
 
 ### Commands, agents, modes, plugins
 
@@ -325,7 +353,8 @@ Example: `~/.config/kilo/command/*.md` (global), `~/.kilocode/command/*.md` (leg
 
 | Variable | Description |
 |---|---|
-| `KILO_CONFIG` | Path to an additional config file (loaded after global) |
-| `KILO_CONFIG_DIR` | Path to an additional config directory (appended to search list) |
-| `KILO_CONFIG_CONTENT` | Inline JSON config string (high precedence, after project dirs) |
-| `KILO_DISABLE_PROJECT_CONFIG` | Skip all project-level config (files and directories) |
+| `KILO_CONFIG` | Path to an additional config file (loaded after global config, before project files) |
+| `KILO_CONFIG_DIR` | Path to an additional config directory (appended to the config directories pass) |
+| `KILO_CONFIG_CONTENT` | Inline JSON config string (loaded after config directories, before active org config) |
+| `KILO_DISABLE_PROJECT_CONFIG` | Skip all project-level config (root-level files and `.kilo`/`.kilocode` directories) |
+| `KILO_PERMISSION` | Permission-only JSON overlay — merges only the `permission` key; highest precedence overall |

@@ -87,7 +87,6 @@ For detailed help on every command and subcommand, see the [CLI Command Referenc
 | `/rename` | - | Rename session |
 | `/timeline` | - | Jump to message |
 | `/fork` | - | Fork from message |
-| `/compact` | `/summarize` | Compact/summarize session |
 | `/undo` | - | Undo previous message |
 | `/redo` | - | Redo message |
 | `/copy` | - | Copy latest agent response |
@@ -472,7 +471,7 @@ Use `{env:VARIABLE_NAME}` syntax in config files to reference environment variab
 `{env:VAR}` (and `{file:...}`) references are resolved **only** in trusted config: your global config (`~/.config/kilo`), a config passed via `KILO_CONFIG` / `KILO_CONFIG_CONTENT`, or organization/MDM-managed config. A project-level `kilo.json` / `opencode.json` committed to a repository **cannot** use `{env:VAR}` — the reference is ignored and a warning is logged. This prevents a malicious repository from exfiltrating your secrets to an attacker-controlled `baseURL` simply by being opened. `{file:...}` still works in project config, but only for files that resolve inside the project root — references that leave it (absolute paths outside the root, `../` traversal, and symlink escapes) are rejected.
 {% /callout %}
 
-For full details on all configuration options including compaction, file watchers, plugins, and experimental features, see the [OpenCode Config documentation](https://opencode.ai/docs/config).
+For full details on all configuration options including file watchers, plugins, and experimental features, see the [OpenCode Config documentation](https://opencode.ai/docs/config).
 
 ## Interactive Mode
 

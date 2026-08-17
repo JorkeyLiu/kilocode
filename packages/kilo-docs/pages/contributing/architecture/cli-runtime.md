@@ -1,6 +1,6 @@
 ---
 title: "CLI Runtime Architecture"
-description: "Architecture of the Kilo CLI runtime, daemon, server, config update lifecycle and convergence, persistence, SDK, and indexing"
+description: "Architecture of the Kilo CLI runtime, daemon, server, config update lifecycle and convergence, persistence, and SDK"
 ---
 
 # CLI Runtime Architecture
@@ -135,7 +135,6 @@ Provider auth records use `api`, `oauth`, or `wellknown` variants in `${Global.P
 | Organization catalog | Kilo model fetch includes organization ID when resolved from config, auth, or environment |
 | Model cache | Caches provider model results for five minutes; failed loads invalidate cache for retry |
 | Custom endpoints | Provider config can override endpoint and credential options |
-| Indexing auth | Resolves indexing-specific Kilo config first, then provider config, auth record, provider options, and `KILO_API_KEY` / `KILO_ORG_ID` environment values |
 
 ### Remote MCP OAuth
 
@@ -165,7 +164,7 @@ Remote HTTP proxy responses can include sync fence metadata. Router waits for ma
 | Subsystem | Purpose |
 |---|---|
 | Agent runtime | Orchestrates messages, model calls, permissions, questions, and multi-step execution |
-| Tool registry | Loads built-in, Kilo-specific, MCP, and readiness-gated semantic search tools |
+| Tool registry | Loads built-in, Kilo-specific, and MCP tools |
 | LSP client | Provides diagnostics and language intelligence |
 | Config service | Merges global, project, organization, managed, and runtime inputs |
 | Instance store | Caches normalized directory-scoped runtime contexts |
@@ -260,7 +259,7 @@ Later sources override earlier values during instance config load:
 | 11 | macOS managed preferences |
 | 12 | Runtime flag-derived permission, tool, compaction, and plugin behavior |
 
-Global config files load from `${Global.Path.config}`. Project updates prefer existing config files found in ancestor `.kilo` or legacy `.kilocode` directories, then existing project root config files, then create `.kilo/kilo.json`. Global indexing settings can carry provider and storage defaults, but global `indexing.enabled` is stripped so project enablement remains local in effective instance config.
+Global config files load from `${Global.Path.config}`. Project updates prefer existing config files found in ancestor `.kilo` or legacy `.kilocode` directories, then existing project root config files, then create `.kilo/kilo.json`.
 
 Signed-in organization modes become normal agent configuration during load. They override migrated legacy modes and remain overridable by later config sources in table.
 
@@ -323,22 +322,6 @@ Testing expectations: tests must cover saving during active streaming, not only 
 
 Both streams send initial `server.connected` event and heartbeat every 10 seconds. VS Code consumes `/global/event` so one server connection can route events for multiple directories.
 
-## Codebase indexing
-
-`packages/kilo-indexing/` owns indexing engine. CLI bridge injects indexing plugin by default unless default plugins are disabled, then starts indexing asynchronously per normalized directory during instance bootstrap.
-
-| Area | Behavior |
-|---|---|
-| Bootstrap | `KilocodeBootstrap` forks indexing initialization so instance startup is not blocked |
-| Worker | Dedicated indexing worker owns `CodeIndexManager` and search calls |
-| Cache | CLI bridge caches worker entry by directory and disposes it with instance |
-| Status | `GET /indexing/status` and `indexing.status` bus event expose progress |
-| Tool | `semantic_search` is registered only after indexing reports readiness |
-| Worktree checkouts | Indexing runs per normalized directory; linked-worktree checkouts mirror baseline files from the primary checkout internally |
-| Empty VS Code window | Extension sets `KILO_DISABLE_CODEBASE_INDEXING=vscode-no-workspace`; bridge reports disabled status |
-| Embeddings | Supports Kilo, OpenAI, Ollama, OpenAI-compatible, Gemini, Mistral, Vercel AI Gateway, Bedrock, OpenRouter, and Voyage configuration |
-| Vector stores | Supports Qdrant and LanceDB |
-
 ## Source map
 
 Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/kilocode).
@@ -352,7 +335,6 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 | SQLite | `packages/opencode/src/storage/db.ts` |
 | Snapshots | `packages/opencode/src/snapshot/index.ts`{% linebreak /%}`packages/opencode/src/kilocode/snapshot/track.ts` |
 | SDK | `packages/sdk/js/`{% linebreak /%}`script/generate.ts` |
-| Indexing | `packages/kilo-indexing/`{% linebreak /%}`packages/opencode/src/kilocode/indexing.ts` |
 | Config update lifecycle and convergence | `packages/opencode/src/kilocode/server/config-convergence.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/config-rebuild.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/generation-gate.ts`{% linebreak /%}`packages/opencode/src/kilocode/server/control-lease.ts` |
 | Config schema shape | `packages/opencode/src/config/config.ts` |
 | Config save classification (hot/cold) | `packages/opencode/src/kilocode/config/hot-keys.ts` |

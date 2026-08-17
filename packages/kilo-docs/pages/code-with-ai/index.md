@@ -42,13 +42,11 @@ Kilo uses specialized agents to help with different tasks:
 
 Core capabilities to boost your productivity:
 
-- [**Autocomplete**](/docs/code-with-ai/features/autocomplete) — Inline code suggestions as you type
 - [**Code Actions**](/docs/code-with-ai/features/code-actions) — AI-powered refactoring and fixes
 - [**Task & Todo Lists**](/docs/code-with-ai/features/task-todo-list) — Break down complex tasks
 - [**Checkpoints**](/docs/code-with-ai/features/checkpoints) — Save and restore working states
 - [**Browser Use**](/docs/code-with-ai/features/browser-use) — Automate web interactions
 - [**Enhance Prompt**](/docs/code-with-ai/features/enhance-prompt) — Improve your prompts automatically
-- [**Git Commit Generation**](/docs/code-with-ai/features/git-commit-generation) — AI-powered commit messages
 
 ## Next Steps
 

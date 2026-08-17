@@ -80,18 +80,6 @@ export namespace KilocodeConfig {
     return candidates.find((file) => existsSync(file)) ?? candidates[0]!
   }
 
-  // ── Config schema extensions ─────────────────────────────────────────
-
-  /** Schema for AI-generated commit message configuration. */
-  export const CommitMessageSchema = Schema.optional(
-    Schema.Struct({
-      prompt: Schema.optional(Schema.String).annotate({
-        description:
-          "Custom system prompt for AI commit message generation. When set, replaces the default conventional commits prompt entirely.",
-      }),
-    }),
-  ).annotate({ description: "Configuration for AI-generated commit messages" })
-
   // ── Config file constants ────────────────────────────────────────────
 
   /** Kilo-specific config file names (highest-to-lowest precedence within kilo). */
@@ -247,29 +235,6 @@ export namespace KilocodeConfig {
     if (typeof value === "string") return JSON.stringify(value)
     if (typeof value === "number" || typeof value === "boolean") return String(value)
     throw new TypeError(`Unsupported config value in semantic comparison: ${typeof value}`)
-  }
-
-  export function scopeIndexing(info: Config.Info, scope: "global" | "local"): Config.Info {
-    if (scope !== "global") return info
-    return stripGlobalIndexing(info)
-  }
-
-  export function retireIndexingFlag(info: Record<string, unknown>, source: string) {
-    if (!isRecord(info.experimental) || !("semantic_indexing" in info.experimental)) return info
-    const experimental = { ...info.experimental }
-    delete experimental.semantic_indexing
-    log.warn("ignored retired experimental.semantic_indexing config; use indexing.enabled instead", { path: source })
-    return { ...info, experimental }
-  }
-
-  function stripGlobalIndexing(info: Config.Info): Config.Info {
-    // Indexing provider/storage settings can be global, but enablement is exposed separately from project enablement.
-    if (info.indexing?.enabled === undefined) return info
-    const indexing = Object.fromEntries(Object.entries(info.indexing).filter(([key]) => key !== "enabled"))
-    if (Object.keys(indexing).length > 0) return { ...info, indexing }
-    const copy = { ...info }
-    delete copy.indexing
-    return copy
   }
 
   // ── Warning helpers ──────────────────────────────────────────────────

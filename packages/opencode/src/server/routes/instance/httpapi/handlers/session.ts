@@ -4,14 +4,12 @@ import { BlockedError as AgentRequirementError } from "@/kilocode/agent-requirem
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
 import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue" // kilocode_change
-import { Agent } from "@/agent/agent"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
 import { Permission } from "@/permission"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
-import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
@@ -37,7 +35,6 @@ import {
   PromptPayload,
   RevertPayload,
   ShellPayload,
-  SummarizePayload,
   UpdatePayload,
   ViewedPayload, // kilocode_change
 } from "../groups/session"
@@ -56,9 +53,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const shareSvc = yield* SessionShare.Service
     const promptSvc = yield* SessionPrompt.Service
     const revertSvc = yield* SessionRevert.Service
-    const compactSvc = yield* SessionCompaction.Service
     const runState = yield* SessionRunState.Service
-    const agentSvc = yield* Agent.Service
     const permissionSvc = yield* Permission.Service
     const statusSvc = yield* SessionStatus.Service
     const todoSvc = yield* Todo.Service
@@ -263,28 +258,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* requireSession(ctx.params.sessionID)
     })
 
-    const summarize = Effect.fn("SessionHttpApi.summarize")(function* (ctx: {
-      params: { sessionID: SessionID }
-      payload: typeof SummarizePayload.Type
-    }) {
-      yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
-      const messages = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
-      const defaultAgent = yield* agentSvc.defaultAgent()
-      const currentAgent = messages.findLast((message) => message.info.role === "user")?.info.agent ?? defaultAgent
-
-      yield* compactSvc.create({
-        sessionID: ctx.params.sessionID,
-        agent: currentAgent,
-        model: {
-          providerID: ctx.payload.providerID,
-          modelID: ctx.payload.modelID,
-        },
-        auto: ctx.payload.auto ?? false,
-      })
-      yield* promptSvc.loop({ sessionID: ctx.params.sessionID })
-      return true
-    })
-
     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof PromptPayload.Type
@@ -457,7 +430,6 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("init", init)
       .handle("share", share)
       .handle("unshare", unshare)
-      .handle("summarize", summarize)
       .handle("prompt", prompt)
       .handle("promptAsync", promptAsync)
       .handle("command", command)

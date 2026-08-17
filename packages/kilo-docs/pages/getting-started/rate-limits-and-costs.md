@@ -56,9 +56,9 @@ Open the model selector dropdown in the Kilo Code chat interface and choose the 
 - **Architect mode** cannot modify code, making it a safe and cost-effective choice for analysing a codebase without risking unintended changes.
 - **Debug mode** is optimized for diagnosis — use it when tracking down a specific problem rather than for general exploration.
 
-### Context condensing
+### Automatic context recovery
 
-When a conversation grows long, use `/compact` (also searchable as `smol` or `condense`) to summarize the history and free up context space. You can also enable **auto-compaction** in **Settings → Context** so Kilo compacts automatically when approaching the context limit, without any manual intervention.
+When a conversation grows long, Kilo automatically compacts the history through internal overflow recovery. This happens without any manual intervention — Kilo compacts when approaching the context limit. See [Context Recovery](/docs/customize/context/context-condensing) for details.
 
 ### Max tokens for thinking models
 
@@ -91,6 +91,6 @@ For current pricing, visit [kilo.ai/models](https://kilo.ai/models).
 ## Related
 
 - [Auto Model](/docs/code-with-ai/agents/auto-model) — Full details on each Auto Model tier
-- [Context Condensing](/docs/customize/context/context-condensing) — How compaction works and how to configure it
+- [Context Recovery](/docs/customize/context/context-condensing) — How automatic overflow recovery works
 - [Using Kilo for Free](/docs/getting-started/using-kilo-for-free) — Getting started without spending credits
 - [Bring Your Own Key (BYOK)](/docs/getting-started/byok) — Use your own provider API keys

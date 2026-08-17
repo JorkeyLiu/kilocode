@@ -12,10 +12,9 @@ import type {
 import { MaxCostNudge, type MaxCostChoice } from "@opencode-ai/core/kilocode/cost/max-cost-nudge"
 import { type KiloConnectionService, ServerStartupError } from "./services/cli-backend"
 import { previewSound } from "./services/attention"
-import type { EditorContext, IndexingStatus } from "./services/cli-backend/types"
-import { FileIgnoreController } from "./services/autocomplete/shims/FileIgnoreController"
-import { ChatTextAreaAutocomplete } from "./services/autocomplete/chat-autocomplete/ChatTextAreaAutocomplete"
-import { notebookUri } from "./services/autocomplete/continuedev/core/autocomplete/notebook"
+import type { EditorContext } from "./services/cli-backend/types"
+import { FileIgnoreController } from "./services/notebook/file-ignore"
+import { notebookUri } from "./services/notebook"
 import { buildWebviewHtml, getWebviewFontSize } from "./utils"
 import { saveImage } from "./kilo-provider/save-image"
 import { handleEditorAction } from "./kilo-provider/editor-actions"
@@ -71,11 +70,6 @@ import { childID } from "./kilo-provider/task-session"
 import { VisibleTaskStreams } from "./kilo-provider/visible-task-streams"
 import { handleNetworkEvent, clearNetworkWaits } from "./kilo-provider/network"
 import { SessionAbort } from "./kilo-provider/abort"
-import {
-  buildAutocompleteSettingsMessage,
-  validAutocompleteSetting,
-  watchAutocompleteConfig,
-} from "./services/autocomplete/settings"
 import { routeEarlyMessage } from "./kilo-provider/early-message"
 import * as ModelState from "./kilo-provider/model-state"
 import { handleForkSession } from "./kilo-provider/fork-session"
@@ -122,7 +116,6 @@ import {
 import { fetchAndSendPendingSuggestions } from "./kilo-provider/handlers/suggestion"
 import { nativeTitle } from "./kilo-provider/native-tab-title"
 import { parseReview, reviewMetadata, type ReviewMessageData } from "./shared/review-comments"
-import { KiloProviderMemory } from "./kilo-provider/memory"
 
 import {
   authorizeCredentialRead,
@@ -146,15 +139,9 @@ import type { Agent } from "@kilocode/sdk/v2/client"
 import { configFeatures } from "./features"
 import { createAutoApproveBridge } from "./kilo-provider/auto-approve"
 import type { KiloProviderOptions } from "./kilo-provider/options"
-import { fetchKiloEmbeddingModelCatalog } from "@kilocode/kilo-gateway"
 import { fetchImageModels } from "./image-generation/models"
 import { stopSessionProcesses } from "./kilo-provider/background-process"
 import { sandboxDefault, sandboxSessionMetadata } from "./shared/sandbox-session"
-import {
-  buildIndexingSettingsMessage,
-  validIndexingSetting,
-  watchIndexingConfig,
-} from "./kilo-provider/indexing-settings"
 
 let maxCost = 0
 
@@ -306,10 +293,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   /** Cached configLoaded payload so requestConfig can be served before client is ready */
   private cachedConfigMessage: unknown = null
   private cachedGlobalConfig: Config | null = null
-  /** Cached indexingStatusLoaded payload so requestIndexingStatus can be served before client is ready */
-  private cachedIndexingStatusMessage: unknown = null
-  /** Cached kiloEmbeddingModelsLoaded payload so requestKiloEmbeddingModels is resilient offline. */
-  private cachedKiloEmbeddingModelsMessage: unknown = null
   /** Cached imageModelsLoaded payload so requestImageModels is resilient offline. */
   private cachedImageModelsMessage: unknown = null
   /** Cached mcpStatusLoaded payload so requestMcpStatus can be served before client is ready */
@@ -353,14 +336,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private readonly confirmations = new MessageConfirmation()
   private readonly costs = new MaxCostNudge()
   private readonly activeAlerts = new Map<string, number>() // sid -> limit currently shown in UI
-  private readonly memory = new KiloProviderMemory({
-    client: () => this.client ?? undefined,
-    session: () => this.currentSession ?? undefined,
-    // Honor disabled project scope (null in a multi-root panel): no workspace fallback,
-    // so memory operations never silently target an arbitrary folder.
-    dir: (sessionID) => this.getProjectDirectory(sessionID),
-    post: (message) => this.postMessage(message),
-  })
   private unsubscribeEvent: (() => void) | null = null
   private unsubscribeState: (() => void) | null = null
   /** Cached migration data so migration doesn't re-read from disk/SecretStorage. */ // legacy-migration
@@ -377,8 +352,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private unsubscribeSandboxPreference: (() => void) | null = null
   private initConnectionPromise: Promise<void> | null = null
   private webviewMessageDisposable: vscode.Disposable | null = null
-  private autocompleteConfigDisposable: vscode.Disposable | null = null
-  private indexingConfigDisposable: vscode.Disposable | null = null
   private telemetryStateDisposable: vscode.Disposable | null = null
   private viewStateDisposable: vscode.Disposable | null = null
   private autoApproveBridge: ReturnType<typeof createAutoApproveBridge> | null = null
@@ -386,7 +359,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   private ignoreController: FileIgnoreController | null = null
   private ignoreControllerDir: string | null = null
-  private chatAutocomplete: ChatTextAreaAutocomplete | null = null
   private projectDirectory: string | null | undefined
   private slimEditMetadata = true
 
@@ -829,10 +801,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   private setupWebviewMessageHandler(webview: vscode.Webview): void {
     this.webviewMessageDisposable?.dispose()
-    this.autocompleteConfigDisposable?.dispose()
-    this.autocompleteConfigDisposable = watchAutocompleteConfig((msg) => this.postMessage(msg))
-    this.indexingConfigDisposable?.dispose()
-    this.indexingConfigDisposable = watchIndexingConfig((msg) => this.postMessage(msg))
     this.telemetryStateDisposable?.dispose()
     this.telemetryStateDisposable = watchTelemetryState((msg) => this.postMessage(msg))
     this.webviewMessageDisposable = webview.onDidReceiveMessage(async (message) => {
@@ -871,7 +839,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         return
       if (await this.handleModelSelectorExpandedMessage(message)) return
       this.visibleTaskStreams.handle(message)
-      if (await this.handleMemoryMessage(message)) return
       if (this.handleLegacyMigrationMessage(message)) return
       switch (message.type) {
         case "webviewReady":
@@ -1060,9 +1027,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             console.error("[Kilo New] fetchCustomProviderModels failed:", e),
           )
           break
-        case "compact":
-          await this.handleCompact(message.sessionID, message.providerID, message.modelID)
-          break
         case "requestAgents":
           this.fetchAndSendAgents().catch((e) => console.error("[Kilo New] fetchAndSendAgents failed:", e))
           break
@@ -1155,19 +1119,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         case "requestGlobalConfig":
           this.fetchAndSendGlobalConfig().catch((e) => console.error("[Kilo New] fetchAndSendGlobalConfig failed:", e))
           break
-        case "requestIndexingStatus":
-          this.fetchAndSendIndexingStatus().catch((e) =>
-            console.error("[Kilo New] fetchAndSendIndexingStatus failed:", e),
-          )
-          break
-        case "requestIndexingSettings":
-          this.postMessage(buildIndexingSettingsMessage())
-          break
-        case "requestKiloEmbeddingModels":
-          this.fetchAndSendKiloEmbeddingModels().catch((e) =>
-            console.error("[Kilo New] fetchAndSendKiloEmbeddingModels failed:", e),
-          )
-          break
         case "requestImageModels":
           this.fetchAndSendImageModels().catch((e) => console.error("[Kilo New] fetchAndSendImageModels failed:", e))
           break
@@ -1180,30 +1131,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             message.saveID,
           )
           break
-        case "openSettingsTab":
-          if (message.tab === "indexing") {
-            await vscode.commands.executeCommand("kilo-code.new.openIndexingSettings")
-          }
-          break
         case "setLanguage":
           await vscode.workspace
             .getConfiguration("kilo-code.new")
             .update("language", message.locale || undefined, vscode.ConfigurationTarget.Global)
           this.connectionService.notifyLanguageChanged(message.locale as string)
           break
-        case "requestChatCompletion": {
-          if (!this.chatAutocomplete) {
-            this.chatAutocomplete = new ChatTextAreaAutocomplete(this.connectionService)
-          }
-          void this.chatAutocomplete.handle(
-            { type: "requestChatCompletion", text: message.text, requestId: message.requestId },
-            {
-              postMessage: (msg: { type: "chatCompletionResult"; text: string; requestId: string }) =>
-                this.postMessage(msg),
-            },
-          )
-          break
-        }
         case "requestFileSearch":
           await handleFileSearch({
             client: this.client,
@@ -1220,9 +1153,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           break
         case "requestTerminalContext":
           void this.handleTerminalContext(message.requestId)
-          break
-        case "chatCompletionAccepted":
-          this.chatAutocomplete?.telemetry.captureAcceptSuggestion(message.suggestionLength)
           break
         case "toggleRemote":
         case "setRemoteEnabled":
@@ -1440,8 +1370,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
           // Remote status events are global and should always pass through
           if (event.type === "kilo-sessions.remote-status-changed") return true
-          if (event.type === "memory.status" || event.type === "memory.updated" || event.type === "memory.error")
-            return true
           const sessionId = this.resolveEventSessionId(event)
 
           // message.part.* events are always session-scoped; drop if session unknown.
@@ -1579,8 +1507,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.fetchAndSendSkills(),
         this.fetchAndSendCommands(),
         this.fetchAndSendConfig(),
-        this.fetchAndSendIndexingStatus(),
-        this.memory.fetch(),
         this.seedSessionStatusMap(),
       ])
       this.cachedGitRepo = await hasGit(this.client!, this.getWorkspaceDirectory())
@@ -2387,10 +2313,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
   }
 
-  private async handleMemoryMessage(message: Record<string, unknown>): Promise<boolean> {
-    return this.memory.handle(message)
-  }
-
   /**
    * Fetch backend config and send to webview.
    *
@@ -2441,8 +2363,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         config,
         globalConfig: global,
         projectConfig: overlay?.project,
-        settings: { maxCost: this.maxCostSetting(), languageCommitMessage: this.commitMessageLanguageSetting() },
-        features: configFeatures(config),
+        settings: { maxCost: this.maxCostSetting() },
+        features: configFeatures(),
       }
       this.cachedConfigMessage = message
       this.postMessage(message)
@@ -2461,46 +2383,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to fetch global config:", error)
     }
-  }
-
-  private async fetchAndSendIndexingStatus(): Promise<void> {
-    if (!this.client) {
-      if (this.cachedIndexingStatusMessage) {
-        this.postMessage(this.cachedIndexingStatusMessage)
-      }
-      return
-    }
-
-    const config = this.connectionService.getServerConfig()
-    if (!config) return
-
-    try {
-      const dir = this.getWorkspaceDirectory(this.currentSession?.id)
-      const auth = Buffer.from(`kilo:${config.password}`).toString("base64")
-      const res = await fetch(`${config.baseUrl}/indexing/status`, {
-        headers: {
-          Authorization: `Basic ${auth}`,
-          ...(dir ? { "x-kilo-directory": dir } : {}),
-        },
-      })
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const status = (await res.json()) as IndexingStatus
-      const message = {
-        type: "indexingStatusLoaded",
-        status,
-      }
-      this.cachedIndexingStatusMessage = message
-      this.postMessage(message)
-    } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to fetch indexing status:", error)
-    }
-  }
-
-  private async fetchAndSendKiloEmbeddingModels(): Promise<void> {
-    const catalog = await fetchKiloEmbeddingModelCatalog()
-    const message = { type: "kiloEmbeddingModelsLoaded", catalog }
-    this.cachedKiloEmbeddingModelsMessage = message
-    this.postMessage(message)
   }
 
   private async fetchAndSendImageModels(): Promise<void> {
@@ -2882,8 +2764,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         config: txResult.effective,
         globalConfig: txResult.global,
         projectConfig: txResult.project,
-        settings: { maxCost: this.maxCostSetting(), languageCommitMessage: this.commitMessageLanguageSetting() },
-        features: configFeatures(txResult.effective),
+        settings: { maxCost: this.maxCostSetting() },
+        features: configFeatures(),
         ...(saveID && { saveID }),
       })
       this.requirements.clear()
@@ -3055,16 +2937,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         config: merged,
         globalConfig: global,
         projectConfig: overlay?.project,
-        settings: { maxCost: this.maxCostSetting(), languageCommitMessage: this.commitMessageLanguageSetting() },
-        features: configFeatures(merged),
+        settings: { maxCost: this.maxCostSetting() },
+        features: configFeatures(),
       }
       this.postMessage({
         type: "configUpdated",
         config: merged,
         globalConfig: global,
         projectConfig: overlay?.project,
-        settings: { maxCost: this.maxCostSetting(), languageCommitMessage: this.commitMessageLanguageSetting() },
-        features: configFeatures(merged),
+        settings: { maxCost: this.maxCostSetting() },
+        features: configFeatures(),
       })
       return "ok"
     } catch (error) {
@@ -3267,10 +3149,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   private maxCostSetting(): number {
     return this.setMaxCost(vscode.workspace.getConfiguration("kilo-code.new").get<number>("maxCost", 0))
-  }
-
-  private commitMessageLanguageSetting(): string {
-    return vscode.workspace.getConfiguration("kilo-code.new").get<string>("languageCommitMessage", "sync")
   }
 
   private setMaxCost(value: unknown): number {
@@ -3618,48 +3496,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
   }
 
-  /**
-   * Handle compact (context summarization) request from the webview.
-   */
-  private async handleCompact(sessionID?: string, providerID?: string, modelID?: string): Promise<void> {
-    if (!this.client) {
-      this.postMessage({
-        type: "error",
-        message: "Not connected to CLI backend",
-      })
-      return
-    }
-
-    const target = sessionID || this.currentSession?.id
-    if (!target) {
-      console.error("[Kilo New] KiloProvider: No sessionID for compact")
-      return
-    }
-
-    if (!providerID || !modelID) {
-      console.error("[Kilo New] KiloProvider: No model selected for compact")
-      this.postMessage({
-        type: "error",
-        message: "No model selected. Connect a provider to compact this session.",
-      })
-      return
-    }
-
-    try {
-      const workspaceDir = this.getWorkspaceDirectory(target)
-      await this.client.session.summarize(
-        { sessionID: target, directory: workspaceDir, providerID, modelID },
-        { throwOnError: true },
-      )
-    } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to compact session:", error)
-      this.postMessage({
-        type: "error",
-        message: getErrorMessage(error) || "Failed to compact session",
-      })
-    }
-  }
-
   // Permission + question handlers extracted to kilo-provider/handlers/permission.ts and question.ts
 
   private get permissionCtx(): PermissionContext {
@@ -3751,8 +3587,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       return
     }
     const { section, leaf } = buildSettingPath(key)
-    if (section === "autocomplete" && !validAutocompleteSetting(leaf, value)) return
-    if (section === "indexing" && !validIndexingSetting(leaf, value)) return
     const config = vscode.workspace.getConfiguration(`kilo-code.new${section ? `.${section}` : ""}`)
     // Normalize a webview-side clear to `undefined` so VS Code removes the
     // key from settings.json rather than persisting a literal `null`. This
@@ -3810,8 +3644,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     await this.extensionContext?.globalState.update("kilo.marketplace.dismissedSuggestions", undefined)
 
     // Re-send all settings to the webview so the UI reflects the reset
-    this.postMessage(buildAutocompleteSettingsMessage())
-    this.postMessage(buildIndexingSettingsMessage())
     this.sendBrowserSettings()
     this.sendNotificationSettings()
     this.sendTimelineSetting()
@@ -3859,7 +3691,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.fetchAndSendAgents(),
       this.fetchAndSendSkills(),
       this.fetchAndSendCommands(),
-      this.fetchAndSendIndexingStatus(),
     ])
   }
 
@@ -4011,48 +3842,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       return
     }
 
-    if (event.type === "memory.status" || event.type === "memory.updated" || event.type === "memory.error") {
-      const props = event.properties as { sessionID?: unknown; detail?: unknown; reason?: unknown }
-      const eventSessionID = typeof props.sessionID === "string" ? props.sessionID : undefined
-      const active = this.currentSession?.id
-      const local =
-        !directory || sameDirectory(directory, this.getProjectDirectory(active) ?? this.getWorkspaceDirectory(active))
-      const trackedById = Boolean(eventSessionID && this.trackedSessionIds.has(eventSessionID))
-      // Directory-scoped events (enable/disable/rebuild/configure/purge) carry no
-      // sessionID, so also match any tracked session sharing the event directory —
-      // e.g. a non-active Agent Manager tab in the same workspace.
-      const trackedByDir = directory
-        ? [...this.sessionDirectories.entries()]
-            .filter(([sid, dir]) => this.trackedSessionIds.has(sid) && sameDirectory(directory, dir))
-            .map(([sid]) => sid)
-        : []
-      const tracked = trackedById || trackedByDir.length > 0
-      if (!local && !tracked) return
-      if (trackedById && eventSessionID && directory) this.trackDirectory(eventSessionID, directory)
-      const targets = new Set<string | undefined>()
-      if (trackedById && eventSessionID) targets.add(eventSessionID)
-      for (const sid of trackedByDir) targets.add(sid)
-      if (local && active) targets.add(active)
-      if (targets.size === 0 && local) targets.add(undefined)
-      const detail =
-        props.detail && typeof props.detail === "object"
-          ? props.detail
-          : event.type === "memory.error" && typeof props.reason === "string"
-            ? { type: "error", message: props.reason, reason: props.reason }
-            : undefined
-      for (const sessionID of targets) {
-        if (detail) {
-          this.postMessage({
-            type: "memoryEvent",
-            sessionID,
-            detail,
-          })
-        }
-        void this.memory.fetch(sessionID, false)
-      }
-      return
-    }
-
     // Drop session events from other projects before any tracking logic.
     // This must come first: the trackedSessionIds guard below would otherwise
     // let a foreign session through if it was accidentally tracked.
@@ -4104,13 +3893,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     const sessionID = this.resolveEventSessionId(event)
 
-    // Events without sessionID (server.connected, server.heartbeat, indexing.status) → always forward
+    // Events without sessionID (server.connected, server.heartbeat) → always forward
     // Events with sessionID → only forward if this webview tracks that session
     // message.part.* events are always session-scoped; drop if session unknown.
     if (!sessionID && isSessionScopedPartEvent(event.type)) return
     if (this.postModelUsageChanged(event, sessionID)) return
     if (
-      event.type !== "indexing.status" &&
       event.type !== "session.deleted" &&
       sessionID &&
       !this.trackedSessionIds.has(sessionID)
@@ -4228,10 +4016,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       )
     }
 
-    if (event.type === "indexing.status" && directory) {
-      if (!sameDirectory(directory, this.getWorkspaceDirectory(this.currentSession?.id))) return
-    }
-
     const msg = isLegacySyncEvent(event)
       ? this.mapSyncEventToWebviewMessage(event)
       : mapSSEEventToWebviewMessage(event, sessionID)
@@ -4245,9 +4029,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       if (!sameDirectory(next.directory, this.getWorkspaceDirectory(next.sessionID))) return
       this.postMessage({ ...next, revision: ++this.sandboxRevision })
       return
-    }
-    if (next.type === "indexingStatusLoaded") {
-      this.cachedIndexingStatusMessage = next
     }
     this.streams.flush(sessionID)
     this.postMessage(next)
@@ -4282,22 +4063,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const pending = this.pendingKiloModel
     this.pendingKiloModel = null
     this.postMessage({ type: "selectKiloModel", ...pending })
-  }
-
-  public async showMemory(sessionID?: string): Promise<void> {
-    await this.memory.show(sessionID ?? this.currentSession?.id)
-  }
-
-  public async toggleMemory(sessionID?: string): Promise<void> {
-    try {
-      const operation = await this.memory.toggle(sessionID ?? this.currentSession?.id)
-      if (operation) {
-        void vscode.window.showInformationMessage(`Project memory ${operation === "enable" ? "enabled" : "disabled"}.`)
-      }
-    } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to toggle memory:", error)
-      void vscode.window.showErrorMessage(getErrorMessage(error) || "Failed to toggle memory")
-    }
   }
 
   /**
@@ -4556,8 +4321,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.connectionGeneration += 1
     this.viewStateDisposable?.dispose()
     this.webviewMessageDisposable?.dispose()
-    this.autocompleteConfigDisposable?.dispose()
-    this.indexingConfigDisposable?.dispose()
     this.telemetryStateDisposable?.dispose()
     this.autoApproveBridge?.dispose()
     this.visibleTaskStreams.clear()
@@ -4577,7 +4340,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.sessionStatusMap.clear()
     this.requirements.dispose()
     this.ignoreController?.dispose()
-    this.chatAutocomplete?.dispose()
     disposeGitChangesTarget()
   }
 }

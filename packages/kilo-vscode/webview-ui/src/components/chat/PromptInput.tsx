@@ -1,6 +1,6 @@
 /**
  * PromptInput component
- * Text input with send/abort buttons, ghost-text autocomplete, and @ file mention support
+ * Text input with send/abort buttons, @ file mention support, and inline model/mode controls
  */
 
 import { createSignal, createEffect, on, For, Index, onCleanup, Show, untrack, type Component } from "solid-js"
@@ -13,8 +13,6 @@ import { showToast } from "@kilocode/kilo-ui/toast"
 import { useSession } from "../../context/session"
 import { useLocalTabs } from "../../context/local-tabs"
 import { useServer } from "../../context/server"
-import { useIndexing } from "../../context/indexing"
-import { indexingButtonVisible } from "../../context/indexing-utils"
 import { useLanguage } from "../../context/language"
 import { useVSCode } from "../../context/vscode"
 import { useConfig } from "../../context/config"
@@ -31,7 +29,6 @@ import { useGitChangesContext } from "../../hooks/useGitChangesContext"
 import { hasTerminalMention } from "../../hooks/terminal-context-utils"
 import { hasGitChangesMention } from "../../hooks/git-changes-context-utils"
 import { useSlashCommand } from "../../hooks/useSlashCommand"
-import { useGhostText } from "../../hooks/useGhostText"
 import { useSpeechToText } from "../speech-to-text/useSpeechToText"
 import { useImageAttachments, type ImageAttachment } from "../../hooks/useImageAttachments"
 import { convertToMentionPath } from "../../utils/path-mentions"
@@ -74,8 +71,6 @@ import {
 import { ReviewComments } from "./ReviewComments"
 import { partReview, reviewBody } from "../../../../src/shared/review-comments"
 import { isEnterKeyCommitNotIme } from "../../utils/ime-enter"
-import { MEMORY_USAGE, parseMemoryCommand } from "../../utils/memory-command"
-import { useMemory } from "../../context/memory"
 
 function finishPending(id: string | undefined): boolean {
   if (!id) return false
@@ -104,12 +99,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const session = useSession()
   const tabs = useLocalTabs()
   const server = useServer()
-  const indexing = useIndexing()
   const { config, globalConfig, settings, features } = useConfig()
   const provider = useProvider()
   const language = useLanguage()
   const vscode = useVSCode()
-  const projectMemory = useMemory()
   const sid = () => session.currentSessionID() ?? props.pendingSessionID ?? session.draftSessionID() ?? undefined
   const ctx = () => {
     const id = props.boxId
@@ -279,7 +272,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     requestSandbox()
   })
 
-  const ghost = useGhostText(vscode, text, () => server.isConnected())
   const speech = useSpeechToText(vscode, server, language)
 
   const replaceReviewComments = (next: ReviewComment[]) => {
@@ -410,16 +402,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   window.addEventListener("agentManagerDiscardDraft", onAgentManagerDiscardDraft)
   onCleanup(() => window.removeEventListener("agentManagerDiscardDraft", onAgentManagerDiscardDraft))
 
-  // Compact/summarize the current session (mirrors canCompact guards in TaskHeader)
-  const onCompact = () => {
-    if (session.status() === "busy") return
-    if (session.messages().length === 0) return
-    if (!session.selected(sid())) return
-    session.compact()
-  }
-  window.addEventListener("compactSession", onCompact)
-  onCleanup(() => window.removeEventListener("compactSession", onCompact))
-
   const onExport = () => {
     const id = session.currentSessionID()
     if (id) session.exportSessionTranscript(id)
@@ -429,13 +411,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const isBusy = () =>
     isPromptBusy(session.status(), !!props.suggesting?.(), !!props.questioning?.(), session.submitting())
-  const showIndexing = () =>
-    indexingButtonVisible(
-      features().indexing,
-      Boolean(settings()["indexing.showButtonWhenDisabled"] ?? true),
-      config(),
-      globalConfig(),
-    )
   const isDisabled = () => !server.isConnected()
   const canUseSpeech = () => canUseSpeechToText(config(), provider.authStates())
   const speechModel = () => selectedSpeechToTextModel(config())
@@ -728,22 +703,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     unsubscribe()
   })
 
-  const acceptSuggestion = () => {
-    const result = ghost.accept()
-    if (!result) return
-
-    const val = text() + result.text
-    setText(val)
-
-    if (textareaRef) {
-      textareaRef.value = val
-      adjustHeight()
-      syncHighlightScroll()
-    }
-  }
-
-  const syncGhost = () => ghost.sync(textareaRef)
-
   const scrollToActiveItem = () => {
     if (!dropdownRef) return
     const items = dropdownRef.querySelectorAll(".file-mention-item")
@@ -792,8 +751,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     slash.onInput(val, target.selectionStart ?? val.length)
     mention.onInput(val, target.selectionStart ?? val.length)
-    ghost.setMentionOpen(slash.show() || mention.showMention())
-    ghost.scheduleRequest(val, textareaRef)
   }
 
   const handleKeyDown = (e: KeyboardEvent) => {
@@ -823,13 +780,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (mention.handleArrowKey(e, textareaRef)) return
 
     if (slash.onKeyDown(e, textareaRef, setText, adjustHeight)) {
-      ghost.setMentionOpen(slash.show())
       queueMicrotask(scrollToActiveSlashItem)
       return
     }
 
     if (mention.onKeyDown(e, textareaRef, setText, adjustHeight)) {
-      ghost.setMentionOpen(mention.showMention())
       queueMicrotask(scrollToActiveItem)
       return
     }
@@ -855,24 +810,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       }
     }
 
-    if (e.key === "Tab" && ghost.text()) {
-      if (!isAtEnd()) return
-      e.preventDefault()
-      acceptSuggestion()
-      return
-    }
-    if (e.key === "ArrowRight" && ghost.text()) {
-      if (!isAtEnd()) return
-      e.preventDefault()
-      acceptSuggestion()
-      return
-    }
-    if (e.key === "Escape" && ghost.text()) {
-      e.preventDefault()
-      e.stopPropagation()
-      ghost.dismiss()
-      return
-    }
     if (isEnterKeyCommitNotIme(e) && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -880,10 +817,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
   const canEnhance = () => !isBusy() && !isDisabled() && !enhancing()
-
-  const handleOpenIndexingSettings = () => {
-    vscode.postMessage({ type: "openSettingsTab", tab: "indexing" })
-  }
 
   const handleEnhance = () => {
     if (isDisabled() || enhancing() || isBusy()) return
@@ -918,7 +851,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     ref.focus()
     adjustHeight()
     syncHighlightScroll()
-    ghost.scheduleRequest(result.text, ref)
   }
 
   const startSpeech = () => {
@@ -952,60 +884,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     transcribeAndSend()
   }
 
-  const runMemory = (memory: NonNullable<ReturnType<typeof parseMemoryCommand>>) => {
-    if (memory.kind === "usage") {
-      showToast({ variant: "error", title: language.t("chat.memory.command.failed"), description: memory.reason })
-      return false
-    }
-    if (memory.kind === "help") {
-      showToast({ variant: "default", title: "/memory", description: MEMORY_USAGE })
-      return true
-    }
-    if (isDisabled() || speech.active() || terminal.pending() || git.pending() || props.blocked?.()) return false
-    const status = projectMemory.status()
-    if (
-      memory.kind === "operation" &&
-      (memory.operation === "remember" || memory.operation === "correct" || memory.operation === "forget") &&
-      status &&
-      !status.state.enabled
-    ) {
-      showToast({ variant: "error", title: language.t("chat.memory.project.disabled") })
-      return false
-    }
-    if (memory.kind === "show") vscode.postMessage({ type: "memoryShow", sessionID: sid() })
-    if (memory.kind === "operation") {
-      vscode.postMessage({
-        type: "memoryOperation",
-        operation: memory.operation,
-        sessionID: sid(),
-        ...(memory.operation === "auto" || memory.operation === "verbose" ? { mode: memory.mode } : {}),
-        ...(memory.operation === "purge" ? { confirm: memory.confirm } : {}),
-        ...(memory.operation === "remember" || memory.operation === "correct" ? { text: memory.text } : {}),
-        ...(memory.operation === "forget" ? { query: memory.query } : {}),
-      })
-    }
-    return true
-  }
-
   const handleSend = async () => {
     const draft = text().trim()
-
-    const memory = parseMemoryCommand(draft)
-    if (memory) {
-      if (!runMemory(memory)) return
-      history.append(draft)
-      setText("")
-      clearReviewComments()
-      imageAttach.clear()
-      mention.closeMention()
-      slash.close()
-      drafts.delete(draftKey())
-      reviewDrafts.delete(draftKey())
-      imageDrafts.delete(draftKey())
-      scrollDrafts.delete(draftKey())
-      if (textareaRef) textareaRef.style.height = "auto"
-      return
-    }
 
     // Detect slash command (hoisted for both client and server command checks).
     // Prioritize exact name matches over hint/alias matches so that a server
@@ -1285,7 +1165,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         </div>
       </Show>
       <div class="prompt-input-wrapper">
-        <div class="prompt-input-ghost-wrapper">
+        <div class="prompt-input-overlay-wrapper">
           <div class="prompt-input-highlight-overlay" ref={highlightRef} aria-hidden="true" dir="auto">
             <Index each={buildHighlightSegments(text(), highlightMentions())}>
               {(seg) => (
@@ -1305,9 +1185,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 </Show>
               )}
             </Index>
-            <Show when={ghost.text()}>
-              <span class="prompt-input-ghost-text">{ghost.text()}</span>
-            </Show>
             {/* A <div> with white-space: pre-wrap collapses a trailing newline,
                 but a <textarea> renders it as a real empty line. This <br> is
                 added in that case so the overlay and textarea heights match. */}
@@ -1323,13 +1200,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             value={text()}
             onInput={handleInput}
             onKeyDown={handleKeyDown}
-            onKeyUp={syncGhost}
             onPaste={handlePaste}
-            onClick={syncGhost}
-            onFocus={syncGhost}
-            onBlur={syncGhost}
             onSelect={() => {
-              syncGhost()
               if (textareaRef) mention.snapSelection(textareaRef)
             }}
             onScroll={syncHighlightScroll}
@@ -1368,32 +1240,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
           </Show>
         </div>
         <div class="prompt-input-hint-actions">
-          <Show when={showIndexing()}>
-            <Tooltip value={indexing.status().message || indexing.label()} placement="top">
-              <Button
-                variant="ghost"
-                size="small"
-                onClick={handleOpenIndexingSettings}
-                aria-label={language.t("prompt.action.indexing")}
-                class={`prompt-indexing-button prompt-indexing-button--${indexing.tone()}`}
-              >
-                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
-                  <ellipse cx="8" cy="3.5" rx="4.5" ry="2" stroke="currentColor" stroke-width="1.2" />
-                  <path
-                    d="M3.5 3.5V12.5C3.5 13.6046 5.51472 14.5 8 14.5C10.4853 14.5 12.5 13.6046 12.5 12.5V3.5"
-                    stroke="currentColor"
-                    stroke-width="1.2"
-                  />
-                  <path
-                    d="M3.5 8C3.5 9.10457 5.51472 10 8 10C10.4853 10 12.5 9.10457 12.5 8"
-                    stroke="currentColor"
-                    stroke-width="1.2"
-                  />
-                  <circle cx="13" cy="3" r="2.5" fill="currentColor" />
-                </svg>
-              </Button>
-            </Tooltip>
-          </Show>
           <Tooltip
             value={
               autoApprove()

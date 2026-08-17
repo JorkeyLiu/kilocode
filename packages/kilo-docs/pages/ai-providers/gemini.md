@@ -71,4 +71,3 @@ Then set your default model:
 ## Tips and Notes
 
 - **Pricing:** Gemini API usage is priced based on input and output tokens. Refer to the [Gemini pricing page](https://ai.google.dev/pricing) for detailed information.
-- **Codebase Indexing:** The `gemini-embedding-001` model is specifically supported for [codebase indexing](/docs/customize/context/codebase-indexing), providing high-quality embeddings for semantic code search.

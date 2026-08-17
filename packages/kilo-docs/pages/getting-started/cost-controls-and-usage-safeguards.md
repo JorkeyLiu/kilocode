@@ -100,27 +100,9 @@ Kilo automatically skips a set of directories including `node_modules`, `dist`, 
 
 **Where to configure:** `kilo.jsonc` (VS Code / CLI). See [.kilocodeignore](/docs/customize/context/kilocodeignore) for full details.
 
-### Compact long conversations
+### Automatic context recovery
 
-When a conversation grows long, use `/compact` in the chat (also searchable as `smol` or `condense`) to summarize the history and free up context space. Kilo replaces older conversation turns with an anchored summary that captures your goal, constraints, progress, and next steps.
-
-Auto-compaction is **enabled by default** — Kilo automatically compacts when approaching the context window limit so you do not need to intervene manually.
-
-**Where to configure:** Toggle auto-compaction in **Settings → Context** (VS Code) or set `compaction.auto` in `kilo.jsonc`. Configure the trigger threshold with `compaction.threshold_percent` (e.g. `80` to compact at 80% of the model's context window).
-
-You can also configure a cheaper model specifically for compaction, so summarization does not consume frontier model tokens:
-
-```jsonc
-{
-  "agent": {
-    "compaction": {
-      "model": "anthropic/claude-haiku-4-5"
-    }
-  }
-}
-```
-
-See [Context Condensing](/docs/customize/context/context-condensing) for full configuration options.
+Kilo automatically manages context window usage through internal overflow recovery. When a conversation approaches the model's context limit, Kilo compacts the history into an anchored summary without any manual intervention. See [Context Recovery](/docs/customize/context/context-condensing) for how it works.
 
 ### Keep max output tokens conservative
 
@@ -248,7 +230,6 @@ Dashboard administrative actions (model restrictions, spending limits, billing m
 
 - Use `kilo-auto/efficient` as the default model
 - Switch to `kilo-auto/free` for low-stakes questions and exploration
-- Enable auto-compaction (on by default); set `compaction.threshold_percent: 80` to compact earlier
 - Set Code agent max output tokens to 16k or below
 - Keep `doom_loop` permission at `ask`
 - Start a new session whenever you switch to an unrelated task
@@ -260,7 +241,6 @@ Dashboard administrative actions (model restrictions, spending limits, billing m
 - Use Architect mode for initial codebase exploration — it cannot modify code, keeping exploration cost lower
 - Use `@file` mentions with specific paths instead of attaching whole directories
 - Add generated and build directories to permission deny rules (`coverage/**`, `.next/**`, etc.)
-- Configure a cheap model for compaction (`anthropic/claude-haiku-4-5` or equivalent)
 - Consider using a model with a large context window (256K+) for cross-file analysis tasks
 - Break large tasks into focused sub-tasks rather than asking for a single comprehensive change
 
@@ -268,7 +248,6 @@ Dashboard administrative actions (model restrictions, spending limits, billing m
 
 - Assign `kilo-auto/efficient` to Code and Debug agents for everyday work
 - Assign `kilo-auto/frontier` to Architect (or Plan) agent for planning tasks
-- Set `kilo-auto/efficient` as the compaction model for all agents
 - If on an Enterprise plan, use Providers & Models to block high-cost models that are not needed for your team's typical work
 
 ```jsonc
@@ -276,8 +255,7 @@ Dashboard administrative actions (model restrictions, spending limits, billing m
   "agent": {
     "code": { "model": "kilo-auto/efficient" },
     "debug": { "model": "kilo-auto/efficient" },
-    "architect": { "model": "kilo-auto/frontier" },
-    "compaction": { "model": "anthropic/claude-haiku-4-5" }
+    "architect": { "model": "kilo-auto/frontier" }
   }
 }
 ```
@@ -335,20 +313,8 @@ This configuration uses only `kilo-auto/efficient`.
       "steps": 15
     },
     // Dedicated agents for background summarization 
-    "compaction": { "model": "kilo-auto/free" },
     "title":      { "model": "kilo-auto/free" },
     "summary":    { "model": "kilo-auto/free" }
-  },
-
-  // ── Compaction (context management) ─────────────────────────────────────
-  // Auto-compact aggressively to keep conversation history short and cheap.
-  "compaction": {
-    "auto": true,              // enable automatic compaction (default: true)
-    "threshold_percent": 50,   // compact when context reaches 50% full (default: ~80%)
-    "prune": true,             // prune old tool outputs to recover context space
-    "tail_turns": 1,           // keep only 1 recent user-turn verbatim after compaction
-    "preserve_recent_tokens": 2000, // cap on tokens preserved verbatim from recent turns
-    "reserved": 8000           // token buffer reserved so compaction itself doesn't overflow
   },
 
   // ── Tool output truncation ───────────────────────────────────────────────
@@ -374,7 +340,7 @@ This configuration uses only `kilo-auto/efficient`.
 }
 ```
 
-Every field in this block is documented in the sections above. Use it as a starting point, then relax individual settings (for example, setting `permission.edit` to `"allow"` for a trusted project, or raising `compaction.threshold_percent` to `70` if compaction feels too aggressive) as you build confidence in how the agent behaves.
+Every field in this block is documented in the sections above. Use it as a starting point, then relax individual settings (for example, setting `permission.edit` to `"allow"` for a trusted project) as you build confidence in how the agent behaves.
 
 ---
 
@@ -384,7 +350,7 @@ If your spend is higher than expected:
 
 - **Check your usage dashboard** at [app.kilo.ai/usage](https://app.kilo.ai/usage) for a breakdown by day, model, and project
 - **Review the model in use** — an accidental switch to a frontier model for routine tasks can significantly raise costs
-- **Look for long sessions** — sessions that were never compacted carry their full history as input tokens on every request; use `/compact` to reset them
+- **Look for long sessions** — sessions that were never compacted carry their full history as input tokens on every request; start a fresh session to reset them
 - **Check MCP server configuration** — unused MCP servers add tool definitions to every system prompt
 - **Review permission settings** — auto-approving all actions with no `doom_loop` guard removes the friction that normally slows down runaway loops
 
@@ -394,7 +360,7 @@ For further reading: [4 Levers to Take Control of Your AI Spend](https://blog.ki
 
 - [Cost Efficiency & Model Selection](/docs/getting-started/rate-limits-and-costs) — Auto Model tier comparison, rate limits, and per-request cost calculation
 - [Auto Model](/docs/code-with-ai/agents/auto-model) — Full details on each Auto Model tier and routing strategy
-- [Context Condensing](/docs/customize/context/context-condensing) — How compaction works and all configuration options
+- [Context Recovery](/docs/customize/context/context-condensing) — How automatic overflow recovery works
 - [Auto-Approving Actions](/docs/getting-started/settings/auto-approving-actions) — Permission system reference for VS Code and CLI
 - [Model Access Controls](/docs/collaborate/enterprise/model-access-controls) — Enterprise model and provider blocklist configuration
 - [Usage & Billing](/docs/gateway/usage-and-billing) — Gateway billing mechanics and organization controls

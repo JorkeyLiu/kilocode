@@ -303,7 +303,6 @@ interface SessionContextValue {
     origin?: string | null,
   ) => void
   abort: () => void
-  compact: () => void
   respondToPermission: (
     permissionId: string,
     response: "once" | "always" | "reject",
@@ -2421,27 +2420,6 @@ export const SessionProvider: ParentComponent = (props) => {
     })
   }
 
-  function compact() {
-    if (!server.isConnected()) {
-      console.warn("[Kilo New] Cannot compact: not connected")
-      return
-    }
-
-    const sessionID = currentSessionID()
-    if (!sessionID) {
-      console.warn("[Kilo New] Cannot compact: no current session")
-      return
-    }
-
-    const sel = selected()
-    vscode.postMessage({
-      type: "compact",
-      sessionID,
-      providerID: sel?.providerID,
-      modelID: sel?.modelID,
-    })
-  }
-
   function respondToPermission(
     permissionId: string,
     response: "once" | "always" | "reject",
@@ -3005,7 +2983,6 @@ export const SessionProvider: ParentComponent = (props) => {
     sendMessage,
     sendCommand,
     abort,
-    compact,
     respondToPermission,
     replyToQuestion,
     rejectQuestion,

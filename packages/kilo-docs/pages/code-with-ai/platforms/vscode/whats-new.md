@@ -19,7 +19,7 @@ Still stumped after reading this? Come find us in discord at #vscode.
 
 ### Where did code indexing go?
 
-Code indexing is temporarily unavailable in the new extension. It is actively being worked on and is expected to return soon. Please follow [this issue](https://github.com/Kilo-Org/kilocode/issues/6144)
+Codebase indexing, semantic search, and project memory have been permanently removed. The agent now discovers code through its built-in tools (grep, glob, read) and context mentions. See [Context Mentions](/docs/code-with-ai/agents/context-mentions) for how the agent finds and references files.
 
 ### How do checkpoints work in the new extension?
 

@@ -62,11 +62,6 @@ export const InitPayload = Schema.Struct({
   providerID: ProviderV2.ID,
   messageID: MessageID,
 })
-export const SummarizePayload = Schema.Struct({
-  providerID: ProviderV2.ID,
-  modelID: ModelV2.ID,
-  auto: Schema.optional(Schema.Boolean),
-})
 export const PromptPayload = Schema.Struct(Struct.omit(SessionPrompt.PromptInput.fields, ["sessionID"]))
 export const CommandPayload = Schema.Struct(Struct.omit(SessionPrompt.CommandInput.fields, ["sessionID"]))
 export const ShellPayload = Schema.Struct(Struct.omit(SessionPrompt.ShellInput.fields, ["sessionID"]))
@@ -104,7 +99,6 @@ export const SessionPaths = {
   abort: `${root}/:sessionID/abort`,
   share: `${root}/:sessionID/share`,
   init: `${root}/:sessionID/init`,
-  summarize: `${root}/:sessionID/summarize`,
   prompt: `${root}/:sessionID/message`,
   promptAsync: `${root}/:sessionID/prompt_async`,
   command: `${root}/:sessionID/command`,
@@ -313,19 +307,6 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.unshare",
             summary: "Unshare session",
             description: "Remove the shareable link for a session, making it private again.",
-          }),
-        ),
-        HttpApiEndpoint.post("summarize", SessionPaths.summarize, {
-          params: { sessionID: SessionID },
-          query: WorkspaceRoutingQuery,
-          payload: SummarizePayload,
-          success: described(Schema.Boolean, "Summarized session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "session.summarize",
-            summary: "Summarize session",
-            description: "Generate a concise summary of the session using AI compaction to preserve key information.",
           }),
         ),
         HttpApiEndpoint.post("prompt", SessionPaths.prompt, {

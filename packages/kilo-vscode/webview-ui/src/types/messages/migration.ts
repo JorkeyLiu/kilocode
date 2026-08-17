@@ -18,12 +18,6 @@ export interface MigrationCustomModeInfo {
   slug: string
 }
 
-export interface LegacyAutocompleteSettings {
-  enableAutoTrigger?: boolean
-  enableSmartInlineTaskKeybinding?: boolean
-  enableChatAutocomplete?: boolean
-}
-
 export interface LegacySettings {
   autoApprovalEnabled?: boolean
   allowedCommands?: string[]
@@ -37,7 +31,6 @@ export interface LegacySettings {
   alwaysAllowModeSwitch?: boolean
   alwaysAllowSubtasks?: boolean
   language?: string
-  autocomplete?: LegacyAutocompleteSettings
 }
 
 export interface MigrationSessionInfo {
@@ -138,7 +131,6 @@ export interface StartMigrationMessage {
     settings: {
       autoApproval: MigrationAutoApprovalSelections
       language: boolean
-      autocomplete: boolean
     }
   }
 }

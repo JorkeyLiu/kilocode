@@ -71,7 +71,7 @@ Low Depth indicates that developers may be trying AI but not trusting or shippin
 
 **Actions:**
 
-1. Enable [Codebase Indexing](/docs/customize/context/codebase-indexing) to improve context quality
+1. Set up [AGENTS.md](/docs/customize/agents-md) to improve context quality
 2. Review whether suggestions are relevant to your codebase
 3. Introduce chained workflows to increase multi-stage usage
 
@@ -89,7 +89,7 @@ Low Frequency suggests AI hasn't become a daily habit.
 
 1. Map AI to existing daily tasks (stand-ups, PRs, documentation)
 2. Ensure the CLI is installed for terminal workflows
-3. Run a "try autocomplete for a week" challenge
+3. Run a "try AI-assisted coding for a week" challenge
 
 ---
 
@@ -112,14 +112,13 @@ Use the score tiers as milestones:
 
 **For Frequency:**
 
-- "Autocomplete Week" — Everyone commits to using autocomplete daily
+- "AI Coding Week" — Everyone commits to using AI daily for their coding tasks
 - CLI onboarding session — 30-minute walkthrough of terminal AI
 - Daily AI tip in Slack — Share one use case per day
 
 **For Depth:**
 
 - "Chain Challenge" — Complete one feature using plan → build → review
-- Codebase Indexing rollout - Enable better context for the whole team
 - Deploy previews — Validate AI output before merging
 
 **For Coverage:**
@@ -170,7 +169,7 @@ The AI Adoption Score is designed to be quotable:
 >
 > **Key Actions Taken:**
 >
-> - Enabled Codebase Indexing for better AI context
+> - Set up AGENTS.md for better AI context
 > - Introduced Code Reviews for all PRs
 > - Onboarded 3 inactive team members
 >

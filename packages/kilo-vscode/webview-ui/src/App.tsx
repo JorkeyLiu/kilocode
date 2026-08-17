@@ -17,9 +17,7 @@ import { ProviderProvider } from "./context/provider"
 import { ConfigProvider } from "./context/config"
 import { DisplayProvider } from "./context/display"
 import { WorkStyleProvider } from "./context/work-style"
-import { IndexingProvider } from "./context/indexing"
 import { AgentRequirementsProvider } from "./context/agent-requirements"
-import { MemoryProvider } from "./context/memory"
 import { SessionProvider, useSession } from "./context/session"
 import { LocalTabsProvider, useLocalTabs } from "./context/local-tabs"
 import { LanguageBridge } from "./context/language-bridge"
@@ -38,7 +36,6 @@ registerVscodeToolOverrides()
 import HistoryView from "./components/history/HistoryView"
 import { MigrationWizard } from "./components/migration" // legacy-migration
 import { FeedbackProvider } from "./context/feedback"
-import { KiloEmbeddingModelsProvider } from "./context/kilo-embedding-models"
 import { ImageModelsProvider } from "./context/image-models"
 // Side-effect-free bridges (shared with the Agent Manager webview). Imported
 // here for the editor-tab webview's provider chain and re-exported so the
@@ -244,25 +241,19 @@ const App: Component = () => {
                           <SpeechToTextPrewarm />
                           <DisplayProvider>
                             <WorkStyleProvider>
-                              <IndexingProvider>
-                                <KiloEmbeddingModelsProvider>
-                                  <ImageModelsProvider>
-                                    <SessionProvider>
-                                      <LocalTabsProvider>
-                                        <AgentRequirementsProvider>
-                                          <MemoryProvider>
-                                            <FeedbackProvider>
-                                              <DataBridge>
-                                                <AppContent />
-                                              </DataBridge>
-                                            </FeedbackProvider>
-                                          </MemoryProvider>
-                                        </AgentRequirementsProvider>
-                                      </LocalTabsProvider>
-                                    </SessionProvider>
-                                  </ImageModelsProvider>
-                                </KiloEmbeddingModelsProvider>
-                              </IndexingProvider>
+                              <ImageModelsProvider>
+                                <SessionProvider>
+                                  <LocalTabsProvider>
+                                    <AgentRequirementsProvider>
+                                      <FeedbackProvider>
+                                        <DataBridge>
+                                          <AppContent />
+                                        </DataBridge>
+                                      </FeedbackProvider>
+                                    </AgentRequirementsProvider>
+                                  </LocalTabsProvider>
+                                </SessionProvider>
+                              </ImageModelsProvider>
                             </WorkStyleProvider>
                           </DisplayProvider>
                         </ConfigProvider>

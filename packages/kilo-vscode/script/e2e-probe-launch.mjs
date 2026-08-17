@@ -18,10 +18,13 @@
  *   KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=sidebar-removal   node script/e2e-probe-launch.mjs
  *   KILO_E2E_SCENARIO=worktree-removal  node script/e2e-probe-launch.mjs
+ *   KILO_E2E_SCENARIO=cloud-claw-removal node script/e2e-probe-launch.mjs
+ *   KILO_E2E_SCENARIO=p3-4-removal      node script/e2e-probe-launch.mjs
  *
  * KILO_E2E_SCENARIO (all | tab-close | child-task-order | variant-memory |
  * topic-navigation | real-session | real-completed | real-overflow |
- * real-restart | sidebar-removal | worktree-removal, default all) is
+ * real-restart | sidebar-removal | worktree-removal | cloud-claw-removal |
+ * p3-4-removal, default all) is
  * forwarded to the probe and the extension-host runner via the environment;
  * the probe validates it before VS Code launches.
  *
@@ -46,7 +49,16 @@
 import { build } from "esbuild"
 import { spawn, spawnSync } from "node:child_process"
 import { createHash } from "node:crypto"
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs"
+import {
+  createWriteStream,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  writeFileSync,
+} from "node:fs"
 import { randomBytes } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, join, resolve } from "node:path"
@@ -76,7 +88,9 @@ if (evidenceEnv) {
     if (!statSync(dest).isDirectory()) fail(`KILO_E2E_EVIDENCE_DIR exists but is not a directory: "${dest}"`)
     const entries = readdirSync(dest)
     if (entries.length > 0) {
-      fail(`KILO_E2E_EVIDENCE_DIR exists and is not empty (${entries.slice(0, 5).join(", ")}...) — refusing to overwrite`)
+      fail(
+        `KILO_E2E_EVIDENCE_DIR exists and is not empty (${entries.slice(0, 5).join(", ")}...) — refusing to overwrite`,
+      )
     }
   }
 }

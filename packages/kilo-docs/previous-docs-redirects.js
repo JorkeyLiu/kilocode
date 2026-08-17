@@ -448,19 +448,19 @@ module.exports = [
   // ============================================
   {
     source: "/docs/basic-usage/autocomplete",
-    destination: "/docs/code-with-ai/features/autocomplete",
+    destination: "/docs/code-with-ai",
     basePath: false,
     permanent: true,
   },
   {
     source: "/docs/basic-usage/autocomplete/index",
-    destination: "/docs/code-with-ai/features/autocomplete",
+    destination: "/docs/code-with-ai",
     basePath: false,
     permanent: true,
   },
   {
     source: "/docs/basic-usage/autocomplete/mistral-setup",
-    destination: "/docs/code-with-ai/features/autocomplete/mistral-setup",
+    destination: "/docs/code-with-ai",
     basePath: false,
     permanent: true,
   },
@@ -478,7 +478,7 @@ module.exports = [
   },
   {
     source: "/docs/basic-usage/git-commit-generation",
-    destination: "/docs/code-with-ai/features/git-commit-generation",
+    destination: "/docs/code-with-ai",
     basePath: false,
     permanent: true,
   },
@@ -518,7 +518,7 @@ module.exports = [
   // ============================================
   {
     source: "/docs/features/codebase-indexing",
-    destination: "/docs/customize/context/codebase-indexing",
+    destination: "/docs/code-with-ai/agents/context-mentions",
     basePath: false,
     permanent: true,
   },
@@ -531,7 +531,7 @@ module.exports = [
   // Old code-with-ai/context paths redirect to new customize/context paths
   {
     source: "/docs/code-with-ai/context/codebase-indexing",
-    destination: "/docs/customize/context/codebase-indexing",
+    destination: "/docs/code-with-ai/agents/context-mentions",
     basePath: false,
     permanent: true,
   },
@@ -889,13 +889,13 @@ module.exports = [
   },
   {
     source: "/docs/advanced-usage/managed-indexing",
-    destination: "/docs/customize/context/codebase-indexing",
+    destination: "/docs/code-with-ai/agents/context-mentions",
     basePath: false,
     permanent: true,
   },
   {
     source: "/docs/deploy-secure/managed-indexing",
-    destination: "/docs/customize/context/codebase-indexing",
+    destination: "/docs/code-with-ai/agents/context-mentions",
     basePath: false,
     permanent: true,
   },
@@ -1157,7 +1157,7 @@ module.exports = [
   },
   {
     source: "/docs/automate/tools/codebase-search",
-    destination: "/docs/automate/tools/semantic-search",
+    destination: "/docs/automate/tools",
     basePath: false,
     permanent: true,
   },
@@ -1414,6 +1414,45 @@ module.exports = [
   {
     source: "/auto-top-ups",
     destination: "https://kilo.ai/features/auto-top-ups",
+    basePath: false,
+    permanent: true,
+  },
+  // ============================================
+  // P3.4 removed products — redirect to live generic pages
+  // ============================================
+  {
+    source: "/docs/code-with-ai/features/autocomplete",
+    destination: "/docs/code-with-ai",
+    basePath: false,
+    permanent: true,
+  },
+  {
+    source: "/docs/code-with-ai/features/autocomplete/index",
+    destination: "/docs/code-with-ai",
+    basePath: false,
+    permanent: true,
+  },
+  {
+    source: "/docs/code-with-ai/features/autocomplete/mistral-setup",
+    destination: "/docs/code-with-ai",
+    basePath: false,
+    permanent: true,
+  },
+  {
+    source: "/docs/code-with-ai/features/git-commit-generation",
+    destination: "/docs/code-with-ai",
+    basePath: false,
+    permanent: true,
+  },
+  {
+    source: "/docs/customize/context/codebase-indexing",
+    destination: "/docs/code-with-ai/agents/context-mentions",
+    basePath: false,
+    permanent: true,
+  },
+  {
+    source: "/docs/automate/tools/semantic-search",
+    destination: "/docs/automate/tools",
     basePath: false,
     permanent: true,
   },

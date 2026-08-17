@@ -40,7 +40,6 @@ import { Command } from "@/command" // kilocode_change
 import { Auth } from "@/auth" // kilocode_change
 import * as SandboxNetwork from "@/kilocode/sandbox/network" // kilocode_change
 import { run as runSandbox, type Profile } from "@kilocode/sandbox" // kilocode_change
-import { MemoryService } from "@kilocode/kilo-memory/effect/service" // kilocode_change
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
@@ -82,7 +81,6 @@ const registryLayer = (opts: RegistryLayerOptions = {}) =>
       Layer.provide(RuntimeFlags.layer(opts.flags ?? {})),
       Layer.provide(Command.defaultLayer), // kilocode_change
       Layer.provide(Auth.defaultLayer), // kilocode_change
-      Layer.provide(MemoryService.layer), // kilocode_change
       Layer.provide(Bus.layer), // kilocode_change - satisfy the Kilo ToolRegistry dependency
     )
 

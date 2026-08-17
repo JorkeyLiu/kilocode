@@ -46,7 +46,6 @@ import { Vcs } from "@/project/vcs"
 import { Reference } from "@/reference/reference"
 import { Workspace } from "@/control-plane/workspace"
 import { Installation } from "@/installation"
-import { MemoryService } from "@kilocode/kilo-memory/effect/service" // kilocode_change
 import { ShareNext } from "@/share/share-next"
 import { SessionShare } from "@/share/session"
 import { Npm } from "@opencode-ai/core/npm"
@@ -167,7 +166,6 @@ const FeatureLayer = Layer.mergeAll(
   Reference.defaultLayer,
   Workspace.defaultLayer,
   Installation.defaultLayer, // kilocode_change - canonical AppLayer service
-  MemoryService.layer, // kilocode_change
   ShareNext.defaultLayer, // kilocode_change - canonical AppLayer service
   SessionShare.defaultLayer, // kilocode_change - canonical AppLayer service
   // kilocode_change - canonical feature service layer

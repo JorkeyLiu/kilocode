@@ -22,7 +22,6 @@ import type {
   SessionInfo,
   SessionCreatedMessage,
 } from "../src/types/messages"
-import { IndexingProvider } from "../src/context/indexing"
 import { DragDropProvider, DragDropSensors, DragOverlay, SortableProvider, closestCenter } from "@thisbeyond/solid-dnd"
 import type { DragEvent } from "@thisbeyond/solid-dnd"
 import { ThemeProvider } from "@kilocode/kilo-ui/theme"
@@ -50,10 +49,8 @@ import { ServerProvider } from "../src/context/server"
 import { ProviderProvider } from "../src/context/provider"
 import { ConfigProvider } from "../src/context/config"
 import { DisplayProvider } from "../src/context/display"
-import { KiloEmbeddingModelsProvider } from "../src/context/kilo-embedding-models"
 import { ImageModelsProvider } from "../src/context/image-models"
 import { FeedbackProvider } from "../src/context/feedback"
-import { MemoryProvider } from "../src/context/memory"
 import { SessionProvider, useSession } from "../src/context/session"
 import { AgentRequirementsProvider } from "../src/context/agent-requirements"
 import { AgentManagerProvider } from "../src/context/agent-manager"
@@ -1243,25 +1240,19 @@ export const AgentManagerApp: Component = () => {
                         <ConfigProvider>
                           <SpeechToTextPrewarm />
                           <DisplayProvider>
-                            <IndexingProvider>
-                              <KiloEmbeddingModelsProvider>
-                                <ImageModelsProvider>
-                                  <SessionProvider>
-                                    <AgentRequirementsProvider>
-                                      <MemoryProvider>
-                                        <FeedbackProvider>
-                                          <AgentManagerProvider>
-                                            <DataBridge>
-                                              <AgentManagerContent />
-                                            </DataBridge>
-                                          </AgentManagerProvider>
-                                        </FeedbackProvider>
-                                      </MemoryProvider>
-                                    </AgentRequirementsProvider>
-                                  </SessionProvider>
-                                </ImageModelsProvider>
-                              </KiloEmbeddingModelsProvider>
-                            </IndexingProvider>
+                            <ImageModelsProvider>
+                              <SessionProvider>
+                                <AgentRequirementsProvider>
+                                  <FeedbackProvider>
+                                    <AgentManagerProvider>
+                                      <DataBridge>
+                                        <AgentManagerContent />
+                                      </DataBridge>
+                                    </AgentManagerProvider>
+                                  </FeedbackProvider>
+                                </AgentRequirementsProvider>
+                              </SessionProvider>
+                            </ImageModelsProvider>
                           </DisplayProvider>
                         </ConfigProvider>
                       </ProviderProvider>

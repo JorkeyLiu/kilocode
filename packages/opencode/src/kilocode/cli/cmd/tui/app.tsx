@@ -23,7 +23,6 @@ import { isKiloError, showKiloErrorToast } from "@/kilocode/kilo-errors"
 import { registerKiloCommands } from "@/kilocode/kilo-commands"
 import { initializeTUIDependencies } from "@kilocode/kilo-gateway/tui"
 import { DialogProcessList } from "@/kilocode/cli/cmd/tui/component/dialog-process-list"
-import { useIndexingWarnings } from "@/kilocode/cli/cmd/tui/indexing-warning"
 import { KiloTerminalTitle } from "./terminal-title"
 import type { KiloTitleIcon } from "./title-icon"
 import { Session as SessionApi } from "@/session/session"
@@ -230,7 +229,6 @@ export function init() {
   const toast = useToast()
   const dialog = useDialog()
 
-  useIndexingWarnings()
 
   // Inject TUI dependencies for kilo-gateway
   initializeTUIDependencies({

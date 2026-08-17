@@ -40,7 +40,6 @@ import { ConfigPluginV1 } from "@opencode-ai/core/v1/config/plugin"
 import { AccountTest } from "../fake/account"
 import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
-import { isIndexingPlugin } from "@kilocode/kilo-indexing/detect" // kilocode_change
 import { isAtomicChatPlugin } from "@/kilocode/atomic-chat-feature" // kilocode_change
 
 /** Infra layer that provides FileSystem, Path, ChildProcessSpawner for test fixtures */
@@ -1248,7 +1247,7 @@ it.effect("keeps plugin origins aligned with merged plugin list", () =>
       expect(names).toContain("local-only@1.0.0")
       // kilocode_change start - bundled plugins intentionally have no external plugin origins
       expect(origins.map((item) => item.spec)).toEqual(
-        plugins.filter((item) => !isIndexingPlugin(item) && !isAtomicChatPlugin(item)),
+        plugins.filter((item) => !isAtomicChatPlugin(item)),
       )
       // kilocode_change end
       expect(origins.find((item) => ConfigPlugin.pluginSpecifier(item.spec) === "shared-plugin@2.0.0")?.scope).toBe(

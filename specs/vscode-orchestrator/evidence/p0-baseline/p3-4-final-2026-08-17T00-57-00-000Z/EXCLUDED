@@ -1,0 +1,8 @@
+EXCLUDED — non-comparable partial evidence
+
+This campaign used the 316-byte bash wrapper at bin/kilo (sourceSha256=119f5d6e020c17afc2857a489fc82b2dcd65e0e1e1b7463aecf7fd555278c81b, sourceSize=316), not the native CLI binary.
+
+Only 1 of 5 measured samples was ok; 4 were blocked by backend-identity-unavailable.
+Status: partial. Non-comparable to the accepted native-binary campaign.
+
+Replaced by: p3-4-final-2026-08-17T01-45-01-088Z (native binary, status ok, all samples ok).

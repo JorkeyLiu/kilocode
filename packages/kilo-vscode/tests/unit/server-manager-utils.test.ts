@@ -2,7 +2,6 @@ import { describe, it, expect } from "bun:test"
 import { parseServerPort } from "../../src/services/cli-backend/server-utils"
 import {
   resolveServerCwd,
-  resolveIndexingEnv,
   resolveManagedServerEnv,
   toErrorMessage,
 } from "../../src/services/cli-backend/server-manager"
@@ -307,12 +306,6 @@ describe("server workspace helpers", () => {
   it("uses extension storage as server cwd when no workspace folder is open", () => {
     expect(resolveServerCwd(undefined, "/global-storage")).toBe("/global-storage")
     expect(resolveServerCwd([], "/global-storage")).toBe("/global-storage")
-  })
-
-  it("disables codebase indexing only when no workspace folder is open", () => {
-    expect(resolveIndexingEnv(undefined)).toEqual({ KILO_DISABLE_CODEBASE_INDEXING: "vscode-no-workspace" })
-    expect(resolveIndexingEnv([])).toEqual({ KILO_DISABLE_CODEBASE_INDEXING: "vscode-no-workspace" })
-    expect(resolveIndexingEnv([{ uri: { fsPath: "/repo" } }])).toEqual({})
   })
 
   it("uses the shared database for the managed backend while preserving the environment", () => {

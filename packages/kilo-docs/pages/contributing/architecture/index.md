@@ -29,7 +29,7 @@ Architecture pages cross two repositories:
 
 | Repository | Contents |
 |---|---|
-| [Kilo&#8209;Org/kilocode](https://github.com/Kilo-Org/kilocode) | Kilo CLI runtime, local daemon, VS Code extension, JavaScript SDK, codebase indexing, Kilo Gateway client, telemetry, docs, and shared UI packages |
+| [Kilo&#8209;Org/kilocode](https://github.com/Kilo-Org/kilocode) | Kilo CLI runtime, local daemon, VS Code extension, JavaScript SDK, Kilo Gateway client, telemetry, docs, and shared UI packages |
 | [Kilo&#8209;Org/cloud](https://github.com/Kilo-Org/cloud) | Web control plane, Kilo Gateway routes, Cloud Agent session runtime, automation, generated-application preview and deployment services, Gas Town, billing, and supporting Workers |
 
 ### Repository autonomy
@@ -182,7 +182,6 @@ These supporting packages also live in [`Kilo-Org/kilocode`](https://github.com/
 
 | Package in `Kilo-Org/kilocode` | Role |
 |---|---|
-| `packages/kilo-indexing/` | Per-directory asynchronous codebase indexing engine behind Kilo CLI bridge |
 | `packages/sdk/js/` | Generated JavaScript client and handwritten wrapper for local server APIs |
 | `packages/kilo-gateway/` | Local Kilo Gateway client integration used by Kilo CLI runtime |
 
@@ -190,7 +189,7 @@ These supporting packages also live in [`Kilo-Org/kilocode`](https://github.com/
 
 | Page | What it covers |
 |---|---|
-| [CLI Runtime](/docs/contributing/architecture/cli-runtime) | Local execution modes, daemon, server authentication, routing, persistence, snapshots, SDK, config, SSE, and indexing |
+| [CLI Runtime](/docs/contributing/architecture/cli-runtime) | Local execution modes, daemon, server authentication, routing, persistence, snapshots, SDK, config, and SSE |
 | [VS Code Extension](/docs/contributing/architecture/vscode-extension) | Shared local `kilo serve` ownership, webview bridge, Agent Manager, PTYs, recovery, bundled resources, and build outputs |
 | [Cloud Platform](/docs/contributing/architecture/cloud-platform) | Hosted service inventory, Cloud Agent topology, shared cloud boundaries, and adjacent hosted runtimes |
 | [Automation Services](/docs/contributing/architecture/automation-services) | Trigger-driven Workers, queues, callbacks, ownership, and scoped execution paths |

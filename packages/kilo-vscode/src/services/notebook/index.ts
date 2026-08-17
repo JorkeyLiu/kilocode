@@ -2,4 +2,5 @@ export { NotebookBridge, createNotebookBridge, type NotebookBridgeContext, type 
 export { NotebookAdapter, type NotebookAdapterOptions } from "./adapter"
 export { normalizeOutputs, normalizeSource } from "./output"
 export { NotebookError, resolveNotebookPath, type NotebookPathDeps } from "./path"
+export { notebookUri } from "./uri"
 export * from "./types"

@@ -50,18 +50,13 @@ function deleteAt(value: Record<string, unknown>, path: string[]): void {
 }
 
 /**
- * Recursively strip null/undefined (null = deleted), preserving schema-valid
- * indexing model/dimension null overrides just like the backend overlay does.
+ * Recursively strip null/undefined (null = deleted).
  */
 export function stripNullPatch(value: Record<string, unknown>, prefix: string[] = []): Record<string, unknown> {
   const result: Record<string, unknown> = {}
   for (const [key, item] of Object.entries(value)) {
     const path = [...prefix, key]
-    if (item === null || item === undefined) {
-      const isIndexingOverride =
-        path.length === 2 && path[0] === "indexing" && (path[1] === "model" || path[1] === "dimension")
-      if (!isIndexingOverride) continue
-    }
+    if (item === null || item === undefined) continue
     if (isRecord(item)) {
       result[key] = stripNullPatch(item, path)
     } else {

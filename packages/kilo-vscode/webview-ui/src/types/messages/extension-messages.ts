@@ -17,7 +17,7 @@ import type { AnacondaDesktopExtensionMessage } from "../../../../src/shared/ana
 import type { QuestionRequest, SuggestionRequest, TodoItem } from "./questions"
 import type { ModelSelection, Provider, ProviderAuthState } from "./providers"
 import type { AgentInfo, AgentRequirementResult, SkillInfo, SlashCommandInfo } from "./agents"
-import type { BrowserSettings, Config, FeatureFlags, IndexingStatus, KiloEmbeddingModelCatalog } from "./config"
+import type { BrowserSettings, Config, FeatureFlags } from "./config"
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
 import type { ProfileData } from "./profile"
 import type {
@@ -34,7 +34,6 @@ import type {
   MigrationSessionProgressMessage,
   MigrationStateMessage,
 } from "./migration"
-import type { MemoryEventMessage, MemoryLoadedMessage, MemoryOperationResultMessage } from "./memory"
 
 // ============================================
 // Messages FROM extension TO webview
@@ -296,23 +295,6 @@ export interface NavigateMessage {
   tab?: string
 }
 
-export interface IndexingStatusLoadedMessage {
-  type: "indexingStatusLoaded"
-  status: IndexingStatus
-}
-
-export interface IndexingSettingsLoadedMessage {
-  type: "indexingSettingsLoaded"
-  settings: {
-    showButtonWhenDisabled: boolean
-  }
-}
-
-export interface KiloEmbeddingModelsLoadedMessage {
-  type: "kiloEmbeddingModelsLoaded"
-  catalog: KiloEmbeddingModelCatalog
-}
-
 export interface ImageModelsLoadedMessage {
   type: "imageModelsLoaded"
   models: Array<{ id: string; name: string; description?: string }>
@@ -352,25 +334,6 @@ export interface AgentRequirementsInvalidatedMessage {
 export interface CommandsLoadedMessage {
   type: "commandsLoaded"
   commands: SlashCommandInfo[]
-}
-
-export interface AutocompleteSettingsLoadedMessage {
-  type: "autocompleteSettingsLoaded"
-  settings: {
-    enableAutoTrigger: boolean
-    enableSmartInlineTaskKeybinding: boolean
-    enableChatAutocomplete: boolean
-    /** `null` means "no explicit setting — use the resolved default." */
-    provider: string | null
-    /** `null` means "no explicit setting — use the resolved default." */
-    model: string | null
-  }
-}
-
-export interface ChatCompletionResultMessage {
-  type: "chatCompletionResult"
-  text: string
-  requestId: string
 }
 
 export interface SpeechToTextResultMessage {
@@ -898,9 +861,6 @@ export type ExtensionMessage =
   | DeviceAuthFailedMessage
   | DeviceAuthCancelledMessage
   | NavigateMessage
-  | IndexingStatusLoadedMessage
-  | IndexingSettingsLoadedMessage
-  | KiloEmbeddingModelsLoadedMessage
   | ImageModelsLoadedMessage
   | ProvidersLoadedMessage
   | AgentsLoadedMessage
@@ -908,8 +868,6 @@ export type ExtensionMessage =
   | AgentRequirementsLoadedMessage
   | AgentRequirementsInvalidatedMessage
   | CommandsLoadedMessage
-  | AutocompleteSettingsLoadedMessage
-  | ChatCompletionResultMessage
   | SpeechToTextStartedMessage
   | SpeechToTextCancelledMessage
   | SpeechToTextResultMessage
@@ -994,6 +952,3 @@ export type ExtensionMessage =
   | TelemetryStateMessage
   | RemoteStatusMessage
   | ValidateFilesResultMessage
-  | MemoryLoadedMessage
-  | MemoryEventMessage
-  | MemoryOperationResultMessage

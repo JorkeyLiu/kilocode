@@ -25,7 +25,6 @@ Key features include:
 - **[Granular permissions](/docs/getting-started/settings/auto-approving-actions)** — Per-tool permission rules with glob patterns
 - **[Agents](/docs/code-with-ai/agents/using-agents)** — Customizable agents (`.kilo/agents/*.md`) replacing the modes system
 - **[Agent Manager](/docs/automate/agent-manager)** — Parallel root-local sessions with per-session tabs and terminals
-- **[Autocomplete](/docs/code-with-ai/features/autocomplete)** — FIM-based with Codestral, status bar cost tracking
 - **[Workflows](/docs/customize/workflows)** — Repeatable prompt templates as `.md` files
 - **[Skills](/docs/customize/skills)** — Load specialized domain knowledge from SKILL.md files
 - **[Custom Subagents](/docs/customize/custom-subagents)** — Define specialized sub-agents for the `task` tool

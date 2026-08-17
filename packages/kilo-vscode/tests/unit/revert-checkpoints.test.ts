@@ -35,7 +35,7 @@ describe("message revert checkpoints", () => {
 describe("revert session synchronization", () => {
   it("keeps REST responses as the mutation result", () => {
     const revert = method("handleRevertSession", "handleUnrevertSession")
-    const unrevert = method("handleUnrevertSession", "handleCompact")
+    const unrevert = method("handleUnrevertSession", "handleCancelQueued")
 
     expect(revert).toContain("await this.client.session.revert")
     expect(unrevert).toContain("await this.client.session.unrevert")

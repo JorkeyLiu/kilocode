@@ -112,6 +112,21 @@
  *                           requests — all assertions run extension-host-side
  *                           and are recorded in
  *                           `cloud-claw-removal-runtime-evidence`.
+ *   - p3-4-removal         => only the P3.4 remaining-feature-removal
+ *                           scenario: the extension host proves the loaded
+ *                           manifest, the RUNTIME command table, the built
+ *                           dist/ bundle list, and the run-owned workspace
+ *                           state expose no indexing / project memory /
+ *                           user-visible context-management / manual-compaction
+ *                           / autocomplete / commit-message surface
+ *                           (LOCK-004/PERF-3/014/015), the fixture-gated
+ *                           generation-request collector stays at ZERO model
+ *                           requests (no external calls), and the retained
+ *                           Open-in-Tab panel + Agent Manager still become
+ *                           ready (LOCK-005/007/008). No synthetic fixtures,
+ *                           no CDP DOM driving, no model requests — all
+ *                           assertions run extension-host-side and are
+ *                           recorded in `p3-4-removal-runtime-evidence`.
  *   Any other value fails fast before VS Code launches. Focused runs:
  *     KILO_E2E_SCENARIO=tab-close         node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=child-task-order  node script/e2e-probe-launch.mjs
@@ -123,6 +138,7 @@
  *     KILO_E2E_SCENARIO=real-restart      node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=worktree-removal  node script/e2e-probe-launch.mjs
  *     KILO_E2E_SCENARIO=cloud-claw-removal node script/e2e-probe-launch.mjs
+ *     KILO_E2E_SCENARIO=p3-4-removal node script/e2e-probe-launch.mjs
  *   (package shortcuts: `bun run test:e2e:tab-close`,
  *   `bun run test:e2e:child-task-order`,
  *   `bun run test:e2e:variant-memory`,
@@ -132,7 +148,8 @@
  *   `bun run test:e2e:real-overflow`,
  *   `bun run test:e2e:real-restart`,
  *   `bun run test:e2e:worktree-removal`,
- *   `bun run test:e2e:cloud-claw-removal`.)
+ *   `bun run test:e2e:cloud-claw-removal`,
+ *   `bun run test:e2e:p3-4-removal`.)
  *
  * Scenarios are independent: each seeds only its own fixtures and coordinates
  * through scenario-specific markers (tab-close-done, child-phase1-done /
@@ -197,7 +214,12 @@ import { basename, dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import type { BackendSnapshot, SessionTruth } from "../src/agent-manager/fixture-backend"
 import { createScriptedModel, SCRIPTED, type ScriptedModelHandle } from "./e2e-scripted-model"
-import { writeRealCompletedSeed, writeRealOverflowSeed, initWorkspaceGit, type CompletedSeedPaths } from "./e2e-completed-seed"
+import {
+  writeRealCompletedSeed,
+  writeRealOverflowSeed,
+  initWorkspaceGit,
+  type CompletedSeedPaths,
+} from "./e2e-completed-seed"
 import { writeRealRestartSeed, RESTART_ARTIFACT_CONTENT } from "./e2e-restart-seed"
 import { isWrongPin, pinExpect, pinnedReason, pinReport, type PinExpectation } from "./e2e-pin"
 import { assertRunOwnedLlmRequests, readLlmRequests } from "./e2e-llm-matrix"
@@ -320,6 +342,7 @@ const SCENARIO_VALUES = [
   "sidebar-removal",
   "worktree-removal",
   "cloud-claw-removal",
+  "p3-4-removal",
 ] as const
 function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -334,7 +357,8 @@ function parseScenarios(value: string): Set<string> {
     value === "real-restart" ||
     value === "sidebar-removal" ||
     value === "worktree-removal" ||
-    value === "cloud-claw-removal"
+    value === "cloud-claw-removal" ||
+    value === "p3-4-removal"
   ) {
     return new Set([value])
   }
@@ -1780,15 +1804,18 @@ async function assertRealCompletedLifecycle(
     (s) => {
       const root = realRootSession(s)
       if (!root) return "root session missing"
-      const pending = (s.pending?.permissions ?? []).find(
-        (p) => p.permission === "read" && p.sessionID === root.id,
-      )
+      const pending = (s.pending?.permissions ?? []).find((p) => p.permission === "read" && p.sessionID === root.id)
       if (!pending) return "no pending read permission for the root session"
       return undefined
     },
     "H-6 permission: backend pending permission observable",
   )
-  await waitForDock(frame, '[data-component="dock-prompt"][data-kind="permission"]', 60_000, "H-6 permission dock visible")
+  await waitForDock(
+    frame,
+    '[data-component="dock-prompt"][data-kind="permission"]',
+    60_000,
+    "H-6 permission dock visible",
+  )
   await clickPermissionAllowOnce(frame, timeout)
   await snap.waitFor(
     (s) => {
@@ -1809,7 +1836,12 @@ async function assertRealCompletedLifecycle(
     90_000,
     "H-6 permission reply drains the pending request and completes",
   )
-  await waitForNoDock(frame, '[data-component="dock-prompt"][data-kind="permission"]', timeout, "H-6 permission dock gone")
+  await waitForNoDock(
+    frame,
+    '[data-component="dock-prompt"][data-kind="permission"]',
+    timeout,
+    "H-6 permission dock gone",
+  )
   await expectTranscriptText(frame, SCRIPTED.permissionFinal, 60_000, "H-6 panel shows the permission completion text")
 
   // --- Phase 6 (H-6): question dock — real inline QuestionDock reply ---
@@ -1903,7 +1935,11 @@ async function assertRealCompletedLifecycle(
     throw new Error("probe: H-5 cleanup — recorded MCP child pids no longer alive before disconnect")
   }
   writeFileSync(join(scratch, "real-completed-mcp-disconnect-request"), "ok")
-  await waitForFile(join(scratch, "real-completed-mcp-disconnect-done"), 60_000, "real-completed-mcp-disconnect-done marker")
+  await waitForFile(
+    join(scratch, "real-completed-mcp-disconnect-done"),
+    60_000,
+    "real-completed-mcp-disconnect-done marker",
+  )
   const deadlineExit = Date.now() + 30_000
   for (;;) {
     const alive = pidsBefore.filter((pid) => {
@@ -2122,9 +2158,7 @@ async function assertRealOverflowLifecycle(
       }
       const continueMsg = msgs.find((m) => m.continuation === true)
       if (!continueMsg) return "no automatic-continuation user message in the backend transcript"
-      const contAnswer = msgs.find(
-        (m) => m.role === "assistant" && m.text.includes(SCRIPTED.continuationAnswer),
-      )
+      const contAnswer = msgs.find((m) => m.role === "assistant" && m.text.includes(SCRIPTED.continuationAnswer))
       if (!contAnswer) return "continuation answer missing from the backend transcript"
       if ((s.statuses[root.id] ?? "idle") !== "idle") return `parent status=${s.statuses[root.id]} expected idle`
       return undefined
@@ -2165,10 +2199,11 @@ async function assertRealOverflowLifecycle(
       promptInput: -1,
       transcriptText: false,
     }))
-  const noControls =
-    surface.settingsRows === 0 && surface.headerContextMenu === 0 && surface.headerContextActions === 0
+  const noControls = surface.settingsRows === 0 && surface.headerContextMenu === 0 && surface.headerContextActions === 0
   if (!noControls) {
-    throw new Error(`probe: H-13 Agent Manager panel has context-management/compact controls: ${JSON.stringify(surface)}`)
+    throw new Error(
+      `probe: H-13 Agent Manager panel has context-management/compact controls: ${JSON.stringify(surface)}`,
+    )
   }
   console.log(`[probe] PASS H-13 panel surface: no context-management/compact controls ${JSON.stringify(surface)}`)
   if (surface.transcriptText !== true) {
@@ -2279,10 +2314,7 @@ async function prepareRealCompleted(
  * shared with real-completed — the small model limit + low threshold would
  * change the served-model behavior the H-2..H-7 turns depend on.
  */
-async function prepareRealOverflow(
-  workspace: string,
-  real: boolean,
-): Promise<ScriptedModelHandle | undefined> {
+async function prepareRealOverflow(workspace: string, real: boolean): Promise<ScriptedModelHandle | undefined> {
   if (!real) return undefined
   const handle = await createScriptedModel(workspace)
   const configFile = writeRealOverflowSeed(workspace, handle.port)
@@ -2349,13 +2381,16 @@ async function runScenario(
     await assertRealOverflowLifecycle(browser, plan, scratch, overflowModel)
     console.log("[probe] real-overflow lifecycle assertion passed")
   }
-  if (scenarios.has("sidebar-removal")) console.log("[probe] sidebar-removal assertions ran in the Extension Host runner")
+  if (scenarios.has("sidebar-removal"))
+    console.log("[probe] sidebar-removal assertions ran in the Extension Host runner")
   if (scenarios.has("worktree-removal")) {
     if (!wtModel) throw new Error("probe: worktree-removal preparation missing")
     await assertWorktreeRemovalLifecycle(browser, plan, scratch, workspace, wtModel)
     console.log("[probe] worktree-removal lifecycle assertion passed")
   }
-  if (scenarios.has("cloud-claw-removal")) console.log("[probe] cloud-claw-removal assertions ran in the Extension Host runner")
+  if (scenarios.has("cloud-claw-removal"))
+    console.log("[probe] cloud-claw-removal assertions ran in the Extension Host runner")
+  if (scenarios.has("p3-4-removal")) console.log("[probe] p3-4-removal assertions ran in the Extension Host runner")
 }
 
 // ---------------------------------------------------------------------------
@@ -2443,6 +2478,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has("real-restart")) return "rr-ready"
   if (scenarios.has("worktree-removal")) return "worktree-removal-ready"
   if (scenarios.has("cloud-claw-removal")) return "cloud-claw-removal-ready"
+  if (scenarios.has("p3-4-removal")) return "p3-4-removal-ready"
   return "ready"
 }
 
@@ -2522,7 +2558,17 @@ async function runRealRestartLifecycle(opts: {
   let failed = false
 
   const launch = async (port: number) => {
-    vscodeRun = launchVSCode({ executable, runnerOut, scratch, fixtureId, scenario: "real-restart", userData, extensions, workspace, port })
+    vscodeRun = launchVSCode({
+      executable,
+      runnerOut,
+      scratch,
+      fixtureId,
+      scenario: "real-restart",
+      userData,
+      extensions,
+      workspace,
+      port,
+    })
     await waitForCdp(port, 90_000)
     console.log("[probe] CDP endpoint reachable, connecting Playwright")
     return chromium.connectOverCDP(`http://127.0.0.1:${port}`, { timeout: 30_000 })
@@ -2596,7 +2642,9 @@ async function runRealRestartLifecycle(opts: {
   }
   const first = await awaitRun("first launch (reload boundary)", true)
   if (first === 0) {
-    console.log("[probe] NOTE: first launch exited 0; reloadWindow main-exit not observed, fresh host re-entry still runs")
+    console.log(
+      "[probe] NOTE: first launch exited 0; reloadWindow main-exit not observed, fresh host re-entry still runs",
+    )
   }
 
   // ── Launch 2: Phase C re-entry in the fresh Extension Host ──────────────
@@ -2722,7 +2770,17 @@ async function main() {
       })
       if (relaunchFailed) failed = true
     } else {
-      vscodeRun = launchVSCode({ executable, runnerOut, scratch, fixtureId, scenario, userData, extensions, workspace, port: cdpPort })
+      vscodeRun = launchVSCode({
+        executable,
+        runnerOut,
+        scratch,
+        fixtureId,
+        scenario,
+        userData,
+        extensions,
+        workspace,
+        port: cdpPort,
+      })
 
       await waitForCdp(cdpPort, 90_000)
       console.log("[probe] CDP endpoint reachable, connecting Playwright")
@@ -2798,7 +2856,16 @@ async function main() {
 
   // Durable evidence handoff after the runner quiesced, before scratch cleanup.
   if (
-    runEvidenceHandoff({ evidenceDir, staging: process.env.KILO_E2E_EVIDENCE_STAGING!, scratch, workspace, scenarios, fixtureId, startedAt: started, success: !failed })
+    runEvidenceHandoff({
+      evidenceDir,
+      staging: process.env.KILO_E2E_EVIDENCE_STAGING!,
+      scratch,
+      workspace,
+      scenarios,
+      fixtureId,
+      startedAt: started,
+      success: !failed,
+    })
   ) {
     failed = true
   }
@@ -2823,10 +2890,14 @@ async function closeHandles(opts: {
 }) {
   const { hang, completed, overflowModel, restartModel, wtModel } = opts
   if (hang) await hang.close().catch((err) => console.error("[probe] hang server close failed:", err))
-  if (completed) await completed.handle.close().catch((err) => console.error("[probe] scripted model close failed:", err))
-  if (overflowModel) await overflowModel.close().catch((err) => console.error("[probe] overflow scripted model close failed:", err))
-  if (restartModel) await restartModel.close().catch((err) => console.error("[probe] restart scripted model close failed:", err))
-  if (wtModel) await wtModel.close().catch((err) => console.error("[probe] worktree-removal scripted model close failed:", err))
+  if (completed)
+    await completed.handle.close().catch((err) => console.error("[probe] scripted model close failed:", err))
+  if (overflowModel)
+    await overflowModel.close().catch((err) => console.error("[probe] overflow scripted model close failed:", err))
+  if (restartModel)
+    await restartModel.close().catch((err) => console.error("[probe] restart scripted model close failed:", err))
+  if (wtModel)
+    await wtModel.close().catch((err) => console.error("[probe] worktree-removal scripted model close failed:", err))
 }
 
 async function verifyCleanup(userData: string, cdpPort: number, scratch: string) {

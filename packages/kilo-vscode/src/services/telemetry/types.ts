@@ -50,21 +50,7 @@ export enum TelemetryEventName {
   SHELL_INTEGRATION_ERROR = "Shell Integration Error",
   CONSECUTIVE_MISTAKE_ERROR = "Consecutive Mistake Error",
 
-  // Autocomplete
-  AUTOCOMPLETE_SUGGESTION_REQUESTED = "Autocomplete Suggestion Requested",
-  AUTOCOMPLETE_LLM_REQUEST_COMPLETED = "Autocomplete LLM Request Completed",
-  AUTOCOMPLETE_LLM_REQUEST_FAILED = "Autocomplete LLM Request Failed",
-  AUTOCOMPLETE_LLM_SUGGESTION_RETURNED = "Autocomplete LLM Suggestion Returned",
-  AUTOCOMPLETE_SUGGESTION_CACHE_HIT = "Autocomplete Suggestion Cache Hit",
-  AUTOCOMPLETE_ACCEPT_SUGGESTION = "Autocomplete Accept Suggestion",
-  AUTOCOMPLETE_SUGGESTION_FILTERED = "Autocomplete Suggestion Filtered",
-  AUTOCOMPLETE_UNIQUE_SUGGESTION_SHOWN = "Autocomplete Unique Suggestion Shown",
-
-  // Inline Assist
-  INLINE_ASSIST_AUTO_TASK = "Inline Assist Auto Task",
-
   // Kilo-specific
-  COMMIT_MSG_GENERATED = "Commit Message Generated",
   AGENT_MANAGER_OPENED = "Agent Manager Opened",
   AGENT_MANAGER_BUTTON_CLICKED = "Agent Manager Button Clicked",
   AGENT_MANAGER_SESSION_STARTED = "Agent Manager Session Started",
@@ -76,13 +62,10 @@ export enum TelemetryEventName {
   AUTO_PURGE_COMPLETED = "Auto Purge Completed",
   AUTO_PURGE_FAILED = "Auto Purge Failed",
   MANUAL_PURGE_TRIGGERED = "Manual Purge Triggered",
-  WEBVIEW_MEMORY_USAGE = "Webview Memory Usage",
-  MEMORY_WARNING_SHOWN = "Memory Warning Shown",
   ASK_APPROVAL = "Ask Approval",
   SUGGESTION_BUTTON_CLICKED = "Suggestion Button Clicked",
   FREE_MODELS_LINK_CLICKED = "Free Models Link Clicked",
   CREATE_ORGANIZATION_LINK_CLICKED = "Create Organization Link Clicked",
-  GHOST_SERVICE_DISABLED = "Ghost Service Disabled",
 
   // Feedback
   FEEDBACK_SUBMITTED = "Feedback Submitted",

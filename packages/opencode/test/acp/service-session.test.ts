@@ -152,7 +152,6 @@ describe("ACP service sessions", () => {
     const forks: string[] = []
     const prompts: unknown[] = []
     const commands: unknown[] = []
-    const summarizes: unknown[] = []
     const usageUpdates: string[] = []
     const sessions = Array.from({ length: 102 }, (_, index) => ({
       id: `ses_${index + 1}`,
@@ -219,10 +218,6 @@ describe("ACP service sessions", () => {
             },
           })
         },
-        summarize: (input: unknown) => {
-          summarizes.push(input)
-          return Promise.resolve({ data: true })
-        },
         abort:
           options?.abort ??
           ((input: { sessionID: string }) => {
@@ -266,7 +261,6 @@ describe("ACP service sessions", () => {
       forks,
       prompts,
       commands,
-      summarizes,
       usageUpdates,
     }
   }
@@ -1079,26 +1073,6 @@ describe("ACP service sessions", () => {
       },
     ])
     expect(result.usage).toEqual({ inputTokens: 3, outputTokens: 4, totalTokens: 7 })
-  })
-
-  it("compact slash command calls summarize path", async () => {
-    const { service, prompts, commands, summarizes } = makeService()
-    const session = await Effect.runPromise(service.newSession({ cwd: "/workspace", mcpServers: [] }))
-
-    await Effect.runPromise(
-      service.prompt({ sessionId: session.sessionId, prompt: [{ type: "text", text: "/compact" }] }),
-    )
-
-    expect(prompts).toEqual([])
-    expect(commands).toEqual([])
-    expect(summarizes).toEqual([
-      {
-        sessionID: session.sessionId,
-        directory: "/workspace",
-        providerID,
-        modelID,
-      },
-    ])
   })
 
   it("maps prompt auth failures to auth-required request errors", async () => {

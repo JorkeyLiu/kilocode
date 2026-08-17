@@ -228,52 +228,6 @@ describe("cli run network retries", () => {
     expect(state.reject).toBeUndefined()
   })
 
-  test("built-in compaction uses the session model without reading stdin", async () => {
-    const q = feed<Event>()
-    const calls: unknown[] = []
-    Bun.stdin.text = async () => {
-      throw new Error("stdin should not be read")
-    }
-
-    const sdk = {
-      command: {
-        list: async () => ({ data: [] }),
-      },
-      config: {
-        get: async () => ({ data: { share: "manual" } }),
-      },
-      event: {
-        subscribe: async () => ({ stream: q.stream() }),
-      },
-      session: {
-        get: async (input: { sessionID: string }) => ({
-          data: {
-            id: input.sessionID,
-            directory: "/tmp/project",
-            model: { providerID: "session-provider", id: "session-model" },
-          },
-        }),
-        summarize: async (input: unknown) => {
-          calls.push(input)
-          q.push(idle())
-          q.end()
-          return { data: true }
-        },
-      },
-    }
-
-    await run(sdk, { command: "compact", message: [] }, false)
-
-    expect(calls).toEqual([
-      {
-        sessionID: "ses_test",
-        directory: "/tmp/project",
-        providerID: "session-provider",
-        modelID: "session-model",
-      },
-    ])
-  })
-
   test("custom compact commands retain piped arguments without a session", async () => {
     const q = feed<Event>()
     const calls: unknown[] = []

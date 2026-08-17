@@ -135,8 +135,6 @@ export const dict = {
   "revert.banner.redo.all": "Alles opnieuw uitvoeren",
   "revert.banner.hint": "You can redo these changes until you send a new message",
   "revert.disabled.agentBusy": "Wacht tot de agent klaar is",
-  "command.session.compact": "Sessie comprimeren",
-  "command.session.compact.description": "De sessie samenvatten om de contextgrootte te verkleinen",
   "command.session.fork": "Afsplitsen van bericht",
   "command.session.fork.description": "Een nieuwe sessie aanmaken vanaf een eerder bericht",
   "command.session.share": "Sessie delen",
@@ -376,7 +374,6 @@ export const dict = {
   "prompt.action.send.recording": "Transcriberen en verzenden",
   "prompt.action.stop": "Stop",
   "prompt.action.enhance": "Prompt verbeteren",
-  "prompt.action.indexing": "Indexeringsinstellingen",
   "prompt.action.autoApprove.enable": "Automatisch goedkeuren inschakelen",
   "prompt.action.autoApprove.disable": "Automatisch goedkeuren uitschakelen",
   "prompt.action.autoApprove.enabled":
@@ -635,9 +632,11 @@ export const dict = {
   "ui.permission.configProtected.scope": "Opgeslagen goedkeuringen gelden alleen voor {{agent}} en deze exacte paden.",
   "ui.permission.configProtected.thisAgent": "deze agent",
   "ui.permission.configProtected.addToAllowed": "Goedkeuring opslaan voor deze agent en deze exacte paden",
-  "ui.permission.configProtected.removeFromAllowed": "Opgeslagen goedkeuring voor deze agent en deze exacte paden verwijderen",
+  "ui.permission.configProtected.removeFromAllowed":
+    "Opgeslagen goedkeuring voor deze agent en deze exacte paden verwijderen",
   "ui.permission.configProtected.addToDenied": "Weigering opslaan voor deze agent en deze exacte paden",
-  "ui.permission.configProtected.removeFromDenied": "Opgeslagen weigering voor deze agent en deze exacte paden verwijderen",
+  "ui.permission.configProtected.removeFromDenied":
+    "Opgeslagen weigering voor deze agent en deze exacte paden verwijderen",
   "ui.permission.doomLoop.prompt": "Mogelijke lus gedetecteerd voor het hulpmiddel {{tool}}. Doorgaan met uitvoeren?",
   "ui.permission.doomLoop.rule": "Doorgaan met {{tool}}-aanroepen",
   "ui.permission.rule.addToAllowed": "Toevoegen aan toegestane lijst",
@@ -1186,46 +1185,7 @@ export const dict = {
   "settings.browser.title": "Browser",
   "settings.checkpoints.title": "Controlepunten",
   "settings.display.title": "Weergave",
-  "settings.autocomplete.title": "Automatisch Aanvullen",
-  "settings.autocomplete.model.title": "Autocomplete-model",
-  "settings.autocomplete.model.description": "Selecteer het model dat wordt gebruikt voor inline code-aanvullingen",
   "settings.notifications.title": "Meldingen",
-  "settings.context.title": "Context",
-  "settings.indexing.title": "Indexering",
-  "settings.indexing.status.title": "Status",
-  "settings.indexing.enable.title": "Indexering inschakelen",
-  "settings.indexing.enable.description": "Schakel semantische codebase-indexering in of uit.",
-  "settings.indexing.showButton.title": "Knop weergeven wanneer indexering is uitgeschakeld",
-  "settings.indexing.showButton.description":
-    "Geef de indexeringsknop onder de prompt weer wanneer indexering is uitgeschakeld. Als de knop verborgen is, opent u Instellingen > Indexering om indexering in te schakelen.",
-  "settings.indexing.globalEnable.title": "Globaal inschakelen",
-  "settings.indexing.globalEnable.description": "Indexering inschakelen voor elke werkruimte.",
-  "settings.indexing.projectEnable.title": "Inschakelen voor dit project",
-  "settings.indexing.projectEnable.description":
-    "Indexering inschakelen voor deze werkruimte wanneer globale indexering is uitgeschakeld.",
-  "settings.indexing.projectEnable.disabledTooltip":
-    "Globale indexering is ingeschakeld, dus dit project is al opgenomen.",
-  "settings.indexing.provider.title": "Embedding-provider",
-  "settings.indexing.provider.description":
-    "Kies de provider die wordt gebruikt om embeddings te genereren voor semantisch zoeken.",
-  "settings.indexing.model.title": "Embedding-model",
-  "settings.indexing.model.description": "Overschrijf het standaard embedding-model voor de geselecteerde provider.",
-  "settings.indexing.dimension.title": "Vectordimensie",
-  "settings.indexing.dimension.description":
-    "Laat leeg om de embedding-dimensie automatisch te detecteren vanuit het model.",
-  "settings.indexing.dimension.placeholder": "Auto",
-  "settings.indexing.providerField.description": "Provider-specifieke verbindingsinstelling.",
-  "settings.indexing.vectorStore.title": "Vectoropslag",
-  "settings.indexing.vectorStore.description": "Kies waar geïndexeerde embeddings worden opgeslagen.",
-  "settings.indexing.lancedbDirectory.title": "LanceDB-directory",
-  "settings.indexing.lancedbDirectory.description": "Optionele directory voor de lokale LanceDB-opslag.",
-  "settings.indexing.lancedbDirectory.placeholder": "Laat leeg voor standaard",
-  "settings.indexing.qdrantUrl.title": "Qdrant-URL",
-  "settings.indexing.qdrantUrl.description": "Server-URL voor de Qdrant-instantie.",
-  "settings.indexing.qdrantApiKey.title": "Qdrant API-sleutel",
-  "settings.indexing.qdrantApiKey.description": "Optionele API-sleutel voor de Qdrant-instantie.",
-  "settings.indexing.qdrantApiKey.placeholder": "Optionele API-sleutel",
-  "settings.indexing.tuning.description": "Geavanceerde parameter voor zoeken en batching.",
 
   "settings.experimental.title": "Experimenteel",
   "settings.language.title": "Taal",
@@ -1342,18 +1302,6 @@ export const dict = {
 
   "common.add": "Toevoegen",
   "common.choose": "Kies…",
-
-  "settings.autocomplete.autoTrigger.title": "Automatische inline aanvullingen inschakelen",
-  "settings.autocomplete.autoTrigger.description":
-    "Toon automatisch suggesties voor inline aanvullingen tijdens het typen",
-  "settings.autocomplete.smartKeybinding.title": "Slimme inline taak-sneltoets inschakelen",
-  "settings.autocomplete.smartKeybinding.description":
-    "Gebruik een slimme sneltoets voor het activeren van inline taken",
-  "settings.autocomplete.chatAutocomplete.title": "Chat tekstveld automatisch aanvullen inschakelen",
-  "settings.autocomplete.chatAutocomplete.description":
-    "Toon suggesties voor automatisch aanvullen in het chat tekstveld",
-  "settings.autocomplete.modelsHint":
-    "Om te kiezen welk model wordt gebruikt voor automatisch aanvullen, zie de Modellen-instellingen.",
 
   "settings.notifications.agent.title": "Agent Voltooiing",
   "settings.notifications.agent.description": "Toon melding wanneer agent een taak voltooit",
@@ -1579,68 +1527,6 @@ export const dict = {
   "settings.checkpoints.enable.description":
     "Maak checkpoints aan voor het bewerken van bestanden zodat je eerdere staten kunt herstellen",
 
-  "settings.context.autoCompaction.title": "Automatische Compactie",
-  "settings.context.autoCompaction.description": "Context automatisch compacteren voordat deze de limiet bereikt",
-  "settings.context.compaction.title": "Compactie",
-  "settings.context.compactionLimit.title": "Limiet voor automatisch compacteren",
-  "settings.context.compactionLimit.description":
-    "Compacteer wanneer de context dit percentage van het modelvenster bereikt. Laat leeg om alleen de veiligheidsbuffer te gebruiken.",
-  "settings.context.prune.title": "Oude Uitvoer Opschonen",
-  "settings.context.prune.description": "Verwijder oude tool uitvoer tijdens compactie",
-  "settings.context.watcherPatterns": "File Watcher Negeer Patronen",
-  "settings.context.watcherPatterns.description": "Glob-patronen voor bestanden die de watcher moet negeren",
-
-  "settings.context.memory.title": "Geheugen",
-  "settings.context.memory.project.title": "Projectgeheugen",
-  "settings.context.memory.autoSave.title": "Projectgeheugen automatisch opslaan",
-  "settings.context.memory.autoSave.description":
-    "Sla duurzame projectfeiten automatisch op uit voltooide beurten wanneer geheugen is ingeschakeld.",
-  "settings.context.memory.index.title": "Geheugenindex",
-  "settings.context.memory.status.notLoaded": "Niet geladen",
-  "settings.context.memory.status.disabled": "Uitgeschakeld",
-  "settings.context.memory.status.enabledTokensOps":
-    "Ingeschakeld - ~{{session}} startcontexttokens in deze sessie - ~{{tokens}} tokens in opgeslagen index - laatste bewerking {{ops}}",
-  "settings.context.memory.index.path": "{{path}}/index.kmem",
-  "settings.context.memory.index.enable": "Schakel geheugen in om projectgeheugenbestanden te maken.",
-  "settings.context.memory.inspect": "Inspecteren",
-  "settings.context.memory.rebuild": "Geheugenindex opnieuw opbouwen",
-  "chat.memory.status.loading": "Geheugenstatus laden",
-  "chat.memory.status.active": "Geheugen actief in deze sessie",
-  "chat.memory.project.enabled": "Projectgeheugen ingeschakeld",
-  "chat.memory.project.disabled": "Projectgeheugen uitgeschakeld",
-  "chat.memory.command.failed": "Geheugenopdracht mislukt",
-  "chat.memory.inspect": "Geheugen inspecteren",
-  "chat.memory.remember": "Onthouden",
-  "chat.memory.forget": "Vergeten",
-  "chat.memory.rebuild": "Index opnieuw opbouwen",
-  "chat.memory.disable": "Geheugen uitschakelen",
-  "chat.memory.enable": "Geheugen inschakelen",
-  "chat.memory.verbose": "Uitgebreid",
-  "chat.memory.activity.idle": "Geen geheugenactiviteit in deze sessie",
-  "chat.memory.activity.loaded": "{{tokens}} tokens geladen",
-  "chat.memory.activity.recalled": "{{count}} opgehaald",
-  "chat.memory.activity.saved": "{{count}} opgeslagen",
-  "chat.memory.activity.loaded.item": "geladen: {{item}}",
-  "chat.memory.activity.recalled.item": "opgehaald: {{item}}",
-  "chat.memory.activity.saved.item": "opgeslagen: {{item}}",
-  "chat.memory.badge.recalled": "Geheugen opgehaald",
-  "chat.memory.badge.items": "{{count}} items",
-
-  "settings.commitMessage.title": "Commit Message",
-  "settings.commitMessage.override.title": "Aangepaste prompt gebruiken",
-  "settings.commitMessage.override.description":
-    "Overschrijf de standaard prompt voor de commit message. Indien ingeschakeld, vervangt uw aangepaste prompt de ingebouwde prompt voor conventional commits volledig.",
-  "settings.commitMessage.prompt.title": "Aangepaste prompt",
-  "settings.commitMessage.prompt.description":
-    "Systeem prompt die naar de AI wordt gestuurd bij het genereren van commit messages. Dit vervangt de standaard prompt volledig.",
-  "settings.commitMessage.prompt.placeholder":
-    "bijv. Genereer commit messages in het Spaans volgens het conventional commits formaat. Retourneer ALLEEN de commit message.",
-
-  "settings.commitMessage.language.sync": "Synchroniseren met UI taal",
-  "settings.commitMessage.language.title": "Taal",
-  "settings.commitMessage.language.description":
-    "Kies welke taal je wilt gebruiken voor AI-gegenereerde commitberichten:",
-
   "settings.display.username.title": "Gebruikersnaam",
   "settings.display.username.description": "Aangepaste gebruikersnaam weergegeven in gesprekken",
   "settings.display.fontSize.title": "Lettergrootte",
@@ -1732,7 +1618,6 @@ export const dict = {
   "migration.select.defaultModel": "Standaard Model",
   "migration.select.autoApproval": "Automatische Goedkeuring",
   "migration.select.language": "UI Taal",
-  "migration.select.autocomplete": "Automatisch Aanvullen Instellingen",
 
   // Migrate — completion
   "migration.complete.summary": "{{success}} van de {{total}} items succesvol gemigreerd.",
@@ -1787,10 +1672,6 @@ export const dict = {
   "settings.saveBar.save": "Opslaan",
   "settings.saveBar.saving": "Bezig met opslaan…",
   "settings.saveBar.saveFailed": "Instellingen konden niet worden opgeslagen",
-  "settings.indexing.kiloModel.title": "Kilo-model voorinstelling",
-  "settings.indexing.kiloModel.description": "Kies een ondersteund Kilo-hosted embeddings model.",
-  "settings.indexing.kiloSignIn.title": "Kilo-aanmelding vereist",
-  "settings.indexing.kiloSignIn.description": "Log in op Kilo om hosted embeddings te gebruiken.",
   // Missing translations - English fallbacks until translated
   "settings.agentBehaviour.createMode": "Nieuwe modus aanmaken",
   "settings.agentBehaviour.createMode.button": "Aanmaken",

@@ -112,14 +112,6 @@ export function useSlashCommand(
       },
     },
     {
-      name: "compact",
-      description: "Summarize and compact the session",
-      hints: ["smol", "condense"],
-      action: () => {
-        window.dispatchEvent(new CustomEvent("compactSession"))
-      },
-    },
-    {
       name: "export",
       description: "Export the current session transcript as Markdown",
       hints: ["markdown", "transcript"],

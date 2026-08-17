@@ -51,15 +51,6 @@ export function migrate(info: typeof ConfigV1.Info.Type) {
     attachments: info.attachment,
     tool_output: info.tool_output,
     mcp: mcp(info),
-    compaction: info.compaction && {
-      auto: info.compaction.auto,
-      prune: info.compaction.prune,
-      keep: {
-        turns: info.compaction.tail_turns,
-        tokens: info.compaction.preserve_recent_tokens,
-      },
-      buffer: info.compaction.reserved,
-    },
     skills: info.skills && [...(info.skills.paths ?? []), ...(info.skills.urls ?? [])],
     commands: info.command,
     instructions: info.instructions,

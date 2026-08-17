@@ -31,7 +31,7 @@ import { INTERACTIVE_INPUT_ERROR, resolveInteractiveStdin } from "./run/runtime.
 import { event as normalizeEvent } from "./run/event"
 import { KiloRunAuto } from "@/kilocode/cli/run-auto" // kilocode_change
 import { KiloHeadless } from "@/kilocode/permission/headless" // kilocode_change
-import { KiloRun, KiloRunDaemon } from "@/kilocode/cli/cmd/run" // kilocode_change
+import { KiloRunDaemon } from "@/kilocode/cli/cmd/run" // kilocode_change
 
 type ModelInput = Parameters<KiloClient["session"]["prompt"]>[0]["model"]
 
@@ -635,12 +635,10 @@ export const RunCommand = effectCmd({
       }
 
       async function execute(sdk: KiloClient) {
-        // kilocode_change start - preserve custom command precedence and avoid reading stdin for built-ins
+        // kilocode_change start - avoid reading stdin for bare --command runs when input is not required
         const deferred = Boolean(args.attach && args.session && !directory)
-        const initial = deferred ? undefined : await KiloRun.resolveBuiltin(sdk, args.command, directory)
         if (!deferred) {
-          KiloRun.validateBuiltin({ command: initial, continue: args.continue, session: args.session })
-          if (!initial) await loadInput()
+          await loadInput()
         }
         // kilocode_change end
 
@@ -872,13 +870,7 @@ export const RunCommand = effectCmd({
         }
         const cwd = args.attach ? (directory ?? sess.directory ?? (await current(sdk))) : (directory ?? root)
         const client = args.attach ? attachSDK(cwd) : sdk
-        // kilocode_change start - classify deferred attach commands in the session directory
-        const builtin = deferred ? await KiloRun.resolveBuiltin(client, args.command, cwd) : initial
-        if (deferred) {
-          KiloRun.validateBuiltin({ command: builtin, continue: args.continue, session: args.session })
-          if (!builtin) await loadInput()
-        }
-        // kilocode_change end
+        if (deferred) await loadInput()
 
         // Validate agent if specified
         const agent = await pickAgent(client)
@@ -892,17 +884,7 @@ export const RunCommand = effectCmd({
             process.exit(1)
           })
 
-          // kilocode_change start - handle built-in session commands
-          if (builtin) {
-            const result = await KiloRun.runBuiltin(client, sessionID, builtin, args.model, sess.model, cwd)
-            if (result.error) {
-              if (!emit("error", { error: result.error })) UI.error(formatRunError(result.error))
-              process.exitCode = 1
-            }
-            return
-          }
-          // kilocode_change end
-
+          // kilocode_change start - keep --command dispatch on the normal session.command path
           if (args.command) {
             const result = await client.session.command({
               sessionID,

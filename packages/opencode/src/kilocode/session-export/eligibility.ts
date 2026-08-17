@@ -1,5 +1,5 @@
-import { getAuthOrgId, type OrgSource, type OrgState } from "./org-sources"
-export type { OrgState } from "./org-sources"
+import { getAuthOrgId, type OrgSource, type OrgState } from "./org-auth"
+export type { OrgState } from "./org-auth"
 
 let kill = false
 let reason: string | undefined

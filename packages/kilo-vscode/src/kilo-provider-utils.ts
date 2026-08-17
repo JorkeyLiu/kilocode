@@ -1,7 +1,6 @@
 import type { Session, Agent, Event, ProviderListResponse } from "@kilocode/sdk/v2/client"
 import type { SyncPayload } from "./services/cli-backend/sdk-sse-adapter"
 import { prettifyError } from "zod/v4"
-import type { IndexingStatus } from "./services/cli-backend/types"
 import type { PartBatch, PartUpdate } from "./kilo-provider/session-stream-scheduler"
 import type { PartRemove } from "./shared/stream-messages"
 import * as path from "path"
@@ -415,10 +414,6 @@ export type WebviewMessage =
   | PartBatch
   | PartRemove
   | {
-      type: "indexingStatusLoaded"
-      status: IndexingStatus
-    }
-  | {
       type: "messageCreated"
       message: Record<string, unknown>
     }
@@ -645,11 +640,6 @@ export function mapSSEEventToWebviewMessage(event: StreamEvent, sessionID: strin
         available: event.properties.available,
         reason: event.properties.reason,
         version: event.properties.version,
-      }
-    case "indexing.status":
-      return {
-        type: "indexingStatusLoaded",
-        status: event.properties.status,
       }
     default:
       return null

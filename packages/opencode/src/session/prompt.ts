@@ -16,7 +16,6 @@ import * as SandboxPolicy from "@/kilocode/sandbox/policy" // kilocode_change
 import { CommandTimeout } from "@/kilocode/command-timeout" // kilocode_change
 import { Suggestion } from "@/kilocode/suggestion" // kilocode_change
 import { Question } from "@/question" // kilocode_change
-import { BUILTIN_COMMANDS } from "@/kilocode/session/builtin-commands" // kilocode_change
 import { legacyReviewMessage } from "@/kilocode/review/command" // kilocode_change
 import { zod } from "@opencode-ai/core/effect-zod" // kilocode_change
 import { withStatics } from "@opencode-ai/core/schema" // kilocode_change
@@ -1517,7 +1516,6 @@ export const layer = Layer.effect(
       // kilocode_change end
       // kilocode_change — cache environment details per turn (prompt caching)
       const envCache: KiloSessionPrompt.EnvCache = {}
-      const memoryCache = KiloSessionPrompt.memoryCache() // kilocode_change
       closeReasons.delete(sessionID) // kilocode_change
       let compactionAttempts = 0 // kilocode_change - cap compaction attempts per turn to avoid infinite loops
       // kilocode_change start - LOCK-002: at most one automatic continuation per
@@ -1799,7 +1797,6 @@ export const layer = Layer.effect(
             bypassAgentCheck,
             messages: msgs,
             promptOps,
-            memoryCache, // kilocode_change
           }).pipe(
             Effect.provideService(Plugin.Service, plugin),
             Effect.provideService(Permission.Service, permission),
@@ -1859,10 +1856,9 @@ export const layer = Layer.effect(
           // kilocode_change end
 
           // kilocode_change start - persistently prune stale tool outputs when payload is already large
-          const [skills, env, mem, instructions] = yield* Effect.all([
+          const [skills, env, instructions] = yield* Effect.all([
             sys.skills(agent),
             sys.environment(model, lastUser.editorContext), // kilocode_change
-            KiloSessionPrompt.memoryInject({ ctx, sessionID, record: step === 1, cache: memoryCache }), // kilocode_change
             instruction.system().pipe(Effect.orDie),
           ])
           let modelMsgs = yield* MessageV2.toModelMessagesEffect(msgs, model).pipe(
@@ -1886,7 +1882,7 @@ export const layer = Layer.effect(
             if (nextSize > REQUEST_PRUNE_BYTES) log.warn("payload still large after pruning", { size: nextSize })
           }
           // kilocode_change end
-          const system = [...env, ...mem, ...instructions, ...(skills ? [skills] : [])] // kilocode_change
+          const system = [...env, ...instructions, ...(skills ? [skills] : [])] // kilocode_change
           const format = lastUser.format ?? { type: "text" as const }
           if (format.type === "json_schema") system.push(STRUCTURED_OUTPUT_SYSTEM_PROMPT)
           const result = yield* handle.process({
@@ -1913,11 +1909,6 @@ export const layer = Layer.effect(
                 : undefined,
             // kilocode_change end
           })
-
-          // kilocode_change start - persist a lightweight marker when this assistant step had memory context
-          const marker = KiloSessionPrompt.memoryPart({ sessionID, message: handle.message, cache: memoryCache })
-          if (marker) yield* sessions.updatePart(marker)
-          // kilocode_change end
 
           if (structured !== undefined) {
             handle.message.structured = structured
@@ -2008,7 +1999,6 @@ export const layer = Layer.effect(
         continue
       }
 
-      yield* compaction.prune({ sessionID, reason: "normal" }).pipe(Effect.ignore, Effect.forkIn(scope))
       return yield* lastAssistant(sessionID)
     })
 
@@ -2065,7 +2055,6 @@ export const layer = Layer.effect(
       const cmd = yield* commands.get(input.command)
       if (!cmd) {
         const available = (yield* commands.list()).map((c) => c.name)
-        available.push(...BUILTIN_COMMANDS) // kilocode_change - surface built-in session commands in error hint
         available.sort() // kilocode_change - alphabetical for stable, easy-to-scan output
         const hint = available.length ? ` Available commands: ${available.join(", ")}` : ""
         const error = new NamedError.Unknown({ message: `Command not found: "${input.command}".${hint}` })

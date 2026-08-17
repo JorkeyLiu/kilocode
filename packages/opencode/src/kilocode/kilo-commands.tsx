@@ -13,8 +13,6 @@ import { DialogAlert } from "@tui/ui/dialog-alert"
 import type { Organization } from "@kilocode/kilo-gateway"
 import { DialogKiloTeamSelect } from "./components/dialog-kilo-team-select.js"
 import { DialogKiloProfile } from "./components/dialog-kilo-profile.js"
-import { DialogIndexing } from "./components/dialog-indexing.js"
-import { indexingEnabled } from "./indexing-feature"
 import { refreshBalance } from "./balance-refresh"
 
 // These types are OpenCode-internal and imported at runtime
@@ -37,7 +35,6 @@ export function registerKiloCommands(useSDK: () => UseSDK) {
   const isKiloConnected = createMemo(() => {
     return sync.data.provider_next.connected.includes("kilo")
   })
-  const indexing = createMemo(() => indexingEnabled(sync.data.config))
 
   useBindings(() => ({
     commands: [
@@ -114,22 +111,6 @@ export function registerKiloCommands(useSDK: () => UseSDK) {
           }
         },
       },
-
-      ...(indexing()
-        ? [
-            {
-              name: "kilo.indexing",
-              title: "Indexing",
-              desc: "Configure codebase indexing",
-              category: "Kilo",
-              slashName: "indexing",
-              slashAliases: ["index", "embedding"],
-              run: () => {
-                dialog.replace(() => <DialogIndexing useSDK={useSDK} />)
-              },
-            },
-          ]
-        : []),
 
       // /teams command
       {

@@ -28,7 +28,7 @@ export namespace TestProfile {
           "util/{filesystem,glob,module,process,which}.test.ts",
         ],
         kilo: [
-          "kilocode/{background-process,daemon,diff-full,external-directory-boundary,indexing-worker,indexing-worktree,interactive-terminal,mcp-oauth-callback,primary-worktree,project-id,read-directory,session-diff-restore,snapshot-cache,snapshot-freeze-repro,snapshot-revert-move,snapshot-seed,task-nesting}.test.ts",
+          "kilocode/{background-process,daemon,diff-full,external-directory-boundary,indexing-worktree,interactive-terminal,mcp-oauth-callback,primary-worktree,project-id,read-directory,session-diff-restore,snapshot-cache,snapshot-freeze-repro,snapshot-revert-move,snapshot-seed,task-nesting}.test.ts",
           "kilocode/cli/cmd/serve.test.ts",
           "kilocode/cli/install-artifact.test.ts",
           "kilocode/config/config.test.ts",

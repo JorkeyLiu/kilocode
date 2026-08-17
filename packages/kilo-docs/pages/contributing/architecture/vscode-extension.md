@@ -39,7 +39,7 @@ flowchart LR
 
 | Area | Behavior |
 |---|---|
-| Startup | Lazy on client demand; autocomplete prewarm can start server during activation |
+| Startup | Lazy on client demand; the speech-to-text capture prewarm is the only retention that can touch server-side capture during activation |
 | Binary | Uses extension `bin/kilo`, or `bin/kilo.exe` on Windows |
 | Port | Starts `kilo serve --port 0`; CLI server prefers `4096`, then asks OS for free port |
 | Authentication | Generates random 32-byte hex password per spawn and passes it as `KILO_SERVER_PASSWORD`; username defaults to `kilo` |
@@ -79,6 +79,24 @@ Retained boundaries that the removal preserves: the shared manifest contribution
 
 **Rollback path.** This is a breaking product change with no flag or compatibility shim. The only supported rollback is reverting the P3.3 removal commit(s) in git (the removed handlers, providers, webview trees, message types, manifest contributions, and bundle entries are preserved in git history). After a revert, the `cloud-claw-removal` E2E scenario and `tests/unit/cloud-claw-removal.test.ts` fail, confirming the removed products are actually back.
 
+## Product runtime absence (P3.4 removal)
+
+Indexing and semantic search, project memory, user-visible context/compaction controls, autocomplete (FIM, next-edit, and chat), and commit-message generation no longer register or initialize in the extension or its webview. Each is structurally absent with no active, dormant, or configurable surface: no manifest contribution (command/keybinding/setting/dependency), no runtime-registered command or inline-completion provider, no server prewarm (the only retained activation prewarm is speech-to-text capture), no settings tab, no webview context or message-protocol path, and no build entry or i18n key. This is a permanent removal — not deferred, gated, or shimmed (LOCK-004); LOCK-014/015 leave no compatibility promise, import guide, or dormant removed-product instruction. The static absence contract is `tests/unit/p3-4-removal.test.ts`.
+
+| Removed surface | Removal scope |
+|---|---|
+| Codebase indexing and semantic search | `packages/kilo-indexing/`, indexing settings/status/dialogs in extension and webview, `semantic_search` tool, `/indexing` API group, `indexing` config (retired with a warning) |
+| Project memory | `packages/kilo-memory/`, memory status/prompt/recall-save surfaces, memory webview protocol, `kilo-code.new.showMemory`/`toggleMemory` commands |
+| Manual/configurable compaction | `/compact`/`/summarize` slash commands, task-header/layout context controls, `ContextTab`/`ContextProgress`, manual `compact` webview message, SDK `session.compact` and `session.summarize` methods, `compaction` config block (retired; automatic overflow recovery is always on) |
+| Autocomplete | FIM inline completion provider, next-edit, chat-textarea autocomplete, autocomplete status bar/settings/models, Gateway autocomplete/FIM/edit clients in `packages/kilo-gateway/` |
+| Commit-message generation | SCM commit-message service, `CommitMessageTab`, `kilo-code.new.generateCommitMessage`, commit-message API handlers |
+
+Retained boundaries are unaffected: invisible automatic internal context-overflow recovery remains and its `compaction` parts still render, with no manual or configurable control (LOCK-005); custom provider and model selector surfaces remain (LOCK-006); Agent Manager, Open-in-Tab, notebook context, checkpoints, and the generic chat/code-action/diff surfaces remain (LOCK-007/008). Server startup is lazy on client demand from the retained chat surfaces; the autocomplete prewarm path is gone.
+
+**Runtime evidence.** The `p3-4-removal` E2E scenario (`bun run test:e2e:p3-4-removal`) runs in a real Extension Host and records `p3-4-removal-runtime-evidence`: it asserts identifier-based absence of removed-feature surfaces in the loaded manifest, the runtime command table, the built `dist/` bundle list, and run-owned workspace state, and asserts the retained surfaces (Agent Manager, Open-in-Tab, automatic compaction part rendering) still resolve. No model requests or external calls.
+
+**Rollback path.** This is a breaking product change with no flag or compatibility shim. The only supported rollback is reverting the P3.4 removal commit(s) in git (the removed services, providers, webview trees, message types, manifest contributions, engine packages, and API groups are preserved in git history). After a revert, the `p3-4-removal` E2E scenario and `tests/unit/p3-4-removal.test.ts` fail, confirming the removed surfaces are actually back.
+
 ## Shared consumers
 
 Shared service has more consumers than chat tabs:
@@ -88,7 +106,6 @@ Shared service has more consumers than chat tabs:
 | Chat | Editor-tab providers and the Agent Manager's embedded chat |
 | Panels | Settings, profile and marketplace surfaces, sub-agent viewers, Agent Manager |
 | Diffs | Inline permission diffs in chat, RevertBanner session revert, and local git-change summaries |
-| Editor assistance | Autocomplete and commit-message generation |
 
 New mutable state must account for concurrent consumers and multiple directory contexts on one process.
 
@@ -180,7 +197,7 @@ Agent Manager PTY WebSocket URL uses `auth_token=<base64 kilo:password>` query m
 
 | Config owner | Examples |
 |---|---|
-| VS Code settings | `kilo-code.new.*` extension UI, proxy, autocomplete, and integration settings |
+| VS Code settings | `kilo-code.new.*` extension UI, proxy, and integration settings |
 | CLI config | Global and project `kilo.jsonc`, `kilo.json`, compatible OpenCode files, provider auth, tools, permissions, modes |
 
 Extension-specific behavior belongs in VS Code settings. Agent runtime behavior belongs in CLI config so the TUI and VS Code can share it.
@@ -193,7 +210,6 @@ Extension-specific behavior belongs in VS Code settings. Agent runtime behavior 
 | CLI Tree-sitter WASM | Copied under `bin/tree-sitter`; backend spawn sets `KILO_TREE_SITTER_WASM_DIR` |
 | FFmpeg helper | Bundled for supported targets for speech capture; capture code also checks system fallback paths |
 | Empty-window cwd | Uses extension global storage directory when no VS Code workspace folder exists |
-| Empty-window indexing | Sets `KILO_DISABLE_CODEBASE_INDEXING=vscode-no-workspace` so CLI reports indexing disabled |
 
 Speech-to-text captures audio locally, then sends completed recording through shared editor-owned `kilo serve` server to authenticated Kilo Gateway transcription path. It is batch transcription, not direct provider streaming.
 
@@ -230,6 +246,7 @@ Extension host bundle targets Node/CommonJS. Browser webviews and shared worker 
 | Real scenarios | Four focused-only scenarios drive REAL backend sessions through the production webview path and assert served-backend truth through the snapshot bridge: `real-session` (create/prompt/reopen), `real-completed` (completed turns, MCP disconnect, H-12 rollback), `real-overflow` (H-13 internal context-overflow compaction), and `real-restart` (SSE reconnect, exact-owned worker restart, true window reload re-entry). Each seeds `small_model`/`subagent_model` to the run-owned provider and asserts at the request level that every generation (agent turns, titles, summaries, subagents) used `e2e-local/e2e-model` — any `kilo/kilo-auto/*` line fails the scenario |
 | P3.1 removal | `sidebar-removal` (focused-only) runs assertions in the Extension Host runner: the loaded manifest contributes no Activity Bar sidebar surface under the forbidden ids/prefixes (`kilo-code-ActivityBar`, `kilo-code.SidebarProvider`, `sidebarTitle.*`) — identifier-based, so unrelated future views are not banned — and the production "Open in Tab" editor panel opens and reaches webview readiness through the env-gated `openInTabReady` fixture bridge, with the Agent Manager still ready afterwards. No CDP DOM driving |
 | P3.3 removal | `cloud-claw-removal` (focused-only) runs assertions in the Extension Host runner: the loaded manifest, the runtime command table, and the built `dist/` bundle list expose no active cloud-session, KiloClaw, local Console, or JetBrains product contribution (identifier-based, so retained generic names like the `jetbrainsMono` font option are not banned), and the retained "Open in Tab" panel + Agent Manager still become ready. Records `cloud-claw-removal-runtime-evidence`; no synthetic fixtures, no CDP DOM driving, and no model requests or external calls |
+| P3.4 removal | `p3-4-removal` (focused-only) runs assertions in the Extension Host runner: the loaded manifest, the runtime command table, the built `dist/` bundle list, and run-owned workspace state expose no active indexing, memory, compaction-control, autocomplete, or commit-message product contribution (identifier-based, so retained generic names are not banned); the retained "Open in Tab" panel, Agent Manager, and automatic `CompactionPart` rendering still resolve. Records `p3-4-removal-runtime-evidence`; no synthetic fixtures, no CDP DOM driving, and no model requests or external calls |
 | Session-load serialization | `KiloProvider` serializes session-list loads (full refreshes, load-more, deferred flushes) so the bridge's awaited refresh is the last applied, making fixture survival deterministic without timers |
 | Process lifecycle | All owned processes are terminated by exact PID matched to the unique user-data dir, the CDP port is verified released, then the scratch dir is deleted — on success and failure paths |
 | Binary resolution | `VSCODE_TEST_EXECUTABLE` (must exist) → cached `.vscode-test/` → `@vscode/test-electron` auto-download into `.vscode-test/`; clean checkouts need no preinstalled binary |

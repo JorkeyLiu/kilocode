@@ -32,15 +32,6 @@ describe("Escape must not abort a session", () => {
     expect(keydown).not.toContain('e.key === "Escape" && isBusy()')
   })
 
-  it("keeps ghost-text Escape dismissal in PromptInput", () => {
-    const branch = prompt.indexOf('if (e.key === "Escape" && ghost.text())')
-    const next = prompt.indexOf("isEnterKeyCommitNotIme(e)", branch)
-
-    expect(branch).toBeGreaterThan(-1)
-    expect(next).toBeGreaterThan(branch)
-    expect(prompt.slice(branch, next)).toContain("ghost.dismiss()")
-  })
-
   it("keeps the explicit stop button abort control", () => {
     expect(prompt).toContain("onClick={() => session.abort()}")
   })

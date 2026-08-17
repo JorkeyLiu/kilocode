@@ -16,7 +16,7 @@ Kilo Code uses large language models (LLMs) to understand your requests and tran
 - Perform web browsing (if enabled).
 - Use external tools via the Model Context Protocol (MCP).
 
-You interact with Kilo Code through a chat interface, where you provide instructions and review/approve its proposed actions, or you can use the inline autocomplete feature which helps you as you type.
+You interact with Kilo Code through a chat interface, where you provide instructions and review/approve its proposed actions.
 
 ## Is Kilo Code free to use?
 

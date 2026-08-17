@@ -40,7 +40,6 @@ import { Question } from "@/question"
 import { Notebook } from "@/kilocode/notebook/service" // kilocode_change
 import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
 import { Session } from "@/session/session"
-import { SessionCompaction } from "@/session/compaction"
 import { LLM } from "@/session/llm"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
@@ -61,7 +60,6 @@ import { ToolRegistry } from "@/tool/registry"
 import { lazy } from "@/util/lazy"
 import { Vcs } from "@/project/vcs"
 import { Workspace } from "@/control-plane/workspace"
-import { MemoryService } from "@kilocode/kilo-memory/effect/service" // kilocode_change
 import { CorsConfig, isAllowedCorsOrigin, type CorsOptions } from "@/server/cors"
 import { serveUIEffect } from "@/server/shared/ui"
 import { ServerAuth } from "@/server/auth"

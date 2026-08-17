@@ -4,12 +4,11 @@ import { resolvePanelProjectDirectory } from "./project-directory"
 import type { KiloConnectionService } from "./services/cli-backend"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
 
-type PanelView = "settings" | "profile" | "indexing"
+type PanelView = "settings" | "profile"
 
 const PANEL_TITLES: Record<PanelView, string> = {
   settings: "Kilo Settings",
   profile: "Kilo Profile",
-  indexing: "Codebase Indexing",
 }
 
 /**

@@ -273,11 +273,9 @@ export namespace KilocodeConfigSources {
   }
 
   function runtimeSources(): Pending[] {
-    return [
-      runtimeSource("KILO_PERMISSION", Flag.KILO_PERMISSION, "Runtime permission overlay."),
-      runtimeSource("KILO_DISABLE_AUTOCOMPACT", process.env.KILO_DISABLE_AUTOCOMPACT, "Disables automatic compaction."),
-      runtimeSource("KILO_DISABLE_PRUNE", process.env.KILO_DISABLE_PRUNE, "Disables tool-output pruning."),
-    ].filter((item): item is Pending => item !== undefined)
+    return [runtimeSource("KILO_PERMISSION", Flag.KILO_PERMISSION, "Runtime permission overlay.")].filter(
+      (item): item is Pending => item !== undefined,
+    )
   }
 
   function runtimeSource(label: string, value: string | undefined, reason: string): Pending | undefined {

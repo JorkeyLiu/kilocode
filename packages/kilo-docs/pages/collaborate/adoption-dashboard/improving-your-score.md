@@ -23,18 +23,15 @@ npm install -g @kilocode/cli
 
 Teams that use both IDE and CLI surfaces tend to show higher daily engagement because AI is available wherever they're working.
 
-### Start with Autocomplete
+### Start with Quick Wins
 
-Autocomplete is low-friction by design. It doesn't require explicit prompting—it just works in the background.
+The fastest way to build AI habits is through small, repeated use cases that fit naturally into existing workflows.
 
-**Action:** Encourage your team to lean on autocomplete for:
+**Action:** Identify daily tasks where AI can help:
 
-- Boilerplate code
-- Repetitive patterns
-- Common syntax
-- Test scaffolding
-
-Building muscle memory with autocomplete leads to consistent daily usage without requiring behavior change.
+- **Boilerplate code** — Generate scaffolding and repetitive patterns
+- **Common syntax** — Speed up standard coding tasks
+- **Test scaffolding** — Create test structures quickly
 
 ### Tie AI to Existing Routines
 
@@ -73,7 +70,7 @@ Linking coding → review → deploy actions significantly boosts your Depth sco
 
 If acceptance rates are low, the issue is often context. The AI is making suggestions without understanding your codebase.
 
-**Action:** Enable [Codebase Indexing](/docs/customize/context/codebase-indexing) to give the model vector-backed search across your repository.
+**Action:** Use `@file` and `@folder` mentions to provide targeted context, and maintain an [AGENTS.md](/docs/customize/agents-md) file with project conventions and standards.
 
 Better context leads to:
 
@@ -141,7 +138,7 @@ Other ways to spread usage:
 | Pattern | Why It Works |
 |---|---|
 | **Pair AI with existing tools** | Developers don't have to learn new workflows |
-| **Start with quick wins** | Autocomplete and commit messages build confidence |
+| **Start with quick wins** | Small, repeated AI use cases build confidence |
 | **Champion-led adoption** | Enthusiastic team members model effective usage |
 | **Weekly check-ins on AI usage** | Keeps AI top-of-mind without being prescriptive |
 | **Celebrate retained code** | Recognize when AI contributions ship to production |
@@ -164,14 +161,14 @@ Other ways to spread usage:
 
 1. Ensure all team members have access and are logged in
 2. Run a 30-minute "Getting Started" session
-3. Ask everyone to try autocomplete for one week
+3. Ask everyone to try AI-assisted coding for one week
 4. Check back on completion rates
 
 ### If You're at 21–50 (Early Adoption)
 
 1. Identify your most active users and learn what they're doing
 2. Introduce Code Reviews to spread usage
-3. Enable Codebase Indexing for better context
+3. Set up AGENTS.md for better context quality
 4. Set a monthly score goal (e.g., "reach 55 by next month")
 
 ### If You're at 51–75 (Growing Adoption)

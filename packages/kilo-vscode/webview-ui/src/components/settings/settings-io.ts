@@ -33,15 +33,12 @@ export const KNOWN_KEYS: ReadonlyArray<string> = [
   "watcher",
   "formatter",
   "lsp",
-  "compaction",
-  "commit_message",
   "tools",
   "auto_collapse_reasoning",
   "terminal_command_display",
   "code_edit_display",
   "hide_prompt_training_models",
   "sandbox",
-  "indexing",
   "experimental",
 ]
 

@@ -60,7 +60,7 @@ export const ConfigProvider: ParentComponent = (props) => {
   const [globalConfig, setGlobalConfig] = createSignal<Config>({})
   const [projectConfig, setProjectConfig] = createSignal<Config>({})
   const [settings, setSettings] = createSignal<Record<string, unknown>>({})
-  const [features, setFeatures] = createSignal<FeatureFlags>({ indexing: false, sandboxControls: false })
+  const [features, setFeatures] = createSignal<FeatureFlags>({ sandboxControls: false })
   const [loading, setLoading] = createSignal(true)
   const [draft, setDraft] = createSignal<Partial<Config>>({})
   const [globalDraft, setGlobalDraft] = createSignal<Partial<Config>>({})
@@ -166,22 +166,6 @@ export const ConfigProvider: ParentComponent = (props) => {
   // Register handler immediately (not in onMount) so we never miss
   // a configLoaded message that arrives before the DOM mount.
   const unsubscribe = vscode.onMessage((message: ExtensionMessage) => {
-    if (message.type === "autocompleteSettingsLoaded") {
-      mergeSettings({
-        "autocomplete.enableAutoTrigger": message.settings.enableAutoTrigger,
-        "autocomplete.enableSmartInlineTaskKeybinding": message.settings.enableSmartInlineTaskKeybinding,
-        "autocomplete.enableChatAutocomplete": message.settings.enableChatAutocomplete,
-        "autocomplete.provider": message.settings.provider,
-        "autocomplete.model": message.settings.model,
-      })
-      return
-    }
-    if (message.type === "indexingSettingsLoaded") {
-      mergeSettings({
-        "indexing.showButtonWhenDisabled": message.settings.showButtonWhenDisabled,
-      })
-      return
-    }
     if (message.type === "configLoaded") {
       // Skip if a save is in-flight — a stale configLoaded must not overwrite
       // the optimistically-updated state while the write is being confirmed.
@@ -240,8 +224,6 @@ export const ConfigProvider: ParentComponent = (props) => {
 
   const requestInitialData = () => {
     vscode.postMessage({ type: "requestConfig" })
-    vscode.postMessage({ type: "requestAutocompleteSettings" })
-    vscode.postMessage({ type: "requestIndexingSettings" })
   }
 
   // Request config immediately; if the extension's httpClient is not yet ready,

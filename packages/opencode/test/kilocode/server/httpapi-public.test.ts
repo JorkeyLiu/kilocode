@@ -1,13 +1,10 @@
 import { describe, expect, test } from "bun:test"
-import { Result, Schema as EffectSchema } from "effect"
 import { OpenApi } from "effect/unstable/httpapi"
 import { AgentBuilderPaths } from "../../../src/kilocode/server/httpapi/groups/agent-builder"
 import { BackgroundProcessPaths } from "../../../src/kilocode/server/httpapi/groups/background-process"
 import { ConfigConsolePaths } from "../../../src/kilocode/server/httpapi/groups/config-console"
-import { IndexingPaths, KiloEmbeddingModel } from "../../../src/kilocode/server/httpapi/groups/indexing"
 import { KiloGatewayPaths } from "../../../src/kilocode/server/httpapi/groups/kilo-gateway"
 import { KilocodePaths } from "../../../src/kilocode/server/httpapi/groups/kilocode"
-import { MemoryPaths } from "../../../src/kilocode/server/httpapi/groups/memory"
 import { NetworkPaths } from "../../../src/kilocode/server/httpapi/groups/network"
 import { TelemetryPaths } from "../../../src/kilocode/server/httpapi/groups/telemetry"
 import { SessionPaths } from "../../../src/server/routes/instance/httpapi/groups/session"
@@ -50,29 +47,9 @@ describe("Kilo PublicApi OpenAPI contract", () => {
       "session.network.asked",
       "background_process.updated",
       "interactive_terminal.updated",
-      "indexing.status",
     ]) {
       expect(spec).toContain(type)
     }
-  })
-
-  test("constrains embedding model metadata", () => {
-    const accepts = (dimension: number, scoreThreshold: number) =>
-      Result.isSuccess(
-        EffectSchema.decodeUnknownResult(KiloEmbeddingModel)({
-          id: "provider/model",
-          name: "Model",
-          dimension,
-          scoreThreshold,
-        }),
-      )
-
-    expect(accepts(1, 0)).toBe(true)
-    expect(accepts(1024, 1)).toBe(true)
-    expect(accepts(0, 0.5)).toBe(false)
-    expect(accepts(1.5, 0.5)).toBe(false)
-    expect(accepts(1024, -0.1)).toBe(false)
-    expect(accepts(1024, 1.1)).toBe(false)
   })
 
   test("constrains agent builder route ids", () => {
@@ -114,8 +91,6 @@ describe("Kilo PublicApi OpenAPI contract", () => {
       { method: "post", path: SessionPaths.viewed },
       { method: "get", path: ConfigConsolePaths.overlay },
       { method: "patch", path: ConfigConsolePaths.overlay },
-      { method: "get", path: IndexingPaths.status },
-      { method: "get", path: IndexingPaths.models },
     ] satisfies Array<{ method: Method; path: string }>
 
     for (const route of routes) {
@@ -131,7 +106,6 @@ describe("Kilo PublicApi OpenAPI contract", () => {
     const routes = [
       { method: "post", path: AgentBuilderPaths.preview },
       { method: "put", path: AgentBuilderPaths.save },
-      { method: "post", path: "/commit-message" },
       { method: "post", path: "/enhance-prompt" },
       { method: "get", path: NetworkPaths.list },
       { method: "post", path: NetworkPaths.reply },
@@ -148,16 +122,6 @@ describe("Kilo PublicApi OpenAPI contract", () => {
       { method: "get", path: ConfigConsolePaths.tuiKeybinds },
       { method: "patch", path: ConfigConsolePaths.tuiConfig },
       { method: "get", path: KilocodePaths.sessionModelUsage },
-      { method: "get", path: MemoryPaths.status },
-      { method: "get", path: MemoryPaths.show },
-      { method: "post", path: MemoryPaths.enable },
-      { method: "post", path: MemoryPaths.disable },
-      { method: "post", path: MemoryPaths.configure },
-      { method: "post", path: MemoryPaths.rebuild },
-      { method: "post", path: MemoryPaths.remember },
-      { method: "post", path: MemoryPaths.correct },
-      { method: "post", path: MemoryPaths.forget },
-      { method: "post", path: MemoryPaths.purge },
     ] satisfies Array<{ method: Method; path: string }>
 
     for (const route of routes) {

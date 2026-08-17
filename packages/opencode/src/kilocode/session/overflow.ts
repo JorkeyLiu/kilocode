@@ -33,14 +33,8 @@ export namespace KiloSessionOverflow {
   }
 
   export function limit(input: { cfg: Config.Info; model: Provider.Model; usable: number }) {
-    const percent = input.cfg.compaction?.threshold_percent
-    if (typeof percent !== "number") return input.usable
-
-    const context = input.model.limit.input || input.model.limit.context
-    if (context === 0) return input.usable
-
-    const cap = Math.floor(context * (percent / 100))
-    return Math.min(input.usable, cap)
+    // Automatic safeguard: compact at the usable context window (input minus the reserved safety buffer).
+    return input.usable
   }
 
   export function measure(input: Payload) {
@@ -75,11 +69,7 @@ export namespace KiloSessionOverflow {
   }
 
   export function enabled(input: { cfg: Config.Info; model: Provider.Model }) {
-    return (
-      input.cfg.compaction?.auto !== false &&
-      typeof input.cfg.compaction?.threshold_percent === "number" &&
-      input.model.limit.context !== 0
-    )
+    return input.model.limit.context !== 0
   }
 
   export function shouldCompact(

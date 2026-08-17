@@ -8,7 +8,6 @@ export const opaque = [
       reason: "opaque SDK traffic is denied by the common executeTool network boundary",
     },
   },
-  { id: "semantic_search", file: "kilocode/tool/semantic-search.ts" },
   { id: "lsp", file: "tool/lsp.ts" },
 ] as const
 

@@ -13,7 +13,6 @@ import type {
   SkipLegacyMigrationMessage,
   StartMigrationMessage,
 } from "./migration"
-import type { MemoryShowMessage, MemoryOperationMessage, MemoryPromptMessage, RequestMemoryMessage } from "./memory"
 
 // ============================================
 // Messages FROM webview TO extension
@@ -151,13 +150,6 @@ export interface SelectSourceRequest {
 
 export interface RequestProvidersMessage {
   type: "requestProviders"
-}
-
-export interface CompactRequest {
-  type: "compact"
-  sessionID: string
-  providerID?: string
-  modelID?: string
 }
 
 export interface OpenSettingsPanelRequest {
@@ -330,16 +322,6 @@ export interface ExportSessionTranscriptRequest {
   sessionID: string
 }
 
-export interface RequestAutocompleteSettingsMessage {
-  type: "requestAutocompleteSettings"
-}
-
-export interface RequestChatCompletionMessage {
-  type: "requestChatCompletion"
-  text: string
-  requestId: string
-}
-
 export interface SpeechToTextPrewarmMessage {
   type: "speechToTextPrewarm"
 }
@@ -386,10 +368,6 @@ export interface RequestGitChangesContextMessage {
   agentManagerContext?: string
 }
 
-export interface ChatCompletionAcceptedMessage {
-  type: "chatCompletionAccepted"
-  suggestionLength?: number
-}
 export interface UpdateSettingRequest {
   type: "updateSetting"
   key: string
@@ -436,25 +414,8 @@ export interface RequestGlobalConfigMessage {
   type: "requestGlobalConfig"
 }
 
-export interface RequestIndexingStatusMessage {
-  type: "requestIndexingStatus"
-}
-
-export interface RequestIndexingSettingsMessage {
-  type: "requestIndexingSettings"
-}
-
-export interface RequestKiloEmbeddingModelsMessage {
-  type: "requestKiloEmbeddingModels"
-}
-
 export interface RequestImageModelsMessage {
   type: "requestImageModels"
-}
-
-export interface OpenSettingsTabRequest {
-  type: "openSettingsTab"
-  tab: string
 }
 
 export interface UpdateConfigMessage {
@@ -836,7 +797,6 @@ export interface RequestModelSelectionsMessage {
   type: "requestModelSelections"
 }
 
-
 export interface FetchMarketplaceDataMessage {
   type: "fetchMarketplaceData"
 }
@@ -901,7 +861,6 @@ export type WebviewMessage =
   | WebviewReadyRequest
   | SelectSourceRequest
   | RequestProvidersMessage
-  | CompactRequest
   | RequestAgentsMessage
   | RequestSkillsMessage
   | RequestAgentRequirementsMessage
@@ -923,8 +882,6 @@ export type WebviewMessage =
   | DeleteSessionRequest
   | RenameSessionRequest
   | ExportSessionTranscriptRequest
-  | RequestAutocompleteSettingsMessage
-  | RequestChatCompletionMessage
   | SpeechToTextPrewarmMessage
   | SpeechToTextStartMessage
   | SpeechToTextStopMessage
@@ -933,7 +890,6 @@ export type WebviewMessage =
   | RequestFilePickerMessage
   | RequestTerminalContextMessage
   | RequestGitChangesContextMessage
-  | ChatCompletionAcceptedMessage
   | UpdateSettingRequest
   | RequestTimelineSettingMessage
   | RequestWorkStyleMessage
@@ -944,11 +900,7 @@ export type WebviewMessage =
   | RequestClaudeCompatSettingMessage
   | RequestConfigMessage
   | RequestGlobalConfigMessage
-  | RequestIndexingStatusMessage
-  | RequestIndexingSettingsMessage
-  | RequestKiloEmbeddingModelsMessage
   | UpdateConfigMessage
-  | OpenSettingsTabRequest
   | RequestNotificationSettingsMessage
   | TestNotificationMessage
   | ResetAllSettingsRequest
@@ -1020,10 +972,6 @@ export type WebviewMessage =
   | ToggleRemoteMessage
   | SetRemoteEnabledMessage
   | RequestRemoteStatusMessage
-  | RequestMemoryMessage
-  | MemoryShowMessage
-  | MemoryOperationMessage
-  | MemoryPromptMessage
   | OpenContentRequest
   | AgentManagerTerminalCreateRequest
   | AgentManagerTerminalCloseRequest

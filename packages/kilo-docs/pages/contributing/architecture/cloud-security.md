@@ -167,15 +167,13 @@ Application records commonly scope to user or organization. Cloud Agent durable 
 
 ### Model request gateway
 
-Gateway exposes endpoint families for chat API kinds, autocomplete, transcription, embeddings, catalogs, anonymous free access, custom LLM endpoints, and BYOK routing.
+Gateway exposes endpoint families for chat API kinds, transcription, catalogs, anonymous free access, and BYOK routing.
 
 | Family | Static-source surfaces |
 |---|---|
 | Chat APIs | `/api/gateway` and `/api/openrouter` aliases for chat completions, responses, and messages |
-| FIM and edit | `/api/fim/completions`, `/api/edit/completions` |
 | Transcription | Audio transcription routes |
-| Embeddings | Embedding proxy routes |
-| Catalogs | Models, transcription models, embedding models, providers, models-by-provider, and validation routes |
+| Catalogs | Models, transcription models, providers, models-by-provider, and validation routes |
 | Provider choice | Managed provider path, direct BYOK, custom LLM endpoint, organization settings, and configured gateway paths |
 | Anonymous free | Eligible free-model requests only, with IP-derived context and limits |
 
@@ -344,7 +342,7 @@ Higher-order agent outcome analysis is roadmap work unless separate source prove
 
 | Category | Examples | Security role |
 |---|---|---|
-| Hosting and storage | Vercel, Cloudflare, managed PostgreSQL, runtime hosting, caches, vector indexes, Snowflake | Hosting, edge, persistence, runtime, indexing, and analytics |
+| Hosting and storage | Vercel, Cloudflare, managed PostgreSQL, runtime hosting, caches, Snowflake | Hosting, edge, persistence, runtime, and analytics |
 | Identity and source control | Google, Apple, GitHub, GitLab, Discord, LinkedIn, WorkOS, Turnstile, Stytch, Google Web Risk | Sign-in, SSO, abuse prevention, repositories, webhooks, and deployment scanning |
 | Models and search | OpenRouter, Vercel AI Gateway, direct providers, BYOK, custom endpoints, Exa, Mistral | Inference, search, embeddings, and customer-selected outbound boundaries |
 | Billing and messaging | Stripe, Apple App Store, Churnkey, Impact.com, Mailgun, Customer.io, Expo, Gmail, Slack, Discord, Telegram, Linear | Billing, messages, mobile push, email, and customer-configured communication |

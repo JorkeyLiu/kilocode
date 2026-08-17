@@ -65,7 +65,6 @@ import { Format } from "../../src/format"
 import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { MemoryService } from "@kilocode/kilo-memory/effect/service" // kilocode_change
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change - admission required by withGenerationAdmission
 
 void Log.init({ print: false })
@@ -137,7 +136,6 @@ function makeHttp() {
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
     Bus.layer, // kilocode_change - satisfy the Kilo ToolRegistry dependency
-    MemoryService.layer, // kilocode_change
     GenerationGate.defaultLayer, // kilocode_change - admission required by withGenerationAdmission
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))

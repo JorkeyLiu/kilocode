@@ -6,7 +6,7 @@
  * chain (which requires a real extension host / SSE connection), we provide mock
  * context values directly. Where a real provider is safe to instantiate without an
  * extension host (VSCodeProvider, ServerProvider, ProviderProvider), we use the real
- * thing so components that call useVSCode()/useServer()/useProvider()/useIndexing()
+ * thing so components that call useVSCode()/useServer()/useProvider()
  * don't throw.
  */
 
@@ -31,15 +31,11 @@ import { File } from "@kilocode/kilo-ui/file"
 import { SessionContext } from "../context/session"
 import { AgentRequirementsContext, type AgentRequirementsContextValue } from "../context/agent-requirements"
 import { LanguageContext } from "../context/language"
-import { IndexingProvider } from "../context/indexing"
-import { KiloEmbeddingModelsProvider } from "../context/kilo-embedding-models"
-import { MemoryProvider } from "../context/memory"
 import { TranscriptSearchProvider } from "../context/transcript-search"
 import { dict as uiEn } from "@kilocode/kilo-ui/i18n/en"
 import { dict as appEn } from "../i18n/en"
 import { dict as amEn } from "../../agent-manager/i18n/en"
 import { dict as kiloEn } from "@kilocode/kilo-i18n/en"
-import { hasIndexingPlugin } from "@kilocode/kilo-indexing/detect"
 import { resolveTemplate } from "../context/language-utils"
 import type {
   Config,
@@ -51,8 +47,6 @@ import type {
   SuggestionRequest,
   AgentRequirementResult,
 } from "../types/messages"
-
-type PluginSpec = string | [string, Record<string, unknown>]
 
 // Merged English dictionary (same merge order as the real LanguageProvider)
 const dict: Record<string, string> = { ...appEn, ...amEn, ...uiEn, ...kiloEn }
@@ -248,7 +242,6 @@ export function mockSessionValue(overrides?: {
     sendMessage: noop,
     sendCommand: noop,
     abort: noop,
-    compact: noop,
     respondToPermission: noop,
     replyToQuestion: noop,
     rejectQuestion: noop,
@@ -319,16 +312,9 @@ const ConfigWrapper: ParentComponent<{
     const [project, setProject] = createSignal(props.projectConfig ?? props.config)
     const [settings, setSettings] = createSignal<Record<string, unknown>>({})
     const [dirty, setDirty] = createSignal(false)
-    const features = createMemo(() => {
-      const config = cfg() as Config & {
-        plugin?: readonly PluginSpec[] | null
-      }
-
-      return {
-        indexing: props.features?.indexing ?? hasIndexingPlugin(config.plugin ?? []),
-        sandboxControls: props.features?.sandboxControls ?? false,
-      }
-    })
+    const features = createMemo(() => ({
+      sandboxControls: props.features?.sandboxControls ?? false,
+    }))
 
     const value = {
       config: createMemo(() => cfg()),
@@ -441,34 +427,28 @@ export const StoryProviders: ParentComponent<StoryProvidersProps> = (props) => {
                     <I18nProvider value={{ locale: () => "en", t }}>
                       <SessionContext.Provider value={session as any}>
                         <AgentRequirementsContext.Provider value={requirements}>
-                          <MemoryProvider>
-                            <IndexingProvider>
-                              <KiloEmbeddingModelsProvider>
-                                <DataProvider
-                                  data={data()}
-                                  directory="/project/"
-                                  onOpenDiff={props.onOpenDiff}
-                                  onOpenFile={props.onOpenFile}
-                                >
-                                  <DiffComponentProvider component={Diff}>
-                                    <CodeComponentProvider component={Code}>
-                                      <FileComponentProvider component={File}>
-                                        <MarkedProvider>
-                                          <TranscriptSearchProvider>
-                                            {props.noPadding ? (
-                                              props.children
-                                            ) : (
-                                              <div style={{ padding: "12px" }}>{props.children}</div>
-                                            )}
-                                          </TranscriptSearchProvider>
-                                        </MarkedProvider>
-                                      </FileComponentProvider>
-                                    </CodeComponentProvider>
-                                  </DiffComponentProvider>
-                                </DataProvider>
-                              </KiloEmbeddingModelsProvider>
-                            </IndexingProvider>
-                          </MemoryProvider>
+                          <DataProvider
+                            data={data()}
+                            directory="/project/"
+                            onOpenDiff={props.onOpenDiff}
+                            onOpenFile={props.onOpenFile}
+                          >
+                            <DiffComponentProvider component={Diff}>
+                              <CodeComponentProvider component={Code}>
+                                <FileComponentProvider component={File}>
+                                  <MarkedProvider>
+                                    <TranscriptSearchProvider>
+                                      {props.noPadding ? (
+                                        props.children
+                                      ) : (
+                                        <div style={{ padding: "12px" }}>{props.children}</div>
+                                      )}
+                                    </TranscriptSearchProvider>
+                                  </MarkedProvider>
+                                </FileComponentProvider>
+                              </CodeComponentProvider>
+                            </DiffComponentProvider>
+                          </DataProvider>
                         </AgentRequirementsContext.Provider>
                       </SessionContext.Provider>
                     </I18nProvider>

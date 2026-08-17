@@ -346,14 +346,14 @@
   color: var(--vscode-input-placeholderForeground, var(--text-weaker));
 }
 
-/* Input overlay (highlight + ghost text) */
-.prompt-input-ghost-wrapper {
+/* Input overlay (highlight) */
+.prompt-input-overlay-wrapper {
   position: relative;
   flex: 1;
   min-width: 0;
 }
 
-.prompt-input-ghost-wrapper .prompt-input {
+.prompt-input-overlay-wrapper .prompt-input {
   display: block;
   position: relative;
   z-index: 1;
@@ -403,11 +403,6 @@
   background-color: color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 25%, transparent);
   box-shadow: 0 0 0 0.5px color-mix(in srgb, var(--vscode-textLink-foreground, #3794ff) 40%, transparent);
   text-decoration: underline;
-}
-
-.prompt-input-ghost-text {
-  color: var(--vscode-editorGhostText-foreground, rgba(255, 255, 255, 0.35));
-  display: inline-flex;
 }
 
 .prompt-input-hint {
@@ -548,30 +543,6 @@
       color: var(--icon-base) !important;
     }
   }
-}
-
-.prompt-indexing-button {
-  position: relative;
-
-  [data-slot="icon-svg"] {
-    color: currentColor;
-  }
-}
-
-.prompt-indexing-button--muted {
-  color: var(--vscode-descriptionForeground);
-}
-
-.prompt-indexing-button--warning {
-  color: var(--vscode-charts-yellow, #cca700);
-}
-
-.prompt-indexing-button--success {
-  color: var(--vscode-testing-iconPassed, #73c991);
-}
-
-.prompt-indexing-button--error {
-  color: var(--vscode-errorForeground, #f48771);
 }
 
 .prompt-status-button {

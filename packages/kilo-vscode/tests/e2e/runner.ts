@@ -466,6 +466,7 @@ interface ScenarioFlags {
   runSidebarRemoval: boolean
   runWorktreeRemoval: boolean
   runCloudClawRemoval: boolean
+  runP34Removal: boolean
 }
 
 /**
@@ -517,6 +518,15 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // extension-host-side and are recorded into
     // `<scratch>/cloud-claw-removal-runtime-evidence`.
     runCloudClawRemoval: scenario === "cloud-claw-removal",
+    // P3.4 remaining-feature-removal is focused-only: it asserts runtime
+    // manifest / command-table / bundle-list / workspace-state absence of the
+    // removed indexing, project memory, user-visible context/compaction
+    // controls, autocomplete, and commit-message surfaces, proves the
+    // generation-request collector stayed at zero model requests, then reads
+    // back the retained Open-in-Tab and Agent Manager surfaces. No synthetic
+    // fixtures, no CDP DOM driving — all assertions run extension-host-side
+    // and are recorded into `<scratch>/p3-4-removal-runtime-evidence`.
+    runP34Removal: scenario === "p3-4-removal",
   }
 }
 
@@ -542,11 +552,12 @@ export async function run(): Promise<void> {
     "sidebar-removal",
     "worktree-removal",
     "cloud-claw-removal",
+    "p3-4-removal",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal | worktree-removal | cloud-claw-removal (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal (default: all)",
     )
   }
   const {
@@ -561,6 +572,7 @@ export async function run(): Promise<void> {
     runSidebarRemoval,
     runWorktreeRemoval,
     runCloudClawRemoval,
+    runP34Removal,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -605,7 +617,16 @@ export async function run(): Promise<void> {
   // --- P3 removal scenarios (focused only) — dispatched from a helper so the
   // run() complexity stays under the ESLint cap. Each proves one removed
   // product surface is absent while the retained editor surfaces stay ready.
-  await runRemovalScenarios(vscode, ext, scratch, fixtureId, runSidebarRemoval, runWorktreeRemoval, runCloudClawRemoval)
+  await runRemovalScenarios(
+    vscode,
+    ext,
+    scratch,
+    fixtureId,
+    runSidebarRemoval,
+    runWorktreeRemoval,
+    runCloudClawRemoval,
+    runP34Removal,
+  )
 
   // --- Tab-close scenario fixtures (TA, TB, TC) — independent of child/variant ---
   // Seeds three session tabs in a known order [TA, TB, TC] with TA active, using
@@ -966,6 +987,7 @@ async function runRemovalScenarios(
   runSidebarRemoval: boolean,
   runWorktreeRemoval: boolean,
   runCloudClawRemoval: boolean,
+  runP34Removal: boolean,
 ): Promise<void> {
   // P3.1 sidebar-removal: proves the ordinary single-chat Activity Bar sidebar
   // is gone from the loaded manifest, and that the "Open in Tab" session editor
@@ -1000,6 +1022,18 @@ async function runRemovalScenarios(
   // `<scratch>/cloud-claw-removal-runtime-evidence`.
   if (runCloudClawRemoval) {
     await assertCloudClawRemoval(vscodeApi, ext, scratch, fixtureId)
+  }
+
+  // P3.4 p3-4-removal: proves the loaded manifest, runtime command table,
+  // built bundle list, and run-owned workspace state expose no removed
+  // indexing / project memory / context-management / manual-compaction /
+  // autocomplete / commit-message surface (LOCK-004/PERF-3/014/015), that the
+  // generation-request collector stayed at zero model requests, and that the
+  // retained Open-in-Tab + Agent Manager surfaces still become ready
+  // (LOCK-005/007/008). No synthetic fixtures, no CDP DOM driving, no model
+  // requests; evidence in `<scratch>/p3-4-removal-runtime-evidence`.
+  if (runP34Removal) {
+    await assertP34Removal(vscodeApi, ext, scratch, fixtureId)
   }
 }
 
@@ -1059,7 +1093,8 @@ async function assertSidebarRemoval(
 }
 
 /** Forbidden P3.2 surface regex (managed worktree / run-script / transfer / custom diff). */
-const FORBIDDEN_SURFACE = /worktree|runScript|setupScript|gitTransfer|diffViewer|diff-viewer|diff-virtual|showChanges|apply|import/i
+const FORBIDDEN_SURFACE =
+  /worktree|runScript|setupScript|gitTransfer|diffViewer|diff-viewer|diff-virtual|showChanges|apply|import/i
 
 /** Forbidden managed-worktree / custom-diff identifiers (mirrors the static P3.2 contract). */
 const FORBIDDEN_IDS = [
@@ -1141,11 +1176,15 @@ function assertNoForbiddenContributions(contributes: Record<string, unknown>): {
   const identifierHits = FORBIDDEN_IDS.filter((id) => JSON.stringify(contributes).includes(id))
   const forbidden = { viewHits, containerHits, commandHits, bindingHits, menuHits, settingHits, identifierHits }
   if (Object.values(forbidden).some((hits) => hits.length > 0)) {
-    throw new Error(`probe runner: loaded manifest still exposes a forbidden P3.2 surface (${JSON.stringify(forbidden)})`)
+    throw new Error(
+      `probe runner: loaded manifest still exposes a forbidden P3.2 surface (${JSON.stringify(forbidden)})`,
+    )
   }
   return {
     declaredCommands,
-    contributedViewIds: Object.values(views).flat().map((v) => v.id ?? ""),
+    contributedViewIds: Object.values(views)
+      .flat()
+      .map((v) => v.id ?? ""),
     configProps,
     forbidden,
   }
@@ -1166,9 +1205,15 @@ async function assertNoForbiddenRuntimeCommands(vscodeApi: typeof vscode): Promi
   const kiloCommands = (await vscodeApi.commands.getCommands(true)).filter((c) => c.startsWith("kilo-code."))
   const runtimeForbidden = kiloCommands.filter((c) => FORBIDDEN_SURFACE.test(c))
   if (runtimeForbidden.length > 0) {
-    throw new Error(`probe runner: runtime command table still registers forbidden P3.2 commands: ${runtimeForbidden.join(", ")}`)
+    throw new Error(
+      `probe runner: runtime command table still registers forbidden P3.2 commands: ${runtimeForbidden.join(", ")}`,
+    )
   }
-  for (const retained of ["kilo-code.new.agentManagerOpen", "kilo-code.new.openInTab", "kilo-code.new.agentManager.newTab"]) {
+  for (const retained of [
+    "kilo-code.new.agentManagerOpen",
+    "kilo-code.new.openInTab",
+    "kilo-code.new.agentManager.newTab",
+  ]) {
     if (!kiloCommands.includes(retained)) {
       throw new Error(`probe runner: retained root-local command missing at runtime: ${retained}`)
     }
@@ -1226,7 +1271,9 @@ function assertNoWorktreeState(workspace: string): {
     setupScripts,
   }
   if (state.worktreesDir || state.agentManagerJson || state.stateMarkers.length > 0 || state.setupScripts.length > 0) {
-    throw new Error(`probe runner: runtime created worktree state in the run-owned workspace (${JSON.stringify(state)})`)
+    throw new Error(
+      `probe runner: runtime created worktree state in the run-owned workspace (${JSON.stringify(state)})`,
+    )
   }
   return state
 }
@@ -1539,11 +1586,15 @@ function assertNoForbiddenProductContributions(contributes: Record<string, unkno
   const identifierHits = FORBIDDEN_PRODUCT_IDS.filter((id) => JSON.stringify(contributes).includes(id))
   const forbidden = { viewHits, containerHits, commandHits, bindingHits, menuHits, settingHits, identifierHits }
   if (Object.values(forbidden).some((hits) => hits.length > 0)) {
-    throw new Error(`probe runner: loaded manifest still exposes a forbidden P3.3 product surface (${JSON.stringify(forbidden)})`)
+    throw new Error(
+      `probe runner: loaded manifest still exposes a forbidden P3.3 product surface (${JSON.stringify(forbidden)})`,
+    )
   }
   return {
     declaredCommands,
-    contributedViewIds: Object.values(views).flat().map((v) => v.id ?? ""),
+    contributedViewIds: Object.values(views)
+      .flat()
+      .map((v) => v.id ?? ""),
     configProps,
     forbidden,
   }
@@ -1563,9 +1614,15 @@ async function assertNoForbiddenProductRuntimeCommands(vscodeApi: typeof vscode)
   const kiloCommands = (await vscodeApi.commands.getCommands(true)).filter((c) => c.startsWith("kilo-code."))
   const runtimeForbidden = kiloCommands.filter((c) => FORBIDDEN_PRODUCT_IDS.includes(c))
   if (runtimeForbidden.length > 0) {
-    throw new Error(`probe runner: runtime command table still registers forbidden P3.3 commands: ${runtimeForbidden.join(", ")}`)
+    throw new Error(
+      `probe runner: runtime command table still registers forbidden P3.3 commands: ${runtimeForbidden.join(", ")}`,
+    )
   }
-  for (const retained of ["kilo-code.new.agentManagerOpen", "kilo-code.new.openInTab", "kilo-code.new.agentManager.newTab"]) {
+  for (const retained of [
+    "kilo-code.new.agentManagerOpen",
+    "kilo-code.new.openInTab",
+    "kilo-code.new.agentManager.newTab",
+  ]) {
     if (!kiloCommands.includes(retained)) {
       throw new Error(`probe runner: retained root-local command missing at runtime: ${retained}`)
     }
@@ -1596,11 +1653,373 @@ function assertNoForbiddenProductBundles(ext: vscode.Extension<unknown>): {
     FORBIDDEN_BUNDLE_PREFIXES.some((prefix) => name.startsWith(`${prefix}.`)),
   )
   if (forbiddenBundleHits.length > 0) {
-    throw new Error(`probe runner: built dist/ still contains forbidden P3.3 product bundles: ${forbiddenBundleHits.join(", ")}`)
+    throw new Error(
+      `probe runner: built dist/ still contains forbidden P3.3 product bundles: ${forbiddenBundleHits.join(", ")}`,
+    )
   }
   return { distDir, bundleFiles, forbiddenBundleHits }
 }
 
+/**
+ * Forbidden P3.4 removed-feature identifiers (indexing, project memory,
+ * context-management / manual compaction, autocomplete, commit-message).
+ * Identifier-based by design (LOCK-004): each token is a product-unique
+ * surface name that would only be present if the removed feature's extension
+ * surface were still active — no broad substring search. Retained generic
+ * names (in-memory caches, speech-to-text prewarm, the invisible automatic
+ * CompactionPart rendering) are deliberately NOT here. Mirrors the static
+ * P3.4 contract (tests/unit/p3-4-removal.test.ts).
+ */
+const FORBIDDEN_P34_IDS = [
+  // autocomplete (FIM / next-edit / chat-autocomplete / statusbar)
+  "AutocompleteServiceManager",
+  "AutocompleteInlineCompletionProvider",
+  "ChatTextAreaAutocomplete",
+  "NextEditInlineCompletionProvider",
+  "AutocompleteCodeActionProvider",
+  "AutocompleteStatusBar",
+  "autocomplete-models",
+  "kilo-code.new.autocomplete.",
+  "generateSuggestions",
+  "cancelSuggestions",
+  // indexing
+  "indexing-settings",
+  "IndexingTab",
+  "useIndexing",
+  "kilo-code.new.indexing.",
+  "prompt-indexing",
+  "indexing-warning",
+  "dialog-indexing",
+  // project memory
+  "showMemory",
+  "toggleMemory",
+  "memory-prompt",
+  "memory-status",
+  "memory-recall",
+  "memory-save",
+  "MemoryManager",
+  "MemoryActivity",
+  "useMemory",
+  "kilo-provider/memory",
+  "memory-dialog",
+  "kilo-code.new.showMemory",
+  "kilo-code.new.toggleMemory",
+  // commit-message
+  "generateCommitMessage",
+  "CommitMessageTab",
+  "kilo-code.new.generateCommitMessage",
+  // user-visible context-management / compaction controls
+  "ContextProgress",
+  "ContextTab",
+  "context-progress",
+  "CompactRequest",
+  "compactSession",
+  "command.session.compact",
+  "settings.context.title",
+  // orchestrator chatCompletionResult protocol
+  "ChatCompletionResultMessage",
+  "chatCompletionResult",
+]
+
+/**
+ * Forbidden P3.4 removed-feature bundle filename prefixes. A file under the
+ * extension's built `dist/` whose basename starts with any of these is a
+ * forbidden removed-feature bundle (e.g. `autocomplete.js`, `indexing.js`,
+ * `memory.js`, `context-progress.js`, `commit-message.js`). Identifier-based:
+ * only exact removed-feature bundle names match, never the retained
+ * `extension.js` / `webview.js` / `agent-manager.js` / `shiki-worker.js`
+ * assets.
+ */
+const FORBIDDEN_P34_BUNDLE_PREFIXES = ["autocomplete", "commit-message", "indexing", "memory", "context-progress"]
+
+/**
+ * Forbidden P3.4 removed-config key forms a run-owned `.kilo` state file must
+ * never contain (LOCK-014/015 — no dormant config surface). Exact quoted JSON
+ * key forms only, so retained content that merely mentions the words never
+ * matches.
+ */
+const FORBIDDEN_P34_STATE_KEYS = [
+  '"codebaseIndexing"',
+  '"indexing"',
+  '"memory"',
+  '"commitMessage"',
+  '"autocomplete"',
+  '"context-progress"',
+]
+
+/**
+ * P3.4 manifest absence check (part 1 of assertP34Removal): the loaded
+ * contributes must expose no removed indexing / memory / context-management /
+ * autocomplete / commit-message surface — no forbidden view ids, containers,
+ * commands, keybindings, menus, settings, or identifiers (identifier-based,
+ * mirroring tests/unit/p3-4-removal.test.ts). Throws on any violation and
+ * returns the manifest evidence for the durable runtime-evidence file.
+ */
+function assertNoP34Contributions(contributes: Record<string, unknown>): {
+  declaredCommands: string[]
+  contributedViewIds: string[]
+  configProps: string[]
+  forbidden: Record<string, string[]>
+} {
+  const views = (contributes.views ?? {}) as Record<string, Array<{ id?: string }>>
+  const viewHits: string[] = []
+  for (const group of Object.values(views)) {
+    for (const view of group) {
+      if (view.id && FORBIDDEN_P34_IDS.includes(view.id)) viewHits.push(view.id)
+    }
+  }
+  const containers = (contributes.viewsContainers ?? {}) as Record<string, Array<{ id?: string }>>
+  const containerHits: string[] = []
+  for (const group of Object.values(containers)) {
+    for (const container of group) {
+      if (container.id && FORBIDDEN_P34_IDS.includes(container.id)) containerHits.push(container.id)
+    }
+  }
+  const declaredCommands: string[] = ((contributes.commands ?? []) as Array<{ command: string }>).map((c) => c.command)
+  const commandHits = declaredCommands.filter((c) => FORBIDDEN_P34_IDS.includes(c))
+  const bindingHits = ((contributes.keybindings ?? []) as Array<{ command?: string }>)
+    .map((b) => b.command ?? "")
+    .filter((c) => FORBIDDEN_P34_IDS.includes(c))
+  const menuHits = Object.values((contributes.menus ?? {}) as Record<string, Array<{ command?: string }>>)
+    .flat()
+    .map((m) => m.command ?? "")
+    .filter((c) => FORBIDDEN_P34_IDS.includes(c))
+  const configProps = Object.keys(
+    ((contributes.configuration ?? {}) as { properties?: Record<string, unknown> }).properties ?? {},
+  )
+  const settingHits = configProps.filter((k) => FORBIDDEN_P34_IDS.some((id) => k.includes(id)))
+  const identifierHits = FORBIDDEN_P34_IDS.filter((id) => JSON.stringify(contributes).includes(id))
+  const forbidden = { viewHits, containerHits, commandHits, bindingHits, menuHits, settingHits, identifierHits }
+  if (Object.values(forbidden).some((hits) => hits.length > 0)) {
+    throw new Error(
+      `probe runner: loaded manifest still exposes a forbidden P3.4 surface (${JSON.stringify(forbidden)})`,
+    )
+  }
+  return {
+    declaredCommands,
+    contributedViewIds: Object.values(views)
+      .flat()
+      .map((v) => v.id ?? ""),
+    configProps,
+    forbidden,
+  }
+}
+
+/**
+ * P3.4 runtime command-table check (part 2 of assertP34Removal): the RUNTIME
+ * command table must contain no registered removed-feature command
+ * (LOCK-PERF-3) while the retained surface commands exist (agentManagerOpen /
+ * openInTab / agentManager.newTab / openMigrationWizard / explainCode /
+ * addToContext). Throws on any violation and returns the runtime evidence.
+ */
+async function assertNoP34RuntimeCommands(vscodeApi: typeof vscode): Promise<{
+  kiloCommands: string[]
+  runtimeForbidden: string[]
+}> {
+  const kiloCommands = (await vscodeApi.commands.getCommands(true)).filter((c) => c.startsWith("kilo-code."))
+  const runtimeForbidden = kiloCommands.filter((c) => FORBIDDEN_P34_IDS.includes(c))
+  if (runtimeForbidden.length > 0) {
+    throw new Error(
+      `probe runner: runtime command table still registers forbidden P3.4 commands: ${runtimeForbidden.join(", ")}`,
+    )
+  }
+  for (const retained of [
+    "kilo-code.new.agentManagerOpen",
+    "kilo-code.new.openInTab",
+    "kilo-code.new.agentManager.newTab",
+    "kilo-code.new.openMigrationWizard",
+    "kilo-code.new.explainCode",
+    "kilo-code.new.addToContext",
+    "kilo-code.new.toggleAutoApprove",
+  ]) {
+    if (!kiloCommands.includes(retained)) {
+      throw new Error(`probe runner: retained command missing at runtime: ${retained}`)
+    }
+  }
+  return { kiloCommands, runtimeForbidden }
+}
+
+/**
+ * P3.4 bundle-list check (part 3 of assertP34Removal): the built extension /
+ * webview asset list under `dist/` must contain no removed-feature bundle.
+ * Throws on any violation and returns the bundle evidence.
+ */
+function assertNoP34Bundles(ext: vscode.Extension<unknown>): {
+  distDir: string
+  bundleFiles: string[]
+  forbiddenBundleHits: string[]
+} {
+  const distDir = join(ext.extensionPath, "dist")
+  let bundleFiles: string[] = []
+  try {
+    bundleFiles = readdirSync(distDir).sort()
+  } catch {
+    // dist/ missing during a source run — treat as no bundles (absence holds).
+    bundleFiles = []
+  }
+  const forbiddenBundleHits = bundleFiles.filter((name) =>
+    FORBIDDEN_P34_BUNDLE_PREFIXES.some((prefix) => name.startsWith(`${prefix}.`)),
+  )
+  if (forbiddenBundleHits.length > 0) {
+    throw new Error(
+      `probe runner: built dist/ still contains forbidden P3.4 bundles: ${forbiddenBundleHits.join(", ")}`,
+    )
+  }
+  return { distDir, bundleFiles, forbiddenBundleHits }
+}
+
+/**
+ * P3.4 workspace-state check (part 4 of assertP34Removal): the run-owned
+ * workspace must contain no removed-feature `.kilo` state — no
+ * memory/indexing/autocomplete/commit-message dirs or files directly under
+ * `.kilo`, and no removed config key form in its small text/JSON files
+ * (LOCK-014/015). Throws on any finding and returns the state evidence.
+ */
+function assertNoP34WorkspaceState(workspace: string): {
+  kiloDirExists: boolean
+  forbiddenFiles: string[]
+  forbiddenStateMarkers: string[]
+} {
+  const kiloDir = join(workspace, ".kilo")
+  const forbiddenFiles: string[] = []
+  const forbiddenStateMarkers: string[] = []
+  let entries: string[] = []
+  try {
+    entries = readdirSync(kiloDir)
+  } catch {
+    return { kiloDirExists: false, forbiddenFiles, forbiddenStateMarkers }
+  }
+  for (const name of entries) {
+    if (/^(memory|indexing|autocomplete|commit-message)/i.test(name)) forbiddenFiles.push(name)
+    const full = join(kiloDir, name)
+    let stat
+    try {
+      stat = statSync(full)
+    } catch {
+      continue
+    }
+    if (stat.isFile() && stat.size > 0 && stat.size < 1_000_000) {
+      const content = readFileSync(full, "utf8")
+      for (const key of FORBIDDEN_P34_STATE_KEYS) {
+        if (content.includes(key)) forbiddenStateMarkers.push(`${name}:${key}`)
+      }
+    }
+  }
+  if (forbiddenFiles.length > 0 || forbiddenStateMarkers.length > 0) {
+    throw new Error(
+      `probe runner: run-owned workspace state contains removed-feature residue (${JSON.stringify({ forbiddenFiles, forbiddenStateMarkers })})`,
+    )
+  }
+  return { kiloDirExists: entries.length > 0, forbiddenFiles, forbiddenStateMarkers }
+}
+
+/**
+ * P3.4 remaining-feature-removal assertions (extension-host side):
+ *   1. assertNoP34Contributions — the loaded manifest contributes no removed
+ *      indexing / memory / context-management / autocomplete / commit-message
+ *      surface,
+ *   2. assertNoP34RuntimeCommands — the RUNTIME command table registers no
+ *      removed-feature command (LOCK-PERF-3) and keeps the retained surface
+ *      commands,
+ *   3. assertNoP34Bundles — the built `dist/` contains no removed-feature
+ *      bundle,
+ *   4. assertNoP34WorkspaceState — the run-owned workspace carries no
+ *      removed-feature `.kilo` state (LOCK-014/015),
+ *   5. model-request silence: the fixture-gated generation-request collector
+ *      must stay at ZERO model requests across the whole scenario (no external
+ *      model calls and no leaked owned resources),
+ *   6. retained surfaces stay ready: the production "Open in Tab" editor panel
+ *      opens and reaches webview readiness, and the Agent Manager panel still
+ *      reports readiness (LOCK-005/007/008).
+ * Writes `<scratch>/p3-4-removal-runtime-evidence` (durable runtime facts) and
+ * `<scratch>/p3-4-removal-ready`. Throws on any assertion failure so the
+ * Extension Host run exits non-zero. No synthetic fixtures, no CDP DOM
+ * driving, no model requests.
+ */
+async function assertP34Removal(
+  vscodeApi: typeof vscode,
+  ext: vscode.Extension<unknown>,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  // LOCK-PERF-3/LOCK-013/014: the generation-request collector must observe
+  // zero model requests for this scenario. Reset at scenario start (the
+  // extension is already activated and the Agent Manager panel already
+  // opened), then assert the store is empty right before writing the
+  // evidence.
+  await resetLlmRequests(vscodeApi)
+
+  const contributes = (ext.packageJSON?.contributes ?? {}) as Record<string, unknown>
+  const manifest = assertNoP34Contributions(contributes)
+  const runtime = await assertNoP34RuntimeCommands(vscodeApi)
+  const bundles = assertNoP34Bundles(ext)
+  const workspace = join(scratch, "workspace")
+  const state = assertNoP34WorkspaceState(workspace)
+
+  const probe = await vscodeApi.commands.executeCommand<{ count: number; ready: boolean }>(CMD_OPEN_TAB_READY)
+  if (!probe || probe.count < 1 || !probe.ready) {
+    throw new Error(`probe runner: Open in Tab panel did not become ready: ${JSON.stringify(probe)}`)
+  }
+  const amReady = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
+  if (!amReady) throw new Error("probe runner: Agent Manager readiness lost after P3.4 assertions")
+
+  const llm = (await vscodeApi.commands.executeCommand(CMD_LLM_REQUESTS)) as {
+    records: unknown[]
+    file: string
+  } | null
+  const llmRequestCount = llm?.records.length ?? 0
+  if (llmRequestCount > 0) {
+    throw new Error(`probe runner: P3.4 scenario issued ${llmRequestCount} model request(s)`)
+  }
+
+  writeFileSync(
+    join(scratch, "p3-4-removal-runtime-evidence"),
+    JSON.stringify(
+      {
+        scenario: "p3-4-removal",
+        collectedAt: new Date().toISOString(),
+        pid: process.pid,
+        fixtureId,
+        manifest: {
+          contributedCommandCount: manifest.declaredCommands.length,
+          contributedCommands: manifest.declaredCommands,
+          contributedViewIds: manifest.contributedViewIds,
+          contributedConfigurationProperties: manifest.configProps,
+          forbidden: manifest.forbidden,
+        },
+        runtime: {
+          kiloCommandTotal: runtime.kiloCommands.length,
+          forbiddenCommandHits: runtime.runtimeForbidden,
+          retainedCommands: {
+            agentManagerOpen: runtime.kiloCommands.includes("kilo-code.new.agentManagerOpen"),
+            openInTab: runtime.kiloCommands.includes("kilo-code.new.openInTab"),
+            agentManagerNewTab: runtime.kiloCommands.includes("kilo-code.new.agentManager.newTab"),
+          },
+        },
+        bundles: {
+          distDir: bundles.distDir,
+          bundleCount: bundles.bundleFiles.length,
+          bundleFiles: bundles.bundleFiles,
+          forbiddenBundleHits: bundles.forbiddenBundleHits,
+        },
+        state: {
+          workspace,
+          kiloDirExists: state.kiloDirExists,
+          forbiddenFiles: state.forbiddenFiles,
+          forbiddenStateMarkers: state.forbiddenStateMarkers,
+        },
+        modelRequests: { count: llmRequestCount },
+        retained: {
+          openInTab: { panels: probe.count, ready: probe.ready },
+          agentManager: { ready: amReady },
+        },
+      },
+      null,
+      2,
+    ),
+  )
+  writeFileSync(join(scratch, "p3-4-removal-ready"), fixtureId)
+}
 
 /**
  * Extension-host service loop for the P3.2 worktree-removal scenario:

@@ -94,7 +94,6 @@ import { Storage } from "@/storage/storage"
 import { InstanceStore } from "@/project/instance-store"
 import { GenerationGate } from "@/kilocode/server/generation-gate"
 import type { Provider } from "@/provider/provider"
-import { MemoryService } from "@kilocode/kilo-memory/effect/service"
 
 import { provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
 import { markProjectConfigReady } from "../fixture/plugin"
@@ -219,7 +218,6 @@ function makeHttp() {
     EventV2Bridge.defaultLayer,
     Database.defaultLayer,
     status,
-    MemoryService.layer,
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
   const todo = Todo.layer.pipe(Layer.provideMerge(deps))

@@ -38,15 +38,11 @@ export const CustomizeNav: NavSection[] = [
     ],
   },
   {
-    title: "Context & Indexing",
+    title: "Context",
     links: [
       {
-        href: "/customize/context/codebase-indexing",
-        children: "Codebase Indexing",
-      },
-      {
         href: "/customize/context/context-condensing",
-        children: "Context Condensing",
+        children: "Automatic Context Recovery",
       },
       {
         href: "/customize/context/kilocodeignore",

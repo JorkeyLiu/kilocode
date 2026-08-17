@@ -20,17 +20,17 @@ function app() {
   return Server.Default().app
 }
 
-async function update(target: ReturnType<typeof app>, provider: "kilo" | "openrouter") {
+async function update(target: ReturnType<typeof app>, shell: string) {
   return target.request("/global/config", {
     method: "PATCH",
     headers: { "content-type": "application/json" },
-    body: JSON.stringify({ indexing: { provider } }),
+    body: JSON.stringify({ shell }),
   })
 }
 
 async function provider(target: ReturnType<typeof app>, directory: string) {
   const response = await target.request("/config", { headers: { "x-kilo-directory": directory } })
-  return (await response.json()).indexing?.provider as string | undefined
+  return (await response.json()).shell as string | undefined
 }
 
 async function config(dir: string, value: object) {
@@ -66,8 +66,8 @@ describe("global config refresh", () => {
 
     // Seed a cold patch whose rebuild fully completes before the disposer is
     // held, and load the workspace instance so the next rebuild covers it.
-    expect((await update(target, "openrouter")).status).toBe(200)
-    expect(await provider(target, workspace.path)).toBe("openrouter")
+    expect((await update(target, "/bin/bash")).status).toBe(200)
+    expect(await provider(target, workspace.path)).toBe("/bin/bash")
 
     // Hold the disposer: the next rebuild fiber blocks inside it until
     // released, proving the PATCH does not wait for disposal (LOCK-002).
@@ -84,14 +84,14 @@ describe("global config refresh", () => {
     }
     GlobalBus.on("event", onDisposed)
     try {
-      const pending = update(target, "kilo")
+      const pending = update(target, "/bin/zsh")
       // The PATCH persists and returns while the rebuild disposer is still
       // blocked — no waiting on disposal, no timing races.
       expect((await pending).status).toBe(200)
       await started.promise
       // The file is persisted while the disposer is still blocked.
       const saved = JSON.parse(await Bun.file(path.join(config.path, "kilo.jsonc")).text())
-      expect(saved.indexing.provider).toBe("kilo")
+      expect(saved.shell).toBe("/bin/zsh")
       // No rebuild completion yet: the rebuild is stuck in the held disposer.
       expect(disposed).toBe(0)
 
@@ -100,7 +100,7 @@ describe("global config refresh", () => {
       await Effect.runPromise(awaitRebuilds())
 
       // The next request reads the new config on the rebuilt instance.
-      expect(await provider(target, workspace.path)).toBe("kilo")
+      expect(await provider(target, workspace.path)).toBe("/bin/zsh")
       expect(disposed).toBe(1)
     } finally {
       release.resolve()
@@ -119,7 +119,7 @@ describe("global config refresh", () => {
     }
     GlobalBus.on("event", listener)
     try {
-      expect((await update(target, "kilo")).status).toBe(200)
+      expect((await update(target, "/bin/zsh")).status).toBe(200)
     } finally {
       GlobalBus.off("event", listener)
     }

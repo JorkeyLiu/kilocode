@@ -39,8 +39,6 @@ import type {
   BackgroundProcessStopSessionResponses,
   CommandListErrors,
   CommandListResponses,
-  CommitMessageGenerateErrors,
-  CommitMessageGenerateResponses,
   Config as Config4,
   ConfigEffectiveErrors,
   ConfigEffectiveResponses,
@@ -140,12 +138,6 @@ import type {
   GlobalHealthResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
-  IndexingModelsErrors,
-  IndexingModelsResponses,
-  IndexingStatusErrors,
-  IndexingStatusResponses,
-  IndexingWarningsErrors,
-  IndexingWarningsResponses,
   InstanceDisposeErrors,
   InstanceDisposeResponses,
   InstanceReloadErrors,
@@ -190,10 +182,6 @@ import type {
   KilocodeSessionImportSessionResponses,
   KilocodeSessionModelUsageErrors,
   KilocodeSessionModelUsageResponses,
-  KiloEditErrors,
-  KiloEditResponses,
-  KiloFimErrors,
-  KiloFimResponses,
   KiloModelsImagesErrors,
   KiloModelsImagesResponses,
   KiloModesErrors,
@@ -224,26 +212,6 @@ import type {
   McpRemoteConfig,
   McpStatusErrors,
   McpStatusResponses,
-  MemoryConfigureErrors,
-  MemoryConfigureResponses,
-  MemoryCorrectErrors,
-  MemoryCorrectResponses,
-  MemoryDisableErrors,
-  MemoryDisableResponses,
-  MemoryEnableErrors,
-  MemoryEnableResponses,
-  MemoryForgetErrors,
-  MemoryForgetResponses,
-  MemoryPurgeErrors,
-  MemoryPurgeResponses,
-  MemoryRebuildErrors,
-  MemoryRebuildResponses,
-  MemoryRememberErrors,
-  MemoryRememberResponses,
-  MemoryShowErrors,
-  MemoryShowResponses,
-  MemoryStatusErrors,
-  MemoryStatusResponses,
   MoveSessionDestination,
   NetworkListErrors,
   NetworkListResponses,
@@ -369,8 +337,6 @@ import type {
   SessionShellResponses,
   SessionStatusErrors,
   SessionStatusResponses,
-  SessionSummarizeErrors,
-  SessionSummarizeResponses,
   SessionTodoErrors,
   SessionTodoResponses,
   SessionUnrevertErrors,
@@ -463,8 +429,6 @@ import type {
   V2ProviderListResponses,
   V2QuestionRequestListErrors,
   V2QuestionRequestListResponses,
-  V2SessionCompactErrors,
-  V2SessionCompactResponses,
   V2SessionContextErrors,
   V2SessionContextResponses,
   V2SessionListErrors,
@@ -4550,49 +4514,6 @@ export class Session2 extends HeyApiClient {
   }
 
   /**
-   * Summarize session
-   *
-   * Generate a concise summary of the session using AI compaction to preserve key information.
-   */
-  public summarize<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-      directory?: string
-      workspace?: string
-      providerID?: string
-      modelID?: string
-      auto?: boolean
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "providerID" },
-            { in: "body", key: "modelID" },
-            { in: "body", key: "auto" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<SessionSummarizeResponses, SessionSummarizeErrors, ThrowOnError>({
-      url: "/session/{sessionID}/summarize",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
    * Send async message
    *
    * Create and send a new message to a session asynchronously, starting the session if needed and returning immediately.
@@ -6115,55 +6036,6 @@ export class BackgroundProcess extends HeyApiClient {
   }
 }
 
-export class CommitMessage extends HeyApiClient {
-  /**
-   * Generate commit message
-   *
-   * Generate a commit message using AI based on the current git diff.
-   */
-  public generate<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      path?: string
-      selectedFiles?: Array<string>
-      previousMessage?: string
-      language?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "path" },
-            { in: "body", key: "selectedFiles" },
-            { in: "body", key: "previousMessage" },
-            { in: "body", key: "language" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<
-      CommitMessageGenerateResponses,
-      CommitMessageGenerateErrors,
-      ThrowOnError
-    >({
-      url: "/commit-message",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
 export class EnhancePrompt extends HeyApiClient {
   /**
    * Enhance prompt
@@ -6203,98 +6075,6 @@ export class EnhancePrompt extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
-    })
-  }
-}
-
-export class Indexing extends HeyApiClient {
-  /**
-   * Get indexing status
-   *
-   * Retrieve the current code indexing status for the active project.
-   */
-  public status<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<IndexingStatusResponses, IndexingStatusErrors, ThrowOnError>({
-      url: "/indexing/status",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Get indexing warnings
-   *
-   * Retrieve code indexing warnings for the active project.
-   */
-  public warnings<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<IndexingWarningsResponses, IndexingWarningsErrors, ThrowOnError>({
-      url: "/indexing/warnings",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * List Kilo embedding models
-   *
-   * Retrieve the embedding models available through the active Kilo account.
-   */
-  public models<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<IndexingModelsResponses, IndexingModelsErrors, ThrowOnError>({
-      url: "/indexing/models",
-      ...options,
-      ...params,
     })
   }
 }
@@ -6708,113 +6488,6 @@ export class Kilo extends HeyApiClient {
       url: "/kilo/modes",
       ...options,
       ...params,
-    })
-  }
-
-  /**
-   * FIM completion
-   *
-   * Proxy a Fill-in-the-Middle completion request to the Kilo Gateway
-   */
-  public fim<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      prefix?: string
-      suffix?: string
-      provider?: string
-      model?: string
-      maxTokens?: number
-      temperature?: number
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "prefix" },
-            { in: "body", key: "suffix" },
-            { in: "body", key: "provider" },
-            { in: "body", key: "model" },
-            { in: "body", key: "maxTokens" },
-            { in: "body", key: "temperature" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).sse.post<KiloFimResponses, KiloFimErrors, ThrowOnError>({
-      url: "/kilo/fim",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Next Edit completion
-   *
-   * Proxy a Mercury-style Next Edit request. The client supplies structured editor context; the gateway assembles the sentinel-tagged prompt and forwards to the upstream edit endpoint.
-   */
-  public edit<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      provider?: string
-      model?: string
-      maxTokens?: number
-      currentFilePath?: string
-      currentFileContent?: string
-      cursorLine?: number
-      cursorCharacter?: number
-      editableRegionStartLine?: number
-      editableRegionEndLine?: number
-      recentlyViewedSnippets?: Array<{
-        filepath: string
-        content: string
-      }>
-      editDiffHistory?: Array<string>
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "provider" },
-            { in: "body", key: "model" },
-            { in: "body", key: "maxTokens" },
-            { in: "body", key: "currentFilePath" },
-            { in: "body", key: "currentFileContent" },
-            { in: "body", key: "cursorLine" },
-            { in: "body", key: "cursorCharacter" },
-            { in: "body", key: "editableRegionStartLine" },
-            { in: "body", key: "editableRegionEndLine" },
-            { in: "body", key: "recentlyViewedSnippets" },
-            { in: "body", key: "editDiffHistory" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<KiloEditResponses, KiloEditErrors, ThrowOnError>({
-      url: "/kilo/edit",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
     })
   }
 
@@ -8263,359 +7936,6 @@ export class Telemetry extends HeyApiClient {
   }
 }
 
-export class Memory extends HeyApiClient {
-  /**
-   * Get memory status
-   *
-   * Return memory state, index preview, and token estimate for the active workspace.
-   */
-  public status<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<MemoryStatusResponses, MemoryStatusErrors, ThrowOnError>({
-      url: "/memory/status",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Show memory
-   *
-   * Return source memory files, generated index, recent decision summary, and memory save decisions.
-   */
-  public show<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<MemoryShowResponses, MemoryShowErrors, ThrowOnError>({
-      url: "/memory/show",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Enable memory
-   *
-   * Scaffold and enable project memory for the active workspace.
-   */
-  public enable<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<MemoryEnableResponses, MemoryEnableErrors, ThrowOnError>({
-      url: "/memory/enable",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Disable memory
-   *
-   * Disable project memory without deleting local memory files.
-   */
-  public disable<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<MemoryDisableResponses, MemoryDisableErrors, ThrowOnError>({
-      url: "/memory/disable",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Configure memory
-   *
-   * Update project memory settings such as automatic project fact capture.
-   */
-  public configure<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      autoConsolidate?: boolean
-      verbose?: boolean
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "autoConsolidate" },
-            { in: "body", key: "verbose" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<MemoryConfigureResponses, MemoryConfigureErrors, ThrowOnError>({
-      url: "/memory/configure",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Rebuild memory index
-   *
-   * Regenerate index.kmem from source memory files.
-   */
-  public rebuild<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<MemoryRebuildResponses, MemoryRebuildErrors, ThrowOnError>({
-      url: "/memory/rebuild",
-      ...options,
-      ...params,
-    })
-  }
-
-  /**
-   * Remember text
-   *
-   * Persist explicit user-provided memory text through the deterministic operation pipeline.
-   */
-  public remember<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      text?: string
-      key?: string
-      file?: "project.md" | "environment.md" | "corrections.md"
-      section?: string
-      sessionID?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "text" },
-            { in: "body", key: "key" },
-            { in: "body", key: "file" },
-            { in: "body", key: "section" },
-            { in: "body", key: "sessionID" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<MemoryRememberResponses, MemoryRememberErrors, ThrowOnError>({
-      url: "/memory/remember",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Remember correction
-   *
-   * Persist explicit corrective memory under corrections.md.
-   */
-  public correct<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      text?: string
-      key?: string
-      sessionID?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "text" },
-            { in: "body", key: "key" },
-            { in: "body", key: "sessionID" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<MemoryCorrectResponses, MemoryCorrectErrors, ThrowOnError>({
-      url: "/memory/correct",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Forget memory
-   *
-   * Remove memory lines by exact key, id, or normalized key text and rebuild the index.
-   */
-  public forget<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      query?: string
-      sessionID?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "query" },
-            { in: "body", key: "sessionID" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<MemoryForgetResponses, MemoryForgetErrors, ThrowOnError>({
-      url: "/memory/forget",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-
-  /**
-   * Purge memory
-   *
-   * Delete all project memory files for the active workspace.
-   */
-  public purge<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-      confirm?: true
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-            { in: "body", key: "confirm" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).post<MemoryPurgeResponses, MemoryPurgeErrors, ThrowOnError>({
-      url: "/memory/purge",
-      ...options,
-      ...params,
-      headers: {
-        "Content-Type": "application/json",
-        ...options?.headers,
-        ...params.headers,
-      },
-    })
-  }
-}
-
 export class Health extends HeyApiClient {
   /**
    * Check v2 server health
@@ -8880,25 +8200,6 @@ export class Session3 extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
-    })
-  }
-
-  /**
-   * Compact v2 session
-   *
-   * Compact a v2 session conversation.
-   */
-  public compact<ThrowOnError extends boolean = false>(
-    parameters: {
-      sessionID: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams([parameters], [{ args: [{ in: "path", key: "sessionID" }] }])
-    return (options?.client ?? this.client).post<V2SessionCompactResponses, V2SessionCompactErrors, ThrowOnError>({
-      url: "/api/session/{sessionID}/compact",
-      ...options,
-      ...params,
     })
   }
 
@@ -9533,19 +8834,9 @@ export class KiloClient extends HeyApiClient {
     return (this._backgroundProcess ??= new BackgroundProcess({ client: this.client }))
   }
 
-  private _commitMessage?: CommitMessage
-  get commitMessage(): CommitMessage {
-    return (this._commitMessage ??= new CommitMessage({ client: this.client }))
-  }
-
   private _enhancePrompt?: EnhancePrompt
   get enhancePrompt(): EnhancePrompt {
     return (this._enhancePrompt ??= new EnhancePrompt({ client: this.client }))
-  }
-
-  private _indexing?: Indexing
-  get indexing(): Indexing {
-    return (this._indexing ??= new Indexing({ client: this.client }))
   }
 
   private _interactiveTerminal?: InteractiveTerminal
@@ -9596,11 +8887,6 @@ export class KiloClient extends HeyApiClient {
   private _telemetry?: Telemetry
   get telemetry(): Telemetry {
     return (this._telemetry ??= new Telemetry({ client: this.client }))
-  }
-
-  private _memory?: Memory
-  get memory(): Memory {
-    return (this._memory ??= new Memory({ client: this.client }))
   }
 
   private _v2?: V2

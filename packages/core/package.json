@@ -57,7 +57,6 @@
   },
   "dependencies": {
     "@kilocode/kilo-gateway": "workspace:*",
-    "@kilocode/kilo-indexing": "workspace:*",
     "@kilocode/sandbox": "workspace:*",
     "@effect/opentelemetry": "catalog:",
     "@effect/platform-node": "catalog:",

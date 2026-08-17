@@ -109,7 +109,7 @@ Auto Free may route your requests to providers that log prompts and outputs and 
 
 ### `kilo-auto/small`
 
-Automatically routes to a small, fast model for lightweight background tasks (session titles, commit messages, summaries).
+Automatically routes to a small, fast model for lightweight background tasks (session titles and summaries).
 
 | Condition | Resolved Model |
 |---|---|

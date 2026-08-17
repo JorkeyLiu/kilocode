@@ -39,7 +39,6 @@ import { ConfigVariable } from "./variable"
 import { Npm } from "@opencode-ai/core/npm"
 import z from "zod" // kilocode_change - Kilo config compatibility schemas
 // kilocode_change start
-import { ZodOverride } from "@opencode-ai/core/effect-zod"
 import { KilocodeConfig } from "../kilocode/config/config"
 import { KilocodeAtomicWrite } from "@/kilocode/config/atomic-write"
 import { primaryPaths } from "../kilocode/primary-worktree"
@@ -48,10 +47,6 @@ import { KilocodeDefaultPlugins } from "@/kilocode/config/default-plugins"
 import { KilocodeGlobalConfigStamp } from "@/kilocode/config/global-stamp"
 import { SandboxConfig } from "@/kilocode/sandbox/config"
 import type { KilocodeMarkdown } from "@/kilocode/config/markdown"
-import {
-  IndexingConfig as KiloIndexingConfig,
-  IndexingSchema as KiloIndexingSchema,
-} from "@kilocode/kilo-indexing/config"
 import { unique } from "remeda"
 // kilocode_change end
 import { withTransientReadRetry } from "@/util/effect-http-client"
@@ -75,7 +70,17 @@ function mergeConfigConcatArrays(target: Info, source: Info): Info {
 
 function normalizeLoadedConfig(data: unknown, source: string) {
   if (!isRecord(data)) return data
-  const copy = KilocodeConfig.retireIndexingFlag({ ...data }, source) // kilocode_change
+  const copy = { ...data } // kilocode_change
+  // Retired product config keys are ignored so existing configs keep loading.
+  // Automatic overflow recovery and codebase indexing are no longer configurable.
+  if ("compaction" in copy) {
+    delete copy.compaction
+    log.warn("compaction config is retired; automatic overflow recovery is always on", { path: source })
+  }
+  if ("indexing" in copy) {
+    delete copy.indexing
+    log.warn("indexing config is retired; codebase indexing was removed", { path: source })
+  }
   const hadLegacy = "theme" in copy || "keybinds" in copy || "tui" in copy
   if (!hadLegacy) return copy
   delete copy.theme
@@ -573,7 +578,7 @@ export const layer = Layer.effect(
         ) {
           const scope = kind ?? (yield* pluginScopeForSource(source))
           const trusted = sourceTrusted ?? scope === "global"
-          const scoped = KilocodeConfig.scopeIndexing(SandboxConfig.scope(next, scope), scope)
+          const scoped = SandboxConfig.scope(next, scope)
           result = mergeConfigConcatArrays(result, scoped)
           if (next.instructions?.length) {
             result.instruction_origins = origins(result.instruction_origins, next.instructions, trusted, source)
@@ -937,12 +942,6 @@ export const layer = Layer.effect(
           result.share = "auto"
         }
 
-        if (Flag.KILO_DISABLE_AUTOCOMPACT) {
-          result.compaction = { ...result.compaction, auto: false }
-        }
-        if (Flag.KILO_DISABLE_PRUNE) {
-          result.compaction = { ...result.compaction, prune: false }
-        }
         // kilocode_change start — inject Kilo default plugins into both plugin list and origins
         KilocodeDefaultPlugins.apply(result, { disabled: Flag.KILO_DISABLE_DEFAULT_PLUGINS, log })
         // kilocode_change end

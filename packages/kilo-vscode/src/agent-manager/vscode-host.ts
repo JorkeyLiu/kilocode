@@ -113,8 +113,6 @@ export class VscodeHost implements Host {
       onFollowupAdopted: (cb) => provider.onFollowupAdopted(cb),
       acknowledgeDraft: (draftID, sessionID) => provider.acknowledgeDraft(draftID, sessionID),
       abortSessions: (ids) => provider.abortSessions(ids),
-      showMemory: (id) => provider.showMemory(id),
-      toggleMemory: (id) => provider.toggleMemory(id),
       dispose: () => provider.dispose(),
     }
 

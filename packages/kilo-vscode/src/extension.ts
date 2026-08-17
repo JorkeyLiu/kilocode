@@ -7,13 +7,9 @@ import { MarketplacePanelProvider } from "./MarketplacePanelProvider"
 import { MarketplaceNotifier } from "./services/marketplace/notifier"
 import { EXTENSION_DISPLAY_NAME } from "./constants"
 import { KiloConnectionService } from "./services/cli-backend"
-import { registerAutocompleteProvider } from "./services/autocomplete"
-import { ensureBackendForAutocomplete } from "./services/autocomplete/ensure-backend"
-import { AutocompleteServiceManager } from "./services/autocomplete/AutocompleteServiceManager"
 import { AttentionService } from "./services/attention"
 import { BrowserAutomationService } from "./services/browser-automation"
 import { TelemetryEventName, TelemetryProxy } from "./services/telemetry"
-import { registerCommitMessageService } from "./services/commit-message"
 import {
   registerCodeActions,
   registerTerminalActions,
@@ -131,9 +127,8 @@ async function provisionVariantModelFixture(
 }
 
 // Activated via "onStartupFinished" and "onUri" (package.json) so that commands, code actions,
-// keybindings, autocomplete, commit-message generation, and URI deep links all work immediately —
-// without requiring the user to open a Kilo chat surface first. The CLI backend is NOT spawned here;
-// it starts lazily when a webview connects or when ensureBackendForAutocomplete() triggers it.
+// keybindings, and URI deep links all work immediately — without requiring the user to open a Kilo
+// chat surface first. The CLI backend is NOT spawned here; it starts lazily when a webview connects.
 export function activate(context: vscode.ExtensionContext) {
   console.log("Kilo Code extension is now active")
   shuttingDown = false
@@ -165,7 +160,7 @@ export function activate(context: vscode.ExtensionContext) {
   connectionService.setRemoteService(remoteService)
 
   // Re-register browser automation MCP server on CLI backend reconnect, configure telemetry,
-  // set remote service client, and reload autocomplete so it picks up the now-available backend connection.
+  // and set remote service client.
   const unsubscribeStateChange = connectionService.onStateChange((state) => {
     if (state === "connected") {
       browserAutomationService.reregisterIfEnabled()
@@ -185,7 +180,6 @@ export function activate(context: vscode.ExtensionContext) {
       } catch {
         remoteService.setClient(null)
       }
-      AutocompleteServiceManager.getInstance()?.load()
     } else {
       remoteService.clearState()
       remoteService.setClient(null)
@@ -288,9 +282,6 @@ export function activate(context: vscode.ExtensionContext) {
   const attention = new AttentionService(connectionService, {
     approve: (event, directory) => autoApprove.approve(event, directory),
   })
-
-  // Prewarm only after all global event consumers are ready.
-  ensureBackendForAutocomplete(connectionService)
 
   agentManagerHost.setAutoApproveController(autoApprove)
 
@@ -420,39 +411,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("kilo-code.new.settingsButtonClicked", (tab?: string) => {
       settingsEditorProvider.openPanel("settings", tab)
     }),
-    vscode.commands.registerCommand("kilo-code.new.openIndexingSettings", () => {
-      settingsEditorProvider.openPanel("settings", "indexing")
-    }),
-    vscode.commands.registerCommand("kilo-code.new.showMemory", async () => {
-      if (agentManagerProvider.isActive()) {
-        await agentManagerProvider.showMemory()
-        return
-      }
-      const tab = activeTabProvider()
-      if (tab) {
-        await tab.waitForReady()
-        await tab.showMemory()
-        return
-      }
-      await agentManagerProvider.openPanel()
-      await agentManagerProvider.waitForReady()
-      await agentManagerProvider.showMemory()
-    }),
-    vscode.commands.registerCommand("kilo-code.new.toggleMemory", async () => {
-      if (agentManagerProvider.isActive()) {
-        await agentManagerProvider.toggleMemory()
-        return
-      }
-      const tab = activeTabProvider()
-      if (tab) {
-        await tab.waitForReady()
-        await tab.toggleMemory()
-        return
-      }
-      await agentManagerProvider.openPanel()
-      await agentManagerProvider.waitForReady()
-      await agentManagerProvider.toggleMemory()
-    }),
     // legacy-migration start
     vscode.commands.registerCommand("kilo-code.new.openMigrationWizard", async () => {
       const tab = activeTabProvider()
@@ -545,12 +503,6 @@ export function activate(context: vscode.ExtensionContext) {
       },
     }),
   )
-
-  // Register autocomplete provider
-  void registerAutocompleteProvider(context, connectionService)
-
-  // Register commit message generation
-  registerCommitMessageService(context, connectionService)
 
   registerHeapSnapshot(context, connectionService)
 
@@ -708,7 +660,7 @@ export function activate(context: vscode.ExtensionContext) {
   })
 
   // P0 perf: activation registration work is done (lazy spawn/connect happens
-  // on first webview or autocomplete prewarm).
+  // on first webview).
   p0Stage("activate.done")
 }
 

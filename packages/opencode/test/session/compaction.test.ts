@@ -221,10 +221,10 @@ function layer(result: "continue" | "compact") {
   )
 }
 
-function cfg(compaction?: ConfigV1.Info["compaction"]) {
+function cfg() {
   const base = Schema.decodeUnknownSync(ConfigV1.Info)({}) as ConfigV1.Info
   return TestConfig.layer({
-    get: () => Effect.succeed({ ...base, compaction }),
+    get: () => Effect.succeed(base),
   })
 }
 
@@ -566,24 +566,6 @@ describe("session.compaction.isOverflow", () => {
       }),
     ),
   )
-
-  it.live(
-    "returns false when compaction.auto is disabled",
-    provideTmpdirInstance(
-      () =>
-        Effect.gen(function* () {
-          const compact = yield* SessionCompaction.Service
-          const model = createModel({ context: 100_000, output: 32_000 })
-          const tokens = { input: 75_000, output: 5_000, reasoning: 0, cache: { read: 0, write: 0 } }
-          expect(yield* compact.isOverflow({ tokens, model })).toBe(false)
-        }),
-      {
-        config: {
-          compaction: { auto: false },
-        },
-      },
-    ),
-  )
 })
 
 describe("session.compaction.create", () => {
@@ -725,7 +707,7 @@ describe("session.compaction.prune", () => {
             })
           }
 
-          yield* compact.prune({ sessionID: info.id })
+          yield* compact.prune({ sessionID: info.id, reason: "post-compaction" })
 
           const msgs = yield* ssn.messages({ sessionID: info.id })
           const part = msgs.flatMap((msg) => msg.parts).find((part) => part.type === "tool")
@@ -735,12 +717,6 @@ describe("session.compaction.prune", () => {
             expect(part.state.time.compacted).toBeNumber()
           }
         }),
-
-      {
-        config: {
-          compaction: { prune: true },
-        },
-      },
     ),
   )
 
@@ -821,7 +797,7 @@ describe("session.compaction.prune", () => {
           })
         }
 
-        yield* compact.prune({ sessionID: info.id })
+        yield* compact.prune({ sessionID: info.id, reason: "post-compaction" })
 
         const msgs = yield* ssn.messages({ sessionID: info.id })
         const part = msgs.flatMap((msg) => msg.parts).find((part) => part.type === "tool")
@@ -980,7 +956,7 @@ describe("session.compaction.process", () => {
       const part = yield* readCompactionPart(session.id)
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBe(keep.id)
-    }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }) })),
+    }).pipe(withCompaction({ config: cfg() })),
   )
 
   // kilocode_change start - configured output ceiling controls automatic tail budgeting
@@ -1009,7 +985,7 @@ describe("session.compaction.process", () => {
       expect(part?.tail_start_id).toBe(keep.id)
     }).pipe(
       withCompaction({
-        config: cfg({ tail_turns: 2 }),
+        config: cfg(),
         provider: ProviderTest.fake({ model: createModel({ context: 20_000, output: 10_000 }) }),
         flags: { outputTokenMax: 2_000 },
       }),
@@ -1018,12 +994,12 @@ describe("session.compaction.process", () => {
   // kilocode_change end
 
   itCompaction.instance(
-    "shrinks retained tail to fit preserve token budget",
+    "shrinks retained tail to fit the internal preserve token budget",
     Effect.gen(function* () {
       const ssn = yield* SessionNs.Service
       const session = yield* ssn.create({})
       yield* createUserMessage(session.id, "first")
-      yield* createUserMessage(session.id, "x".repeat(2_000))
+      yield* createUserMessage(session.id, "x".repeat(20_000))
       const keep = yield* createUserMessage(session.id, "tiny")
       yield* createSummaryCompaction(session.id)
 
@@ -1040,7 +1016,12 @@ describe("session.compaction.process", () => {
       const part = yield* readCompactionPart(session.id)
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBe(keep.id)
-    }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 100 }) })),
+    }).pipe(
+      withCompaction({
+        config: cfg(),
+        provider: ProviderTest.fake({ model: createModel({ context: 12_000, output: 5_000 }) }),
+      }),
+    ),
   )
 
   itCompaction.instance(
@@ -1065,7 +1046,7 @@ describe("session.compaction.process", () => {
         expect(part?.type).toBe("compaction")
         expect(part?.tail_start_id).toBeUndefined()
         expect(captured).toContain("yyyy")
-      }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 1, preserve_recent_tokens: 20 }) }))
+      }).pipe(withCompaction({ llm: stub.layer, config: cfg() }))
     },
     { git: true },
   )
@@ -1102,13 +1083,13 @@ describe("session.compaction.process", () => {
         expect(part?.tail_start_id).toBeUndefined()
         expect(captured).toContain("recent image turn")
         expect(captured).toContain("Attached image/png: big.png")
-      }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 1, preserve_recent_tokens: 100 }) }))
+      }).pipe(withCompaction({ llm: stub.layer, config: cfg() }))
     },
     { git: true },
   )
 
   itCompaction.instance(
-    "retains a split turn suffix when a later message fits the preserve token budget",
+    "retains a split turn suffix when a later message fits the internal preserve token budget",
     () => {
       const stub = llm()
       let captured = ""
@@ -1125,7 +1106,7 @@ describe("session.compaction.process", () => {
           messageID: large.id,
           sessionID: session.id,
           type: "text",
-          text: "z".repeat(2_000),
+          text: "z".repeat(20_000),
         })
         const keep = yield* createAssistantMessage(session.id, recent.id, test.directory)
         yield* ssn.updatePart({
@@ -1153,7 +1134,13 @@ describe("session.compaction.process", () => {
         expect(filtered[1]?.info.role).toBe("assistant")
         expect(filtered[1]?.info.role === "assistant" ? filtered[1].info.summary : false).toBe(true)
         expect(filtered.map((msg) => msg.info.id)).not.toContain(large.id)
-      }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 1, preserve_recent_tokens: 100 }) }))
+      }).pipe(
+        withCompaction({
+          llm: stub.layer,
+          config: cfg(),
+          provider: ProviderTest.fake({ model: createModel({ context: 12_000, output: 5_000 }) }),
+        }),
+      )
     },
     { git: true },
   )
@@ -1543,7 +1530,7 @@ describe("session.compaction.process", () => {
       expect(
         filtered.some((msg) => msg.info.role === "user" && msg.parts.some((part) => part.type === "compaction")),
       ).toBe(true)
-    }).pipe(withCompaction({ llm: stub.layer, config: cfg({ tail_turns: 2, preserve_recent_tokens: 10_000 }) }))
+    }).pipe(withCompaction({ llm: stub.layer, config: cfg() }))
   })
 
   itCompaction.instance(
@@ -1587,7 +1574,7 @@ describe("session.compaction.process", () => {
       const part = yield* readCompactionPart(session.id)
       expect(part?.type).toBe("compaction")
       expect(part?.tail_start_id).toBe(keep.id)
-    }).pipe(withCompaction({ config: cfg({ tail_turns: 2, preserve_recent_tokens: 500 }) })),
+    }).pipe(withCompaction({ config: cfg() })),
   )
 })
 

@@ -698,38 +698,6 @@ export class AgentManagerProvider implements Disposable {
     return this.waitForPanelReady(panel)
   }
 
-  public async showMemory(): Promise<void> {
-    const panel = this.panel
-    const sid = this.activeSessionId
-    if (!panel || !sid) {
-      this.host.showError("No active Agent Manager session")
-      return
-    }
-    if (!(await this.waitForPanelReady(panel))) return
-    if (this.activeSessionId !== sid) return
-    try {
-      await panel.sessions.showMemory(sid)
-    } catch (error) {
-      this.host.showError(getErrorMessage(error) || "Failed to show memory")
-    }
-  }
-
-  public async toggleMemory(): Promise<void> {
-    const panel = this.panel
-    const sid = this.activeSessionId
-    if (!panel || !sid) {
-      this.host.showError("No active Agent Manager session")
-      return
-    }
-    if (!(await this.waitForPanelReady(panel))) return
-    if (this.activeSessionId !== sid) return
-    try {
-      await panel.sessions.toggleMemory(sid)
-    } catch (error) {
-      this.host.showError(getErrorMessage(error) || "Failed to toggle memory")
-    }
-  }
-
   /** Expose session→directory mappings for the auto-approve toggle. */
   public getSessionDirectories(): ReadonlyMap<string, string> {
     return this.panel?.sessions.getSessionDirectories() ?? new Map()

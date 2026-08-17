@@ -53,14 +53,14 @@ describe("deepMerge", () => {
 })
 
 describe("scoped config normalization", () => {
-  it("preserves indexing null overrides while stripping unrelated nulls", () => {
+  it("strips unrelated nulls during merge", () => {
     const target = { username: "alice", indexing: { model: "global", dimension: 1024 } } as Config
     const source = { username: null, indexing: { model: null, dimension: null } } as unknown as Partial<Config>
 
-    expect(mergeScopedConfig(target, source)).toEqual({ indexing: { model: null, dimension: null } })
+    expect(mergeScopedConfig(target, source)).toEqual({ indexing: {} })
   })
 
-  it("builds clean set and unset payloads while preserving indexing null overrides", () => {
+  it("builds clean set and unset payloads", () => {
     const patch = {
       formatter: {},
       username: null,
@@ -74,10 +74,12 @@ describe("scoped config normalization", () => {
 
     expect(pruneConfigSet(patch)).toEqual({
       formatter: {},
-      indexing: { model: null, dimension: null },
+      indexing: { qdrant: {} },
     })
     expect(configUnsetPaths(patch)).toEqual([
       ["username"],
+      ["indexing", "model"],
+      ["indexing", "dimension"],
       ["indexing", "searchMinScore"],
       ["indexing", "qdrant", "apiKey"],
     ])

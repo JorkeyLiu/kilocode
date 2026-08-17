@@ -13,11 +13,6 @@ import { SessionExport } from "@/kilocode/session-export"
 import { createWorkspaceProvider } from "@/kilocode/session-export/workspace-provider"
 import { Instance } from "@/kilocode/instance"
 import { Identity } from "@kilocode/kilo-telemetry"
-import { MemoryLifecycle } from "@/kilocode/memory/turn"
-import { MemoryService } from "@kilocode/kilo-memory/effect/service"
-import { MemoryEvents } from "@/kilocode/memory/events"
-import { installMemoryRuntime } from "@/kilocode/memory/runtime"
-import { KiloToolRegistry } from "@/kilocode/tool/registry"
 
 const log = Log.create({ service: "kilocode-bootstrap" })
 
@@ -31,25 +26,11 @@ export namespace KilocodeBootstrap {
   export const layer = Layer.effect(
     Service,
     Effect.gen(function* () {
-      // Bind the package memory effect layer to opencode (paths, instance binder, logger, event sink).
-      installMemoryRuntime()
       const kilo = yield* KiloSessions.Service
       const bus = yield* Bus.Service
-      const sessions = yield* Session.Service
-      const summary = yield* SessionSummary.Service
-      const provider = yield* Provider.Service
-      const memory = yield* MemoryService.Service
 
       const init = Effect.fn("KilocodeBootstrap.init")(function* () {
         yield* kilo.init()
-        yield* MemoryLifecycle.subscribe({ bus, sessions, summary, provider, memory })
-        // Invalidate enabled cache on every memory state mutation (properties.directory holds the memory root).
-        yield* bus.subscribeCallback(MemoryEvents.Status, (evt) =>
-          KiloToolRegistry.invalidateMemoryEnabled(evt.properties.directory),
-        )
-        yield* bus.subscribeCallback(MemoryEvents.Updated, (evt) =>
-          KiloToolRegistry.invalidateMemoryEnabled(evt.properties.directory),
-        )
         // kilocode_change start - session export bootstrap
         yield* Effect.gen(function* () {
           if (!SessionExport.enabled) return
@@ -76,14 +57,6 @@ export namespace KilocodeBootstrap {
           ),
         )
         // kilocode_change end
-        yield* EffectBridge.fromPromise(() =>
-          import("@/kilocode/indexing").then((mod) => mod.KiloIndexing.init()),
-        ).pipe(
-          Effect.catchCause((cause) =>
-            Effect.sync(() => log.warn("indexing bootstrap failed", { err: Cause.squash(cause) })),
-          ),
-          Effect.forkDetach,
-        )
       })
 
       return Service.of({ init })
@@ -96,7 +69,6 @@ export namespace KilocodeBootstrap {
       Session.defaultLayer,
       SessionSummary.defaultLayer,
       Provider.defaultLayer,
-      MemoryService.layer,
       Bus.defaultLayer,
     ]),
   )

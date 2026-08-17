@@ -270,15 +270,12 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
       "kilo-code.new.improveCode",
       "kilo-code.new.addToContext",
       "kilo-code.new.terminalAddToContext",
-      "kilo-code.new.generateCommitMessage",
       "kilo-code.new.focusChatInput",
       "kilo-code.new.toggleChatSearch",
       "kilo-code.new.cycleAgentMode",
       "kilo-code.new.openInTab",
       "kilo-code.new.agentManagerOpen",
       "kilo-code.new.agentManager.newTab",
-      "kilo-code.new.showMemory",
-      "kilo-code.new.toggleMemory",
     ]) {
       expect(declared, `declared command ${cmd}`).toContain(cmd)
     }

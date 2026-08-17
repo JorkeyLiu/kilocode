@@ -66,7 +66,6 @@ import { TestInstance } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import { RuntimeFlags } from "@/effect/runtime-flags"
-import { MemoryService } from "@kilocode/kilo-memory/effect/service" // kilocode_change
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
@@ -221,7 +220,6 @@ function makePrompt(input?: { processor?: "blocking" }) {
     Database.defaultLayer,
     EventV2Bridge.defaultLayer,
     Bus.layer, // kilocode_change - satisfy the Kilo ToolRegistry dependency
-    MemoryService.layer, // kilocode_change
     GenerationGate.defaultLayer, // kilocode_change - admission required by withGenerationAdmission
   ).pipe(Layer.provideMerge(infra))
   const question = Question.layer.pipe(Layer.provideMerge(deps))
@@ -701,34 +699,35 @@ noLLMServer.instance(
 )
 // kilocode_change end
 
-it.instance("loop stops provider overflow instead of auto-compacting when disabled", () =>
-  Effect.gen(function* () {
-    const { llm } = yield* useServerConfig((url) => ({
-      ...providerCfg(url),
-      compaction: { auto: false },
-    }))
-    const prompt = yield* SessionPrompt.Service
-    const sessions = yield* Session.Service
-    const chat = yield* sessions.create({ title: "Pinned" })
+it.instance(
+  "automatic overflow recovery still runs when compaction.auto is configured off",
+  () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig((url) => ({
+        ...providerCfg(url),
+        compaction: { auto: false },
+      }))
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({ title: "Pinned" })
 
-    yield* llm.error(413, { error: { message: "request entity too large" } })
-    yield* prompt.prompt({
-      sessionID: chat.id,
-      agent: "build",
-      noReply: true,
-      parts: [{ type: "text", text: "hello" }],
-    })
+      // Provider overflow. Compaction is an invisible safeguard: config cannot disable it.
+      yield* llm.error(413, { error: { message: "request entity too large" } })
+      // The loop recovers past the overflow on the retry.
+      yield* llm.text("recovered")
+      yield* user(chat.id, "hello")
 
-    const result = yield* prompt.loop({ sessionID: chat.id })
-    const messages = yield* sessions.messages({ sessionID: chat.id })
+      const result = yield* prompt.loop({ sessionID: chat.id })
 
-    expect(result.info.role).toBe("assistant")
-    if (result.info.role === "assistant") {
-      expect(result.info.error?.name).toBe("ContextOverflowError")
-      expect(result.info.finish).toBe("error")
-    }
-    expect(messages.some((message) => message.parts.some((part) => part.type === "compaction"))).toBe(false)
-  }),
+      expect(result.info.role).toBe("assistant")
+      // The configured `auto: false` is ignored — the overflow is not surfaced as a
+      // hard ContextOverflowError stop (the removed escape hatch).
+      if (result.info.role === "assistant") {
+        expect(result.info.error?.name).not.toBe("ContextOverflowError")
+        expect(result.info.finish).not.toBe("error")
+      }
+    }),
+  { timeout: 60_000 },
 )
 
 noLLMServer.instance.skip(

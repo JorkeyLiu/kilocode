@@ -1,7 +1,7 @@
 export * as ConfigV1 from "./config"
 
 import { Effect, Schema } from "effect"
-import { NonNegativeInt, PositiveInt, type DeepMutable } from "../../schema"
+import { PositiveInt, type DeepMutable } from "../../schema"
 import { ConfigExperimental } from "../../config/experimental"
 import { ConfigAgentV1 } from "./agent"
 import { ConfigAttachmentV1 } from "./attachment"
@@ -16,11 +16,6 @@ import { ConfigProviderV1 } from "./provider"
 import { ConfigReferenceV1 } from "./reference"
 import { ConfigServerV1 } from "./server"
 import { ConfigSkillsV1 } from "./skills"
-// kilocode_change start
-import { ZodOverride } from "../../effect-zod"
-import { IndexingConfig as KiloIndexingConfig, IndexingSchema as KiloIndexingSchema } from "@kilocode/kilo-indexing/config"
-import z from "zod"
-// kilocode_change end
 
 export type Layout = ConfigLayoutV1.Layout
 
@@ -29,30 +24,10 @@ export const WellKnown = Schema.Struct({
   remote_config: Schema.optional(Schema.Json),
 })
 
-// kilocode_change start - indexing configuration
-export const Indexing = KiloIndexingConfig
-export type Indexing = z.infer<typeof Indexing>
-// kilocode_change end
-
 const LogLevelRef = Schema.Literals(["DEBUG", "INFO", "WARN", "ERROR"]).annotate({
   identifier: "LogLevel",
   description: "Log level",
 })
-const Percent = Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThanOrEqualTo(100)) // kilocode_change
-
-const IndexingRef = KiloIndexingSchema.annotate({ [ZodOverride]: KiloIndexingConfig }) // kilocode_change
-
-// kilocode_change start
-/** Schema for AI-generated commit message configuration. */
-const CommitMessageSchema = Schema.optional(
-  Schema.Struct({
-    prompt: Schema.optional(Schema.String).annotate({
-      description:
-        "Custom system prompt for AI commit message generation. When set, replaces the default conventional commits prompt entirely.",
-    }),
-  }),
-).annotate({ description: "Configuration for AI-generated commit messages" })
-// kilocode_change end
 
 export const Info = Schema.Struct({
   $schema: Schema.optional(Schema.String).annotate({
@@ -102,7 +77,6 @@ export const Info = Schema.Struct({
   auto_collapse_reasoning: Schema.optional(Schema.Boolean).annotate({
     description: "Automatically collapse reasoning blocks after the agent finishes writing them",
   }),
-  indexing: Schema.optional(IndexingRef).annotate({ description: "Codebase indexing configuration" }),
   console: Schema.optional(
     Schema.Struct({
       context_sidebar_width: Schema.optional(
@@ -251,7 +225,6 @@ export const Info = Schema.Struct({
   enterprise: Schema.optional(
     Schema.Struct({ url: Schema.optional(Schema.String).annotate({ description: "Enterprise URL" }) }),
   ),
-  commit_message: CommitMessageSchema, // kilocode_change
   tool_output: Schema.optional(
     Schema.Struct({
       max_lines: Schema.optional(PositiveInt).annotate({
@@ -265,32 +238,6 @@ export const Info = Schema.Struct({
     description:
       "Thresholds for truncating tool output. When output exceeds either limit, the full text is written to the truncation directory and a preview is returned.",
   }),
-  compaction: Schema.optional(
-    Schema.Struct({
-      auto: Schema.optional(Schema.Boolean).annotate({
-        description: "Enable automatic compaction when context is full (default: true)",
-      }),
-      // kilocode_change start
-      threshold_percent: Schema.optional(Schema.NullOr(Percent)).annotate({
-        description:
-          "Percentage of the model input/context window that triggers automatic compaction. The reserved safety buffer still applies if it would compact sooner.",
-      }),
-      // kilocode_change end
-      prune: Schema.optional(Schema.Boolean).annotate({
-        description: "Enable pruning of old tool outputs (default: true)",
-      }),
-      tail_turns: Schema.optional(NonNegativeInt).annotate({
-        description:
-          "Number of recent user turns, including their following assistant/tool responses, to keep verbatim during compaction (default: 2)",
-      }),
-      preserve_recent_tokens: Schema.optional(NonNegativeInt).annotate({
-        description: "Maximum number of tokens from recent turns to preserve verbatim after compaction",
-      }),
-      reserved: Schema.optional(NonNegativeInt).annotate({
-        description: "Token buffer for compaction. Leaves enough window to avoid overflow during compaction.",
-      }),
-    }),
-  ),
   experimental: Schema.optional(
     Schema.Struct({
       disable_paste_summary: Schema.optional(Schema.Boolean),

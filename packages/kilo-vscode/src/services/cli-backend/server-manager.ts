@@ -26,11 +26,6 @@ export function resolveServerCwd(folders: readonly WorkspaceFolderLike[] | undef
   return folders?.[0]?.uri.fsPath ?? storage
 }
 
-export function resolveIndexingEnv(folders: readonly WorkspaceFolderLike[] | undefined): Record<string, string> {
-  if (folders && folders.length > 0) return {}
-  return { KILO_DISABLE_CODEBASE_INDEXING: "vscode-no-workspace" }
-}
-
 export function resolveManagedServerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   return { ...env, KILO_DISABLE_CHANNEL_DB: "true" }
 }
@@ -141,7 +136,6 @@ export class ServerManager {
       const folders = vscode.workspace.workspaceFolders
       const spawnCwd = resolveServerCwd(folders, this.context.globalStorageUri.fsPath)
       fs.mkdirSync(spawnCwd, { recursive: true })
-      const indexingEnv = resolveIndexingEnv(folders)
       const localCli =
         this.context.extensionMode === vscode.ExtensionMode.Development ||
         fs.existsSync(path.join(this.context.extensionPath, "bin", ".cli-version"))
@@ -194,7 +188,6 @@ export class ServerManager {
           KILO_CLIENT: "vscode",
           KILO_ENABLE_QUESTION_TOOL: "true",
           KILOCODE_FEATURE: "vscode-extension",
-          ...indexingEnv,
           KILO_TELEMETRY_LEVEL: vscode.env.isTelemetryEnabled ? "all" : "off",
           KILO_APP_NAME: "kilo-code",
           KILO_EDITOR_NAME: vscode.env.appName,
