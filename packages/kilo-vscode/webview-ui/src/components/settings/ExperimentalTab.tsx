@@ -23,8 +23,14 @@ const SHARE_OPTIONS: ShareOption[] = [
   { value: "disabled", labelKey: "settings.experimental.share.disabled" },
 ]
 
+function unsupportedStyle(readonly: boolean) {
+  return readonly
+    ? { opacity: "0.6" }
+    : { opacity: "1" }
+}
+
 const ExperimentalTab: Component = () => {
-  const { config, updateConfig } = useConfig()
+  const { config, updateConfig, saveError, canonical } = useConfig()
   const language = useLanguage()
   const imageModels = useImageModels()
   const vscode = useVSCode()
@@ -43,8 +49,10 @@ const ExperimentalTab: Component = () => {
   })
 
   const experimental = createMemo(() => config().experimental ?? {})
+  const readonly = () => canonical?.() === true
 
   const updateExperimental = (key: string, value: unknown) => {
+    if (readonly()) return
     updateConfig({
       experimental: { ...experimental(), [key]: value },
     })
@@ -52,9 +60,16 @@ const ExperimentalTab: Component = () => {
 
   return (
     <div>
+      <Show when={saveError()}>
+        {(error) => <div role="alert" style={{ color: "var(--vscode-errorForeground)", "margin-bottom": "8px" }}>{error().message}</div>}
+      </Show>
+      <Show when={canonical?.()}>
+        <div role="note" style={{ color: "var(--text-weak-base)", "margin-bottom": "8px" }}>Experimental, sharing, formatter, LSP, tools, and remote settings are read-only in canonical GUI configuration.</div>
+      </Show>
+      <div aria-disabled={canonical?.() === true} title={canonical?.() === true ? "Unsupported in canonical GUI config" : undefined} style={unsupportedStyle(canonical?.() === true)}>
       <Card>
         {/* Remote control */}
-        <div data-component="remote-settings">
+        <div data-component="remote-settings" aria-disabled="true" title="Unsupported in canonical GUI config">
           <div data-slot="remote-settings-header">
             <div data-slot="settings-row-label-title">{language.t("settings.experimental.remote.title")}</div>
             <div data-slot="settings-row-label-subtitle">{language.t("settings.experimental.remote.description")}</div>
@@ -72,11 +87,10 @@ const ExperimentalTab: Component = () => {
           </div>
           <div data-slot="remote-settings-row">
             <span data-slot="remote-settings-label">{language.t("settings.experimental.remote.startup")}</span>
-            <Switch
-              checked={config().remote_control ?? false}
-              onChange={(checked) => {
-                updateConfig({ remote_control: checked })
-              }}
+             <Switch
+               checked={config().remote_control ?? false}
+                onChange={() => undefined}
+                disabled={readonly()}
               hideLabel
             >
               {language.t("settings.experimental.remote.startup")}
@@ -85,7 +99,8 @@ const ExperimentalTab: Component = () => {
         </div>
 
         {/* Share mode */}
-        <SettingsRow
+         <div aria-disabled="true" title="Unsupported in canonical GUI config" style={{ opacity: "0.65" }}>
+         <SettingsRow
           title={language.t("settings.experimental.share.title")}
           description={language.t("settings.experimental.share.description")}
         >
@@ -94,43 +109,46 @@ const ExperimentalTab: Component = () => {
             current={SHARE_OPTIONS.find((o) => o.value === (config().share ?? "manual"))}
             value={(o) => o.value}
             label={(o) => language.t(o.labelKey)}
-            onSelect={(o) => {
-              if (!o) return
-              const next = o.value as "manual" | "auto" | "disabled"
-              if (next === (config().share ?? "manual")) return
-              updateConfig({ share: next })
-            }}
+            onSelect={() => undefined}
+            disabled={readonly()}
             variant="secondary"
             size="small"
             triggerVariant="settings"
           />
-        </SettingsRow>
+         </SettingsRow>
+         </div>
 
-        <SettingsRow
+         <div aria-disabled="true" title="Unsupported in canonical GUI config" style={{ opacity: "0.65" }}>
+         <SettingsRow
           title={language.t("settings.experimental.formatter.title")}
           description={language.t("settings.experimental.formatter.description")}
         >
           <Switch
             checked={config().formatter !== false}
-            onChange={(checked) => updateConfig({ formatter: checked ? {} : false })}
+             onChange={() => undefined}
+             disabled={readonly()}
             hideLabel
           >
             {language.t("settings.experimental.formatter.title")}
           </Switch>
-        </SettingsRow>
+         </SettingsRow>
+         </div>
 
-        <SettingsRow
+         <div aria-disabled="true" title="Unsupported in canonical GUI config" style={{ opacity: "0.65" }}>
+         <SettingsRow
           title={language.t("settings.experimental.lsp.title")}
           description={language.t("settings.experimental.lsp.description")}
         >
           <Switch
             checked={config().lsp !== false}
-            onChange={(checked) => updateConfig({ lsp: checked ? {} : false })}
+             onChange={() => undefined}
+             disabled={readonly()}
             hideLabel
           >
             {language.t("settings.experimental.lsp.title")}
           </Switch>
-        </SettingsRow>
+         </SettingsRow>
+         </div>
 
         <SettingsRow
           title={language.t("settings.experimental.batch.title")}
@@ -138,7 +156,8 @@ const ExperimentalTab: Component = () => {
         >
           <Switch
             checked={experimental().batch_tool ?? false}
-            onChange={(checked) => updateExperimental("batch_tool", checked)}
+             onChange={(checked) => { if (!readonly()) updateExperimental("batch_tool", checked) }}
+             disabled={readonly()}
             hideLabel
           >
             {language.t("settings.experimental.batch.title")}
@@ -151,7 +170,8 @@ const ExperimentalTab: Component = () => {
         >
           <Switch
             checked={experimental().codebase_search ?? false}
-            onChange={(checked) => updateExperimental("codebase_search", checked)}
+             onChange={(checked) => { if (!readonly()) updateExperimental("codebase_search", checked) }}
+             disabled={readonly()}
             hideLabel
           >
             {language.t("settings.experimental.codebaseSearch.title")}
@@ -164,7 +184,8 @@ const ExperimentalTab: Component = () => {
         >
           <Switch
             checked={experimental().image_generation ?? false}
-            onChange={(checked) => updateExperimental("image_generation", checked)}
+             onChange={(checked) => { if (!readonly()) updateExperimental("image_generation", checked) }}
+             disabled={readonly()}
             hideLabel
           >
             {language.t("settings.experimental.imageGeneration.title")}
@@ -184,7 +205,8 @@ const ExperimentalTab: Component = () => {
                 .find((m) => m.value === experimental().image_generation_model)}
               value={(item) => item.value}
               label={(item) => item.label}
-              onSelect={(item) => updateExperimental("image_generation_model", item?.value ?? undefined)}
+               onSelect={(item) => { if (!readonly()) updateExperimental("image_generation_model", item?.value ?? undefined) }}
+               disabled={readonly()}
               variant="secondary"
               size="small"
               triggerVariant="settings"
@@ -199,7 +221,8 @@ const ExperimentalTab: Component = () => {
         >
           <Switch
             checked={experimental().native_notebook_tools ?? false}
-            onChange={(checked) => updateExperimental("native_notebook_tools", checked)}
+            onChange={(checked) => { if (!readonly()) updateExperimental("native_notebook_tools", checked) }}
+            disabled={readonly()}
             hideLabel
           >
             {language.t("settings.experimental.nativeNotebookTools.title")}
@@ -212,7 +235,8 @@ const ExperimentalTab: Component = () => {
         >
           <Switch
             checked={experimental().continue_loop_on_deny ?? false}
-            onChange={(checked) => updateExperimental("continue_loop_on_deny", checked)}
+            onChange={(checked) => { if (!readonly()) updateExperimental("continue_loop_on_deny", checked) }}
+            disabled={readonly()}
             hideLabel
           >
             {language.t("settings.experimental.continueOnDeny.title")}
@@ -225,7 +249,8 @@ const ExperimentalTab: Component = () => {
         >
           <Switch
             checked={experimental().swe_pruner ?? false}
-            onChange={(checked) => updateExperimental("swe_pruner", checked)}
+            onChange={(checked) => { if (!readonly()) updateExperimental("swe_pruner", checked) }}
+            disabled={readonly()}
             hideLabel
           >
             {language.t("settings.experimental.swePruner.title")}
@@ -239,10 +264,10 @@ const ExperimentalTab: Component = () => {
           >
             <ModelSelectorBase
               value={parseModelString(experimental().swe_pruner_model ?? undefined)}
-              onSelect={(providerID, modelID) =>
-                updateExperimental("swe_pruner_model", providerID && modelID ? `${providerID}/${modelID}` : null)
-              }
-              placement="bottom-start"
+               onSelect={(providerID, modelID) => {
+                 if (!readonly()) updateExperimental("swe_pruner_model", providerID && modelID ? `${providerID}/${modelID}` : null)
+               }}
+               placement="bottom-start"
               allowClear
               clearLabel={language.t("settings.providers.notSet")}
               label={language.t("settings.experimental.swePrunerModel.title")}
@@ -259,7 +284,8 @@ const ExperimentalTab: Component = () => {
         >
           <TextField
             value={String(experimental().mcp_timeout ?? 60000)}
-            onChange={(val) => {
+             onChange={(val) => {
+               if (readonly()) return
               const num = parseInt(val, 10)
               if (!isNaN(num) && num > 0) {
                 updateExperimental("mcp_timeout", num)
@@ -280,7 +306,8 @@ const ExperimentalTab: Component = () => {
               <SettingsRow title={name} description="" last={index() >= Object.keys(config().tools ?? {}).length - 1}>
                 <Switch
                   checked={enabled}
-                  onChange={(checked) => updateConfig({ tools: { ...config().tools, [name]: checked } })}
+                   onChange={(checked) => { if (!readonly()) updateConfig({ tools: { ...config().tools, [name]: checked } }) }}
+                   disabled={readonly()}
                   hideLabel
                 >
                   {name}
@@ -290,6 +317,7 @@ const ExperimentalTab: Component = () => {
           </For>
         </Card>
       </Show>
+      </div>
     </div>
   )
 }

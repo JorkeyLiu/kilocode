@@ -17,7 +17,7 @@ interface Props {
 
 const McpEditView: Component<Props> = (props) => {
   const language = useLanguage()
-  const { config, updateConfig } = useConfig()
+  const { config, updateConfig, canonical } = useConfig()
 
   const cfg = createMemo<McpConfig>(() => config().mcp?.[props.name] ?? {})
 
@@ -25,6 +25,7 @@ const McpEditView: Component<Props> = (props) => {
   const [envVal, setEnvVal] = createSignal("")
 
   const update = (partial: Partial<McpConfig>) => {
+    if (canonical?.()) return
     const existing = config().mcp ?? {}
     const current = existing[props.name] ?? {}
     updateConfig({
@@ -43,7 +44,7 @@ const McpEditView: Component<Props> = (props) => {
   const args = () => {
     const c = cfg().command
     if (Array.isArray(c)) return c.slice(1).join("\n")
-    return ""
+    return (cfg().args ?? []).join("\n")
   }
 
   const env = createMemo(() => Object.entries(cfg().environment ?? cfg().env ?? {}))
@@ -80,7 +81,9 @@ const McpEditView: Component<Props> = (props) => {
             {language.t("settings.agentBehaviour.editMcp")} — {props.name}
           </span>
         </div>
-        <IconButton size="small" variant="ghost" icon="close" onClick={() => props.onRemove(props.name)} />
+          <Show when={!canonical?.()}>
+            <IconButton size="small" variant="ghost" icon="close" onClick={() => props.onRemove(props.name)} />
+          </Show>
       </div>
 
       {/* Transport info */}
@@ -107,10 +110,11 @@ const McpEditView: Component<Props> = (props) => {
           <TextField
             value={cmd()}
             placeholder={language.t("settings.agentBehaviour.addMcp.command.placeholder")}
-            onChange={(val) => {
-              const existing = cfg().command
-              const rest = Array.isArray(existing) ? existing.slice(1) : []
-              update({ command: [val.trim(), ...rest] })
+            disabled={canonical?.() === true}
+              onChange={(val) => {
+                const existing = cfg().command
+                const rest = Array.isArray(existing) ? existing.slice(1) : []
+                update(canonical?.() ? { command: val.trim(), args: rest } : { command: [val.trim(), ...rest] })
             }}
           />
         </Card>
@@ -125,9 +129,10 @@ const McpEditView: Component<Props> = (props) => {
             value={args()}
             placeholder={language.t("settings.agentBehaviour.addMcp.args.placeholder")}
             multiline
-            onChange={(val) => {
-              const parts = val.split(/\n/).filter(Boolean)
-              update({ command: [cmd(), ...parts] })
+            disabled={canonical?.() === true}
+             onChange={(val) => {
+               const parts = val.split(/\n/).filter(Boolean)
+               update(canonical?.() ? { command: cmd(), args: parts } : { command: [cmd(), ...parts] })
             }}
           />
         </Card>
@@ -141,13 +146,14 @@ const McpEditView: Component<Props> = (props) => {
           <TextField
             value={cfg().url ?? ""}
             placeholder={language.t("settings.agentBehaviour.addMcp.url.placeholder")}
-            onChange={(val) => update({ url: val.trim() || undefined })}
+            disabled={canonical?.() === true}
+             onChange={(val) => update({ url: val.trim() || undefined })}
           />
         </Card>
       </Show>
 
       {/* Environment variables (local servers only) */}
-      <Show when={transport() === "local"}>
+       <Show when={transport() === "local" && !canonical?.()}>
         <Card style={{ "margin-bottom": "12px" }}>
           <div data-slot="settings-row-label-title" style={{ "margin-bottom": "4px" }}>
             {language.t("settings.agentBehaviour.editMcp.env")}
@@ -166,19 +172,20 @@ const McpEditView: Component<Props> = (props) => {
             }}
           >
             <div style={{ flex: 1 }}>
-              <TextField value={envKey()} placeholder="KEY" onChange={(val) => setEnvKey(val)} />
+               <TextField value={envKey()} placeholder="KEY" disabled={canonical?.() === true} onChange={(val) => setEnvKey(val)} />
             </div>
             <div style={{ flex: 1 }}>
               <TextField
                 value={envVal()}
                 placeholder="value"
-                onChange={(val) => setEnvVal(val)}
+                 disabled={canonical?.() === true}
+                 onChange={(val) => setEnvVal(val)}
                 onKeyDown={(e: KeyboardEvent) => {
                   if (e.key === "Enter") addEnv()
                 }}
               />
             </div>
-            <Button variant="secondary" onClick={addEnv}>
+            <Button variant="secondary" onClick={addEnv} disabled={canonical?.() === true}>
               {language.t("common.add")}
             </Button>
           </div>
@@ -202,7 +209,7 @@ const McpEditView: Component<Props> = (props) => {
                 >
                   {key}={val}
                 </span>
-                <IconButton size="small" variant="ghost" icon="close" onClick={() => removeEnv(key)} />
+                  <IconButton size="small" variant="ghost" icon="close" onClick={() => removeEnv(key)} disabled={canonical?.() === true} />
               </div>
             )}
           </For>

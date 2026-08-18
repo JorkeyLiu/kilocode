@@ -6,12 +6,12 @@ import { useLanguage } from "../../context/language"
 import SettingsRow from "./SettingsRow"
 
 const CheckpointsTab: Component = () => {
-  const { config, updateConfig } = useConfig()
+  const { config, updateConfig, canonical } = useConfig()
   const language = useLanguage()
 
   return (
     <div>
-      <Card>
+      <Card aria-disabled={canonical?.() === true} title={canonical?.() === true ? "Unsupported in canonical GUI config" : undefined}>
         <SettingsRow
           title={language.t("settings.checkpoints.enable.title")}
           description={language.t("settings.checkpoints.enable.description")}
@@ -19,7 +19,8 @@ const CheckpointsTab: Component = () => {
         >
           <Switch
             checked={config().snapshot !== false}
-            onChange={(checked) => updateConfig({ snapshot: checked })}
+             onChange={(checked) => { if (!canonical?.()) updateConfig({ snapshot: checked }) }}
+             disabled={canonical?.() === true}
             hideLabel
           >
             {language.t("settings.checkpoints.enable.title")}

@@ -199,16 +199,18 @@ describe("CustomProviderDialog — credential reveal (LOCK-003/005)", () => {
   })
 
   it("seeds form field with loaded key without marking touched", () => {
-    // The onCredentialLoaded handler should call setForm("apiKey", ...) but NOT setApiTouched(true)
-    const loadedMatch = DIALOG_SRC.match(/onCredentialLoaded:[\s\S]*?setCredentialLoading\(false\)/)
+    // The onCredentialLoaded handler should call setForm("apiKey", ...) but NOT setApiTouched(true).
+    // On the canonical path it returns early without seeding the form.
+    const loadedMatch = DIALOG_SRC.match(/onCredentialLoaded:[\s\S]*?setCredentialLoading\(false\)\s*\}/)
     expect(loadedMatch).not.toBeNull()
     expect(loadedMatch![0]).toContain('setForm("apiKey", message.apiKey)')
     expect(loadedMatch![0]).not.toContain("setApiTouched(true)")
   })
 
   it("guards credential load from overwriting a user edit (apiTouched check)", () => {
-    // The onCredentialLoaded handler must check apiTouched() before seeding the form field
-    const loadedMatch = DIALOG_SRC.match(/onCredentialLoaded:[\s\S]*?setCredentialLoading\(false\)/)
+    // The onCredentialLoaded handler must check apiTouched() before seeding the form field.
+    // On the canonical path it returns early without touching the form at all.
+    const loadedMatch = DIALOG_SRC.match(/onCredentialLoaded:[\s\S]*?setCredentialLoading\(false\)\s*\}/)
     expect(loadedMatch).not.toBeNull()
     expect(loadedMatch![0]).toContain("if (!apiTouched())")
   })

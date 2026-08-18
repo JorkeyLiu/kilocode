@@ -15,11 +15,12 @@ import type {
 import type { PermissionRequest } from "./permissions"
 import type { AnacondaDesktopExtensionMessage } from "../../../../src/shared/anaconda-desktop-messages"
 import type { QuestionRequest, SuggestionRequest, TodoItem } from "./questions"
-import type { ModelSelection, Provider, ProviderAuthState } from "./providers"
+import type { CanonicalProviderView, ModelSelection, Provider, ProviderAuthState } from "./providers"
 import type { AgentInfo, AgentRequirementResult, SkillInfo, SlashCommandInfo } from "./agents"
 import type { BrowserSettings, Config, FeatureFlags } from "./config"
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
 import type { ProfileData } from "./profile"
+import type { CanonicalConfigPayload, CanonicalStamp } from "../../../../src/config/types"
 import type {
   LocalGitStats,
   ManagedSessionState,
@@ -308,6 +309,25 @@ export interface ProvidersLoadedMessage {
   defaultSelection: ModelSelection
   authMethods: Record<string, ProviderAuthMethod[]>
   authStates: Record<string, ProviderAuthState>
+  canonical?: false
+  materializationVersion?: number
+  contentHash?: string
+  diagnostics?: Record<string, unknown>
+}
+
+export interface CanonicalProvidersLoadedMessage {
+  type: "providersLoaded"
+  providers: Readonly<Record<string, CanonicalProviderView>>
+  connected: readonly string[]
+  defaults: Readonly<Record<string, string>>
+  defaultSelection: ModelSelection
+  canonical: true
+  /** P4.1: explicit readiness signal — false for pre-materialization not-ready state. */
+  ready: boolean
+  materializationVersion: number
+  contentHash: string
+  diagnostics: Readonly<Record<string, unknown>>
+  stamp: CanonicalStamp
 }
 
 export interface AgentsLoadedMessage {
@@ -315,6 +335,39 @@ export interface AgentsLoadedMessage {
   agents: AgentInfo[]
   allAgents: AgentInfo[]
   defaultAgent: string
+  canonical?: false
+  materializationVersion?: number
+  contentHash?: string
+  diagnostics?: Record<string, unknown>
+}
+
+export interface CanonicalAgentsLoadedMessage extends Omit<AgentsLoadedMessage, "canonical" | "materializationVersion" | "contentHash" | "stamp"> {
+  canonical: true
+  /** P4.1: explicit readiness signal — false for pre-materialization not-ready state. */
+  ready: boolean
+  materializationVersion: number
+  contentHash: string
+  diagnostics: Record<string, unknown>
+  stamp: CanonicalStamp
+}
+
+export interface AgentMutationAppliedMessage {
+  type: "agentMutationApplied"
+  requestId: string
+  name: string
+  contentHash: string
+  stamp: CanonicalStamp
+  canonical: true
+}
+
+export interface AgentMutationErrorMessage {
+  type: "agentMutationError"
+  requestId: string
+  name: string
+  message: string
+  kind?: string
+  canonical: true
+  stamp: CanonicalStamp
 }
 
 export interface SkillsLoadedMessage {
@@ -469,6 +522,23 @@ export interface ConfigLoadedMessage {
   projectConfig?: Config
   settings?: ExtensionSettings
   features: FeatureFlags
+  canonical?: false
+  contentHash?: string
+  materializationVersion?: number
+  diagnostics?: Array<{ path: string[]; message: string }>
+}
+
+export interface CanonicalConfigLoadedMessage extends Omit<ConfigLoadedMessage, "canonical" | "config" | "globalConfig" | "projectConfig" | "contentHash" | "materializationVersion" | "diagnostics" | "stamp"> {
+  canonical: true
+  /** P4.1: explicit readiness signal — false for pre-materialization not-ready state. */
+  ready: boolean
+  config: CanonicalConfigPayload
+  globalConfig?: CanonicalConfigPayload
+  projectConfig?: CanonicalConfigPayload
+  contentHash: string
+  materializationVersion: number
+  diagnostics: Array<{ path: string[]; message: string }>
+  stamp: CanonicalStamp
 }
 
 export interface ConfigUpdatedMessage {
@@ -485,6 +555,25 @@ export interface ConfigUpdatedMessage {
    * superseded saves only release their own sent snapshot (LOCK-002/005).
    */
   saveID?: string
+  /** P4.1: content hash of the committed canonical config for draft stamp tracking. */
+  contentHash?: string
+  /** P4.1: materialization version for stamp tracking. */
+  materializationVersion?: number
+  canonical?: false
+  diagnostics?: Array<{ path: string[]; message: string }>
+}
+
+export interface CanonicalConfigUpdatedMessage extends Omit<ConfigUpdatedMessage, "canonical" | "config" | "globalConfig" | "projectConfig" | "contentHash" | "materializationVersion" | "diagnostics" | "stamp"> {
+  canonical: true
+  /** P4.1: explicit readiness signal — false for pre-materialization not-ready state. */
+  ready: boolean
+  config: CanonicalConfigPayload
+  globalConfig?: CanonicalConfigPayload
+  projectConfig?: CanonicalConfigPayload
+  contentHash: string
+  materializationVersion: number
+  diagnostics: Array<{ path: string[]; message: string }>
+  stamp: CanonicalStamp
 }
 
 export interface ConfigUpdateFailedMessage {
@@ -493,6 +582,20 @@ export interface ConfigUpdateFailedMessage {
   details?: string
   /** Save identity echoed from the webview, when the failure maps to one. */
   saveID?: string
+  /** P4.1: structured conflict/invalid/stale kind. */
+  kind?: "stale" | "invalid" | "conflict" | "backend"
+  /** P4.1: content hash of the last-known valid config for stale detection. */
+  contentHash?: string
+  /** P4.1: materialization version for stamp tracking. */
+  materializationVersion?: number
+  /** P4.1: validation errors when kind is "invalid". */
+  validationErrors?: Array<{ path: string[]; message: string }>
+  canonical?: false
+}
+
+export interface CanonicalConfigUpdateFailedMessage extends Omit<ConfigUpdateFailedMessage, "canonical"> {
+  canonical: true
+  stamp: CanonicalStamp
 }
 
 export interface GlobalConfigLoadedMessage {
@@ -760,18 +863,36 @@ export interface ProviderConnectedMessage {
   type: "providerConnected"
   requestId: string
   providerID: string
+  canonical?: false
+}
+
+export interface CanonicalProviderConnectedMessage extends Omit<ProviderConnectedMessage, "canonical"> {
+  canonical: true
+  stamp: CanonicalStamp
 }
 
 export interface ProviderDisconnectedMessage {
   type: "providerDisconnected"
   requestId: string
   providerID: string
+  canonical?: false
+}
+
+export interface CanonicalProviderDisconnectedMessage extends Omit<ProviderDisconnectedMessage, "canonical"> {
+  canonical: true
+  stamp: CanonicalStamp
 }
 
 export interface ProviderDeletedMessage {
   type: "providerDeleted"
   requestId: string
   providerID: string
+  canonical?: false
+}
+
+export interface CanonicalProviderDeletedMessage extends Omit<ProviderDeletedMessage, "canonical"> {
+  canonical: true
+  stamp: CanonicalStamp
 }
 
 export interface ProviderActionErrorMessage {
@@ -780,13 +901,34 @@ export interface ProviderActionErrorMessage {
   providerID: string
   action: "authorize" | "connect" | "disconnect" | "delete"
   message: string
+  canonical?: false
+  kind?: string
+  diagnostic?: boolean
+  retry?: { type: "retryProviderCleanup"; mode: "delete" | "restore"; scope: "global" | "project"; stamp: CanonicalStamp; retryID: string }
+}
+
+export interface CanonicalProviderActionErrorMessage extends Omit<ProviderActionErrorMessage, "canonical" | "retry"> {
+  canonical: true
+  stamp: CanonicalStamp
+  retry?: { type: "retryProviderCleanup"; mode: "delete" | "restore"; scope: "global" | "project"; stamp: CanonicalStamp; retryID: string }
 }
 
 export interface ProviderCredentialLoadedMessage {
   type: "providerCredentialLoaded"
   requestID: string
   providerID: string
-  apiKey: string
+  hasCredential?: boolean
+  canonical?: false
+  apiKey?: string
+}
+
+export interface CanonicalProviderCredentialLoadedMessage {
+  type: "providerCredentialLoaded"
+  requestID: string
+  providerID: string
+  hasCredential: boolean
+  canonical: true
+  stamp: CanonicalStamp
 }
 
 export interface ProviderCredentialErrorMessage {
@@ -794,6 +936,14 @@ export interface ProviderCredentialErrorMessage {
   requestID: string
   providerID: string
   error: string
+}
+
+export interface CanonicalConfigErrorMessage {
+  type: "canonicalConfigError"
+  kind: string
+  message: string
+  diagnostics?: readonly unknown[]
+  stamp: CanonicalStamp
 }
 
 export interface CustomProviderModelsFetchedMessage {
@@ -813,6 +963,25 @@ export interface McpStatusEntry {
 export interface McpStatusLoadedMessage {
   type: "mcpStatusLoaded"
   status: Record<string, McpStatusEntry>
+}
+
+export interface McpCleanupErrorMessage {
+  type: "mcpCleanupError"
+  name: string
+  /** Present only when the request carried a legal scope (post-commit failures). */
+  scope?: "global" | "project"
+  retryID: string
+  message: string
+  stamp: CanonicalStamp
+}
+
+export interface McpCleanupRetryResultMessage {
+  type: "mcpCleanupRetryResult"
+  requestId: string
+  name: string
+  ok: boolean
+  message?: string
+  stamp?: CanonicalStamp
 }
 
 export interface RemoteStatusMessage {
@@ -863,7 +1032,11 @@ export type ExtensionMessage =
   | NavigateMessage
   | ImageModelsLoadedMessage
   | ProvidersLoadedMessage
+  | CanonicalProvidersLoadedMessage
   | AgentsLoadedMessage
+  | CanonicalAgentsLoadedMessage
+  | AgentMutationAppliedMessage
+  | AgentMutationErrorMessage
   | SkillsLoadedMessage
   | AgentRequirementsLoadedMessage
   | AgentRequirementsInvalidatedMessage
@@ -889,8 +1062,11 @@ export type ExtensionMessage =
   | BrowserSettingsLoadedMessage
   | ClaudeCompatSettingLoadedMessage
   | ConfigLoadedMessage
+  | CanonicalConfigLoadedMessage
   | ConfigUpdatedMessage
+  | CanonicalConfigUpdatedMessage
   | ConfigUpdateFailedMessage
+  | CanonicalConfigUpdateFailedMessage
   | GlobalConfigLoadedMessage
   | NotificationSettingsLoadedMessage
   | TimelineSettingLoadedMessage
@@ -935,11 +1111,17 @@ export type ExtensionMessage =
   | OpenInstallModalMessage
   | ProviderOAuthReadyMessage
   | ProviderConnectedMessage
+  | CanonicalProviderConnectedMessage
   | ProviderDisconnectedMessage
+  | CanonicalProviderDisconnectedMessage
   | ProviderDeletedMessage
+  | CanonicalProviderDeletedMessage
   | ProviderActionErrorMessage
+  | CanonicalProviderActionErrorMessage
   | ProviderCredentialLoadedMessage
+  | CanonicalProviderCredentialLoadedMessage
   | ProviderCredentialErrorMessage
+  | CanonicalConfigErrorMessage
   | AnacondaDesktopExtensionMessage
   | CustomProviderModelsFetchedMessage
   | RecentsLoadedMessage
@@ -948,6 +1130,8 @@ export type ExtensionMessage =
   | ModelSelectionsLoadedMessage
   | LanguageChangedMessage
   | McpStatusLoadedMessage
+  | McpCleanupErrorMessage
+  | McpCleanupRetryResultMessage
   | ExtensionDataReadyMessage
   | TelemetryStateMessage
   | RemoteStatusMessage

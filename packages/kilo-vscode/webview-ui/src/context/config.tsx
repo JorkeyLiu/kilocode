@@ -11,7 +11,7 @@
 import { createContext, useContext, createSignal, createMemo, onCleanup } from "solid-js"
 import type { ParentComponent, Accessor } from "solid-js"
 import { useVSCode } from "./vscode"
-import type { Config, ExtensionMessage, FeatureFlags } from "../types/messages"
+import type { CanonicalConfigPayload, Config, ExtensionMessage, FeatureFlags } from "../types/messages"
 import {
   configUnsetPaths,
   deepMerge,
@@ -23,9 +23,27 @@ import {
   subtractSentDraft,
 } from "../utils/config-utils"
 import { splitConfigByScope } from "../utils/config-scope"
+import { getEntry } from "../../../src/config/registry"
+import type { CanonicalStamp } from "../../../src/config/types"
+import { toCanonicalPayload } from "../../../src/config/types"
 
 function has(value: Record<string, unknown>) {
   return Object.keys(value).length > 0
+}
+
+type ConfigStamp = CanonicalStamp
+
+function accepts(message: { canonical?: boolean; materializationVersion?: number }, stamp: ConfigStamp | undefined): boolean {
+  return !message.canonical || message.materializationVersion === undefined || message.materializationVersion >= (stamp?.materializationVersion ?? -1)
+}
+
+/** P4.1: canonical mode is only active after successful, error-free materialization. The explicit `ready` field carries the truth; canonical:true alone must not imply ready. */
+function isCanonicalReady(message: { canonical?: boolean; ready?: boolean; materializationVersion?: number }): boolean {
+  return !!message.canonical && message.materializationVersion !== undefined && message.materializationVersion > 0 && message.ready !== false
+}
+
+function diagnostics(message: { diagnostics?: Array<{ path: string[]; message: string }> }, set: (value: Array<{ path: string[]; message: string }>) => void): void {
+  if (message.diagnostics) set(message.diagnostics)
 }
 
 export interface SaveError {
@@ -38,11 +56,15 @@ interface ConfigContextValue {
   globalConfig: Accessor<Config>
   projectConfig: Accessor<Config>
   settings: Accessor<Record<string, unknown>>
+  stamp?: Accessor<ConfigStamp | undefined>
   features: Accessor<FeatureFlags>
   loading: Accessor<boolean>
   isDirty: Accessor<boolean>
   saving: Accessor<boolean>
   saveError: Accessor<SaveError | null>
+  canonical?: Accessor<boolean>
+  canonicalMode?: Accessor<boolean>
+  diagnostics?: Accessor<Array<{ path: string[]; message: string }>>
   updateConfig: (partial: Partial<Config>) => void
   updateGlobalConfig: (partial: Partial<Config>) => void
   updateProjectConfig: (partial: Partial<Config>) => void
@@ -96,8 +118,32 @@ export const ConfigProvider: ParentComponent = (props) => {
   // Error from the most recent saveConfig() attempt, or null if no error.
   // Cleared when the user edits the draft again or starts a new save.
   const [saveError, setSaveError] = createSignal<SaveError | null>(null)
+  const [stamp, setStamp] = createSignal<ConfigStamp>()
+  const [canonicalDiagnostics, setCanonicalDiagnostics] = createSignal<Array<{ path: string[]; message: string }>>([])
+  const [canonical, setCanonical] = createSignal(false)
+  const [canonicalMode, setCanonicalMode] = createSignal(false)
+
+  function filter(value: Partial<Config>) {
+    const unsupported = Object.keys(value).filter((key) => !getEntry(key))
+    if (unsupported.length > 0) {
+      setSaveError({ message: `Unsupported settings are read-only in canonical GUI config: ${unsupported.join(", ")}` })
+    }
+    return Object.fromEntries(Object.entries(value).filter(([key]) => getEntry(key))) as Partial<Config>
+  }
+
+  /** P4.1: update canonical mode and readiness from any canonical message. Mode is sticky; readiness closes on ready:false. */
+  function applyCanonicalState(message: { canonical?: boolean; ready?: boolean }) {
+    if (message.canonical) setCanonicalMode(true)
+    else if (canonicalMode()) return
+    if (isCanonicalReady(message)) setCanonical(true)
+    else if (message.canonical && message.ready === false) setCanonical(false)
+  }
 
   function applyConfigUpdated(message: Extract<ExtensionMessage, { type: "configUpdated" }>) {
+    if (!accepts(message, stamp())) return
+    applyCanonicalState(message)
+    if (message.canonical && "stamp" in message) setStamp(message.stamp)
+    setCanonicalDiagnostics(message.diagnostics ?? [])
     const id = message.saveID
     const pending = pendingSaveID()
     const last = lastSavedID()
@@ -111,6 +157,9 @@ export const ConfigProvider: ParentComponent = (props) => {
       sentByID.delete(id)
       return
     }
+    const config = message.config as Config
+    const global = message.globalConfig as Config | undefined
+    const project = message.projectConfig as Config | undefined
     if (confirmed) {
       // This configUpdated is the acknowledgement of our saveConfig() write.
       // Drop the sent fields from the drafts — but only where the current
@@ -134,57 +183,75 @@ export const ConfigProvider: ParentComponent = (props) => {
       setGlobalDraft(restGlobal)
       setProjectDraft(restProject)
       setSaveError(null)
-      setConfig(resolveConfig(message.config, rest, has(rest)))
-      if (message.globalConfig !== undefined) {
-        setGlobalConfig(mergeScopedConfig(message.globalConfig, restGlobal))
-        setSavedGlobal(message.globalConfig)
-      }
-      if (message.projectConfig !== undefined) {
-        setProjectConfig(mergeScopedConfig(message.projectConfig, restProject))
-        setSavedProject(message.projectConfig)
+       setConfig(resolveConfig(config, rest, has(rest)))
+       if (global !== undefined) {
+         setGlobalConfig(mergeScopedConfig(global, restGlobal))
+         setSavedGlobal(global)
+       }
+       if (project !== undefined) {
+         setProjectConfig(mergeScopedConfig(project, restProject))
+         setSavedProject(project)
       }
       setFeatures(message.features)
     } else {
       // configUpdated from a different source (e.g. PermissionDock save) or an
       // echo of the last confirmed save. Re-apply the draft on top so pending
       // settings changes are preserved.
-      setConfig(resolveConfig(message.config, draft(), has(draft() as Record<string, unknown>)))
-      if (message.globalConfig !== undefined) {
-        setGlobalConfig(mergeScopedConfig(message.globalConfig, globalDraft()))
-        setSavedGlobal(message.globalConfig)
-      }
-      if (message.projectConfig !== undefined) {
-        setProjectConfig(mergeScopedConfig(message.projectConfig, projectDraft()))
-        setSavedProject(message.projectConfig)
+       setConfig(resolveConfig(config, draft(), has(draft() as Record<string, unknown>)))
+       if (global !== undefined) {
+         setGlobalConfig(mergeScopedConfig(global, globalDraft()))
+         setSavedGlobal(global)
+       }
+       if (project !== undefined) {
+         setProjectConfig(mergeScopedConfig(project, projectDraft()))
+         setSavedProject(project)
       }
       setFeatures(message.features)
     }
     if (message.settings) mergeSettings(message.settings)
-    setSaved(message.config)
+     setSaved(config)
+  }
+
+  function handleConfigLoaded(message: Extract<ExtensionMessage, { type: "configLoaded" }>): void {
+    if (!accepts(message, stamp()) || saving()) return
+    applyCanonicalState(message)
+    const config = message.config as Config
+    const global = message.globalConfig as Config | undefined
+    const project = message.projectConfig as Config | undefined
+    setConfig(resolveConfig(config, draft(), has(draft() as Record<string, unknown>)))
+    setFeatures(message.features)
+    if (message.canonical && "stamp" in message) setStamp(message.stamp)
+    setCanonicalDiagnostics(message.diagnostics ?? [])
+    setSaved(config)
+    if (message.settings) mergeSettings(message.settings)
+    if (global !== undefined) {
+      setGlobalConfig(mergeScopedConfig(global, globalDraft()))
+      setSavedGlobal(global)
+    }
+    if (project !== undefined) {
+      setProjectConfig(mergeScopedConfig(project, projectDraft()))
+      setSavedProject(project)
+    }
+    setLoading(false)
+  }
+
+  function handleConfigFailure(message: Extract<ExtensionMessage, { type: "configUpdateFailed" }>): void {
+    if (message.saveID !== undefined && message.saveID !== pendingSaveID()) {
+      sentByID.delete(message.saveID)
+      return
+    }
+    setSaving(false)
+    setPendingSaveID(null)
+    if (message.saveID !== undefined) sentByID.delete(message.saveID)
+    setSaveError({ message: message.message, details: message.details })
+    if (message.canonical && "stamp" in message) setStamp(message.stamp)
   }
 
   // Register handler immediately (not in onMount) so we never miss
   // a configLoaded message that arrives before the DOM mount.
   const unsubscribe = vscode.onMessage((message: ExtensionMessage) => {
     if (message.type === "configLoaded") {
-      // Skip if a save is in-flight — a stale configLoaded must not overwrite
-      // the optimistically-updated state while the write is being confirmed.
-      if (saving()) return
-      // Re-apply the draft on top so pending changes (e.g. a toggled switch the
-      // user hasn't saved yet) stay visible instead of snapping back.
-      setConfig(resolveConfig(message.config, draft(), has(draft() as Record<string, unknown>)))
-      setFeatures(message.features)
-      setSaved(message.config)
-      if (message.settings) mergeSettings(message.settings)
-      if (message.globalConfig !== undefined) {
-        setGlobalConfig(mergeScopedConfig(message.globalConfig, globalDraft()))
-        setSavedGlobal(message.globalConfig)
-      }
-      if (message.projectConfig !== undefined) {
-        setProjectConfig(mergeScopedConfig(message.projectConfig, projectDraft()))
-        setSavedProject(message.projectConfig)
-      }
-      setLoading(false)
+      handleConfigLoaded(message)
       return
     }
     if (message.type === "globalConfigLoaded") {
@@ -198,20 +265,16 @@ export const ConfigProvider: ParentComponent = (props) => {
       return
     }
     if (message.type === "configUpdateFailed") {
-      // A stale failure for an older save must not disturb the active save;
-      // it only releases that save's sent snapshot (the draft stays for retry).
-      if (message.saveID !== undefined && message.saveID !== pendingSaveID()) {
-        sentByID.delete(message.saveID)
-        return
-      }
-      // The write was rejected (e.g. schema validation) — surface the error
-      // and keep the draft + isDirty so the user can correct and retry. The
-      // failed save's sent snapshot is released; its paths remain in the draft.
-      setSaving(false)
-      setPendingSaveID(null)
-      if (message.saveID !== undefined) sentByID.delete(message.saveID)
-      setSaveError({ message: message.message, details: message.details })
+      handleConfigFailure(message)
       return
+    }
+    if (message.type === "canonicalConfigError") {
+      // P4.1: error closes readiness; retain canonicalMode and stamp so the
+      // webview can recover when a later ready:true arrives.
+      setCanonical(false)
+      setCanonicalDiagnostics([{ path: [], message: message.message }])
+      setSaveError({ message: message.message })
+      if ("stamp" in message) setStamp(message.stamp)
     }
   })
 
@@ -251,24 +314,30 @@ export const ConfigProvider: ParentComponent = (props) => {
   })
 
   function updateConfig(partial: Partial<Config>) {
+    const supported = filter(partial)
+    if (!has(supported as Record<string, unknown>)) return
     // Optimistically update local state with deep merge + null stripping
-    setConfig((prev) => stripNulls(deepMerge(prev, partial)))
+    setConfig((prev) => stripNulls(deepMerge(prev, supported)))
     // Accumulate in draft — will be sent on saveConfig()
-    setDraft((prev) => deepMerge(prev as Config, partial))
+    setDraft((prev) => deepMerge(prev as Config, supported))
     // Clear any stale error from a previous failed save — the user is editing
     // again, so the old error message no longer reflects the current draft.
     setSaveError(null)
   }
 
   function updateGlobalConfig(partial: Partial<Config>) {
-    setGlobalConfig((prev) => mergeScopedConfig(prev, partial))
-    setGlobalDraft((prev) => deepMerge(prev as Config, partial))
+    const supported = filter(partial)
+    if (!has(supported as Record<string, unknown>)) return
+    setGlobalConfig((prev) => mergeScopedConfig(prev, supported))
+    setGlobalDraft((prev) => deepMerge(prev as Config, supported))
     setSaveError(null)
   }
 
   function updateProjectConfig(partial: Partial<Config>) {
-    setProjectConfig((prev) => mergeScopedConfig(prev, partial))
-    setProjectDraft((prev) => deepMerge(prev as Config, partial))
+    const supported = filter(partial)
+    if (!has(supported as Record<string, unknown>)) return
+    setProjectConfig((prev) => mergeScopedConfig(prev, supported))
+    setProjectDraft((prev) => deepMerge(prev as Config, supported))
     setSaveError(null)
   }
 
@@ -299,29 +368,53 @@ export const ConfigProvider: ParentComponent = (props) => {
       setSettingsDraft({})
     }
     if (!configDirty && !globalDirty && !projectDirty) return
+    // P4.1 gate: reject saves before canonical readiness — no legacy
+    // canonical:false mutation window is permitted.
+    if (!canonical()) {
+      setSaveError({ message: "Canonical config is not ready" })
+      return
+    }
     // LOCK-001: globally unique save identity — no provider-local counter that
     // can collide across webview reloads or windows.
     const saveID = newSaveID()
-    // Don't clear draft/isDirty yet — wait for configUpdated confirmation.
-    // If the write fails, the save bar stays visible so the user can retry.
-    setSaving(true)
-    setPendingSaveID(saveID)
+    if (!stamp()) {
+      setSaveError({ message: "Canonical config stamp is unavailable" })
+      return
+    }
     // Split so per-project settings (e.g. commit_message.prompt) land in the
     // workspace's kilo.json instead of the global one. Send one message so the
     // extension confirms only after both scopes are saved.
     const split = splitConfigByScope(changes)
     const next = deepMerge(split.global as Config, globals)
     const project = deepMerge(split.project as Config, projects)
+    // P4.1: validate canonical payload BEFORE marking in-flight so a
+    // toCanonicalPayload failure never leaves saving/pendingIDs stuck.
+    const canonicalPayload = toCanonicalPayload(pruneConfigSet(next) as Record<string, unknown>)
+    if (!canonicalPayload) {
+      setSaveError({ message: "Canonical config payload contains unsupported fields" })
+      return
+    }
+    const projectPayload = toCanonicalPayload(pruneConfigSet(project) as Record<string, unknown>)
+    if (!projectPayload && projectDirty) {
+      setSaveError({ message: "Canonical project config payload contains unsupported fields" })
+      return
+    }
+    // Don't clear draft/isDirty yet — wait for configUpdated confirmation.
+    // If the write fails, the save bar stays visible so the user can retry.
+    setSaving(true)
+    setPendingSaveID(saveID)
     // LOCK-002: snapshot exactly what was sent under the save identity so the
     // matching ack can preserve same-field edits made while the save flew.
     sentByID.set(saveID, { changes, globals, projects })
     vscode.postMessage({
       type: "updateConfig",
-      config: pruneConfigSet(next) as Config,
-      projectConfig: pruneConfigSet(project) as Config,
+      canonical: true,
+      config: canonicalPayload,
+      projectConfig: projectPayload,
       globalUnset: configUnsetPaths(next),
       projectUnset: configUnsetPaths(project),
       saveID,
+      stamp: stamp()!,
     })
   }
 
@@ -342,11 +435,15 @@ export const ConfigProvider: ParentComponent = (props) => {
     globalConfig,
     projectConfig,
     settings,
+    stamp,
     features,
     loading,
     isDirty,
     saving,
     saveError,
+    canonical,
+    canonicalMode,
+    diagnostics: canonicalDiagnostics,
     updateConfig,
     updateGlobalConfig,
     updateProjectConfig,

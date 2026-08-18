@@ -25,9 +25,10 @@ interface Props {
   onRemove: (agent: AgentInfo) => void
 }
 
+// eslint-disable-next-line complexity
 const ModeEditView: Component<Props> = (props) => {
   const language = useLanguage()
-  const { config, updateConfig } = useConfig()
+  const { config, updateConfig, canonical } = useConfig()
   const provider = useProvider()
   const session = useSession()
 
@@ -38,7 +39,10 @@ const ModeEditView: Component<Props> = (props) => {
   const native = () => agent()?.native ?? false
   const [expanded, setExpanded] = createSignal(false)
 
-  const cfg = createMemo<AgentConfig>(() => config().agent?.[props.name] ?? {})
+  const cfg = createMemo<AgentConfig>(() => {
+    const item = agent()
+    return item ? ({ ...(item.frontmatter ?? {}), prompt: item.body ?? "" } as AgentConfig) : {}
+  })
   const model = createMemo(() => parseModelString(cfg().model ?? undefined))
   const variants = createMemo(() => {
     const sel = model()
@@ -48,25 +52,33 @@ const ModeEditView: Component<Props> = (props) => {
   const showVariant = () => variants().length > 0 || !!cfg().variant
 
   const update = (partial: Partial<AgentConfig>) => {
-    updateConfig(agentPatch(props.name, partial))
+    if (canonical?.()) return
+    const current = agent()
+    const frontmatter = { ...(current?.frontmatter ?? {}), ...partial }
+    delete frontmatter.prompt
+    session.mutateAgent({ action: "edit", name: props.name, frontmatter, body: typeof partial.prompt === "string" ? partial.prompt : current?.body ?? cfg().prompt ?? "" })
   }
 
   const selectModel = (providerID: string, modelID: string) => {
+    if (canonical?.()) return
     const sel = { providerID, modelID }
     const list = Object.keys(provider.findModel(sel)?.variants ?? {})
     update(modelPatch(providerID, modelID, list, cfg().variant))
   }
 
   const selectVariant = (value: string) => {
+    if (canonical?.()) return
     update({ variant: value })
   }
 
   const clearVariant = () => {
+    if (canonical?.()) return
     update({ variant: null })
   }
 
   const updatePermission = (patch: PermissionConfig) => {
-    updateConfig(agentPatch(props.name, { permission: patch }))
+    if (canonical?.()) return
+    update({ permission: patch })
   }
 
   const exportMode = () => {
@@ -82,7 +94,7 @@ const ModeEditView: Component<Props> = (props) => {
   }
 
   return (
-    <div>
+      <div>
       <div
         style={{
           display: "flex",
@@ -105,15 +117,18 @@ const ModeEditView: Component<Props> = (props) => {
               icon="download"
               title={language.t("settings.agentBehaviour.exportMode")}
               onClick={exportMode}
+              disabled={canonical?.() === true}
             />
             <IconButton
               size="small"
               variant="ghost"
               icon="close"
               onClick={() => {
+                if (canonical?.()) return
                 const a = agent()
                 if (a) props.onRemove(a)
               }}
+              disabled={canonical?.() === true}
             />
           </div>
         </Show>
@@ -143,6 +158,7 @@ const ModeEditView: Component<Props> = (props) => {
             value={cfg().description ?? ""}
             placeholder={language.t("settings.agentBehaviour.createMode.description.placeholder")}
             onChange={(val) => update({ description: val || undefined })}
+            disabled={canonical?.() === true}
           />
         </Card>
       </Show>
@@ -159,6 +175,7 @@ const ModeEditView: Component<Props> = (props) => {
           placeholder={language.t("settings.agentBehaviour.createMode.prompt.placeholder")}
           multiline
           onChange={(val) => update({ prompt: val || undefined })}
+          disabled={canonical?.() === true}
         />
       </Card>
 
@@ -204,7 +221,8 @@ const ModeEditView: Component<Props> = (props) => {
           <TextField
             value={cfg().temperature?.toString() ?? ""}
             placeholder={language.t("common.default")}
-            onChange={(val) => {
+              onChange={(val) => {
+                if (canonical?.()) return
               const parsed = parseFloat(val)
               update({ temperature: isNaN(parsed) ? undefined : parsed })
             }}
@@ -218,7 +236,8 @@ const ModeEditView: Component<Props> = (props) => {
           <TextField
             value={cfg().top_p?.toString() ?? ""}
             placeholder={language.t("common.default")}
-            onChange={(val) => {
+              onChange={(val) => {
+                if (canonical?.()) return
               const parsed = parseFloat(val)
               update({ top_p: isNaN(parsed) ? undefined : parsed })
             }}
@@ -234,8 +253,10 @@ const ModeEditView: Component<Props> = (props) => {
             placeholder={language.t("common.default")}
             onChange={(val) => {
               const parsed = parseInt(val, 10)
+              if (canonical?.()) return
               update({ steps: isNaN(parsed) ? undefined : parsed })
             }}
+            disabled={canonical?.() === true}
           />
         </SettingsRow>
 
@@ -246,6 +267,7 @@ const ModeEditView: Component<Props> = (props) => {
           <Switch
             checked={cfg().hidden ?? false}
             onChange={(val) => {
+              if (canonical?.()) return
               // Send explicit `false` (not `undefined`) so deepMerge can overwrite a previously-saved `true`.
               update({ hidden: val })
               // Clear default_agent if hiding the current default (null = delete sentinel).
@@ -253,6 +275,7 @@ const ModeEditView: Component<Props> = (props) => {
                 updateConfig({ default_agent: null })
               }
             }}
+            disabled={canonical?.() === true}
             hideLabel
           >
             {language.t("settings.agentBehaviour.hidden.title")}
@@ -267,6 +290,7 @@ const ModeEditView: Component<Props> = (props) => {
           <Switch
             checked={cfg().disable ?? false}
             onChange={(val) => {
+              if (canonical?.()) return
               // Send explicit `false` (not `undefined`) so deepMerge can overwrite a previously-saved `true`.
               update({ disable: val })
               // Clear default_agent if disabling the current default (null = delete sentinel).
@@ -274,6 +298,7 @@ const ModeEditView: Component<Props> = (props) => {
                 updateConfig({ default_agent: null })
               }
             }}
+            disabled={canonical?.() === true}
             hideLabel
           >
             {language.t("settings.agentBehaviour.disable.title")}

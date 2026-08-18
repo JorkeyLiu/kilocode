@@ -193,14 +193,77 @@ VS Code extension has two terminal paths:
 
 Agent Manager PTY WebSocket URL uses `auth_token=<base64 kilo:password>` query mode because browser WebSocket API cannot attach Basic header. Webview CSP permits loopback HTTP and WebSocket origins for active server port. CLI also exposes scope-bound short-lived PTY ticket API as alternate browser WebSocket auth mode.
 
-## Config split
+## Canonical config (P4.1)
 
-| Config owner | Examples |
+The extension owns a **file-authoritative** GUI configuration layer (LOCK-010). User-authored effective configuration is authored and persisted through exactly two canonical JSONC files and six typed asset directories per scope — the UI is a bidirectional editor over these files, not a separate config store.
+
+### Canonical authored scopes
+
+| Scope | Config file | Asset directories |
+|---|---|---|
+| Global | `~/.config/kilo/kilo.jsonc` | `~/.config/kilo/{agent,command,skill,tool,plugin,rules}/` |
+| Project | `<workspaceRoot>/.kilo/kilo.jsonc` | `<workspaceRoot>/.kilo/{agent,command,skill,tool,plugin,rules}/` |
+
+The global root is resolved from the platform home directory via `packages/kilo-vscode/src/config/paths.ts` (`Roots` class); tests inject roots for isolation. Canonical project scope exists only when a first VS Code workspace folder is open. With no workspace, the service operates global-only: no project watchers start, and project-scope writes and asset operations are rejected.
+
+### Closed field registry
+
+An 11-field closed JSONC registry defines every configurable field class (`packages/kilo-vscode/src/config/registry.ts`). Unknown or deprecated fields are rejected. Each field carries a complete registry entry: owner, persistence, legal scope (global-only / project-only / both-with-typed-composition), composition operator, secret handling, snapshot inclusion, provenance, and removal disposition. Validation is enforced by the separate closed `fieldSchemas` mapping and contextual validators (`packages/kilo-vscode/src/config/validate.ts`), not as per-entry registry metadata.
+
+| Field class | Composition | Scope |
+|---|---|---|
+| `model`, `model_variant`, `model_variant_overrides` | single / single / keyed | global + project |
+| `subagent_model`, `subagent_variant`, `subagent_variant_overrides` | single / single / keyed | global + project |
+| `default_agent` | single | global + project |
+| `provider` | keyed | global + project |
+| `mcp` | keyed | global + project |
+| `permission` | restrictive | global + project |
+| `instructions` | ordered | global + project |
+
+Typed asset classes (agent, command, skill, tool, plugin, rules) exist as markdown files in their canonical directories — never as top-level JSONC records. The closed JSONC registry and the typed asset classes are separate canonical asset classes, not competing field definitions.
+
+### Service and lifecycle
+
+`CanonicalConfigService` (`packages/kilo-vscode/src/config/service.ts`) is a lifecycle-owned singleton created during extension activation. One instance owns file watchers, materialization state, content/version stamps, a `SecretStorage` adapter for opaque credential references, and derived selector indexes (provider, agent, model) persisted through VS Code state adapters.
+
+```mermaid
+flowchart LR
+  subgraph host ["Extension host"]
+    service["CanonicalConfigService"]
+    providers["Provider/Agent/Model selectors"]
+    webviews["KiloProvider webviews"]
+  end
+
+  global["~/.config/kilo/kilo.jsonc"]
+  project["<workspaceRoot>/.kilo/kilo.jsonc"]
+  secrets["VS Code SecretStorage"]
+  state["VS Code globalState / workspaceState"]
+
+  service --> global
+  service --> project
+  service --> secrets
+  service --> state
+  providers --> service
+  webviews --> providers
+```
+
+| Aspect | Behavior |
 |---|---|
-| VS Code settings | `kilo-code.new.*` extension UI, proxy, and integration settings |
-| CLI config | Global and project `kilo.jsonc`, `kilo.json`, compatible OpenCode files, provider auth, tools, permissions, modes |
+| Initialization | Rehydrate persisted indexes → scan asset directories → materialize from disk → start file watchers |
+| External edits | Watcher detects change → re-materialize → emit new snapshot |
+| GUI writes | Atomic file edit with stale-detection → validate scoped candidate + cross-scope composition → commit → re-materialize |
+| Invalid edits | Retain exact prior valid materialization; emit diagnostics; never silently fall back to legacy values |
+| Own writes | Per-file timestamp coalescing — never suppress external edits |
+| Readiness | `materializationReady` is true only after an error-free materialization; snapshot existence alone is not readiness |
+| Secrets | Credentials stored as opaque `secret:kilo.credentials.<scope>.<kind>.<id>` refs in JSONC; plaintext never leaves the extension host |
 
-Extension-specific behavior belongs in VS Code settings. Agent runtime behavior belongs in CLI config so the TUI and VS Code can share it.
+### WYSIWYG and stale-draft handling
+
+Every GUI write applies a partial set/unset patch to the current stamped document (not replacement). Both scoped candidates and cross-scope composition are validated before any byte is changed. Writes use temp-file + rename for atomicity. Final CAS (content-address stamp) checks immediately before rename detect concurrent external edits and return stale-write conflicts instead of silent overwrites.
+
+### Retained migration bridge
+
+The current `kilo serve` HTTP/SSE/SDK transport remains the active migration bridge (LOCK-009). The CLI backend continues to consume config through its own readers during the transition. P4.3 will atomically cut over legacy readers; until then, the CLI remains a bridge and the canonical file-authoritative GUI layer described above is the new extension-owned config surface. VS Code settings (`kilo-code.new.*` extension UI, proxy, and integration settings) remain separate from the canonical config boundary.
 
 ## Bundled resources
 
@@ -209,7 +272,7 @@ Extension-specific behavior belongs in VS Code settings. Agent runtime behavior 
 | CLI executable | Platform binary under extension `bin/`; Windows uses `kilo.exe` |
 | CLI Tree-sitter WASM | Copied under `bin/tree-sitter`; backend spawn sets `KILO_TREE_SITTER_WASM_DIR` |
 | FFmpeg helper | Bundled for supported targets for speech capture; capture code also checks system fallback paths |
-| Empty-window cwd | Uses extension global storage directory when no VS Code workspace folder exists |
+| No-workspace behavior | With no VS Code workspace folder, the config service operates global-only; project watchers are not started and project-scope writes are rejected |
 
 Speech-to-text captures audio locally, then sends completed recording through shared editor-owned `kilo serve` server to authenticated Kilo Gateway transcription path. It is batch transcription, not direct provider streaming.
 
@@ -267,7 +330,7 @@ This harness spans a real Extension Host, Electron/CDP, and fixture lifecycle bo
 | Xvfb | Verified or installed explicitly (`apt-get install -y xvfb`) before the run |
 | Cache scope | Only `packages/kilo-vscode/.vscode-test` (the VS Code download) is cached, keyed Linux/x64 by the resolved target SHA and the extension package manifest; scratch, user-data, workspace, and profile are never cached, and an executable cache from a different target commit is never restored |
 | Clean checkout | Each run starts from a fresh checkout of the immutable SHA, runs `bun install`, and builds the bundled CLI (`bun script/local-bin.ts`) with `KILO_SKIP_BUNDLED_BWRAP=1` scoped to that one step: the Linux runner installs no Zig, the E2E fixture coverage never invokes sandbox tooling, and production `ServerManager` tolerates a missing local bwrap, so the CLI runs without a bundled bwrap; release/package validation (`bun run package:vsix`) remains the separate path that stages bundled sandbox resources. The probe then builds the extension/webview bundles and auto-downloads VS Code — proving the harness works from scratch |
-| Failure diagnostics | Complete E2E stdout/stderr is captured via `set -o pipefail` + `tee` into a runner-owned diagnostics directory and uploaded on failure or cancellation (`if: failure() || cancelled()`) with 7-day bounded retention; GitHub hard job cancellation can still prevent later steps. Harness scratch and exact-PID cleanup are untouched |
+| Failure diagnostics | Complete E2E stdout/stderr is captured via `set -o pipefail` + `tee` into a runner-owned diagnostics directory and uploaded on failure or cancellation (`if: failure() |  | cancelled()`) with 7-day bounded retention; GitHub hard job cancellation can still prevent later steps. Harness scratch and exact-PID cleanup are untouched |
 | Resource lifecycle | Workflow timeout is bounded above the harness watchdog (`KILO_E2E_TIMEOUT`); no broad process killing or global cleanup — the harness's exact-owned termination and CDP-port verification are the only process controls |
 
 E2E remains never-automatic: the workflow is a read-only, explicit, manual act, and macOS runs stay local-only.
@@ -279,6 +342,7 @@ Paths below are relative to [`Kilo-Org/kilocode`](https://github.com/Kilo-Org/ki
 | Concern | Source path |
 |---|---|
 | Activation | `packages/kilo-vscode/src/extension.ts` |
+| Canonical config foundation | `packages/kilo-vscode/src/config/` (service, registry, types, paths, materialize, compose, validate, write, parse, selectors, snapshot, secret-adapter, state-adapter) |
 | Editor-owned server child process | `packages/kilo-vscode/src/services/cli-backend/server-manager.ts` |
 | Shared SDK and SSE ownership | `packages/kilo-vscode/src/services/cli-backend/connection-service.ts` |
 | SSE reconnect adapter | `packages/kilo-vscode/src/services/cli-backend/sdk-sse-adapter.ts` |

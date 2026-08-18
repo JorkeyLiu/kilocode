@@ -38,6 +38,7 @@ export interface ThinkingSelectorBaseProps {
   deferDismiss?: boolean
   /** Listen for the global prompt trigger event. Defaults to true. */
   globalTrigger?: boolean
+  disabled?: boolean
 }
 
 export const ThinkingSelectorBase: Component<ThinkingSelectorBaseProps> = (props) => {
@@ -66,6 +67,7 @@ export const ThinkingSelectorBase: Component<ThinkingSelectorBaseProps> = (props
   }
 
   function onOpen(val: boolean) {
+    if (props.disabled) return
     if (val) {
       const items = rows()
       const idx = items.findIndex((v) => v === props.value)
@@ -78,6 +80,7 @@ export const ThinkingSelectorBase: Component<ThinkingSelectorBaseProps> = (props
   }
 
   const onTrigger = () => {
+    if (props.disabled) return
     if (rows().length === 0) return
     onOpen(true)
   }
@@ -87,6 +90,7 @@ export const ThinkingSelectorBase: Component<ThinkingSelectorBaseProps> = (props
   }
 
   function pick(value: string | undefined) {
+    if (props.disabled) return
     if (value === undefined) {
       props.onClear?.()
       onOpen(false)
@@ -145,7 +149,7 @@ export const ThinkingSelectorBase: Component<ThinkingSelectorBaseProps> = (props
         open={open()}
         onOpenChange={onOpen}
         triggerAs={Button}
-        triggerProps={{ variant: "ghost", size: "small" }}
+         triggerProps={{ variant: "ghost", size: "small", disabled: props.disabled }}
         trigger={
           <>
             <span class="thinking-selector-trigger-label">{display(props.value)}</span>

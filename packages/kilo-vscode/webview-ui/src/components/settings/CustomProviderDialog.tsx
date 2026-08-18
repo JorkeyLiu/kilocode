@@ -23,19 +23,10 @@ import {
   type CustomProviderPackage,
 } from "../../../../src/shared/provider-model"
 import { ModelCard } from "./CustomProviderModelCard"
-import type {
-  ChatTemplateArgsValue,
-  EnableThinkingValue,
-  Modalities,
-  Modality,
-  ModelEntry,
-  OutputEffortValue,
-  ReasoningEffortValue,
-  ThinkingTypeValue,
-  VariantEntry,
-} from "./CustomProviderModelCard"
-import { validateCustomProvider } from "./CustomProviderValidation"
+import type { Modalities, Modality, ModelEntry, VariantEntry } from "./CustomProviderModelCard"
+import { validateCustomProvider, serializeCanonicalProvider, parseVariant } from "./CustomProviderValidation"
 import type { FormErrors, FormState, HeaderRow } from "./CustomProviderValidation"
+import type { CanonicalProviderVariantPayload } from "../../../../src/config/types"
 const DEBOUNCE_MS = 500
 const SEARCH_DEBOUNCE_MS = 150
 
@@ -61,7 +52,7 @@ type RawModel = {
   name?: string
   reasoning?: boolean
   modalities?: { input?: unknown; output?: unknown }
-  variants?: Record<string, Record<string, unknown>>
+  variants?: Record<string, CanonicalProviderVariantPayload>
 }
 
 // Keep this aligned with the CLI provider schema; the UI only exposes image.
@@ -84,25 +75,6 @@ function modes(raw: unknown): Modalities {
   return {
     ...(input ? { input } : {}),
     ...(output ? { output } : {}),
-  }
-}
-
-function parseVariant([name, cfg]: [string, Record<string, unknown>]): VariantEntry {
-  return {
-    name,
-    enableThinking: typeof cfg.enable_thinking === "boolean" ? cfg.enable_thinking : undefined,
-    thinking:
-      typeof cfg.thinking === "object" && cfg.thinking !== null
-        ? ((cfg.thinking as { type?: string }).type as ThinkingTypeValue)
-        : undefined,
-    splitReasoning: typeof cfg.reasoning_split === "boolean" ? cfg.reasoning_split : undefined,
-    reasoningEffort:
-      typeof cfg.reasoningEffort === "string" ? (cfg.reasoningEffort as ReasoningEffortValue) : undefined,
-    outputEffort: typeof cfg.effort === "string" ? (cfg.effort as OutputEffortValue) : undefined,
-    chatTemplateArgs:
-      typeof cfg.chat_template_args === "object" && cfg.chat_template_args !== null
-        ? ((cfg.chat_template_args as { enable_thinking?: boolean }).enable_thinking as ChatTemplateArgsValue)
-        : undefined,
   }
 }
 
@@ -168,12 +140,13 @@ export interface CustomProviderDialogProps {
 
 const CustomProviderDialog = (props: CustomProviderDialogProps) => {
   const dialog = useDialog()
-  const { config } = useConfig()
+  const { config, canonical: configCanonical } = useConfig()
   const provider = useProvider()
   const language = useLanguage()
   const vscode = useVSCode()
   const action = createProviderAction(vscode)
   onCleanup(action.dispose)
+  const isCanonical = () => configCanonical?.() === true || provider.canonical?.() === true
 
   const editing = () => !!props.existing
 
@@ -199,6 +172,10 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
   /** Request the saved credential on demand for an existing API-backed custom provider. */
   function requestCredential() {
     if (!props.existing) return
+    if (provider.providers()[props.existing.providerID]?.hasCredential !== undefined) {
+      setCredentialLoading(false)
+      return
+    }
     setCredentialLoading(true)
     setCredentialError(undefined)
     pendingCredentialID = action.send(
@@ -207,11 +184,12 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
         onCredentialLoaded: (message) => {
           if (pendingCredentialID === undefined) return
           pendingCredentialID = undefined
-          setOriginalKey(message.apiKey)
-          // Only seed the form field if the user hasn't started typing (LOCK: guard overwrite)
-          if (!apiTouched()) {
-            setForm("apiKey", message.apiKey)
-          }
+            if (message.canonical || !message.apiKey) {
+              setCredentialLoading(false)
+              return
+            }
+           setOriginalKey(message.apiKey)
+           if (!apiTouched()) setForm("apiKey", message.apiKey)
           setCredentialLoading(false)
         },
         onCredentialError: (message) => {
@@ -305,7 +283,7 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
     const url = fetchURL().trim()
     const raw = fetchKey().trim()
     const env = raw.match(/^\{env:([^}]+)\}$/)?.[1]?.trim()
-    const apiKey = raw && !env ? raw : undefined
+     const apiKey = isCanonical() ? undefined : raw && !env ? raw : undefined
     // When editing an existing provider with the key field untouched, the
     // webview has no key to send — keys are stripped before provider data
     // reaches it. Send the providerID so the extension can authenticate the
@@ -330,6 +308,8 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
     setSearch("")
 
     const rid = crypto.randomUUID()
+    const currentStamp = provider.stamp?.()
+    if (isCanonical() && !currentStamp) return
 
     const unsub = vscode.onMessage((msg: ExtensionMessage) => {
       if (msg.type !== "customProviderModelsFetched") return
@@ -365,14 +345,21 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
       setFetchedModels(fresh)
     })
 
-    vscode.postMessage({
+    vscode.postMessage(({
       type: "fetchCustomProviderModels",
       requestId: rid,
       baseURL: url,
-      apiKey,
       providerID,
       headers,
-    })
+       ...(!isCanonical() ? { apiKey } : {}),
+      ...(isCanonical()
+        ? {
+            canonical: true as const,
+            credentialRequested: !!raw && !env,
+             stamp: currentStamp!,
+          }
+        : {}),
+    }) as Parameters<typeof vscode.postMessage>[0])
   }
 
   // ── Model picker actions ────────────────────────────────────────────
@@ -543,19 +530,34 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
   function save(e: SubmitEvent) {
     e.preventDefault()
     if (form.saving) return
+    const currentStamp = provider.stamp?.()
+    if (isCanonical() && !currentStamp) return
 
     const result = validate()
     if (!result) return
 
     setForm("saving", true)
 
+    // Canonical path: serialize to {name, endpoint, protocol, models} directly.
+    // Never invoke legacy serializer shape (npm/options/headers/env).
+    const canonicalConfig = isCanonical() ? serializeCanonicalProvider(form) : undefined
+    if (isCanonical() && !canonicalConfig) {
+      setForm("saving", false)
+      return
+    }
+
     action.send(
       {
         type: "saveCustomProvider",
         providerID: result.providerID,
-        config: result.config,
-        apiKey: apiTouched() ? result.key : undefined,
-        apiKeyChanged: apiTouched(),
+        ...(isCanonical()
+          ? {
+              config: canonicalConfig!,
+              canonical: true as const,
+              credentialRequested: apiTouched(),
+              stamp: currentStamp!,
+            }
+          : { config: result.config, apiKey: apiTouched() ? result.key : undefined, apiKeyChanged: apiTouched() }),
       },
       {
         onConnected: () => {
@@ -620,7 +622,7 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
 
           {/* Basic settings: 2-column grid that collapses at narrow widths */}
           <div class="cpd-basic-grid">
-            <TextField
+                 <TextField
               autofocus={!editing()}
               label={language.t("provider.custom.field.providerID.label")}
               placeholder={language.t("provider.custom.field.providerID.placeholder")}
@@ -629,13 +631,14 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
               onChange={(v) => setForm("providerID", v)}
               validationState={errors.providerID ? "invalid" : undefined}
               error={errors.providerID}
-              disabled={editing()}
+              disabled={editing() || isCanonical()}
             />
             <TextField
               label={language.t("provider.custom.field.name.label")}
               placeholder={language.t("provider.custom.field.name.placeholder")}
               value={form.name}
-              onChange={(v) => setForm("name", v)}
+               onChange={(v) => setForm("name", v)}
+              disabled={isCanonical()}
               validationState={errors.name ? "invalid" : undefined}
               error={errors.name}
             />
@@ -648,7 +651,8 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
                 current={PACKAGE_OPTIONS.find((option) => option.value === form.npm)}
                 value={(option) => option.value}
                 label={(option) => option.label}
-                onSelect={(option) => {
+                 onSelect={(option) => {
+                   if (isCanonical()) return
                   if (!option) return
                   setForm("npm", option.value)
                   setFetchPackage(option.value)
@@ -661,7 +665,8 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
               label={language.t("provider.custom.field.baseURL.label")}
               placeholder={language.t("provider.custom.field.baseURL.placeholder")}
               value={form.baseURL}
-              onChange={(v) => {
+               onChange={(v) => {
+                 if (isCanonical()) return
                 setForm("baseURL", v)
                 setFetchURL(v)
               }}
@@ -669,6 +674,12 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
               error={errors.baseURL}
             />
 
+            <Show when={isCanonical()}>
+              <div class="cpd-api-key-row" aria-disabled="true" title="Credential input is collected by the extension host">
+                Credential input is collected securely by the extension host when this provider is saved.
+              </div>
+            </Show>
+            <Show when={!isCanonical()}>
             {/* API key: full-width row spanning both columns */}
             <div class="cpd-api-key-row">
               <Show when={credentialLoading()}>
@@ -750,6 +761,7 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
                 </TextFieldRoot>
               </Show>
             </div>
+            </Show>
           </div>
 
           {/* Models section */}
@@ -911,6 +923,7 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
           </div>
 
           {/* Headers section */}
+          <Show when={!isCanonical()}>
           <div class="cpd-section">
             <hr class="cpd-divider" />
             <label class="cpd-section-label">
@@ -957,6 +970,7 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
               {language.t("provider.custom.headers.add")}
             </Button>
           </div>
+          </Show>
 
           {/* Sticky footer */}
           <div class="cpd-footer">

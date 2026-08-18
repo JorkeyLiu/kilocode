@@ -24,6 +24,9 @@ import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
 import { resolveReloadDirectory } from "./reload-directory"
+import { CanonicalConfigService } from "./config/service"
+import { createVscodeStateAdapter, createVscodeWatcherAdapter } from "./config/state-adapter"
+import { Roots } from "./config/paths"
 
 let agentManager: AgentManagerProvider | undefined
 let shuttingDown = false
@@ -142,6 +145,26 @@ export function activate(context: vscode.ExtensionContext) {
   // Create shared connection service (one server for all webviews)
   const connectionService = new KiloConnectionService(context)
   const notebookBridge = createNotebookBridge(connectionService)
+
+  // P4.1: Create canonical config service — lifecycle-owned singleton that owns
+  // file watchers, materialization state, credential storage, and selector indexes.
+  // Existing backend/SSE runtime bridge continues until P4.3; this service is additive.
+  // Must initialize before consumers subscribe; initialization rehydrates
+  // compatible derived indexes for immediate presentation, then reconciles
+  // canonical disk state. Initialization failure is logged and does not block
+  // unrelated extension functionality.
+  const canonicalConfig = new CanonicalConfigService(context, {
+    roots: new Roots(
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+    ),
+    globalState: createVscodeStateAdapter(context.globalState),
+    workspaceState: createVscodeStateAdapter(context.workspaceState),
+    watcherAdapter: createVscodeWatcherAdapter(),
+  })
+  context.subscriptions.push(canonicalConfig)
+  canonicalConfig.initialize().catch((err) => {
+    console.error("[Kilo New] CanonicalConfigService initialization failed:", err)
+  })
   let restore = context.workspaceState.get<RestoreState>(RESTORE_KEY) ?? {}
   const remember = (patch: RestoreState) => {
     const next = { ...restore, ...patch }
@@ -239,7 +262,7 @@ export function activate(context: vscode.ExtensionContext) {
   const ensureChatTab = async (): Promise<KiloProvider> => {
     const tab = activeTabProvider()
     if (tab) return tab
-    return openKiloInNewTab(context, connectionService, agentManagerProvider, remoteService, autoApprove)
+    return openKiloInNewTab(context, connectionService, agentManagerProvider, remoteService, autoApprove, canonicalConfig)
   }
 
   // Ensure Agent Manager navigation keybindings work when a VS Code terminal has focus.
@@ -250,7 +273,7 @@ export function activate(context: vscode.ExtensionContext) {
   ensureCommandsSkipShell(skip)
 
   // Create Agent Manager provider for editor panel
-  const agentManagerHost = new VscodeHost(context.extensionUri, connectionService, context, remoteService)
+  const agentManagerHost = new VscodeHost(context.extensionUri, connectionService, context, remoteService, canonicalConfig)
   const agentManagerProvider = new AgentManagerProvider(agentManagerHost, connectionService)
   agentManagerProvider.onPanelVisibilityChange((visible) => remember({ agentManager: visible }))
   agentManager = agentManagerProvider
@@ -308,6 +331,7 @@ export function activate(context: vscode.ExtensionContext) {
       deserializeWebviewPanel(panel: vscode.WebviewPanel) {
         const tabProvider = new KiloProvider(context.extensionUri, connectionService, context, {
           tabTitle: panelTitleHandler(panel),
+          canonicalConfig,
         })
         tabProvider.setRemoteService(remoteService)
         tabProvider.setAutoApproveController(autoApprove)
@@ -329,6 +353,7 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Create standalone editor providers (open in editor area, not sidebar)
   const settingsEditorProvider = new SettingsEditorProvider(context.extensionUri, connectionService, context)
+  settingsEditorProvider.setCanonicalConfig(canonicalConfig)
   settingsEditorProvider.setRemoteService(remoteService)
   const marketplacePanelProvider = new MarketplacePanelProvider(context.extensionUri, connectionService, context)
   context.subscriptions.push(settingsEditorProvider, marketplacePanelProvider)
@@ -425,6 +450,7 @@ export function activate(context: vscode.ExtensionContext) {
         agentManagerProvider,
         remoteService,
         autoApprove,
+        canonicalConfig,
       )
       await tabProvider.waitForReady()
       tabProvider.postMessage({ type: "migrationState", needed: true, source: "legacy" })
@@ -444,7 +470,7 @@ export function activate(context: vscode.ExtensionContext) {
       remoteService.toggle().catch((err) => console.error("[Kilo New] toggleRemote command failed:", err))
     }),
     vscode.commands.registerCommand("kilo-code.new.openInTab", () => {
-      return openKiloInNewTab(context, connectionService, agentManagerProvider, remoteService, autoApprove)
+      return openKiloInNewTab(context, connectionService, agentManagerProvider, remoteService, autoApprove, canonicalConfig)
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.previousSession", () => {
       agentManagerProvider.postMessage({ type: "action", action: "sessionPrevious" })
@@ -676,6 +702,7 @@ async function openKiloInNewTab(
   agentManagerProvider: AgentManagerProvider,
   remoteService: RemoteStatusService,
   autoApprove: ReturnType<typeof registerToggleAutoApprove>,
+  canonicalConfig: CanonicalConfigService,
 ): Promise<KiloProvider> {
   const lastCol = Math.max(...vscode.window.visibleTextEditors.map((e) => e.viewColumn || 0), 0)
   const hasVisibleEditors = vscode.window.visibleTextEditors.length > 0
@@ -699,6 +726,7 @@ async function openKiloInNewTab(
 
   const tabProvider = new KiloProvider(context.extensionUri, connectionService, context, {
     tabTitle: panelTitleHandler(panel),
+    canonicalConfig,
   })
   tabProvider.setRemoteService(remoteService)
   tabProvider.setAutoApproveController(autoApprove)

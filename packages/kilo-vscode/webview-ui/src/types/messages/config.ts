@@ -1,6 +1,7 @@
 import type { PermissionConfig } from "./permissions"
 import type { AgentConfig } from "./agents"
 import type { ProviderConfig } from "./providers"
+import type { CanonicalConfigPayload, CanonicalMcpPayload, CanonicalProviderPayload } from "../../../../src/config/types"
 
 export interface McpConfig {
   type?: "local" | "remote"
@@ -97,3 +98,5 @@ export interface Config {
 export interface FeatureFlags {
   sandboxControls: boolean
 }
+
+export type { CanonicalConfigPayload, CanonicalMcpPayload, CanonicalProviderPayload }

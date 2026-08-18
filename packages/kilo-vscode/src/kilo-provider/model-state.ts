@@ -186,7 +186,23 @@ export async function handleMessage(
   post: PostMessage,
   cache?: VariantCache,
   log: Log = defaultLog,
+  canonicalMode: boolean = false,
 ): Promise<boolean> {
+  // P4.1: when canonical config service is attached, legacy model.json
+  // mutations and reads are rejected/answered with empty state. Canonical
+  // authority derives from config/index APIs, not model.json.
+  if (canonicalMode) {
+    if (type === "persistModelSelection" || type === "clearModelSelection") return true
+    if (type === "requestModelSelections") {
+      post({ type: "modelSelectionsLoaded", selections: {} })
+      return true
+    }
+    if (type === "persistVariant") return true
+    if (type === "requestVariants") {
+      post({ type: "variantsLoaded", variants: {} })
+      return true
+    }
+  }
   if (type === "persistModelSelection") {
     await enqueue(async () => {
       const doc = await readDoc(client, log)
@@ -266,20 +282,25 @@ export async function reset(
   post: PostMessage,
   cache?: VariantCache,
   log: Log = defaultLog,
+  canonicalMode: boolean = false,
 ): Promise<void> {
-  await enqueue(async () => {
-    const doc = await readDoc(client, log)
-    // Reset is explicit user intent to clear: when the canonical file reads
-    // successfully (ENOENT is a fresh document) replace the model/variant maps
-    // with fresh empty ones while leaving unrelated top-level sections
-    // untouched. An existing file that is unreadable or malformed (doc.ok
-    // false) is never overwritten — the read already logged the skip and the
-    // file is preserved for recovery/diagnosis; only live/cache state clears.
-    if (doc.ok) await commit(client, { ...doc.data, model: {}, variant: {} })
-    // Clear the migration cache so a later requestVariants cannot resurrect
-    // reset values from globalState.
-    await cache?.write({})
-  })
+  // P4.1: when canonical mode is active, model.json is not the authority.
+  // Skip file writes; only send empty state to the webview.
+  if (!canonicalMode) {
+    await enqueue(async () => {
+      const doc = await readDoc(client, log)
+      // Reset is explicit user intent to clear: when the canonical file reads
+      // successfully (ENOENT is a fresh document) replace the model/variant maps
+      // with fresh empty ones while leaving unrelated top-level sections
+      // untouched. An existing file that is unreadable or malformed (doc.ok
+      // false) is never overwritten — the read already logged the skip and the
+      // file is preserved for recovery/diagnosis; only live/cache state clears.
+      if (doc.ok) await commit(client, { ...doc.data, model: {}, variant: {} })
+      // Clear the migration cache so a later requestVariants cannot resurrect
+      // reset values from globalState.
+      await cache?.write({})
+    })
+  }
   post({ type: "modelSelectionsLoaded", selections: {} })
   post({ type: "variantsLoaded", variants: {} })
 }

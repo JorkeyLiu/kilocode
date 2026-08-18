@@ -1,4 +1,5 @@
 import type { PermissionConfig, PermissionRuleItem } from "./permissions"
+import type { CanonicalStamp } from "../../../../src/config/types"
 
 // Skill info from CLI backend
 export interface SkillInfo {
@@ -26,6 +27,12 @@ export interface AgentInfo {
   deprecated?: boolean
   color?: string
   permission?: PermissionRuleItem[]
+  scope?: "global" | "project"
+  path?: string
+  assetHash?: string
+  frontmatter?: Record<string, unknown>
+  body?: string
+  stamp?: CanonicalStamp
 }
 
 export interface AgentRequirementSkill {

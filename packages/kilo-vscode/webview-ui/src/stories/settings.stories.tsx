@@ -21,6 +21,7 @@ import type { AgentConfig, CommandConfig, Config } from "../types/messages"
 import { SidebarEmptyState } from "../components/chat/SidebarEmptyState"
 import { WorkStyleContext, type WorkStyleContextValue } from "../context/work-style"
 import { getVSCodeAPI } from "../context/vscode"
+import { useConfig } from "../context/config"
 
 const meta: Meta = {
   title: "Settings",
@@ -49,6 +50,56 @@ export const SettingsPanel: Story = {
     <StoryProviders>
       <div style={{ height: "700px", display: "flex", "flex-direction": "column" }}>
         <Settings />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const CanonicalAuthorityDiagnostics: Story = {
+  name: "Settings — canonical diagnostics and unsupported controls",
+  render: () => (
+    <StoryProviders canonical diagnostics={[{ path: ["experimental"], message: "Unsupported setting is read-only: experimental" }]} config={{ model: "kilo/anthropic/claude-sonnet-4-6", experimental: { batch_tool: true } } as any}>
+      <div style={{ "max-height": "700px", overflow: "auto" }}>
+        <Settings tab="experimental" />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const CanonicalInteraction: Story = {
+  name: "Settings — canonical interaction contracts",
+  render: () => (
+    <StoryProviders canonical diagnostics={[{ path: ["experimental"], message: "Unsupported setting is read-only: experimental" }]} config={{ model: "kilo/anthropic/claude-sonnet-4-6", provider: { openai: { name: "OpenAI" } } } as any}>
+      <div data-testid="canonical-diagnostics" role="alert"><SettingsDiagnostics /></div>
+      <div data-testid="canonical-unsupported-controls">
+        <Settings tab="display" />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+export const CanonicalInteractionWithCapturedSettings: Story = {
+  name: "Settings — canonical UI-local updateSetting contract",
+  render: () => (
+    <StoryProviders canonical onMessage={() => undefined} config={{ model: "kilo/anthropic/claude-sonnet-4-6" } as any}>
+      <div data-testid="canonical-local-settings">
+        <Settings tab="display" />
+      </div>
+    </StoryProviders>
+  ),
+}
+
+function SettingsDiagnostics() {
+  const config = useConfig()
+  return <>{(config.diagnostics?.() ?? []).map((item) => item.message).join("; ")}</>
+}
+
+export const CanonicalOAuthHidden: Story = {
+  name: "Settings — canonical OAuth controls hidden",
+  render: () => (
+    <StoryProviders canonical config={{ model: "kilo/anthropic/claude-sonnet-4-6" } as any}>
+      <div style={{ "max-height": "700px", overflow: "auto" }}>
+        <Settings tab="providers" />
       </div>
     </StoryProviders>
   ),

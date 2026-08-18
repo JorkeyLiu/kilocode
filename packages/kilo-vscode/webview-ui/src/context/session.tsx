@@ -94,6 +94,7 @@ import { createAbortState } from "./abort-state"
 import { isSameSessionTree } from "./model-usage"
 import { createDraftAgentSeed } from "./session-agent"
 import { seedPendingChoices } from "./session-pending"
+import type { CanonicalStamp } from "../../../src/config/types"
 
 const RECENT_LIMIT = 5
 const MESSAGE_PAGE_LIMIT = 80
@@ -247,11 +248,15 @@ interface SessionContextValue {
   agents: Accessor<AgentInfo[]>
   allAgents: Accessor<AgentInfo[]>
   removeAgent: (name: string) => void
+  mutateAgent: (input: { action: "create" | "edit" | "import"; name: string; frontmatter: Record<string, unknown>; body: string }) => void
+  agentDiagnostic: Accessor<string | null>
   removeMcp: (name: string) => void
 
   // MCP server status (runtime connect/disconnect)
   mcpStatus: Accessor<Record<string, McpStatusEntry>>
   mcpLoading: Accessor<string | null>
+  mcpCleanupDiagnostic: Accessor<{ name: string; message: string; retry?: { requestId: string; name: string; scope: "global" | "project"; retryID: string; stamp: import("../../../src/config/types").CanonicalStamp } } | null>
+  retryMcpCleanup: (retry: { requestId: string; name: string; scope: "global" | "project"; retryID: string; stamp: import("../../../src/config/types").CanonicalStamp }) => void
   connectMcp: (name: string) => void
   disconnectMcp: (name: string) => void
   authenticateMcp: (name: string) => void
@@ -335,7 +340,7 @@ export const SessionProvider: ParentComponent = (props) => {
   const vscode = useVSCode()
   const server = useServer()
   const provider = useProvider()
-  const { config } = useConfig()
+  const { config, projectConfig, canonical, canonicalMode, stamp } = useConfig()
   const language = useLanguage()
 
   // Current session ID
@@ -425,6 +430,8 @@ export const SessionProvider: ParentComponent = (props) => {
   // Agents (modes) loaded from the CLI backend
   const [agents, setAgents] = createSignal<AgentInfo[]>([])
   const [allAgents, setAllAgents] = createSignal<AgentInfo[]>([])
+  const [agentStamp, setAgentStamp] = createSignal<CanonicalStamp>()
+  const [agentDiagnostic, setAgentDiagnostic] = createSignal<string | null>(null)
   const [defaultAgent, setDefaultAgent] = createSignal("code")
   const [pendingKiloModel, setPendingKiloModel] = createSignal<{
     modelID?: string
@@ -437,6 +444,16 @@ export const SessionProvider: ParentComponent = (props) => {
   const [skills, setSkills] = createSignal<SkillInfo[]>([])
 
   const removeAgent = (name: string) => {
+    const item = allAgents().find((agent) => agent.name === name)
+    // P4.1: agent mutations are rejected before canonical readiness — no legacy
+    // mutation window is permitted.
+    if (canonical?.() && !agentStamp()) return
+    if (item?.scope) {
+      const stamp = agentStamp()
+      if (!stamp) return
+      vscode.postMessage({ type: "removeAgent", canonical: true, name, scope: item.scope, expectedHash: item.assetHash ?? "absent", stamp: { ...stamp, assetHash: item.assetHash ?? "absent" } })
+      return
+    }
     setAgents((prev) => prev.filter((a) => a.name !== name))
 
     // Clear stale selections so selectedAgentName() falls back to the default
@@ -455,15 +472,44 @@ export const SessionProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "removeAgent", name })
   }
 
+  const mutateAgent = (input: { action: "create" | "edit" | "import"; name: string; frontmatter: Record<string, unknown>; body: string }) => {
+    const item = allAgents().find((agent) => agent.name === input.name)
+    if (canonical?.() && !agentStamp()) return
+    vscode.postMessage({
+      type: "mutateAgent",
+      ...input,
+      scope: item?.scope ?? "project",
+      expectedHash: item?.assetHash ?? "absent",
+       ...(agentStamp() ? { stamp: { ...agentStamp()!, assetHash: item?.assetHash ?? "absent" } } : {}),
+      requestId: crypto.randomUUID(),
+    })
+  }
+
   const removeMcp = (name: string) => {
+    if (canonical?.()) {
+      const current = stamp?.()
+      if (!current) return
+      const scope = projectConfig().mcp?.[name] !== undefined ? "project" : "global"
+      vscode.postMessage({
+        type: "removeMcp",
+        name,
+        canonical: true,
+        scope,
+        expectedHash: (scope === "project" ? current.projectHash : current.globalHash) ?? "absent",
+        stamp: current,
+      })
+      return
+    }
     vscode.postMessage({ type: "removeMcp", name })
   }
 
   // MCP runtime status
   const [mcpStatus, setMcpStatus] = createSignal<Record<string, McpStatusEntry>>({})
   const [mcpLoading, setMcpLoading] = createSignal<string | null>(null)
+  const [mcpCleanupDiagnostic, setMcpCleanupDiagnostic] = createSignal<{ name: string; message: string; retry?: { requestId: string; name: string; scope: "global" | "project"; retryID: string; stamp: import("../../../src/config/types").CanonicalStamp } } | null>(null)
 
   const connectMcp = (name: string) => {
+    if (canonical?.()) return
     if (mcpLoading()) return
     if (!server.isConnected()) return
     setMcpLoading(name)
@@ -471,6 +517,7 @@ export const SessionProvider: ParentComponent = (props) => {
   }
 
   const disconnectMcp = (name: string) => {
+    if (canonical?.()) return
     if (mcpLoading()) return
     if (!server.isConnected()) return
     setMcpLoading(name)
@@ -478,6 +525,7 @@ export const SessionProvider: ParentComponent = (props) => {
   }
 
   const authenticateMcp = (name: string) => {
+    if (canonical?.()) return
     if (mcpLoading()) return
     if (!server.isConnected()) return
     setMcpLoading(name)
@@ -486,6 +534,12 @@ export const SessionProvider: ParentComponent = (props) => {
 
   const refreshMcpStatus = () => {
     vscode.postMessage({ type: "requestMcpStatus" })
+  }
+
+  const retryMcpCleanup = (retry: { requestId: string; name: string; scope: "global" | "project"; retryID: string; stamp: import("../../../src/config/types").CanonicalStamp }) => {
+    // Host-owned: the request carries the opaque retryID only — no authority
+    // refs. The host looks up its stored record for scope/name/ref/stamp.
+    vscode.postMessage({ type: "retryMcpCleanup", requestId: retry.requestId, retryID: retry.retryID })
   }
 
   // Pending agent selection for before a session exists
@@ -636,7 +690,10 @@ export const SessionProvider: ParentComponent = (props) => {
 
   /** Per-mode model from config (e.g. config.agent.code.model). */
   function getModeModel(agentName: string): ModelSelection | null {
-    return parseModelString(config().agent?.[agentName]?.model)
+    if (!canonical?.()) return parseModelString(config().agent?.[agentName]?.model)
+    const agent = allAgents().find((item) => item.name === agentName)
+    const model = agent?.frontmatter?.model
+    return parseModelString(typeof model === "string" ? model : undefined)
   }
 
   /** Global default model from config (config.model). */
@@ -648,11 +705,19 @@ export const SessionProvider: ParentComponent = (props) => {
    * Configured new-session default (VS Code `kilo-code.new.model.*` via
    * provider.defaultSelection): customizes the fallback tier below config and
    * memory, validated against the catalog so stale values fall to KILO_AUTO.
+   *
+   * LOCK-3 / P4.1: Before first successful canonical materialization the
+   * webview is not-ready and must never expose KILO_AUTO / provider "kilo"
+   * as a fallback — the selection is null (empty/not-ready). After canonical
+   * readiness, empty provider state also returns null rather than KILO_AUTO.
    */
-  function configuredFallback(): ModelSelection {
+  function configuredFallback(): ModelSelection | null {
+    // P4.1 gate: before canonical readiness the webview is not-ready;
+    // no KILO_AUTO / kilo fallback is permitted.
+    if (!canonical?.()) return null
     const sel = provider.defaultSelection()
-    if (Object.keys(provider.providers()).length === 0) return KILO_AUTO
-    return provider.isModelValid(sel) ? sel : KILO_AUTO
+    if (Object.keys(provider.providers()).length === 0) return null
+    return provider.isModelValid(sel) ? sel : null
   }
 
   function resolveModel(
@@ -773,6 +838,9 @@ export const SessionProvider: ParentComponent = (props) => {
   }
 
   function selectKiloModel(modelID?: string, agent?: string) {
+    // Canonical mode rejects every direct selectKiloModel path.
+    // Legacy KILO_AUTO/kilo behavior remains only when canonical mode is false.
+    if (canonical?.()) return
     if (!modelID && !agent) return
     setPendingKiloModel({ ...(modelID && { modelID }), ...(agent && { agent }), after: catalog() })
     if (modelID) vscode.postMessage({ type: "requestProviders" })
@@ -885,10 +953,24 @@ export const SessionProvider: ParentComponent = (props) => {
   // pattern used by ProviderProvider for providersLoaded.
   const unsubAgents = vscode.onMessage((message: ExtensionMessage) => {
     if (message.type !== "agentsLoaded") {
+      if (message.type === "agentMutationError") setAgentDiagnostic(message.message)
       return
     }
-    setAgents(message.agents)
-    setAllAgents(message.allAgents ?? message.agents)
+    // P4.1: ignore legacy (non-canonical) agentsLoaded when canonical mode is active.
+    if (canonicalMode?.() && !message.canonical) return
+     const stamp = message.canonical && "stamp" in message ? message.stamp : undefined
+     const fresh = !stamp || stamp.materializationVersion >= (agentStamp()?.materializationVersion ?? -1)
+     if (stamp && fresh) setAgentStamp(stamp)
+     if (fresh) {
+       setAgents(message.agents)
+       setAllAgents(message.allAgents ?? message.agents)
+     }
+      if (fresh && message.diagnostics && Object.keys(message.diagnostics).length > 0) {
+       setAgentDiagnostic(JSON.stringify(message.diagnostics))
+      } else if (fresh && stamp) {
+       setAgentDiagnostic(null)
+      }
+     if (!fresh) return
     setDefaultAgent(message.defaultAgent)
 
     const names = new Set(message.agents.map((a) => a.name))
@@ -962,6 +1044,20 @@ export const SessionProvider: ParentComponent = (props) => {
     if (message.type === "mcpStatusLoaded") {
       setMcpStatus(message.status)
       setMcpLoading(null)
+    }
+    if (message.type === "mcpCleanupError") {
+      setMcpCleanupDiagnostic({
+        name: message.name,
+        message: message.message,
+        // A retry record exists only when the host stored one (retryID set);
+        // terminal failures (no owned ref / invalid scope) carry an empty
+        // retryID and no retry.
+        ...(message.retryID && message.scope ? { retry: { requestId: message.retryID, name: message.name, scope: message.scope, retryID: message.retryID, stamp: message.stamp } } : {}),
+      })
+    }
+    if (message.type === "mcpCleanupRetryResult") {
+      if (message.ok) setMcpCleanupDiagnostic(null)
+      else if (mcpCleanupDiagnostic()) setMcpCleanupDiagnostic((prev) => prev ? { ...prev, message: message.message ?? prev.message } : null)
     }
   })
 
@@ -1063,6 +1159,8 @@ export const SessionProvider: ParentComponent = (props) => {
   // reload; session-scoped picks are ephemeral live state and stay untouched.
   const unsubVariants = vscode.onMessage((message: ExtensionMessage) => {
     if (message.type !== "variantsLoaded") return
+    // P4.1: ignore legacy model.json variants when canonical mode is active.
+    if (canonicalMode?.()) return
     setStore("variantSelections", mergeLoadedVariants(store.variantSelections, message.variants))
   })
 
@@ -1074,6 +1172,8 @@ export const SessionProvider: ParentComponent = (props) => {
   // Uses replace semantics so a reset (empty payload) clears old entries.
   const unsubSelections = vscode.onMessage((message: ExtensionMessage) => {
     if (message.type !== "modelSelectionsLoaded") return
+    // P4.1: ignore legacy model.json selections when canonical mode is active.
+    if (canonicalMode?.()) return
     setStore("modelSelections", reconcile(message.selections))
     const flags: Record<string, boolean> = {}
     for (const name of Object.keys(message.selections)) {
@@ -2936,9 +3036,13 @@ export const SessionProvider: ParentComponent = (props) => {
     refreshSkills,
     removeSkill,
     removeAgent,
+    mutateAgent,
+    agentDiagnostic,
     removeMcp,
     mcpStatus,
     mcpLoading,
+    mcpCleanupDiagnostic,
+    retryMcpCleanup,
     connectMcp,
     disconnectMcp,
     authenticateMcp,

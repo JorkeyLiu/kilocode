@@ -33,7 +33,7 @@ const Settings: Component<SettingsProps> = (props) => {
   const server = useServer()
   const language = useLanguage()
   const vscode = useVSCode()
-  const { loading, isDirty, saving, saveError, saveConfig, discardConfig, features } = useConfig()
+  const { loading, isDirty, saving, saveError, diagnostics, saveConfig, discardConfig, features } = useConfig()
   const [active, setActive] = createSignal(props.tab ?? "models")
   const [errorExpanded, setErrorExpanded] = createSignal(false)
   const sandboxing = createMemo(() => Sandboxing.visible(features()))
@@ -239,7 +239,12 @@ const Settings: Component<SettingsProps> = (props) => {
       </Tabs>
 
       {/* Save bar — slides in when there are unsaved config changes */}
-      <Show when={isDirty()}>
+      <Show when={(diagnostics?.() ?? []).length > 0}>
+        <div role="alert" class="settings-save-bar-error">
+          {(diagnostics?.() ?? []).map((item) => item.message).join("; ")}
+        </div>
+      </Show>
+      <Show when={isDirty() || saveError()}>
         <div class="settings-save-bar-wrap">
           <Show when={saveError()}>
             {(err) => (

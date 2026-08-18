@@ -1,4 +1,5 @@
 import { Component, For, Show, createMemo } from "solid-js"
+import type { ParentComponent } from "solid-js"
 import { Card } from "@kilocode/kilo-ui/card"
 import { Select } from "@kilocode/kilo-ui/select"
 import { Switch } from "@kilocode/kilo-ui/switch"
@@ -8,7 +9,6 @@ import { useLanguage } from "../../context/language"
 import { useProvider } from "../../context/provider"
 import { useSession } from "../../context/session"
 import { parseModelString } from "../../../../src/shared/provider-model"
-import { agentPatch } from "./agent-behaviour-patches"
 import { ModelSelectorBase } from "../shared/ModelSelector"
 import { ThinkingSelectorBase } from "../shared/ThinkingSelector"
 import SettingsRow from "./SettingsRow"
@@ -16,14 +16,26 @@ import { DEFAULT_SPEECH_TO_TEXT_MODEL } from "../../../../src/speech-to-text/mod
 import { hasSpeechToTextAccess, selectedSpeechToTextModel } from "../speech-to-text/availability"
 import { SPEECH_TO_TEXT_MODEL_OPTIONS } from "../speech-to-text/model-selector"
 
+function updateIfEditable(readonly: boolean, update: (partial: Partial<import("../../types/messages").Config>) => void, partial: Partial<import("../../types/messages").Config>): void {
+  if (!readonly) update(partial)
+}
+
+const ReadOnly: ParentComponent<{ value: boolean }> = (props) => (
+  <div aria-disabled={props.value} title={props.value ? "Unsupported in canonical GUI config" : undefined} style={{ opacity: props.value ? "0.6" : "1" }}>
+    {props.children}
+  </div>
+)
+
 const ModelsTab: Component = () => {
-  const { config, updateConfig } = useConfig()
+  const { config, updateConfig, canonical } = useConfig()
   const language = useLanguage()
   const provider = useProvider()
   const session = useSession()
+  const readonly = () => canonical?.() === true
 
   function handleModelSelect(configKey: "model" | "small_model") {
     return (providerID: string, modelID: string) => {
+      if (readonly()) return
       if (!providerID || !modelID) {
         updateConfig({ [configKey]: null })
         return
@@ -48,6 +60,7 @@ const ModelsTab: Component = () => {
   })
 
   function updateDefaultModelVariant(value: string | null) {
+    if (readonly()) return
     const key = defaultModelKey()
     if (!key) return
     // LOCK-005: per-model override update must not clear global model_variant.
@@ -78,6 +91,7 @@ const ModelsTab: Component = () => {
   })
 
   function handleSubagentModelSelect(providerID: string, modelID: string) {
+    if (readonly()) return
     if (!providerID || !modelID) {
       updateConfig({ subagent_model: null, subagent_variant: null })
       return
@@ -90,6 +104,7 @@ const ModelsTab: Component = () => {
   }
 
   function updateSubagentVariant(value: string | null) {
+    if (readonly()) return
     const key = variantKey()
     if (!key) return
     // LOCK-005: per-model override update must not clear global subagent_variant.
@@ -103,23 +118,26 @@ const ModelsTab: Component = () => {
   function handleModeModelSelect(agentName: string) {
     return (providerID: string, modelID: string) => {
       if (!providerID || !modelID) {
-        updateConfig(agentPatch(agentName, { model: null }))
+        const current = session.allAgents().find((agent) => agent.name === agentName)
+        session.mutateAgent({ action: "edit", name: agentName, frontmatter: { ...(current?.frontmatter ?? {}), model: null }, body: current?.body ?? "" })
         return
       }
-      updateConfig(agentPatch(agentName, { model: `${providerID}/${modelID}` }))
+      const current = session.allAgents().find((agent) => agent.name === agentName)
+      session.mutateAgent({ action: "edit", name: agentName, frontmatter: { ...(current?.frontmatter ?? {}), model: `${providerID}/${modelID}` }, body: current?.body ?? "" })
     }
   }
 
   return (
     <div>
-      <Card>
+           <Card aria-disabled={readonly()} title={readonly() ? "Unsupported in canonical GUI config" : undefined}>
         <SettingsRow
           title={language.t("settings.providers.defaultModel.title")}
           description={language.t("settings.providers.defaultModel.description")}
         >
-          <ModelSelectorBase
+             <ModelSelectorBase
             value={parseModelString(config().model ?? undefined)}
-            onSelect={handleModelSelect("model")}
+             onSelect={handleModelSelect("model")}
+             disabled={readonly()}
             placement="bottom-start"
             allowClear
             clearLabel={language.t("settings.providers.notSet")}
@@ -127,15 +145,16 @@ const ModelsTab: Component = () => {
             description={language.t("settings.providers.defaultModel.description")}
           />
           <Show when={defaultModelVariants().length > 0}>
-            <ThinkingSelectorBase
+             <ThinkingSelectorBase
               variants={defaultModelVariants()}
               value={defaultModelVariant()}
-              onSelect={(value) => updateDefaultModelVariant(value)}
-              onClear={() => updateDefaultModelVariant(null)}
+               onSelect={(value) => updateDefaultModelVariant(value)}
+               onClear={() => updateDefaultModelVariant(null)}
               allowClear
               clearLabel={language.t("settings.providers.notSet")}
               placement="bottom-start"
-              globalTrigger={false}
+                    globalTrigger={false}
+                    disabled={readonly()}
             />
           </Show>
         </SettingsRow>
@@ -143,43 +162,51 @@ const ModelsTab: Component = () => {
           title={language.t("settings.providers.smallModel.title")}
           description={language.t("settings.providers.smallModel.description")}
         >
-          <ModelSelectorBase
-            value={parseModelString(config().small_model ?? undefined)}
-            onSelect={handleModelSelect("small_model")}
+              <div aria-disabled={canonical?.() === true} title={canonical?.() === true ? "Unsupported in canonical GUI config" : undefined} style={{ opacity: canonical?.() === true ? "0.6" : "1" }}>
+             <ModelSelectorBase
+             value={parseModelString(config().small_model ?? undefined)}
+             onSelect={handleModelSelect("small_model")}
+             disabled={readonly()}
             placement="bottom-start"
             allowClear
             clearLabel={language.t("settings.providers.notSet")}
             includeAutoSmall
             label={language.t("settings.providers.smallModel.title")}
             description={language.t("settings.providers.smallModel.description")}
-          />
+             />
+             </div>
         </SettingsRow>
         <SettingsRow
           title={language.t("settings.providers.subagentModel.title")}
           description={language.t("settings.providers.subagentModel.description")}
         >
           <div style={{ display: "flex", "flex-direction": "column", "align-items": "flex-end", gap: "8px" }}>
-            <ModelSelectorBase
-              value={subagentModel()}
-              onSelect={handleSubagentModelSelect}
+              <div aria-disabled={canonical?.() === true} title={canonical?.() === true ? "Unsupported in canonical GUI config" : undefined} style={{ opacity: canonical?.() === true ? "0.6" : "1" }}>
+             <ModelSelectorBase
+             value={subagentModel()}
+               onSelect={handleSubagentModelSelect}
+               disabled={readonly()}
               placement="bottom-start"
               allowClear
               clearLabel={language.t("settings.providers.notSet")}
               label={language.t("settings.providers.subagentModel.title")}
               description={language.t("settings.providers.subagentModel.description")}
-            />
-            <Show when={subagentVariants().length > 0}>
-              <ThinkingSelectorBase
-                variants={subagentVariants()}
-                value={subagentVariant()}
-                onSelect={(value) => updateSubagentVariant(value)}
-                onClear={() => updateSubagentVariant(null)}
-                allowClear
-                clearLabel={language.t("settings.providers.notSet")}
-                placement="bottom-start"
-                globalTrigger={false}
-              />
-            </Show>
+             />
+             </div>
+             <ReadOnly value={readonly()}>
+               <Show when={subagentVariants().length > 0}>
+                 <ThinkingSelectorBase
+                   variants={subagentVariants()}
+                   value={subagentVariant()}
+                   onSelect={(value) => updateSubagentVariant(value)}
+                   onClear={() => updateSubagentVariant(null)}
+                   allowClear
+                   clearLabel={language.t("settings.providers.notSet")}
+                   placement="bottom-start"
+                   globalTrigger={false}
+                 />
+               </Show>
+             </ReadOnly>
           </div>
         </SettingsRow>
         <SettingsRow
@@ -214,7 +241,7 @@ const ModelsTab: Component = () => {
               triggerProps={{
                 "aria-label": `${language.t("settings.models.speechToTextModel.title")}: ${speechOption()?.label}`,
               }}
-              disabled={!kiloReady()}
+               disabled={readonly() || !kiloReady()}
               placeholder={DEFAULT_SPEECH_TO_TEXT_MODEL.label}
             />
           </Tooltip>
@@ -226,7 +253,8 @@ const ModelsTab: Component = () => {
         >
           <Switch
             checked={config().hide_prompt_training_models === true}
-            onChange={(checked: boolean) => updateConfig({ hide_prompt_training_models: checked })}
+             onChange={(checked: boolean) => updateIfEditable(readonly(), updateConfig, { hide_prompt_training_models: checked })}
+             disabled={readonly()}
             hideLabel
           >
             {language.t("settings.models.hidePromptTraining.title")}
@@ -243,8 +271,9 @@ const ModelsTab: Component = () => {
               last={index() === allAgents().length - 1}
             >
               <ModelSelectorBase
-                value={parseModelString(config().agent?.[agent.name]?.model ?? undefined)}
-                onSelect={handleModeModelSelect(agent.name)}
+               value={parseModelString(agent.frontmatter?.model as string | undefined)}
+               onSelect={handleModeModelSelect(agent.name)}
+               disabled={readonly()}
                 placement="bottom-start"
                 allowClear
                 clearLabel={language.t("settings.providers.notSet")}

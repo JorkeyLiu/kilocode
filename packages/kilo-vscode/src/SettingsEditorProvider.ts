@@ -3,6 +3,7 @@ import { KiloProvider } from "./KiloProvider"
 import { resolvePanelProjectDirectory } from "./project-directory"
 import type { KiloConnectionService } from "./services/cli-backend"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
+import type { CanonicalConfigService } from "./config/service"
 
 type PanelView = "settings" | "profile"
 
@@ -27,6 +28,7 @@ export class SettingsEditorProvider implements vscode.Disposable {
   private providers = new Map<PanelView, KiloProvider>()
   private tabs = new Map<PanelView, string>()
   private remoteService: RemoteStatusService | null = null
+  private canonicalConfig: CanonicalConfigService | null = null
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -102,6 +104,7 @@ export class SettingsEditorProvider implements vscode.Disposable {
     // backend connectivity (config, providers, agents, profile, auth).
     const provider = new KiloProvider(this.extensionUri, this.connectionService, this.context, {
       projectDirectory,
+      canonicalConfig: this.canonicalConfig ?? undefined,
     })
     if (this.remoteService) {
       provider.setRemoteService(this.remoteService)
@@ -155,6 +158,11 @@ export class SettingsEditorProvider implements vscode.Disposable {
     for (const [, provider] of this.providers) {
       provider.setRemoteService(service)
     }
+  }
+
+  setCanonicalConfig(service: CanonicalConfigService): void {
+    this.canonicalConfig = service
+    for (const provider of this.providers.values()) provider.setCanonicalConfig(service)
   }
 
   dispose(): void {

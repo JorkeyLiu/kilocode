@@ -17,7 +17,7 @@ import ModeEditView from "./ModeEditView"
 import ModeCreateView from "./ModeCreateView"
 import McpEditView from "./McpEditView"
 import WorkflowsTab from "./agent-behaviour/WorkflowsTab"
-import { selectedDefaultAgentValue, agentPatch } from "./agent-behaviour-patches"
+import { selectedDefaultAgentValue } from "./agent-behaviour-patches"
 import { parseImport, MAX_IMPORT_SIZE } from "./mode-io"
 import type { ImportError } from "./mode-io"
 
@@ -50,7 +50,7 @@ type AgentView = "list" | "create" | "edit"
 
 const AgentBehaviourTab: Component = () => {
   const language = useLanguage()
-  const { config, updateConfig } = useConfig()
+  const { config, updateConfig, canonical } = useConfig()
   const session = useSession()
   const dialog = useDialog()
   const vscode = useVSCode()
@@ -91,13 +91,6 @@ const AgentBehaviourTab: Component = () => {
       .allAgents()
       .filter((a) => !a.hidden)
       .map((a) => a.name)
-    // Also include any agents from config that might not be in the agent list
-    const agents = Object.keys(config().agent ?? {})
-    for (const name of agents) {
-      if (!names.includes(name)) {
-        names.push(name)
-      }
-    }
     return names.sort()
   })
 
@@ -114,6 +107,7 @@ const AgentBehaviourTab: Component = () => {
   const instructions = () => config().instructions ?? []
 
   const addInstruction = () => {
+    if (canonical?.()) return
     const value = newInstruction().trim()
     if (!value) {
       return
@@ -127,6 +121,7 @@ const AgentBehaviourTab: Component = () => {
   }
 
   const removeInstruction = (index: number) => {
+    if (canonical?.()) return
     const current = [...instructions()]
     current.splice(index, 1)
     updateConfig({ instructions: current })
@@ -136,6 +131,7 @@ const AgentBehaviourTab: Component = () => {
   const skillUrls = () => config().skills?.urls ?? []
 
   const addSkillPath = () => {
+    if (canonical?.()) return
     const value = newSkillPath().trim()
     if (!value) {
       return
@@ -149,12 +145,14 @@ const AgentBehaviourTab: Component = () => {
   }
 
   const removeSkillPath = (index: number) => {
+    if (canonical?.()) return
     const current = [...skillPaths()]
     current.splice(index, 1)
     updateConfig({ skills: { ...config().skills, paths: current } })
   }
 
   const addSkillUrl = () => {
+    if (canonical?.()) return
     const value = newSkillUrl().trim()
     if (!value) {
       return
@@ -168,6 +166,7 @@ const AgentBehaviourTab: Component = () => {
   }
 
   const removeSkillUrl = (index: number) => {
+    if (canonical?.()) return
     const current = [...skillUrls()]
     current.splice(index, 1)
     updateConfig({ skills: { ...config().skills, urls: current } })
@@ -250,6 +249,7 @@ const AgentBehaviourTab: Component = () => {
   const errorKey = (tag: ImportError) => `settings.agentBehaviour.importMode.${tag}` as const
 
   const importMode = (file: File) => {
+    if (canonical?.()) return
     setImportError("")
     if (file.size > MAX_IMPORT_SIZE) {
       setImportError(language.t(errorKey("tooLarge")))
@@ -262,7 +262,12 @@ const AgentBehaviourTab: Component = () => {
         setImportError(language.t(errorKey(result.error)))
         return
       }
-      updateConfig(agentPatch(result.name, result.config))
+       session.mutateAgent({
+         action: "import",
+         name: result.name,
+         frontmatter: Object.fromEntries(Object.entries(result.config).filter(([key]) => key !== "prompt")),
+         body: result.config.prompt ?? "",
+       })
       setImportError("")
     }
     reader.readAsText(file)
@@ -299,7 +304,7 @@ const AgentBehaviourTab: Component = () => {
               value={(o) => o.value}
               label={(o) => o.label}
               onSelect={(o) => {
-                if (!o) return
+                if (!o || canonical?.()) return
                 const next = selectedDefaultAgentValue(o.value)
                 if (next === (config().default_agent ?? null)) return
                 updateConfig({ default_agent: next })
@@ -323,13 +328,13 @@ const AgentBehaviourTab: Component = () => {
         >
           <div data-slot="settings-row-label-title">{language.t("settings.agentBehaviour.availableAgents")}</div>
           <div style={{ display: "flex", gap: "8px" }}>
-            <Button variant="ghost" size="small" onClick={triggerImport}>
+             <Button variant="ghost" size="small" onClick={triggerImport} disabled={canonical?.() === true}>
               {language.t("settings.agentBehaviour.importMode")}
             </Button>
             <Button variant="ghost" size="small" onClick={browse}>
               {language.t("settings.agentBehaviour.mcpBrowseMarketplace")}
             </Button>
-            <Button variant="secondary" size="small" onClick={() => setAgentView("create")}>
+             <Button variant="secondary" size="small" onClick={() => { if (!canonical?.()) setAgentView("create") }} disabled={canonical?.() === true}>
               {language.t("settings.agentBehaviour.createMode")}
             </Button>
           </div>
@@ -368,9 +373,12 @@ const AgentBehaviourTab: Component = () => {
               {(name, index) => {
                 const agent = () => session.allAgents().find((a) => a.name === name)
                 const isCustom = () => !agent()?.native
-                const agentCfg = () => config().agent?.[name] ?? {}
-                const disabled = () => agentCfg().disable ?? false
-                const hidden = () => agentCfg().hidden ?? false
+                 const agentCfg = () => {
+                   const value = agent()?.frontmatter?.disable
+                   return typeof value === "boolean" ? value : false
+                 }
+                 const disabled = agentCfg
+                 const hidden = () => agent()?.hidden ?? false
                 const deprecated = () => agent()?.deprecated ?? false
                 return (
                   <div
@@ -502,6 +510,7 @@ const AgentBehaviourTab: Component = () => {
   }
 
   const confirmRemoveMcp = (name: string) => {
+    if (canonical?.()) return
     dialog.show(() => (
       <Dialog title={language.t("settings.agentBehaviour.removeMcp.title")} fit>
         <div class="dialog-confirm-body">
@@ -582,10 +591,22 @@ const AgentBehaviourTab: Component = () => {
             "margin-bottom": "8px",
           }}
         >
-          <Button variant="secondary" size="small" onClick={browse}>
+           <Button variant="secondary" size="small" onClick={browse} disabled={canonical?.() === true}>
             {language.t("settings.agentBehaviour.mcpBrowseMarketplace")}
           </Button>
         </div>
+        <Show when={session.mcpCleanupDiagnostic()}>
+          <Card style={{ "margin-bottom": "12px", "border-color": "var(--vscode-testing-iconFailed, #f44336)" }}>
+            <div style={{ "font-size": "var(--kilo-font-size-12)", color: "var(--vscode-testing-iconFailed, #f44336)", "margin-bottom": "8px" }}>
+              MCP credential cleanup failed for {session.mcpCleanupDiagnostic()!.name}: {session.mcpCleanupDiagnostic()!.message}
+            </div>
+            <Show when={session.mcpCleanupDiagnostic()!.retry}>
+              <Button variant="secondary" size="small" onClick={() => session.retryMcpCleanup(session.mcpCleanupDiagnostic()!.retry!)}>
+                Retry cleanup
+              </Button>
+            </Show>
+          </Card>
+        </Show>
         <Show
           when={mcpEntries().length > 0}
           fallback={
@@ -665,7 +686,7 @@ const AgentBehaviourTab: Component = () => {
                             <Button
                               variant="secondary"
                               size="small"
-                              disabled={session.mcpLoading() === name}
+                               disabled={canonical?.() === true || session.mcpLoading() === name}
                               onClick={() => session.authenticateMcp(name)}
                             >
                               {language.t("common.signIn")}
@@ -675,7 +696,7 @@ const AgentBehaviourTab: Component = () => {
                         <div onClick={(e: MouseEvent) => e.stopPropagation()}>
                           <Switch
                             checked={isConnected(name)}
-                            disabled={session.mcpLoading() === name}
+                             disabled={canonical?.() === true || session.mcpLoading() === name}
                             onChange={() => {
                               if (isConnected(name)) {
                                 session.disconnectMcp(name)
@@ -692,19 +713,21 @@ const AgentBehaviourTab: Component = () => {
                           size="small"
                           variant="ghost"
                           icon="close"
-                          onClick={(e: MouseEvent) => {
+                           disabled={canonical?.() === true}
+                           onClick={(e: MouseEvent) => {
                             e.stopPropagation()
                             confirmRemoveMcp(name)
                           }}
                         />
-                        <IconButton
-                          size="small"
-                          variant="ghost"
-                          icon="chevron-right"
+                           <IconButton
+                             size="small"
+                             variant="ghost"
+                             icon="chevron-right"
                           onClick={(e: MouseEvent) => {
                             e.stopPropagation()
-                            setEditingMcp(name)
-                          }}
+                             setEditingMcp(name)
+                           }}
+                           disabled={canonical?.() === true}
                         />
                       </div>
                     </div>
@@ -853,7 +876,7 @@ const AgentBehaviourTab: Component = () => {
                   </div>
                 </div>
                 {!builtin(skill) && (
-                  <IconButton size="small" variant="ghost" icon="close" onClick={() => confirmRemoveSkill(skill)} />
+                 <IconButton size="small" variant="ghost" icon="close" onClick={() => confirmRemoveSkill(skill)} disabled={canonical?.() === true} />
                 )}
               </div>
             )}
@@ -874,16 +897,17 @@ const AgentBehaviourTab: Component = () => {
           }}
         >
           <div style={{ flex: 1 }}>
-            <TextField
+             <TextField
               value={newSkillPath()}
               placeholder="e.g. ./skills"
-              onChange={(val) => setNewSkillPath(val)}
+               onChange={(val) => setNewSkillPath(val)}
+               disabled={canonical?.() === true}
               onKeyDown={(e: KeyboardEvent) => {
                 if (e.key === "Enter") addSkillPath()
               }}
             />
           </div>
-          <Button variant="secondary" onClick={addSkillPath}>
+           <Button variant="secondary" onClick={addSkillPath} disabled={canonical?.() === true}>
             {language.t("common.add")}
           </Button>
         </div>
@@ -906,7 +930,7 @@ const AgentBehaviourTab: Component = () => {
               >
                 {path}
               </span>
-              <IconButton size="small" variant="ghost" icon="close" onClick={() => removeSkillPath(index())} />
+               <IconButton size="small" variant="ghost" icon="close" onClick={() => removeSkillPath(index())} disabled={canonical?.() === true} />
             </div>
           )}
         </For>
@@ -928,13 +952,14 @@ const AgentBehaviourTab: Component = () => {
             <TextField
               value={newSkillUrl()}
               placeholder="e.g. https://example.com/skills"
-              onChange={(val) => setNewSkillUrl(val)}
+               onChange={(val) => setNewSkillUrl(val)}
+               disabled={canonical?.() === true}
               onKeyDown={(e: KeyboardEvent) => {
                 if (e.key === "Enter") addSkillUrl()
               }}
             />
           </div>
-          <Button variant="secondary" onClick={addSkillUrl}>
+           <Button variant="secondary" onClick={addSkillUrl} disabled={canonical?.() === true}>
             {language.t("common.add")}
           </Button>
         </div>
@@ -957,7 +982,7 @@ const AgentBehaviourTab: Component = () => {
               >
                 {url}
               </span>
-              <IconButton size="small" variant="ghost" icon="close" onClick={() => removeSkillUrl(index())} />
+               <IconButton size="small" variant="ghost" icon="close" onClick={() => removeSkillUrl(index())} disabled={canonical?.() === true} />
             </div>
           )}
         </For>
@@ -1070,9 +1095,11 @@ const AgentBehaviourTab: Component = () => {
           <Switch
             checked={claudeCompat()}
             onChange={(checked: boolean) => {
+              if (canonical?.()) return
               setClaudeCompat(checked)
               vscode.postMessage({ type: "updateSetting", key: "claudeCodeCompat", value: checked })
             }}
+            disabled={canonical?.() === true}
             hideLabel
           >
             {language.t("settings.agentBehaviour.claudeCompat.title")}
@@ -1083,6 +1110,14 @@ const AgentBehaviourTab: Component = () => {
   )
 
   const renderSubtabContent = () => {
+    const unsupported = activeSubtab() === "skills" || activeSubtab() === "rules" || activeSubtab() === "workflows"
+    if (canonical?.() === true && unsupported) {
+      return (
+        <Card aria-disabled="true" title="Unsupported in canonical GUI config">
+          <div role="note" style={{ color: "var(--text-weak-base)" }}>This section is read-only in canonical GUI configuration.</div>
+        </Card>
+      )
+    }
     switch (activeSubtab()) {
       case "agents":
         return renderAgentsSubtab()
@@ -1101,6 +1136,9 @@ const AgentBehaviourTab: Component = () => {
 
   return (
     <div>
+      <Show when={session.agentDiagnostic()}>
+        {(message) => <div role="alert" style={{ color: "var(--vscode-errorForeground)", "margin-bottom": "8px" }}>{message()}</div>}
+      </Show>
       {/* Horizontal subtab bar */}
       <div
         style={{

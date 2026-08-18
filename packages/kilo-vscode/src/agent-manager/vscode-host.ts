@@ -16,6 +16,7 @@ import { openFileInEditor, getWorkspaceRoot } from "../review-utils"
 import { TelemetryProxy, type TelemetryEventName } from "../services/telemetry"
 import type { AutoApproveController } from "../commands/toggle-auto-approve"
 import type { RemoteStatusService } from "../services/RemoteStatusService"
+import type { CanonicalConfigService } from "../config/service"
 
 export class VscodeHost implements Host {
   private autoApprove: AutoApproveController | undefined
@@ -25,6 +26,7 @@ export class VscodeHost implements Host {
     private readonly connectionService: KiloConnectionService,
     private readonly context: vscode.ExtensionContext,
     private readonly remoteService: RemoteStatusService,
+    private readonly canonicalConfig: CanonicalConfigService,
   ) {}
 
   setAutoApproveController(ctrl: AutoApproveController): void {
@@ -92,6 +94,7 @@ export class VscodeHost implements Host {
       snapshotInitialization: SNAPSHOT_INITIALIZATION,
       slimEditMetadata: true,
       disableViewedRegistration: true,
+      canonicalConfig: this.canonicalConfig,
     })
     provider.setRemoteService(this.remoteService)
     provider.attachToWebview(panel.webview, {

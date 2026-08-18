@@ -99,7 +99,10 @@ describe("session context pull-back implementation", () => {
   it("wires the pending lifecycle through the extracted helper", () => {
     // session.tsx delegates the pending map + cleanup effect to the helper and
     // passes the queued-message derivation inputs through it.
-    expect(session).toContain("createPendingPullBacks((sid) => statusMap[sid] ?? idle, (sid) => store.messages[sid], getParts)")
+    expect(session).toContain("createPendingPullBacks(")
+    expect(session).toContain("(sid) => statusMap[sid] ?? idle")
+    expect(session).toContain("(sid) => store.messages[sid]")
+    expect(session).toContain("getParts")
     expect(session).toContain('import { createPendingPullBacks } from "./session-pull-back"')
     expect(session).not.toContain("pendingPullBacksTick")
   })

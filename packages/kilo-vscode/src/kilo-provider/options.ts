@@ -1,3 +1,5 @@
+import type { CanonicalConfigService } from "../config/service"
+
 export type KiloProviderOptions = {
   projectDirectory?: string | null
   platform?: string
@@ -13,4 +15,6 @@ export type KiloProviderOptions = {
    * without real-time sleeps.
    */
   scheduleRetry?: (delayMs: number, fn: () => void) => () => void
+  /** Canonical GUI authority for config, custom providers, and agents. */
+  canonicalConfig?: CanonicalConfigService
 }

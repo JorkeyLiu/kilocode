@@ -56,6 +56,26 @@ const esbuildProblemMatcherPlugin = {
 }
 
 /**
+ * Force jsonc-parser to resolve to its ESM module entry instead of the UMD
+ * main entry. The UMD bundle uses runtime `require2("./impl/format")` calls
+ * that fail at extension-host load time because the impl submodules are not
+ * shipped in dist. The ESM entry statically imports its dependencies, so
+ * esbuild can bundle them all into a single file.
+ *
+ * @type {import('esbuild').Plugin}
+ */
+const jsoncParserEsmPlugin = {
+  name: "jsonc-parser-esm",
+  setup(build) {
+    build.onResolve({ filter: /^jsonc-parser$/ }, (args) => {
+      const pkg = require.resolve("jsonc-parser/package.json")
+      const dir = require("path").dirname(pkg)
+      return { path: require("path").join(dir, "lib", "esm", "main.js") }
+    })
+  },
+}
+
+/**
  * Route the shared `@opencode-ai/ui/pierre/worker` module (and its relative
  * variants) to the Kilo implementation in `webview-ui/pierre-worker.ts`.
  *
@@ -203,7 +223,7 @@ async function main() {
     outfile: "dist/extension.js",
     external: ["vscode"],
     logLevel: "silent",
-    plugins: [esbuildProblemMatcherPlugin],
+    plugins: [jsoncParserEsmPlugin, esbuildProblemMatcherPlugin],
   })
 
   // Build Agent Manager webview (SolidJS, shares components with the editor-tab chat webview)

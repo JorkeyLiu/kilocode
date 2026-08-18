@@ -17,7 +17,6 @@ import { createProviderAction } from "../../utils/provider-action"
 import {
   ATOMIC_CHAT_PROVIDER_KEY,
   isLocalProviderOptionalApiKey,
-  LOCAL_PROVIDER_API_KEY_PLACEHOLDER,
 } from "../../utils/local-providers"
 import AnacondaDesktopDialog from "./AnacondaDesktopDialog"
 
@@ -87,10 +86,13 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
 
   const item = createMemo(() => provider.providers()[props.providerID])
   const name = () => item()?.name ?? props.providerID
+  const canonical = () => provider.canonical?.() === true || provider.providers()[props.providerID]?.hasCredential !== undefined
   const methods = createMemo<ProviderAuthMethod[]>(() => {
     const list =
       provider.authMethods()[props.providerID] ?? fallbackMethods(language.t("provider.connect.method.apiKey"))
+    if (props.oauthOnly && canonical()) return []
     if (props.oauthOnly) return list.filter((item) => item.type === "oauth")
+    if (canonical()) return list.filter((item) => item.type !== "oauth")
     return list
   })
   const method = createMemo(() => {
@@ -150,6 +152,11 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
 
   /** LOCK-003/004: Request the saved credential on-demand via provider action utility. */
   function requestCredential() {
+    if (canonical()) {
+      setOriginalKey("********")
+      setState({ ...state, credentialLoading: false, credentialError: undefined })
+      return
+    }
     setState({ ...state, credentialLoading: true, credentialError: undefined })
     pendingCredentialID = action.send(
       { type: "getProviderCredential", providerID: props.providerID },
@@ -158,7 +165,11 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
           // LOCK-004: stale response guard — only apply if request is still pending
           if (pendingCredentialID === undefined) return
           pendingCredentialID = undefined
-          setOriginalKey(message.apiKey)
+           if (message.canonical || !message.apiKey) {
+             setState({ ...state, credentialLoading: false, credentialError: language.t("provider.apiKey.manage.error") })
+             return
+           }
+           setOriginalKey(message.apiKey)
           // Direct assignment: seed the editable value synchronously
           setApiKeyValue?.(message.apiKey)
           setState({ ...state, credentialLoading: false, credentialError: undefined })
@@ -264,8 +275,10 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
 
   /** LOCK-073: Execute the disconnect after confirmation. On failure, keep confirm view visible with error. */
   function executeRemove() {
+    const stamp = provider.stamp?.()
+    if (!stamp) return
     action.send(
-      { type: "disconnectProvider", providerID: props.providerID },
+      { type: "disconnectProvider", providerID: props.providerID, canonical: true, stamp },
       {
         onDisconnected: () => {
           showToast({
@@ -300,6 +313,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     action.send(
       {
         type: "authorizeProviderOAuth",
+        canonical: false,
         providerID: props.providerID,
         method: index,
       },
@@ -318,7 +332,9 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     )
   }
 
-  function connect(apiKey: string, metadata?: Record<string, string>) {
+  function connect(metadata?: Record<string, string>) {
+    const stamp = provider.stamp?.()
+    if (!stamp) return
     setState({
       ...state,
       phase: "connecting",
@@ -329,9 +345,11 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     action.send(
       {
         type: "connectProvider",
+        canonical: true,
         providerID: props.providerID,
-        apiKey,
         metadata,
+        credentialRequested: true,
+         stamp,
       },
       {
         onConnected: succeed,
@@ -354,6 +372,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     action.send(
       {
         type: "completeProviderOAuth",
+        canonical: false,
         providerID: props.providerID,
         method: index,
         code,
@@ -432,8 +451,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
     function submit(e: SubmitEvent) {
       e.preventDefault()
       const trimmed = value().trim()
-      const apiKey = trimmed || (apiKeyOptional() ? LOCAL_PROVIDER_API_KEY_PLACEHOLDER : "")
-      if (!apiKey) {
+      if (!canonical() && !trimmed && !apiKeyOptional()) {
         setState({ ...state, error: language.t("provider.connect.apiKey.required"), field: "apiKey" })
         return
       }
@@ -450,7 +468,7 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
         }
         metadata[prompt.key] = field
       }
-      connect(apiKey, Object.keys(metadata).length > 0 ? metadata : undefined)
+      connect(Object.keys(metadata).length > 0 ? metadata : undefined)
     }
 
     // LOCK-005: Toggle password visibility — no autofocus
@@ -476,7 +494,11 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
             {state.credentialError}
           </div>
         </Show>
-        <Show when={!state.credentialLoading}>
+         <Show when={!state.credentialLoading}>
+           <Show when={canonical()}>
+             <div class="provider-connect-body">Credential input is collected securely by the extension host.</div>
+           </Show>
+           <Show when={!canonical()}>
           {props.manageApiKey && originalKey() !== null ? (
             /* LOCK-009: Local Kobalte composition — eye toggle as flex sibling inside input-wrapper */
             <TextFieldRoot
@@ -544,7 +566,8 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
               error={state.field === "apiKey" ? state.error : undefined}
             />
           )}
-        </Show>
+           </Show>
+         </Show>
         <For each={prompts()}>
           {(prompt) => (
             <Switch>
@@ -774,6 +797,9 @@ const ProviderConnectDialog: Component<ProviderConnectDialogProps> = (props) => 
   return (
     <Dialog title={title()} fit>
       <Switch>
+        <Match when={canonical() && props.oauthOnly}>
+          <div class="dialog-confirm-body">OAuth provider authentication is unavailable in canonical GUI configuration.</div>
+        </Match>
         <Match when={state.methodIndex === undefined}>
           <MethodSelection />
         </Match>

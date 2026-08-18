@@ -1,5 +1,13 @@
 import type { CustomProviderPackage } from "../../../../src/shared/provider-model"
-import type { Modalities, ModelEntry, VariantEntry } from "./CustomProviderModelCard"
+import type {
+  Modalities,
+  ModelEntry,
+  OutputEffortValue,
+  ReasoningEffortValue,
+  VariantEntry,
+} from "./CustomProviderModelCard"
+import type { CanonicalProviderPayload, CanonicalProviderVariantPayload } from "../../../../src/config/types"
+import { isValidCanonicalProviderEntry } from "../../../../src/config/types"
 
 type Translator = (key: string, params?: Record<string, string>) => string
 
@@ -104,15 +112,34 @@ function checkProviderID(id: string, editing: boolean, disabled: string[], exist
   return { idErr, existsErr }
 }
 
-function serializeVariant(v: VariantEntry): [string, Record<string, unknown>] {
-  const cfg: Record<string, unknown> = {}
-  if (v.enableThinking !== undefined) cfg.enable_thinking = v.enableThinking
-  if (v.thinking !== undefined) cfg.thinking = { type: v.thinking }
-  if (v.splitReasoning !== undefined) cfg.reasoning_split = v.splitReasoning
-  if (v.reasoningEffort !== undefined) cfg.reasoningEffort = v.reasoningEffort
-  if (v.outputEffort !== undefined) cfg.effort = v.outputEffort
-  if (v.chatTemplateArgs !== undefined) cfg.chat_template_args = { enable_thinking: v.chatTemplateArgs }
+function serializeVariant(v: VariantEntry): [string, CanonicalProviderVariantPayload] {
+  const cfg: CanonicalProviderVariantPayload = {
+    ...(v.enableThinking !== undefined ? { enable_thinking: v.enableThinking } : {}),
+    ...(v.thinking !== undefined ? { thinking: { type: v.thinking } } : {}),
+    ...(v.splitReasoning !== undefined ? { reasoning_split: v.splitReasoning } : {}),
+    ...(v.reasoningEffort !== undefined ? { reasoningEffort: v.reasoningEffort } : {}),
+    ...(v.outputEffort !== undefined ? { effort: v.outputEffort } : {}),
+    ...(v.chatTemplateArgs !== undefined ? { chat_template_args: { enable_thinking: v.chatTemplateArgs } } : {}),
+  }
   return [v.name.trim(), cfg]
+}
+
+/**
+ * Deserialize a canonical variant payload entry back into the GUI form shape.
+ * Reads only the closed six canonical keys; anything else or any wrong-typed
+ * value is dropped (returns undefined for that field).
+ * Counterpart of serializeVariant — both use CanonicalProviderVariantPayload.
+ */
+export function parseVariant([name, cfg]: [string, CanonicalProviderVariantPayload]): VariantEntry {
+  return {
+    name,
+    enableThinking: typeof cfg.enable_thinking === "boolean" ? cfg.enable_thinking : undefined,
+    thinking: cfg.thinking?.type,
+    splitReasoning: typeof cfg.reasoning_split === "boolean" ? cfg.reasoning_split : undefined,
+    reasoningEffort: typeof cfg.reasoningEffort === "string" ? (cfg.reasoningEffort as ReasoningEffortValue) : undefined,
+    outputEffort: typeof cfg.effort === "string" ? (cfg.effort as OutputEffortValue) : undefined,
+    chatTemplateArgs: typeof cfg.chat_template_args?.enable_thinking === "boolean" ? cfg.chat_template_args.enable_thinking : undefined,
+  }
 }
 
 function modalities(m: ModelEntry): Modalities | undefined {
@@ -225,4 +252,44 @@ export function validateCustomProvider(input: ValidateArgs): ValidateResult {
       },
     },
   }
+}
+
+/**
+ * Serialize form state to canonical provider payload shape.
+ * Returns `{name, endpoint, protocol, models}` — never npm/options/headers/env.
+ * The result must pass the shared canonical provider schema (isValidCanonicalProviderEntry);
+ * a payload that fails the shared schema returns undefined.
+ * Used by canonical save/discovery paths instead of the legacy validateCustomProvider.
+ */
+export function serializeCanonicalProvider(form: FormState): CanonicalProviderPayload | undefined {
+  const name = form.name.trim()
+  const endpoint = form.baseURL.trim()
+  if (!name || !endpoint || !/^https?:\/\//.test(endpoint)) return undefined
+
+  const models: Record<string, { name: string; reasoning?: boolean; modalities?: { input?: string[]; output?: string[] }; variants?: Record<string, CanonicalProviderVariantPayload> }> = {}
+  for (const m of form.models) {
+    const id = m.id.trim()
+    const mName = m.name.trim()
+    if (!id || !mName) continue
+    const entry: { name: string; reasoning?: boolean; modalities?: { input?: string[]; output?: string[] }; variants?: Record<string, CanonicalProviderVariantPayload> } = { name: mName }
+    if (m.reasoning) entry.reasoning = true
+    const modes = modalities(m)
+    if (modes) entry.modalities = modes
+    if (m.reasoning && m.variants.length > 0) {
+      const vEntries = m.variants.filter((v) => v.name.trim()).map(serializeVariant)
+      if (vEntries.length > 0) entry.variants = Object.fromEntries(vEntries)
+    }
+    models[id] = entry
+  }
+
+  const payload: CanonicalProviderPayload = {
+    ...(name ? { name } : {}),
+    endpoint,
+    protocol: "openai",
+    ...(Object.keys(models).length > 0 ? { models } : {}),
+  }
+
+  // Shared schema gate: the serializer must produce exactly what the canonical
+  // provider schema accepts — same model-set rule, same endpoint/protocol rules.
+  return isValidCanonicalProviderEntry(payload) ? payload : undefined
 }

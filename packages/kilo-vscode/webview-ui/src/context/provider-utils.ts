@@ -1,11 +1,11 @@
-import type { Provider, ProviderModel, ModelSelection } from "../types/messages"
+import type { ProviderView, ProviderModel, ModelSelection } from "../types/messages"
 
 export type EnrichedModel = ProviderModel & { providerID: string; providerName: string }
 
 /**
  * Flatten a provider map into a list of models enriched with provider info.
  */
-export function flattenModels(providers: Record<string, Provider>): EnrichedModel[] {
+export function flattenModels(providers: Record<string, ProviderView>): EnrichedModel[] {
   const result: EnrichedModel[] = []
   for (const providerID of Object.keys(providers)) {
     const provider = providers[providerID]!
@@ -34,7 +34,7 @@ export function findModel(models: EnrichedModel[], selection: ModelSelection | n
  * Kilo gateway models remain usable whenever the provider catalog exposes them.
  */
 export function isModelValid(
-  providers: Record<string, Provider>,
+  providers: Record<string, ProviderView>,
   connected: string[],
   selection: ModelSelection | null,
 ): boolean {

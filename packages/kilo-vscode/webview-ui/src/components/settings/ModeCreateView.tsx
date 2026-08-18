@@ -5,6 +5,7 @@ import { Button } from "@kilocode/kilo-ui/button"
 import { IconButton } from "@kilocode/kilo-ui/icon-button"
 
 import { useConfig } from "../../context/config"
+import { useSession } from "../../context/session"
 import { useLanguage } from "../../context/language"
 import type { AgentConfig } from "../../types/messages"
 import SettingsRow from "./SettingsRow"
@@ -18,7 +19,8 @@ interface Props {
 
 const ModeCreateView: Component<Props> = (props) => {
   const language = useLanguage()
-  const { config, updateConfig } = useConfig()
+  const { config, canonical } = useConfig()
+  const session = useSession()
 
   const [name, setName] = createSignal("")
   const [description, setDescription] = createSignal("")
@@ -45,19 +47,23 @@ const ModeCreateView: Component<Props> = (props) => {
   }
 
   const submit = () => {
+    if (canonical?.()) return
     const slug = name().trim()
     const msg = validate(slug)
     if (msg) {
       setError(msg)
       return
     }
-    updateConfig(
-      agentPatch(slug, {
+    session.mutateAgent({
+      action: "create",
+      name: slug,
+      frontmatter: {
+        name: slug,
         mode: "primary",
         description: description().trim() || undefined,
-        prompt: prompt().trim() || undefined,
-      }),
-    )
+      },
+      body: prompt().trim(),
+    })
     reset()
     props.onBack()
   }
@@ -135,7 +141,7 @@ const ModeCreateView: Component<Props> = (props) => {
         <Button variant="ghost" onClick={cancel}>
           {language.t("settings.agentBehaviour.createMode.cancel")}
         </Button>
-        <Button variant="primary" onClick={submit}>
+         <Button variant="primary" onClick={submit} disabled={canonical?.() === true}>
           {language.t("settings.agentBehaviour.createMode.button")}
         </Button>
       </div>

@@ -327,6 +327,7 @@
         "fuzzysort": "3.1.0",
         "ignore": "^7.0.3",
         "js-tiktoken": "^1.0.18",
+        "jsonc-parser": "3.3.1",
         "lru-cache": "^11.0.2",
         "marked": "catalog:",
         "openai": "^4.85.4",

@@ -125,6 +125,7 @@ export interface ModelSelectorBaseProps {
   label?: string
   /** Additional accessible context for this model setting. */
   description?: string
+  disabled?: boolean
 }
 
 export const ModelSelectorBase: Component<ModelSelectorBaseProps> = (props) => {
@@ -435,12 +436,14 @@ export const ModelSelectorBase: Component<ModelSelectorBaseProps> = (props) => {
   })
 
   function pick(model: EnrichedModel) {
+    if (props.disabled) return
     props.onSelect(model.providerID, model.id)
     setOpen(false)
     props.onPick?.()
   }
 
   function pickClear() {
+    if (props.disabled) return
     setSelectedKey(CLEAR_KEY)
     setPreActiveKey(CLEAR_KEY)
     setPreviewKey(CLEAR_KEY)
@@ -656,7 +659,7 @@ export const ModelSelectorBase: Component<ModelSelectorBaseProps> = (props) => {
           variant: "secondary",
           size: "normal",
           get disabled() {
-            return !canOpen()
+            return props.disabled === true || !canOpen()
           },
           get title() {
             return activeModel()?.id

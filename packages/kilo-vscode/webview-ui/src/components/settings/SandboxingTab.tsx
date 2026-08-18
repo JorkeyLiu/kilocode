@@ -27,8 +27,9 @@ function destination(input: string) {
   return `${match[1]}:${port}`
 }
 
+// eslint-disable-next-line complexity
 const SandboxingTab: Component = () => {
-  const { globalConfig, updateGlobalConfig } = useConfig()
+  const { globalConfig, updateGlobalConfig, canonical } = useConfig()
   const language = useLanguage()
   const sandbox = createMemo(() => globalConfig().sandbox ?? {})
   const [newPath, setNewPath] = createSignal("")
@@ -38,6 +39,7 @@ const SandboxingTab: Component = () => {
   const allowedHosts = () => sandbox().allowed_hosts ?? []
 
   const addHost = () => {
+    if (canonical?.()) return
     const input = newHost().trim().toLowerCase()
     const value = destination(input)
     if (!value) return
@@ -52,6 +54,7 @@ const SandboxingTab: Component = () => {
   }
 
   const removeHost = (index: number) => {
+    if (canonical?.()) return
     const current = [...allowedHosts()]
     current.splice(index, 1)
     updateGlobalConfig({
@@ -60,6 +63,7 @@ const SandboxingTab: Component = () => {
   }
 
   const addPath = () => {
+    if (canonical?.()) return
     const value = newPath().trim()
     if (!value) return
     const current = [...writablePaths()]
@@ -73,6 +77,7 @@ const SandboxingTab: Component = () => {
   }
 
   const removePath = (index: number) => {
+    if (canonical?.()) return
     const current = [...writablePaths()]
     current.splice(index, 1)
     updateGlobalConfig({
@@ -81,7 +86,8 @@ const SandboxingTab: Component = () => {
   }
 
   return (
-    <Card>
+    <Card aria-disabled={canonical?.() === true} title={canonical?.() === true ? "Unsupported in canonical GUI config" : undefined}>
+      {canonical?.() === true && <div role="note" style={{ color: "var(--text-weak-base)", "margin-bottom": "8px" }}>Sandbox settings are read-only in canonical GUI configuration.</div>}
       <SettingsRow
         title={language.t("settings.sandboxing.enabled.title")}
         description={language.t("settings.sandboxing.enabled.description")}
@@ -90,11 +96,13 @@ const SandboxingTab: Component = () => {
         <Switch
           checked={sandbox().enabled ?? false}
           inputProps={{ "aria-describedby": enabledDescription }}
-          onChange={(checked) =>
-            updateGlobalConfig({
-              sandbox: { ...sandbox(), enabled: checked },
-            })
-          }
+           onChange={(checked) => {
+             if (canonical?.()) return
+             updateGlobalConfig({
+               sandbox: { ...sandbox(), enabled: checked },
+             })
+           }}
+           disabled={canonical?.() === true}
           hideLabel
         >
           {language.t("settings.sandboxing.enabled.title")}
@@ -108,13 +116,14 @@ const SandboxingTab: Component = () => {
       >
         <Switch
           checked={sandbox().network !== "allow"}
-          disabled={sandbox().enabled !== true}
+           disabled={canonical?.() === true || sandbox().enabled !== true}
           inputProps={{ "aria-describedby": networkDescription }}
-          onChange={(checked) =>
-            updateGlobalConfig({
-              sandbox: { ...sandbox(), network: checked ? "deny" : "allow" },
-            })
-          }
+           onChange={(checked) => {
+             if (canonical?.()) return
+             updateGlobalConfig({
+               sandbox: { ...sandbox(), network: checked ? "deny" : "allow" },
+             })
+           }}
           hideLabel
         >
           {language.t("settings.sandboxing.network.title")}
@@ -140,7 +149,7 @@ const SandboxingTab: Component = () => {
               <div style={{ flex: 1 }}>
                 <TextField
                   value={newHost()}
-                  disabled={sandbox().enabled !== true || sandbox().network === "allow"}
+                  disabled={canonical?.() === true || sandbox().enabled !== true || sandbox().network === "allow"}
                   placeholder="api.github.com:443"
                   onChange={(val) => setNewHost(val)}
                   onKeyDown={(e: KeyboardEvent) => {
@@ -152,7 +161,7 @@ const SandboxingTab: Component = () => {
               </div>
               <Button
                 variant="secondary"
-                disabled={sandbox().enabled !== true || sandbox().network === "allow"}
+                disabled={canonical?.() === true || sandbox().enabled !== true || sandbox().network === "allow"}
                 onClick={addHost}
               >
                 {language.t("common.add")}
@@ -181,7 +190,7 @@ const SandboxingTab: Component = () => {
                     size="small"
                     variant="ghost"
                     icon="close"
-                    disabled={sandbox().enabled !== true || sandbox().network === "allow"}
+                    disabled={canonical?.() === true || sandbox().enabled !== true || sandbox().network === "allow"}
                     onClick={() => removeHost(index())}
                   />
                 </div>
@@ -212,7 +221,7 @@ const SandboxingTab: Component = () => {
               <div style={{ flex: 1 }}>
                 <TextField
                   value={newPath()}
-                  disabled={sandbox().enabled !== true}
+                  disabled={canonical?.() === true || sandbox().enabled !== true}
                   placeholder="/tmp"
                   onChange={(val) => setNewPath(val)}
                   onKeyDown={(e: KeyboardEvent) => {
@@ -222,7 +231,7 @@ const SandboxingTab: Component = () => {
                   label={language.t("settings.sandboxing.writablePaths.title")}
                 />
               </div>
-              <Button variant="secondary" disabled={sandbox().enabled !== true} onClick={addPath}>
+              <Button variant="secondary" disabled={canonical?.() === true || sandbox().enabled !== true} onClick={addPath}>
                 {language.t("common.add")}
               </Button>
             </div>
@@ -250,7 +259,7 @@ const SandboxingTab: Component = () => {
                     size="small"
                     variant="ghost"
                     icon="close"
-                    disabled={sandbox().enabled !== true}
+                    disabled={canonical?.() === true || sandbox().enabled !== true}
                     onClick={() => removePath(index())}
                   />
                 </div>

@@ -15,7 +15,7 @@ import { useLanguage } from "../../context/language"
 import { useProvider } from "../../context/provider"
 import { useServer } from "../../context/server"
 import { useVSCode } from "../../context/vscode"
-import type { Provider } from "../../types/messages"
+import type { ProviderView } from "../../types/messages"
 import CustomProviderDialog from "./CustomProviderDialog"
 import ProviderConnectDialog from "./ProviderConnectDialog"
 import ProviderSelectDialog from "./ProviderSelectDialog"
@@ -42,6 +42,7 @@ const ProvidersTab: Component = () => {
   const server = useServer()
   const vscode = useVSCode()
   const action = createProviderAction(vscode)
+  const canonicalMode = () => provider.canonical?.() === true
 
   onCleanup(action.dispose)
 
@@ -50,7 +51,11 @@ const ProvidersTab: Component = () => {
   // eagerly evaluates createMemo during initialisation. (LOCK-009)
   const disabledProviders = createMemo(() => config().disabled_providers ?? [])
   const disabledIds = createMemo(() => new Set(disabledProviders()))
-  const allProviders = createMemo(() => providersWithKiloFallback(provider.providers()))
+  const allProviders = createMemo(() => {
+    const items = Object.values(providersWithKiloFallback(provider.providers()))
+    return canonicalMode() ? items.filter((item: ProviderView) => item.id !== KILO_PROVIDER_ID) : items
+  })
+  const providerMap = createMemo(() => Object.fromEntries(allProviders().map((item) => [item.id, item])) as Record<string, ProviderView>)
 
   // Configured IDs: connected + disabled + config entries + auth states
   const configuredIds = createMemo(() =>
@@ -58,14 +63,14 @@ const ProvidersTab: Component = () => {
   )
 
   const configured = createMemo(() =>
-    buildConfiguredList(allProviders(), provider.connected(), disabledIds(), config().provider, provider.authStates()),
+    buildConfiguredList(providerMap(), provider.connected(), disabledIds(), config().provider, provider.authStates()),
   )
 
-  const addList = createMemo(() => buildAddList(allProviders(), configuredIds()))
+  const addList = createMemo(() => buildAddList(providerMap(), configuredIds()))
 
   // ── Actions ──────────────────────────────────────────────────────────────
 
-  function sourceTag(item: Provider) {
+  function sourceTag(item: ProviderView) {
     if (item.id === KILO_PROVIDER_ID) return language.t("settings.providers.tag.gateway")
     if (item.id === "anaconda-desktop") return language.t("settings.providers.tag.local")
     const current = providerSource(item)
@@ -81,13 +86,14 @@ const ProvidersTab: Component = () => {
     return language.t("settings.providers.tag.other")
   }
 
-  function editProvider(item: Provider) {
+  function editProvider(item: ProviderView) {
     const cfg = config().provider?.[item.id]
     if (!cfg) return
     dialog.show(() => <CustomProviderDialog existing={{ providerID: item.id, name: item.name, config: cfg }} />)
   }
 
   function deleteCustom(providerID: string, name: string) {
+    if (canonicalMode()) return
     dialog.show(() => (
       <Dialog title={language.t("provider.delete.confirm.title", { provider: name })} fit>
         <div class="dialog-confirm-body">
@@ -100,22 +106,25 @@ const ProvidersTab: Component = () => {
               variant="primary"
               size="large"
               onClick={() => {
-                action.send(
-                  { type: "deleteCustomProvider", providerID },
-                  {
-                    onDeleted: () => {
-                      showToast({
-                        variant: "success",
-                        icon: "circle-check",
-                        title: language.t("provider.delete.toast.deleted.title", { provider: name }),
-                        description: language.t("provider.delete.toast.deleted.description", { provider: name }),
-                      })
-                    },
-                    onError: (message) => {
-                      showToast({ title: language.t("common.requestFailed"), description: message.message })
-                    },
-                  },
-                )
+                const done = () => {
+                  showToast({
+                    variant: "success",
+                    icon: "circle-check",
+                    title: language.t("provider.delete.toast.deleted.title", { provider: name }),
+                    description: language.t("provider.delete.toast.deleted.description", { provider: name }),
+                  })
+                }
+                const error = (message: { message: string }) => {
+                  showToast({ title: language.t("common.requestFailed"), description: message.message })
+                }
+                if (!canonicalMode()) {
+                  action.send({ type: "deleteCustomProvider", providerID, canonical: false }, { onDeleted: done, onError: error })
+                  dialog.close()
+                  return
+                }
+                const stamp = provider.stamp?.()
+                if (!stamp) return
+                action.send({ type: "deleteCustomProvider", providerID, canonical: true, stamp }, { onDeleted: done, onError: error })
                 dialog.close()
               }}
             >
@@ -128,6 +137,7 @@ const ProvidersTab: Component = () => {
   }
 
   function toggleProvider(providerID: string) {
+    if (canonicalMode()) return
     const current = disabledProviders()
     const isDisabled = current.includes(providerID)
     if (isDisabled) {
@@ -137,7 +147,8 @@ const ProvidersTab: Component = () => {
     }
   }
 
-  function connectProvider(item: Provider) {
+  function connectProvider(item: ProviderView) {
+    if (canonicalMode()) return
     if (item.id === KILO_PROVIDER_ID) {
       server.goToLogin()
       return
@@ -145,32 +156,34 @@ const ProvidersTab: Component = () => {
     dialog.show(() => <ProviderConnectDialog providerID={item.id} />)
   }
 
-  function connectChatGPT(item: Provider) {
+  function connectChatGPT(item: ProviderView) {
+    if (canonicalMode()) return
     dialog.show(() => <ProviderConnectDialog providerID={item.id} oauthOnly />)
   }
 
-  function chatgpt(item: Provider) {
+  function chatgpt(item: ProviderView) {
     if (item.id !== "openai") return false
     if (providerSource(item) === "custom") return false
     return (provider.authMethods()[item.id] ?? []).some((method) => method.type === "oauth")
   }
 
   /** Open the API Key management dialog (LOCK-035). */
-  function manageApiKey(item: Provider) {
+  function manageApiKey(item: ProviderView) {
+    if (canonicalMode()) return
     dialog.show(() => <ProviderConnectDialog providerID={item.id} manageApiKey />)
   }
 
   // ── Control policy predicates (LOCK-045) ──────────────────────────────────
 
-  function showAccountButton(item: Provider): boolean {
+  function showAccountButton(item: ProviderView): boolean {
     return isKiloProvider(item)
   }
 
-  function showEditButton(item: Provider): boolean {
+  function showEditButton(item: ProviderView): boolean {
     return isCustomConfigured(item, config().provider)
   }
 
-  function showTrashButton(item: Provider): boolean {
+  function showTrashButton(item: ProviderView): boolean {
     return isCustomConfigured(item, config().provider)
   }
 
@@ -200,6 +213,21 @@ const ProvidersTab: Component = () => {
 
   return (
     <div>
+      <Show when={provider.diagnostics?.()}>
+        {(diagnostics) => {
+          const d = diagnostics() as { action?: string; message?: string; kind?: string; retry?: { type: "retryProviderCleanup"; mode: "delete" | "restore"; scope: "global" | "project"; stamp: import("../../../../src/config/types").CanonicalStamp; retryID: string } }
+          return (
+            <div role="alert" style={{ color: "var(--vscode-errorForeground)", "margin-bottom": "8px", display: "flex", "align-items": "center", gap: "8px" }}>
+              <span>{d.message ?? JSON.stringify(d)}</span>
+              <Show when={d.retry}>
+                <Button variant="secondary" size="small" onClick={() => provider.retryProviderCleanup?.(d.retry!)}>
+                  Retry
+                </Button>
+              </Show>
+            </div>
+          )
+        }}
+      </Show>
       {/* Configured providers */}
       <h4 style={{ "margin-top": "16px", "margin-bottom": "8px" }}>
         {language.t("settings.providers.section.configured")}
@@ -263,7 +291,8 @@ const ProvidersTab: Component = () => {
                               size="large"
                               variant="ghost"
                               aria-label={language.t("common.edit")}
-                              onClick={() => editProvider(item)}
+                             onClick={() => { if (!canonicalMode()) editProvider(item) }}
+                             disabled={canonicalMode() === true}
                             />
                           </Tooltip>
                         </div>
@@ -285,7 +314,8 @@ const ProvidersTab: Component = () => {
                         <Button
                           size="large"
                           variant="ghost"
-                          onClick={() => connectChatGPT(item)}
+                           onClick={() => { if (!canonicalMode()) connectChatGPT(item) }}
+                           disabled={canonicalMode() === true}
                           class="settings-provider-row-credential-slot"
                         >
                           {language.t("settings.providers.action.signInChatGPT")}
@@ -295,7 +325,8 @@ const ProvidersTab: Component = () => {
                         <Button
                           size="large"
                           variant="ghost"
-                          onClick={() => connectProvider(item)}
+                           onClick={() => { if (!canonicalMode()) connectProvider(item) }}
+                           disabled={canonicalMode() === true}
                           class="settings-provider-row-credential-slot"
                         >
                           {language.t("provider.anaconda.action.manage")}
@@ -308,7 +339,8 @@ const ProvidersTab: Component = () => {
 
                     <Switch
                       checked={!disabledIds().has(item.id)}
-                      onChange={() => toggleProvider(item.id)}
+                      onChange={() => { if (!canonicalMode()) toggleProvider(item.id) }}
+                      disabled={canonicalMode() === true}
                       aria-label={language.t("settings.providers.switch.label", { provider: item.name })}
                     />
 
@@ -325,7 +357,8 @@ const ProvidersTab: Component = () => {
                             size="large"
                             variant="ghost"
                             aria-label={language.t("settings.providers.action.deleteProvider")}
-                            onClick={() => deleteCustom(item.id, item.name)}
+                             onClick={() => deleteCustom(item.id, item.name)}
+                             disabled={canonicalMode() === true}
                           />
                         </Tooltip>
                       </div>
@@ -365,7 +398,7 @@ const ProvidersTab: Component = () => {
                     )}
                   </Show>
                 </div>
-                <Button size="large" variant="secondary" icon="plus-small" onClick={() => connectProvider(item)}>
+                 <Button size="large" variant="secondary" icon="plus-small" onClick={() => connectProvider(item)} disabled={canonicalMode() === true}>
                   {item.id === KILO_PROVIDER_ID
                     ? language.t("common.signIn")
                     : language.t("settings.providers.action.configure")}
@@ -408,7 +441,8 @@ const ProvidersTab: Component = () => {
             size="large"
             variant="secondary"
             icon="plus-small"
-            onClick={() => dialog.show(() => <CustomProviderDialog />)}
+             onClick={() => { if (!canonicalMode()) dialog.show(() => <CustomProviderDialog />) }}
+             disabled={canonicalMode() === true}
           >
             {language.t("settings.providers.action.configure")}
           </Button>
@@ -417,7 +451,8 @@ const ProvidersTab: Component = () => {
         {/* Show more providers */}
         <button
           type="button"
-          onClick={() => dialog.show(() => <ProviderSelectDialog />)}
+           onClick={() => { if (!canonicalMode()) dialog.show(() => <ProviderSelectDialog />) }}
+           disabled={canonicalMode() === true}
           style={{
             display: "flex",
             "align-items": "center",

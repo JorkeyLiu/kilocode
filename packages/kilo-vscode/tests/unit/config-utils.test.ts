@@ -741,3 +741,156 @@ describe("ConfigState", () => {
     })
   })
 })
+
+// ---------------------------------------------------------------------------
+// P4.1: Canonical readiness gate + invalid save cleanup
+// ---------------------------------------------------------------------------
+
+describe("P4.1: Canonical readiness gate", () => {
+  it("saveConfig returns false and does not set saving when canonical is false", () => {
+    const s = new ConfigState()
+    s.canonical = false
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+
+    const result = s.saveConfig("s1", { snapshot: false })
+
+    expect(result).toBe(false)
+    expect(s.saving).toBe(false)
+    expect(s.pendingSaveID).toBeNull()
+  })
+
+  it("saveConfig returns true after canonical materialization", () => {
+    const s = new ConfigState()
+    s.canonical = false
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+
+    // Canonical readiness arrives
+    s.canonical = true
+    const result = s.saveConfig("s1", { snapshot: false })
+
+    expect(result).toBe(true)
+    expect(s.saving).toBe(true)
+    expect(s.pendingSaveID).toBe("s1")
+  })
+
+  it("saveConfig is rejected when canonical is false even with dirty draft", () => {
+    const s = new ConfigState()
+    s.canonical = false
+    s.handleConfigLoaded({ model: "openai/gpt-4" })
+    s.updateConfig({ model: "anthropic/claude-sonnet-4-20250514" })
+
+    expect(s.dirty).toBe(true)
+    expect(s.saveConfig("s1")).toBe(false)
+    expect(s.saving).toBe(false)
+  })
+
+  it("multiple saves are all blocked before canonical readiness", () => {
+    const s = new ConfigState()
+    s.canonical = false
+    s.handleConfigLoaded({ snapshot: true, username: "alice" })
+    s.updateConfig({ snapshot: false })
+    s.updateConfig({ username: "bob" })
+
+    expect(s.saveConfig("s1")).toBe(false)
+    expect(s.saveConfig("s2")).toBe(false)
+    expect(s.saving).toBe(false)
+    // Draft is preserved for retry after readiness
+    expect(s.dirty).toBe(true)
+    expect(s.draft.snapshot).toBe(false)
+    expect(s.draft.username).toBe("bob")
+  })
+})
+
+describe("P4.1: Canonical gate opens on materialization", () => {
+  it("handleConfigLoaded with canonical=true opens the gate", () => {
+    const s = new ConfigState()
+    s.canonical = false
+    s.handleConfigLoaded({ snapshot: true }, true)
+
+    expect(s.canonical).toBe(true)
+    expect(s.loading).toBe(false)
+  })
+
+  it("handleConfigUpdated with canonical=true opens the gate", () => {
+    const s = new ConfigState()
+    s.canonical = false
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+    s.saveConfig("s1", { snapshot: false })
+
+    // Save was blocked — reset and open gate
+    s.canonical = false
+    s.handleConfigUpdated({ snapshot: true }, undefined, true)
+
+    expect(s.canonical).toBe(true)
+  })
+
+  it("save after canonical gate opens processes normally", () => {
+    const s = new ConfigState()
+    s.canonical = false
+    s.handleConfigLoaded({ model: "openai/gpt-4" })
+    s.updateConfig({ model: "anthropic/claude-sonnet-4-20250514" })
+
+    // Blocked before gate
+    expect(s.saveConfig("s1")).toBe(false)
+
+    // Gate opens
+    s.canonical = true
+    expect(s.saveConfig("s1", { model: "anthropic/claude-sonnet-4-20250514" })).toBe(true)
+    expect(s.saving).toBe(true)
+
+    // Ack confirms
+    s.handleConfigUpdated({ model: "anthropic/claude-sonnet-4-20250514" }, "s1")
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(false)
+    expect(s.config.model).toBe("anthropic/claude-sonnet-4-20250514")
+  })
+})
+
+describe("P4.1: Replacement/disposal closing the gate", () => {
+  it("handleConfigLoaded without canonical keeps gate closed", () => {
+    const s = new ConfigState()
+    s.canonical = true
+    s.handleConfigLoaded({ snapshot: true })
+    // Non-canonical configLoaded does not close an already-open gate
+    expect(s.canonical).toBe(true)
+  })
+
+  it("discardConfig preserves canonical state", () => {
+    const s = new ConfigState()
+    s.canonical = true
+    s.handleConfigLoaded({ snapshot: true })
+    s.updateConfig({ snapshot: false })
+    s.discardConfig()
+
+    expect(s.canonical).toBe(true)
+    expect(s.dirty).toBe(false)
+  })
+})
+
+describe("P4.1: Draft preserved for retry after blocked save", () => {
+  it("draft survives blocked save and is available after gate opens", () => {
+    const s = new ConfigState()
+    s.canonical = false
+    s.handleConfigLoaded({ model: "openai/gpt-4", username: "alice" })
+    s.updateConfig({ model: "anthropic/claude-sonnet-4-20250514" })
+    s.updateConfig({ username: "bob" })
+
+    // Save blocked
+    expect(s.saveConfig("s1")).toBe(false)
+    expect(s.dirty).toBe(true)
+    expect(s.draft).toEqual({ model: "anthropic/claude-sonnet-4-20250514", username: "bob" })
+
+    // Gate opens — save succeeds with the preserved draft
+    s.canonical = true
+    expect(s.saveConfig("s1", { model: "anthropic/claude-sonnet-4-20250514", username: "bob" })).toBe(true)
+
+    // Ack
+    s.handleConfigUpdated({ model: "anthropic/claude-sonnet-4-20250514", username: "bob" }, "s1")
+    expect(s.saving).toBe(false)
+    expect(s.dirty).toBe(false)
+    expect(Object.keys(s.draft).length).toBe(0)
+  })
+})

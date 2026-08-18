@@ -1,4 +1,4 @@
-import { type Component } from "solid-js"
+import { type Component, Show } from "solid-js"
 import { Select } from "@kilocode/kilo-ui/select"
 import { TextField } from "@kilocode/kilo-ui/text-field"
 import { Card } from "@kilocode/kilo-ui/card"
@@ -25,22 +25,26 @@ const CODE_EDIT_OPTIONS: LayoutOption[] = [
 ]
 
 const DisplayTab: Component = () => {
-  const { config, updateConfig } = useConfig()
+  const { config, updateConfig, canonical } = useConfig()
   const display = useDisplay()
   const language = useLanguage()
 
   return (
     <div>
-      <Card>
+      <Card aria-disabled={canonical?.() === true} title={canonical?.() === true ? "Unsupported in canonical GUI config" : undefined}>
+        <Show when={canonical?.() === true}>
+          <div role="note" style={{ color: "var(--text-weak-base)", "margin-bottom": "8px" }}>Display settings are read-only in canonical GUI configuration.</div>
+        </Show>
         <SettingsRow
           title={language.t("settings.display.username.title")}
           description={language.t("settings.display.username.description")}
         >
           <div style={{ width: "160px" }}>
-            <TextField
+              <TextField
               value={config().username ?? ""}
               placeholder="User"
-              onChange={(val) => updateConfig({ username: val.trim() || undefined })}
+               onChange={(val) => { if (!canonical?.()) updateConfig({ username: val.trim() || undefined }) }}
+               disabled={canonical?.() === true}
             />
           </div>
         </SettingsRow>
@@ -56,7 +60,7 @@ const DisplayTab: Component = () => {
               max="24"
               step="1"
               value={display.fontSize()}
-              onInput={(event) => display.setFontSize(Number(event.currentTarget.value))}
+               onInput={(event) => display.setFontSize(Number(event.currentTarget.value))}
               aria-label={language.t("settings.display.fontSize.title")}
             />
             <span>{display.fontSize()}px</span>
@@ -69,9 +73,8 @@ const DisplayTab: Component = () => {
         >
           <Switch
             checked={display.reasoningAutoCollapse()}
-            onChange={(checked: boolean) => {
-              display.setReasoningAutoCollapse(checked)
-            }}
+             onChange={(checked: boolean) => { if (!canonical?.()) display.setReasoningAutoCollapse(checked) }}
+             disabled={canonical?.() === true}
             hideLabel
           >
             {language.t("settings.display.reasoningAutoCollapse.title")}
@@ -87,15 +90,16 @@ const DisplayTab: Component = () => {
             current={TERMINAL_OPTIONS.find((o) => o.value === (config().terminal_command_display ?? "expanded"))}
             value={(o) => o.value}
             label={(o) => language.t(o.labelKey)}
-            onSelect={(o) => {
-              if (!o) return
+             onSelect={(o) => {
+               if (!o || canonical?.()) return
               const next = o.value as TerminalCommandDisplay
               if (next === (config().terminal_command_display ?? "expanded")) return
               updateConfig({ terminal_command_display: next })
             }}
             variant="secondary"
             size="small"
-            triggerVariant="settings"
+             triggerVariant="settings"
+             disabled={canonical?.() === true}
           />
         </SettingsRow>
 
@@ -110,14 +114,15 @@ const DisplayTab: Component = () => {
             value={(o) => o.value}
             label={(o) => language.t(o.labelKey)}
             onSelect={(o) => {
-              if (!o) return
+               if (!o || canonical?.()) return
               const next = o.value as CodeEditDisplay
               if (next === (config().code_edit_display ?? "collapsed")) return
               updateConfig({ code_edit_display: next })
             }}
             variant="secondary"
             size="small"
-            triggerVariant="settings"
+             triggerVariant="settings"
+             disabled={canonical?.() === true}
           />
         </SettingsRow>
       </Card>

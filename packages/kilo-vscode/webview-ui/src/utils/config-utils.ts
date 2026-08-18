@@ -179,6 +179,8 @@ export class ConfigState {
   dirty = false
   saving = false
   loading = true
+  /** P4.1: canonical readiness gate — saves are rejected when false. */
+  canonical = true
   /** Save identity whose ack/failure we are currently waiting for. */
   pendingSaveID: string | null = null
   /** Save identity of the last successfully confirmed save. */
@@ -194,8 +196,9 @@ export class ConfigState {
   }
 
   /** Handle an incoming configLoaded push from the extension. */
-  handleConfigLoaded(server: Config) {
+  handleConfigLoaded(server: Config, canonical?: boolean) {
     if (this.saving) return
+    if (canonical) this.canonical = true
     this.config = resolveConfig(server, this.draft, this.dirty)
     this.saved = server
     this.loading = false
@@ -208,7 +211,7 @@ export class ConfigState {
    * matching ack, only paths whose current draft value still equals the value
    * that save sent are removed — same-field edits made after send survive.
    */
-  handleConfigUpdated(server: Config, id?: string) {
+  handleConfigUpdated(server: Config, id?: string, canonical?: boolean) {
     const pending = this.pendingSaveID
     const last = this.lastSavedID
     const confirmed = id !== undefined && id === pending
@@ -223,6 +226,8 @@ export class ConfigState {
       this.sentByID.delete(id)
       return
     }
+    // P4.1: canonical gate opens on any materialized configUpdated.
+    if (canonical) this.canonical = true
     if (confirmed) {
       this.saving = false
       this.pendingSaveID = null
@@ -276,13 +281,19 @@ export class ConfigState {
    * edits accumulate). `sent` records the snapshot actually written under the
    * save identity so the matching ack can preserve same-field edits made while
    * the save was in flight (LOCK-002).
+   *
+   * P4.1: returns false when canonical is not ready (the caller must not
+   * mark in-flight before the gate opens).
    */
-  saveConfig(id?: string, sent?: Partial<Config>) {
-    if (Object.keys(this.draft).length === 0) return
+  saveConfig(id?: string, sent?: Partial<Config>): boolean {
+    if (Object.keys(this.draft).length === 0) return false
+    // P4.1 gate: reject saves before canonical readiness.
+    if (!this.canonical) return false
     this.saving = true
     const saveID = id ?? newSaveID()
     this.pendingSaveID = saveID
     if (sent !== undefined) this.sentByID.set(saveID, sent)
+    return true
   }
 
   /** Discard pending changes. */

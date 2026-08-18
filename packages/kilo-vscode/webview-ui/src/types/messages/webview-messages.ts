@@ -1,7 +1,8 @@
 import type { InstallMarketplaceItemOptions, MarketplaceFilters, MarketplaceItem } from "../marketplace"
 import type { FileAttachment } from "./parts"
 import type { MessageLoadMode } from "./sessions"
-import type { ModelSelection, ProviderConfig } from "./providers"
+import type { ModelSelection, ProviderConfig, LegacyProviderConfig } from "./providers"
+import type { CanonicalConfigPayload, CanonicalProviderPayload, CanonicalStamp } from "../../../../src/config/types"
 import type { Config } from "./config"
 import type { ReviewMessageData } from "../../../../src/shared/review-comments"
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
@@ -239,14 +240,74 @@ export interface RemoveSkillMessage {
   location: string
 }
 
-export interface RemoveModeMessage {
+export interface LegacyRemoveModeMessage {
   type: "removeAgent"
   name: string
+  canonical?: false
+  scope?: "global" | "project"
+  expectedHash?: string
 }
 
-export interface RemoveMcpMessage {
+export interface CanonicalRemoveModeMessage {
+  type: "removeAgent"
+  name: string
+  canonical: true
+  scope: "global" | "project"
+  expectedHash: string
+  stamp: CanonicalStamp
+}
+
+export type RemoveModeMessage = LegacyRemoveModeMessage | CanonicalRemoveModeMessage
+
+export interface LegacyMutateAgentMessage {
+  type: "mutateAgent"
+  action: "create" | "edit" | "import"
+  name: string
+  frontmatter: Record<string, unknown>
+  body: string
+  scope?: "global" | "project"
+  expectedHash: string
+  canonical?: false
+  requestId: string
+}
+
+export interface CanonicalMutateAgentMessage {
+  type: "mutateAgent"
+  canonical: true
+  action: "create" | "edit" | "import"
+  name: string
+  frontmatter: Record<string, unknown>
+  body: string
+  scope: "global" | "project"
+  expectedHash: string
+  stamp: CanonicalStamp
+  requestId: string
+}
+
+export type MutateAgentMessage = LegacyMutateAgentMessage | CanonicalMutateAgentMessage
+
+export interface LegacyRemoveMcpMessage {
   type: "removeMcp"
   name: string
+  canonical?: false
+}
+
+export interface CanonicalRemoveMcpMessage {
+  type: "removeMcp"
+  name: string
+  canonical: true
+  scope: "global" | "project"
+  expectedHash: string
+  stamp: CanonicalStamp
+}
+
+export type RemoveMcpMessage = LegacyRemoveMcpMessage | CanonicalRemoveMcpMessage
+
+export interface RetryMcpCleanupMessage {
+  type: "retryMcpCleanup"
+  requestId: string
+  /** Opaque host-owned retry ID — the host looks up its stored record. */
+  retryID: string
 }
 
 export interface RequestMcpStatusMessage {
@@ -418,7 +479,7 @@ export interface RequestImageModelsMessage {
   type: "requestImageModels"
 }
 
-export interface UpdateConfigMessage {
+export interface LegacyUpdateConfigMessage {
   type: "updateConfig"
   /** Global config patch written to ~/.config/kilo/kilo.json. */
   config: Partial<Config>
@@ -432,7 +493,21 @@ export interface UpdateConfigMessage {
    * from older saves (LOCK-005).
    */
   saveID?: string
+  canonical?: false
 }
+
+export interface CanonicalUpdateConfigMessage {
+  type: "updateConfig"
+  canonical: true
+  config: CanonicalConfigPayload
+  globalUnset?: string[][]
+  projectConfig?: CanonicalConfigPayload
+  projectUnset?: string[][]
+  saveID?: string
+  stamp: CanonicalStamp
+}
+
+export type UpdateConfigMessage = LegacyUpdateConfigMessage | CanonicalUpdateConfigMessage
 
 export interface RequestNotificationSettingsMessage {
   type: "requestNotificationSettings"
@@ -686,16 +761,30 @@ export interface RequestRemoteStatusMessage {
   type: "requestRemoteStatus"
 }
 
-export interface ConnectProviderMessage {
+export interface LegacyConnectProviderMessage {
   type: "connectProvider"
   requestId: string
   providerID: string
   apiKey: string
   metadata?: Record<string, string>
+  canonical?: false
 }
+
+export interface CanonicalConnectProviderMessage {
+  type: "connectProvider"
+  canonical: true
+  requestId: string
+  providerID: string
+  metadata?: Record<string, string>
+  credentialRequested: boolean
+  stamp: CanonicalStamp
+}
+
+export type ConnectProviderMessage = LegacyConnectProviderMessage | CanonicalConnectProviderMessage
 
 export interface AuthorizeProviderOAuthMessage {
   type: "authorizeProviderOAuth"
+  canonical: false
   requestId: string
   providerID: string
   method: number
@@ -703,6 +792,7 @@ export interface AuthorizeProviderOAuthMessage {
 
 export interface CompleteProviderOAuthMessage {
   type: "completeProviderOAuth"
+  canonical: false
   requestId: string
   providerID: string
   method: number
@@ -713,22 +803,55 @@ export interface DisconnectProviderMessage {
   type: "disconnectProvider"
   requestId: string
   providerID: string
+  canonical: true
+  stamp: CanonicalStamp
 }
 
-export interface SaveCustomProviderMessage {
+export interface RetryProviderCleanupMessage {
+  type: "retryProviderCleanup"
+  requestId: string
+  /** Opaque host-owned retry ID — the host looks up its stored record. */
+  retryID: string
+}
+
+export interface LegacySaveCustomProviderMessage {
   type: "saveCustomProvider"
   requestId: string
   providerID: string
-  config: ProviderConfig
+  config: LegacyProviderConfig
+  canonical?: false
   apiKey?: string
   apiKeyChanged?: boolean
 }
 
-export interface DeleteCustomProviderMessage {
+export interface CanonicalSaveCustomProviderMessage {
+  type: "saveCustomProvider"
+  canonical: true
+  requestId: string
+  providerID: string
+  config: CanonicalProviderPayload
+  credentialRequested: boolean
+  stamp: CanonicalStamp
+}
+
+export type SaveCustomProviderMessage = LegacySaveCustomProviderMessage | CanonicalSaveCustomProviderMessage
+
+export interface LegacyDeleteCustomProviderMessage {
   type: "deleteCustomProvider"
   requestId: string
   providerID: string
+  canonical: false
 }
+
+export interface CanonicalDeleteCustomProviderMessage {
+  type: "deleteCustomProvider"
+  requestId: string
+  providerID: string
+  canonical: true
+  stamp: CanonicalStamp
+}
+
+export type DeleteCustomProviderMessage = LegacyDeleteCustomProviderMessage | CanonicalDeleteCustomProviderMessage
 
 export interface GetProviderCredentialMessage {
   type: "getProviderCredential"
@@ -741,6 +864,7 @@ export interface FetchCustomProviderModelsMessage {
   requestId: string
   baseURL: string
   apiKey?: string
+  canonical?: false
   /**
    * When editing an existing provider and the key field is untouched, the
    * webview has no key to send (keys are stripped before they reach it).
@@ -749,6 +873,16 @@ export interface FetchCustomProviderModelsMessage {
    */
   providerID?: string
   headers?: Record<string, string>
+}
+
+export interface CanonicalFetchCustomProviderModelsMessage {
+  type: "fetchCustomProviderModels"
+  canonical: true
+  requestId: string
+  baseURL: string
+  providerID?: string
+  credentialRequested: boolean
+  stamp: CanonicalStamp
 }
 
 export interface PersistRecentsRequest {
@@ -868,7 +1002,9 @@ export type WebviewMessage =
   | SendCommandRequest
   | RemoveSkillMessage
   | RemoveModeMessage
+  | MutateAgentMessage
   | RemoveMcpMessage
+  | RetryMcpCleanupMessage
   | RequestMcpStatusMessage
   | ConnectMcpMessage
   | DisconnectMcpMessage
@@ -955,11 +1091,13 @@ export type WebviewMessage =
   | AuthorizeProviderOAuthMessage
   | CompleteProviderOAuthMessage
   | DisconnectProviderMessage
+  | RetryProviderCleanupMessage
   | AnacondaDesktopWebviewMessage
   | SaveCustomProviderMessage
   | DeleteCustomProviderMessage
   | GetProviderCredentialMessage
   | FetchCustomProviderModelsMessage
+  | CanonicalFetchCustomProviderModelsMessage
   | PersistRecentsRequest
   | RequestRecentsMessage
   | PersistModelSelectorExpandedRequest

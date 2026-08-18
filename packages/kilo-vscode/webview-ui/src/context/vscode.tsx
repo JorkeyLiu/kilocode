@@ -67,6 +67,7 @@ export const VSCodeProvider: ParentComponent = (props) => {
 
   const value: VSCodeContextValue = {
     postMessage: (message: WebviewMessage) => {
+      window.dispatchEvent(new CustomEvent("kilo-webview-message", { detail: message }))
       api.postMessage(message)
     },
     onMessage: (handler: (message: ExtensionMessage) => void) => {

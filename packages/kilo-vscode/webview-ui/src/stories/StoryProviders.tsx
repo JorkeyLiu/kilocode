@@ -12,6 +12,7 @@
 
 import { createSignal, createMemo, type ParentComponent } from "solid-js"
 import { VSCodeProvider } from "../context/vscode"
+import { getVSCodeAPI } from "../context/vscode"
 import { ServerProvider } from "../context/server"
 import { FeedbackProvider } from "../context/feedback"
 import { ProviderContext } from "../context/provider"
@@ -93,6 +94,7 @@ const MockProviderProvider: ParentComponent<{
   connected?: string[]
   authStates?: Record<string, ProviderAuthState>
   authMethods?: Record<string, any[]>
+  canonical?: boolean
 }> = (props) => {
   const value = {
     providers: () => MOCK_PROVIDERS as any,
@@ -105,6 +107,7 @@ const MockProviderProvider: ParentComponent<{
     authStates: () =>
       props.authStates ?? ((props.kiloAuth ? { kilo: "oauth" } : {}) as Record<string, ProviderAuthState>),
     isModelValid: () => true,
+    canonical: () => props.canonical === true,
   }
   return <ProviderContext.Provider value={value}>{props.children}</ProviderContext.Provider>
 }
@@ -293,6 +296,9 @@ interface StoryProvidersProps {
   authMethods?: Record<string, any[]>
   /** When true, renders children without the default 12px padding wrapper */
   noPadding?: boolean
+  canonical?: boolean
+  onMessage?: (message: unknown) => void
+  diagnostics?: Array<{ path: string[]; message: string }>
 }
 
 /** Wraps children with either a mock ConfigContext (when config prop is given) or the real ConfigProvider. */
@@ -301,9 +307,12 @@ const ConfigWrapper: ParentComponent<{
   features?: Partial<FeatureFlags>
   globalConfig?: Config
   projectConfig?: Config
+  canonical?: boolean
+  diagnostics?: Array<{ path: string[]; message: string }>
   onConfigChange?: (config: Config) => void
   onGlobalConfigChange?: (config: Config) => void
   onProjectConfigChange?: (config: Config) => void
+  onMessage?: (message: unknown) => void
 }> = (props) => {
   if (props.config) {
     const scoped = props.globalConfig !== undefined || props.projectConfig !== undefined
@@ -326,7 +335,10 @@ const ConfigWrapper: ParentComponent<{
       isDirty: dirty,
       saving: () => false,
       saveError: () => null,
+      canonical: () => props.canonical === true,
+       diagnostics: () => props.diagnostics ?? [],
       updateConfig: (partial: Partial<Config>) => {
+        if (props.canonical) return
         setCfg((prev) => {
           const next = merge(prev as Record<string, unknown>, partial as Record<string, unknown>) as Config
           props.onConfigChange?.(next)
@@ -335,6 +347,7 @@ const ConfigWrapper: ParentComponent<{
         setDirty(true)
       },
       updateGlobalConfig: (partial: Partial<Config>) => {
+        if (props.canonical) return
         const update = (prev: Config) => {
           const next = merge(prev as Record<string, unknown>, partial as Record<string, unknown>) as Config
           props.onGlobalConfigChange?.(next)
@@ -346,6 +359,7 @@ const ConfigWrapper: ParentComponent<{
         setDirty(true)
       },
       updateProjectConfig: (partial: Partial<Config>) => {
+        if (props.canonical) return
         const update = (prev: Config) => {
           const next = merge(prev as Record<string, unknown>, partial as Record<string, unknown>) as Config
           props.onProjectConfigChange?.(next)
@@ -358,6 +372,7 @@ const ConfigWrapper: ParentComponent<{
       },
       updateSetting: (key: string, value: unknown) => {
         setSettings((prev) => ({ ...prev, [key]: value }))
+        props.onMessage?.({ type: "updateSetting", key, value })
         setDirty(true)
       },
       saveConfig: () => setDirty(false),
@@ -370,6 +385,14 @@ const ConfigWrapper: ParentComponent<{
 
 export const StoryProviders: ParentComponent<StoryProvidersProps> = (props) => {
   const data = () => props.data ?? defaultMockData
+  const api = getVSCodeAPI()
+  if (props.onMessage) {
+    const post = api.postMessage.bind(api)
+    api.postMessage = (message) => {
+      props.onMessage?.(message)
+      post(message)
+    }
+  }
   const session = mockSessionValue({
     id: props.sessionID,
     permissions: props.permissions,
@@ -404,6 +427,7 @@ export const StoryProviders: ParentComponent<StoryProvidersProps> = (props) => {
             features={props.features}
             globalConfig={props.globalConfig}
             projectConfig={props.projectConfig}
+            canonical={props.canonical}
             onConfigChange={props.onConfigChange}
             onGlobalConfigChange={props.onGlobalConfigChange}
             onProjectConfigChange={props.onProjectConfigChange}
@@ -414,6 +438,7 @@ export const StoryProviders: ParentComponent<StoryProvidersProps> = (props) => {
                 connected={props.connected}
                 authStates={props.authStates}
                 authMethods={props.authMethods}
+                canonical={props.canonical}
               >
                 <DialogProvider>
                   <LanguageContext.Provider
