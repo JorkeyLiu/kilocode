@@ -173,7 +173,7 @@ When you click "Redo All" (unrevert):
 
 ### Storage and Cleanup
 
-Snapshot data is stored per-project and is periodically cleaned up. A background process runs `git gc --prune=7.days` every hour, which removes unreachable snapshot objects older than 7 days. Because snapshots are stored as raw tree hashes (not refs or commits), older snapshots may be pruned by garbage collection even if a session still references them.
+Snapshot data is stored per-project and is periodically cleaned up per project. Each hour `Snapshot.cleanup` collects live snapshot hashes for the project from `Session.revert.snapshot` and snapshot-bearing `Part` rows (`snapshot`/`patch`/`step-start`/`step-finish`), then prunes snapshot refs under `refs/kilo/snapshots/<timestamp>/<hash>` older than 7 days that are not in the live set; aged live refs and recent refs are retained. If the live-root Database is unavailable or collection fails, pruning is skipped and `git gc --prune=7.days` still runs without deleting aged refs. `snapshot` is project-owned, not a session-family artifact, so family retention never deletes it.
 
 ### Snapshot Isolation
 

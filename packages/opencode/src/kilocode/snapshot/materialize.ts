@@ -90,7 +90,7 @@ export namespace KiloSnapshotMaterialize {
     return yield* pack(input, path.join(input.staging, "pack"), "trees", objects)
   })
 
-  export const prune = Effect.fnUntraced(function* (input: Input, before: number) {
+  export const prune = Effect.fnUntraced(function* (input: Input, before: number, live?: ReadonlySet<string>) {
     const result = yield* input.git([
       "--git-dir",
       input.gitdir,
@@ -106,10 +106,13 @@ export namespace KiloSnapshotMaterialize {
       .split("\n")
       .map((item) => item.trim())
       .filter((item) => {
-        const match = item.match(/^refs\/kilo\/snapshots\/(\d+)\/[0-9a-f]+$/)
+        const match = item.match(/^refs\/kilo\/snapshots\/(\d+)\/([0-9a-f]+)$/)
         if (!match) return false
-        const time = Number(match[1])
-        return Number.isSafeInteger(time) && time < before
+        const time = Number(match[1]!)
+        if (!Number.isSafeInteger(time) || time >= before) return false
+        const hash = match[2]!
+        if (live?.has(hash)) return false
+        return true
       })
     if (!refs.length) return true
     const removed = yield* input.git(["--git-dir", input.gitdir, "update-ref", "--stdin"], {

@@ -56,7 +56,10 @@ const decodeSummary = Schema.decodeUnknownOption(SummaryFile)
 export interface Interface {
   readonly remove: (key: string[]) => Effect.Effect<void, FSUtil.Error>
   readonly read: <T>(key: string[]) => Effect.Effect<T, Error>
-  readonly update: <T>(key: string[], fn: (draft: T) => void) => Effect.Effect<T, Error>
+  readonly update: <T>(
+    key: string[],
+    fn: (draft: T) => void,
+  ) => Effect.Effect<T, Error | Artifact.UnregisteredArtifactError>
   readonly write: <T>(
     key: string[],
     content: T,
@@ -283,8 +286,22 @@ export const layer = Layer.effect(
         return value as T
       })
 
+    const assertRegistered = (key: string[]): Effect.Effect<void, Artifact.UnregisteredArtifactError> => {
+      const root = key[0]
+      if (!root || !Artifact.entries[root]) {
+        return Effect.fail(
+          new Artifact.UnregisteredArtifactError({
+            prefix: key,
+            message: `Unregistered artifact write blocked: ${key.length === 0 ? "(empty)" : key.join("/")} — registry entry required`,
+          }),
+        )
+      }
+      return Effect.void
+    }
+
     const update: Interface["update"] = <T>(key: string[], fn: (draft: T) => void) =>
       Effect.gen(function* () {
+        yield* assertRegistered(key)
         const value = yield* withResolved(key, (target, rw) =>
           TxReentrantLock.withWriteLock(
             rw,
@@ -301,15 +318,7 @@ export const layer = Layer.effect(
 
     const write: Interface["write"] = (key: string[], content: unknown) =>
       Effect.gen(function* () {
-        const root = key[0]
-        if (!root || !Artifact.entries[root]) {
-          return yield* Effect.fail(
-            new Artifact.UnregisteredArtifactError({
-              prefix: key,
-              message: `Unregistered artifact write blocked: ${key.length === 0 ? "(empty)" : key.join("/")} — registry entry required`,
-            }),
-          )
-        }
+        yield* assertRegistered(key)
         yield* withResolved(key, (target, rw) => TxReentrantLock.withWriteLock(rw, writeJson(target, content)))
       })
 

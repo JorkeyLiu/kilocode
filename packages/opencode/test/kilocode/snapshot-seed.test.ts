@@ -13,6 +13,7 @@ import { Instance } from "../../src/kilocode/instance"
 import { Filesystem } from "../../src/util/filesystem"
 import { KiloSnapshotMaterialize } from "../../src/kilocode/snapshot/materialize"
 import { KiloSnapshotSeed } from "../../src/kilocode/snapshot/seed"
+import { Database } from "@opencode-ai/core/database/database"
 import { disposeAllInstances, provideInstance, testInstanceStoreLayer, tmpdir } from "../fixture/fixture"
 
 const fwd = (...parts: string[]) => path.join(...parts).replaceAll("\\", "/")
@@ -58,6 +59,20 @@ function run<A>(dir: string, body: (snapshot: Snapshot.Interface) => Effect.Effe
       const gitdir = path.join(Global.Path.data, "snapshot", Instance.project.id, Hash.fast(Instance.worktree))
       return { value, gitdir }
     }).pipe(provideInstance(dir), Effect.provide(Snapshot.defaultLayer), Effect.provide(testInstanceStoreLayer)),
+  )
+}
+
+function cleanWithDb(dir: string) {
+  return Effect.runPromise(
+    Effect.gen(function* () {
+      const snapshot = yield* Snapshot.Service
+      yield* snapshot.cleanup()
+    }).pipe(
+      provideInstance(dir),
+      Effect.provide(Snapshot.defaultLayer),
+      Effect.provide(testInstanceStoreLayer),
+      Effect.provide(Database.layerFromPath(":memory:")),
+    ),
   )
 }
 
@@ -284,7 +299,7 @@ test(
 
     const expired = `refs/kilo/snapshots/1/${result.value!}`
     await $`git --git-dir=${result.gitdir} update-ref ${expired} ${result.value!}`.quiet()
-    await run(tmp.path, (snapshot) => snapshot.cleanup())
+    await cleanWithDb(tmp.path)
     expect(
       (await $`git --git-dir=${result.gitdir} rev-parse --verify --quiet ${expired}`.nothrow().text()).trim(),
     ).toBe("")

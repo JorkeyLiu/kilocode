@@ -14,7 +14,7 @@ const dir = path.join(Global.Path.data, "storage")
 const it = testEffect(Layer.mergeAll(Storage.defaultLayer, FSUtil.defaultLayer, CrossSpawnSpawner.defaultLayer))
 
 const scope = Effect.fnUntraced(function* () {
-  const root = ["storage_test", crypto.randomUUID()]
+  const root = ["session_diff", `test-${crypto.randomUUID()}`]
   const fs = yield* FSUtil.Service
   const svc = yield* Storage.Service
   yield* Effect.addFinalizer(() =>
@@ -63,7 +63,7 @@ describe("Storage", () => {
   it.live("round-trips JSON content", () =>
     Effect.gen(function* () {
       const { root, svc } = yield* scope()
-      const key = [...root, "session_diff", "roundtrip"]
+      const key = [...root, "roundtrip"]
       const value = [{ file: "a.ts", additions: 2, deletions: 1 }]
 
       yield* svc.write(key, value)

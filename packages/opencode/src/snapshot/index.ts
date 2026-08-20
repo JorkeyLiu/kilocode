@@ -4,6 +4,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { formatPatch, structuredPatch } from "diff"
 import path from "path"
 import { AppProcess } from "@opencode-ai/core/process"
+import { resolveLiveForPrune, shouldPrune } from "./cleanup-decision"
 import { InstanceState } from "@/effect/instance-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Hash } from "@opencode-ai/core/util/hash"
@@ -116,6 +117,7 @@ export const layer: Layer.Layer<Service, never, Requirements> =
             worktree: ctx.worktree,
             gitdir: path.join(Global.Path.data, "snapshot", ctx.project.id, Hash.fast(ctx.worktree)),
             vcs: ctx.project.vcs,
+            projectID: ctx.project.id,
           }
 
           const args = (cmd: string[]) => ["--git-dir", state.gitdir, "--work-tree", state.worktree, ...cmd]
@@ -334,9 +336,8 @@ export const layer: Layer.Layer<Service, never, Requirements> =
               Effect.gen(function* () {
                 if (!(yield* enabled())) return
                 if (!(yield* exists(state.gitdir))) return
-                // kilocode_change start - retain snapshots for the same seven-day window as object pruning
-                yield* KiloSnapshotMaterialize.prune({ gitdir: state.gitdir, git, fs }, Date.now() - retention)
-                // kilocode_change end
+                const maybeLive = (yield* resolveLiveForPrune(state.projectID)) as Set<string> | null
+                if (shouldPrune(maybeLive)) yield* KiloSnapshotMaterialize.prune({ gitdir: state.gitdir, git, fs }, Date.now() - retention, maybeLive!)
                 const result = yield* git(args(["gc", `--prune=${prune}`]), { cwd: state.directory })
                 if (result.code !== 0) {
                   log.warn("cleanup failed", {

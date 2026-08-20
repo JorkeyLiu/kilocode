@@ -93,7 +93,11 @@ export class UnregisteredArtifactError extends Schema.TaggedErrorClass<Unregiste
 ) {}
 
 export function assertFamilyWrite(prefix: string[]): void {
-  if (prefix.length === 0) return
+  if (prefix.length === 0)
+    throw new UnregisteredArtifactError({
+      prefix,
+      message: `Unregistered artifact write blocked: (empty) — registry entry required`,
+    })
   const root = prefix[0]!
   if (isFamilyKind(root)) return
   if (registry[root]) return
@@ -104,7 +108,11 @@ export function assertFamilyWrite(prefix: string[]): void {
 }
 
 export function assertFamilyWriteEffect(prefix: string[]) {
-  if (prefix.length === 0) return { _tag: "ok" as const }
+  if (prefix.length === 0)
+    return new UnregisteredArtifactError({
+      prefix,
+      message: `Unregistered artifact write blocked: (empty) — registry entry required`,
+    })
   const root = prefix[0]!
   if (isFamilyKind(root)) return { _tag: "ok" as const }
   if (registry[root]) return { _tag: "ok" as const }
