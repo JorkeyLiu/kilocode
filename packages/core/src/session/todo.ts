@@ -4,6 +4,7 @@ import { asc, eq } from "drizzle-orm"
 import { Context, Effect, Layer, Schema } from "effect"
 import { Database } from "../database/database"
 import { EventV2 } from "../event"
+import { SessionRevision } from "./revision"
 import { SessionSchema } from "./schema"
 import { TodoTable } from "./sql"
 
@@ -50,19 +51,21 @@ export const layer = Layer.effect(
         .transaction((tx) =>
           Effect.gen(function* () {
             yield* tx.delete(TodoTable).where(eq(TodoTable.session_id, input.sessionID)).run()
-            if (input.todos.length === 0) return
-            yield* tx
-              .insert(TodoTable)
-              .values(
-                input.todos.map((todo, position) => ({
-                  session_id: input.sessionID,
-                  content: todo.content,
-                  status: todo.status,
-                  priority: todo.priority,
-                  position,
-                })),
-              )
-              .run()
+            if (input.todos.length > 0) {
+              yield* tx
+                .insert(TodoTable)
+                .values(
+                  input.todos.map((todo, position) => ({
+                    session_id: input.sessionID,
+                    content: todo.content,
+                    status: todo.status,
+                    priority: todo.priority,
+                    position,
+                  })),
+                )
+                .run()
+            }
+            yield* SessionRevision.advance(input.sessionID, tx)
           }),
         )
         .pipe(Effect.orDie)

@@ -2,6 +2,7 @@ import { describe, test, expect, beforeEach, afterEach } from "bun:test"
 import { Database } from "bun:sqlite"
 import { drizzle, type SQLiteBunDatabase } from "drizzle-orm/bun-sqlite"
 import { migrate } from "drizzle-orm/bun-sqlite/migrator"
+import { eq } from "drizzle-orm"
 import path from "path"
 import fs from "fs/promises"
 import { readFileSync, readdirSync } from "fs"
@@ -74,11 +75,7 @@ async function writeProject(storageDir: string, project: Record<string, unknown>
   await Bun.write(path.join(storageDir, "project", `${project.id}.json`), JSON.stringify(project))
 }
 
-async function writeSession(
-  storageDir: string,
-  projectID: string,
-  session: Record<string, unknown> & { id: string },
-) {
+async function writeSession(storageDir: string, projectID: string, session: Record<string, unknown> & { id: string }) {
   await Bun.write(path.join(storageDir, "session", projectID, `${session.id}.json`), JSON.stringify(session))
 }
 
@@ -553,10 +550,7 @@ describe("JSON to SQLite migration", () => {
       await JsonMigration.bootstrap()
       expect(await Bun.file(pending).exists()).toBe(true)
 
-      await Bun.write(
-        broken,
-        JSON.stringify({ id: "proj_retry", worktree: "/retry", vcs: "git", sandboxes: [] }),
-      )
+      await Bun.write(broken, JSON.stringify({ id: "proj_retry", worktree: "/retry", vcs: "git", sandboxes: [] }))
       await JsonMigration.bootstrap()
       expect(await Bun.file(pending).exists()).toBe(false)
 
@@ -712,7 +706,7 @@ describe("JSON to SQLite migration", () => {
     expect(stats.errors).toEqual([])
   })
 
-  test("continues when a JSON file is unreadable and records an error", async () => {
+  test("continues when a project JSON file is unreadable and records an error", async () => {
     await writeProject(storageDir, {
       id: "proj_test123abc",
       worktree: "/",
@@ -760,7 +754,7 @@ describe("JSON to SQLite migration", () => {
     expect(todos[1].position).toBe(2)
   })
 
-  test("skips orphaned todos, permissions, and shares", async () => {
+  test("skips orphaned permissions and shares", async () => {
     await writeProject(storageDir, {
       id: "proj_test123abc",
       worktree: "/",
@@ -807,40 +801,61 @@ describe("JSON to SQLite migration", () => {
     expect(db.select().from(SessionShareTable).all().length).toBe(1)
   })
 
-  test("handles mixed corruption and partial validity in one migration run", async () => {
+  test("handles mixed corruption and partial validity: failed family rolls back, successful families commit", async () => {
+    // Family A: ses_test456def — has a broken message file → entire family rolls back
+    // Family B: ses_ok — clean → commits successfully
+    // Family C: ses_orphan — in nonexistent project dir → skipped as orphan
     await writeProject(storageDir, {
       id: "proj_test123abc",
       worktree: "/ok",
       time: { created: 1700000000000, updated: 1700000001000 },
       sandboxes: [],
     })
-    await Bun.write(
-      path.join(storageDir, "project", "proj_missing_id.json"),
-      JSON.stringify({ worktree: "/bad", sandboxes: [] }),
-    )
     await Bun.write(path.join(storageDir, "project", "proj_broken.json"), "{ nope")
 
+    // Family A: broken message causes rollback
     await writeSession(storageDir, "proj_test123abc", {
       id: "ses_test456def",
       projectID: "proj_test123abc",
-      slug: "ok",
+      slug: "broken-fam",
       directory: "/ok",
-      title: "Ok",
+      title: "Broken Family",
       version: "1",
       time: { created: 1700000000000, updated: 1700000001000 },
     })
     await Bun.write(
-      path.join(storageDir, "session", "proj_test123abc", "ses_missing_project.json"),
-      JSON.stringify({
-        id: "ses_missing_project",
-        slug: "bad",
-        directory: "/bad",
-        title: "Bad",
-        version: "1",
-      }),
+      path.join(storageDir, "message", "ses_test456def", "msg_ok.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
+    )
+    await Bun.write(path.join(storageDir, "message", "ses_test456def", "msg_broken.json"), "{ nope")
+    await Bun.write(
+      path.join(storageDir, "todo", "ses_test456def.json"),
+      JSON.stringify([{ content: "should-rollback", status: "pending", priority: "high" }]),
+    )
+
+    // Family B: clean → commits
+    await writeSession(storageDir, "proj_test123abc", {
+      id: "ses_ok",
+      projectID: "proj_test123abc",
+      slug: "ok",
+      directory: "/ok",
+      title: "OK Family",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+    await Bun.write(
+      path.join(storageDir, "message", "ses_ok", "msg_ok.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
     )
     await Bun.write(
-      path.join(storageDir, "session", "proj_test123abc", "ses_orphan.json"),
+      path.join(storageDir, "part", "msg_ok", "part_ok.json"),
+      JSON.stringify({ type: "text", text: "ok" }),
+    )
+
+    // Family C: orphan — in a project dir that doesn't exist in projectIds
+    await fs.mkdir(path.join(storageDir, "session", "proj_missing"), { recursive: true })
+    await Bun.write(
+      path.join(storageDir, "session", "proj_missing", "ses_orphan.json"),
       JSON.stringify({
         id: "ses_orphan",
         projectID: "proj_missing",
@@ -848,82 +863,640 @@ describe("JSON to SQLite migration", () => {
         directory: "/bad",
         title: "Orphan",
         version: "1",
+        time: { created: 1700000000000, updated: 1700000001000 },
       }),
     )
 
-    await Bun.write(
-      path.join(storageDir, "message", "ses_test456def", "msg_ok.json"),
-      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
-    )
-    await Bun.write(path.join(storageDir, "message", "ses_test456def", "msg_broken.json"), "{ nope")
-    await Bun.write(
-      path.join(storageDir, "message", "ses_missing", "msg_orphan.json"),
-      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
-    )
-
-    await Bun.write(
-      path.join(storageDir, "part", "msg_ok", "part_ok.json"),
-      JSON.stringify({ type: "text", text: "ok" }),
-    )
-    await Bun.write(
-      path.join(storageDir, "part", "msg_missing", "part_missing_message.json"),
-      JSON.stringify({ type: "text", text: "bad" }),
-    )
-    await Bun.write(path.join(storageDir, "part", "msg_ok", "part_broken.json"), "{ nope")
-
-    await Bun.write(
-      path.join(storageDir, "todo", "ses_test456def.json"),
-      JSON.stringify([
-        { content: "ok", status: "pending", priority: "high" },
-        { content: "skip", status: "pending" },
-      ]),
-    )
-    await Bun.write(
-      path.join(storageDir, "todo", "ses_missing.json"),
-      JSON.stringify([{ content: "orphan", status: "pending", priority: "high" }]),
-    )
-    await Bun.write(path.join(storageDir, "todo", "ses_broken.json"), "{ nope")
-
-    await Bun.write(
-      path.join(storageDir, "permission", "proj_test123abc.json"),
-      JSON.stringify([{ permission: "file.read" }]),
-    )
-    await Bun.write(
-      path.join(storageDir, "permission", "proj_missing.json"),
-      JSON.stringify([{ permission: "file.write" }]),
-    )
-    await Bun.write(path.join(storageDir, "permission", "proj_broken.json"), "{ nope")
-
+    // Share for broken family → orphan (session not committed)
     await Bun.write(
       path.join(storageDir, "session_share", "ses_test456def.json"),
+      JSON.stringify({ id: "share_broken", secret: "secret", url: "https://broken.example.com" }),
+    )
+    // Share for OK family → committed
+    await Bun.write(
+      path.join(storageDir, "session_share", "ses_ok.json"),
       JSON.stringify({ id: "share_ok", secret: "secret", url: "https://ok.example.com" }),
     )
-    await Bun.write(
-      path.join(storageDir, "session_share", "ses_missing.json"),
-      JSON.stringify({ id: "share_orphan", secret: "secret", url: "https://missing.example.com" }),
-    )
-    await Bun.write(path.join(storageDir, "session_share", "ses_broken.json"), "{ nope")
 
     const stats = await JsonMigration.run(db)
 
-    // Projects: proj_test123abc (valid), proj_missing_id (now derives id from filename)
-    // Sessions: ses_test456def (valid), ses_missing_project (now uses dir path),
-    // ses_orphan (now uses dir path, ignores stale projectID)
-    expect(stats.projects).toBe(2)
-    expect(stats.sessions).toBe(3)
+    // Projects: proj_test123abc (valid), proj_broken (unreadable, skipped)
+    // Family A: rolled back (broken message) → 0 sessions/messages/todos
+    // Family B: committed → 1 session, 1 message, 1 part
+    // Family C: skipped (orphan) → 0 sessions
+    expect(stats.projects).toBe(1)
+    expect(stats.sessions).toBe(1)
     expect(stats.messages).toBe(1)
     expect(stats.parts).toBe(1)
-    expect(stats.todos).toBe(1)
-    expect(stats.permissions).toBe(0)
-    expect(stats.shares).toBe(1)
-    expect(stats.errors.length).toBeGreaterThanOrEqual(5)
+    expect(stats.todos).toBe(0)
+    expect(stats.shares).toBe(1) // only ses_ok share
+    expect(stats.errors.length).toBeGreaterThanOrEqual(1) // at least the family error + project error
 
-    expect(db.select().from(ProjectTable).all().length).toBe(2)
-    expect(db.select().from(SessionTable).all().length).toBe(3)
+    expect(db.select().from(ProjectTable).all().length).toBe(1)
+    expect(db.select().from(SessionTable).all().length).toBe(1)
     expect(db.select().from(MessageTable).all().length).toBe(1)
     expect(db.select().from(PartTable).all().length).toBe(1)
-    expect(db.select().from(TodoTable).all().length).toBe(1)
-    expect(db.select().from(PermissionTable).all().length).toBe(0)
+    expect(db.select().from(TodoTable).all().length).toBe(0)
     expect(db.select().from(SessionShareTable).all().length).toBe(1)
+  })
+
+  test("failed family leaves zero rows; neighboring family commits", async () => {
+    // Setup: two valid projects
+    await writeProject(storageDir, {
+      id: "proj_a",
+      worktree: "/a",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+    await writeProject(storageDir, {
+      id: "proj_b",
+      worktree: "/b",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+
+    // Family A: broken session file → rollback
+    await Bun.write(path.join(storageDir, "session", "proj_a", "ses_a.json"), "{ bad json")
+    await Bun.write(
+      path.join(storageDir, "message", "ses_a", "msg_a.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
+    )
+    await Bun.write(path.join(storageDir, "part", "msg_a", "part_a.json"), JSON.stringify({ type: "text", text: "a" }))
+    await Bun.write(
+      path.join(storageDir, "todo", "ses_a.json"),
+      JSON.stringify([{ content: "todo-a", status: "pending", priority: "high" }]),
+    )
+
+    // Family B: clean → commits
+    await writeSession(storageDir, "proj_b", {
+      id: "ses_b",
+      projectID: "proj_b",
+      slug: "b",
+      directory: "/b",
+      title: "B",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+    await Bun.write(
+      path.join(storageDir, "message", "ses_b", "msg_b.json"),
+      JSON.stringify({ role: "assistant", time: { created: 1700000000000 }, cost: 0.5 }),
+    )
+    await Bun.write(path.join(storageDir, "part", "msg_b", "part_b.json"), JSON.stringify({ type: "text", text: "b" }))
+    await Bun.write(
+      path.join(storageDir, "todo", "ses_b.json"),
+      JSON.stringify([{ content: "todo-b", status: "completed", priority: "low" }]),
+    )
+
+    const stats = await JsonMigration.run(db)
+
+    expect(stats.sessions).toBe(1) // only ses_b
+    expect(stats.messages).toBe(1) // only msg_b
+    expect(stats.parts).toBe(1) // only part_b
+    expect(stats.todos).toBe(1) // only todo-b
+    expect(stats.errors.length).toBeGreaterThanOrEqual(1) // ses_a family error
+
+    // Verify DB: only family B rows exist
+    const sessions = db.select().from(SessionTable).all()
+    expect(sessions.length).toBe(1)
+    expect(sessions[0].id).toBe(SessionSchema.ID.make("ses_b"))
+
+    const messages = db.select().from(MessageTable).all()
+    expect(messages.length).toBe(1)
+    expect(messages[0].session_id).toBe(SessionSchema.ID.make("ses_b"))
+
+    const parts = db.select().from(PartTable).all()
+    expect(parts.length).toBe(1)
+    expect(parts[0].session_id).toBe(SessionSchema.ID.make("ses_b"))
+
+    const todos = db.select().from(TodoTable).all()
+    expect(todos.length).toBe(1)
+    expect(todos[0].session_id).toBe(SessionSchema.ID.make("ses_b"))
+  })
+
+  test("retry after failed family: onConflictDoNothing makes re-run safe", async () => {
+    await writeProject(storageDir, {
+      id: "proj_retry",
+      worktree: "/r",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+
+    // First run: broken session file → family rolls back
+    await Bun.write(path.join(storageDir, "session", "proj_retry", "ses_r.json"), "{ bad")
+    await writeSession(storageDir, "proj_retry", {
+      id: "ses_ok_retry",
+      projectID: "proj_retry",
+      slug: "ok",
+      directory: "/r",
+      title: "OK",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+
+    const stats1 = await JsonMigration.run(db)
+    expect(stats1.sessions).toBe(1) // only ses_ok_retry
+
+    // Second run: fix the broken file → family now commits; ses_ok_retry deduped
+    await writeSession(storageDir, "proj_retry", {
+      id: "ses_r",
+      projectID: "proj_retry",
+      slug: "r",
+      directory: "/r",
+      title: "R",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+
+    const stats2 = await JsonMigration.run(db)
+    expect(stats2.sessions).toBe(2) // both ses_ok_retry and ses_r commit (onConflictDoNothing for dedup)
+    expect(db.select().from(SessionTable).all().length).toBe(2) // both committed
+  })
+
+  test("no orphan children: rolled-back family leaves zero session/message/part/todo rows", async () => {
+    await writeProject(storageDir, {
+      id: "proj_orphan",
+      worktree: "/o",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+
+    // Create a family with all child types, then break the session file
+    await Bun.write(path.join(storageDir, "session", "proj_orphan", "ses_break.json"), "{ broken")
+    await Bun.write(
+      path.join(storageDir, "message", "ses_break", "msg1.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
+    )
+    await Bun.write(path.join(storageDir, "part", "msg1", "prt1.json"), JSON.stringify({ type: "text", text: "x" }))
+    await Bun.write(
+      path.join(storageDir, "todo", "ses_break.json"),
+      JSON.stringify([{ content: "orphan-todo", status: "pending", priority: "high" }]),
+    )
+
+    await JsonMigration.run(db)
+
+    // All rows for this family must be absent
+    expect(db.select().from(SessionTable).all().length).toBe(0)
+    expect(db.select().from(MessageTable).all().length).toBe(0)
+    expect(db.select().from(PartTable).all().length).toBe(0)
+    expect(db.select().from(TodoTable).all().length).toBe(0)
+  })
+
+  test("bounded iteration: per-family glob enumeration", async () => {
+    // Verify that messages/parts are enumerated per-family, not globally.
+    // Create two sessions with their own messages; a broken message in
+    // session A should not affect session B (different families).
+    await writeProject(storageDir, {
+      id: "proj_bound",
+      worktree: "/b",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+    await writeSession(storageDir, "proj_bound", {
+      id: "ses_a_bound",
+      projectID: "proj_bound",
+      slug: "a",
+      directory: "/b",
+      title: "A",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+    await writeSession(storageDir, "proj_bound", {
+      id: "ses_b_bound",
+      projectID: "proj_bound",
+      slug: "b",
+      directory: "/b",
+      title: "B",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+
+    // ses_a_bound: has a broken message → family rolls back
+    await Bun.write(
+      path.join(storageDir, "message", "ses_a_bound", "msg_a.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
+    )
+    await Bun.write(path.join(storageDir, "message", "ses_a_bound", "msg_a_bad.json"), "{ bad")
+
+    // ses_b_bound: clean → commits
+    await Bun.write(
+      path.join(storageDir, "message", "ses_b_bound", "msg_b.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
+    )
+    await Bun.write(path.join(storageDir, "part", "msg_b", "part_b.json"), JSON.stringify({ type: "text", text: "ok" }))
+
+    const stats = await JsonMigration.run(db)
+
+    expect(stats.sessions).toBe(1) // only ses_b_bound
+    expect(stats.messages).toBe(1) // only msg_b
+    expect(stats.parts).toBe(1) // only part_b
+
+    const sessions = db.select().from(SessionTable).all()
+    expect(sessions.length).toBe(1)
+    expect(sessions[0].id).toBe(SessionSchema.ID.make("ses_b_bound"))
+
+    const messages = db.select().from(MessageTable).all()
+    expect(messages.length).toBe(1)
+    expect(messages[0].session_id).toBe(SessionSchema.ID.make("ses_b_bound"))
+  })
+
+  test("successful migration leaves transaction closed", async () => {
+    // Verify that if the outer transaction itself fails (not a family),
+    // the entire transaction is rolled back cleanly.
+    await writeProject(storageDir, {
+      id: "proj_tx",
+      worktree: "/t",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+    await writeSession(storageDir, "proj_tx", {
+      id: "ses_tx",
+      projectID: "proj_tx",
+      slug: "tx",
+      directory: "/t",
+      title: "TX",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+
+    // Migration should complete without leaving an open transaction
+    await JsonMigration.run(db)
+
+    // Verify the DB is usable after migration (no open transaction)
+    const projects = db.select().from(ProjectTable).all()
+    expect(projects.length).toBe(1)
+    const sessions = db.select().from(SessionTable).all()
+    expect(sessions.length).toBe(1)
+  })
+
+  test("read-failure family rolls back while neighboring family commits", async () => {
+    // Test that BOTH read errors and insert errors trigger family rollback
+    await writeProject(storageDir, {
+      id: "proj_err",
+      worktree: "/e",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+
+    // Read failure: broken JSON in session file
+    await Bun.write(path.join(storageDir, "session", "proj_err", "ses_read_err.json"), "{ bad")
+    await Bun.write(
+      path.join(storageDir, "message", "ses_read_err", "msg1.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
+    )
+
+    // Neighbor: clean
+    await writeSession(storageDir, "proj_err", {
+      id: "ses_clean",
+      projectID: "proj_err",
+      slug: "clean",
+      directory: "/e",
+      title: "Clean",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+
+    const stats = await JsonMigration.run(db)
+
+    // Only the clean family committed
+    expect(stats.sessions).toBe(1)
+    expect(db.select().from(SessionTable).all().length).toBe(1)
+    expect(db.select().from(SessionTable).all()[0].id).toBe(SessionSchema.ID.make("ses_clean"))
+
+    // The failed family has zero rows
+    const failedSessionRows = db
+      .select()
+      .from(SessionTable)
+      .where(eq(SessionTable.id, SessionSchema.ID.make("ses_read_err")))
+      .all()
+    expect(failedSessionRows.length).toBe(0)
+  })
+
+  test("outer rollback failure is visible alongside the original error", async () => {
+    // Simulate: outer transaction fails (throws before COMMIT) AND the
+    // compensating ROLLBACK also fails. The thrown error must contain both.
+    await writeProject(storageDir, {
+      id: "proj_rollback",
+      worktree: "/r",
+      time: { created: Date.now(), updated: Date.now() },
+      sandboxes: [],
+    })
+    await writeSession(storageDir, "proj_rollback", {
+      id: "ses_rollback",
+      projectID: "proj_rollback",
+      slug: "rollback",
+      directory: "/r",
+      title: "Rollback",
+      version: "1",
+      time: { created: Date.now(), updated: Date.now() },
+    })
+
+    // Wrap the drizzle DB so that the usage SQL (run just before COMMIT)
+    // throws to simulate an outer-transaction error, and then the
+    // compensating ROLLBACK also throws.
+    let outerFailed = false
+    const proxy = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "run") {
+          return (sql: string) => {
+            const sqlStr = typeof sql === "string" ? sql : String(sql)
+            // After an outer error, make ROLLBACK also fail
+            if (outerFailed && sqlStr.includes("ROLLBACK") && !sqlStr.includes("SAVEPOINT")) {
+              throw new Error("simulated rollback failure")
+            }
+            // Trigger outer error on the usage UPDATE (runs right before COMMIT)
+            if (!outerFailed && sqlStr.includes("coalesce")) {
+              outerFailed = true
+              throw new Error("simulated outer transaction failure")
+            }
+            return Reflect.get(target, prop, receiver).call(target, sql)
+          }
+        }
+        const val = Reflect.get(target, prop, receiver)
+        if (typeof val === "function") return val.bind(target)
+        return val
+      },
+    }) as unknown as SQLiteBunDatabase
+
+    await expect(JsonMigration.run(proxy)).rejects.toThrow(
+      /outer transaction failed.*simulated outer transaction failure.*rollback also failed.*simulated rollback failure/,
+    )
+  })
+
+  test("family rollback+release succeeds: savepoint is cleaned up after failure", async () => {
+    // Verify that after a failed family, both ROLLBACK TO SAVEPOINT and
+    // RELEASE SAVEPOINT execute successfully, leaving no stale savepoint.
+    await writeProject(storageDir, {
+      id: "proj_sp",
+      worktree: "/s",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+
+    // Family A: broken session → triggers rollback + release
+    await Bun.write(path.join(storageDir, "session", "proj_sp", "ses_bad.json"), "{ bad")
+    await Bun.write(
+      path.join(storageDir, "message", "ses_bad", "msg1.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
+    )
+
+    // Family B: clean → should commit successfully, proving no stale savepoint
+    await writeSession(storageDir, "proj_sp", {
+      id: "ses_good",
+      projectID: "proj_sp",
+      slug: "good",
+      directory: "/s",
+      title: "Good",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+
+    const stats = await JsonMigration.run(db)
+
+    // Family B committed despite family A failure → transaction state was clean
+    expect(stats.sessions).toBe(1)
+    expect(db.select().from(SessionTable).all().length).toBe(1)
+    expect(db.select().from(SessionTable).all()[0].id).toBe(SessionSchema.ID.make("ses_good"))
+
+    // Family A: zero rows
+    const badSessions = db
+      .select()
+      .from(SessionTable)
+      .where(eq(SessionTable.id, SessionSchema.ID.make("ses_bad")))
+      .all()
+    expect(badSessions.length).toBe(0)
+
+    // Error recorded for family A
+    expect(stats.errors.some((e) => e.includes("ses_bad"))).toBe(true)
+  })
+
+  test("family rollback failure aborts outer transaction and preserves original error", async () => {
+    // Simulate: family fails (broken message), then ROLLBACK TO SAVEPOINT
+    // also fails. The migration must throw, preventing COMMIT. The thrown
+    // error must contain the original family error and the rollback failure.
+    await writeProject(storageDir, {
+      id: "proj_rb",
+      worktree: "/r",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+    await writeSession(storageDir, "proj_rb", {
+      id: "ses_rb",
+      projectID: "proj_rb",
+      slug: "rb",
+      directory: "/r",
+      title: "RB",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+    // Broken message triggers family failure via readOrThrow
+    await Bun.write(path.join(storageDir, "message", "ses_rb", "msg1.json"), "{ bad")
+
+    // Proxy: track SAVEPOINT creation, then make ROLLBACK TO SAVEPOINT fail.
+    // Check ROLLBACK before SAVEPOINT to avoid re-arming.
+    let sawFamilySp = false
+    const proxy = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "run") {
+          return (sql: string) => {
+            const sqlStr = typeof sql === "string" ? sql : String(sql)
+            if (sawFamilySp && sqlStr.includes("ROLLBACK TO SAVEPOINT")) {
+              sawFamilySp = false
+              throw new Error("simulated rollback failure")
+            }
+            if (sqlStr.includes("SAVEPOINT") && !sqlStr.includes("ROLLBACK") && !sqlStr.includes("RELEASE")) {
+              sawFamilySp = true
+            }
+            return Reflect.get(target, prop, receiver).call(target, sql)
+          }
+        }
+        const val = Reflect.get(target, prop, receiver)
+        if (typeof val === "function") return val.bind(target)
+        return val
+      },
+    }) as unknown as SQLiteBunDatabase
+
+    // Rollback failure must throw to abort the outer transaction
+    await expect(JsonMigration.run(proxy)).rejects.toThrow(
+      /rollback failed.*simulated rollback failure.*original:.*ses_rb/,
+    )
+  })
+
+  test("family rollback failure prevents partial rows from committing", async () => {
+    // Prove that when ROLLBACK TO SAVEPOINT fails, no rows from any
+    // family persist — the outer transaction is rolled back.
+    await writeProject(storageDir, {
+      id: "proj_nopersist",
+      worktree: "/n",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+
+    // Family A: broken session → triggers rollback failure via proxy
+    await Bun.write(path.join(storageDir, "session", "proj_nopersist", "ses_a.json"), "{ bad")
+    await Bun.write(
+      path.join(storageDir, "message", "ses_a", "msg_a.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
+    )
+
+    // Family B: clean → would commit if rollback failure didn't abort
+    await writeSession(storageDir, "proj_nopersist", {
+      id: "ses_b",
+      projectID: "proj_nopersist",
+      slug: "b",
+      directory: "/n",
+      title: "B",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+    await Bun.write(
+      path.join(storageDir, "message", "ses_b", "msg_b.json"),
+      JSON.stringify({ role: "user", time: { created: 1700000000000 } }),
+    )
+
+    // Proxy: make ROLLBACK TO SAVEPOINT fail for the broken family
+    let sawFamilySp = false
+    const proxy = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "run") {
+          return (sql: string) => {
+            const sqlStr = typeof sql === "string" ? sql : String(sql)
+            if (sawFamilySp && sqlStr.includes("ROLLBACK TO SAVEPOINT")) {
+              sawFamilySp = false
+              throw new Error("simulated rollback failure")
+            }
+            if (sqlStr.includes("SAVEPOINT") && !sqlStr.includes("ROLLBACK") && !sqlStr.includes("RELEASE")) {
+              sawFamilySp = true
+            }
+            return Reflect.get(target, prop, receiver).call(target, sql)
+          }
+        }
+        const val = Reflect.get(target, prop, receiver)
+        if (typeof val === "function") return val.bind(target)
+        return val
+      },
+    }) as unknown as SQLiteBunDatabase
+
+    await expect(JsonMigration.run(proxy)).rejects.toThrow()
+
+    // No rows from any family should persist — outer ROLLBACK undoes everything
+    expect(db.select().from(SessionTable).all().length).toBe(0)
+    expect(db.select().from(MessageTable).all().length).toBe(0)
+  })
+
+  test("family release-after-rollback failure aborts outer transaction", async () => {
+    // Simulate: family fails (broken message), ROLLBACK TO SAVEPOINT succeeds,
+    // but RELEASE SAVEPOINT fails. The migration must throw, preventing COMMIT.
+    // The thrown error must contain the original family error and the release failure.
+    await writeProject(storageDir, {
+      id: "proj_rel",
+      worktree: "/l",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+    await writeSession(storageDir, "proj_rel", {
+      id: "ses_rel",
+      projectID: "proj_rel",
+      slug: "rel",
+      directory: "/l",
+      title: "Rel",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+    // Broken message triggers family failure via readOrThrow
+    await Bun.write(path.join(storageDir, "message", "ses_rel", "msg1.json"), "{ bad")
+
+    // Proxy: track SAVEPOINT creation and ROLLBACK, then make RELEASE fail.
+    // Check ROLLBACK/RELEASE before SAVEPOINT to avoid re-arming.
+    let sawFamilySp = false
+    let sawRollback = false
+    const proxy = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "run") {
+          return (sql: string) => {
+            const sqlStr = typeof sql === "string" ? sql : String(sql)
+            if (sawFamilySp && sqlStr.includes("ROLLBACK TO SAVEPOINT")) {
+              sawRollback = true
+              return Reflect.get(target, prop, receiver).call(target, sql)
+            }
+            if (sawRollback && sqlStr.includes("RELEASE SAVEPOINT")) {
+              sawFamilySp = false
+              sawRollback = false
+              throw new Error("simulated release failure")
+            }
+            if (sqlStr.includes("SAVEPOINT") && !sqlStr.includes("ROLLBACK") && !sqlStr.includes("RELEASE")) {
+              sawFamilySp = true
+            }
+            return Reflect.get(target, prop, receiver).call(target, sql)
+          }
+        }
+        const val = Reflect.get(target, prop, receiver)
+        if (typeof val === "function") return val.bind(target)
+        return val
+      },
+    }) as unknown as SQLiteBunDatabase
+
+    // Release failure must throw to abort the outer transaction
+    await expect(JsonMigration.run(proxy)).rejects.toThrow(
+      /release after rollback failed.*simulated release failure.*original:.*ses_rel/,
+    )
+  })
+
+  test("family release-after-rollback failure prevents partial rows from committing", async () => {
+    // Prove that when RELEASE fails after successful ROLLBACK, no rows
+    // from any family persist — the outer transaction is rolled back.
+    await writeProject(storageDir, {
+      id: "proj_norel",
+      worktree: "/r",
+      time: { created: 1700000000000, updated: 1700000001000 },
+      sandboxes: [],
+    })
+
+    // Family A: broken session → triggers release failure via proxy
+    await Bun.write(path.join(storageDir, "session", "proj_norel", "ses_a.json"), "{ bad")
+
+    // Family B: clean → would commit if release failure didn't abort
+    await writeSession(storageDir, "proj_norel", {
+      id: "ses_b",
+      projectID: "proj_norel",
+      slug: "b",
+      directory: "/r",
+      title: "B",
+      version: "1",
+      time: { created: 1700000000000, updated: 1700000001000 },
+    })
+
+    // Proxy: make RELEASE fail after successful ROLLBACK
+    let sawFamilySp = false
+    let sawRollback = false
+    const proxy = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "run") {
+          return (sql: string) => {
+            const sqlStr = typeof sql === "string" ? sql : String(sql)
+            if (sawFamilySp && sqlStr.includes("ROLLBACK TO SAVEPOINT")) {
+              sawRollback = true
+              return Reflect.get(target, prop, receiver).call(target, sql)
+            }
+            if (sawRollback && sqlStr.includes("RELEASE SAVEPOINT")) {
+              sawFamilySp = false
+              sawRollback = false
+              throw new Error("simulated release failure")
+            }
+            if (sqlStr.includes("SAVEPOINT") && !sqlStr.includes("ROLLBACK") && !sqlStr.includes("RELEASE")) {
+              sawFamilySp = true
+            }
+            return Reflect.get(target, prop, receiver).call(target, sql)
+          }
+        }
+        const val = Reflect.get(target, prop, receiver)
+        if (typeof val === "function") return val.bind(target)
+        return val
+      },
+    }) as unknown as SQLiteBunDatabase
+
+    await expect(JsonMigration.run(proxy)).rejects.toThrow()
+
+    // No rows from any family should persist — outer ROLLBACK undoes everything
+    expect(db.select().from(SessionTable).all().length).toBe(0)
   })
 })

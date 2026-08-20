@@ -3,6 +3,7 @@ import { Effect } from "effect"
 import type { SessionID } from "@/session/schema"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { Database } from "@opencode-ai/core/database/database"
+import { SessionRevision } from "@opencode-ai/core/session/revision"
 
 export const key = "kilocode.sandbox"
 
@@ -58,12 +59,15 @@ export const write = Effect.fn("SandboxState.write")(function* (sessionID: Sessi
           .from(SessionTable)
           .where(eq(SessionTable.id, sessionID))
           .get()
-        if (!row) return
+        if (!row) yield* Effect.die(`SandboxState.write: session ${sessionID} not found`)
         yield* tx
           .update(SessionTable)
-          .set({ metadata: merge(row.metadata, value), time_updated: Date.now() })
+          .set({
+            metadata: merge(row!.metadata, value),
+          })
           .where(eq(SessionTable.id, sessionID))
           .run()
+        yield* SessionRevision.advance(sessionID, tx)
       }),
     )
     .pipe(Effect.orDie)
@@ -75,16 +79,19 @@ export const clear = Effect.fn("SandboxState.clear")(function* (sessionID: Sessi
     .transaction((tx) =>
       Effect.gen(function* () {
         const row = yield* tx
-        .select({ metadata: SessionTable.metadata })
-        .from(SessionTable)
-        .where(eq(SessionTable.id, sessionID))
-        .get()
-        if (!row) return
+          .select({ metadata: SessionTable.metadata })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, sessionID))
+          .get()
+        if (!row) yield* Effect.die(`SandboxState.clear: session ${sessionID} not found`)
         yield* tx
           .update(SessionTable)
-          .set({ metadata: remove(row.metadata), time_updated: Date.now() })
+          .set({
+            metadata: remove(row!.metadata),
+          })
           .where(eq(SessionTable.id, sessionID))
           .run()
+        yield* SessionRevision.advance(sessionID, tx)
       }),
     )
     .pipe(Effect.orDie)

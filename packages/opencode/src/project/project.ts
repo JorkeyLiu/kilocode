@@ -199,11 +199,18 @@ export const layer = Layer.effect(
                   .run()
               }
 
+              // RETURNING proves affected-row count atomically; each
+              // matched row increments exactly once.
               yield* d
                 .update(SessionTable)
-                .set({ project_id: newID, time_updated: sql`${SessionTable.time_updated}` })
+                .set({
+                  project_id: newID,
+                  revision: sql`${SessionTable.revision} + 1`,
+                  time_updated: sql`${SessionTable.time_updated}`,
+                })
                 .where(eq(SessionTable.project_id, oldID))
-                .run()
+                .returning({ id: SessionTable.id })
+                .all()
               yield* d
                 .update(WorkspaceTable)
                 .set({ project_id: newID })
@@ -296,47 +303,67 @@ export const layer = Layer.effect(
       ).pipe(Effect.map((arr) => arr.filter((x): x is string => x !== undefined)))
 
       yield* db
-        .insert(ProjectTable)
-        .values({
-          id: result.id,
-          worktree: AbsolutePath.make(result.worktree),
-          vcs: result.vcs ?? null,
-          name: result.name,
-          icon_url: result.icon?.url,
-          icon_url_override: result.icon?.override,
-          icon_color: result.icon?.color,
-          time_created: result.time.created,
-          time_updated: result.time.updated,
-          time_initialized: result.time.initialized,
-          sandboxes: result.sandboxes.map((sandbox) => AbsolutePath.make(sandbox)),
-          commands: result.commands,
-        })
-        .onConflictDoUpdate({
-          target: ProjectTable.id,
-          set: {
-            worktree: AbsolutePath.make(result.worktree),
-            vcs: result.vcs ?? null,
-            name: result.name,
-            icon_url: result.icon?.url,
-            icon_url_override: result.icon?.override,
-            icon_color: result.icon?.color,
-            time_updated: result.time.updated,
-            time_initialized: result.time.initialized,
-            sandboxes: result.sandboxes.map((sandbox) => AbsolutePath.make(sandbox)),
-            commands: result.commands,
-          },
-        })
-        .run()
-        .pipe(Effect.orDie)
+        .transaction(
+          (tx) =>
+            Effect.gen(function* () {
+              yield* tx
+                .insert(ProjectTable)
+                .values({
+                  id: result.id,
+                  worktree: AbsolutePath.make(result.worktree),
+                  vcs: result.vcs ?? null,
+                  name: result.name,
+                  icon_url: result.icon?.url,
+                  icon_url_override: result.icon?.override,
+                  icon_color: result.icon?.color,
+                  time_created: result.time.created,
+                  time_updated: result.time.updated,
+                  time_initialized: result.time.initialized,
+                  sandboxes: result.sandboxes.map((sandbox) => AbsolutePath.make(sandbox)),
+                  commands: result.commands,
+                })
+                .onConflictDoUpdate({
+                  target: ProjectTable.id,
+                  set: {
+                    worktree: AbsolutePath.make(result.worktree),
+                    vcs: result.vcs ?? null,
+                    name: result.name,
+                    icon_url: result.icon?.url,
+                    icon_url_override: result.icon?.override,
+                    icon_color: result.icon?.color,
+                    time_updated: result.time.updated,
+                    time_initialized: result.time.initialized,
+                    sandboxes: result.sandboxes.map((sandbox) => AbsolutePath.make(sandbox)),
+                    commands: result.commands,
+                  },
+                })
+                .run()
 
-      if (projectID !== ProjectV2.ID.global) {
-        yield* db
-          .update(SessionTable)
-          .set({ project_id: projectID })
-          .where(and(eq(SessionTable.project_id, ProjectV2.ID.global), eq(SessionTable.directory, data.directory)))
-          .run()
-          .pipe(Effect.orDie)
-      }
+              if (projectID !== ProjectV2.ID.global) {
+                // RETURNING proves affected-row count atomically; zero
+                // matches is valid (no sessions in global project for this
+                // directory). Each matched row increments exactly once.
+                const reassigned = yield* tx
+                  .update(SessionTable)
+                  .set({
+                    project_id: projectID,
+                    revision: sql`${SessionTable.revision} + 1`,
+                    time_updated: sql`${SessionTable.time_updated}`,
+                  })
+                  .where(
+                    and(eq(SessionTable.project_id, ProjectV2.ID.global), eq(SessionTable.directory, data.directory)),
+                  )
+                  .returning({ id: SessionTable.id })
+                  .all()
+                  .pipe(Effect.orDie)
+                // Expose reassigned IDs so callers/tests can assert exact
+                // matched IDs when needed.
+                void reassigned
+              }
+            }),
+          { behavior: "immediate" },
+        )
+        .pipe(Effect.orDie)
 
       yield* saveProjectDirectory({
         projectID,

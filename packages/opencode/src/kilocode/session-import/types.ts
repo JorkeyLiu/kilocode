@@ -1,6 +1,14 @@
 import z from "zod"
 
 export namespace SessionImportType {
+  /** Typed domain error for import validation failures (non-fatal, not a defect). */
+  export class ValidationError extends Error {
+    constructor(message: string) {
+      super(message)
+      this.name = "SessionImportValidationError"
+    }
+  }
+
   export const UserMessageData = z.object({
     role: z.literal("user"),
     time: z.object({

@@ -1,9 +1,9 @@
 import { SessionID } from "./schema"
 import { Effect, Layer, Context, Schema } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
-import { eq } from "drizzle-orm"
-import { asc } from "drizzle-orm"
+import { asc, eq } from "drizzle-orm"
 import { TodoTable } from "@opencode-ai/core/session/sql"
+import { SessionRevision } from "@opencode-ai/core/session/revision"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventV2 } from "@opencode-ai/core/event"
 
@@ -44,19 +44,21 @@ export const layer = Layer.effect(
         .transaction((tx) =>
           Effect.gen(function* () {
             yield* tx.delete(TodoTable).where(eq(TodoTable.session_id, input.sessionID)).run()
-            if (input.todos.length === 0) return
-            yield* tx
-              .insert(TodoTable)
-              .values(
-                input.todos.map((todo, position) => ({
-                  session_id: input.sessionID,
-                  content: todo.content,
-                  status: todo.status,
-                  priority: todo.priority,
-                  position,
-                })),
-              )
-              .run()
+            if (input.todos.length > 0) {
+              yield* tx
+                .insert(TodoTable)
+                .values(
+                  input.todos.map((todo, position) => ({
+                    session_id: input.sessionID,
+                    content: todo.content,
+                    status: todo.status,
+                    priority: todo.priority,
+                    position,
+                  })),
+                )
+                .run()
+            }
+            yield* SessionRevision.advance(input.sessionID, tx)
           }),
         )
         .pipe(Effect.orDie)

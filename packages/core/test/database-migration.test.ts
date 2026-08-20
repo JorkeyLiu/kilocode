@@ -4,7 +4,7 @@ import { fileURLToPath } from "url"
 import path from "path"
 import { SqliteClient } from "@effect/sql-sqlite-bun"
 import { EffectDrizzleSqlite } from "@opencode-ai/effect-drizzle-sqlite"
-import { Effect, Layer } from "effect"
+import { DateTime, Effect, Layer } from "effect"
 import { eq, inArray, sql } from "drizzle-orm"
 import { DatabaseMigration } from "@opencode-ai/core/database/migration"
 import { migrations } from "@opencode-ai/core/database/migration.gen"
@@ -18,9 +18,13 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { SessionSchema } from "@opencode-ai/core/session/schema"
 import { SessionTable } from "@opencode-ai/core/session/sql"
-import sessionMetadataMigration from "@opencode-ai/core/database/migration/20260511173437_session-metadata"
-import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
+import { SessionEvent } from "@opencode-ai/core/session/event"
+import { SessionProjector } from "@opencode-ai/core/session/projector"
+import { EventV2 } from "@opencode-ai/core/event"
 import { Database } from "@opencode-ai/core/database/database"
+import sessionMetadataMigration from "@opencode-ai/core/database/migration/20260511173437_session-metadata"
+import sessionRevisionMigration from "@opencode-ai/core/database/migration/20260819120000_add_session_revision"
+import type { SqlClient as SqlClientService } from "effect/unstable/sql/SqlClient"
 import { tmpdir } from "./fixture/tmpdir"
 
 const run = <A, E>(effect: Effect.Effect<A, E, SqlClientService>) =>
@@ -507,6 +511,85 @@ describe("DatabaseMigration", () => {
         yield* DatabaseMigration.applyOnly(db, [])
 
         expect(yield* db.all(sql`SELECT id FROM migration ORDER BY id`)).toEqual([{ id: "existing" }])
+      }),
+    )
+  })
+
+  test("session revision migration adds revision column defaulting to 0", async () => {
+    await run(
+      Effect.gen(function* () {
+        const db = yield* makeDb
+        // Create session table WITHOUT revision column (pre-migration state)
+        yield* db.run(
+          sql`CREATE TABLE session (id text PRIMARY KEY, slug text NOT NULL, directory text NOT NULL, title text NOT NULL, version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, workspace_id text, path text, agent text)`,
+        )
+        // Support tables required by the production EventV2 + SessionProjector layers
+        yield* db.run(
+          sql`CREATE TABLE project (id text PRIMARY KEY, worktree text NOT NULL, sandboxes text NOT NULL, vcs text, name text, icon_url text, icon_url_override text, icon_color text, time_created integer NOT NULL DEFAULT 0, time_updated integer NOT NULL DEFAULT 0, time_initialized integer, commands text)`,
+        )
+        yield* db.run(
+          sql`CREATE TABLE event_sequence (aggregate_id text PRIMARY KEY, seq integer NOT NULL, owner_id text)`,
+        )
+        yield* db.run(
+          sql`CREATE TABLE event (id text PRIMARY KEY, aggregate_id text NOT NULL, seq integer NOT NULL, type text NOT NULL, data text NOT NULL)`,
+        )
+        yield* db.run(sql`CREATE UNIQUE INDEX event_aggregate_seq_idx ON event (aggregate_id, seq)`)
+        yield* db.run(sql`CREATE INDEX event_aggregate_type_seq_idx ON event (aggregate_id, type, seq)`)
+        yield* db.run(
+          sql`CREATE TABLE session_context_epoch (session_id text PRIMARY KEY, baseline text NOT NULL, agent text NOT NULL DEFAULT 'build', snapshot text NOT NULL, baseline_seq integer NOT NULL, replacement_seq integer, revision integer DEFAULT 0 NOT NULL)`,
+        )
+
+        yield* db.run(
+          sql`INSERT INTO session (id, slug, directory, title, version, time_created, time_updated) VALUES ('ses_existing', 'legacy', '/test', 'Legacy Session', 'v1', 1000, 2000)`,
+        )
+
+        // Apply the revision migration
+        yield* DatabaseMigration.applyOnly(db, [sessionRevisionMigration])
+
+        // Existing row gets revision 0 from the DEFAULT
+        const row = yield* db.get<{ revision: number }>(sql`SELECT revision FROM session WHERE id = 'ses_existing'`)
+        expect(row?.revision).toBe(0)
+
+        // A new insert also gets revision 0
+        yield* db.run(
+          sql`INSERT INTO session (id, slug, directory, title, version, time_created, time_updated) VALUES ('ses_new', 'fresh', '/test', 'New Session', 'v1', 3000, 4000)`,
+        )
+        const newRow = yield* db.get<{ revision: number }>(sql`SELECT revision FROM session WHERE id = 'ses_new'`)
+        expect(newRow?.revision).toBe(0)
+
+        // Build production layers from the migrated in-memory database to perform
+        // a real canonical mutation via the projector, not a raw SQL UPDATE.
+        const dbService = Layer.succeed(Database.Service, { db })
+        const events = EventV2.layer.pipe(Layer.provide(dbService))
+        const projector = SessionProjector.layer.pipe(Layer.provide(events), Layer.provide(dbService))
+        const merged = Layer.mergeAll(dbService, events, projector)
+
+        yield* Effect.scoped(
+          Effect.gen(function* () {
+            const eventsSvc = yield* EventV2.Service
+            const projectID = ProjectV2.ID.make("proj_mig")
+
+            // Insert project FK (the test session references it via the session table)
+            yield* db.run(
+              sql`INSERT OR IGNORE INTO project (id, worktree, sandboxes) VALUES (${"proj_mig"}, ${"/test"}, ${"[]"})`,
+            )
+
+            // Publish a real Moved event — the SessionProjector will advance revision
+            // by 1 as part of its canonical mutation within the event transaction.
+            yield* eventsSvc.publish(SessionEvent.Moved, {
+              sessionID: SessionSchema.ID.make("ses_existing"),
+              timestamp: DateTime.makeUnsafe(5000),
+              location: { directory: "/new" as never },
+            })
+
+            // Verify the canonical mutation advanced revision and updated time_updated
+            const updated = yield* db.get<{ revision: number; time_updated: number }>(
+              sql`SELECT revision, time_updated FROM session WHERE id = 'ses_existing'`,
+            )
+            expect(updated?.revision).toBe(1)
+            expect(updated?.time_updated).toBe(5000)
+          }),
+        ).pipe(Effect.provide(merged))
       }),
     )
   })

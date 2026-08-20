@@ -4,18 +4,162 @@ import { Session } from "@/session/session"
 import { CliError, effectCmd } from "../effect-cmd"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable, MessageTable, PartTable } from "@opencode-ai/core/session/sql"
+import { SessionRevision } from "@opencode-ai/core/session/revision"
 import { InstanceRef } from "@/effect/instance-ref"
 import { EOL } from "os"
 import path from "path"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Effect, Schema } from "effect"
+import { eq } from "drizzle-orm"
 import * as Log from "@opencode-ai/core/util/log" // kilocode_change
 import type { InstanceContext } from "@/project/instance-context"
+import { isDeepStrictEqual } from "node:util"
+import { SessionID, MessageID, PartID } from "@/session/schema"
+import { ProjectV2 } from "@opencode-ai/core/project"
 
 const log = Log.create({ service: "import" }) // kilocode_change
 
 const decodeMessageInfo = Schema.decodeUnknownSync(SessionV1.Info)
 const decodePart = Schema.decodeUnknownSync(SessionV1.Part)
+
+/**
+ * Apply the CLI import aggregate mutation within a database transaction:
+ * session row + all messages + all parts. Returns `{ changed }` indicating
+ * whether any semantic mutation occurred (caller advances revision after
+ * this returns when `existing && changed`).
+ *
+ * Extracted so the command handler and tests share the same production code path.
+ */
+export function applyImportAggregate(opts: {
+  session: { id: string; project_id: string; directory: string; path?: string }
+  messages: ExportData["messages"]
+}) {
+  return Database.Service.use(({ db }) =>
+    db.transaction((tx) =>
+      Effect.gen(function* () {
+        let changed = false
+        const sid = SessionID.make(opts.session.id)
+
+        const existing = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sid)).get()
+
+        if (existing) {
+          if (
+            existing.project_id !== opts.session.project_id ||
+            existing.directory !== opts.session.directory ||
+            existing.path !== opts.session.path
+          ) {
+            changed = true
+            yield* tx
+              .update(SessionTable)
+              .set({
+                project_id: ProjectV2.ID.make(opts.session.project_id),
+                directory: opts.session.directory,
+                path: opts.session.path,
+              })
+              .where(eq(SessionTable.id, sid))
+              .run()
+          }
+        } else {
+          changed = true
+          yield* tx
+            .insert(SessionTable)
+            .values({
+              id: sid,
+              project_id: ProjectV2.ID.make(opts.session.project_id),
+              slug: "import",
+              directory: opts.session.directory,
+              path: opts.session.path,
+              title: "CLI Import",
+              version: "v2",
+              time_created: Date.now(),
+              time_updated: Date.now(),
+              revision: 0,
+            })
+            .run()
+        }
+
+        for (const msg of opts.messages) {
+          const msgInfo = decodeMessageInfo(msg.info)
+          const { id, sessionID: _, ...msgData } = msgInfo
+
+          const existingMsg = yield* tx.select().from(MessageTable).where(eq(MessageTable.id, id)).get()
+
+          if (existingMsg) {
+            if (existingMsg.session_id !== sid) {
+              throw new Error(`Message ${id} belongs to session ${existingMsg.session_id}, not ${sid}`)
+            }
+            if (!isDeepStrictEqual(existingMsg.data, msgData)) {
+              changed = true
+              yield* tx
+                .update(MessageTable)
+                .set({ data: msgData as never })
+                .where(eq(MessageTable.id, id))
+                .run()
+            }
+          } else {
+            changed = true
+            yield* tx
+              .insert(MessageTable)
+              .values({
+                id,
+                session_id: sid,
+                time_created: msgInfo.time?.created ?? Date.now(),
+                data: msgData as never,
+              })
+              .run()
+          }
+
+          for (const part of msg.parts) {
+            const partInfo = decodePart(part)
+            const { id: partId, sessionID: _s, messageID, ...partData } = partInfo
+
+            if (messageID !== id) {
+              throw new Error(`Part ${partId} references message ${messageID}, not its containing message ${id}`)
+            }
+
+            const existingPart = yield* tx.select().from(PartTable).where(eq(PartTable.id, partId)).get()
+
+            if (existingPart) {
+              if (existingPart.message_id !== MessageID.make(messageID)) {
+                throw new Error(`Part ${partId} belongs to message ${existingPart.message_id}, not ${messageID}`)
+              }
+              if (existingPart.session_id !== sid) {
+                throw new Error(`Part ${partId} belongs to session ${existingPart.session_id}, not ${sid}`)
+              }
+              if (!isDeepStrictEqual(existingPart.data, partData)) {
+                changed = true
+                yield* tx
+                  .update(PartTable)
+                  .set({ data: partData as never })
+                  .where(eq(PartTable.id, partId))
+                  .run()
+              }
+            } else {
+              changed = true
+              yield* tx
+                .insert(PartTable)
+                .values({
+                  id: partId,
+                  message_id: MessageID.make(messageID),
+                  session_id: sid,
+                  data: partData,
+                })
+                .run()
+            }
+          }
+        }
+
+        // Advance revision exactly once when the aggregate carried a real mutation
+        // and an existing session row was present.
+        if (changed && existing) {
+          yield* SessionRevision.advance(sid, tx)
+        }
+
+        return { changed }
+      }),
+    ),
+  )
+}
 
 /** Discriminated union returned by the ShareNext API (GET /api/shares/:id/data) */
 export type ShareData =
@@ -206,47 +350,14 @@ const runImport = Effect.fn("Cli.import.body")(function* (file: string, ctx: Ins
     path: path.relative(path.resolve(ctx.worktree), ctx.directory).replaceAll("\\", "/"),
   }) as Session.Info
   const row = Session.toRow(info)
-  yield* db
-    .insert(SessionTable)
-    .values(row)
-    .onConflictDoUpdate({
-      target: SessionTable.id,
-      set: { project_id: row.project_id, directory: row.directory, path: row.path },
-    })
-    .run()
-    .pipe(Effect.orDie)
 
-  for (const msg of exportData.messages) {
-    const msgInfo = decodeMessageInfo(msg.info) as SessionV1.Info
-    const { id, sessionID: _, ...msgData } = msgInfo
-    yield* db
-      .insert(MessageTable)
-      .values({
-        id,
-        session_id: row.id,
-        time_created: msgInfo.time?.created ?? Date.now(),
-        data: msgData as never,
-      })
-      .onConflictDoNothing()
-      .run()
-      .pipe(Effect.orDie)
-
-    for (const part of msg.parts) {
-      const partInfo = decodePart(part) as SessionV1.Part
-      const { id: partId, sessionID: _s, messageID, ...partData } = partInfo
-      yield* db
-        .insert(PartTable)
-        .values({
-          id: partId,
-          message_id: messageID,
-          session_id: row.id,
-          data: partData,
-        })
-        .onConflictDoNothing()
-        .run()
-        .pipe(Effect.orDie)
-    }
-  }
+  // One atomic aggregate mutation: session + all messages + all parts in a single
+  // transaction. A new session starts at revision 0; an existing row advances once
+  // only when at least one semantic change occurs. Exact retry is a true no-op.
+  yield* applyImportAggregate({
+    session: { id: row.id, project_id: row.project_id, directory: row.directory, path: row.path },
+    messages: exportData.messages,
+  }).pipe(Effect.orDie)
 
   // kilocode_change start
   yield* Effect.promise(() => bootstrapImportedSessionIngest(exportData!.info.id))

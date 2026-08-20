@@ -13,6 +13,7 @@ import { SessionInput } from "./input"
 import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./sql"
+import { SessionRevision } from "./revision"
 import type { DeepMutable } from "../schema"
 
 type DatabaseService = Database.Interface["db"]
@@ -220,6 +221,7 @@ function run(db: DatabaseService, event: SessionEvent.Event) {
       appendMessage,
     }
     yield* SessionMessageUpdater.update(adapter, event)
+    yield* SessionRevision.advance(event.data.sessionID, db)
   })
 }
 
@@ -248,9 +250,10 @@ export const layer = Layer.effectDiscard(
     yield* events.beforeCommit((event) => SessionInput.guardReservedID(db, event))
     yield* events.project(SessionV1.Event.Created, (event) =>
       Effect.gen(function* () {
+        const row = sessionRow(event.data.info)
         const stored = yield* db
           .insert(SessionTable)
-          .values(sessionRow(event.data.info))
+          .values({ ...row, revision: 0 })
           .onConflictDoNothing()
           .returning({ sessionID: SessionTable.id })
           .get()
@@ -267,12 +270,15 @@ export const layer = Layer.effectDiscard(
       }),
     )
     yield* events.project(SessionV1.Event.Updated, (event) =>
-      db
-        .update(SessionTable)
-        .set(sessionRow(event.data.info))
-        .where(eq(SessionTable.id, event.data.sessionID))
-        .run()
-        .pipe(Effect.orDie),
+      Effect.gen(function* () {
+        yield* db
+          .update(SessionTable)
+          .set(sessionRow(event.data.info))
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* SessionRevision.advance(event.data.sessionID, db)
+      }),
     )
     yield* events.project(SessionEvent.Moved, (event) =>
       Effect.gen(function* () {
@@ -287,6 +293,7 @@ export const layer = Layer.effectDiscard(
           .where(eq(SessionTable.id, event.data.sessionID))
           .run()
           .pipe(Effect.orDie)
+        yield* SessionRevision.advance(event.data.sessionID, db)
         yield* SessionContextEpoch.reset(db, event.data.sessionID)
       }),
     )
@@ -305,6 +312,7 @@ export const layer = Layer.effectDiscard(
           .onConflictDoUpdate({ target: MessageTable.id, set: { data } })
           .run()
           .pipe(Effect.orDie)
+        yield* SessionRevision.advance(sessionID, db)
       }),
     )
     yield* events.project(SessionV1.Event.MessageRemoved, (event) =>
@@ -324,6 +332,7 @@ export const layer = Layer.effectDiscard(
           .where(and(eq(MessageTable.id, event.data.messageID), eq(MessageTable.session_id, event.data.sessionID)))
           .run()
           .pipe(Effect.orDie)
+        yield* SessionRevision.advance(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionV1.Event.PartRemoved, (event) =>
@@ -341,6 +350,7 @@ export const layer = Layer.effectDiscard(
           .where(and(eq(PartTable.id, event.data.partID), eq(PartTable.session_id, event.data.sessionID)))
           .run()
           .pipe(Effect.orDie)
+        yield* SessionRevision.advance(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionV1.Event.PartUpdated, (event) =>
@@ -360,21 +370,23 @@ export const layer = Layer.effectDiscard(
         const next = usage(event.data.part)
         if (previous) yield* applyUsage(db, row.session_id, previous, -1)
         if (next) yield* applyUsage(db, sessionID, next)
+        yield* SessionRevision.advance(sessionID, db)
       }),
     )
-    yield* events.project(SessionEvent.AgentSwitched, (event) => {
-      if (event.seq === undefined) return Effect.die("Synchronized Session event is missing aggregate sequence")
-      return db
-        .update(SessionTable)
-        .set({ agent: event.data.agent, time_updated: DateTime.toEpochMillis(event.data.timestamp) })
-        .where(eq(SessionTable.id, event.data.sessionID))
-        .run()
-        .pipe(
-          Effect.orDie,
-          Effect.andThen(run(db, event)),
-          Effect.andThen(SessionContextEpoch.requestReplacement(db, event.data.sessionID, event.seq)),
-        )
-    })
+    yield* events.project(SessionEvent.AgentSwitched, (event) =>
+      Effect.gen(function* () {
+        yield* db
+          .update(SessionTable)
+          .set({ agent: event.data.agent, time_updated: DateTime.toEpochMillis(event.data.timestamp) })
+          .where(eq(SessionTable.id, event.data.sessionID))
+          .run()
+          .pipe(Effect.orDie)
+        yield* run(db, event)
+        if (event.seq === undefined)
+          return yield* Effect.die("Synchronized Session event is missing aggregate sequence")
+        yield* SessionContextEpoch.requestReplacement(db, event.data.sessionID, event.seq)
+      }),
+    )
     yield* events.project(SessionEvent.ModelSwitched, (event) =>
       Effect.gen(function* () {
         yield* db
@@ -391,6 +403,8 @@ export const layer = Layer.effectDiscard(
     )
     yield* events.project(SessionEvent.Prompted, (event) =>
       Effect.gen(function* () {
+        if (event.seq === undefined)
+          return yield* Effect.die("Synchronized Session event is missing aggregate sequence")
         const messageID = event.data.messageID
         const existing = yield* db
           .select({ id: SessionMessageTable.id })
@@ -399,9 +413,19 @@ export const layer = Layer.effectDiscard(
           .get()
           .pipe(Effect.orDie)
         if (existing) return yield* Effect.die(new PromptAlreadyProjected())
-        yield* run(db, event)
-        if (event.seq === undefined)
-          return yield* Effect.die("Synchronized Session event is missing aggregate sequence")
+        yield* insertMessage(
+          db,
+          event,
+          new SessionMessage.User({
+            id: messageID,
+            type: "user",
+            text: event.data.prompt.text,
+            files: event.data.prompt.files,
+            agents: event.data.prompt.agents,
+            references: event.data.prompt.references,
+            time: { created: event.data.timestamp },
+          }),
+        )
         yield* SessionInput.projectLegacyPrompted(db, {
           id: messageID,
           sessionID: event.data.sessionID,
@@ -410,6 +434,7 @@ export const layer = Layer.effectDiscard(
           timeCreated: event.data.timestamp,
           promotedSeq: event.seq,
         })
+        yield* SessionRevision.advance(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionEvent.PromptLifecycle.Admitted, (event) =>
@@ -424,6 +449,7 @@ export const layer = Layer.effectDiscard(
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
         })
+        yield* SessionRevision.advance(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionEvent.PromptLifecycle.Promoted, (event) =>
@@ -441,6 +467,7 @@ export const layer = Layer.effectDiscard(
             promotedSeq: event.seq,
           }),
         )
+        yield* SessionRevision.advance(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionEvent.ContextUpdated, (event) => {
@@ -465,7 +492,7 @@ export const layer = Layer.effectDiscard(
     yield* events.project(SessionEvent.Tool.Failed, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Reasoning.Ended, (event) => run(db, event))
-    // yield* events.project(SessionEvent.Retried, (event) => run(db, event))
+    yield* events.project(SessionEvent.Retried, (event) => run(db, event))
     yield* events.project(SessionEvent.Compaction.Started, (event) => run(db, event))
     yield* events.project(SessionEvent.Compaction.Delta, (event) => run(db, event))
     yield* events.project(SessionEvent.Compaction.Ended, (event) => {

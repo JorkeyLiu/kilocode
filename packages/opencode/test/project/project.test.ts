@@ -168,6 +168,92 @@ describe("Project.fromDirectory", () => {
     }),
   )
 
+  it.live("reassigns global-project sessions and advances revision", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const project = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      // Ensure the global project exists (FK constraint)
+      yield* project.fromDirectory(path.join(path.dirname(tmp), "non-git-dir-" + Date.now()))
+      // Insert a session into the global project with this directory
+      const sessionID = crypto.randomUUID() as SessionID
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: ProjectV2.ID.global,
+          slug: sessionID,
+          directory: tmp,
+          title: "reassign-test",
+          version: "0.0.0-test",
+          time_created: Date.now(),
+          time_updated: Date.now(),
+        })
+        .run()
+        .pipe(Effect.orDie)
+      const revBefore = yield* db
+        .select({ revision: SessionTable.revision })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(revBefore?.revision).toBe(0)
+
+      const result = yield* project.fromDirectory(tmp)
+
+      // Session reassigned to the git-derived project
+      const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+      expect(row?.project_id).toBe(result.project.id)
+      expect(row?.revision).toBe(1)
+    }),
+  )
+
+  it.live("bulk reassignment updates matched rows' project and revision", () =>
+    Effect.gen(function* () {
+      const { db } = yield* Database.Service
+      const project = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      yield* project.fromDirectory(path.join(path.dirname(tmp), "non-git-dir-" + Date.now()))
+      // Insert two sessions into the global project with this directory
+      const idA = crypto.randomUUID() as SessionID
+      const idB = crypto.randomUUID() as SessionID
+      for (const id of [idA, idB]) {
+        yield* db
+          .insert(SessionTable)
+          .values({
+            id,
+            project_id: ProjectV2.ID.global,
+            slug: id,
+            directory: tmp,
+            title: "bulk-reassign-" + id.slice(0, 8),
+            version: "0.0.0-test",
+            time_created: Date.now(),
+            time_updated: Date.now(),
+          })
+          .run()
+          .pipe(Effect.orDie)
+      }
+      const result = yield* project.fromDirectory(tmp)
+      // Both matched rows reassigned to the git-derived project with incremented revisions
+      for (const id of [idA, idB]) {
+        const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
+        expect(row?.project_id).toBe(result.project.id)
+        expect(row?.revision).toBe(1)
+      }
+    }),
+  )
+
+  it.live("zero-row bulk reassignment is valid (no sessions in global project for directory)", () =>
+    Effect.gen(function* () {
+      const project = yield* Project.Service
+      const tmp = yield* tmpdirScoped({ git: true })
+      yield* project.fromDirectory(path.join(path.dirname(tmp), "non-git-dir-" + Date.now()))
+      // No sessions inserted — fromDirectory should succeed with zero reassignments
+      const result = yield* project.fromDirectory(tmp)
+      expect(result.project.id).toBeDefined()
+    }),
+  )
+
   it.live("prefers normalized origin remote over root commit", () =>
     Effect.gen(function* () {
       const project = yield* Project.Service
@@ -226,6 +312,14 @@ describe("Project.fromDirectory", () => {
         .values({ id: workspaceID, type: "local", name: "test", project_id: rootProject.id })
         .run()
         .pipe(Effect.orDie)
+      // Capture revision before migration
+      const revBefore = yield* db
+        .select({ revision: SessionTable.revision })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(revBefore?.revision).toBe(0)
       yield* Effect.promise(() => $`git remote add origin git@github.com:acme/app.git`.cwd(tmp).quiet())
 
       const result = yield* projects.fromDirectory(tmp)
@@ -234,10 +328,15 @@ describe("Project.fromDirectory", () => {
       expect(
         yield* db.select().from(ProjectTable).where(eq(ProjectTable.id, rootProject.id)).get().pipe(Effect.orDie),
       ).toBeUndefined()
-      expect(
-        (yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie))
-          ?.project_id,
-      ).toBe(remoteID)
+      const sessionRow = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
+      expect(sessionRow?.project_id).toBe(remoteID)
+      // Bulk reassignment incremented revision by exactly 1
+      expect(sessionRow?.revision).toBe(1)
       expect(
         (yield* db.select().from(WorkspaceTable).where(eq(WorkspaceTable.id, workspaceID)).get().pipe(Effect.orDie))
           ?.project_id,
