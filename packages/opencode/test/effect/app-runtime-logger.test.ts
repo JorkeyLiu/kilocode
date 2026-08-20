@@ -9,6 +9,7 @@ import * as Observability from "@opencode-ai/core/effect/observability"
 import { attach } from "../../src/effect/run-service"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import * as Ownership from "@/retention/ownership"
 
 const it = testEffect(CrossSpawnSpawner.defaultLayer)
 

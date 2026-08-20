@@ -11,6 +11,8 @@ import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { Deferred, Effect, DateTime, Layer } from "effect"
 import { eq } from "drizzle-orm"
 import { Session as SessionNs } from "@/session/session"
+import { SessionRunState } from "@/session/run-state"
+import { SessionStatus } from "@/session/status"
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { testInstanceStoreLayer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
@@ -20,6 +22,7 @@ import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import * as SandboxState from "@/kilocode/sandbox/state"
 import { Todo } from "@/session/todo"
+import * as Ownership from "@/retention/ownership"
 
 /** Read the raw revision column for a session. */
 function readRevision(db: CoreDatabase.Interface["db"], id: SessionID) {
@@ -32,18 +35,30 @@ function readRevision(db: CoreDatabase.Interface["db"], id: SessionID) {
     .pipe(Effect.map((row) => row?.revision))
 }
 
+const ownership = Ownership.layer
+const status = SessionStatus.defaultLayer
+const bg = BackgroundJob.defaultLayer
+const runState = SessionRunState.layer.pipe(Layer.provide(status), Layer.provide(bg), Layer.provide(ownership))
+const sessionLayer = SessionNs.layer.pipe(
+  Layer.provide(runState),
+  Layer.provide(Storage.defaultLayer),
+  Layer.provide(CoreDatabase.defaultLayer),
+  Layer.provideMerge(EventV2Bridge.defaultLayer),
+  Layer.provide(SessionProjector.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
+  Layer.provide(ownership),
+  Layer.provide(bg),
+)
+
 const it = testEffect(
   Layer.mergeAll(
     CoreDatabase.defaultLayer,
     EventV2.defaultLayer,
-    SessionNs.layer.pipe(
-      Layer.provide(Storage.defaultLayer),
-      Layer.provide(CoreDatabase.defaultLayer),
-      Layer.provideMerge(EventV2Bridge.defaultLayer),
-      Layer.provide(SessionProjector.defaultLayer),
-      Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
-      Layer.provide(BackgroundJob.defaultLayer),
-    ),
+    sessionLayer,
+    runState,
+    status,
+    bg,
+    ownership,
     Todo.layer.pipe(Layer.provide(EventV2Bridge.defaultLayer), Layer.provide(CoreDatabase.defaultLayer)),
     testInstanceStoreLayer,
   ),

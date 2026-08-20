@@ -66,6 +66,7 @@ import { Reference } from "../../src/reference/reference"
 import { RepositoryCache } from "../../src/reference/repository-cache"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change - admission required by withGenerationAdmission
+import * as Ownership from "@/retention/ownership"
 
 void Log.init({ print: false })
 
@@ -114,7 +115,9 @@ const lsp = Layer.succeed(
 
 const status = SessionStatus.layer.pipe(Layer.provideMerge(EventV2Bridge.defaultLayer))
 const run = SessionRunState.layer.pipe(Layer.provide(status))
-const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
+const infra = Layer.mergeAll(
+    Ownership.layer,
+NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 
 function makeHttp() {
   const deps = Layer.mergeAll(

@@ -161,6 +161,14 @@ const nativeLayer = (config: Config) =>
         create: config.create ?? true,
       })
       yield* Effect.addFinalizer(() => Effect.sync(() => native.close()))
+      const isFresh = !native.query("SELECT name FROM sqlite_master WHERE type = 'table' LIMIT 1").get()
+      if (isFresh) {
+        native.run("PRAGMA auto_vacuum = 2")
+        const check = native.query("PRAGMA auto_vacuum").get() as { auto_vacuum: number } | undefined
+        if (!check || check.auto_vacuum !== 2) {
+          return yield* Effect.die(new Error(`fresh DB auto_vacuum verification failed: expected 2 got ${check?.auto_vacuum}`))
+        }
+      }
       if (config.disableWAL !== true) native.run("PRAGMA journal_mode = WAL;")
       return native
     }),

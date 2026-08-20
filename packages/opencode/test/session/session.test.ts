@@ -17,19 +17,34 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { BackgroundJob } from "@/background/job"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { GlobalBus } from "@/bus/global"
+import { SessionRunState } from "@/session/run-state"
+import { SessionStatus } from "@/session/status"
+import * as Ownership from "@/retention/ownership"
 
 void Log.init({ print: false })
 
+const ownership = Ownership.layer
+const status = SessionStatus.defaultLayer
+const bg = BackgroundJob.defaultLayer
+const runState = SessionRunState.layer.pipe(Layer.provide(status), Layer.provide(bg), Layer.provide(ownership))
+const sessionLayer = SessionNs.layer.pipe(
+  Layer.provide(runState),
+  Layer.provide(Storage.defaultLayer),
+  Layer.provide(Database.defaultLayer),
+  Layer.provideMerge(EventV2Bridge.defaultLayer),
+  Layer.provide(SessionProjector.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
+  Layer.provide(bg),
+  Layer.provide(ownership),
+)
+
 const it = testEffect(
   Layer.mergeAll(
-    SessionNs.layer.pipe(
-      Layer.provide(Storage.defaultLayer),
-      Layer.provide(Database.defaultLayer),
-      Layer.provideMerge(EventV2Bridge.defaultLayer),
-      Layer.provide(SessionProjector.defaultLayer),
-      Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
-      Layer.provide(BackgroundJob.defaultLayer),
-    ),
+    sessionLayer,
+    runState,
+    status,
+    bg,
+    ownership,
     CrossSpawnSpawner.defaultLayer,
     testInstanceStoreLayer,
   ),

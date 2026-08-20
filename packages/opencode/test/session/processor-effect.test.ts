@@ -35,6 +35,7 @@ import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { SessionEvent } from "@opencode-ai/core/session/event"
 import { LLMEvent } from "@opencode-ai/llm"
+import * as Ownership from "@/retention/ownership"
 
 void Log.init({ print: false })
 
@@ -177,7 +178,9 @@ const assistant = Effect.fn("TestSession.assistant")(function* (
 })
 
 const status = SessionStatus.layer.pipe(Layer.provideMerge(EventV2Bridge.defaultLayer))
-const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
+const infra = Layer.mergeAll(
+    Ownership.layer,
+NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 const deps = Layer.mergeAll(
   Session.defaultLayer,
   Snapshot.defaultLayer,

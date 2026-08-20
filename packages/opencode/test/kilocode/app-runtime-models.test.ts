@@ -18,6 +18,7 @@ import { Provider } from "@/provider/provider"
 import * as KiloModelsDev from "@/provider/models"
 import { LLM } from "@/session/llm"
 import { it } from "../lib/effect"
+import * as Ownership from "@/retention/ownership"
 
 it.instance(
   "LOCK-005: default AppLayer resolves Provider, Kilo, Core, and LLM through canonical layers",
@@ -58,7 +59,9 @@ it.instance(
         // and Kilo service instances — proving the default app graph shares one
         // Provider layer object and one canonical combined models layer object.
         const featureCtx = yield* Layer.buildWithMemoMap(
-          Layer.mergeAll(LLM.defaultLayer, Provider.defaultLayer, Provider.defaultModels),
+          Layer.mergeAll(
+    Ownership.layer,
+LLM.defaultLayer, Provider.defaultLayer, Provider.defaultModels),
           memo,
           scope,
         )

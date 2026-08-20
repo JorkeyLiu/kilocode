@@ -5,6 +5,7 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Effect, Exit, Layer, Option, RcMap, Schema, Context, TxReentrantLock } from "effect"
 import { NonNegativeInt } from "@opencode-ai/core/schema"
 import { Git } from "@/git"
+import * as Artifact from "@opencode-ai/core/retention/artifact"
 
 const log = Log.create({ service: "storage" })
 
@@ -56,7 +57,10 @@ export interface Interface {
   readonly remove: (key: string[]) => Effect.Effect<void, FSUtil.Error>
   readonly read: <T>(key: string[]) => Effect.Effect<T, Error>
   readonly update: <T>(key: string[], fn: (draft: T) => void) => Effect.Effect<T, Error>
-  readonly write: <T>(key: string[], content: T) => Effect.Effect<void, FSUtil.Error>
+  readonly write: <T>(
+    key: string[],
+    content: T,
+  ) => Effect.Effect<void, FSUtil.Error | Artifact.UnregisteredArtifactError>
   readonly list: (prefix: string[]) => Effect.Effect<string[][], FSUtil.Error>
 }
 
@@ -297,6 +301,15 @@ export const layer = Layer.effect(
 
     const write: Interface["write"] = (key: string[], content: unknown) =>
       Effect.gen(function* () {
+        const root = key[0]
+        if (!root || !Artifact.entries[root]) {
+          return yield* Effect.fail(
+            new Artifact.UnregisteredArtifactError({
+              prefix: key,
+              message: `Unregistered artifact write blocked: ${key.length === 0 ? "(empty)" : key.join("/")} — registry entry required`,
+            }),
+          )
+        }
         yield* withResolved(key, (target, rw) => TxReentrantLock.withWriteLock(rw, writeJson(target, content)))
       })
 

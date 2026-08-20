@@ -40,6 +40,10 @@ import { Command } from "@/command"
 import { Truncate } from "@/tool/truncate"
 import { ToolRegistry } from "@/tool/registry"
 import { Format } from "@/format"
+import * as RetentionMaintenance from "@/retention/maintenance"
+import * as RetentionOwnership from "@/retention/ownership"
+import * as RetentionLease from "@/retention/lease"
+import * as RetentionAccounting from "@/retention/accounting"
 import { InstanceLayer } from "@/project/instance-layer"
 import { Project } from "@/project/project"
 import { Vcs } from "@/project/vcs"
@@ -176,11 +180,20 @@ const buildAppLayer = (
   models: ModelsLayer = Provider.defaultModels,
   provider: ProviderLayer = Provider.defaultLayer,
   modelCache: ModelCacheLayer = ModelCache.defaultLayer,
-) =>
-  Layer.mergeAll(buildCoreLayer(models, provider, modelCache), SessionLayer, FeatureLayer).pipe(
-    Layer.provideMerge(InstanceLayer.layer),
-    Layer.provideMerge(Observability.layer),
+) => {
+  const base = Layer.mergeAll(
+    buildCoreLayer(models, provider, modelCache),
+    SessionLayer,
+    FeatureLayer,
+    RetentionOwnership.layer,
+    RetentionLease.layer,
+    RetentionAccounting.layer,
+    InstanceLayer.layer,
+    Observability.layer,
   )
+  const maintenance = RetentionMaintenance.layer.pipe(Layer.provide(base))
+  return Layer.mergeAll(base, maintenance)
+}
 // kilocode_change end
 
 // kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair

@@ -18,6 +18,10 @@ import { eq, and, gte, isNull, desc, like, sql, inArray, lt, or } from "drizzle-
 import type { SQL } from "drizzle-orm"
 import { PartTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
+import * as Artifact from "@opencode-ai/core/retention/artifact"
+import * as Retention from "@opencode-ai/core/retention/retention"
+import * as Ownership from "@/retention/ownership"
+import { SessionChangefeedTable, RetentionObligationTable } from "@opencode-ai/core/retention/sql"
 import { Log } from "@opencode-ai/core/util/log"
 import { MessageV2 } from "./message-v2"
 import type { InstanceContext } from "../project/instance-context"
@@ -25,7 +29,8 @@ import { InstanceState } from "@/effect/instance-state"
 import { Snapshot } from "@/snapshot"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
-import { SessionID, MessageID, PartID } from "./schema"
+import { SessionID, MessageID, PartID, BusyError as SchemaBusyError } from "./schema"
+import { SessionRunState } from "./run-state"
 
 import type { Provider } from "@/provider/provider"
 import { Permission } from "@/permission"
@@ -410,17 +415,20 @@ export const getUsage = (input: {
   const reasoningTokens = safe(input.usage.reasoningTokens ?? 0)
 
   const cacheReadInputTokens = safe(input.usage.cacheReadInputTokens ?? 0)
+  const meta = input.metadata as Record<string, unknown> | undefined
+  const bedrockUsage = (meta?.["bedrock"] as Record<string, unknown> | undefined)?.["usage"] as
+    | Record<string, unknown>
+    | undefined
+  const veniceUsage = (meta?.["venice"] as Record<string, unknown> | undefined)?.["usage"] as
+    | Record<string, unknown>
+    | undefined
   const cacheWriteInputTokens = safe(
     Number(
       input.usage.cacheWriteInputTokens ??
-        input.metadata?.["anthropic"]?.["cacheCreationInputTokens"] ??
-        // google-vertex-anthropic returns metadata under "vertex" key
-        // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
-        input.metadata?.["vertex"]?.["cacheCreationInputTokens"] ??
-        // @ts-expect-error
-        input.metadata?.["bedrock"]?.["usage"]?.["cacheWriteInputTokens"] ??
-        // @ts-expect-error
-        input.metadata?.["venice"]?.["usage"]?.["cacheCreationInputTokens"] ??
+        (meta?.["anthropic"] as Record<string, unknown> | undefined)?.["cacheCreationInputTokens"] ??
+        (meta?.["vertex"] as Record<string, unknown> | undefined)?.["cacheCreationInputTokens"] ??
+        (bedrockUsage?.["cacheWriteInputTokens"] as number | undefined) ??
+        (veniceUsage?.["cacheCreationInputTokens"] as number | undefined) ??
         0,
     ),
   )
@@ -481,9 +489,8 @@ export const getUsage = (input: {
   }
 }
 
-export class BusyError extends Schema.TaggedErrorClass<BusyError>()("SessionBusyError", {
-  sessionID: SessionID,
-}) {}
+export const BusyError = SchemaBusyError
+export type BusyError = InstanceType<typeof SchemaBusyError>
 
 export type NotFound = NotFoundError
 
@@ -561,7 +568,7 @@ export type Patch = Omit<Partial<Info>, "time" | "share" | "summary" | "revert" 
 export const layer: Layer.Layer<
   Service,
   never,
-  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service | Storage.Service
+  BackgroundJob.Service | RuntimeFlags.Service | Database.Service | EventV2Bridge.Service | Storage.Service | Ownership.Service | SessionRunState.Service
 > = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -571,6 +578,8 @@ export const layer: Layer.Layer<
     const events = yield* EventV2Bridge.Service
     const flags = yield* RuntimeFlags.Service
     const storage = yield* Storage.Service
+    const ownership = yield* Ownership.Service
+    const runState = yield* SessionRunState.Service
 
     // kilocode_change start - inherited sandbox policy source
     const createNext = Effect.fn("Session.createNext")(function* (input: {
@@ -642,7 +651,13 @@ export const layer: Layer.Layer<
     })
 
     const get = Effect.fn("Session.get")(function* (id: SessionID) {
-      const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
+      const release = yield* ownership.acquireLease(id)
+      const row = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, id))
+        .get()
+        .pipe(Effect.orDie, Effect.ensuring(release))
       if (!row) return yield* Effect.fail(new NotFoundError({ message: `Session not found: ${id}` }))
       return fromRow(row)
     })
@@ -685,18 +700,12 @@ export const layer: Layer.Layer<
     const remove: Interface["remove"] = Effect.fnUntraced(function* (sessionID: SessionID) {
       const session = yield* get(sessionID)
       try {
-        // `remove` needs to work in all cases, such as broken sessions that
-        // run cleanup without instance state.
         const hasInstance = yield* InstanceState.directory.pipe(
           Effect.as(true),
           Effect.catchCause(() => Effect.succeed(false)),
         )
 
         if (hasInstance) yield* cancelBackgroundJobs(background, sessionID)
-        const kids = yield* children(sessionID)
-        for (const child of kids) {
-          yield* remove(child.id)
-        }
 
         // kilocode_change start
         yield* SandboxPolicy.dispose(
@@ -704,32 +713,76 @@ export const layer: Layer.Layer<
           Effect.gen(function* () {
             yield* Effect.promise(() => KiloSession.removeSession(sessionID)).pipe(Effect.ignore)
             KiloSession.clearPlatformOverride(sessionID)
-            if (hasInstance) {
-              yield* Effect.promise(() => BackgroundProcess.stopSession(sessionID)).pipe(Effect.ignore)
-              yield* Effect.promise(() => InteractiveTerminal.stopSession(sessionID)).pipe(Effect.ignore)
-              void Promise.all([import("@/effect/app-runtime"), import("./run-state")]).then(([app, run]) =>
-                app.AppRuntime.runPromise(run.SessionRunState.Service.use((svc) => svc.cancel(sessionID))).catch(
-                  () => {},
-                ),
-              )
-            }
-            // kilocode_change - migrated from legacy sync.run/sync.remove to EventV2 (events.publish/remove)
-            yield* events.publish(SessionV1.Event.Deleted, { sessionID, info: session })
-            // kilocode_change - capture final session-export workspace delta on close/delete
-            const workspaceKey = hasInstance ? yield* InstanceState.directory : undefined // kilocode_change
-            yield* Effect.promise(() => SessionExport.onSessionClose(sessionID, workspaceKey)) // kilocode_change
+              if (hasInstance) {
+                yield* Effect.promise(() => BackgroundProcess.stopSession(sessionID)).pipe(Effect.ignore)
+                yield* Effect.promise(() => InteractiveTerminal.stopSession(sessionID)).pipe(Effect.ignore)
+                yield* runState.cancel(sessionID).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.logWarning("Session.remove runState cancel failed", { sessionID, cause }).pipe(Effect.asVoid),
+                  ),
+                )
+              }
+            const workspaceKey = hasInstance ? yield* InstanceState.directory : undefined
+            yield* Effect.promise(() => SessionExport.onSessionClose(sessionID, workspaceKey))
             yield* events.remove(sessionID)
-            // kilocode_change - session_diff/session_diff_base are session-owned artifacts orphaned by
-            // remove; Storage.remove treats a missing file as idempotent success and serializes file
-            // access per key, so only genuine (non-ENOENT) failures surface here and are logged.
-            yield* Effect.forEach(["session_diff", "session_diff_base"] as const, (kind) =>
-              storage.remove([kind, sessionID]).pipe(
-                Effect.catch((err) =>
-                  Effect.sync(() => log.error("failed to remove session diff artifact", { sessionID, kind, err })),
-                ),
-              ),
-              { discard: true },
-            )
+            const now = Date.now()
+            const familyIDs = yield* Retention.deleteFamilyUnprotected(db, sessionID, now).pipe(Effect.orDie)
+            if (familyIDs.length > 0) {
+              const keys = Artifact.familyArtifactsForFamily(familyIDs)
+              const delExit = yield* Effect.forEach(keys, (key) => storage.remove(key), { discard: true }).pipe(
+                Effect.exit,
+              )
+              if (delExit._tag === "Failure") {
+                yield* Effect.logWarning("Session.remove artifact delete failed, obligation retained", {
+                  sessionID,
+                  cause: String(delExit.cause),
+                })
+                yield* db
+                  .run(sql`UPDATE retention_obligation SET attempts = attempts + 1 WHERE family_root_id = ${sessionID}`)
+                  .pipe(
+                    Effect.orDie,
+                    Effect.catchCause((cause) =>
+                      Effect.logWarning("Session.remove obligation attempt bump failed", {
+                        sessionID,
+                        cause: String(cause),
+                      }).pipe(Effect.asVoid),
+                    ),
+                  )
+              } else {
+                const obligationExit = yield* db
+                  .delete(RetentionObligationTable)
+                  .where(eq(RetentionObligationTable.family_root_id, sessionID))
+                  .run()
+                  .pipe(Effect.exit)
+                if (obligationExit._tag === "Failure") {
+                  yield* Effect.logWarning("Session.remove obligation delete failed", {
+                    sessionID,
+                    cause: String(obligationExit.cause),
+                  })
+                  yield* db
+                    .run(sql`UPDATE retention_obligation SET attempts = attempts + 1 WHERE family_root_id = ${sessionID}`)
+                    .pipe(
+                      Effect.orDie,
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("Session.remove obligation attempt bump after delete failure failed", {
+                          sessionID,
+                          cause: String(cause),
+                        }).pipe(Effect.asVoid),
+                      ),
+                    )
+                }
+              }
+            } else {
+              const directExit = yield* Effect.forEach(Artifact.familyArtifactsForSession(sessionID), (key) =>
+                storage.remove(key).pipe(Effect.catch(() => Effect.void)),
+              ).pipe(Effect.exit)
+              if (directExit._tag === "Failure") {
+                yield* Effect.logWarning("Session.remove direct artifact cleanup failed", {
+                  sessionID,
+                  cause: String(directExit.cause),
+                })
+              }
+            }
           }),
         )
         // kilocode_change end
@@ -978,28 +1031,31 @@ export const layer: Layer.Layer<
     })
 
     const messages: Interface["messages"] = Effect.fn("Session.messages")(function* (input) {
-      if (input.limit) {
-        return (yield* MessageV2.page({ sessionID: input.sessionID, limit: input.limit }).pipe(
-          Effect.provideService(Database.Service, database),
-        )).items
-      }
-
-      const size = 50
-      const result = [] as SessionV1.WithParts[]
-      let before: string | undefined
-      while (true) {
-        const page = yield* MessageV2.page({ sessionID: input.sessionID, limit: size, before }).pipe(
-          Effect.provideService(Database.Service, database),
-        )
-        if (page.items.length === 0) break
-        for (let i = page.items.length - 1; i >= 0; i--) {
-          const item = page.items[i]
-          if (item) result.push(item)
+      const release = yield* ownership.acquireLease(input.sessionID)
+      return yield* Effect.gen(function* () {
+        if (input.limit) {
+          return (yield* MessageV2.page({ sessionID: input.sessionID, limit: input.limit }).pipe(
+            Effect.provideService(Database.Service, database),
+          )).items
         }
-        if (!page.more || !page.cursor) break
-        before = page.cursor
-      }
-      return result.reverse()
+
+        const size = 50
+        const result = [] as SessionV1.WithParts[]
+        let before: string | undefined
+        while (true) {
+          const page = yield* MessageV2.page({ sessionID: input.sessionID, limit: size, before }).pipe(
+            Effect.provideService(Database.Service, database),
+          )
+          if (page.items.length === 0) break
+          for (let i = page.items.length - 1; i >= 0; i--) {
+            const item = page.items[i]
+            if (item) result.push(item)
+          }
+          if (!page.more || !page.cursor) break
+          before = page.cursor
+        }
+        return result.reverse()
+      }).pipe(Effect.ensuring(release))
     })
 
     const removeMessage = Effect.fn("Session.removeMessage")(function* (input: {
@@ -1087,12 +1143,14 @@ export const layer: Layer.Layer<
 )
 
 export const defaultLayer = layer.pipe(
+  Layer.provide(SessionRunState.defaultLayer),
   Layer.provide(BackgroundJob.defaultLayer),
   Layer.provide(Database.defaultLayer),
   Layer.provide(EventV2Bridge.defaultLayer),
   Layer.provide(SessionV2.defaultLayer),
   Layer.provide(RuntimeFlags.defaultLayer),
   Layer.provide(Storage.defaultLayer),
+  Layer.provide(Ownership.layer),
 )
 
 const cancelBackgroundJobs = Effect.fn("Session.cancelBackgroundJobs")(function* (

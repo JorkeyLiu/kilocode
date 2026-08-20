@@ -59,6 +59,7 @@ import * as Log from "@opencode-ai/core/util/log"
 import { provideTmpdirServer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 import { TestLLMServer } from "../lib/llm-server"
+import * as Ownership from "@/retention/ownership"
 
 Log.init({ print: false })
 
@@ -129,7 +130,9 @@ const lsp = Layer.succeed(
   }),
 )
 
-const status = Layer.mergeAll(SessionStatus.defaultLayer, Bus.layer)
+const status = Layer.mergeAll(
+    Ownership.layer,
+SessionStatus.defaultLayer, Bus.layer)
 const runState = SessionRunState.layer.pipe(Layer.provide(status))
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 

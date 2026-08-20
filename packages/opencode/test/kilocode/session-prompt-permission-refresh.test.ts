@@ -56,6 +56,7 @@ import { KiloReadObject } from "../../src/kilocode/tool/read-object"
 import { provideTmpdirServer } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
+import * as Ownership from "@/retention/ownership"
 
 void Log.init({ print: false })
 
@@ -122,7 +123,9 @@ const lsp = Layer.succeed(
   }),
 )
 
-const status = Layer.mergeAll(SessionStatus.defaultLayer, Bus.layer)
+const status = Layer.mergeAll(
+    Ownership.layer,
+SessionStatus.defaultLayer, Bus.layer)
 const run = SessionRunState.layer.pipe(Layer.provide(status))
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 

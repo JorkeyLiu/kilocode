@@ -3,12 +3,13 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Runner } from "@/effect/runner"
 import { BackgroundJob } from "@/background/job"
 import { Effect, Latch, Layer, Scope, Context } from "effect"
-import { Session } from "./session"
+import { BusyError } from "./schema"
 import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
+import * as Ownership from "@/retention/ownership"
 
 export interface Interface {
-  readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, Session.BusyError>
+  readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, BusyError>
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly ensureRunning: (
     sessionID: SessionID,
@@ -20,7 +21,7 @@ export interface Interface {
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
     work: Effect.Effect<SessionV1.WithParts>,
     ready?: Latch.Latch,
-  ) => Effect.Effect<SessionV1.WithParts, Session.BusyError>
+  ) => Effect.Effect<SessionV1.WithParts, BusyError>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/SessionRunState") {}
@@ -30,6 +31,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const background = yield* BackgroundJob.Service
     const status = yield* SessionStatus.Service
+    const ownership = yield* Ownership.Service
 
     const state = yield* InstanceState.make(
       Effect.fn("SessionRunState.state")(function* () {
@@ -89,7 +91,8 @@ export const layer = Layer.effect(
       onInterrupt: Effect.Effect<SessionV1.WithParts>,
       work: Effect.Effect<SessionV1.WithParts>,
     ) {
-      return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work)
+      const release = yield* ownership.acquireActive(sessionID)
+      return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work).pipe(Effect.ensuring(release))
     })
 
     const startShell = Effect.fn("SessionRunState.startShell")(function* (
@@ -98,9 +101,10 @@ export const layer = Layer.effect(
       work: Effect.Effect<SessionV1.WithParts>,
       ready?: Latch.Latch,
     ) {
+      const release = yield* ownership.acquireActive(sessionID)
       return yield* (yield* runner(sessionID, onInterrupt))
         .startShell(work, ready)
-        .pipe(Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))))
+        .pipe(Effect.ensuring(release), Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))))
     })
 
     return Service.of({ assertNotBusy, cancel, ensureRunning, startShell })
@@ -110,6 +114,7 @@ export const layer = Layer.effect(
 export const defaultLayer = layer.pipe(
   Layer.provide(BackgroundJob.defaultLayer),
   Layer.provide(SessionStatus.defaultLayer),
+  Layer.provide(Ownership.layer),
 )
 
 const cancelBackgroundJobs = Effect.fn("SessionRunState.cancelBackgroundJobs")(function* (
@@ -147,7 +152,7 @@ const cancelBackgroundJobs = Effect.fn("SessionRunState.cancelBackgroundJobs")(f
 })
 
 function busyError(sessionID: SessionID) {
-  return new Session.BusyError({ sessionID })
+  return new BusyError({ sessionID })
 }
 
 export * as SessionRunState from "./run-state"

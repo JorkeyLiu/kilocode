@@ -11,10 +11,13 @@ import * as Log from "@opencode-ai/core/util/log"
 import { testEffect } from "../lib/effect"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import * as Ownership from "@/retention/ownership"
 
 void Log.init({ print: false })
 
-const it = testEffect(Layer.mergeAll(SessionNs.defaultLayer, Database.defaultLayer))
+const it = testEffect(Layer.mergeAll(
+    Ownership.layer,
+SessionNs.defaultLayer, Database.defaultLayer))
 
 const withSession = <A, E, R>(
   fn: (input: { session: SessionNs.Interface; sessionID: SessionID }) => Effect.Effect<A, E, R>,

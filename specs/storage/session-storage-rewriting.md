@@ -63,12 +63,11 @@ sync/warp replay protocol.
 
 | ID | Bounded by | Required by | Status |
 |---|---|---|---|
-| R15 | Automatic retention bounds: byte-budget high/low watermarks with hysteresis, recent-retention floor, family eligibility/ordering, diagnostics | P4.2 (P4.2a). Not a P1-P3 blocker | Open — added 2026-08-14 |
-| R16 | Canonical aggregate schema/revision model and bounded outbox/changefeed disposition; artifact ownership/retention registry | P4.2 (P4.2a). Not a P1-P3 blocker | Open — added 2026-08-14 |
-| R17 | Offline archive format/location/integrity/checksum; fresh-DB cutover identity; rollback and archive-deletion authority | P4.2 (P4.2a). Not a P1-P3 blocker | Open — added 2026-08-14 |
+| R15 | Automatic retention bounds: byte-budget high/low watermarks with hysteresis, recent-retention floor, family eligibility/ordering, diagnostics | P4.2 (P4.2a). Not a P1-P3 blocker | Resolved 2026-08-20 — high 8 GiB, low 6 GiB, 7-day floor, complete-family deletion, incremental auto-vacuum/checkpoint, per-run diagnostics; 25% hysteresis; resource bound not performance SLA; values change only via later architecture decision |
+| R16 | Canonical aggregate schema/revision model and bounded outbox/changefeed disposition; artifact ownership/retention registry | P4.2 (P4.2a). Not a P1-P3 blocker | Resolved 2026-08-20 — normalized session/message/part/todo/share + registered operation/outcome/failure aggregates; `SessionTable.revision` monotonic; payload-free tombstone on delete; bounded changefeed 50,000 rows/64 MiB; closed artifact registry; S2 materializes, S3 closes/audits |
+| R17 | Offline archive format/location/integrity/checksum; fresh-DB cutover identity; rollback and archive-deletion authority | P4.2 (P4.2a). Not a P1-P3 blocker | Resolved 2026-08-20 — offline versioned dir `<data-basename>-archive/p4.2/<UTC>-<uuid>/` under same-filesystem sibling; manifest v1 with SHA-256; fixed member set with `session-export.db` included/absent recorded and `snapshot` excluded; singleton storage identity; offline rollback; deletion requires separate maintainer authorization |
 
-No numeric budget is invented now (R15-R17). R15-R17 are recorded in the
-runtime spec (section 9) and the migration tracker (section 9).
+R15-R17 are recorded in the runtime spec (section 9) and the migration tracker (section 9).
 
 ### 1.5 Relationship to orchestrator phases
 
@@ -329,15 +328,8 @@ runtime (section 6.2).
 
 ### 5.1 Canonical aggregate storage
 
-- **Canonical durable truth** is transactionally maintained normalized session
-  aggregates/read models plus explicitly registered artifacts — not an
-  unbounded replay log. The `session`, `message`, `part`, V2 projections, and
-  their file-backed artifacts (section 3) are the canonical state; the
-  full-payload append-only event log is not a target mechanism for history.
-- **Atomic revision commits**: every mutation commits canonical state and a
-  monotonic aggregate/session revision atomically in one transaction, so
-  readers observe either the old revision or the new one, never a torn state
-  (crash-safe maintenance; ADR-0001's monotonic-integrity principle retained).
+- **Canonical durable truth** is normalized session/message/part/todo/share and registered operation/outcome/failure aggregates as R11 fields land, plus registered artifacts (R16 resolved 2026-08-20). The `session`, `message`, `part`, V2 projections, and registered artifacts are the canonical state; the full-payload append-only event log is not a target mechanism for history. Legacy `event`/`event_sequence` is not required for reconstruction and remains removal scope.
+- **Atomic revision commits**: `SessionTable.revision` is the per-session monotonic revision; every semantic mutation and its revision commit in one immediate transaction, so readers observe either the old revision or the new one, never a torn state (crash-safe maintenance; ADR-0001's monotonic-integrity retained). Deletion obtains final revision=current+1 and atomically writes a payload-free delete tombstone to the changefeed before hard-deleting the aggregate in the same transaction; feed rows have no FK cascade to session.
 - **Lossless logical content and continuation** for runtime-retained
   canonical-era sessions (ADR-0001 principle retained, scoped per section 1.3):
   continuing a retained session after the rewrite (new turn, retry, revert,
@@ -350,65 +342,37 @@ runtime (section 6.2).
   storage / registered artifact model; diagnostic and panel projections are
   derived and never create competing stores (ADR-0005 I-5; runtime spec
   sections 7.2, 9).
-- The exact canonical schema and revision model are R16 (bounded decision,
-  open; no exact schema is invented here).
+- Rationale: payload-free bounded deltas avoid recreating full-object event growth while allowing reconnect efficiency; hard-cap gaps safe because canonical snapshot hydration is authoritative.
 
-### 5.2 Bounded changefeed/outbox (R9)
+### 5.2 Bounded changefeed/outbox (R9/R16)
 
-- A **bounded derived changefeed/outbox** may serve reconnect deltas for the
-  runtime observation and hydration contract (runtime spec section 7.1, R9).
-- It is **not authoritative history**, is **not required for reconstruction**
-  (reconstruction reads the canonical aggregates), and is **eligible for
-  automatic truncation** after the consumer holds an authoritative hydration
-  state (an observation snapshot, section 9 terminology).
-- Its disposition — retention bounds, truncation triggers, ordering/idempotency
-  — is part of R16 (outbox/changefeed disposition) and R9.
+- A **bounded derived payload-free changefeed/outbox** serves reconnect deltas for the runtime observation and hydration contract (runtime spec 7.1, R9; R16 resolved 2026-08-20). It has global monotonic sequence, session ID, session revision, kind, runtime-owned occurrence time; uniqueness/idempotency is `(session_id, revision, kind)`.
+- It is **not authoritative history**, is **not required for reconstruction** (reconstruction reads the canonical aggregates), and is **eligible for automatic truncation** after the consumer holds an authoritative hydration state (an observation snapshot, section 9 terminology). It is derived, never reconstruction authority. Canonical snapshot hydration establishes a sequence cursor; acknowledged rows are truncatable.
+- Hard cap is both 50,000 rows and 64 MiB; exceeding either may evict oldest rows even if unacknowledged. Any cursor gap forces full rehydration. Exact wire handshake remains R9/P4.2b. Rationale: payload-free bounded deltas avoid recreating full-object event growth while allowing reconnect efficiency; hard-cap gaps safe because canonical snapshot hydration is authoritative.
+- Deletion writes a payload-free tombstone atomically before hard-delete in the same transaction (section 5.1); feed rows have no FK cascade to session.
 
-### 5.3 Automatic retention
+### 5.3 Automatic retention (R15 resolved 2026-08-20)
 
 - **Invisible private-runtime maintenance**, not a product/UI/config surface:
   no user-visible setting, no per-session pin UI, no storage dashboard, and no
-  manual cleanup product.
-- **Byte-budget policy**: internal byte-budget high/low watermarks with
-  hysteresis. When the high watermark is crossed, the runtime prunes the
-  oldest inactive root-session families atomically until the low watermark is
-  reached. Exact values and the recent-retention floor are R15; no numeric
-  budget is invented now.
+  manual cleanup product. No setting/pin/dashboard/manual cleanup/UI exists or will be added.
+- **Byte-budget policy**: high watermark 8 GiB, low watermark 6 GiB — 25% hysteresis over a fresh canonical store; a resource bound, not a performance SLA; values change only via later recorded architecture decision, never user config. Budget scope is physical bytes of the active canonical DB main file + WAL and registered session-family artifacts; excludes offline archives, logs/cache, and project-owned snapshot storage. When high is exceeded, the runtime prunes eligible root families until at/below low or no eligible family remains. Physical accounting must include WAL.
 - **Family = root + descendants + owned messages/parts/outcomes/events/diffs/
-  shares/registered artifacts**; pruning is complete-family deletion.
-  Project-scoped/shared revert snapshots (section 3.3 `snapshot/`) are not
-  owned by one session family and are never deleted as part of family
-  pruning; their ownership/GC (project-level reachability/refcount) is
-  assigned in the artifact registry separately (section 5.4), with no silent
-  orphaning.
-- **Protections**: active/in-flight families and maintenance-leased/read
-  families cannot be pruned. No partial transcript/tool/output truncation, no
-  logical loss inside runtime-retained sessions, no deletion inline with a
-  user-visible request, and no silent orphaning (ADR-0001's
-  complete-session/family deletion and no-silent-lossy-compaction principles
-  retained).
-- **Diagnostics**: the runtime records aggregate rows/bytes reclaimed and
-  failures diagnostically; these are descriptive maintenance facts, never a
-  user-facing surface and never a numeric performance gate (runtime spec
-  section 10).
+  shares/registered artifacts**; pruning is complete-family deletion;
+  never partial transcript truncation. Project-scoped/shared revert snapshots (section 3.3 `snapshot/`) are not owned by one session family and are never deleted as part of family pruning; their ownership/GC (project-level reachability/refcount) is assigned in the artifact registry separately (section 5.4), with no silent orphaning.
+- **Eligibility and ordering**: protect every root family whose maximum runtime-owned activity across root+descendants is within 7 days; additionally requires all members terminal/idle and no active/in-flight operation or maintenance/read lease. Revalidate protections in the deletion transaction. Order eligible roots by activity ascending then root ID. Active/in-flight and maintenance-leased/read families cannot be pruned. No partial transcript/tool/output truncation, no logical loss inside runtime-retained sessions, no deletion inline with a user-visible request, and no silent orphaning (ADR-0001's complete-session/family deletion and no-silent-lossy-compaction retained).
+- **Maintenance timing and crash safety**: maintenance is coalesced after boot and canonical commits, runs only off the generation hot path when idle and high is exceeded. Canonical DB deletion is one immediate transaction; filesystem artifact cleanup uses a durable idempotent cleanup obligation so crash recovery cannot expose a partially retained canonical family.
+- **Reclamation**: fresh canonical DB is created with incremental auto-vacuum. After pruning, checkpoint/reclaim incrementally off hot path. If floor/protections prevent low, stop safely and emit pressure diagnostics.
+- **Diagnostics**: per-run diagnostic facts: trigger, before/after physical bytes, selected/deleted/skipped family counts with reasons, canonical rows and artifact bytes reclaimed, checkpoint/vacuum result, failures. These are descriptive maintenance facts, never a user-facing surface and never a numeric performance gate (runtime spec section 10).
+- Rationale: 8/6 separates normal operation from measured ~24.56 GiB legacy emergency; 7 days preserves recent continuity while bounding growth.
 
-### 5.4 Artifact field/owner/retention registry
+### 5.4 Artifact field/owner/retention registry (R16 resolved 2026-08-20)
 
-- Every session-owned sidecar/artifact — `session_diff`, `session_diff_base`,
-  `session_share`, share state, and any registered artifact — has a registry
-  entry with owner and retention disposition, analogous to the config field
-  registry (runtime spec section 3.2); session-family deletion removes exactly
-  the session-owned artifacts of the deleted family, nothing else.
-- Project-scoped/shared artifacts — revert snapshot storage
-  (`~/.local/share/kilo/snapshot/`, section 3.3) — are registered with
-  project-level ownership: they are not deleted as part of one session family;
-  the registry assigns their GC/ownership via project-level reachability or
-  reference counting, separate from session-family deletion, with no silent
-  orphaning.
-- Unregistered session-owned artifacts **block the storage phase exit** (R16;
-  section 8 gate).
-- The registry covers artifacts that survive the cutover (section 6) and the
-  canonical model's new artifact surface.
+- Closed registry entries: canonical DB aggregate rows (including SessionShare/todo/message/part/context and future registered outcome/failure rows) are schema-owned and cascade/transaction governed, not file artifacts; `session_diff`, `session_diff_base`, `session_share` are session-family-owned file artifacts, retained/deleted with family; `snapshot` is project-owned and collected only by project reachability/refcount, never family pruning; `session-export.db` is legacy cutover material under R17, not canonical artifact. New runtime artifact writes require a registry entry before landing.
+- Every session-owned sidecar/artifact has a registry entry with owner and retention disposition, analogous to the config field registry (runtime spec 3.2); session-family deletion removes exactly the session-owned artifacts of the deleted family, nothing else. Project-scoped/shared revert snapshot storage (`~/.local/share/kilo/snapshot/`, section 3.3) is registered with project-level ownership via reachability/refcount, separate from session-family deletion, with no silent orphaning.
+- Unregistered session-owned artifacts **block the storage phase exit** (R16; section 8 gate).
+- The registry covers artifacts that survive the cutover (section 6) and the canonical model's new artifact surface.
+- Sequencing: R16 registry definition is available to S2; S2 materializes/consumes the registry for deletion. S3 is registry closure/audit: verify every writer/class is registered, project snapshot ownership is correct, and zero unregistered artifacts remain. Thus S2→S3 is preserved.
 
 ### 5.5 Explicitly rejected mechanisms
 
@@ -418,58 +382,32 @@ verification phase (old spec P6); permanent duplicate full-payload event
 snapshots; generic full-object update history; any multi-client sync/warp
 replay protocol; and any removed-client compatibility boundary.
 
-## 6. Cutover (LOCK-017)
+## 6. Cutover (LOCK-017; R17 resolved 2026-08-20)
 
 ### 6.1 Offline archive procedure
 
 At the P4.2 storage cutover (P4.2a, work unit S5):
 
-1. Stop the sole runtime cleanly (no active generations, no in-flight
-   maintenance).
-2. Verify the legacy DB and the session-owned sidecars (integrity checks).
-3. Archive an explicit, fixed set as an **opaque offline artifact** with
-   checksum/integrity evidence: the legacy `kilo.db` (including the `event`
-   and `event_sequence` tables) and the three session-owned sidecar
-   directories (`storage/session_diff`, `storage/session_diff_base`,
-   `storage/session_share`). Nothing else is archived. Inert
-   `session-export.db` (section 3.3) is not part of the fixed set; its
-   disposition — included in the cutover archive or excluded by recorded
-   decision — is an R17 item, never a silent deletion. The archive is opaque:
-   no runtime archive reader exists or will be created (no migration/import,
-   no dual-reader).
-4. Boot a fresh canonical DB, empty, and continue on the canonical model
-   (section 5).
-5. Retain **rollback authority** until archive deletion is separately
-   authorized; the archive is not deleted by the cutover itself.
+1. Cutover archive is an offline versioned directory under the same-filesystem sibling derived from `Global.Path.data`: `<data-basename>-archive/p4.2/<UTC>-<uuid>/`. Temporary archive is created under the same `p4.2` parent; EXDEV/cross-device fallback is forbidden/fails closed. It has manifest schema v1 and preserved POSIX relative paths. No runtime archive reader.
+2. Stop the sole runtime and close handles; run `wal_checkpoint(TRUNCATE)`, `integrity_check`, and `foreign_key_check`. Fixed members are `kilo.db` plus `kilo.db-wal`/`kilo.db-shm` if present after checkpoint, `storage/session_diff`, `storage/session_diff_base`, `storage/session_share`; explicitly include `session-export.db` and its WAL/SHM when present, otherwise record absence. Explicitly exclude project-owned `snapshot` and explain it is not rollback material under this cutover decision. Nothing else is archived.
+3. Manifest v1 records archive ID, UTC creation, source data root, each sorted file path with bytes and SHA-256, present/absent fixed members, and deterministic aggregate SHA-256 over sorted path/bytes/hash records. Preserve empty fixed directories. Fsync files/directories, reverify, atomically rename temp to final, fsync parent; any failure leaves legacy active and aborts cutover.
+4. Boot a fresh canonical DB, empty, and continue on the canonical model (section 5).
+5. Retain **rollback authority** until archive deletion is separately authorized; the archive is not deleted by the cutover itself.
 
 ### 6.2 Fresh canonical DB boot
 
 The fresh canonical DB starts **empty** — from the canonical schema/revision
 model (R16) with the artifact registry (R16) and automatic retention (R15)
-active — and contains no pre-cutover sessions. The last-week containment set
-kept by operational containment (section 4) remains only in the offline legacy
-archive; it is not migrated into, read by, or usable from the fresh canonical
-runtime. No old-session migration or import occurs at boot.
+active — and contains no pre-cutover sessions. It has singleton storage identity: UUID, schema version, creation time, cutover archive ID. Boot gate verifies identity and zero sessions/registered family artifacts before activation. The last-week containment set kept by operational containment (section 4) remains only in the offline legacy archive; it is not migrated into, read by, or usable from the fresh canonical runtime. No old-session migration or import occurs at boot. Fresh DB uses incremental auto-vacuum (R15).
 
 ### 6.3 Rollback authority and archive deletion
 
-- Rollback authority: while the offline cutover archive exists, the cutover
-  can be rolled back by stopping the runtime, restoring the legacy DB and
-  sidecars from the archive, and verifying integrity — without any dual-read
-  path. The rollback authority is the P4.2 cutover archive, distinct from the
-  pre-P4 operational containment archive (section 4); R17 records the
-  distinction and the exact rollback procedure.
-- Archive deletion is a separate authorization, never a side effect of the
-  cutover; after deletion, rollback to the legacy store is no longer possible.
+- Rollback is offline only: stop/close, verify archive, separately archive the current canonical store under a distinct rollback ID, atomically restore legacy members, rerun integrity checks, then boot legacy path. Never dual-read. The rollback authority is the P4.2 cutover archive, distinct from the pre-P4 operational containment archive (section 4).
+- Archive deletion requires separate explicit maintainer authorization after cutover and is never a cutover side effect; no runtime/UI/API automatic deletion path exists; after deletion, rollback is no longer possible.
 
-### 6.4 R17 decisions
+### 6.4 R17 decisions (resolved 2026-08-20)
 
-Exact archive format/location, the explicit archive member set (section 6.1,
-including `event_sequence` and the disposition of inert `session-export.db`),
-cutover identity, integrity/checksum procedure, and the rollback/archive-
-deletion procedure are R17 (bounded decision, open; required by P4.2a). R17
-distinguishes the pre-P4 operational containment archive (section 4) from the
-P4.2 cutover archive, which is the rollback authority (section 6.3).
+R17 is resolved 2026-08-20 (section 6.1-6.3): location `<data-basename>-archive/p4.2/<UTC>-<uuid>/` with temp under same parent and EXDEV forbidden; manifest v1 with deterministic SHA-256; fixed members `kilo.db`(+WAL/SHM), `storage/session_diff`, `storage/session_diff_base`, `storage/session_share`, plus `session-export.db`(+WAL/SHM) when present else recorded absence; `snapshot` excluded; fsync+atomic rename+reverify; singleton storage identity (UUID, schema version, creation time, cutover archive ID) with boot gate; offline rollback with separate current-store archive; deletion requires separate maintainer authorization, never a side effect; no runtime archive reader. Rationale: directory+manifest permits transparent offline integrity/restore without runtime compatibility reader; same-parent atomic rename and explicit optional members fail closed. R17 distinguishes the pre-P4 operational containment archive (section 4) from the P4.2 cutover archive, which is the rollback authority.
 
 ## 7. Storage Work Units (S0..S5, under orchestrator P4.2)
 
@@ -481,10 +419,10 @@ are namespaced storage work units and collide with no orchestrator phase.
 |---|---|---|---|
 | S0 Baseline and fixtures | Freeze the read-only aggregate measurement queries (section 10) as reproducible commands; build lossless-family fixtures (retained family; active/in-flight family; maintenance-leased/read family); record storage baseline metrics in the tracker (section 8) | Reproducible commands + fixture tests pass; baseline recorded (2026-08-14 values, section 2.2) | Measurement queries from section 10; fixture tests in `packages/opencode` |
 | S1 Canonical aggregate schema and revision commit model | Define the canonical aggregate/read-model schema and the atomic monotonic aggregate/session revision commit (section 5.1); crash-safe maintenance transactions | Every mutation commits canonical state + revision atomically; crash injection leaves no torn state; no unbounded replay log is written | Round-trip and crash-injection tests |
-| S2 Automatic retention engine | Byte-budget high/low watermarks with hysteresis (exact values R15), family eligibility/ordering, atomic family pruning, protections, diagnostics (section 5.3) | Retention engine bounded-test passes (no numeric values frozen); active/in-flight and maintenance-leased/read families never pruned; retained families fully lossless; rows/bytes reclaimed recorded | Retention engine tests; family-protection tests |
-| S3 Artifact field/owner/retention registry | Register every session-owned sidecar/artifact with owner and retention (section 5.4) | Registry covers all session-owned artifacts; audit finds zero unregistered; unregistered artifacts block this unit's exit | Registry audit test |
-| S4 Bounded changefeed/outbox | Bounded derived feed for reconnect deltas (section 5.2; R9): not authoritative history, truncatable after authoritative hydration state | Storage-side feed behavior verified: bounded ordering, truncation, and idempotency; feed truncation never affects reconstruction. Wire-level R9 convergence (hydrate + replay deltas) is a P4.2b gate, not an S4 exit | Storage-side feed tests (ordering/truncation/idempotency); wire-level R9 convergence at P4.2b (runtime spec section 7.1) |
-| S5 Offline cutover | Stop the sole runtime, verify + archive legacy DB and sidecars (opaque artifact, checksum/integrity), boot fresh canonical DB, retain rollback authority (section 6) | Archive integrity verified; fresh DB boots clean; rollback procedure documented and rehearsed; R17 resolved | Cutover rehearsal; archive integrity check |
+| S2 Automatic retention engine | Byte-budget high 8 GiB/low 6 GiB with hysteresis, 7-day floor, family eligibility/ordering, atomic family pruning with cleanup obligation, protections, incremental vacuum/checkpoint, diagnostics (section 5.3; R15 resolved 2026-08-20) | Retention engine passes with normative values; protects 7-day families and active/leased families, ordering activity asc then root ID, complete-family deletion only, WAL-inclusive accounting, pressure diagnostics when floor prevents low | Retention engine tests; family-protection tests |
+| S3 Artifact field/owner/retention registry | Register every session-owned sidecar/artifact with owner and retention; S2 materializes/consumes registry, S3 closes/audits (section 5.4; R16 resolved 2026-08-20) | Registry definition available to S2; S2 materializes for deletion; S3 verifies every writer/class registered, snapshot ownership correct, zero unregistered; unregistered blocks exit; S2→S3 preserved | Registry audit test |
+| S4 Bounded changefeed/outbox | Bounded payload-free feed for reconnect deltas with global seq, `(session_id, revision, kind)` idempotency, 50,000 rows/64 MiB caps, cursor-gap full rehydration (section 5.2; R16 resolved 2026-08-20) | Storage-side feed verified: bounded ordering, hard-cap eviction, truncation, idempotency, gap→rehydration; payload-free tombstone on delete; feed never affects reconstruction | Storage-side feed tests (ordering/truncation/idempotency/caps); wire-level R9 convergence at P4.2b (runtime spec 7.1) |
+| S5 Offline cutover | Stop sole runtime, checkpoint/integrity, archive fixed members with manifest v1+SHA-256 under `<data-basename>-archive/p4.2/<UTC>-<uuid>/`, boot fresh DB with singleton identity, retain rollback authority (section 6; R17 resolved 2026-08-20) | Archive integrity verified with manifest+aggregate SHA-256 and atomic rename; fresh DB boots clean with identity gate and zero sessions/artifacts; offline rollback rehearsed; deletion requires separate authorization | Cutover rehearsal; archive integrity check |
 
 ## 8. Gates And Tests
 
@@ -549,8 +487,5 @@ layer when a storage work unit touches code):
 
 ## 11. Open Decisions
 
-- R15, R16, R17 (section 1.4) are open, required by P4.2a, and not P1-P3
-  blockers. No numeric budget, exact schema, or archive format is invented in
-  this document.
-- The operational containment evidence slots (section 4.2) remain pending until
-  manual execution evidence exists.
+- R15, R16, R17 (section 1.4) are resolved 2026-08-20, required by P4.2a, and not P1-P3 blockers. Operational containment archive remains distinct from cutover archive.
+- The operational containment evidence slots (section 4.2) remain pending until manual execution evidence exists.

@@ -19,33 +19,45 @@ import * as SandboxPolicy from "@/kilocode/sandbox/policy"
 import { SandboxStore } from "@/kilocode/sandbox/store"
 import type { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
+import { SessionRunState } from "@/session/run-state"
 import { SessionStatus } from "@/session/status"
 import { Shell } from "@/shell/shell"
 import { Storage } from "@/storage/storage"
 import { SyncEvent } from "@/sync"
 import { provideInstance, testInstanceStoreLayer, tmpdirScoped } from "../../fixture/fixture"
 import { testEffect } from "../../lib/effect"
+import * as Ownership from "@/retention/ownership"
+
+const ownership = Ownership.layer
+const status = SessionStatus.defaultLayer
+const bg = BackgroundJob.defaultLayer
+const runState = SessionRunState.layer.pipe(Layer.provide(status), Layer.provide(bg), Layer.provide(ownership))
+const session = Session.layer.pipe(
+  Layer.provide(runState),
+  Layer.provide(Bus.layer),
+  Layer.provide(Storage.defaultLayer),
+  Layer.provide(SyncEvent.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
+  Layer.provide(ownership),
+  Layer.provide(bg),
+  Layer.provide(Database.defaultLayer),
+  Layer.provide(EventV2Bridge.defaultLayer),
+  Layer.provide(SessionV2.defaultLayer),
+)
 
 const it = testEffect(
   Layer.mergeAll(
-    Session.layer.pipe(
-      Layer.provide(Bus.layer),
-      Layer.provide(Storage.defaultLayer),
-      Layer.provide(SyncEvent.defaultLayer),
-      Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: false })),
-      Layer.provide(BackgroundJob.defaultLayer),
-      Layer.provide(Database.defaultLayer),
-      Layer.provide(EventV2Bridge.defaultLayer),
-      Layer.provide(SessionV2.defaultLayer),
-    ),
-    BackgroundJob.defaultLayer,
+    session,
+    runState,
+    status,
+    bg,
+    ownership,
     Bus.layer,
     Config.defaultLayer,
     Database.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
     testInstanceStoreLayer,
     Notebook.defaultLayer,
-    SessionStatus.defaultLayer,
   ),
 )
 
