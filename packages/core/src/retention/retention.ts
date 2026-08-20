@@ -2,8 +2,9 @@ import { Effect, Schema } from "effect"
 import { sql, eq, inArray } from "drizzle-orm"
 import { Database } from "../database/database"
 import { SessionTable } from "../session/sql"
-import { SessionChangefeedTable, RetentionObligationTable } from "./sql"
+import { RetentionObligationTable } from "./sql"
 import * as Artifact from "./artifact"
+import * as Changefeed from "./changefeed"
 import { ID as SessionID } from "../session/schema"
 
 export const HIGH_BYTES = 8 * 1024 * 1024 * 1024
@@ -148,11 +149,7 @@ function deleteFamilyCanonicalTx(
     if (rows.length !== actualIds.length) yield* Effect.die(`family row count mismatch ${rootID}`)
     for (const row of rows) {
       const finalRev = row.rev + 1
-      yield* tx
-        .insert(SessionChangefeedTable)
-        .values({ session_id: row.id, revision: finalRev, kind: "deleted", time: now })
-        .run()
-        .pipe(Effect.orDie)
+      yield* Changefeed.appendTx(tx, { session_id: row.id as string, revision: finalRev, kind: "deleted", time: now })
     }
     yield* tx
       .insert(RetentionObligationTable)
@@ -202,14 +199,9 @@ export function deleteFamilyTransaction(
         for (const id of actualIds) {
           if (isActive(id) || isLeased(id)) yield* Effect.die(`family now active/leased ${family.rootID} ${id}`)
         }
-        // Reuse canonical for tombstone/obligation/delete without re-querying, but we already have rows
         for (const row of rows) {
           const finalRev = row.rev + 1
-          yield* tx
-            .insert(SessionChangefeedTable)
-            .values({ session_id: row.id, revision: finalRev, kind: "deleted", time: now })
-            .run()
-            .pipe(Effect.orDie)
+          yield* Changefeed.appendTx(tx, { session_id: row.id as string, revision: finalRev, kind: "deleted", time: now })
         }
         yield* tx
           .insert(RetentionObligationTable)

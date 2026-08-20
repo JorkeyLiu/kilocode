@@ -37,5 +37,7 @@ export const migrations = (
     import("./migration/20260714141136_session-message-legacy-writer-compat"),
     import("./migration/20260819120000_add_session_revision"),
     import("./migration/20260820000000_add_retention_foundation"),
+    import("./migration/20260821000000_add_changefeed_bounds"),
+    import("./migration/20260822000000_add_changefeed_kind_check"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

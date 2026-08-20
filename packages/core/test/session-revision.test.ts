@@ -408,7 +408,7 @@ describe("Session revision (P4.2a S1)", () => {
       yield* setup
       const { db } = yield* Database.Service
       const fakeID = SessionV2.ID.make("ses_nonexistent_adv_" + Date.now())
-      const exit = yield* db.transaction((tx) => SessionRevision.advance(fakeID, tx)).pipe(Effect.exit)
+      const exit = yield* db.transaction((tx) => SessionRevision.advanceTx(fakeID, tx)).pipe(Effect.exit)
       expect(exit._tag).toBe("Failure")
     }),
   )
@@ -421,7 +421,7 @@ describe("Session revision (P4.2a S1)", () => {
       const created = yield* session.create({ location })
       const before = yield* Effect.promise(() => getRevision(db, created.id))
       expect(before).toBe(0)
-      yield* db.transaction((tx) => SessionRevision.advance(created.id, tx)).pipe(Effect.orDie)
+      yield* db.transaction((tx) => SessionRevision.advanceTx(created.id, tx)).pipe(Effect.orDie)
       const after = yield* Effect.promise(() => getRevision(db, created.id))
       expect(after).toBe(1)
     }),

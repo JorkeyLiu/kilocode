@@ -223,7 +223,7 @@ function run(db: DatabaseService, event: SessionEvent.Event) {
       appendMessage,
     }
     yield* SessionMessageUpdater.update(adapter, event)
-    yield* SessionRevision.advance(event.data.sessionID, db)
+    yield* SessionRevision.advanceTx(event.data.sessionID, db)
   })
 }
 
@@ -279,7 +279,7 @@ export const layer = Layer.effectDiscard(
           .where(eq(SessionTable.id, event.data.sessionID))
           .run()
           .pipe(Effect.orDie)
-        yield* SessionRevision.advance(event.data.sessionID, db)
+        yield* SessionRevision.advanceTx(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionEvent.Moved, (event) =>
@@ -295,7 +295,7 @@ export const layer = Layer.effectDiscard(
           .where(eq(SessionTable.id, event.data.sessionID))
           .run()
           .pipe(Effect.orDie)
-        yield* SessionRevision.advance(event.data.sessionID, db)
+        yield* SessionRevision.advanceTx(event.data.sessionID, db)
         yield* SessionContextEpoch.reset(db, event.data.sessionID)
       }),
     )
@@ -317,7 +317,7 @@ export const layer = Layer.effectDiscard(
           .onConflictDoUpdate({ target: MessageTable.id, set: { data } })
           .run()
           .pipe(Effect.orDie)
-        yield* SessionRevision.advance(sessionID, db)
+        yield* SessionRevision.advanceTx(sessionID, db)
       }),
     )
     yield* events.project(SessionV1.Event.MessageRemoved, (event) =>
@@ -337,7 +337,7 @@ export const layer = Layer.effectDiscard(
           .where(and(eq(MessageTable.id, event.data.messageID), eq(MessageTable.session_id, event.data.sessionID)))
           .run()
           .pipe(Effect.orDie)
-        yield* SessionRevision.advance(event.data.sessionID, db)
+        yield* SessionRevision.advanceTx(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionV1.Event.PartRemoved, (event) =>
@@ -355,7 +355,7 @@ export const layer = Layer.effectDiscard(
           .where(and(eq(PartTable.id, event.data.partID), eq(PartTable.session_id, event.data.sessionID)))
           .run()
           .pipe(Effect.orDie)
-        yield* SessionRevision.advance(event.data.sessionID, db)
+        yield* SessionRevision.advanceTx(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionV1.Event.PartUpdated, (event) =>
@@ -375,7 +375,7 @@ export const layer = Layer.effectDiscard(
         const next = usage(event.data.part)
         if (previous) yield* applyUsage(db, row.session_id, previous, -1)
         if (next) yield* applyUsage(db, sessionID, next)
-        yield* SessionRevision.advance(sessionID, db)
+        yield* SessionRevision.advanceTx(sessionID, db)
       }),
     )
     yield* events.project(SessionEvent.AgentSwitched, (event) =>
@@ -439,7 +439,7 @@ export const layer = Layer.effectDiscard(
           timeCreated: event.data.timestamp,
           promotedSeq: event.seq,
         })
-        yield* SessionRevision.advance(event.data.sessionID, db)
+        yield* SessionRevision.advanceTx(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionEvent.PromptLifecycle.Admitted, (event) =>
@@ -454,7 +454,7 @@ export const layer = Layer.effectDiscard(
           delivery: event.data.delivery,
           timeCreated: event.data.timestamp,
         })
-        yield* SessionRevision.advance(event.data.sessionID, db)
+        yield* SessionRevision.advanceTx(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionEvent.PromptLifecycle.Promoted, (event) =>
@@ -472,7 +472,7 @@ export const layer = Layer.effectDiscard(
             promotedSeq: event.seq,
           }),
         )
-        yield* SessionRevision.advance(event.data.sessionID, db)
+        yield* SessionRevision.advanceTx(event.data.sessionID, db)
       }),
     )
     yield* events.project(SessionEvent.ContextUpdated, (event) => {

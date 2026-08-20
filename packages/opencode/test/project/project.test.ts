@@ -9,6 +9,7 @@ import { GlobalBus } from "../../src/bus/global"
 import { Database } from "@opencode-ai/core/database/database"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { SessionTable } from "@opencode-ai/core/session/sql"
+import { SessionChangefeedTable } from "@opencode-ai/core/retention/sql"
 import { WorkspaceTable } from "@opencode-ai/core/control-plane/workspace.sql"
 import { eq } from "drizzle-orm"
 import { Hash } from "@opencode-ai/core/util/hash"
@@ -205,6 +206,11 @@ describe("Project.fromDirectory", () => {
       const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
       expect(row?.project_id).toBe(result.project.id)
       expect(row?.revision).toBe(1)
+      const feed = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(feed.length).toBe(1)
+      expect(feed[0]!.kind).toBe("changed")
+      expect(feed[0]!.revision).toBe(1)
+      expect(feed[0]!.session_id).toBe(sessionID)
     }),
   )
 
@@ -239,6 +245,10 @@ describe("Project.fromDirectory", () => {
         const row = yield* db.select().from(SessionTable).where(eq(SessionTable.id, id)).get().pipe(Effect.orDie)
         expect(row?.project_id).toBe(result.project.id)
         expect(row?.revision).toBe(1)
+        const feed = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, id)).all().pipe(Effect.orDie)
+        expect(feed.length).toBe(1)
+        expect(feed[0]!.kind).toBe("changed")
+        expect(feed[0]!.revision).toBe(1)
       }
     }),
   )
@@ -341,6 +351,11 @@ describe("Project.fromDirectory", () => {
         (yield* db.select().from(WorkspaceTable).where(eq(WorkspaceTable.id, workspaceID)).get().pipe(Effect.orDie))
           ?.project_id,
       ).toBe(remoteID)
+      const feed = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, sessionID)).all().pipe(Effect.orDie)
+      expect(feed.length).toBe(1)
+      expect(feed[0]!.kind).toBe("changed")
+      expect(feed[0]!.revision).toBe(1)
+      expect(feed[0]!.session_id).toBe(sessionID)
     }),
   )
 })

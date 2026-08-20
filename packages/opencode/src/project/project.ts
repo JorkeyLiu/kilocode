@@ -3,6 +3,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { ProjectDirectoryTable, ProjectTable } from "@opencode-ai/core/project/sql"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { WorkspaceTable } from "@opencode-ai/core/control-plane/workspace.sql"
+import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 import * as Log from "@opencode-ai/core/util/log"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { GlobalBus } from "@/bus/global"
@@ -200,8 +201,8 @@ export const layer = Layer.effect(
               }
 
               // RETURNING proves affected-row count atomically; each
-              // matched row increments exactly once.
-              yield* d
+              // matched row increments exactly once. Capture new revision per row for changefeed.
+              const reassigned = yield* d
                 .update(SessionTable)
                 .set({
                   project_id: newID,
@@ -209,15 +210,21 @@ export const layer = Layer.effect(
                   time_updated: sql`${SessionTable.time_updated}`,
                 })
                 .where(eq(SessionTable.project_id, oldID))
-                .returning({ id: SessionTable.id })
+                .returning({ id: SessionTable.id, revision: SessionTable.revision })
                 .all()
+                .pipe(Effect.orDie)
+              const now = Date.now()
+              for (const r of reassigned) {
+                yield* Changefeed.appendTx(d, { session_id: r.id as string, revision: r.revision, kind: "changed", time: now })
+              }
               yield* d
                 .update(WorkspaceTable)
                 .set({ project_id: newID })
                 .where(eq(WorkspaceTable.project_id, oldID))
                 .run()
+                .pipe(Effect.orDie)
 
-              if (oldProject) yield* d.delete(ProjectTable).where(eq(ProjectTable.id, oldID)).run()
+              if (oldProject) yield* d.delete(ProjectTable).where(eq(ProjectTable.id, oldID)).run().pipe(Effect.orDie)
             }),
           { behavior: "immediate" },
         )
@@ -342,7 +349,7 @@ export const layer = Layer.effect(
               if (projectID !== ProjectV2.ID.global) {
                 // RETURNING proves affected-row count atomically; zero
                 // matches is valid (no sessions in global project for this
-                // directory). Each matched row increments exactly once.
+                // directory). Each matched row increments exactly once and emits feed.
                 const reassigned = yield* tx
                   .update(SessionTable)
                   .set({
@@ -353,12 +360,13 @@ export const layer = Layer.effect(
                   .where(
                     and(eq(SessionTable.project_id, ProjectV2.ID.global), eq(SessionTable.directory, data.directory)),
                   )
-                  .returning({ id: SessionTable.id })
+                  .returning({ id: SessionTable.id, revision: SessionTable.revision })
                   .all()
                   .pipe(Effect.orDie)
-                // Expose reassigned IDs so callers/tests can assert exact
-                // matched IDs when needed.
-                void reassigned
+                const now = Date.now()
+                for (const r of reassigned) {
+                  yield* Changefeed.appendTx(tx, { session_id: r.id as string, revision: r.revision, kind: "changed", time: now })
+                }
               }
             }),
           { behavior: "immediate" },

@@ -65,7 +65,7 @@ export const layer = Layer.effect(
                 )
                 .run()
             }
-            yield* SessionRevision.advance(input.sessionID, tx)
+            yield* SessionRevision.advanceTx(input.sessionID, tx)
           }),
         )
         .pipe(Effect.orDie)

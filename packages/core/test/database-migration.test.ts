@@ -523,6 +523,16 @@ describe("DatabaseMigration", () => {
         yield* db.run(
           sql`CREATE TABLE session (id text PRIMARY KEY, slug text NOT NULL, directory text NOT NULL, title text NOT NULL, version text NOT NULL, time_created integer NOT NULL, time_updated integer NOT NULL, workspace_id text, path text, agent text)`,
         )
+        // S4 changefeed tables required by SessionRevision.advance
+        yield* db.run(
+          sql`CREATE TABLE session_changefeed (seq integer PRIMARY KEY AUTOINCREMENT NOT NULL, session_id text NOT NULL, revision integer NOT NULL, time integer NOT NULL, kind text NOT NULL, CONSTRAINT session_changefeed_session_revision_kind_unique UNIQUE(session_id,revision,kind))`,
+        )
+        yield* db.run(sql`CREATE INDEX session_changefeed_seq_idx ON session_changefeed (seq)`)
+        yield* db.run(sql`CREATE INDEX session_changefeed_session_idx ON session_changefeed (session_id)`)
+        yield* db.run(
+          sql`CREATE TABLE session_changefeed_state (id integer PRIMARY KEY NOT NULL, latest_seq integer NOT NULL DEFAULT 0, retained_rows integer NOT NULL DEFAULT 0, retained_bytes integer NOT NULL DEFAULT 0)`,
+        )
+        yield* db.run(sql`INSERT INTO session_changefeed_state (id, latest_seq, retained_rows, retained_bytes) VALUES (1, 0, 0, 0)`)
         // Support tables required by the production EventV2 + SessionProjector layers
         yield* db.run(
           sql`CREATE TABLE project (id text PRIMARY KEY, worktree text NOT NULL, sandboxes text NOT NULL, vcs text, name text, icon_url text, icon_url_override text, icon_color text, time_created integer NOT NULL DEFAULT 0, time_updated integer NOT NULL DEFAULT 0, time_initialized integer, commands text)`,

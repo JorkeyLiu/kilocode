@@ -152,7 +152,7 @@ export function applyImportAggregate(opts: {
         // Advance revision exactly once when the aggregate carried a real mutation
         // and an existing session row was present.
         if (changed && existing) {
-          yield* SessionRevision.advance(sid, tx)
+          yield* SessionRevision.advanceTx(sid, tx)
         }
 
         return { changed }

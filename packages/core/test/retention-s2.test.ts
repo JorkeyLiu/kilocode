@@ -95,7 +95,10 @@ describe("S2 retention core", () => {
       expect(r1).toBeUndefined()
       expect(r2).toBeUndefined()
       const feed = yield* db.select().from(SessionChangefeedTable).all().pipe(Effect.orDie)
-      expect(feed.length).toBe(2)
+      // S4: 2 changed (synthetic advances) + 2 deleted tombstones
+      expect(feed.length).toBe(4)
+      expect(feed.filter((r) => r.kind === "deleted").length).toBe(2)
+      expect(feed.filter((r) => r.kind === "changed").length).toBe(2)
     }),
   )
 

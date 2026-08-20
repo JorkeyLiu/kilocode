@@ -67,7 +67,7 @@ export const write = Effect.fn("SandboxState.write")(function* (sessionID: Sessi
           })
           .where(eq(SessionTable.id, sessionID))
           .run()
-        yield* SessionRevision.advance(sessionID, tx)
+        yield* SessionRevision.advanceTx(sessionID, tx)
       }),
     )
     .pipe(Effect.orDie)
@@ -91,7 +91,7 @@ export const clear = Effect.fn("SandboxState.clear")(function* (sessionID: Sessi
           })
           .where(eq(SessionTable.id, sessionID))
           .run()
-        yield* SessionRevision.advance(sessionID, tx)
+        yield* SessionRevision.advanceTx(sessionID, tx)
       }),
     )
     .pipe(Effect.orDie)

@@ -1,6 +1,7 @@
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable, MessageTable, PartTable } from "@opencode-ai/core/session/sql"
 import { SessionRevision } from "@opencode-ai/core/session/revision"
+import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 import { SessionID, MessageID, PartID } from "../../session/schema"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
@@ -139,6 +140,11 @@ export namespace SessionImportService {
                 )
               }
 
+              if (row) {
+                const newRev = row.revision + 1
+                yield* Changefeed.appendTx(tx, { session_id: input.id, revision: newRev, kind: "changed", time: Date.now() })
+              }
+
               return { ok: true, id: input.id } as SessionImportType.Result
             }),
           )
@@ -204,7 +210,7 @@ export namespace SessionImportService {
               }
 
               // Advance revision exactly once for a real mutation.
-              yield* SessionRevision.advance(SessionID.make(input.sessionID), tx)
+              yield* SessionRevision.advanceTx(SessionID.make(input.sessionID), tx)
 
               return { ok: true, id: input.id } as SessionImportType.Result
             }),
@@ -292,7 +298,7 @@ export namespace SessionImportService {
               }
 
               // Advance revision exactly once for a real mutation.
-              yield* SessionRevision.advance(SessionID.make(input.sessionID), tx)
+              yield* SessionRevision.advanceTx(SessionID.make(input.sessionID), tx)
 
               return { ok: true, id: input.id } as SessionImportType.Result
             }),
