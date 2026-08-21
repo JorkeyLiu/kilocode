@@ -30,6 +30,7 @@ import { SessionCommand } from "./cli/cmd/session"
 import { DbCommand } from "./cli/cmd/db"
 import { errorMessage } from "./util/error"
 import { PluginCommand } from "./cli/cmd/plug"
+import { InternalStorageCommand } from "./cli/cmd/internal-storage" // kilocode_change - hidden internal S5 command
 import { Heap } from "./cli/heap"
 import { ensureProcessMetadata } from "@opencode-ai/core/util/opencode-process"
 import { isRecord } from "@/util/record"
@@ -137,6 +138,7 @@ let cli = yargs(args) // kilocode_change
   .command(SessionCommand)
   .command(PluginCommand)
   .command(DbCommand)
+  .command(InternalStorageCommand as any) // kilocode_change - hidden internal S5 entrypoint, must not be public/SDK
 
 // kilocode_change start - register Kilo-specific commands after the upstream chain
 cli = KiloCli.register(cli)

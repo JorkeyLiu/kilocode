@@ -18,10 +18,10 @@ describe("SessionExport worker respawn", () => {
     else process.env.KILOCODE_FEATURE = feature
   })
 
-  test("passes surface to worker init", () => {
+  test("passes surface to worker init", async () => {
     const workers: FakeWorker[] = []
     process.env.KILOCODE_FEATURE = "cli"
-    SessionExport.init({
+    await SessionExport.init({
       agentVersion: "v0",
       dbPath: ":memory:",
       subscribeAll: () => () => {},
@@ -37,7 +37,7 @@ describe("SessionExport worker respawn", () => {
   })
 
   test("shutdown catches synchronous worker acknowledgements", async () => {
-    SessionExport.init({
+    await SessionExport.init({
       agentVersion: "v0",
       dbPath: ":memory:",
       subscribeAll: () => () => {},
@@ -50,9 +50,9 @@ describe("SessionExport worker respawn", () => {
     expect(performance.now() - start).toBeLessThan(100)
   })
 
-  test("respawns once when worker postMessage fails", () => {
+  test("respawns once when worker postMessage fails", async () => {
     const workers: FakeWorker[] = []
-    SessionExport.init({
+    await SessionExport.init({
       agentVersion: "v0",
       dbPath: ":memory:",
       subscribeAll: () => () => {},
@@ -72,13 +72,13 @@ describe("SessionExport worker respawn", () => {
 
   test("reinitializes capture with latest snapshot provider", async () => {
     const worker = new FakeWorker(0)
-    SessionExport.init({
+    await SessionExport.init({
       agentVersion: "v0",
       dbPath: ":memory:",
       subscribeAll: () => () => {},
       createWorker: () => worker as unknown as Worker,
     })
-    SessionExport.init({
+    await SessionExport.init({
       agentVersion: "v0",
       dbPath: ":memory:",
       subscribeAll: () => () => {},
@@ -99,7 +99,7 @@ describe("SessionExport worker respawn", () => {
 
   test("keeps snapshot providers scoped by workspace", async () => {
     const worker = new FakeWorker(0)
-    SessionExport.init({
+    await SessionExport.init({
       agentVersion: "v0",
       dbPath: ":memory:",
       workspaceKey: "workspace-a",
@@ -110,7 +110,7 @@ describe("SessionExport worker respawn", () => {
         diff: async () => ({ snapshotHash: "snap-a", diff: [] }),
       },
     })
-    SessionExport.init({
+    await SessionExport.init({
       agentVersion: "v0",
       dbPath: ":memory:",
       workspaceKey: "workspace-b",
@@ -137,9 +137,9 @@ describe("SessionExport worker respawn", () => {
     expect(files).toEqual(["a.ts", "b.ts"])
   })
 
-  test("sets kill switch after repeated worker postMessage failures", () => {
+  test("sets kill switch after repeated worker postMessage failures", async () => {
     const workers: FakeWorker[] = []
-    SessionExport.init({
+    await SessionExport.init({
       agentVersion: "v0",
       dbPath: ":memory:",
       subscribeAll: () => () => {},

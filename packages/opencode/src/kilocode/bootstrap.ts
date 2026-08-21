@@ -40,17 +40,19 @@ export namespace KilocodeBootstrap {
               return undefined
             }),
           )
-          SessionExport.init({
-            agentVersion: InstallationVersion,
-            anonId: anon,
-            dbPath: path.join(Global.Path.data, "session-export.db"),
-            workspaceKey: Instance.directory,
-            subscribeAll: (cb) => Bus.subscribeAll(cb),
-            snapshotProvider: createWorkspaceProvider({
-              root: Instance.directory,
-              statePath: path.join(Global.Path.data, "session-export-workspace.json"),
+          yield* Effect.promise(() =>
+            SessionExport.init({
+              agentVersion: InstallationVersion,
+              anonId: anon,
+              dbPath: path.join(Global.Path.data, "session-export.db"),
+              workspaceKey: Instance.directory,
+              subscribeAll: (cb) => Bus.subscribeAll(cb),
+              snapshotProvider: createWorkspaceProvider({
+                root: Instance.directory,
+                statePath: path.join(Global.Path.data, "session-export-workspace.json"),
+              }),
             }),
-          })
+          ).pipe(Effect.orDie)
         }).pipe(
           Effect.catchCause((cause) =>
             Effect.sync(() => log.warn("session export bootstrap failed", { err: Cause.squash(cause) })),

@@ -39,5 +39,6 @@ export const migrations = (
     import("./migration/20260820000000_add_retention_foundation"),
     import("./migration/20260821000000_add_changefeed_bounds"),
     import("./migration/20260822000000_add_changefeed_kind_check"),
+    import("./migration/20260823000000_add_storage_identity"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

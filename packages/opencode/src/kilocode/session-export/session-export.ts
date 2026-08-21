@@ -4,6 +4,8 @@ import { Config } from "./config"
 import { setKillSwitch } from "./eligibility"
 import { createSequencer } from "./sequence"
 import { SyncSubscriber } from "./sync-subscriber"
+import { acquireLease, isLeaseHeld, type LeaseHandle } from "@opencode-ai/core/cutover/lease"
+import path from "node:path"
 
 declare global {
   const KILO_SESSION_EXPORT_WORKER_PATH: string
@@ -34,7 +36,37 @@ const maxRespawns = 3
 
 export const enabled = false
 
-export const init = (opts: {
+const leaseHandles: LeaseHandle[] = []
+
+function isFileBacked(p: string): boolean {
+  return p !== ":memory:" && !p.includes(":memory:") && p !== ""
+}
+
+async function acquireDataRootLease(dbPath: string): Promise<LeaseHandle | undefined> {
+  if (!isFileBacked(dbPath)) return undefined
+  const dataRoot = path.dirname(path.resolve(dbPath))
+  if (isLeaseHeld(dataRoot)) return undefined
+  const handle = await acquireLease(dataRoot)
+  leaseHandles.push(handle)
+  return handle
+}
+
+async function releaseDataRootLeases(): Promise<void> {
+  while (leaseHandles.length > 0) {
+    const h = leaseHandles.pop()!
+    try {
+      await h.release()
+    } catch (e) {
+      console.warn("[session-export] lease release failed", e)
+    }
+  }
+}
+
+export function _leaseHandleCountForTests(): number {
+  return leaseHandles.length
+}
+
+export const init = async (opts: {
   agentVersion: string
   dbPath: string
   endpoint?: string
@@ -45,9 +77,13 @@ export const init = (opts: {
   syncSeq?: (sessionId: string) => number
   subscribeAll: (cb: (event: unknown) => void) => () => void
   createWorker?: (url: WorkerTarget) => Worker
-}): void => {
+}): Promise<void> => {
   const url = target()
+  let lease: LeaseHandle | undefined
   try {
+    if (isFileBacked(opts.dbPath)) {
+      lease = await acquireDataRootLease(opts.dbPath)
+    }
     const key = opts.workspaceKey ?? "default"
     const previous = instances.get(key)
     previous?.unsubscribe()
@@ -75,6 +111,13 @@ export const init = (opts: {
     shared = next
     spawn(url)
   } catch (err) {
+    if (lease) {
+      try {
+        await lease.release()
+        const idx = leaseHandles.indexOf(lease)
+        if (idx >= 0) leaseHandles.splice(idx, 1)
+      } catch {}
+    }
     const current = worker as unknown as Worker | undefined
     if (current) current.terminate()
     worker = undefined
@@ -124,25 +167,29 @@ export const onSessionClose = async (sessionId: string, workspaceKey?: string): 
 }
 
 export const shutdown = async (): Promise<void> => {
-  if (!worker) return
-  const current = worker
-  for (const item of instances.values()) item.unsubscribe()
-  await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, Config.shutdownFlushTimeoutMs + 500)
-    current.onmessage = (event: MessageEvent) => {
-      if ((event.data as { kind?: string }).kind === "shutdown_done") {
-        clearTimeout(timer)
-        resolve()
+  if (worker) {
+    const current = worker
+    for (const item of instances.values()) item.unsubscribe()
+    await new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, Config.shutdownFlushTimeoutMs + 500)
+      current.onmessage = (event: MessageEvent) => {
+        if ((event.data as { kind?: string }).kind === "shutdown_done") {
+          clearTimeout(timer)
+          resolve()
+        }
       }
-    }
-    current.postMessage({ kind: "shutdown", timeoutMs: Config.shutdownFlushTimeoutMs })
-  })
-  current.terminate()
-  worker = undefined
+      current.postMessage({ kind: "shutdown", timeoutMs: Config.shutdownFlushTimeoutMs })
+    })
+    current.terminate()
+    worker = undefined
+  } else {
+    for (const item of instances.values()) item.unsubscribe()
+  }
   for (const item of instances.values()) item.options.sequencer?.close()
   instances.clear()
   shared = undefined
   attempts = 0
+  await releaseDataRootLeases()
 }
 
 function target(): WorkerTarget {
