@@ -32,8 +32,10 @@ export interface ScopedContent {
  * - keyed: record merge by stable ID; duplicate IDs = conflict
  * - ordered: registry-declared global-then-project ordering
  * - restrictive: ordered layers preserved for later permission evaluation; never overlays
+ * - meta: benign tooling metadata (e.g. $schema); valid in both scopes,
+ *   never composed, never enters the materialized value or content hash
  */
-export type CompositionOperator = "single" | "keyed" | "ordered" | "restrictive"
+export type CompositionOperator = "single" | "keyed" | "ordered" | "restrictive" | "meta"
 
 // ── Persistence & ownership ──────────────────────────────────────────
 

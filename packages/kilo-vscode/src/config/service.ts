@@ -99,6 +99,38 @@ export interface CanonicalConfigError {
   readonly errors?: readonly ValidationError[]
 }
 
+/** Per-directory asset scan summary for the fixture state snapshot. */
+export interface CanonicalAssetDirSummary {
+  readonly dir: AssetDirectory
+  readonly scope: "global" | "project"
+  readonly entries: number
+  readonly errors: number
+}
+
+/**
+ * Read-only runtime snapshot of the canonical materialization state
+ * (KILO_E2E_FIXTURE only, served through the extension.ts fixture bridge).
+ * Pure diagnostics: lets the E2E harness distinguish readiness-never-opened
+ * from ready-but-empty-index without touching any runtime behavior.
+ */
+export interface CanonicalStateSnapshot {
+  readonly globalRoot: string
+  readonly projectRoot: string | null
+  readonly materializationReady: boolean
+  readonly successfulMaterializationStamp: CanonicalStamp | null
+  readonly lastMaterializationError: string | null
+  readonly assetScan: readonly CanonicalAssetDirSummary[]
+  readonly agentIndex: { readonly size: number; readonly ids: readonly string[] } | null
+  readonly providerIndex: {
+    readonly size: number
+    readonly ids: readonly string[]
+    readonly entries: readonly { readonly id: string; readonly hasCredential: boolean; readonly modelIds: readonly string[] }[]
+    readonly connected: readonly string[]
+  } | null
+  readonly defaultModel: string | null
+  readonly defaultSelection: { readonly providerID: string; readonly modelID: string } | null
+}
+
 // ── Service ──────────────────────────────────────────────────────────
 
 export interface CanonicalConfigServiceOptions {
@@ -173,6 +205,12 @@ export class CanonicalConfigService implements Disposable {
    * Late subscribers query this — snapshot existence alone is never readiness.
    */
   private successfulMaterializationStamp: CanonicalStamp | null = null
+
+  /**
+   * Message of the last error emitted through onDidError (fixture diagnostics
+   * only). Captured by wrapping the error emitter — no emit-site changes.
+   */
+  private lastError: string | null = null
 
   /** Content hashes of the last-read global/project config files. */
   private globalHash: string | null = null
@@ -249,9 +287,24 @@ export class CanonicalConfigService implements Disposable {
     // Use injected emitter factory or fall back to in-memory implementation
     const ef = opts.emitterFactory ?? createDefaultEmitterFactory()
     this.onChangeEmitter = ef.create<CanonicalConfigEvent>()
-    this.onErrorEmitter = ef.create<CanonicalConfigError>()
+    this.onErrorEmitter = this.trackErrors(ef.create<CanonicalConfigError>())
     this.onDidChange = this.onChangeEmitter.event
     this.onDidError = this.onErrorEmitter.event
+  }
+
+  /**
+   * Wrap the raw error emitter so the last emitted error message is recorded
+   * for the fixture state snapshot. Fire/dispose semantics are unchanged.
+   */
+  private trackErrors(raw: TypedEmitter<CanonicalConfigError>): TypedEmitter<CanonicalConfigError> {
+    return {
+      event: raw.event,
+      fire: (e: CanonicalConfigError) => {
+        this.lastError = e.message
+        raw.fire(e)
+      },
+      dispose: () => raw.dispose(),
+    }
   }
 
   // ── Public API ─────────────────────────────────────────────────────
@@ -280,6 +333,127 @@ export class CanonicalConfigService implements Disposable {
   /** Stamp from the last successful error-free materialization. */
   get lastReadyStamp(): CanonicalStamp | null {
     return this.successfulMaterializationStamp
+  }
+
+  /** Message of the last error emitted through onDidError (fixture diagnostics). */
+  get lastMaterializationError(): string | null {
+    return this.lastError
+  }
+
+  /**
+   * E2E fixture bridge (KILO_E2E_FIXTURE only, registered by extension.ts):
+   * read-only snapshot of the canonical runtime state — roots, readiness,
+   * stamps, asset scan summary, and selector index sizes/ids. Throws when the
+   * fixture env is absent so no production path can depend on it. Pure read:
+   * no mutation, no events, no watchers.
+   */
+  fixtureStateSnapshot(): CanonicalStateSnapshot {
+    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture canonicalState requires KILO_E2E_FIXTURE")
+    const scan = this.lastAssetScan
+    const provider = this.providerIndex
+    const agent = this.agentIndex
+    const snapshot = this.currentSnapshot
+    const rawModel = snapshot?.config.value.model
+    const defaultModel = typeof rawModel === "string" ? rawModel : null
+    const selected = defaultModel ? defaultModel.split("/") : []
+    const providerID = selected[0] && provider?.providers.some((p) => p.id === selected[0]) ? selected[0] : ""
+    const defaultSelection = defaultModel && providerID ? { providerID, modelID: selected.slice(1).join("/") || "auto" } : providerID ? { providerID, modelID: "" } : null
+    return {
+      globalRoot: this.paths.globalRoot,
+      projectRoot: this.paths.projectRoot ?? null,
+      materializationReady: this.materializationReady,
+      successfulMaterializationStamp: this.lastReadyStamp,
+      lastMaterializationError: this.lastError,
+      assetScan: summarizeAssetScan(scan, this.paths),
+      providerIndex: provider
+        ? {
+            size: provider.providers.length,
+            ids: provider.providers.map((p) => p.id),
+            entries: provider.providers.map((p) => ({ id: p.id, hasCredential: p.hasCredential, modelIds: [...p.modelIds] })),
+            connected: provider.providers.filter((p) => p.hasCredential).map((p) => p.id),
+          }
+        : null,
+      agentIndex: agent ? { size: agent.agents.length, ids: agent.agents.map((a) => a.id) } : null,
+      defaultModel,
+      defaultSelection,
+    }
+  }
+
+  /**
+   * Fixture-gated credential seeding for the real-restart E2E scenario.
+   * Uses the existing production `storeSecret("project","provider",...)` API
+   * behind the KILO_E2E_FIXTURE bridge and converges canonical state through
+   * the existing GUI-write materialization scheduler (identity rewrite via
+   * writeConfig). Does not expose the secret value. Returns a small success
+   * payload only after the published selector index reports the provider
+   * connected and the config model is visible. Throws when the fixture env is
+   * absent.
+   */
+  // eslint-disable-next-line complexity
+  async seedFixtureProviderCredential(
+    id: string = "e2e-local",
+    value: string = "e2e-fixture-key",
+  ): Promise<{ ok: true; providerId: string; hasCredential: true; connected: readonly string[]; defaultModel: string | null; defaultSelection: { providerID: string; modelID: string } | null; materializationVersion: number } | { ok: false; reason: string }> {
+    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture seedFixtureProviderCredential requires KILO_E2E_FIXTURE")
+    // Production path: store the credential in run-owned SecretStorage.
+    await this.storeSecret("project", "provider", id, value)
+    // Bounded wait for project hash or initial materialization readiness before
+    // the identity rewrite. This covers the cold-start race where extension.ts
+    // fires canonicalConfig.initialize() fire-and-forget and the runner seeds
+    // before that promise has produced a project hash. Uses a 10s max / 50ms
+    // cadence poll that is cancellable on disposal — no arbitrary sleep drives
+    // correctness.
+    let hash = this.getConfigHash("project")
+    if (hash === null) {
+      const deadline = Date.now() + 10_000
+      while (hash === null) {
+        if (this.disposed) return { ok: false, reason: "service disposed before project config hash became available" }
+        // If initial materialization has already completed but the project hash
+        // is still null, the config is genuinely missing/invalid — no need to
+        // wait the full deadline. The hash can only appear together with a
+        // successful materialization, so readiness without hash is terminal.
+        if (this.materializationReady) break
+        if (Date.now() > deadline) break
+        await new Promise<void>((resolve) => setTimeout(resolve, 50))
+        if (this.disposed) return { ok: false, reason: "service disposed before project config hash became available" }
+        hash = this.getConfigHash("project")
+      }
+      if (hash === null) {
+        // After bounded wait: if the materialization already converged (e.g.
+        // re-seed where credential already visible), return success without
+        // synthesizing a hash. Otherwise report the precise missing-hash failure
+        // — never synthesize a hash or overwrite user data.
+        const snap = this.fixtureStateSnapshot()
+        const entry = snap.providerIndex?.entries.find((e) => e.id === id)
+        if (snap.materializationReady && entry?.hasCredential && snap.defaultModel) {
+          return { ok: true, providerId: id, hasCredential: true as const, connected: snap.providerIndex!.connected, defaultModel: snap.defaultModel, defaultSelection: snap.defaultSelection, materializationVersion: snap.successfulMaterializationStamp?.materializationVersion ?? 0 }
+        }
+        return { ok: false, reason: "no project config hash for convergence write" }
+      }
+    }
+    // storeSecret ordering is preserved: secret stored, hash/readiness awaited,
+    // then identity rewrite triggers existing materialization/revision machinery.
+    const write = await this.writeConfig("project", {}, hash)
+    if (!write.ok) {
+      return { ok: false, reason: `convergence write failed: ${write.kind}: ${write.message}` }
+    }
+    // The writeConfig path already awaited enqueueAndRunMaterialization("gui"),
+    // so the published selector index now reflects the stored credential.
+    // Bounded visibility poll (10s max, 50ms cadence, cancellable on disposal).
+    const deadline = Date.now() + 10_000
+    for (;;) {
+      if (this.disposed) return { ok: false, reason: "service disposed before credential converged" }
+      const snap = this.fixtureStateSnapshot()
+      const entry = snap.providerIndex?.entries.find((e) => e.id === id)
+      const converged = snap.materializationReady && entry?.hasCredential === true && snap.defaultModel !== null
+      if (converged) {
+        return { ok: true, providerId: id, hasCredential: true as const, connected: snap.providerIndex!.connected, defaultModel: snap.defaultModel, defaultSelection: snap.defaultSelection, materializationVersion: snap.successfulMaterializationStamp?.materializationVersion ?? 0 }
+      }
+      if (Date.now() > deadline) {
+        return { ok: false, reason: `credential status did not converge: materializationReady=${snap.materializationReady} hasCredential=${entry?.hasCredential} defaultModel=${snap.defaultModel}` }
+      }
+      await new Promise<void>((resolve) => setTimeout(resolve, 50))
+    }
   }
 
   /** Get the current materialized config value (frozen). */
@@ -1549,6 +1723,10 @@ export class CanonicalConfigService implements Disposable {
     }
     this.debounceTimers.clear()
 
+    // Fixture seed bounded waits are cancellable via the disposed flag
+    // checked on every 50ms poll iteration. No additional timer bookkeeping
+    // is required — pending 50ms sleeps resolve naturally and observe disposal.
+
     // Dispose all file watchers
     for (const w of this.watchers) {
       w.dispose()
@@ -2476,6 +2654,25 @@ export class CanonicalConfigService implements Disposable {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
+}
+
+/** Summarize an asset scan per directory/scope (fixture snapshot only). */
+function summarizeAssetScan(scan: AssetScanResult | null, paths: CanonicalPaths): CanonicalAssetDirSummary[] {
+  if (!scan) return []
+  const out: CanonicalAssetDirSummary[] = []
+  for (const dir of ASSET_DIRECTORIES) {
+    for (const scope of ["global", "project"] as const) {
+      const root = scope === "global" ? paths.globalAssetDirs[dir] : paths.projectAssetDirs?.[dir]
+      if (!root) continue
+      out.push({
+        dir,
+        scope,
+        entries: scan.entries.filter((e) => e.scope === scope && sameCanonicalPath(path.dirname(e.filePath), root)).length,
+        errors: scan.errors.filter((e) => e.scope === scope && e.file !== undefined && (sameCanonicalPath(path.dirname(e.file), root) || sameCanonicalPath(e.file, root))).length,
+      })
+    }
+  }
+  return out
 }
 
 function parseScopeDocument(raw: FileReadResult | undefined): Record<string, unknown> {

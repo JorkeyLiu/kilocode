@@ -1,0 +1,51 @@
+{
+  "schema": "kilo-e2e-provenance/1",
+  "source": {
+    "root": "/tmp/kilo-e2e-real-restart-20260822T165842-fresh",
+    "manifest": "/tmp/kilo-e2e-real-restart-20260822T165842-fresh/manifest.json",
+    "manifestSha256": "4df6cc39302361b539b8cb68e736295257bce855da1821fa17e5618a14ca6256",
+    "manifestBytes": 11442
+  },
+  "durable": {
+    "root": "specs/vscode-orchestrator/evidence/p0-baseline/2026-08-22T09-00-53Z-p4.2-h10h11/real-restart",
+    "manifestRedacted": "specs/vscode-orchestrator/evidence/p0-baseline/2026-08-22T09-00-53Z-p4.2-h10h11/real-restart/manifest.redacted.json",
+    "fileCount": 31
+  },
+  "run": {
+    "fixtureId": "e2e-probe-94df723c",
+    "scenario": "real-restart",
+    "startedAt": "2026-08-22T08:59:43.228Z",
+    "completedAt": "2026-08-22T09:00:53.528Z",
+    "durationMs": 70300,
+    "probePid": 73461,
+    "success": true,
+    "provenance": "focused E2E harness (packages/kilo-vscode), fixture-gated, run-owned evidence",
+    "env": {
+      "KILO_E2E_SCENARIO": "real-restart"
+    }
+  },
+  "success": true,
+  "status": "complete",
+  "validated": true,
+  "requiredCount": 18,
+  "totalSourceFiles": 33,
+  "omitted": [
+    {
+      "dest": "workspace/.kilo/kilo.json",
+      "reason": "plaintext secret fixture-key redacted; replaced by opaque canonical kilo.jsonc where applicable"
+    },
+    {
+      "dest": "run.log",
+      "reason": "large log omitted per LOCK-002 minimal evidence"
+    },
+    {
+      "dest": "rr-model-requests.json",
+      "reason": "large model request bodies omitted per LOCK-002"
+    },
+    {
+      "dest": "workspace/.kilo/package-lock.json",
+      "reason": "non-essential package lock omitted for minimal set"
+    }
+  ],
+  "secretScan": "no fixture-key or apiKey plaintext in durable set; kilo.jsonc retains opaque credential ref secret:kilo.credentials.project.provider.e2e-local"
+}

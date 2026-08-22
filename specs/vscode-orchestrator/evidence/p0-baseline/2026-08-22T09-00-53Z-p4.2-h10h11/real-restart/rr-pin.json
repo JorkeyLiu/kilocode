@@ -1,0 +1,16 @@
+{
+  "prompt": "E2E_RESTART_PROMPT: call the user tool and wait for the result",
+  "expected": {
+    "agent": "e2e-agent",
+    "model": "e2e-local/e2e-model",
+    "variant": "low"
+  },
+  "users": [
+    {
+      "id": "msg_028b309bf001sOcP79eKCsdQxK",
+      "agent": "e2e-agent",
+      "model": "e2e-local/e2e-model/low",
+      "pass": true
+    }
+  ]
+}

@@ -220,10 +220,19 @@ import {
   initWorkspaceGit,
   type CompletedSeedPaths,
 } from "./e2e-completed-seed"
-import { writeRealRestartSeed, RESTART_ARTIFACT_CONTENT } from "./e2e-restart-seed"
+import { realProjectSeed, writeRealRestartSeed, RESTART_ARTIFACT_CONTENT } from "./e2e-restart-seed"
+import { CONFIG_FILENAME } from "../src/config/paths"
 import { isWrongPin, pinExpect, pinnedReason, pinReport, type PinExpectation } from "./e2e-pin"
 import { assertRunOwnedLlmRequests, readLlmRequests } from "./e2e-llm-matrix"
 import { evidenceDirFor, runEvidenceHandoff } from "./e2e-evidence"
+import {
+  assertArchiveStable,
+  canonicalDataRoot,
+  canonicalDbPath,
+  isIsolatedDataRoot,
+  prepareCanonicalRun,
+  validateGateEvidence,
+} from "./e2e-canonical"
 import {
   activeTabId,
   activeTabLabel,
@@ -251,6 +260,8 @@ import {
   pickOption,
   pickVariant,
   realTabStates,
+  requestRsCanonicalState,
+  requestRsSeedCredential,
   sendTurnWithPin,
   sendWithRetry,
   sidebarTopicStates,
@@ -269,6 +280,7 @@ import {
   type SidebarTopicState,
 } from "./e2e-probe-dom"
 import { assertRealRestartReload, runRealRestartBoundaries } from "./e2e-probe-restart"
+import { repoRootFrom } from "./p0-bench/repo-root"
 import {
   REAL_ROLLBACK_PROMPT,
   REAL_ROLLBACK_SUMMARY_PROMPT,
@@ -292,6 +304,13 @@ if (process.versions.bun) {
 
 // Set by script/e2e-probe-launch.mjs; falls back to the current working dir.
 const root = process.env.KILO_E2E_ROOT ? resolve(process.env.KILO_E2E_ROOT) : resolve(process.cwd())
+// Monorepo root for cross-package paths (the hidden cutover CLI entry at
+// packages/opencode/src/index.ts). `root` is the PACKAGE root
+// (packages/kilo-vscode) — joining it with packages/opencode/... produced
+// packages/kilo-vscode/packages/opencode/... and failed the first full
+// real-restart run before VS Code launched. Git-first resolution keeps the
+// monorepo root correct from any checkout or worktree directory.
+const repoRoot = repoRootFrom(root)
 const runnerEntry = join(root, "tests", "e2e", "runner.ts")
 const shouldBuild = !process.argv.includes("--no-build")
 // Watchdog for the whole probe run (outer bound). real-completed drives
@@ -366,6 +385,18 @@ function parseScenarios(value: string): Set<string> {
     `[probe] unknown KILO_E2E_SCENARIO "${value}". ` +
       `Supported values: ${SCENARIO_VALUES.join(" | ")} (default: all).`,
   )
+}
+
+// Shared canonical gate: canonical root setup and Extension Host env
+// wiring must test through this predicate so the gates cannot drift.
+// real-restart keeps its 18/18 behavior unchanged; real-session now shares the
+// same fresh canonical DB + hidden cutover + archive stability.
+function isRealRestart(value: string): boolean {
+  return parseScenarios(value).has("real-restart")
+}
+
+export function needsCanonicalStorage(value: string): boolean {
+  return parseScenarios(value).has("real-restart") || parseScenarios(value).has("real-session")
 }
 
 // LOCK-006: macOS and Linux are first-class. Windows must fail fast with a
@@ -832,7 +863,7 @@ async function assertVariantMemoryAcrossAgents(browser: Browser, plan: E2EPlan, 
   let bLabel = ""
   for (;;) {
     const mode = await labelText(frame, ".mode-switcher-trigger-label")
-    const options = mode ? await agentOptions(frame, timeout) : []
+    const options = mode ? (await agentOptions(frame, timeout)).options : []
     if (mode && options.length > 0) {
       aLabel = mode
       bLabel = options.find((name) => name !== mode) ?? ""
@@ -1276,7 +1307,60 @@ function userText(snap: BackendSnapshot, id: string): string {
  */
 async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scratch: string): Promise<void> {
   const timeout = 30_000
+  // P4.2 fresh canonical gate must be proven BEFORE the first canonical-era session is created (mirrors restartPhase0).
+  await waitForFile(join(scratch, "canonical-gate.json"), 30_000, "canonical gate evidence before first session")
+  {
+    const gateRaw = readFileSync(join(scratch, "canonical-gate.json"), "utf8")
+    let gate: unknown
+    try {
+      gate = JSON.parse(gateRaw)
+    } catch {
+      throw new Error("probe: canonical gate JSON malformed")
+    }
+    const err = validateGateEvidence(gate)
+    if (err) throw new Error(`probe: canonical gate invalid before session: ${err}`)
+    if (!existsSync(join(scratch, "canonical-archive-before.json"))) {
+      throw new Error("probe: canonical-archive-before.json missing before first session")
+    }
+    const dataRoot = (gate as Record<string, unknown>).dataRoot as string | undefined
+    if (typeof dataRoot === "string" && !isIsolatedDataRoot(scratch, dataRoot)) {
+      throw new Error(`probe: canonical dataRoot not isolated inside scratch: ${dataRoot}`)
+    }
+    {
+      const beforeRaw = readFileSync(join(scratch, "canonical-archive-before.json"), "utf8")
+      let before: unknown
+      try {
+        before = JSON.parse(beforeRaw)
+      } catch {
+        throw new Error("probe: canonical-archive-before.json malformed")
+      }
+      const count = (before as { archiveCount?: unknown }).archiveCount
+      if (typeof count !== "number" || count < 1) {
+        throw new Error(`probe: canonical archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session (archiveCount=${String(count)})`)
+      }
+    }
+    console.log("[probe] PASS fresh canonical identity/zero-state gate before first session")
+  }
   await waitForFile(join(scratch, "real-ready"), 120_000, "real-ready marker")
+  {
+    const credFile = join(scratch, "rs-credential.json")
+    await waitForFile(credFile, timeout, "rs-credential.json (credential provisioning evidence)")
+    const cred = JSON.parse(readFileSync(credFile, "utf8")) as Record<string, unknown>
+    console.log(`[probe] credential provisioning (pre-real-ready): ${JSON.stringify(cred)}`)
+    if (cred.ok !== true) throw new Error(`probe: credential provisioning failed before real-ready: ${JSON.stringify(cred)}`)
+    const connected = (cred as { connected?: unknown }).connected
+    if (!Array.isArray(connected) || !connected.includes(plan.customProvider)) {
+      throw new Error(`probe: credential evidence missing connected ${plan.customProvider}: ${JSON.stringify(cred)}`)
+    }
+    if ((cred as { defaultModel?: unknown }).defaultModel !== `${plan.customProvider}/${plan.customModel}`) {
+      throw new Error(`probe: credential evidence wrong defaultModel: ${JSON.stringify(cred)}`)
+    }
+  }
+  {
+    const fresh = await requestRsSeedCredential(scratch, timeout)
+    console.log(`[probe] credential seeding round-trip: ${JSON.stringify(fresh)}`)
+    if (fresh.ok !== true) throw new Error(`probe: credential round-trip failed: ${JSON.stringify(fresh)}`)
+  }
 
   // The panel opens with a single pending "New Session" tab; the frame is
   // anchored by any .am-tab-sortable tab (never rendered by the editor-tab
@@ -1284,6 +1368,24 @@ async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scrat
   const found = await findAgentManagerFrameAny(browser, 60_000)
   const frame = found.frame
   const snap = snapshotClient(scratch)
+
+  const cstate = await requestRsCanonicalState(scratch, timeout)
+  console.log(`[probe] canonical state: ${JSON.stringify(cstate)}`)
+  {
+    const prov = (cstate as { providerIndex?: { connected?: unknown; entries?: Array<{ id: string; hasCredential: boolean }> } | null }).providerIndex
+    if (!prov || !Array.isArray(prov.connected) || !prov.connected.includes(plan.customProvider)) {
+      throw new Error(`probe: canonical state missing connected ${plan.customProvider}: ${JSON.stringify(cstate)}`)
+    }
+    const entry = prov.entries?.find((e) => e.id === plan.customProvider)
+    if (!entry?.hasCredential) throw new Error(`probe: canonical state hasCredential false for ${plan.customProvider}: ${JSON.stringify(cstate)}`)
+    const expectedModel = `${plan.customProvider}/${plan.customModel}`
+    if ((cstate as { defaultModel?: unknown }).defaultModel !== expectedModel) {
+      throw new Error(`probe: canonical state wrong defaultModel: expected ${expectedModel}, got ${JSON.stringify(cstate)}`)
+    }
+    if ((cstate as { materializationReady?: unknown }).materializationReady !== true) {
+      throw new Error(`probe: canonical state not ready: ${JSON.stringify(cstate)}`)
+    }
+  }
 
   // --- Phase 1 (H-1 + H-9): custom agent served, selected; variant picked ---
   await waitForAgentOption(frame, plan.customAgentLabel, timeout)
@@ -2278,7 +2380,29 @@ async function prepareRealSession(
   if (!real) return undefined
   const hang = await createHangServer()
   const configFile = writeRealSessionConfig(workspace, hang.port)
-  console.log(`[probe] real-session config seed: ${configFile} (hang server port ${hang.port})`)
+  // Project-scope canonical seed (extension-only) mirroring writeRealRestartSeed:
+  // the backend kilo.json seed above feeds ONLY the CLI backend — the extension
+  // reads exclusively <workspace>/.kilo/kilo.jsonc (paths.ts projectConfigFile),
+  // so without this seed the canonical provider index can never serve e2e-local
+  // and waitForModelSelected(e2e-local/e2e-model) cannot pass.
+  const canonicalFile = join(workspace, ".kilo", CONFIG_FILENAME)
+  writeFileSync(canonicalFile, JSON.stringify(realProjectSeed(hang.port), null, 2))
+  // No-op dependency guard (same rationale as writeRealRestartSeed):
+  // prevent the detached Npm.install("@kilocode/plugin") fiber from reifying
+  // into the run-owned .kilo config dir. Required even though real-session has
+  // no user tool — the config loader fires for every writable config dir.
+  const kiloDir = join(workspace, ".kilo")
+  mkdirSync(join(kiloDir, "node_modules"), { recursive: true })
+  writeFileSync(
+    join(kiloDir, "package-lock.json"),
+    JSON.stringify({
+      name: "kilo-e2e-workspace",
+      version: "0.0.0",
+      lockfileVersion: 3,
+      packages: { "": { dependencies: { "@kilocode/plugin": "0.0.0" } } },
+    }),
+  )
+  console.log(`[probe] real-session config seed: ${configFile} + canonical ${canonicalFile} (hang server port ${hang.port})`)
   return hang
 }
 
@@ -2502,6 +2626,14 @@ function launchVSCode(opts: {
   port: number
 }): Promise<number> {
   const { executable, runnerOut, scratch, fixtureId, scenario, userData, extensions, workspace, port } = opts
+  // For the canonical post-cutover runs (real-restart + real-session), the
+  // Extension Host must use the same run-owned fresh canonical data root
+  // (single DB for the whole run). The isolated root lives at
+  // scratch/xdg-data/kilo (canonicalDataRoot); expose it via KILO_DB so the
+  // spawned kilo serve uses it instead of any ambient HOME/XDG data.
+  // Non-canonical runs inherit the existing XDG isolation without an explicit
+  // KILO_DB. Predicate needsCanonicalStorage covers both gates.
+  const canonicalEnv = needsCanonicalStorage(scenario) ? { KILO_DB: canonicalDbPath(scratch) } : {}
   return runTests({
     ...(executable ? { vscodeExecutablePath: executable } : {}),
     extensionDevelopmentPath: root,
@@ -2515,6 +2647,7 @@ function launchVSCode(opts: {
       XDG_DATA_HOME: join(scratch, "xdg-data"),
       XDG_CACHE_HOME: join(scratch, "xdg-cache"),
       XDG_STATE_HOME: join(scratch, "xdg-state"),
+      ...canonicalEnv,
     },
     launchArgs: [
       workspace,
@@ -2699,38 +2832,62 @@ async function main() {
   const workspace = join(scratch, "workspace")
   mkdirSync(workspace, { recursive: true })
 
-  // LOCK-013: test-only evidence contract — resolve/validate fail-fast (e2e-evidence.ts).
-  const evidenceDir = evidenceDirFor(scratch)
-
   console.log(`[probe] fixture id: ${fixtureId}`)
   console.log(`[probe] cdp port:   ${cdpPort}`)
   console.log(`[probe] scratch:    ${scratch}`)
 
   const doneFile = join(scratch, "done")
   let failed = false
-  // real-session only: the run-owned hang server + workspace config seed must
-  // exist BEFORE VS Code launches so the lazily-spawned CLI backend loads the
-  // custom provider/model/variant and agents at startup.
-  const hang = await prepareRealSession(workspace, scenarios.has("real-session"))
-  // real-completed only: the run-owned scripted model server + the full
-  // workspace seed (config, user tool, skill, MCP fixture, permission target,
-  // no-op dependency guard) must also exist BEFORE VS Code launches.
-  const completed = await prepareRealCompleted(workspace, scenarios.has("real-completed"))
-  // real-overflow only: the run-owned scripted model server + the dedicated
-  // small-context workspace seed (config + no-op dependency guard) must also
-  // exist BEFORE VS Code launches.
-  const overflowModel = await prepareRealOverflow(workspace, scenarios.has("real-overflow"))
-  // real-restart only: the run-owned scripted model server + the minimal
-  // workspace seed (config + user tool + no-op dependency guard) must also
-  // exist BEFORE VS Code launches — the scripted model and the session/artifact
-  // survive every restart boundary.
-  const restartModel = await prepareRealRestart(workspace, scenarios.has("real-restart"))
-  // P3.2 worktree-removal only: the run-owned scripted model server + the
-  // MINIMAL workspace seed (config + H-12 edit rule + tracked rollback file +
-  // no-op dependency guard, plain single git repo) must also exist BEFORE VS
-  // Code launches so the lazily-spawned CLI backend loads them at startup.
-  const wtModel = await prepareWorktreeRemoval(workspace, scenarios.has("worktree-removal"))
+  // Run-owned handles and the evidence destination are declared before the
+  // guarded region and assigned INSIDE it: every step after mkdtempSync —
+  // fixture seeding, canonical setup, runner bundle, VS Code launch — must
+  // flow through the same cleanup tail (closeHandles + verifyCleanup) on
+  // failure, so the run-owned scratch is removed instead of leaking (the
+  // first full real-restart run leaked kilo-e2e-* when ensureFreshCanonicalRoot
+  // threw before the try block).
+  let evidenceDir: ReturnType<typeof evidenceDirFor>
+  let hang: Awaited<ReturnType<typeof prepareRealSession>>
+  let completed: Awaited<ReturnType<typeof prepareRealCompleted>>
+  let overflowModel: Awaited<ReturnType<typeof prepareRealOverflow>>
+  let restartModel: Awaited<ReturnType<typeof prepareRealRestart>>
+  let wtModel: Awaited<ReturnType<typeof prepareWorktreeRemoval>>
   try {
+    // LOCK-013: test-only evidence contract — resolve/validate fail-fast (e2e-evidence.ts).
+    evidenceDir = evidenceDirFor(scratch)
+    // real-session only: the run-owned hang server + workspace config seed must
+    // exist BEFORE VS Code launches so the lazily-spawned CLI backend loads the
+    // custom provider/model/variant and agents at startup.
+    hang = await prepareRealSession(workspace, scenarios.has("real-session"))
+    // real-completed only: the run-owned scripted model server + the full
+    // workspace seed (config, user tool, skill, MCP fixture, permission target,
+    // no-op dependency guard) must also exist BEFORE VS Code launches.
+    completed = await prepareRealCompleted(workspace, scenarios.has("real-completed"))
+    // real-overflow only: the run-owned scripted model server + the dedicated
+    // small-context workspace seed (config + no-op dependency guard) must also
+    // exist BEFORE VS Code launches.
+    overflowModel = await prepareRealOverflow(workspace, scenarios.has("real-overflow"))
+    // real-restart only: the run-owned scripted model server + the minimal
+    // workspace seed (config + user tool + no-op dependency guard) must also
+    // exist BEFORE VS Code launches — the scripted model and the session/artifact
+    // survive every restart boundary.
+    restartModel = await prepareRealRestart(workspace, scenarios.has("real-restart"))
+    // P3.2 worktree-removal only: the run-owned scripted model server + the
+    // MINIMAL workspace seed (config + H-12 edit rule + tracked rollback file +
+    // no-op dependency guard, plain single git repo) must also exist BEFORE VS
+    // Code launches so the lazily-spawned CLI backend loads them at startup.
+    wtModel = await prepareWorktreeRemoval(workspace, scenarios.has("worktree-removal"))
+    // canonical post-cutover wiring (P4.2 H-10/H-11 for real-restart + real-session):
+    // allocate a run-owned isolated temp root at scratch/xdg-data/kilo, execute
+    // the existing hidden `__internal-storage-cutover cutover --data-root` against
+    // it before the first kilo serve spawn, and record read-only gate + archive
+    // evidence. The fresh DB starts empty by design; the harness creates the
+    // canonical-era session then proves it rehydrates across the boundaries.
+    // `repoRoot` is the MONOREPO root — the hidden CLI entry lives at
+    // packages/opencode/src/index.ts relative to it, not to the package root.
+    // real-* scenarios also seed the hermetic global canonical root here
+    // (plugin dependency guard + canonical agent .md assets) pre-first-launch.
+    // Predicate needsCanonicalStorage covers real-restart + real-session.
+    await prepareCanonicalRun({ scenarios, scratch, repoRoot, realRestart: needsCanonicalStorage(scenario) })
     const runnerOut = join(scratch, "runner.cjs")
     await build({
       entryPoints: [runnerEntry],
@@ -2769,6 +2926,15 @@ async function main() {
         restartModel,
       })
       if (relaunchFailed) failed = true
+      // H-10/H-11 post-boundary canonical archive stability: the same fresh
+      // canonical data root must show no archive mutation after the five
+      // boundaries (SSE reconnect, worker restart, Extension Host reload).
+      try {
+        assertArchiveStable(scratch, canonicalDataRoot(scratch))
+      } catch (err) {
+        failed = true
+        console.error(`[probe] FAIL canonical archive stability: ${err instanceof Error ? err.message : String(err)}`)
+      }
     } else {
       vscodeRun = launchVSCode({
         executable,
@@ -2800,6 +2966,19 @@ async function main() {
             `realAgent=${plan.customAgent} realAgentB=${plan.customAgentB} realModel=${plan.customProvider}/${plan.customModel}`,
         )
         await runScenario(browser, scenarios, plan, scratch, workspace, completed, overflowModel, wtModel)
+        // Real-session post-boundary canonical archive stability: same fresh
+        // canonical data root must show no archive mutation after the panel
+        // close/reopen + session-switch boundaries. Reuses the same predicate
+        // as the pre-run gate; real-restart's stability is already checked in
+        // its dedicated two-process path above.
+        if (needsCanonicalStorage(scenario)) {
+          try {
+            assertArchiveStable(scratch, canonicalDataRoot(scratch))
+          } catch (err) {
+            failed = true
+            console.error(`[probe] FAIL canonical archive stability: ${err instanceof Error ? err.message : String(err)}`)
+          }
+        }
       } finally {
         // Unblock the extension-host runner on success AND failure so VS Code
         // always exits under program control (no detached processes).

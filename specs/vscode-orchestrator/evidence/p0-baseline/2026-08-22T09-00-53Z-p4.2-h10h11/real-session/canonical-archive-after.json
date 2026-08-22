@@ -1,0 +1,16 @@
+{
+  "archives": [
+    {
+      "id": "20260822T085456Z-77a6ec66-20b9-4745-92ea-369c979fea2e",
+      "mtimeMs": 1787388896688.7515,
+      "bytes": 1075,
+      "sha256": "30353bccab462f1e5f085580d350103b87ec33e48e71038b3416395d0826c242"
+    }
+  ],
+  "markers": {
+    "cutover": false,
+    "rollback": false,
+    "lease": true
+  },
+  "archiveCount": 1
+}

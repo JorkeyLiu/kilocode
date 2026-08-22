@@ -2,7 +2,7 @@
  * P4.1 Config Foundation — Registry tests.
  *
  * Covers audit triggers:
- * - Closed field set enforcement (exact 11 JSONC fields)
+ * - Closed field set enforcement (exact 12 JSONC fields incl. the $schema meta-key)
  * - Rejected fields (server, console, share, enterprise, tools, etc.)
  * - Agent/command as asset-only (never JSONC records)
  * - Credential reference handling (secret-ref entries)
@@ -24,9 +24,9 @@ import {
 } from "../../../src/config/registry"
 
 describe("closed JSONC field set", () => {
-  it("contains exactly 11 fields", () => {
+  it("contains exactly 12 fields", () => {
     const entries = getAllEntries()
-    expect(entries.length).toBe(11)
+    expect(entries.length).toBe(12)
   })
 
   it("matches the CLOSED_JSONC_FIELDS constant", () => {
@@ -44,6 +44,7 @@ describe("closed JSONC field set", () => {
 
   it("CLOSED_JSONC_FIELDS contains exactly the locked set", () => {
     expect(CLOSED_JSONC_FIELDS).toEqual([
+      "$schema",
       "model",
       "model_variant",
       "model_variant_overrides",
@@ -141,12 +142,12 @@ describe("policy fields", () => {
 describe("scope validation", () => {
   it("all fields valid in global scope", () => {
     const globalKeys = keysForScope("global")
-    expect(globalKeys.length).toBe(11)
+    expect(globalKeys.length).toBe(12)
   })
 
   it("all fields valid in project scope", () => {
     const projectKeys = keysForScope("project")
-    expect(projectKeys.length).toBe(11)
+    expect(projectKeys.length).toBe(12)
   })
 })
 
@@ -181,6 +182,11 @@ describe("composition operators", () => {
     const restrictive = keysByComposition("restrictive")
     expect(restrictive.map((e) => e.key)).toEqual(["permission"])
   })
+
+  it("meta fields", () => {
+    const meta = keysByComposition("meta")
+    expect(meta.map((e) => e.key)).toEqual(["$schema"])
+  })
 })
 
 describe("cross-scope conflict", () => {
@@ -198,6 +204,8 @@ describe("secret-ref keys", () => {
 describe("snapshot keys", () => {
   const snapshots = snapshotKeys()
   expect(snapshots.length).toBe(11)
+  // The $schema meta-key never appears in snapshots
+  expect(snapshots).not.toContain("$schema")
 })
 
 describe("validateRegistryKeys", () => {

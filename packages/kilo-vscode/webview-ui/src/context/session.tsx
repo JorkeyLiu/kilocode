@@ -69,7 +69,7 @@ import {
 import { Identifier } from "../utils/id"
 import { resolveModelSelection } from "./model-selection"
 import { recomputeRecovered } from "./session-recovery"
-import { applyRecoverAgent, resolveSessionAgent as resolveAgent } from "./session-agent-store"
+import { applyRecoverAgent, resolvePromptAgent, resolveSessionAgent as resolveAgent } from "./session-agent-store"
 import { getSessionModel as canonicalGetSessionModel } from "./session-model-store"
 import { errorIDs } from "./session-errors"
 import { PartStash } from "./part-stash"
@@ -872,8 +872,7 @@ export const SessionProvider: ParentComponent = (props) => {
   })
 
   function promptAgent(sessionID?: string) {
-    const name = agentForScope(sessionID)
-    return name !== defaultAgent() ? name : undefined
+    return resolvePromptAgent(store, pendingAgentSelection(), defaultAgent(), agentNames(), allAgentNames(), sessionID)
   }
 
   function hideErrors(sid: string) {
@@ -976,9 +975,11 @@ export const SessionProvider: ParentComponent = (props) => {
     const names = new Set(message.agents.map((a) => a.name))
 
     // Reset pending selection if the agent no longer exists (e.g. after org switch)
+    // LOCK-004: an unselected/default-only pending path stays null so omission
+    // semantics are preserved; only an invalid explicit pick is cleared.
     const pending = pendingAgentSelection()
-    if (!pending || !names.has(pending)) {
-      setPendingAgentSelection(message.defaultAgent)
+    if (pending !== null && !names.has(pending)) {
+      setPendingAgentSelection(null)
     }
 
     // Clear per-session selections that reference a mode no longer available
@@ -2626,8 +2627,10 @@ export const SessionProvider: ParentComponent = (props) => {
     }
 
     // Reset agent selection to default for the new session (model overrides persist)
+    // LOCK-004: clear explicit pending so the next send omits the default agent
+    // per the established contract; UI still displays default via fallback.
     agentDrafts.prune(draftSessionID())
-    setPendingAgentSelection(defaultAgent())
+    setPendingAgentSelection(null)
     vscode.postMessage({ type: "createSession" })
   }
 
@@ -2637,7 +2640,7 @@ export const SessionProvider: ParentComponent = (props) => {
     setCurrentSessionID(undefined)
     setDraftSessionID(undefined)
     setLoading(false)
-    setPendingAgentSelection(defaultAgent())
+    setPendingAgentSelection(null)
     vscode.postMessage({ type: "clearSession" })
   }
 

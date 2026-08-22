@@ -60,9 +60,13 @@ const instructionsSchema = z.union([z.string(), z.array(z.string())])
 /** permission: record (restrictive layers preserved as-is) */
 const permissionSchema = z.record(z.unknown())
 
+/** $schema: benign meta-key injected by CLI tooling; any non-empty string */
+const schemaMetaSchema = z.string().min(1, "$schema must not be empty")
+
 // ── Field schema map ─────────────────────────────────────────────────
 
 const fieldSchemas: Record<CanonicalField, z.ZodTypeAny> = {
+  "$schema": schemaMetaSchema,
   model: modelSchema,
   model_variant: variantSchema,
   model_variant_overrides: variantOverridesSchema,

@@ -1,0 +1,109 @@
+{
+  "requestedAt": "2026-08-22T08:55:25.734Z",
+  "sessions": [
+    {
+      "id": "ses_fd75182edffe5v6hPo8qtk8dxk",
+      "title": "New session - 2026-08-22T08:55:19.058Z",
+      "agent": "e2e-agent-b",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "high"
+      },
+      "parentID": null,
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "createdAt": 1787388919058,
+      "updatedAt": 1787388919723
+    },
+    {
+      "id": "ses_fd751974affegBxFkZ11gtXDso",
+      "title": "New session - 2026-08-22T08:55:13.845Z",
+      "agent": "e2e-agent",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": null,
+      "summary": {
+        "additions": 0,
+        "deletions": 0,
+        "files": 0
+      },
+      "createdAt": 1787388913845,
+      "updatedAt": 1787388917702
+    }
+  ],
+  "messages": {
+    "ses_fd75182edffe5v6hPo8qtk8dxk": [
+      {
+        "id": "msg_028ae7d040016k8f2i767Bunyo",
+        "role": "user",
+        "agent": "e2e-agent-b",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "high"
+        },
+        "text": "E2E parity prompt B: custom agent B plus high variant"
+      },
+      {
+        "id": "msg_028ae7daa001onKr5nPL77icUY",
+        "role": "assistant",
+        "agent": "e2e-agent-b",
+        "text": ""
+      }
+    ],
+    "ses_fd751974affegBxFkZ11gtXDso": [
+      {
+        "id": "msg_028ae68a2001R1nZploV20JDDL",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E parity prompt A: custom agent plus low variant"
+      },
+      {
+        "id": "msg_028ae771e001W1RAxxO70KmE6C",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": ""
+      }
+    ]
+  },
+  "statuses": {},
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "e2e-agent-b",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {},
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {
+    "ses_fd75182edffe5v6hPo8qtk8dxk": [],
+    "ses_fd751974affegBxFkZ11gtXDso": []
+  }
+}

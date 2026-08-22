@@ -114,6 +114,15 @@ export default [
     files: ["webview-ui/src/context/server.tsx"],
     rules: { complexity: ["error", 21] },
   },
+  {
+    files: ["script/e2e-probe.ts"],
+    // Real-session canonical gate adds ~120 lines for the P4.2 post-cutover
+    // evidence (gate/credential/state/archive) mirroring real-restart. The
+    // lifecycle stays in one file so the five-boundary claim aggregates across
+    // manifests; helper logic already lives in e2e-canonical.ts,
+    // e2e-probe-dom.ts, and e2e-probe-restart.ts.
+    rules: { complexity: ["error", 27], "max-lines": ["error", 3200] },
+  },
 
   eslintConfigPrettier,
 ]

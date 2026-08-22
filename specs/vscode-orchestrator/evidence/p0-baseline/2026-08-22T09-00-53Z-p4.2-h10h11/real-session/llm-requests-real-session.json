@@ -1,0 +1,51 @@
+{
+  "scenario": "real-session",
+  "collectedAt": "2026-08-22T08:55:34.853Z",
+  "file": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-AmURs3/llm-requests.jsonl",
+  "records": [
+    {
+      "pid": 66295,
+      "instance": 1,
+      "ts": "2026-08-22T08:55:17",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "title-ses_fd751974affegBxFkZ11gtXDso",
+      "small": true,
+      "agent": "title",
+      "mode": "primary"
+    },
+    {
+      "pid": 66295,
+      "instance": 1,
+      "ts": "2026-08-22T08:55:17",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "ses_fd751974affegBxFkZ11gtXDso",
+      "small": false,
+      "agent": "e2e-agent",
+      "mode": "primary"
+    },
+    {
+      "pid": 66295,
+      "instance": 1,
+      "ts": "2026-08-22T08:55:19",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "title-ses_fd75182edffe5v6hPo8qtk8dxk",
+      "small": true,
+      "agent": "title",
+      "mode": "primary"
+    },
+    {
+      "pid": 66295,
+      "instance": 1,
+      "ts": "2026-08-22T08:55:21",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "ses_fd75182edffe5v6hPo8qtk8dxk",
+      "small": false,
+      "agent": "e2e-agent-b",
+      "mode": "primary"
+    }
+  ]
+}

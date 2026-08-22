@@ -78,9 +78,10 @@ export const ProviderProvider: ParentComponent = (props) => {
 
     const views = Object.fromEntries(Object.entries(message.providers).map(([id, item]) => {
       const models = Object.fromEntries(Object.entries(item.models).map(([modelID, model]) => {
-        const view = model as { id?: unknown; name?: unknown }
-        if (typeof view.id !== "string" || typeof view.name !== "string") return [modelID, { id: modelID, name: modelID }]
-        return [modelID, { id: view.id, name: view.name }]
+        const view = model as { id?: unknown; name?: unknown; variants?: unknown }
+        const variants = view.variants && typeof view.variants === "object" && !Array.isArray(view.variants) ? (view.variants as Record<string, Record<string, unknown>>) : undefined
+        if (typeof view.id !== "string" || typeof view.name !== "string") return [modelID, { id: modelID, name: modelID, ...(variants ? { variants } : {}) }]
+        return [modelID, { id: view.id, name: view.name, ...(variants ? { variants } : {}) }]
       }))
       return [id, { id: item.id, name: item.name, hasCredential: item.hasCredential, models }]
     }))

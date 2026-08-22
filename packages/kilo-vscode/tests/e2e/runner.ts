@@ -127,10 +127,12 @@ const CMD_POST = "kilo-code.new.e2eFixture.postToAgentManager"
 const CMD_SETTLE = "kilo-code.new.e2eFixture.settleSessions"
 const CMD_PROVISION = "kilo-code.new.e2eFixture.provisionVariantModel"
 const CMD_SNAPSHOT = "kilo-code.new.e2eFixture.backendSnapshot"
+const CMD_CANONICAL_STATE = "kilo-code.new.e2eFixture.canonicalState"
 const CMD_MCP_DISCONNECT = "kilo-code.new.e2eFixture.mcpDisconnect"
 const CMD_SSE_RECONNECT = "kilo-code.new.e2eFixture.sseReconnect"
 const CMD_KILL_SERVER = "kilo-code.new.e2eFixture.killServer"
 const CMD_RECONNECT_SERVER = "kilo-code.new.e2eFixture.reconnectServer"
+const CMD_SEED_CREDENTIAL = "kilo-code.new.e2eFixture.seedCredential"
 const CMD_LLM_REQUESTS = "kilo-code.new.e2eFixture.llmRequests"
 const CMD_LLM_RESET = "kilo-code.new.e2eFixture.llmRequestsReset"
 const CMD_OPEN_TAB_READY = "kilo-code.new.e2eFixture.openInTabReady"
@@ -2070,6 +2072,20 @@ async function serviceWorktreeRemovalBoundary(
  */
 async function serviceRealSessionBoundary(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
   await resetLlmRequests(vscodeApi)
+  // Canonical credential provisioning (real SecretStorage, no bypass):
+  // the seeded kilo.jsonc already carries the credential ref and default model;
+  // store the secret through the production storeSecret path and converge
+  // canonical state before the first UI assertion. Uses run-owned SecretStorage
+  // and awaits materializationReady + hasCredential before writing evidence.
+  // Distinct rs-credential.json keeps the five-boundary claim aggregatable
+  // across manifests without collision with real-restart's rr-credential.json.
+  try {
+    const seeded = await vscodeApi.commands.executeCommand(CMD_SEED_CREDENTIAL)
+    writeFileSync(join(scratch, "rs-credential.json"), JSON.stringify(seeded, null, 2))
+  } catch (err) {
+    writeFileSync(join(scratch, "rs-credential.json"), JSON.stringify({ ok: false, error: String(err) }, null, 2))
+    throw err
+  }
   await vscodeApi.commands.executeCommand(CMD_SETTLE)
   writeFileSync(join(scratch, "real-ready"), fixtureId)
 
@@ -2082,6 +2098,21 @@ async function serviceRealSessionBoundary(vscodeApi: typeof vscode, scratch: str
       const snapshot = await vscodeApi.commands.executeCommand(CMD_SNAPSHOT)
       writeFileSync(join(scratch, `real-snap-${snap}.json`), JSON.stringify(snapshot, null, 2))
       snap += 1
+    }
+    // Canonical-state probe (real-session lifecycle, before its agent-list assertion):
+    // read-only CanonicalConfigService snapshot — the H1/H2 discriminator for a
+    // recurring ModeSwitcher options=[].
+    const cstate = join(scratch, "rs-cstate-request")
+    if (existsSync(cstate)) {
+      rmSync(cstate)
+      const state = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
+      writeFileSync(join(scratch, "rs-cstate.json"), JSON.stringify(state, null, 2))
+    }
+    const credSeed = join(scratch, "rs-credseed-request")
+    if (existsSync(credSeed)) {
+      rmSync(credSeed)
+      const seeded = await vscodeApi.commands.executeCommand(CMD_SEED_CREDENTIAL)
+      writeFileSync(join(scratch, "rs-credential.json"), JSON.stringify(seeded, null, 2))
     }
     const reopen = join(scratch, "real-reopen-request")
     if (existsSync(reopen)) {
@@ -2331,6 +2362,9 @@ const REAL_RESTART_SERVICE_BUDGET = 2_100_000
  *   4. on `rr-reconnect-request`, executes the production reconnect flow
  *      (getClientAsync → connect → replacement server + SSE) and writes
  *      `rr-reconnect.json` with the new PID/port/state,
+ *   4b. on `rr-cstate-request`, executes the env-gated canonicalState fixture
+ *       command (read-only CanonicalConfigService snapshot) and writes
+ *       `rr-cstate.json` — the restartPhase0 H1/H2 diagnostic,
  *   5. on `rr-snap-N-request`, executes the backendSnapshot fixture command
  *      and writes `rr-snap-N.json`,
  *   6. on `rr-reload-request` (harness finished Phase B), writes
@@ -2364,6 +2398,18 @@ async function serviceRealRestartBoundary(vscodeApi: typeof vscode, scratch: str
   // the Phase C reloadWindow relaunch, so no reset happens in the reload
   // re-entry above.
   await resetLlmRequests(vscodeApi)
+  // Canonical credential provisioning (real SecretStorage, no bypass):
+  // the seeded kilo.jsonc already carries the credential ref and default model;
+  // store the secret through the production storeSecret path and converge
+  // canonical state before the first UI assertion. Uses run-owned SecretStorage
+  // and awaits materializationReady + hasCredential before writing evidence.
+  try {
+    const seeded = await vscodeApi.commands.executeCommand(CMD_SEED_CREDENTIAL)
+    writeFileSync(join(scratch, "rr-credential.json"), JSON.stringify(seeded, null, 2))
+  } catch (err) {
+    writeFileSync(join(scratch, "rr-credential.json"), JSON.stringify({ ok: false, error: String(err) }, null, 2))
+    throw err
+  }
   await vscodeApi.commands.executeCommand(CMD_SETTLE)
   writeFileSync(join(scratch, "rr-ready"), fixtureId)
 
@@ -2378,6 +2424,23 @@ async function serviceRealRestartBoundary(vscodeApi: typeof vscode, scratch: str
       rmSync(conn)
       const obs = await vscodeApi.commands.executeCommand(CMD_SSE_RECONNECT)
       writeFileSync(join(scratch, "rr-conn.json"), JSON.stringify(obs, null, 2))
+    }
+
+    // Canonical-state probe (restartPhase0, before its agent-list assertion):
+    // read-only CanonicalConfigService snapshot from the env-gated fixture
+    // command — the H1/H2 discriminator for a recurring ModeSwitcher options=[].
+    const cstate = join(scratch, "rr-cstate-request")
+    if (existsSync(cstate)) {
+      rmSync(cstate)
+      const state = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
+      writeFileSync(join(scratch, "rr-cstate.json"), JSON.stringify(state, null, 2))
+    }
+
+    const credSeed = join(scratch, "rr-credseed-request")
+    if (existsSync(credSeed)) {
+      rmSync(credSeed)
+      const seeded = await vscodeApi.commands.executeCommand(CMD_SEED_CREDENTIAL)
+      writeFileSync(join(scratch, "rr-credential.json"), JSON.stringify(seeded, null, 2))
     }
 
     const kill = join(scratch, "rr-kill-request")

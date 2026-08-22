@@ -5,7 +5,7 @@
  * node fs) and are used by every scenario.
  */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Browser, Frame, Page } from "@playwright/test"
 import type { BackendSnapshot } from "../src/agent-manager/fixture-backend"
@@ -201,15 +201,14 @@ export async function waitForRealSessionTabs(
 export async function waitForAgentOption(frame: Frame, label: string, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
-    const options = await agentOptions(frame, 5_000)
-    if (options.includes(label)) {
+    const snap = await agentOptions(frame, 5_000)
+    const failure = agentOptionFailure(snap, label)
+    if (failure === undefined) {
       console.log(`[probe] PASS custom agent served in ModeSwitcher: "${label}"`)
       return
     }
     if (Date.now() > deadline) {
-      throw new Error(
-        `probe: custom agent "${label}" not listed in the real ModeSwitcher. options=[${options.join(", ")}]`,
-      )
+      throw new Error(`probe: custom agent "${label}" not listed in the real ModeSwitcher: ${failure}`)
     }
     await sleep(250)
   }
@@ -910,21 +909,174 @@ export async function pickAgent(frame: Frame, value: string, timeoutMs: number):
   )
 }
 
+/**
+ * Structured ModeSwitcher read: which variant of the trigger is rendered
+ * plus the visible option labels. The webview renders its trigger ONLY when
+ * agents.length > 1, so "trigger absent" (index never populated),
+ * "trigger rendered but disabled" (selection cannot resolve against the
+ * served agents — the legacy default-agent parity regression signature), and
+ * "trigger present with an empty/short list" are distinct failure modes the
+ * harness must not conflate — a plain [] used to hide all three.
+ */
+export interface ModeSwitcherSnapshot {
+  /** True when the `.mode-switcher-trigger-label` trigger exists in the DOM. */
+  triggerRendered: boolean
+  /** "interactive" popover, disabled trigger, or "absent" from the DOM. */
+  variant: "interactive" | "disabled" | "absent"
+  /** Visible agent option labels after opening the popover ([] when unrendered/disabled). */
+  options: string[]
+  /** Captured trigger-click failure text (never swallowed); undefined on success. */
+  clickError?: string
+}
+
+/** Bounded wait for the popover list to become visible before reading items. */
+const MODE_SWITCHER_LIST_WAIT_MS = 2_000
+
+/**
+ * Pure readiness classifier for the ModeSwitcher agent list. Returns undefined
+ * when the expected label is served by a properly populated switcher;
+ * otherwise a DISTINCT reason string per failure mode:
+ * - trigger never rendered (webview hides it when agents.length <= 1),
+ * - trigger rendered but disabled (aria-disabled="true"),
+ * - trigger click failed (captured error text, not swallowed),
+ * - trigger rendered but fewer than 2 visible options,
+ * - expected label missing from a populated list.
+ * Exported for the focused unit tests.
+ */
+export function agentOptionFailure(snap: ModeSwitcherSnapshot, label: string): string | undefined {
+  if (!snap.triggerRendered || snap.variant === "absent") {
+    return "ModeSwitcher trigger never rendered — the webview hides the trigger when agents.length <= 1"
+  }
+  if (snap.variant === "disabled") {
+    return 'ModeSwitcher trigger is disabled (aria-disabled="true") — the selection value matches no served agent'
+  }
+  if (snap.clickError) {
+    return snap.clickError
+  }
+  if (snap.options.length < 2) {
+    return `ModeSwitcher shows ${snap.options.length} visible option(s) [${snap.options.join(", ")}]; expected >= 2`
+  }
+  if (!snap.options.includes(label)) {
+    return `expected label not listed; options=[${snap.options.join(", ")}]`
+  }
+  return undefined
+}
+
 /** Agent labels offered by the ModeSwitcher (production popover options), then close it. */
-export async function agentOptions(frame: Frame, timeoutMs: number): Promise<string[]> {
-  await frame
-    .locator(".mode-switcher-trigger-label")
+export async function agentOptions(frame: Frame, timeoutMs: number): Promise<ModeSwitcherSnapshot> {
+  const trigger = frame.locator(".mode-switcher-trigger-label")
+  const triggerRendered = await trigger
+    .count()
+    .then((n) => n > 0)
+    .catch(() => false)
+  if (!triggerRendered) {
+    return { triggerRendered: false, variant: "absent", options: [] }
+  }
+  // Disabled-variant detection BEFORE clicking: a disabled trigger can never
+  // open the popover, so the read must report the variant instead of a
+  // misleading empty-options list.
+  const disabled = await frame
+    .locator('button[aria-disabled="true"] .mode-switcher-trigger-label')
+    .count()
+    .then((n) => n > 0)
+    .catch(() => false)
+  if (disabled) {
+    return { triggerRendered: true, variant: "disabled", options: [] }
+  }
+  let clickError: string | undefined
+  await trigger
     .first()
     .click({ timeout: 5_000 })
-    .catch(() => {})
-  const names: string[] = await frame
-    .locator(".mode-switcher-list .mode-switcher-item-name")
-    .allTextContents()
-    .then((items) => items.map((s) => s.trim()).filter((s) => s.length > 0))
-    .catch(() => [])
+    .catch((err: unknown) => {
+      clickError = `ModeSwitcher trigger click failed: ${err instanceof Error ? err.message : String(err)}`
+    })
+  // Bounded wait for the popover before reading items (a just-clicked list may
+  // need a tick to mount); absence after the bound is itself diagnostic.
+  const listVisible = await frame
+    .locator(".mode-switcher-list")
+    .first()
+    .waitFor({ state: "visible", timeout: Math.min(MODE_SWITCHER_LIST_WAIT_MS, timeoutMs) })
+    .then(() => true)
+    .catch(() => false)
+  const names: string[] = listVisible
+    ? await frame
+        .locator(".mode-switcher-list .mode-switcher-item-name")
+        .allTextContents()
+        .then((items) => items.map((s) => s.trim()).filter((s) => s.length > 0))
+        .catch(() => [])
+    : []
   // Close the popover again (Escape) so the next pick starts from a closed state.
   await closePopover(frame, ".mode-switcher-list")
-  return names
+  return clickError === undefined
+    ? { triggerRendered: true, variant: "interactive", options: names }
+    : { triggerRendered: true, variant: "interactive", options: names, clickError }
+}
+
+/**
+ * Canonical-state probe round trip over the fixture bridge: writes the
+ * `rr-cstate-request` marker; the extension-host runner executes the env-gated
+ * `kilo-code.new.e2eFixture.canonicalState` command (read-only
+ * CanonicalConfigService snapshot) and writes `rr-cstate.json`. Called BEFORE
+ * the agent-list assertion in restartPhase0 so a recurring ModeSwitcher
+ * options=[] is self-diagnosing (H1 readiness-never-opened vs H2 empty index).
+ */
+export async function requestCanonicalState(scratch: string, timeoutMs = 60_000): Promise<Record<string, unknown>> {
+  const file = join(scratch, "rr-cstate.json")
+  writeFileSync(join(scratch, "rr-cstate-request"), "ok")
+  await waitForFile(file, timeoutMs, "rr-cstate.json (canonical state probe)")
+  return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+}
+
+/**
+ * Credential-seeding probe round trip: writes `rr-credseed-request`; the
+ * runner executes the env-gated `kilo-code.new.e2eFixture.seedCredential`
+ * command (production storeSecret path + GUI-write convergence) and writes
+ * `rr-credential.json`. Never exposes the secret value. Called before
+ * rr-ready/first canonical-state assertion to prove the real SecretStorage
+ * path converged.
+ */
+export async function requestSeedCredential(scratch: string, timeoutMs = 60_000): Promise<Record<string, unknown>> {
+  const marker = join(scratch, "rr-credseed-request")
+  const file = join(scratch, "rr-credential.json")
+  // Ensure round-trip freshness: remove any prior file so waitForFile proves
+  // the fresh command execution, not a stale pre-rr-ready write.
+  try {
+    rmSync(file, { force: true } as never)
+  } catch {}
+  writeFileSync(marker, "ok")
+  await waitForFile(file, timeoutMs, "rr-credential.json (credential seeding probe)")
+  return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+}
+
+/**
+ * Real-session canonical-state probe: `rs-cstate-request` → `rs-cstate.json`.
+ * Mirrors requestCanonicalState for the rr- boundary but uses distinct
+ * rs- markers so the five-boundary claim aggregates across manifests without
+ * collision. Called BEFORE the agent-list assertion in the real-session
+ * lifecycle for the same H1/H2 diagnostic.
+ */
+export async function requestRsCanonicalState(scratch: string, timeoutMs = 60_000): Promise<Record<string, unknown>> {
+  const file = join(scratch, "rs-cstate.json")
+  writeFileSync(join(scratch, "rs-cstate-request"), "ok")
+  await waitForFile(file, timeoutMs, "rs-cstate.json (canonical state probe)")
+  return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
+}
+
+/**
+ * Real-session credential round trip: `rs-credseed-request` → `rs-credential.json`.
+ * Mirrors requestSeedCredential but uses the rs- marker so the evidence
+ * inventory stays distinct from the real-restart rs-credential.json file.
+ * Never exposes the secret value.
+ */
+export async function requestRsSeedCredential(scratch: string, timeoutMs = 60_000): Promise<Record<string, unknown>> {
+  const marker = join(scratch, "rs-credseed-request")
+  const file = join(scratch, "rs-credential.json")
+  try {
+    rmSync(file, { force: true } as never)
+  } catch {}
+  writeFileSync(marker, "ok")
+  await waitForFile(file, timeoutMs, "rs-credential.json (credential seeding probe)")
+  return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
 }
 
 /** Poll until the given file's bytes exactly equal `expected`. */

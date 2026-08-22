@@ -1,0 +1,22 @@
+{
+  "$schema": "https://app.kilo.ai/config.json",
+  "model": "e2e-local/e2e-model",
+  "provider": {
+    "e2e-local": {
+      "name": "E2E Local",
+      "endpoint": "http://127.0.0.1:56921/v1",
+      "protocol": "openai",
+      "credential": "secret:kilo.credentials.project.provider.e2e-local",
+      "models": {
+        "e2e-model": {
+          "name": "E2E Model",
+          "variants": {
+            "low": {},
+            "medium": {},
+            "high": {}
+          }
+        }
+      }
+    }
+  }
+}

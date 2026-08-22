@@ -27,15 +27,61 @@
 
 import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
+import { CONFIG_FILENAME } from "../src/config/paths"
+
+/** The agent asset ids/labels the real-* scenarios pick through ModeSwitcher. */
+export const REAL_AGENT_ASSETS = [
+  { id: "e2e-agent", displayName: "E2E Agent", description: "E2E restart custom agent" },
+  { id: "e2e-agent-b", displayName: "E2E Agent B", description: "E2E restart custom agent B" },
+] as const
 
 export interface RestartSeedPaths {
   configFile: string
+  /** Project-scope canonical config the extension's CanonicalConfigService reads. */
+  canonicalFile: string
   userToolFile: string
   artifactFile: string
 }
 
+export interface RealGlobalSeedPaths {
+  configDir: string
+  agentDir: string
+  assetFiles: string[]
+}
+
 /** The exact bytes the run-owned user tool writes into the artifact file. */
 export const RESTART_ARTIFACT_CONTENT = `echo:${"restart"}`
+
+/**
+ * The SAME run-owned provider in the closed canonical project-scope shape the
+ * extension's CanonicalConfigService validator accepts (types.ts
+ * APPROVED_PROVIDER_KEYS: name/endpoint/protocol/models/credential only;
+ * protocol from CANONICAL_PROTOCOLS; no plaintext apiKey needed for a local
+ * openai-compatible endpoint). The kilo.json backend seed above feeds ONLY the
+ * CLI backend — the extension reads exclusively <workspace>/.kilo/kilo.jsonc
+ * (paths.ts projectConfigFile), so without this seed the canonical provider
+ * index can never serve e2e-local and waitForModelSelected(e2e-local/e2e-model)
+ * cannot pass even after agents appear.
+ */
+export function realProjectSeed(port: number): Record<string, unknown> {
+  return {
+    model: "e2e-local/e2e-model",
+    provider: {
+      "e2e-local": {
+        name: "E2E Local",
+        endpoint: `http://127.0.0.1:${port}/v1`,
+        protocol: "openai",
+        credential: "secret:kilo.credentials.project.provider.e2e-local",
+        models: {
+          "e2e-model": {
+            name: "E2E Model",
+            variants: { low: {}, medium: {}, high: {} },
+          },
+        },
+      },
+    },
+  }
+}
 
 export function writeRealRestartSeed(workspace: string, port: number, pluginToolUrl: string): RestartSeedPaths {
   const configFile = join(workspace, ".kilo", "kilo.json")
@@ -81,6 +127,11 @@ export function writeRealRestartSeed(workspace: string, port: number, pluginTool
     ),
   )
 
+  // Project-scope canonical seed (extension-only; see realProjectSeed). The
+  // backend kilo.json seed stays untouched — this is an additional file.
+  const canonicalFile = join(workspace, ".kilo", CONFIG_FILENAME)
+  writeFileSync(canonicalFile, JSON.stringify(realProjectSeed(port), null, 2))
+
   // The user-defined tool through the real ToolRegistry (plugin bridge): its
   // execute writes the run-owned artifact file under ctx.directory, so the
   // artifact is durable on disk across every restart boundary.
@@ -107,20 +158,75 @@ export function writeRealRestartSeed(workspace: string, port: number, pluginTool
   // the detached Npm.install("@kilocode/plugin") fiber from reifying into the
   // run-owned .kilo config dir.
   const kiloDir = join(workspace, ".kilo")
-  mkdirSync(join(kiloDir, "node_modules"), { recursive: true })
+  writeDependencyGuard(kiloDir, "kilo-e2e-workspace")
+
+  return {
+    configFile,
+    canonicalFile,
+    userToolFile,
+    artifactFile: join(workspace, "e2e-custom-called.txt"),
+  }
+}
+
+/**
+ * The no-op dependency guard consumed by core Npm.install: an existing
+ * node_modules dir makes the reify step skip (packages/core/src/npm.ts), so
+ * the doomed background install of the unpublished branch version never runs.
+ */
+function writeDependencyGuard(dir: string, name: string): void {
+  mkdirSync(join(dir, "node_modules"), { recursive: true })
   writeFileSync(
-    join(kiloDir, "package-lock.json"),
+    join(dir, "package-lock.json"),
     JSON.stringify({
-      name: "kilo-e2e-workspace",
+      name,
       version: "0.0.0",
       lockfileVersion: 3,
       packages: { "": { dependencies: { "@kilocode/plugin": "0.0.0" } } },
     }),
   )
+}
 
-  return {
-    configFile,
-    userToolFile,
-    artifactFile: join(workspace, "e2e-custom-called.txt"),
-  }
+/**
+ * real-* scenarios only: seed the run-owned GLOBAL canonical root
+ * `<scratch>/xdg-config/kilo` BEFORE the first kilo serve spawn:
+ *
+ *   - node_modules + package-lock.json — the same no-op dependency guard as
+ *     the workspace seed, because core scans Global.Path.config (= this dir
+ *     under the scratch XDG tree) and forks a detached background install of
+ *     the unpublished branch version of @kilocode/plugin.
+ *   - agent/<id>.md — one valid canonical agent asset per ModeSwitcher fixture
+ *     identity. Post-S5 cutover, agents reach ModeSwitcher ONLY through the
+ *     extension's CanonicalConfigService asset index, which scans these .md
+ *     files under the XDG-honoring global root; kilo.json agent records never
+ *     enter that index. Frontmatter satisfies validate.ts's strict agent
+ *     schema; the model/variant pin comes from the workspace kilo.json seed.
+ *
+ * Hermetic by construction: everything lives inside <scratch>/xdg-config, and
+ * the extension resolves the same root via XDG_CONFIG_HOME (paths.ts).
+ */
+export function writeRealGlobalSeed(scratch: string): RealGlobalSeedPaths {
+  const configDir = join(scratch, "xdg-config", "kilo")
+  writeDependencyGuard(configDir, "kilo-e2e-global")
+
+  const agentDir = join(configDir, "agent")
+  mkdirSync(agentDir, { recursive: true })
+  const assetFiles = REAL_AGENT_ASSETS.map((asset) => {
+    const file = join(agentDir, `${asset.id}.md`)
+    writeFileSync(
+      file,
+      [
+        "---",
+        `displayName: ${asset.displayName}`,
+        `description: ${asset.description}`,
+        "mode: primary",
+        "---",
+        "",
+        `You are ${asset.displayName}, the E2E fixture agent.`,
+        "",
+      ].join("\n"),
+    )
+    return file
+  })
+
+  return { configDir, agentDir, assetFiles }
 }

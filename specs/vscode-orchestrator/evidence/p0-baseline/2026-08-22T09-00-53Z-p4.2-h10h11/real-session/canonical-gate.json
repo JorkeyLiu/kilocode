@@ -1,0 +1,38 @@
+{
+  "dbPath": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-AmURs3/xdg-data/kilo/kilo.db",
+  "dataRoot": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-AmURs3/xdg-data/kilo",
+  "collectedAt": "2026-08-22T08:54:58.886Z",
+  "identity": {
+    "uuid": "c359ddc8-9708-469b-86d1-05b4bbe1dca6",
+    "schema_version": "1",
+    "created_at": 1787388896770,
+    "cutover_archive_id": "20260822T085456Z-77a6ec66-20b9-4745-92ea-369c979fea2e"
+  },
+  "autoVacuum": 2,
+  "zeroState": {
+    "session": 0,
+    "message": 0,
+    "part": 0,
+    "todo": 0,
+    "session_message": 0,
+    "session_input": 0,
+    "session_context_epoch": 0,
+    "session_share": 0,
+    "event": 0,
+    "event_sequence": 0,
+    "session_changefeed": 0,
+    "retention_obligation": 0,
+    "session_changefeed_state_count": 1,
+    "session_changefeed_state": {
+      "latest_seq": 0,
+      "retained_rows": 0,
+      "retained_bytes": 0
+    },
+    "storage_identity_count": 1
+  },
+  "family": {
+    "session_diff": 0,
+    "session_diff_base": 0,
+    "session_share": 0
+  }
+}

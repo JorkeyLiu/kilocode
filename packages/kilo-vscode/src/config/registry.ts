@@ -15,9 +15,13 @@
  * `<workspaceRoot>/.kilo/kilo.jsonc`.
  *
  * The exact closed set of JSONC field classes:
- *   model, model_variant, model_variant_overrides,
+ *   $schema, model, model_variant, model_variant_overrides,
  *   subagent_model, subagent_variant, subagent_variant_overrides,
  *   default_agent, provider, mcp, permission, instructions
+ *
+ * `$schema` is a benign meta-key injected into kilo.jsonc by the CLI backend;
+ * it is valid in both scopes but never composed — it is excluded from the
+ * materialized value, content hash, and snapshots.
  *
  * Agent, command, tool, skill, plugin, rules exist only as typed markdown
  * assets in their singular directories — never as top-level JSONC records.
@@ -30,6 +34,18 @@ import type { RegistryEntry } from "./types"
 const entries: RegistryEntry[] = [
   // ── Model selection fields ───────────────────────────────────────
 
+  {
+    key: "$schema",
+    description: "JSON schema meta-key injected by CLI tooling; benign, excluded from materialization and snapshots",
+    scopes: ["global", "project"],
+    persistence: "jsonc",
+    owner: "backend",
+    composition: "meta",
+    secret: "none",
+    snapshot: false,
+    provenance: "file",
+    removal: "preserve",
+  },
   {
     key: "model",
     description: "Default model in provider/model format",
@@ -203,13 +219,23 @@ export function isKnownKey(key: string): boolean {
   return registryMap.has(key)
 }
 
+/**
+ * Check if a key is a GUI-facing field: known to the closed registry and not
+ * composition "meta". Meta keys ($schema) are validation-only metadata owned
+ * by the backend — they never enter GUI payloads or write-path filters.
+ */
+export function isGuiField(key: string): boolean {
+  const entry = registryMap.get(key)
+  return entry !== undefined && entry.composition !== "meta"
+}
+
 /** Get all keys that belong to a specific scope. */
 export function keysForScope(scope: "global" | "project"): string[] {
   return entries.filter((e) => e.scopes.includes(scope)).map((e) => e.key)
 }
 
 /** Get all keys that use a specific composition operator. */
-export function keysByComposition(operator: "single" | "keyed" | "ordered" | "restrictive"): RegistryEntry[] {
+export function keysByComposition(operator: "single" | "keyed" | "ordered" | "restrictive" | "meta"): RegistryEntry[] {
   return entries.filter((e) => e.composition === operator)
 }
 
@@ -249,8 +275,9 @@ export function validateRegistryKeys(
 
 // ── Closed set constant (for external verification) ──────────────────
 
-/** The exact 11 accepted JSONC top-level field names. */
+/** The exact 12 accepted JSONC top-level field names. */
 export const CLOSED_JSONC_FIELDS = [
+  "$schema",
   "model",
   "model_variant",
   "model_variant_overrides",

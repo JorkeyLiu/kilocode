@@ -1,0 +1,253 @@
+{
+  "schema": "kilo-e2e-evidence/1",
+  "run": {
+    "fixtureId": "e2e-probe-94df723c",
+    "scenario": "real-restart",
+    "startedAt": "2026-08-22T08:59:43.228Z",
+    "completedAt": "2026-08-22T09:00:53.528Z",
+    "durationMs": 70300,
+    "probePid": 73461,
+    "success": true,
+    "provenance": "focused E2E harness (packages/kilo-vscode), fixture-gated, run-owned evidence",
+    "env": {
+      "KILO_E2E_SCENARIO": "real-restart"
+    }
+  },
+  "destination": "specs/vscode-orchestrator/evidence/p0-baseline/2026-08-22T09-00-53Z-p4.2-h10h11/real-restart",
+  "sourceManifest": {
+    "path": "/tmp/kilo-e2e-real-restart-20260822T165842-fresh/manifest.json",
+    "sha256": "4df6cc39302361b539b8cb68e736295257bce855da1821fa17e5618a14ca6256",
+    "bytes": 11442
+  },
+  "redacted": true,
+  "redactionNote": "Durable evidence is a secret-safe derivative. Plaintext workspace/.kilo/kilo.json (contains fixture-key) and large bodies (rr-model-requests.json, run.log) were omitted. The file inventory below reflects only secret-safe files actually copied; it is not byte-identical to source and does not claim source completeness. Source identity preserved in provenance.json.",
+  "required": [
+    "canonical-archive-after.json",
+    "canonical-archive-before.json",
+    "canonical-gate.json",
+    "llm-matrix-real-restart-final.json",
+    "llm-requests-real-restart.json",
+    "llm-requests.jsonl",
+    "plan.json",
+    "rr-c-snap-1.json",
+    "rr-c-snap-2.json",
+    "rr-credential.json",
+    "rr-cstate.json",
+    "rr-dom-evidence",
+    "rr-snap-1.json",
+    "rr-snap-2.json",
+    "rr-snap-3.json",
+    "rr-snap-4.json",
+    "runner-pid",
+    "workspace/.kilo/kilo.json"
+  ],
+  "files": [
+    {
+      "dest": "canonical-archive-after.json",
+      "bytes": 348,
+      "sha256": "1a5366f772bf7346ced3b6d302fbd507b4bd24806c37fb65718ddc08c374c5be",
+      "sourceRel": "canonical-archive-after.json"
+    },
+    {
+      "dest": "canonical-archive-before.json",
+      "bytes": 348,
+      "sha256": "1a5366f772bf7346ced3b6d302fbd507b4bd24806c37fb65718ddc08c374c5be",
+      "sourceRel": "canonical-archive-before.json"
+    },
+    {
+      "dest": "canonical-gate.json",
+      "bytes": 1056,
+      "sha256": "b3bb3928d3fec2c810fa3ddaf9a09fff177f5b2a667be3cb17c51c6b9c53d6e5",
+      "sourceRel": "canonical-gate.json"
+    },
+    {
+      "dest": "evidence-ready",
+      "bytes": 53,
+      "sha256": "8a0947da215290cddcfdd2dfdd699ed233137ff6364684da36188fd34dfd3959",
+      "sourceRel": "evidence-ready"
+    },
+    {
+      "dest": "llm-matrix-real-restart-final.json",
+      "bytes": 330,
+      "sha256": "eba2f0a69b825b76c9a6237842db1479fb6c1acbeb046a7a9ad46f6cf88191bd",
+      "sourceRel": "llm-matrix-real-restart-final.json"
+    },
+    {
+      "dest": "llm-matrix-real-restart-phase0.json",
+      "bytes": 331,
+      "sha256": "e2b876b3de053b3b5af0be0ed4f3f1d3005f3a2a33c92a7c14d597958786605b",
+      "sourceRel": "llm-matrix-real-restart-phase0.json"
+    },
+    {
+      "dest": "llm-matrix-real-restart-phaseA.json",
+      "bytes": 331,
+      "sha256": "3299b48e983fcc0aff0b723af5b6235310be5302e04bcd899ae261ef26af594c",
+      "sourceRel": "llm-matrix-real-restart-phaseA.json"
+    },
+    {
+      "dest": "llm-matrix-real-restart-phaseB.json",
+      "bytes": 331,
+      "sha256": "76cc5965af08344094a07caf687ed357574738b80d5891f82d7a316e76499330",
+      "sourceRel": "llm-matrix-real-restart-phaseB.json"
+    },
+    {
+      "dest": "llm-requests-real-restart.json",
+      "bytes": 1031,
+      "sha256": "a5cf4e0f2ff57e7772c21b850953b7f258a6b3cff652cbbad15c2eebd0891b5b",
+      "sourceRel": "llm-requests-real-restart.json"
+    },
+    {
+      "dest": "llm-requests.jsonl",
+      "bytes": 592,
+      "sha256": "7f41b67bf2b143cc3d6d6bd4ec9f82185e6feec2fb165fd51c7ee593e30b362b",
+      "sourceRel": "llm-requests.jsonl"
+    },
+    {
+      "dest": "plan.json",
+      "bytes": 1195,
+      "sha256": "5b3d28b176ebacb799379df7b7dc15c10657502c4c73f7f8fe86afa003ac9b2d",
+      "sourceRel": "plan.json"
+    },
+    {
+      "dest": "rr-c-snap-1.json",
+      "bytes": 1873,
+      "sha256": "ae8c60810d8e35b5847d2022d23caab5931eb6874e899824da04424b1d13f9b8",
+      "sourceRel": "rr-c-snap-1.json"
+    },
+    {
+      "dest": "rr-c-snap-2.json",
+      "bytes": 1873,
+      "sha256": "170d8c14fa392fc1cc89045a4e629a5aecbb64799122a112a3ce08f426759baf",
+      "sourceRel": "rr-c-snap-2.json"
+    },
+    {
+      "dest": "rr-conn.json",
+      "bytes": 342,
+      "sha256": "374f09e51fd60097424d5f3fda44e575ee48d95c1496dd939e2917c3e2072680",
+      "sourceRel": "rr-conn.json"
+    },
+    {
+      "dest": "rr-credential.json",
+      "bytes": 267,
+      "sha256": "4e9c0b92e22016de43d6091b31b1aa17caf1a8b0957b343ebdf905c1bda6c588",
+      "sourceRel": "rr-credential.json"
+    },
+    {
+      "dest": "rr-cstate.json",
+      "bytes": 2145,
+      "sha256": "850d3553ca966db4c0c8d29bb73c3ca6d90e3b73dc017a54832cfa64d1026f16",
+      "sourceRel": "rr-cstate.json"
+    },
+    {
+      "dest": "rr-dom-evidence",
+      "bytes": 109463,
+      "sha256": "a62d83caeaf9f2ffd89ebeb9651155c113b4fd2d724c50ceace20bc0f6bf59a6",
+      "sourceRel": "rr-dom-evidence"
+    },
+    {
+      "dest": "rr-kill.json",
+      "bytes": 35,
+      "sha256": "e2788479ac5dd2ce547bf854c6ba50aa23898563b7717959ec426e070bd71364",
+      "sourceRel": "rr-kill.json"
+    },
+    {
+      "dest": "rr-pin.json",
+      "bytes": 349,
+      "sha256": "b1ae7cb6b820b95832b6af29c5bf4d1e9d9de99b0c6e4103a6add7f6689d4db0",
+      "sourceRel": "rr-pin.json"
+    },
+    {
+      "dest": "rr-ready",
+      "bytes": 18,
+      "sha256": "1d9848840bddfc15fdfe49885a821de091558ef9fa1f0d66f49e54866cbc08d2",
+      "sourceRel": "rr-ready"
+    },
+    {
+      "dest": "rr-reconnect.json",
+      "bytes": 395,
+      "sha256": "5d59b18552b9057dc10ab424b594b5355d61e8795cd791b2d0c1811d0fb79800",
+      "sourceRel": "rr-reconnect.json"
+    },
+    {
+      "dest": "rr-reload-executed",
+      "bytes": 5,
+      "sha256": "a30a1c7370381442a7bf9115a90c4c4ba6565d2a354f65e3d2d42448a752fa1c",
+      "sourceRel": "rr-reload-executed"
+    },
+    {
+      "dest": "rr-reloaded",
+      "bytes": 18,
+      "sha256": "1d9848840bddfc15fdfe49885a821de091558ef9fa1f0d66f49e54866cbc08d2",
+      "sourceRel": "rr-reloaded"
+    },
+    {
+      "dest": "rr-snap-1.json",
+      "bytes": 1370,
+      "sha256": "d70d161b8f355959dd727a71d9ee7e4e857d7e16f1641061de01127c34e143d3",
+      "sourceRel": "rr-snap-1.json"
+    },
+    {
+      "dest": "rr-snap-2.json",
+      "bytes": 1873,
+      "sha256": "ff1dd0919c37a367b44603236362cb852543a61ded4019541e285b149963b082",
+      "sourceRel": "rr-snap-2.json"
+    },
+    {
+      "dest": "rr-snap-3.json",
+      "bytes": 1873,
+      "sha256": "51da45547ada1d5ce51470381e55faac15886b5addc59687d4c9d216be9e525b",
+      "sourceRel": "rr-snap-3.json"
+    },
+    {
+      "dest": "rr-snap-4.json",
+      "bytes": 1873,
+      "sha256": "86b3726853d4839bc7f5e05f545da87ea750fcf7471b3fbe041a3868751382c7",
+      "sourceRel": "rr-snap-4.json"
+    },
+    {
+      "dest": "runner-alive",
+      "bytes": 7,
+      "sha256": "03494afd4248c42f5fa1237bf2eeebe751ab8d9c977d55405fcb17469dbd91f8",
+      "sourceRel": "runner-alive"
+    },
+    {
+      "dest": "runner-done",
+      "bytes": 2,
+      "sha256": "2689367b205c16ce32ed4200942b8b8b1e262dfc70d9bc9fbc77c49699a4f1df",
+      "sourceRel": "runner-done"
+    },
+    {
+      "dest": "runner-pid",
+      "bytes": 5,
+      "sha256": "cc54ace86826c67cd10931ca5d57054fdaa24d2c303afbf977626fe566b23af5",
+      "sourceRel": "runner-pid"
+    },
+    {
+      "dest": "workspace/e2e-custom-called.txt",
+      "bytes": 12,
+      "sha256": "509ac5341f42c1cad63e0cea865c7d569fd8fba6e33d674f2a187baeb28cbf88",
+      "sourceRel": "workspace/e2e-custom-called.txt"
+    }
+  ],
+  "omitted": [
+    {
+      "dest": "workspace/.kilo/kilo.json",
+      "reason": "plaintext secret fixture-key redacted; replaced by opaque canonical kilo.jsonc where applicable"
+    },
+    {
+      "dest": "run.log",
+      "reason": "large log omitted per LOCK-002 minimal evidence"
+    },
+    {
+      "dest": "rr-model-requests.json",
+      "reason": "large model request bodies omitted per LOCK-002"
+    },
+    {
+      "dest": "workspace/.kilo/package-lock.json",
+      "reason": "non-essential package lock omitted for minimal set"
+    }
+  ],
+  "status": "complete",
+  "validated": true,
+  "notes": []
+}

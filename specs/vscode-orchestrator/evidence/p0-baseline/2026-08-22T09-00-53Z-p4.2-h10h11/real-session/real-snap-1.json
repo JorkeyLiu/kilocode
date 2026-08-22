@@ -1,0 +1,68 @@
+{
+  "requestedAt": "2026-08-22T08:55:17.807Z",
+  "sessions": [
+    {
+      "id": "ses_fd751974affegBxFkZ11gtXDso",
+      "title": "New session - 2026-08-22T08:55:13.845Z",
+      "agent": "e2e-agent",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": null,
+      "createdAt": 1787388913845,
+      "updatedAt": 1787388914073
+    }
+  ],
+  "messages": {
+    "ses_fd751974affegBxFkZ11gtXDso": [
+      {
+        "id": "msg_028ae68a2001R1nZploV20JDDL",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E parity prompt A: custom agent plus low variant"
+      },
+      {
+        "id": "msg_028ae771e001W1RAxxO70KmE6C",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": ""
+      }
+    ]
+  },
+  "statuses": {
+    "ses_fd751974affegBxFkZ11gtXDso": "busy"
+  },
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "e2e-agent-b",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {},
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {
+    "ses_fd751974affegBxFkZ11gtXDso": []
+  }
+}

@@ -2,6 +2,7 @@ import type { Session, Agent, Event, ProviderListResponse } from "@kilocode/sdk/
 import type { SyncPayload } from "./services/cli-backend/sdk-sse-adapter"
 import { prettifyError } from "zod/v4"
 import type { PartBatch, PartUpdate } from "./kilo-provider/session-stream-scheduler"
+import type { AgentIndex } from "./config/selectors"
 import type { PartRemove } from "./shared/stream-messages"
 import * as path from "path"
 
@@ -240,6 +241,21 @@ export function filterVisibleAgents(agents: Agent[]): { visible: Agent[]; defaul
   const visible = agents.filter((a) => a.mode !== "subagent" && !a.hidden)
   const defaultAgent = visible.length > 0 ? visible[0]!.name : "code"
   return { visible, defaultAgent }
+}
+
+/**
+ * Legacy parity for the canonical agents payload. When the config declares an
+ * explicit `default_agent`, serve it verbatim; otherwise derive the default
+ * from the served list with the same ordering semantics as
+ * filterVisibleAgents — first non-subagent (`mode !== "specialized"` in the
+ * canonical index vocabulary), non-hidden entry, falling back to the first
+ * served entry. Returns "" only when nothing at all is served.
+ */
+export function resolveServedDefaultAgent(index: Pick<AgentIndex, "defaultId" | "agents">): string {
+  if (index.defaultId) return index.defaultId
+  const served = index.agents.filter((item) => !item.hidden)
+  const visible = served.filter((item) => item.mode !== "specialized")
+  return (visible[0] ?? served[0])?.id ?? ""
 }
 
 /** Page size for the initial session load / full refresh. */

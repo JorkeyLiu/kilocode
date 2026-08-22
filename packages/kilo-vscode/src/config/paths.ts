@@ -16,6 +16,19 @@ import type { AssetDirectory, CanonicalPaths } from "./types"
 import { ASSET_DIRECTORIES } from "./types"
 
 /**
+ * Default global config root, spec-compliant XDG resolution: `$XDG_CONFIG_HOME/kilo`
+ * when XDG_CONFIG_HOME is set to an absolute path, otherwise `<homedir>/.config/kilo`.
+ * Per the XDG base-directory spec, a non-absolute or empty override is ignored and
+ * falls through to the homedir path. This follows the spec directly; it is not an
+ * exact match of xdg-basedir's implementation.
+ */
+export function defaultGlobalRoot(): string {
+  const override = process.env.XDG_CONFIG_HOME
+  if (override !== undefined && path.isAbsolute(override)) return path.join(override, "kilo")
+  return path.join(os.homedir(), ".config", "kilo")
+}
+
+/**
  * Injectable roots for test isolation. All path resolution flows through
  * this so tests can point at temp directories without OS-level side effects.
  */
@@ -25,7 +38,7 @@ export class Roots {
 
   constructor(projectRoot: string | undefined, globalRoot?: string) {
     this.projectRoot = projectRoot
-    this.globalRoot = globalRoot ?? path.join(os.homedir(), ".config", "kilo")
+    this.globalRoot = globalRoot ?? defaultGlobalRoot()
   }
 
   static default(projectRoot: string | undefined): Roots {

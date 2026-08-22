@@ -1,0 +1,66 @@
+{
+  "requestedAt": "2026-08-22T09:00:21.855Z",
+  "sessions": [
+    {
+      "id": "ses_fd74cf62bffe8vSPT3RzSYQEC1",
+      "title": "New session - 2026-08-22T09:00:17.236Z",
+      "agent": "e2e-agent",
+      "model": {
+        "providerID": "e2e-local",
+        "modelID": "e2e-model",
+        "variant": "low"
+      },
+      "parentID": null,
+      "createdAt": 1787389217236,
+      "updatedAt": 1787389217572
+    }
+  ],
+  "messages": {
+    "ses_fd74cf62bffe8vSPT3RzSYQEC1": [
+      {
+        "id": "msg_028b309bf001sOcP79eKCsdQxK",
+        "role": "user",
+        "agent": "e2e-agent",
+        "model": {
+          "providerID": "e2e-local",
+          "modelID": "e2e-model",
+          "variant": "low"
+        },
+        "text": "E2E_RESTART_PROMPT: call the user tool and wait for the result"
+      },
+      {
+        "id": "msg_028b31a5c001gHtJ6fGAx5jPW3",
+        "role": "assistant",
+        "agent": "e2e-agent",
+        "text": ""
+      }
+    ]
+  },
+  "statuses": {},
+  "agents": [
+    "code",
+    "ask",
+    "compaction",
+    "debug",
+    "e2e-agent",
+    "e2e-agent-b",
+    "explore",
+    "general",
+    "orchestrator",
+    "plan",
+    "summary",
+    "title"
+  ],
+  "connectedProviders": [
+    "kilo",
+    "e2e-local"
+  ],
+  "mcp": {},
+  "pending": {
+    "permissions": [],
+    "questions": []
+  },
+  "children": {
+    "ses_fd74cf62bffe8vSPT3RzSYQEC1": []
+  }
+}

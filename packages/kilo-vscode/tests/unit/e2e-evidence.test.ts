@@ -207,6 +207,15 @@ describe("evidenceInventory (required artifact set)", () => {
     // No backend-snapshot globs exist for a pure runtime-absence scenario.
     expect(rels).not.toContain("scratch:llm-requests-cloud-claw-removal.json")
   })
+
+  it("requires the real-restart canonical-state probe diagnostic (rr-cstate.json)", () => {
+    const { required, optional } = evidenceInventory(new Set(["real-restart"]))
+    const rels = required.map((s) => `${s.base}:${s.rel}`)
+    expect(rels).toContain("scratch:rr-cstate.json")
+    expect(rels).toContain("scratch:canonical-gate.json")
+    // The probe is decision-critical, not an optional extra.
+    expect(optional.map((s) => s.rel)).not.toContain("rr-cstate.json")
+  })
 })
 
 describe("expandGlob (snapshot expansion)", () => {

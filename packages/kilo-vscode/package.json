@@ -739,7 +739,7 @@
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "knip": "knip",
-    "lint": "eslint src webview-ui script/e2e-probe.ts script/e2e-evidence.ts script/e2e-probe-dom.ts script/e2e-probe-restart.ts script/e2e-probe-worktree.ts script/e2e-pin.ts script/e2e-llm-matrix.ts script/e2e-scripted-model.ts script/e2e-completed-seed.ts script/e2e-restart-seed.ts script/e2e-p0-bench.ts script/p0-bench-merge.ts script/p0-bench tests/e2e",
+    "lint": "eslint src webview-ui script/e2e-probe.ts script/e2e-evidence.ts script/e2e-probe-dom.ts script/e2e-probe-restart.ts script/e2e-probe-worktree.ts script/e2e-pin.ts script/e2e-llm-matrix.ts script/e2e-scripted-model.ts script/e2e-completed-seed.ts script/e2e-restart-seed.ts script/e2e-canonical.ts script/e2e-canonical-gate.ts script/e2e-p0-bench.ts script/p0-bench-merge.ts script/p0-bench tests/e2e",
     "test": "vscode-test",
     "test:unit": "bun test tests/unit/ --dots",
     "rebuild-sdk": "bun run --cwd ../sdk/js build",

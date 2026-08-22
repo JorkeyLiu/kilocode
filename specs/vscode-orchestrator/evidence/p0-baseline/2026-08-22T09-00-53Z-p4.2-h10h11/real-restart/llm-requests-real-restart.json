@@ -1,0 +1,40 @@
+{
+  "scenario": "real-restart",
+  "collectedAt": "2026-08-22T09:00:53.231Z",
+  "file": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-8btjNE/llm-requests.jsonl",
+  "records": [
+    {
+      "pid": 74573,
+      "instance": 1,
+      "ts": "2026-08-22T09:00:21",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "title-ses_fd74cf62bffe8vSPT3RzSYQEC1",
+      "small": true,
+      "agent": "title",
+      "mode": "primary"
+    },
+    {
+      "pid": 74573,
+      "instance": 1,
+      "ts": "2026-08-22T09:00:21",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "ses_fd74cf62bffe8vSPT3RzSYQEC1",
+      "small": false,
+      "agent": "e2e-agent",
+      "mode": "primary"
+    },
+    {
+      "pid": 74573,
+      "instance": 1,
+      "ts": "2026-08-22T09:00:22",
+      "providerID": "e2e-local",
+      "modelID": "e2e-model",
+      "sessionID": "ses_fd74cf62bffe8vSPT3RzSYQEC1",
+      "small": false,
+      "agent": "e2e-agent",
+      "mode": "primary"
+    }
+  ]
+}

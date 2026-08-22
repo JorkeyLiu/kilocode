@@ -1,3 +1,5 @@
+import type { CanonicalProviderVariantPayload } from "../../../../src/config/types"
+
 // Provider/model types for model selector
 
 export interface ProviderModel {
@@ -59,6 +61,7 @@ export interface Provider extends ProviderView {
 export interface CanonicalProviderModelView {
   readonly id: string
   readonly name: string
+  readonly variants?: Readonly<Record<string, Readonly<CanonicalProviderVariantPayload>>>
 }
 
 /** Selector-only provider data used by canonical configuration. */

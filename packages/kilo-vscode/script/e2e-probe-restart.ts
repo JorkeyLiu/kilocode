@@ -35,7 +35,7 @@
  * real backend through the real SDK and rendered by the real webview.
  */
 
-import { readFileSync, writeFileSync } from "node:fs"
+import { existsSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Browser, Frame } from "@playwright/test"
 import type { BackendSnapshot } from "../src/agent-manager/fixture-backend"
@@ -43,6 +43,7 @@ import { SCRIPTED, type ScriptedModelHandle } from "./e2e-scripted-model"
 import { RESTART_ARTIFACT_CONTENT } from "./e2e-restart-seed"
 import { isWrongPin, pinnedReason, pinReport, type PinExpectation } from "./e2e-pin"
 import { assertRunOwnedLlmRequests, readLlmRequests } from "./e2e-llm-matrix"
+import { isIsolatedDataRoot, validateGateEvidence } from "./e2e-canonical"
 import {
   E2EPlan,
   expectTranscriptText,
@@ -52,6 +53,8 @@ import {
   pickAgent,
   pickVariant,
   realTabStates,
+  requestCanonicalState,
+  requestSeedCredential,
   sendWithRetry,
   sleep,
   snapshotClient,
@@ -160,6 +163,7 @@ async function ensureRestartSessionOpen(frame: Frame, sessionId: string, timeout
  * The snapshot client is SHARED with the caller so the numbered marker
  * sequence stays in lockstep with the runner's counter.
  */
+// eslint-disable-next-line complexity
 async function restartPhase0(
   browser: Browser,
   plan: E2EPlan,
@@ -169,9 +173,98 @@ async function restartPhase0(
   model: ScriptedModelHandle,
 ): Promise<{ sessionId: string; runnerPid: number; frame: Frame }> {
   const timeout = 30_000
+  // P4.2 H-10/H-11 fresh canonical gate must be proven BEFORE the first
+  // canonical-era session is created. The harness wrote canonical-gate.json
+  // before launching the Extension Host; fail fast if it is missing or
+  // malformed so the run cannot claim canonical post-cutover behavior.
+  await waitForFile(join(scratch, "canonical-gate.json"), 30_000, "canonical gate evidence before first session")
+  {
+    const gateRaw = readFileSync(join(scratch, "canonical-gate.json"), "utf8")
+    let gate: unknown
+    try {
+      gate = JSON.parse(gateRaw)
+    } catch {
+      throw new Error("probe: canonical gate JSON malformed")
+    }
+    const err = validateGateEvidence(gate)
+    if (err) throw new Error(`probe: canonical gate invalid before session: ${err}`)
+    // Archive before evidence must also be present (no mutation proof).
+    if (!existsSync(join(scratch, "canonical-archive-before.json"))) {
+      throw new Error("probe: canonical-archive-before.json missing before first session")
+    }
+    // Ensure the harness never targeted the user's real home: the gate's
+    // dataRoot must be inside the run-owned scratch (normalized isolation helper).
+    const dataRoot = (gate as Record<string, unknown>).dataRoot as string | undefined
+    if (typeof dataRoot === "string" && !isIsolatedDataRoot(scratch, dataRoot)) {
+      throw new Error(`probe: canonical dataRoot not isolated inside scratch: ${dataRoot}`)
+    }
+    // Require at least one canonical archive before the first session — the fresh
+    // canonical DB proof must precede the first canonical-era session.
+    {
+      const beforeRaw = readFileSync(join(scratch, "canonical-archive-before.json"), "utf8")
+      let before: unknown
+      try {
+        before = JSON.parse(beforeRaw)
+      } catch {
+        throw new Error("probe: canonical-archive-before.json malformed")
+      }
+      const count = (before as { archiveCount?: unknown }).archiveCount
+      if (typeof count !== "number" || count < 1) {
+        throw new Error(`probe: canonical archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session (archiveCount=${String(count)})`)
+      }
+    }
+    console.log("[probe] PASS fresh canonical identity/zero-state gate before first session")
+  }
   await waitForFile(join(scratch, "rr-ready"), 120_000, "rr-ready marker")
+  // Credential provisioning evidence (real SecretStorage, no bypass): the
+  // runner seeded the project provider credential before writing rr-ready.
+  // Verify the pre-existing evidence without exposing the secret value, then
+  // exercise a fresh marker round-trip for coverage.
+  {
+    const credFile = join(scratch, "rr-credential.json")
+    await waitForFile(credFile, timeout, "rr-credential.json (credential provisioning evidence)")
+    const cred = JSON.parse(readFileSync(credFile, "utf8")) as Record<string, unknown>
+    console.log(`[probe] credential provisioning (pre-rr-ready): ${JSON.stringify(cred)}`)
+    if (cred.ok !== true) throw new Error(`probe: credential provisioning failed before rr-ready: ${JSON.stringify(cred)}`)
+    const connected = (cred as { connected?: unknown }).connected
+    if (!Array.isArray(connected) || !connected.includes(plan.customProvider)) {
+      throw new Error(`probe: credential evidence missing connected ${plan.customProvider}: ${JSON.stringify(cred)}`)
+    }
+    if ((cred as { defaultModel?: unknown }).defaultModel !== `${plan.customProvider}/${plan.customModel}`) {
+      throw new Error(`probe: credential evidence wrong defaultModel: ${JSON.stringify(cred)}`)
+    }
+  }
+  {
+    const fresh = await requestSeedCredential(scratch, timeout)
+    console.log(`[probe] credential seeding round-trip: ${JSON.stringify(fresh)}`)
+    if (fresh.ok !== true) throw new Error(`probe: credential round-trip failed: ${JSON.stringify(fresh)}`)
+  }
   const found = await findAgentManagerFrameAny(browser, 60_000)
   const frame = found.frame
+
+  // Canonical-state probe BEFORE the agent-list assertion: captures the
+  // runtime CanonicalConfigService snapshot (readiness, stamp, last error,
+  // asset scan summary, selector index sizes/ids) into rr-cstate.json so the
+  // dark span between materializeFromDisk completion and webview acceptance is
+  // self-diagnosing — H1 (readiness never opened) vs H2 (ready but empty
+  // index) becomes decidable from run evidence instead of inference.
+  const cstate = await requestCanonicalState(scratch, timeout)
+  console.log(`[probe] canonical state: ${JSON.stringify(cstate)}`)
+  {
+    const prov = (cstate as { providerIndex?: { connected?: unknown; entries?: Array<{ id: string; hasCredential: boolean }> } | null }).providerIndex
+    if (!prov || !Array.isArray(prov.connected) || !prov.connected.includes(plan.customProvider)) {
+      throw new Error(`probe: canonical state missing connected ${plan.customProvider}: ${JSON.stringify(cstate)}`)
+    }
+    const entry = prov.entries?.find((e) => e.id === plan.customProvider)
+    if (!entry?.hasCredential) throw new Error(`probe: canonical state hasCredential false for ${plan.customProvider}: ${JSON.stringify(cstate)}`)
+    const expectedModel = `${plan.customProvider}/${plan.customModel}`
+    if ((cstate as { defaultModel?: unknown }).defaultModel !== expectedModel) {
+      throw new Error(`probe: canonical state wrong defaultModel: expected ${expectedModel}, got ${JSON.stringify(cstate)}`)
+    }
+    if ((cstate as { materializationReady?: unknown }).materializationReady !== true) {
+      throw new Error(`probe: canonical state not ready: ${JSON.stringify(cstate)}`)
+    }
+  }
 
   await waitForAgentOption(frame, plan.customAgentLabel, timeout)
   await pickAgent(frame, plan.customAgentLabel, timeout)

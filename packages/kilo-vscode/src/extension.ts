@@ -613,6 +613,13 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.backendSnapshot", async () => {
         return agentManagerProvider.backendSnapshotForFixture()
       }),
+      // Read-only runtime snapshot of the CanonicalConfigService materialization
+      // state (roots, readiness, stamps, asset scan summary, selector index
+      // sizes/ids) — lets the real-restart harness distinguish readiness-never-
+      // opened from ready-but-empty-index when ModeSwitcher options=[] recurs.
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.canonicalState", async () => {
+        return canonicalConfig.fixtureStateSnapshot()
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.mcpDisconnect", async (name: string) => {
         return agentManagerProvider.mcpDisconnectForFixture(name)
       }),
@@ -655,6 +662,9 @@ export function activate(context: vscode.ExtensionContext) {
           return true
         },
       ),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.seedCredential", async () => {
+        return canonicalConfig.seedFixtureProviderCredential("e2e-local", "e2e-fixture-key")
+      }),
       // P3.1 sidebar-removal scenario: open a fresh "Open in Tab" editor panel
       // through the production openInTab path and report whether its webview
       // reached readiness. Proves the session editor survives without the

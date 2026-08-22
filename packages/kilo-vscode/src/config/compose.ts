@@ -310,6 +310,19 @@ function composeRestrictive(
   }
 }
 
+/**
+ * Compose a "meta" field: benign tooling metadata (e.g. $schema).
+ * Always omitted from the materialized value — never composed, never hashed.
+ */
+function composeMeta(entry: RegistryEntry): ComposedField {
+  return {
+    key: entry.key,
+    value: undefined,
+    source: "global",
+    provenance: makeProvenance("global", "", entry.composition, false),
+  }
+}
+
 // ── Public API ───────────────────────────────────────────────────────
 
 /**
@@ -330,6 +343,8 @@ export function composeField(
       return composeOrdered(entry, global, project)
     case "restrictive":
       return composeRestrictive(entry, global, project)
+    case "meta":
+      return composeMeta(entry)
   }
 }
 

@@ -4,8 +4,8 @@
  * Verifies the closed registry: known keys, unknown key rejection,
  * scope validation, composition operators, and cross-scope conflict.
  *
- * The exact closed set of 11 JSONC fields:
- *   model, model_variant, model_variant_overrides,
+ * The exact closed set of 12 JSONC fields:
+ *   $schema, model, model_variant, model_variant_overrides,
  *   subagent_model, subagent_variant, subagent_variant_overrides,
  *   default_agent, provider, mcp, permission, instructions
  */
@@ -79,7 +79,7 @@ describe("registry", () => {
   describe("getAllEntries", () => {
     it("returns all registry entries", () => {
       const entries = getAllEntries()
-      expect(entries.length).toBe(11)
+      expect(entries.length).toBe(12)
       // Check some representative entries exist
       const keys = entries.map((e) => e.key)
       expect(keys).toContain("model")
@@ -94,16 +94,16 @@ describe("registry", () => {
       const keys = keysForScope("global")
       expect(keys).toContain("model")
       expect(keys).toContain("instructions")
-      // All 11 fields are valid in both scopes
-      expect(keys.length).toBe(11)
+      // All 12 fields are valid in both scopes
+      expect(keys.length).toBe(12)
     })
 
     it("returns project-scope keys", () => {
       const keys = keysForScope("project")
       expect(keys).toContain("model")
       expect(keys).toContain("permission")
-      // All 11 fields are valid in both scopes
-      expect(keys.length).toBe(11)
+      // All 12 fields are valid in both scopes
+      expect(keys.length).toBe(12)
     })
   })
 
@@ -133,6 +133,12 @@ describe("registry", () => {
       expect(entries.length).toBeGreaterThan(0)
       expect(entries.some((e) => e.key === "permission")).toBe(true)
     })
+
+    it("returns meta-composition keys", () => {
+      const entries = keysByComposition("meta")
+      expect(entries.length).toBe(1)
+      expect(entries[0]!.key).toBe("$schema")
+    })
   })
 
   describe("keysWithCrossScopeConflict", () => {
@@ -148,8 +154,9 @@ describe("registry", () => {
       const keys = snapshotKeys()
       expect(keys).toContain("model")
       expect(keys).toContain("permission")
-      // All 11 fields appear in snapshots
+      // The 11 snapshot fields appear; the $schema meta-key is excluded
       expect(keys.length).toBe(11)
+      expect(keys).not.toContain("$schema")
     })
   })
 

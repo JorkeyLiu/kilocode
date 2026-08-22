@@ -326,7 +326,38 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
     optional.push({ rel: "p3-4-removal-ready", base: "scratch" })
   }
   if (scenarios.has("real-restart")) {
+    required.push(
+      { rel: "canonical-gate.json", base: "scratch" },
+      { rel: "canonical-archive-before.json", base: "scratch" },
+      { rel: "canonical-archive-after.json", base: "scratch" },
+      // Canonical-state probe (restartPhase0): the runtime
+      // CanonicalConfigService snapshot that makes ModeSwitcher options=[]
+      // self-diagnosing (H1 readiness-never-opened vs H2 empty index). The
+      // probe fails fast when the round trip never completes, so a successful
+      // run always carries this file.
+      { rel: "rr-cstate.json", base: "scratch" },
+      // Credential provisioning evidence (real SecretStorage, no bypass):
+      // proves the project credential ref was stored and canonical state
+      // converged to connected + defaultModel before the first session.
+      // Never contains the secret value.
+      { rel: "rr-credential.json", base: "scratch" },
+    )
     optional.push({ rel: "e2e-custom-called.txt", base: "workspace" })
+  }
+  if (scenarios.has("real-session")) {
+    required.push(
+      { rel: "canonical-gate.json", base: "scratch" },
+      { rel: "canonical-archive-before.json", base: "scratch" },
+      { rel: "canonical-archive-after.json", base: "scratch" },
+      // Real-session canonical-state probe: same diagnostic as real-restart
+      // but distinct rs-cstate.json so the five-boundary claim aggregates
+      // across manifests without collision.
+      { rel: "rs-cstate.json", base: "scratch" },
+      // Real-session credential evidence: distinct rs-credential.json file
+      // (real SecretStorage, no bypass) — never contains the secret value.
+      { rel: "rs-credential.json", base: "scratch" },
+      { rel: ".kilo/kilo.jsonc", base: "workspace" },
+    )
   }
   if (scenarios.has("real-session") || scenarios.has("real-overflow") || scenarios.has("worktree-removal")) {
     optional.push({ rel: ".kilo/package-lock.json", base: "workspace" })

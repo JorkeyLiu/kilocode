@@ -7,10 +7,45 @@
  * - Asset directory paths
  */
 
-import { describe, expect, it } from "bun:test"
-import { Roots, globalConfigFile, projectConfigFile, assetDir, resolveCanonicalPaths, CONFIG_FILENAME } from "../../../src/config/paths"
+import { afterEach, beforeEach, describe, expect, it } from "bun:test"
+import { homedir } from "node:os"
+import { join } from "node:path"
+import { Roots, defaultGlobalRoot, globalConfigFile, projectConfigFile, assetDir, resolveCanonicalPaths, CONFIG_FILENAME } from "../../../src/config/paths"
+
+describe("defaultGlobalRoot (XDG_CONFIG_HOME)", () => {
+  const saved = process.env.XDG_CONFIG_HOME
+  const restore = () => {
+    if (saved === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = saved
+  }
+  afterEach(restore)
+
+  it("honors an absolute XDG_CONFIG_HOME override", () => {
+    process.env.XDG_CONFIG_HOME = "/tmp/e2e-xdg-config"
+    expect(defaultGlobalRoot()).toBe(join("/tmp/e2e-xdg-config", "kilo"))
+  })
+
+  it("ignores a relative XDG_CONFIG_HOME per the XDG spec and falls back to homedir", () => {
+    process.env.XDG_CONFIG_HOME = "relative/config"
+    expect(defaultGlobalRoot()).toBe(join(homedir(), ".config", "kilo"))
+  })
+
+  it("falls back to ~/.config/kilo when XDG_CONFIG_HOME is empty", () => {
+    process.env.XDG_CONFIG_HOME = ""
+    expect(defaultGlobalRoot()).toBe(join(homedir(), ".config", "kilo"))
+  })
+})
 
 describe("Roots", () => {
+  const saved = process.env.XDG_CONFIG_HOME
+  beforeEach(() => {
+    delete process.env.XDG_CONFIG_HOME
+  })
+  afterEach(() => {
+    if (saved === undefined) delete process.env.XDG_CONFIG_HOME
+    else process.env.XDG_CONFIG_HOME = saved
+  })
+
   it("defaults global root to ~/.config/kilo", () => {
     const roots = new Roots("/workspace")
     expect(roots.getGlobalRoot()).toContain(".config/kilo")

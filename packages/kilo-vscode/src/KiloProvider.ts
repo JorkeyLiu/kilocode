@@ -29,6 +29,7 @@ import {
   sessionToWebview,
   indexProvidersById,
   filterVisibleAgents,
+  resolveServedDefaultAgent,
   mapSSEEventToWebviewMessage,
   getErrorMessage,
   getConfigErrorDetails,
@@ -146,7 +147,8 @@ import type { CanonicalConfigService, CanonicalConfigEvent, CanonicalConfigError
 import { sameStamp } from "./config/types"
 import { toCanonicalPayload, type CanonicalConfigPayload, type CanonicalMcpPayload, type CanonicalProviderPayload, type CanonicalStamp, type CleanupRetryRecord, parseCanonicalProviderRecord, narrowProviderEntry, isValidCanonicalProviderEntry } from "./config/types"
 import { parseSecretKey } from "./config/secret-adapter"
-import { CLOSED_JSONC_FIELDS } from "./config/registry"
+import { CLOSED_JSONC_FIELDS, isGuiField } from "./config/registry"
+import { mapProviderIndexToWebviewProviders } from "./config/selectors"
 
 let maxCost = 0
 
@@ -217,10 +219,11 @@ function canonicalMcpValue(value: unknown): CanonicalMcpPayload {
 }
 
 function filterCanonicalScope(value: Record<string, unknown>): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(value).filter(([key]) => CLOSED_JSONC_FIELDS.includes(key as (typeof CLOSED_JSONC_FIELDS)[number])))
+  // Meta keys ($schema) are validation-only backend metadata: excluded from
+  // the GUI payload so toCanonicalPayload never sees them.
+  return Object.fromEntries(Object.entries(value).filter(([key]) => isGuiField(key)))
 }
 
-const CANONICAL_PROVIDER_KEYS = new Set(["name", "endpoint", "protocol", "models"])
 const CREDENTIAL_KEY = /^(?:api[_-]?key|authorization|token|password|secret|cookie|credential|headers?)$/i
 
 /**
@@ -666,13 +669,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       ? ((this.cachedProvidersMessage as { defaultSelection?: { providerID?: string } }).defaultSelection?.providerID ?? null)
       : null)
     if (!index) return
-    const providers = Object.fromEntries(index.providers.map((item) => [item.id, {
-      id: item.id,
-      name: item.displayName,
-      hasCredential: item.hasCredential,
-      source: "custom" as const,
-      models: Object.fromEntries(item.modelIds.map((id) => [id, { id, name: item.modelLabels[id] ?? id }])),
-    }]))
+    const providers = mapProviderIndexToWebviewProviders(index)
     const selected = typeof (service.snapshot?.config.value.model) === "string" ? String(service.snapshot?.config.value.model).split("/") : []
     const providerID = selected[0] && index.providers.some((item) => item.id === selected[0]) ? selected[0] : ""
     const message = {
@@ -721,7 +718,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       type: "agentsLoaded" as const,
       agents: index.agents.filter((item) => !item.hidden).map(map),
       allAgents: index.agents.map(map),
-      defaultAgent: index.defaultId ?? "",
+      // Legacy parity: configs without `default_agent` must still receive a
+      // usable default derived from the served list (see resolveServedDefaultAgent);
+      // "" only when zero agents are served.
+      defaultAgent: resolveServedDefaultAgent(index),
       canonical: true,
       ready: true,
       materializationVersion: index.materializationVersion,
@@ -974,9 +974,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
        this.postMessage({ type: "configUpdateFailed", message: "Canonical config stamp is required", kind: "stale", saveID, canonical: true, stamp: { ...service.stamp, assetHash: null } })
       return
     }
-    const clean = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).filter(([key]) => CLOSED_JSONC_FIELDS.includes(key as (typeof CLOSED_JSONC_FIELDS)[number])))
+    // Meta keys ($schema) are backend-owned validation metadata: excluded
+    // from GUI write patches and never unsettable from the webview.
+    const clean = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).filter(([key]) => isGuiField(key)))
     const unset = (value: Record<string, unknown>, paths: string[][]) => {
-      for (const path of paths) if (path.length === 1 && CLOSED_JSONC_FIELDS.includes(path[0] as (typeof CLOSED_JSONC_FIELDS)[number])) value[path[0]!] = undefined
+      for (const path of paths) if (path.length === 1 && isGuiField(path[0])) value[path[0]!] = undefined
       return value
     }
     const global = unset(clean({ ...partial }), globalUnset)

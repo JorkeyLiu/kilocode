@@ -1,7 +1,9 @@
 import { describe, expect, it } from "bun:test"
+import { readFileSync } from "node:fs"
+import { join } from "node:path"
 import { restartSessionReason } from "../../script/e2e-probe-restart"
 import { SCRIPTED } from "../../script/e2e-scripted-model"
-import { modelLabelShows } from "../../script/e2e-probe-dom"
+import { modelLabelShows, agentOptionFailure } from "../../script/e2e-probe-dom"
 import type { BackendSnapshot, MessageTruth } from "../../src/agent-manager/fixture-backend"
 import type { E2EPlan } from "../../script/e2e-probe-dom"
 
@@ -139,5 +141,51 @@ describe("restartSessionReason (shared backend pin predicate)", () => {
   it("treats a missing session and a missing user message as transient (not pin failures)", () => {
     expect(restartSessionReason(snap([]), "missing", plan, PROMPT)).toContain("missing from backend")
     expect(restartSessionReason(snap([]), "s1", plan, PROMPT)).toContain("no UI-submitted user message")
+  })
+})
+
+describe("restart probe isolation (normalized helper)", () => {
+  it("uses the shared normalized isolation helper, not raw startsWith", () => {
+    const src = readFileSync(join(import.meta.dirname, "../../script/e2e-probe-restart.ts"), "utf8")
+    expect(src).toContain("isIsolatedDataRoot")
+    expect(src).not.toContain("dataRoot.startsWith(scratch)")
+    expect(src).not.toContain("!dataRoot.startsWith")
+  })
+  // Prefix-attack cases for isIsolatedDataRoot itself are covered in
+  // tests/unit/e2e-canonical.test.ts and are intentionally not duplicated here.
+})
+
+describe("agentOptionFailure (ModeSwitcher distinction)", () => {
+  it("distinguishes a never-rendered trigger from an empty rendered list", () => {
+    const unrendered = agentOptionFailure({ triggerRendered: false, variant: "absent", options: [] }, "E2E Agent")
+    expect(unrendered).toContain("trigger never rendered")
+    const empty = agentOptionFailure({ triggerRendered: true, variant: "interactive", options: [] }, "E2E Agent")
+    expect(empty).toContain("0 visible option(s)")
+    expect(empty).not.toContain("never rendered")
+  })
+
+  it("requires >= 2 visible options even when the expected label is present", () => {
+    const single = agentOptionFailure({ triggerRendered: true, variant: "interactive", options: ["E2E Agent"] }, "E2E Agent")
+    expect(single).toContain("1 visible option(s)")
+    expect(single).toContain("expected >= 2")
+    expect(agentOptionFailure({ triggerRendered: true, variant: "interactive", options: ["E2E Agent", "E2E Agent B"] }, "E2E Agent")).toBeUndefined()
+  })
+
+  it("fails when the expected label is missing from a populated list", () => {
+    const reason = agentOptionFailure({ triggerRendered: true, variant: "interactive", options: ["Ask", "Code"] }, "E2E Agent")
+    expect(reason).toContain("expected label not listed")
+    expect(reason).toContain("options=[Ask, Code]")
+  })
+
+  it("restartPhase0 probes canonical state BEFORE the agent-list assertion and the runner services the marker", () => {
+    const probeSrc = readFileSync(join(import.meta.dirname, "../../script/e2e-probe-restart.ts"), "utf8")
+    const cstateAt = probeSrc.indexOf("await requestCanonicalState(scratch")
+    const agentAt = probeSrc.indexOf("await waitForAgentOption(frame, plan.customAgentLabel, timeout)")
+    expect(cstateAt).toBeGreaterThan(-1)
+    expect(agentAt).toBeGreaterThan(cstateAt)
+    const runnerSrc = readFileSync(join(import.meta.dirname, "../e2e/runner.ts"), "utf8")
+    expect(runnerSrc).toContain('"kilo-code.new.e2eFixture.canonicalState"')
+    expect(runnerSrc).toContain('rr-cstate-request')
+    expect(runnerSrc).toContain('rr-cstate.json')
   })
 })

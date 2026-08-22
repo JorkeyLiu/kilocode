@@ -26,6 +26,7 @@
     "../../script/e2e-scripted-model.ts",
     "../../script/e2e-completed-seed.ts",
     "../../script/e2e-restart-seed.ts",
+    "../../script/e2e-canonical.ts",
     "../../script/e2e-p0-bench.ts",
     "../../script/p0-bench-merge.ts",
     "../../script/p0-bench/*.ts"

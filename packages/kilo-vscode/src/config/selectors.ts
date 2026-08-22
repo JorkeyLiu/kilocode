@@ -6,16 +6,17 @@
  * provenance/stale/invalid diagnostics, provider IDs/models, agent IDs/display
  * metadata, and selected IDs as appropriate.
  *
- * Selector-only payloads: IDs, display labels, model IDs, selected IDs,
- * version/hash/provenance status/diagnostics. No provider endpoint/protocol,
- * variant override maps, effective permission/config, or secrets (Blocker 13).
+ * Selector-only payloads: IDs, display labels, model IDs/labels, per-model
+ * variant maps, selected IDs, version/hash/provenance status/diagnostics.
+ * No provider endpoint/protocol, variant override maps, effective
+ * permission/config, or secrets (Blocker 13).
  *
  * Key registry:
  * - globalState: `kilo.canonicalIndex.providers` and `kilo.canonicalIndex.globalModel`
  * - workspaceState: `kilo.canonicalIndex.agents` and `kilo.canonicalIndex.projectModel`
  */
 
-import type { MaterializedConfig, ProvenanceStamp, StateAdapter, CanonicalProviderPayload } from "./types"
+import type { MaterializedConfig, ProvenanceStamp, StateAdapter, CanonicalProviderPayload, CanonicalProviderVariantPayload } from "./types"
 import { parseCanonicalProviderRecord, isValidModelsMap, parseOwnedCredentialRef } from "./types"
 import type { ConfigSnapshot } from "./snapshot"
 
@@ -37,6 +38,8 @@ export interface ProviderIndexEntry {
   readonly displayName: string
   readonly modelIds: readonly string[]
   readonly modelLabels: Readonly<Record<string, string>>
+  /** Per-model variant maps preserved from validated provider models. Frozen immutable. */
+  readonly modelVariants: Readonly<Record<string, Readonly<Record<string, CanonicalProviderVariantPayload>>>>
 }
 
 export interface ProviderIndex {
@@ -173,33 +176,108 @@ export function buildProviderIndex(
     for (const [id, entry] of Object.entries(parsedProviders)) {
       const models = entry.models
       const modelLabels: Record<string, string> = {}
+      const modelVariants: Record<string, Readonly<Record<string, CanonicalProviderVariantPayload>>> = {}
       const modelIds = models ? Object.keys(models) : []
       if (models) {
         for (const [modelId, model] of Object.entries(models)) {
           if (typeof model.name === "string") {
             modelLabels[modelId] = model.name
           }
+          if (model.variants && typeof model.variants === "object") {
+            const cloned: Record<string, CanonicalProviderVariantPayload> = {}
+            for (const [variantName, payload] of Object.entries(model.variants as Record<string, CanonicalProviderVariantPayload>)) {
+              const copy = { ...(payload as Record<string, unknown>) } as CanonicalProviderVariantPayload
+              // Freeze nested closed records for immutability parity with snapshot
+              if ((copy as Record<string, unknown>).thinking && typeof (copy as Record<string, unknown>).thinking === "object") {
+                Object.freeze((copy as Record<string, unknown>).thinking as object)
+              }
+              if ((copy as Record<string, unknown>).chat_template_args && typeof (copy as Record<string, unknown>).chat_template_args === "object") {
+                Object.freeze((copy as Record<string, unknown>).chat_template_args as object)
+              }
+              Object.freeze(copy)
+              cloned[variantName] = copy
+            }
+            Object.freeze(cloned)
+            modelVariants[modelId] = cloned
+          }
         }
       }
-      providers.push({
+      Object.freeze(modelLabels)
+      Object.freeze(modelVariants)
+      const modelIdsFrozen = Object.freeze([...modelIds]) as readonly string[]
+      const entryRecord: ProviderIndexEntry = {
         id,
         hasCredential: credentialStatus?.get(id) ?? (typeof entry.credential === "string" && parseOwnedCredentialRef(entry.credential) !== null),
         displayName: typeof entry.name === "string" ? entry.name : id,
-        modelIds,
+        modelIds: modelIdsFrozen,
         modelLabels,
-      })
+        modelVariants,
+      }
+      Object.freeze(entryRecord)
+      providers.push(entryRecord)
     }
   }
 
-  return {
+  Object.freeze(providers)
+  const diagnostics = buildDiagnostics(config)
+  Object.freeze(diagnostics.conflicts)
+  Object.freeze(diagnostics.provenance)
+  Object.freeze(diagnostics)
+  return Object.freeze({
     version: SELECTOR_INDEX_VERSION,
     materializationVersion: config.version,
     materializationHash: config.contentHash,
-    diagnostics: buildDiagnostics(config),
+    diagnostics,
     providers,
     selectedId: existingSelectedId,
     timestamp: Date.now(),
-  }
+  })
+}
+
+// ── Provider → webview mapping (pure, vscode-free) ──────────────────
+
+export type CanonicalWebviewModelView = {
+  readonly id: string
+  readonly name: string
+  readonly variants?: Readonly<Record<string, Readonly<CanonicalProviderVariantPayload>>>
+}
+
+export type CanonicalWebviewProviderView = {
+  readonly id: string
+  readonly name: string
+  readonly hasCredential: boolean
+  readonly source: "custom"
+  readonly models: Readonly<Record<string, CanonicalWebviewModelView>>
+}
+
+/**
+ * Pure helper: map a ProviderIndex to the webview `providersLoaded` provider views,
+ * including per-model variant maps. This is the single production mapping used
+ * by KiloProvider.sendCanonicalProviders and by tests.
+ */
+export function mapProviderIndexToWebviewProviders(index: ProviderIndex): Record<string, CanonicalWebviewProviderView> {
+  return Object.fromEntries(
+    index.providers.map((item) => [
+      item.id,
+      {
+        id: item.id,
+        name: item.displayName,
+        hasCredential: item.hasCredential,
+        source: "custom" as const,
+        models: Object.fromEntries(
+          item.modelIds.map((mid) => {
+            const base: { id: string; name: string; variants?: Readonly<Record<string, Readonly<CanonicalProviderVariantPayload>>> } = {
+              id: mid,
+              name: item.modelLabels[mid] ?? mid,
+            }
+            const variants = item.modelVariants?.[mid]
+            if (variants && Object.keys(variants).length > 0) base.variants = variants
+            return [mid, base]
+          }),
+        ),
+      },
+    ]),
+  )
 }
 
 /**
@@ -300,12 +378,69 @@ export async function persistProviderIndex(state: StateAdapter, index: ProviderI
 /**
  * Rehydrate a provider index from globalState.
  * Returns null if no persisted index or if the schema version is incompatible.
+ * Rehydrated structures are deeply frozen to preserve the same immutability
+ * guarantees as buildProviderIndex — modelVariants, entries, array, and index.
  */
 export function rehydrateProviderIndex(state: StateAdapter): ProviderIndex | null {
   const stored = state.get<ProviderIndex>(STATE_KEYS.providers)
   if (!stored) return null
   if (stored.version !== SELECTOR_INDEX_VERSION) return null
-  return stored
+  const frozenProviders = stored.providers.map((entry) => {
+    const rawVariants = (entry as unknown as { modelVariants?: unknown }).modelVariants as ProviderIndexEntry["modelVariants"] | undefined
+    let modelVariants: ProviderIndexEntry["modelVariants"]
+    if (!rawVariants || typeof rawVariants !== "object" || Array.isArray(rawVariants)) {
+      modelVariants = Object.freeze({}) as ProviderIndexEntry["modelVariants"]
+    } else {
+      const frozenByModel: Record<string, Readonly<Record<string, CanonicalProviderVariantPayload>>> = {}
+      for (const [modelId, variantMap] of Object.entries(rawVariants as Record<string, Record<string, CanonicalProviderVariantPayload>>)) {
+        if (!variantMap || typeof variantMap !== "object" || Array.isArray(variantMap)) {
+          frozenByModel[modelId] = Object.freeze({}) as Readonly<Record<string, CanonicalProviderVariantPayload>>
+          continue
+        }
+        const frozenMap: Record<string, CanonicalProviderVariantPayload> = {}
+        for (const [variantName, payload] of Object.entries(variantMap)) {
+          const copy = { ...(payload as Record<string, unknown>) } as CanonicalProviderVariantPayload
+          if ((copy as Record<string, unknown>).thinking && typeof (copy as Record<string, unknown>).thinking === "object") {
+            Object.freeze((copy as Record<string, unknown>).thinking as object)
+          }
+          if ((copy as Record<string, unknown>).chat_template_args && typeof (copy as Record<string, unknown>).chat_template_args === "object") {
+            Object.freeze((copy as Record<string, unknown>).chat_template_args as object)
+          }
+          Object.freeze(copy)
+          frozenMap[variantName] = copy
+        }
+        Object.freeze(frozenMap)
+        frozenByModel[modelId] = frozenMap
+      }
+      modelVariants = Object.freeze(frozenByModel) as ProviderIndexEntry["modelVariants"]
+    }
+    const modelLabels = Object.freeze({ ...(entry.modelLabels as Record<string, string>) })
+    const modelIds = Object.freeze([...entry.modelIds]) as readonly string[]
+    const frozenEntry: ProviderIndexEntry = {
+      id: entry.id,
+      hasCredential: entry.hasCredential,
+      displayName: entry.displayName,
+      modelIds,
+      modelLabels,
+      modelVariants,
+    }
+    Object.freeze(frozenEntry)
+    return frozenEntry
+  })
+  Object.freeze(frozenProviders)
+  const diagnostics = {
+    ...stored.diagnostics,
+    conflicts: Object.freeze([...stored.diagnostics.conflicts]),
+    provenance: Object.freeze({ ...stored.diagnostics.provenance }),
+  }
+  Object.freeze(diagnostics)
+  const rehydrated: ProviderIndex = {
+    ...stored,
+    providers: frozenProviders,
+    diagnostics: diagnostics as ProviderIndex["diagnostics"],
+  }
+  Object.freeze(rehydrated)
+  return rehydrated
 }
 
 /**

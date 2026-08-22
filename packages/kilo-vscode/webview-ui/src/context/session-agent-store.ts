@@ -90,3 +90,37 @@ export function resolveSessionAgent(
   if (sessionAgent && allNames?.has(sessionAgent)) return sessionAgent
   return defaultAgent
 }
+
+/**
+ * LOCK-004: Preserve an explicitly selected session/pending-draft agent in the
+ * outbound prompt even when it equals the served default agent. An explicit
+ * selection must not be erased merely because it equals the default; an
+ * unselected/default-only path may still omit the agent if that is the
+ * existing contract.
+ *
+ * Explicitness is determined by stored selection state, not by value equality:
+ * - for a scoped send (draftID or real sessionID): `store.agentSelections[scope]` present
+ * - for an unscoped pending composer: `pending !== null`
+ *
+ * Recovered continuity (`sessionRecoveredAgents`) is not explicit and does not
+ * force a send.
+ *
+ * @returns agent name to send, or undefined when the established contract omits
+ *   the default agent for a genuinely unselected path.
+ */
+export function resolvePromptAgent(
+  store: AgentStore,
+  pending: string | null,
+  defaultAgent: string,
+  names: Set<string>,
+  allNames: Set<string> | undefined,
+  scope: string | undefined,
+): string | undefined {
+  const resolved =
+    scope !== undefined
+      ? resolveSessionAgent(store, scope, defaultAgent, names, allNames)
+      : (pending ?? defaultAgent)
+  const explicit = scope !== undefined ? store.agentSelections[scope] !== undefined : pending !== null
+  if (explicit) return resolved
+  return resolved !== defaultAgent ? resolved : undefined
+}
