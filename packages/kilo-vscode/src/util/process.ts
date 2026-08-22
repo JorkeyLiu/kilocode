@@ -22,7 +22,7 @@ const _exec = promisify(_execFile)
 
 /** `child_process.spawn` with `windowsHide: true` forced on. */
 export function spawn(cmd: string, args: string[], opts: SpawnOptions = {}): ChildProcess {
-  return _spawn(cmd, args, { windowsHide: true, ...opts })
+  return _spawn(cmd, args, { ...opts, windowsHide: true })
 }
 
 /** Promisified `child_process.execFile` with `windowsHide: true` forced on. */

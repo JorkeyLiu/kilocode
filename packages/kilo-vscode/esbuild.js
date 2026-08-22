@@ -226,6 +226,23 @@ async function main() {
     plugins: [jsoncParserEsmPlugin, esbuildProblemMatcherPlugin],
   })
 
+  // R1 private worker standalone artifact (packaged and resolvable via HostOptions default)
+  const workerCtx = await esbuild.context({
+    entryPoints: ["src/private-worker/worker.ts"],
+    bundle: true,
+    format: "cjs",
+    minifyIdentifiers: false,
+    minifySyntax: production,
+    minifyWhitespace: production,
+    sourcemap: !production,
+    sourcesContent: false,
+    platform: "node",
+    outfile: "dist/private-worker/worker.js",
+    external: ["vscode"],
+    logLevel: "silent",
+    plugins: [esbuildProblemMatcherPlugin],
+  })
+
   // Build Agent Manager webview (SolidJS, shares components with the editor-tab chat webview)
   const agentManagerCtx = await createBrowserWebviewContext(
     "webview-ui/agent-manager/index.tsx",
@@ -244,6 +261,7 @@ async function main() {
   if (watch) {
     await Promise.all([
       extensionCtx.watch(),
+      workerCtx.watch(),
       webviewCtx.watch(),
       agentManagerCtx.watch(),
       marketplaceCtx.watch(),
@@ -252,6 +270,7 @@ async function main() {
   } else {
     await Promise.all([
       extensionCtx.rebuild(),
+      workerCtx.rebuild(),
       webviewCtx.rebuild(),
       agentManagerCtx.rebuild(),
       marketplaceCtx.rebuild(),
@@ -259,6 +278,7 @@ async function main() {
     ])
     await Promise.all([
       extensionCtx.dispose(),
+      workerCtx.dispose(),
       webviewCtx.dispose(),
       agentManagerCtx.dispose(),
       marketplaceCtx.dispose(),
