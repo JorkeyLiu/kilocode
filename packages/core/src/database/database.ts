@@ -10,7 +10,7 @@ import fs from "fs/promises"
 import { DatabaseMigration } from "./migration"
 import { InstallationChannel } from "../installation/version"
 import { acquireLease } from "../cutover/lease"
-import { deriveArchive } from "../cutover/archive"
+import { deriveArchive } from "../cutover/archive-path"
 
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
 type DatabaseShape = Effect.Success<typeof makeDatabase>

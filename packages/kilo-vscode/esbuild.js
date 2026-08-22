@@ -243,6 +243,24 @@ async function main() {
     plugins: [esbuildProblemMatcherPlugin],
   })
 
+  // Standalone private worker ESM artifact (bundled graph for KILO_PRIVATE_WORKER_STANDALONE)
+  const standaloneWorkerCtx = await esbuild.context({
+    entryPoints: ["src/private-worker/standalone-worker.ts"],
+    bundle: true,
+    format: "esm",
+    minifyIdentifiers: false,
+    minifySyntax: production,
+    minifyWhitespace: production,
+    sourcemap: !production,
+    sourcesContent: false,
+    platform: "node",
+    outfile: "dist/private-worker/standalone-worker.mjs",
+    conditions: ["node", "import"],
+    external: ["vscode"],
+    logLevel: "silent",
+    plugins: [esbuildProblemMatcherPlugin],
+  })
+
   // Build Agent Manager webview (SolidJS, shares components with the editor-tab chat webview)
   const agentManagerCtx = await createBrowserWebviewContext(
     "webview-ui/agent-manager/index.tsx",
@@ -262,6 +280,7 @@ async function main() {
     await Promise.all([
       extensionCtx.watch(),
       workerCtx.watch(),
+      standaloneWorkerCtx.watch(),
       webviewCtx.watch(),
       agentManagerCtx.watch(),
       marketplaceCtx.watch(),
@@ -271,6 +290,7 @@ async function main() {
     await Promise.all([
       extensionCtx.rebuild(),
       workerCtx.rebuild(),
+      standaloneWorkerCtx.rebuild(),
       webviewCtx.rebuild(),
       agentManagerCtx.rebuild(),
       marketplaceCtx.rebuild(),
@@ -279,6 +299,7 @@ async function main() {
     await Promise.all([
       extensionCtx.dispose(),
       workerCtx.dispose(),
+      standaloneWorkerCtx.dispose(),
       webviewCtx.dispose(),
       agentManagerCtx.dispose(),
       marketplaceCtx.dispose(),

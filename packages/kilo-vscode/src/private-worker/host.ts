@@ -4,6 +4,22 @@ import { JsonRpcPeer, type PeerState } from "./peer"
 import { StderrTail } from "../services/cli-backend/stderr-tail"
 import * as path from "path"
 import * as fs from "fs"
+import { isAbsolute } from "path"
+
+export function isStandaloneEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return env.KILO_PRIVATE_WORKER_STANDALONE === "1" && typeof env.KILO_DB === "string" && isAbsolute(env.KILO_DB)
+}
+
+// Local resolver helper for testability (bounded)
+export function resolveWorkerArtifact(env: NodeJS.ProcessEnv = process.env): string | undefined {
+  if (!isStandaloneEnabled(env)) return undefined
+  const candidates = [
+    path.join(__dirname, "private-worker/standalone-worker.mjs"),
+    path.join(__dirname, "standalone-worker.mjs"),
+  ]
+  for (const p of candidates) if (fs.existsSync(p)) return p
+  return undefined
+}
 
 /**
  * Extension-owned private worker host for R1 scaffold.
@@ -175,6 +191,9 @@ export class PrivateWorkerHost {
     if (this.opts.command) {
       return { command: this.opts.command, args: this.opts.args ?? [] }
     }
+    const effectiveEnv = { ...process.env, ...this.opts.env } as NodeJS.ProcessEnv
+    const standalone = resolveWorkerArtifact(effectiveEnv)
+    if (standalone) return { command: process.execPath, args: [standalone] }
     // Resolvable packaged worker artifact emitted by esbuild (dist/private-worker/worker.js).
     const candidates = [
       path.join(__dirname, "private-worker/worker.js"),
