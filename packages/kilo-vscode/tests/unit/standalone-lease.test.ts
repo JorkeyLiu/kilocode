@@ -36,6 +36,65 @@ async function waitForFileGone(p: string, timeoutMs = 3000): Promise<boolean> {
   return !fs.existsSync(p)
 }
 
+function readLeasePid(p: string): number | undefined {
+  try {
+    const raw = fs.readFileSync(p, "utf8")
+    const data = JSON.parse(raw)
+    return typeof data.pid === "number" ? data.pid : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e: unknown) {
+    const code = (e as { code?: string }).code
+    if (code === "ESRCH") return false
+    if (code === "EPERM") return true
+    return true
+  }
+}
+
+function getHostProc(host: PrivateWorkerHost): import("child_process").ChildProcess | null {
+  return (host as unknown as { proc: import("child_process").ChildProcess | null }).proc
+}
+
+async function waitForHostClosed(host: PrivateWorkerHost, timeoutMs = 3000): Promise<boolean> {
+  const start = Date.now()
+  while (Date.now() - start < timeoutMs) {
+    if (host.getState() === "closed") return true
+    await new Promise((r) => setTimeout(r, 25))
+  }
+  return host.getState() === "closed"
+}
+
+async function waitForExit(proc: import("child_process").ChildProcess, timeoutMs = 3000): Promise<boolean> {
+  if (proc.exitCode !== null || proc.signalCode !== null) return true
+  return await new Promise<boolean>((resolve) => {
+    let done = false
+    const timer = setTimeout(() => {
+      if (done) return
+      done = true
+      proc.removeListener("exit", onExit)
+      proc.removeListener("close", onExit)
+      resolve(false)
+    }, timeoutMs)
+    const onExit = () => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      proc.removeListener("exit", onExit)
+      proc.removeListener("close", onExit)
+      resolve(true)
+    }
+    proc.once("exit", onExit)
+    proc.once("close", onExit)
+  })
+}
+
 function makeTmpEnv(): { tmp: string; dbPath: string; env: NodeJS.ProcessEnv; cleanup: () => Promise<void> } {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-vscode-standalone-"))
   const dataDir = path.join(tmp, "data")
@@ -201,6 +260,122 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
       await cleanup()
     }
   }, 15000)
+
+  it("concurrent second real child fails to acquire same DB lease while first holds it; winner remains healthy (real-child lease contention)", async () => {
+    const { dbPath, env, cleanup } = makeTmpEnv()
+    const lease = leasePathForDbFile(dbPath)
+    const standaloneTs = path.resolve(process.cwd(), "src/private-worker/standalone-worker.ts")
+    const host1 = new PrivateWorkerHost({ command: "bun", args: ["--conditions=browser", standaloneTs], env, initializeTimeoutMs: 5000 })
+    let host2: PrivateWorkerHost | null = null
+    try {
+      const init1 = await host1.start()
+      expect((init1 as { protocolVersion: string }).protocolVersion).toBe("1.0")
+      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      const winnerPid = readLeasePid(lease)
+      const proc1 = getHostProc(host1)
+      expect(winnerPid).toBe(proc1?.pid)
+      const pong1 = (await host1.request("ping")) as { pong: boolean }
+      expect(pong1.pong).toBe(true)
+
+      host2 = new PrivateWorkerHost({ command: "bun", args: ["--conditions=browser", standaloneTs], env, initializeTimeoutMs: 3500 })
+      let loserFailed = false
+      let loserError: unknown = null
+      try {
+        await host2.start()
+      } catch (e) {
+        loserFailed = true
+        loserError = e
+      }
+      if (!loserFailed) {
+        // if start unexpectedly succeeded, check state
+        if (host2.getState() === "closed") loserFailed = true
+      }
+      // ensure loser is observably failed (closed)
+      await waitForHostClosed(host2, 2000)
+      expect(loserFailed).toBe(true)
+      expect(host2.getState()).toBe("closed")
+      if (loserError) expect(String((loserError as Error).message).length > 0).toBe(true)
+
+      // winner lease intact and healthy
+      expect(fs.existsSync(lease)).toBe(true)
+      expect(readLeasePid(lease)).toBe(winnerPid)
+      expect(isPidAlive(winnerPid!)).toBe(true)
+      expect(host1.getState()).toBe("open")
+      const pongAfter = (await host1.request("ping")) as { pong: boolean }
+      expect(pongAfter.pong).toBe(true)
+      const snapAfter = (await host1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
+      expect(snapAfter.v).toBe(OBSERVATION_VERSION)
+      expect(snapAfter.cursor).toBe(0)
+      const proc2 = host2 ? getHostProc(host2) : null
+      // loser proc, if still referenced, should be exited or killed; dispose ensures exact-PID cleanup
+      if (proc2) expect(proc2.exitCode !== null || proc2.signalCode !== null || host2.getState() === "closed").toBe(true)
+    } finally {
+      host1.dispose()
+      host2?.dispose()
+      await waitForHostClosed(host1, 2000)
+      if (host2) await waitForHostClosed(host2, 2000)
+      await new Promise((r) => setTimeout(r, 200))
+      await waitForFileGone(lease, 3000).catch(() => {})
+      await cleanup()
+    }
+  }, 20000)
+
+  it("abrupt SIGKILL of worker leaves recoverable lease; next real child reacquires and observes valid cursor (crash-recovery)", async () => {
+    const { dbPath, env, cleanup } = makeTmpEnv()
+    const lease = leasePathForDbFile(dbPath)
+    const standaloneTs = path.resolve(process.cwd(), "src/private-worker/standalone-worker.ts")
+    const host1 = new PrivateWorkerHost({ command: "bun", args: ["--conditions=browser", standaloneTs], env, initializeTimeoutMs: 5000 })
+    let host2: PrivateWorkerHost | null = null
+    try {
+      const init1 = await host1.start()
+      expect((init1 as { protocolVersion: string }).protocolVersion).toBe("1.0")
+      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      const victimPid = readLeasePid(lease)
+      const proc1 = getHostProc(host1)
+      expect(victimPid).toBe(proc1?.pid)
+      const snap1 = (await host1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { cursor: number }
+      expect(snap1.cursor).toBe(0)
+
+      // abrupt exact-PID SIGKILL (no graceful cleanup)
+      expect(proc1?.pid).toBeDefined()
+      try { proc1!.kill("SIGKILL") } catch {}
+      await waitForHostClosed(host1, 3000)
+      await new Promise((r) => setTimeout(r, 150))
+      expect(host1.getState()).toBe("closed")
+      expect(fs.existsSync(lease)).toBe(true)
+      const stalePid = readLeasePid(lease)
+      expect(stalePid).toBe(victimPid)
+      expect(isPidAlive(stalePid!)).toBe(false)
+
+      host2 = new PrivateWorkerHost({ command: "bun", args: ["--conditions=browser", standaloneTs], env, initializeTimeoutMs: 5000 })
+      const init2 = await host2.start()
+      expect((init2 as { protocolVersion: string }).protocolVersion).toBe("1.0")
+      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      const recoveredPid = readLeasePid(lease)
+      const proc2 = getHostProc(host2)
+      expect(recoveredPid).toBe(proc2?.pid)
+      expect(recoveredPid).not.toBe(victimPid)
+      expect(isPidAlive(recoveredPid!)).toBe(true)
+      const pong2 = (await host2.request("ping")) as { pong: boolean }
+      expect(pong2.pong).toBe(true)
+      const snap2 = (await host2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
+      expect(snap2.v).toBe(OBSERVATION_VERSION)
+      expect(snap2.cursor).toBe(0)
+      const read2 = (await host2.request(OBSERVATION_METHODS.READ, { cursor: 0 })) as { rehydrate: boolean; entries: unknown[]; v: string; cursor: number }
+      expect(read2.v).toBe(OBSERVATION_VERSION)
+      expect(read2.rehydrate).toBe(false)
+      expect(read2.entries.length).toBe(0)
+      const ahead = (await host2.request(OBSERVATION_METHODS.READ, { cursor: 9999 })) as { rehydrate: boolean }
+      expect(ahead.rehydrate).toBe(true)
+    } finally {
+      host1.dispose()
+      host2?.dispose()
+      await new Promise((r) => setTimeout(r, 200))
+      if (host2) await waitForFileGone(lease, 3000).catch(() => {})
+      else await waitForFileGone(lease, 3000).catch(() => {})
+      await cleanup()
+    }
+  }, 25000)
 
   it("preserves injected deps precedence and default startup without env", async () => {
     const aToB = new PassThrough()

@@ -34,6 +34,52 @@ async function waitForFileGone(p: string, timeoutMs = 2000): Promise<boolean> {
   return !fs.existsSync(p)
 }
 
+async function waitForExit(proc: ChildProcess, timeoutMs = 3000): Promise<boolean> {
+  if (proc.exitCode !== null || proc.signalCode !== null) return true
+  return await new Promise<boolean>((resolve) => {
+    let done = false
+    const timer = setTimeout(() => {
+      if (done) return
+      done = true
+      proc.removeListener("exit", onExit)
+      proc.removeListener("close", onExit)
+      resolve(false)
+    }, timeoutMs)
+    const onExit = () => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      proc.removeListener("exit", onExit)
+      proc.removeListener("close", onExit)
+      resolve(true)
+    }
+    proc.once("exit", onExit)
+    proc.once("close", onExit)
+  })
+}
+
+function readLeasePid(p: string): number | undefined {
+  try {
+    const raw = fs.readFileSync(p, "utf8")
+    const data = JSON.parse(raw)
+    return typeof data.pid === "number" ? data.pid : undefined
+  } catch {
+    return undefined
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e: unknown) {
+    const code = (e as { code?: string }).code
+    if (code === "ESRCH") return false
+    if (code === "EPERM") return true
+    return true
+  }
+}
+
 function makeTmpEnv(): { tmp: string; dbPath: string; env: NodeJS.ProcessEnv; cleanup: () => Promise<void> } {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-standalone-"))
   const dataDir = path.join(tmp, "data")
@@ -235,6 +281,162 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
       await cleanup()
     }
   }, 15000)
+
+  it("concurrent second real child fails to acquire same DB lease while first holds it; winner remains healthy (real-child lease contention)", async () => {
+    const { dbPath, env, cleanup } = makeTmpEnv()
+    const lease = leasePathForDbFile(dbPath)
+    let proc1: ChildProcess | undefined
+    let peer1: JsonRpcPeer | undefined
+    let proc2: ChildProcess | undefined
+    let peer2: JsonRpcPeer | undefined
+    try {
+      expect(fs.existsSync(lease)).toBe(false)
+      const first = spawnStandalone(env)
+      proc1 = first.proc
+      peer1 = first.peer
+      const init1 = (await peer1.request("initialize", { clientInfo: { name: "winner", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
+      expect(init1.protocolVersion).toBe("1.0")
+      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      const winnerPid = readLeasePid(lease)
+      expect(typeof winnerPid).toBe("number")
+      expect(winnerPid).toBe(proc1.pid)
+      // winner healthy before contention
+      const pong1 = (await peer1.request("ping")) as { pong: boolean }
+      expect(pong1.pong).toBe(true)
+
+      // concurrent second child with same DB/env
+      const second = spawnStandalone(env)
+      proc2 = second.proc
+      peer2 = second.peer
+      // loser must fail observably: initialize rejects or peer closes or proc exits non-zero
+      let loserFailed = false
+      let loserError: unknown = null
+      let initSucceeded = false
+      try {
+        const init2 = peer2.request("initialize", { clientInfo: { name: "loser", version: "1" }, protocolVersion: "1.0" })
+        // bound wait: either initialize resolves/rejects or proc exits
+        const raced = await Promise.race([
+          init2.then(
+            () => ({ ok: true as const }),
+            (e) => ({ ok: false as const, err: e }),
+          ),
+          new Promise<{ ok: boolean; err?: unknown }>((resolve) =>
+            setTimeout(() => resolve({ ok: false, err: new Error("initialize did not settle") }), 4000),
+          ),
+        ])
+        if (!raced.ok) {
+          loserError = (raced as { err?: unknown }).err
+          initSucceeded = false
+        } else {
+          // if it unexpectedly succeeded, that is failure of exclusivity
+          initSucceeded = true
+        }
+      } catch (e) {
+        loserError = e
+        initSucceeded = false
+      }
+      // Strict observability: timeout alone does not count; require peer closed or proc exited within bound
+      const procExited = await waitForExit(proc2, 3000)
+      if (peer2.getState() !== "closed") await new Promise((r) => setTimeout(r, 100))
+      const peerClosed = peer2.getState() === "closed"
+      loserFailed = !initSucceeded && (peerClosed || procExited)
+      expect(loserFailed).toBe(true)
+      // error should be observable (InternalError from peer closed or lease message in stderr if available)
+      if (loserError) {
+        const msg = String((loserError as Error).message ?? loserError)
+        // at least contains closed/timeout/lease exclusivity signal
+        expect(msg.length > 0).toBe(true)
+      }
+      // loser must not have corrupted winner lease
+      expect(fs.existsSync(lease)).toBe(true)
+      expect(readLeasePid(lease)).toBe(winnerPid)
+      expect(isPidAlive(winnerPid!)).toBe(true)
+      // winner remains healthy after contention
+      expect(peer1.getState()).toBe("open")
+      const pongAfter = (await peer1.request("ping")) as { pong: boolean }
+      expect(pongAfter.pong).toBe(true)
+      const snapAfter = (await peer1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
+      expect(snapAfter.v).toBe(OBSERVATION_VERSION)
+      expect(snapAfter.cursor).toBe(0)
+      // loser peer should be closed; if not, close it
+      expect(peer2.getState()).toBe("closed")
+    } finally {
+      try { peer1?.dispose() } catch {}
+      try { if (proc1) proc1.kill() } catch {}
+      try { peer2?.dispose() } catch {}
+      try { if (proc2) proc2.kill() } catch {}
+      // wait bounded for winner lease release after dispose
+      if (proc1) await waitForExit(proc1, 2000)
+      if (proc2) await waitForExit(proc2, 2000)
+      await waitForFileGone(lease, 3000).catch(() => {})
+      await cleanup()
+    }
+  }, 20000)
+
+  it("abrupt SIGKILL of worker leaves recoverable lease; next real child reacquires and observes valid cursor (crash-recovery)", async () => {
+    const { dbPath, env, cleanup } = makeTmpEnv()
+    const lease = leasePathForDbFile(dbPath)
+    let proc1: ChildProcess | undefined
+    let peer1: JsonRpcPeer | undefined
+    let proc2: ChildProcess | undefined
+    let peer2: JsonRpcPeer | undefined
+    try {
+      const first = spawnStandalone(env)
+      proc1 = first.proc
+      peer1 = first.peer
+      const init1 = (await peer1.request("initialize", { clientInfo: { name: "crash-victim", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
+      expect(init1.protocolVersion).toBe("1.0")
+      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      const victimPid = readLeasePid(lease)
+      expect(victimPid).toBe(proc1.pid)
+      const snap1 = (await peer1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { cursor: number; v: string }
+      expect(snap1.cursor).toBe(0)
+
+      // abrupt exact-PID termination via SIGKILL (no graceful cleanup)
+      expect(proc1.pid).toBeDefined()
+      try { proc1.kill("SIGKILL") } catch {}
+      await waitForExit(proc1, 3000)
+      await new Promise((r) => setTimeout(r, 150))
+      expect(peer1.getState()).toBe("closed")
+      // lease file should remain with stale PID (worker had no chance to clean)
+      expect(fs.existsSync(lease)).toBe(true)
+      const stalePid = readLeasePid(lease)
+      expect(stalePid).toBe(victimPid)
+      expect(isPidAlive(stalePid!)).toBe(false)
+
+      // next real child should recover stale lease and succeed
+      const second = spawnStandalone(env)
+      proc2 = second.proc
+      peer2 = second.peer
+      const init2 = (await peer2.request("initialize", { clientInfo: { name: "recovery", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
+      expect(init2.protocolVersion).toBe("1.0")
+      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      const recoveredPid = readLeasePid(lease)
+      expect(recoveredPid).toBe(proc2.pid)
+      expect(recoveredPid).not.toBe(victimPid)
+      expect(isPidAlive(recoveredPid!)).toBe(true)
+      const pong2 = (await peer2.request("ping")) as { pong: boolean }
+      expect(pong2.pong).toBe(true)
+      const snap2 = (await peer2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
+      expect(snap2.v).toBe(OBSERVATION_VERSION)
+      expect(snap2.cursor).toBe(0)
+      const read2 = (await peer2.request(OBSERVATION_METHODS.READ, { cursor: 0 })) as { rehydrate: boolean; entries: unknown[]; v: string; cursor: number }
+      expect(read2.v).toBe(OBSERVATION_VERSION)
+      expect(read2.rehydrate).toBe(false)
+      expect(read2.entries.length).toBe(0)
+      const ahead = (await peer2.request(OBSERVATION_METHODS.READ, { cursor: 9999 })) as { rehydrate: boolean }
+      expect(ahead.rehydrate).toBe(true)
+    } finally {
+      try { peer1?.dispose() } catch {}
+      try { if (proc1 && proc1.exitCode === null && proc1.signalCode === null) proc1.kill() } catch {}
+      try { peer2?.dispose() } catch {}
+      try { if (proc2) proc2.kill() } catch {}
+      if (proc1) await waitForExit(proc1, 2000)
+      if (proc2) await waitForExit(proc2, 2000)
+      await waitForFileGone(lease, 3000).catch(() => {})
+      await cleanup()
+    }
+  }, 25000)
 
   it("preserves existing injected deps precedence and default startup without env", async () => {
     // In-process startWorker with injected deps should still work without lease
