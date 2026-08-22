@@ -247,7 +247,13 @@ export class JsonRpcPeer {
         } catch (e) {
           const code = (e as { code?: number })?.code
           const msg = e instanceof Error ? e.message : String(e)
-          const outCode = code === ErrorCode.MethodNotFound ? ErrorCode.MethodNotFound : ErrorCode.InternalError
+          const outCode =
+            code === ErrorCode.MethodNotFound ||
+            code === ErrorCode.InvalidParams ||
+            code === ErrorCode.InvalidRequest ||
+            code === ErrorCode.ParseError
+              ? code
+              : ErrorCode.InternalError
           this.sendRaw(makeError(id, outCode, msg))
         }
         return
@@ -272,7 +278,13 @@ export class JsonRpcPeer {
     } catch (e) {
       const code = (e as { code?: number })?.code
       const msg = e instanceof Error ? e.message : String(e)
-      const outCode = code === ErrorCode.MethodNotFound ? ErrorCode.MethodNotFound : ErrorCode.InternalError
+      const outCode =
+        code === ErrorCode.MethodNotFound ||
+        code === ErrorCode.InvalidParams ||
+        code === ErrorCode.InvalidRequest ||
+        code === ErrorCode.ParseError
+          ? code
+          : ErrorCode.InternalError
       this.sendRaw(makeError(id, outCode, msg))
     }
   }

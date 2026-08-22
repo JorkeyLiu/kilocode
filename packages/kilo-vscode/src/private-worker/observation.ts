@@ -1,0 +1,213 @@
+/**
+ * R9 observation wire foundation over the private JSON-RPC carrier.
+ * Additive, protocol-level, no DB/migration/timer/production wiring.
+ *
+ * Versioned envelope with explicit method names for snapshot hydration,
+ * changefeed read/subscribe delivery, and acknowledgement. Payload-free
+ * entries only: { seq, session_id, revision, kind, time }.
+ * Gap semantics: any stale/gapped cursor produces explicit rehydrate,
+ * never fabricated deltas. Duplicate delivery idempotent via cursor/seq.
+ *
+ * Controller is injectable against callbacks for authoritative snapshot,
+ * readAfter, and ack so behavior is testable without storage.
+ */
+
+import { ErrorCode } from "./json-rpc"
+
+export const OBSERVATION_VERSION = "1.0" as const
+
+export const OBSERVATION_METHODS = {
+  SNAPSHOT: "observation/snapshot",
+  READ: "observation/read",
+  ACK: "observation/ack",
+  SUBSCRIBE: "observation/subscribe",
+} as const
+
+export const OBSERVATION_NOTIFICATION = "observation/changed" as const
+
+export type ObservationKind = "changed" | "deleted"
+
+const VALID_KINDS = new Set<string>(["changed", "deleted"])
+
+function isValidKind(v: unknown): v is ObservationKind {
+  return typeof v === "string" && VALID_KINDS.has(v)
+}
+
+export interface ObservationEntry {
+  seq: number
+  session_id: string
+  revision: number
+  kind: ObservationKind
+  time: number
+}
+
+export interface SnapshotResult {
+  v: typeof OBSERVATION_VERSION
+  cursor: number
+  snapshot: unknown
+}
+
+export type ReadResultWire =
+  | { v: typeof OBSERVATION_VERSION; cursor: number; rehydrate: false; entries: ObservationEntry[] }
+  | { v: typeof OBSERVATION_VERSION; cursor: number; rehydrate: true; reason: string; entries: ObservationEntry[] }
+
+export interface AckResult {
+  v: typeof OBSERVATION_VERSION
+  cursor: number
+}
+
+export interface SubscribeResult {
+  v: typeof OBSERVATION_VERSION
+  cursor: number
+  subscribed: true
+}
+
+export interface ChangedNotification {
+  v: typeof OBSERVATION_VERSION
+  cursor: number
+  entries: ObservationEntry[]
+}
+
+export type ObservationReadBackendResult =
+  | { type: "deltas"; cursor: number; entries: ReadonlyArray<ObservationEntry> }
+  | { type: "rehydrate"; cursor: number; reason: string }
+
+export interface ObservationDeps {
+  getSnapshot: () => Promise<{ cursor: number; snapshot: unknown }>
+  readAfter: (cursor: number) => Promise<ObservationReadBackendResult>
+  ack: (cursor: number) => Promise<void>
+}
+
+function invalidParams(msg: string): Error & { code?: number } {
+  const err = new Error(msg) as Error & { code?: number }
+  err.code = ErrorCode.InvalidParams
+  return err
+}
+
+function internalError(msg: string): Error & { code?: number } {
+  const err = new Error(msg) as Error & { code?: number }
+  err.code = ErrorCode.InternalError
+  return err
+}
+
+function notFound(msg: string): Error & { code?: number } {
+  const err = new Error(msg) as Error & { code?: number }
+  err.code = ErrorCode.MethodNotFound
+  return err
+}
+
+function validateVersion(params: unknown): void {
+  if (params !== null && typeof params === "object" && !Array.isArray(params) && "v" in (params as Record<string, unknown>)) {
+    const v = (params as Record<string, unknown>).v
+    if (v !== undefined && v !== OBSERVATION_VERSION) {
+      throw invalidParams(`unsupported observation version: ${String(v)}`)
+    }
+  }
+}
+
+function extractCursor(params: unknown, required: boolean): number {
+  if (params === null || typeof params !== "object" || Array.isArray(params)) {
+    throw invalidParams("cursor must be object with integer cursor")
+  }
+  const o = params as Record<string, unknown>
+  if (!("cursor" in o)) {
+    if (required) throw invalidParams("cursor is required")
+    throw invalidParams("cursor missing")
+  }
+  const c = o.cursor
+  if (typeof c !== "number" || !Number.isInteger(c) || c < 0 || !Number.isSafeInteger(c)) {
+    throw invalidParams("cursor must be integer >=0")
+  }
+  return c
+}
+
+export class ObservationController {
+  constructor(private readonly deps: ObservationDeps) {}
+
+  async handle(method: string, params: unknown): Promise<unknown> {
+    switch (method) {
+      case OBSERVATION_METHODS.SNAPSHOT:
+        return this.handleSnapshot(params)
+      case OBSERVATION_METHODS.READ:
+        return this.handleRead(params)
+      case OBSERVATION_METHODS.ACK:
+        return this.handleAck(params)
+      case OBSERVATION_METHODS.SUBSCRIBE:
+        return this.handleSubscribe(params)
+      default:
+        throw notFound(`Method not found: ${method}`)
+    }
+  }
+
+  private async handleSnapshot(params: unknown): Promise<SnapshotResult> {
+    validateVersion(params)
+    if (params !== undefined && params !== null && typeof params !== "object") {
+      throw invalidParams("snapshot params must be object if provided")
+    }
+    const state = await this.deps.getSnapshot()
+    if (typeof state.cursor !== "number" || !Number.isInteger(state.cursor) || state.cursor < 0) {
+      throw internalError("snapshot returned invalid cursor")
+    }
+    return { v: OBSERVATION_VERSION, cursor: state.cursor, snapshot: state.snapshot }
+  }
+
+  private async handleRead(params: unknown): Promise<ReadResultWire> {
+    validateVersion(params)
+    const cursor = extractCursor(params, true)
+    const res = await this.deps.readAfter(cursor)
+    if (res.type === "rehydrate") {
+      return { v: OBSERVATION_VERSION, cursor: res.cursor, rehydrate: true as const, reason: res.reason, entries: [] }
+    }
+    for (const e of res.entries) {
+      if (
+        typeof e.seq !== "number" ||
+        typeof e.session_id !== "string" ||
+        typeof e.revision !== "number" ||
+        typeof e.kind !== "string" ||
+        typeof e.time !== "number"
+      ) {
+        throw internalError("readAfter returned invalid entry shape")
+      }
+      if (!isValidKind(e.kind)) {
+        throw invalidParams(`invalid observation kind: ${String(e.kind)}`)
+      }
+    }
+    return { v: OBSERVATION_VERSION, cursor: res.cursor, rehydrate: false as const, entries: [...res.entries] as ObservationEntry[] }
+  }
+
+  private async handleAck(params: unknown): Promise<AckResult> {
+    validateVersion(params)
+    const cursor = extractCursor(params, true)
+    await this.deps.ack(cursor)
+    return { v: OBSERVATION_VERSION, cursor }
+  }
+
+  private async handleSubscribe(params: unknown): Promise<SubscribeResult> {
+    validateVersion(params)
+    if (params !== null && typeof params === "object" && !Array.isArray(params) && "cursor" in (params as Record<string, unknown>)) {
+      extractCursor(params, true)
+    } else if (params !== undefined && params !== null && typeof params !== "object") {
+      throw invalidParams("subscribe params must be object if provided")
+    }
+    const snap = await this.deps.getSnapshot()
+    if (typeof snap.cursor !== "number" || !Number.isInteger(snap.cursor) || snap.cursor < 0) {
+      throw internalError("snapshot returned invalid cursor")
+    }
+    return { v: OBSERVATION_VERSION, cursor: snap.cursor, subscribed: true }
+  }
+
+  notifyChanged(peer: { notify: (method: string, params?: unknown) => void }, entries: ReadonlyArray<ObservationEntry>, cursor: number): void {
+    for (const e of entries) {
+      if (!isValidKind((e as ObservationEntry).kind)) {
+        throw invalidParams(`invalid observation kind: ${String((e as ObservationEntry).kind)}`)
+      }
+    }
+    const payload: ChangedNotification = { v: OBSERVATION_VERSION, cursor, entries: [...entries] as ObservationEntry[] }
+    peer.notify(OBSERVATION_NOTIFICATION, payload)
+  }
+}
+
+export function createObservationHandler(deps: ObservationDeps): (method: string, params: unknown) => Promise<unknown> {
+  const ctrl = new ObservationController(deps)
+  return (m, p) => ctrl.handle(m, p)
+}
