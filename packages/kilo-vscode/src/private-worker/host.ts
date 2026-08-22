@@ -21,6 +21,7 @@ export interface HostOptions {
   args?: string[]
   env?: NodeJS.ProcessEnv
   initializeTimeoutMs?: number
+  onNotification?: (method: string, params: unknown) => void
 }
 
 export class PrivateWorkerHost {
@@ -76,6 +77,7 @@ export class PrivateWorkerHost {
       reader: this.proc.stdout,
       writer: this.proc.stdin,
       child: this.proc,
+      onNotification: this.opts.onNotification,
     })
     // Initialize handshake replaces port detection/health (R1) with bounded timeout.
     const timeoutMs = this.opts.initializeTimeoutMs ?? 5000
