@@ -87,6 +87,17 @@ export class PrivateObservationService implements Disposable {
   private readonly consumer: ((method: string, params: unknown) => void) | undefined
   private readonly opts: PrivateObservationServiceOptions
   private readonly cursorStore: ObservationCursorStore | undefined
+  // R9 fixture-only bounded notification recorder at onNotification boundary:
+  // small in-memory sequence of JSON-safe envelopes, not production state,
+  // enabled only under KILO_E2E_FIXTURE. No persistence, no second store.
+  // Monotonic ordinal watermark: startOrdinal = nextOrdinal - retainedLength,
+  // independent of bounded array length to avoid truncation gaps.
+  private readonly notificationLog: Array<{ ordinal: number; method: string; params: unknown; at: string }> = []
+  private readonly notificationLogLimit = 50
+  private notificationNextOrdinal = 0
+  private readonly isFixtureRecorderEnabled: boolean
+  private peerClosedHook: (() => void) | null = null
+  private suppressDepth = 0
 
   constructor(opts?: PrivateObservationServiceOptions)
   constructor(context: unknown, opts: PrivateObservationServiceOptions)
@@ -121,6 +132,7 @@ export class PrivateObservationService implements Disposable {
     }
     this.consumer = this.opts.onNotification
     this.cursorStore = this.opts.cursorStore
+    this.isFixtureRecorderEnabled = !!process.env.KILO_E2E_FIXTURE
   }
 
   /** Whether the internal gate is enabled (explicit, fail-closed). */
@@ -131,6 +143,41 @@ export class PrivateObservationService implements Disposable {
   /** Whether the host has been started and is open. */
   isStarted(): boolean {
     return this.host !== null && this.host.getState() === "open"
+  }
+
+  /**
+   * Bounded readiness wait for fixture — waits for existing
+   * initialization/reconnect singleflight to settle, then verifies
+   * isStarted/hostState open within timeout. Preserves fire-and-forget
+   * activation; readiness is explicit and fixture-gated, never polling
+   * in production. Returns true when ready, throws on timeout.
+   */
+  async waitReady(timeoutMs = 10_000): Promise<boolean> {
+    const deadline = Date.now() + timeoutMs
+    for (;;) {
+      const pending = this.reconnectPromise ?? this.initPromise
+      if (pending) {
+        try {
+          await Promise.race([
+            pending,
+            new Promise<never>((_, reject) => {
+              const rem = deadline - Date.now()
+              if (rem <= 0) reject(new Error("privateObservationWaitReady timed out waiting for init/reconnect"))
+              else {
+                const t = setTimeout(() => reject(new Error("privateObservationWaitReady timed out")), rem)
+                if ((t as unknown as { unref?: () => void })?.unref) (t as unknown as { unref: () => void }).unref()
+              }
+            }),
+          ])
+        } catch (e) {
+          if (String((e as Error).message).includes("timed out")) throw e
+          // init/reconnect failure still counts as settled for readiness probe
+        }
+      }
+      if (this.isStarted() && this.getHostState() === "open") return true
+      if (Date.now() >= deadline) throw new Error(`privateObservationWaitReady timed out: hostState=${this.getHostState()} isStarted=${this.isStarted()}`)
+      await new Promise<void>((r) => setTimeout(r, 100))
+    }
   }
 
   /** Current host state for diagnostics (open/closed). */
@@ -172,6 +219,24 @@ export class PrivateObservationService implements Disposable {
     if (proc.exitCode !== null || proc.signalCode !== null) {
       this.pendingShutdownHost = null
       this.pendingShutdownProc = null
+    }
+  }
+
+  private runSuppressed<T>(fn: () => T): T {
+    this.suppressDepth++
+    try {
+      return fn()
+    } finally {
+      this.suppressDepth = Math.max(0, this.suppressDepth - 1)
+    }
+  }
+
+  private async runSuppressedAsync<T>(fn: () => Promise<T>): Promise<T> {
+    this.suppressDepth++
+    try {
+      return await fn()
+    } finally {
+      this.suppressDepth = Math.max(0, this.suppressDepth - 1)
     }
   }
 
@@ -226,7 +291,9 @@ export class PrivateObservationService implements Disposable {
       if (this.initPromise) {
         try {
           await this.initPromise
-        } catch {}
+        } catch (e) {
+          console.warn("[Kilo] PrivateObservationService reconnect observed in-flight initialize failure:", e)
+        }
       }
       return this.doReconnect()
     })()
@@ -255,7 +322,8 @@ export class PrivateObservationService implements Disposable {
       let ok = false
       try {
         // Bounded awaitable shutdown — exact PID, no global kills, no unbounded wait.
-        ok = await old.shutdown(2000)
+        // Suppressed: intentional disposal must not invoke lifecycle onPeerClosed -> reconnect loop.
+        ok = await this.runSuppressedAsync(() => old.shutdown(2000))
       } catch {
         ok = false
       }
@@ -301,24 +369,48 @@ export class PrivateObservationService implements Disposable {
       args: this.opts.args,
       initializeTimeoutMs: this.opts.initializeTimeoutMs,
       onNotification: (m, p) => {
+        if (this.isFixtureRecorderEnabled) {
+          try {
+            const safe = JSON.parse(JSON.stringify(p === undefined ? null : p))
+            const ordinal = this.notificationNextOrdinal++
+            this.notificationLog.push({ ordinal, method: m, params: safe, at: new Date().toISOString() })
+            if (this.notificationLog.length > this.notificationLogLimit) this.notificationLog.shift()
+          } catch {
+            // JSON-safe envelope failed — still forward to consumer, do not block
+          }
+        }
         try {
           this.consumer?.(m, p)
         } catch {
           // consumer failures never propagate to transport
         }
       },
+      onClosed: () => {
+        if (this.suppressDepth > 0) return
+        if (this.disposed) return
+        try {
+          this.peerClosedHook?.()
+        } catch {
+          // hook failures never propagate
+        }
+      },
     }
     const host = new PrivateWorkerHost(hostOpts)
     this.host = host
     try {
-      const res = await host.start()
+      // Suppressed: host.start internal timeout dispose must not invoke lifecycle hook; external close after success still fires because suppress is scoped to this await.
+      const res = await this.runSuppressedAsync(() => host.start())
       return res
     } catch (e) {
+      console.warn("[Kilo] PrivateObservationService initialize failed:", e)
       // Ensure failed host is torn down and not retained as started; if exact child remains live after
       // graceful SIGTERM, retain explicit ownership in pending fields (no orphan, no replacement while live).
-      try {
-        host.dispose()
-      } catch {}
+      // Suppressed: pending-child shutdown must not trigger lifecycle reconnect recursively.
+      this.runSuppressed(() => {
+        try {
+          host.dispose()
+        } catch {}
+      })
       const proc = host.getProc()
       const alive = proc ? proc.exitCode === null && proc.signalCode === null : false
       // Use host liveness (exact PID) rather than host state — disposed host reports closed but proc may be live
@@ -408,6 +500,61 @@ export class PrivateObservationService implements Disposable {
     return this.host.request(method, params)
   }
 
+  /** Fixture-only bounded notification log — JSON-safe envelopes, no persistence. */
+  getNotificationLog(): Array<{ ordinal: number; method: string; params: unknown; at: string }> {
+    try {
+      return JSON.parse(JSON.stringify(this.notificationLog)) as Array<{ ordinal: number; method: string; params: unknown; at: string }>
+    } catch {
+      return [...this.notificationLog]
+    }
+  }
+
+  /** Fixture-only snapshot with monotonic watermark — {startOrdinal, nextOrdinal, entries}. Independent of bounded retention. */
+  getNotificationSnapshot(): { startOrdinal: number; nextOrdinal: number; entries: Array<{ ordinal: number; method: string; params: unknown; at: string }> } {
+    const next = this.notificationNextOrdinal
+    const entries = this.getNotificationLog()
+    const start = entries.length === 0 ? next : (entries[0]!.ordinal ?? next - entries.length)
+    // Cross-check: start should equal next - length when ordinals contiguous; recompute if needed
+    const computedStart = next - entries.length
+    const startOrdinal = entries.length > 0 && typeof entries[0]!.ordinal === "number" ? entries[0]!.ordinal : computedStart
+    // Ensure monotonic start <= next
+    return { startOrdinal, nextOrdinal: next, entries }
+  }
+
+  clearNotificationLog(): void {
+    this.notificationLog.length = 0
+    // Keep nextOrdinal monotonic — watermark advances; cleared window is [next, next)
+  }
+
+  /** Owned peer-close hook — lifecycle triggers call setOnPeerClosed to receive transport close events. No polling. */
+  setOnPeerClosed(handler: (() => void) | null): void {
+    this.peerClosedHook = handler
+  }
+
+  /** Fixture-only: close the underlying transport peer without killing the worker process. Returns peer-close evidence. */
+  closePeerTransport(): {
+    closed: boolean
+    aliveBefore: boolean
+    aliveAfter: boolean
+    beforePid?: number
+    afterPid?: number
+    beforeHostState: string
+    afterHostState: string
+  } {
+    const beforePid = this.host?.getPid()
+    const beforeHostState = this.getHostState()
+    const aliveBefore = this.host ? this.host.isAlive() : false
+    const raw = this.host ? this.host.closePeerTransport() : { closed: false, aliveBefore, aliveAfter: false, beforePid, afterPid: beforePid }
+    const closed = typeof raw === "boolean" ? raw : raw.closed
+    const aliveAfterRaw = typeof raw === "boolean" ? (this.host ? this.host.isAlive() : false) : raw.aliveAfter
+    const afterPidRaw = typeof raw === "boolean" ? this.host?.getPid() : raw.afterPid
+    // Capture immediately after disposal; bounded short observation (no production polling timer) is implicit via sync isAlive check.
+    const aliveAfter = typeof aliveAfterRaw === "boolean" ? aliveAfterRaw : this.host ? this.host.isAlive() : false
+    const afterPid = afterPidRaw ?? this.host?.getPid()
+    const afterHostState = this.getHostState()
+    return { closed, aliveBefore, aliveAfter, beforePid, afterPid, beforeHostState, afterHostState }
+  }
+
   /** Forward notification without a host (no-op when not started). */
   notify(method: string, params?: unknown): void {
     this.host?.notify(method, params)
@@ -418,24 +565,28 @@ export class PrivateObservationService implements Disposable {
     this.disposed = true
     this.initPromise = null
     this.reconnectPromise = null
-    if (this.host) {
-      try {
-        this.host.dispose()
-      } catch {}
-      this.host = null
-    }
-    if (this.pendingShutdownHost) {
-      try {
-        this.pendingShutdownHost.dispose()
-      } catch {}
-      this.pendingShutdownHost = null
-      this.pendingShutdownProc = null
-    } else if (this.pendingShutdownProc) {
-      try {
-        this.pendingShutdownProc.kill()
-      } catch {}
-      this.pendingShutdownProc = null
-    }
+    // Clear/block hook so intentional disposal does not schedule lifecycle reconnect.
+    this.peerClosedHook = null
+    this.runSuppressed(() => {
+      if (this.host) {
+        try {
+          this.host.dispose()
+        } catch {}
+        this.host = null
+      }
+      if (this.pendingShutdownHost) {
+        try {
+          this.pendingShutdownHost.dispose()
+        } catch {}
+        this.pendingShutdownHost = null
+        this.pendingShutdownProc = null
+      } else if (this.pendingShutdownProc) {
+        try {
+          this.pendingShutdownProc.kill()
+        } catch {}
+        this.pendingShutdownProc = null
+      }
+    })
   }
 }
 

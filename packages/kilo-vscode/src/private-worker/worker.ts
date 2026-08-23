@@ -26,6 +26,7 @@ export interface WorkerOptions {
   writer?: NodeJS.WritableStream
   version?: string
   observationDeps?: ObservationDeps
+  onClosed?: () => void
 }
 
 export function startWorker(opts: WorkerOptions = {}): JsonRpcPeer {
@@ -42,6 +43,7 @@ export function startWorker(opts: WorkerOptions = {}): JsonRpcPeer {
   const peer = new JsonRpcPeer({
     reader,
     writer,
+    onClosed: opts.onClosed,
     onRequest: async (method, params) => {
       if (ctrl && method.startsWith("observation/")) return ctrl.handle(method, params)
       if (method === "initialize") {

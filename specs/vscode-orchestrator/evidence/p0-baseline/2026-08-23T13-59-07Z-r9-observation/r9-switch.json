@@ -1,0 +1,52 @@
+{
+  "boundary": "switch",
+  "before": {
+    "pid": 83418,
+    "hostState": "open",
+    "cursor": 1,
+    "rehydrate": false
+  },
+  "after": {
+    "pid": 83426,
+    "hostState": "open",
+    "cursor": 1,
+    "rehydrate": false
+  },
+  "duplicate": false,
+  "continuity": true,
+  "rehydrate": false,
+  "beforeEntriesCount": 0,
+  "afterEntriesCount": 0,
+  "notifications": {
+    "before": [],
+    "after": []
+  },
+  "notificationsBefore": [],
+  "notificationsAfter": [],
+  "actionResult": {
+    "kind": "switch",
+    "switchConfirmation": {
+      "clickedTabId": "e2e-probe-d3cbd796-B",
+      "activeTabId": "e2e-probe-d3cbd796-B",
+      "at": "2026-08-23T13:59:04.873Z",
+      "selected": true
+    }
+  },
+  "notes": [
+    "before pid 83418 after 83426",
+    "beforeEntries 0 afterEntries 0",
+    "notifs before 0 after 0"
+  ],
+  "switchConfirmation": {
+    "clickedTabId": "e2e-probe-d3cbd796-B",
+    "activeTabId": "e2e-probe-d3cbd796-B",
+    "at": "2026-08-23T13:59:04.873Z",
+    "selected": true
+  },
+  "switch": {
+    "clickedTabId": "e2e-probe-d3cbd796-B",
+    "activeTabId": "e2e-probe-d3cbd796-B",
+    "at": "2026-08-23T13:59:04.873Z",
+    "selected": true
+  }
+}

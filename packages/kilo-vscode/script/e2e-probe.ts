@@ -280,6 +280,7 @@ import {
   type SidebarTopicState,
 } from "./e2e-probe-dom"
 import { assertRealRestartReload, runRealRestartBoundaries } from "./e2e-probe-restart"
+import { assertR9ObservationLifecycle } from "./e2e-probe-r9"
 import { repoRootFrom } from "./p0-bench/repo-root"
 import {
   REAL_ROLLBACK_PROMPT,
@@ -336,7 +337,9 @@ const timeoutMs = Number(
           ? 6_000_000
           : process.env.KILO_E2E_SCENARIO === "worktree-removal"
             ? 6_000_000
-            : 300_000),
+            : process.env.KILO_E2E_SCENARIO === "r9-observation"
+              ? 1_200_000
+              : 300_000),
 )
 
 // LOCK-002: scenario selection. `all` (default) runs every scenario in one VS
@@ -362,6 +365,7 @@ const SCENARIO_VALUES = [
   "worktree-removal",
   "cloud-claw-removal",
   "p3-4-removal",
+  "r9-observation",
 ] as const
 function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
@@ -377,7 +381,8 @@ function parseScenarios(value: string): Set<string> {
     value === "sidebar-removal" ||
     value === "worktree-removal" ||
     value === "cloud-claw-removal" ||
-    value === "p3-4-removal"
+    value === "p3-4-removal" ||
+    value === "r9-observation"
   ) {
     return new Set([value])
   }
@@ -396,7 +401,11 @@ function isRealRestart(value: string): boolean {
 }
 
 export function needsCanonicalStorage(value: string): boolean {
-  return parseScenarios(value).has("real-restart") || parseScenarios(value).has("real-session")
+  return (
+    parseScenarios(value).has("real-restart") ||
+    parseScenarios(value).has("real-session") ||
+    parseScenarios(value).has("r9-observation")
+  )
 }
 
 // LOCK-006: macOS and Linux are first-class. Windows must fail fast with a
@@ -2515,6 +2524,10 @@ async function runScenario(
   if (scenarios.has("cloud-claw-removal"))
     console.log("[probe] cloud-claw-removal assertions ran in the Extension Host runner")
   if (scenarios.has("p3-4-removal")) console.log("[probe] p3-4-removal assertions ran in the Extension Host runner")
+  if (scenarios.has("r9-observation")) {
+    await assertR9ObservationLifecycle(browser, plan, scratch)
+    console.log("[probe] r9-observation lifecycle assertion passed")
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -2603,6 +2616,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has("worktree-removal")) return "worktree-removal-ready"
   if (scenarios.has("cloud-claw-removal")) return "cloud-claw-removal-ready"
   if (scenarios.has("p3-4-removal")) return "p3-4-removal-ready"
+  if (scenarios.has("r9-observation")) return "r9-ready"
   return "ready"
 }
 

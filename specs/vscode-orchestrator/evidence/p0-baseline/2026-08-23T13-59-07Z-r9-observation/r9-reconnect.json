@@ -1,0 +1,154 @@
+{
+  "boundary": "reconnect",
+  "before": {
+    "pid": 83426,
+    "hostState": "open",
+    "cursor": 1,
+    "rehydrate": false
+  },
+  "after": {
+    "pid": 83477,
+    "hostState": "open",
+    "cursor": 2,
+    "rehydrate": false
+  },
+  "duplicate": false,
+  "continuity": true,
+  "rehydrate": false,
+  "beforeEntriesCount": 0,
+  "afterEntriesCount": 1,
+  "notifications": {
+    "before": [],
+    "after": [
+      {
+        "ordinal": 1,
+        "method": "observation/changed",
+        "params": {
+          "v": "1.0",
+          "cursor": 2,
+          "entries": [
+            {
+              "seq": 2,
+              "session_id": "r9-reconnect-1787493545558",
+              "revision": 1,
+              "kind": "changed",
+              "time": 1787493545558
+            }
+          ]
+        },
+        "at": "2026-08-23T13:59:05.564Z"
+      }
+    ]
+  },
+  "notificationsBefore": [],
+  "notificationsAfter": [
+    {
+      "ordinal": 1,
+      "method": "observation/changed",
+      "params": {
+        "v": "1.0",
+        "cursor": 2,
+        "entries": [
+          {
+            "seq": 2,
+            "session_id": "r9-reconnect-1787493545558",
+            "revision": 1,
+            "kind": "changed",
+            "time": 1787493545558
+          }
+        ]
+      },
+      "at": "2026-08-23T13:59:05.564Z"
+    }
+  ],
+  "actionResult": {
+    "before": {
+      "hostState": "open",
+      "isStarted": true,
+      "pid": 83426
+    },
+    "afterClose": {
+      "hostState": "closed",
+      "pid": 83426,
+      "closeAlive": true,
+      "closeAliveAfter": true,
+      "closed": true,
+      "beforeAlive": true,
+      "beforePid": 83426,
+      "afterPid": 83426,
+      "afterHostState": "closed"
+    },
+    "after": {
+      "hostState": "open",
+      "isStarted": true,
+      "pid": 83477,
+      "pendingAlive": false
+    },
+    "trigger": {
+      "reason": "peer:closed",
+      "reconnectResult": {
+        "protocolVersion": "1.0",
+        "serverInfo": {
+          "name": "kilo-private-worker",
+          "version": "7.4.11"
+        },
+        "capabilities": {}
+      },
+      "readResult": {
+        "v": "1.0",
+        "cursor": 1,
+        "rehydrate": false,
+        "entries": []
+      },
+      "rehydrate": false
+    },
+    "close": {
+      "closed": true,
+      "aliveBefore": true,
+      "aliveAfter": true,
+      "beforePid": 83426,
+      "afterPid": 83426,
+      "beforeHostState": "open",
+      "afterHostState": "closed"
+    },
+    "postMutate": {
+      "v": "1.0",
+      "cursor": 2,
+      "entry": {
+        "seq": 2,
+        "session_id": "r9-reconnect-1787493545558",
+        "revision": 1,
+        "kind": "changed",
+        "time": 1787493545558
+      }
+    }
+  },
+  "notes": [
+    "before pid 83426 after 83477",
+    "beforeEntries 0 afterEntries 1",
+    "notifs before 0 after 1"
+  ],
+  "subscribe": {
+    "v": "1.0",
+    "cursor": 2,
+    "subscribed": true
+  },
+  "trigger": {
+    "reason": "peer:closed",
+    "reconnectResult": {
+      "protocolVersion": "1.0",
+      "serverInfo": {
+        "name": "kilo-private-worker",
+        "version": "7.4.11"
+      },
+      "capabilities": {}
+    },
+    "readResult": {
+      "v": "1.0",
+      "cursor": 1,
+      "rehydrate": false,
+      "entries": []
+    },
+    "rehydrate": false
+  }
+}

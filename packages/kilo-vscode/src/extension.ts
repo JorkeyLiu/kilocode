@@ -181,11 +181,16 @@ export function activate(context: vscode.ExtensionContext) {
   let privateObservation: PrivateObservationService
   try {
     const dbPath = resolveCanonicalDbPath()
+    const isFixture = !!process.env.KILO_E2E_FIXTURE
     privateObservation = new PrivateObservationService({
       enabled: true,
       dbPath,
       cursorStore: createMementoCursorStore(context.globalState),
+      ...(isFixture ? { testBridge: true } : {}),
     })
+    if (isFixture) {
+      console.log("[Kilo] PrivateObservationService testBridge enabled for KILO_E2E_FIXTURE")
+    }
   } catch (err) {
     console.warn("[Kilo] PrivateObservationService canonical DB path resolution failed, fail-closed:", err)
     let fallback: PrivateObservationService | null = null
@@ -209,6 +214,15 @@ export function activate(context: vscode.ExtensionContext) {
   // focus, config change, session switch, peer-closed) -> reconnect + read(persisted)
   // gap->rehydrate. Trailing 150ms coalescence, no polling, no Failure wiring.
   const privateObservationTriggers = PrivateObservationLifecycleTriggers.wireVscode(privateObservation, context)
+  // Wire transport-close observed callback: JsonRpcPeer/Host onClosed -> lifecycle onPeerClosed (no polling, exact-PID).
+  // Ownership: PrivateObservationService owns the HostOptions.onClosed seam; triggers own debounce/singleflight.
+  try {
+    privateObservation.setOnPeerClosed(() => {
+      void privateObservationTriggers.onPeerClosed().catch((err) => {
+        console.warn("[Kilo] privateObservation peer-close trigger failed:", err)
+      })
+    })
+  } catch {}
   // Wire real AgentManagerProvider visibility when available (created below).
   // Explicit wiring via onPanelVisibilityChanged keeps core vscode-free and avoids cast.
   context.subscriptions.push(privateObservationTriggers)
@@ -336,11 +350,23 @@ export function activate(context: vscode.ExtensionContext) {
     canonicalConfig,
   )
   const agentManagerProvider = new AgentManagerProvider(agentManagerHost, connectionService)
-  agentManagerProvider.onPanelVisibilityChange((visible) => remember({ agentManager: visible }))
+  context.subscriptions.push(agentManagerProvider.onPanelVisibilityChange((visible) => remember({ agentManager: visible })))
   // R9-C3: wire panel visibility trigger without altering existing remember wiring
-  agentManagerProvider.onPanelVisibilityChange((visible) => {
-    void privateObservationTriggers.onPanelVisibilityChanged(visible)
-  })
+  context.subscriptions.push(
+    agentManagerProvider.onPanelVisibilityChange((visible) => {
+      void privateObservationTriggers.onPanelVisibilityChanged(visible).catch((err) => {
+        console.warn("[Kilo] privateObservation panel trigger failed:", err)
+      })
+    }),
+  )
+  // R9: real production session-switch forwarder at AgentManagerProvider message boundary
+  context.subscriptions.push(
+    agentManagerProvider.onActiveSessionChanged((id) => {
+      void privateObservationTriggers.onActiveSessionChanged(id).catch((err) => {
+        console.warn("[Kilo] privateObservation session trigger failed:", err)
+      })
+    }),
+  )
   agentManager = agentManagerProvider
   context.subscriptions.push(agentManagerProvider)
 
@@ -751,6 +777,182 @@ export function activate(context: vscode.ExtensionContext) {
           new Promise<false>((resolve) => setTimeout(() => resolve(false), 30_000)),
         ])
         return { count: tabPanels.size, ready }
+      }),
+      // R9 private observation E2E bridge (KILO_E2E_FIXTURE only) — deterministic
+      // probes for snapshot/read/ack/subscribe/hostState/reconnect and fixture-gated
+      // test/mutateChangefeed. Canonical DB identity is proven via the resolver,
+      // testBridge is only enabled when KILO_E2E_FIXTURE is set (explicit artifact
+      // in privateObservationStatus), and no production path depends on these
+      // commands.
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationStatus", async () => {
+        const dbPath = (() => {
+          try {
+            return resolveCanonicalDbPath()
+          } catch (e) {
+            return `error:${String(e)}`
+          }
+        })()
+        const host = privateObservation.getHost()
+        return {
+          enabled: privateObservation.isEnabled(),
+          hostState: privateObservation.getHostState(),
+          pid: host?.getPid(),
+          isStarted: privateObservation.isStarted(),
+          persistedCursor: privateObservation.getPersistedCursor(),
+          dbPath,
+          testBridge: !!process.env.KILO_E2E_FIXTURE,
+          envDb: process.env.KILO_DB ?? null,
+        }
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationSnapshot", async () => {
+        return privateObservation.snapshot({})
+      }),
+      vscode.commands.registerCommand(
+        "kilo-code.new.e2eFixture.privateObservationRead",
+        async (cursor: number) => {
+          return privateObservation.read(cursor)
+        },
+      ),
+      vscode.commands.registerCommand(
+        "kilo-code.new.e2eFixture.privateObservationAck",
+        async (cursor: number) => {
+          return privateObservation.ack(cursor)
+        },
+      ),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationSubscribe", async () => {
+        return privateObservation.subscribe({})
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationReconnect", async () => {
+        return privateObservation.reconnect()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationWaitReady", async (timeoutMs?: number) => {
+        const t = typeof timeoutMs === "number" ? timeoutMs : 10_000
+        await privateObservation.waitReady(t)
+        const host = privateObservation.getHost()
+        return {
+          hostState: privateObservation.getHostState(),
+          isStarted: privateObservation.isStarted(),
+          pid: host?.getPid(),
+          persistedCursor: privateObservation.getPersistedCursor(),
+        }
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationOnPeerClosed", async () => {
+        const before = {
+          hostState: privateObservation.getHostState(),
+          isStarted: privateObservation.isStarted(),
+          pid: privateObservation.getHost()?.getPid(),
+          pendingPid: privateObservation.getPendingShutdownHost()?.getPid(),
+        }
+        const triggerResult = await privateObservationTriggers.onPeerClosed()
+        const after = {
+          hostState: privateObservation.getHostState(),
+          isStarted: privateObservation.isStarted(),
+          pid: privateObservation.getHost()?.getPid(),
+          pendingPid: privateObservation.getPendingShutdownHost()?.getPid(),
+          pendingAlive: (() => {
+            const h = privateObservation.getPendingShutdownHost()
+            return h ? h.isAlive() : false
+          })(),
+        }
+        return { before, after, trigger: triggerResult }
+      }),
+      // Distinct transport close: close the RPC peer transport without killing the worker process,
+      // observe the onClosed -> lifecycle trigger path, then ensure reconnect. Proves PID alive before replacement.
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationClosePeer", async () => {
+        const before = {
+          hostState: privateObservation.getHostState(),
+          isStarted: privateObservation.isStarted(),
+          pid: privateObservation.getHost()?.getPid(),
+          pendingPid: privateObservation.getPendingShutdownHost()?.getPid(),
+        }
+        const beforeAlive = (() => {
+          const h = privateObservation.getHost()
+          return h ? h.isAlive() : false
+        })()
+        const closeRes = privateObservation.closePeerTransport()
+        // If closing peer inherently disposes process, report API constraint — still proceed with lifecycle trigger
+        // Evidence must include post-close liveness: aliveBefore, aliveAfter, same numeric PID.
+        const afterClose = {
+          hostState: privateObservation.getHostState(),
+          pid: privateObservation.getHost()?.getPid(),
+          closeAlive: closeRes.aliveBefore,
+          closeAliveAfter: closeRes.aliveAfter,
+          closed: closeRes.closed,
+          beforeAlive,
+          beforePid: closeRes.beforePid,
+          afterPid: closeRes.afterPid,
+          afterHostState: closeRes.afterHostState,
+        }
+        // Allow observed onClosed hook to schedule trigger; also explicitly invoke trigger to coalesce via debounce/singleflight.
+        // This guarantees idempotent reconnect without duplicate host creation.
+        let triggerResult: unknown = undefined
+        try {
+          triggerResult = await privateObservationTriggers.onPeerClosed()
+        } catch (e) {
+          triggerResult = { error: String(e) }
+        }
+        const after = {
+          hostState: privateObservation.getHostState(),
+          isStarted: privateObservation.isStarted(),
+          pid: privateObservation.getHost()?.getPid(),
+          pendingPid: privateObservation.getPendingShutdownHost()?.getPid(),
+          pendingAlive: (() => {
+            const h = privateObservation.getPendingShutdownHost()
+            return h ? h.isAlive() : false
+          })(),
+        }
+        // Return both close evidence and trigger result for validator distinction from exact-PID kill
+        return { before, afterClose, after, trigger: triggerResult, close: closeRes }
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationKillWorker", async () => {
+        const host = privateObservation.getHost()
+        const beforePid = host?.getPid()
+        const proc = host?.getProc() ?? null
+        if (!proc || !beforePid) throw new Error("no active private worker to kill")
+        const exitedBefore = proc.exitCode !== null || proc.signalCode !== null
+        if (exitedBefore) throw new Error(`private worker pid ${beforePid} already exited`)
+        // Exact-PID kill: terminate the exact child proc, bounded wait, no global kills
+        try {
+          proc.kill()
+        } catch (e) {
+          throw new Error(`kill exact pid ${beforePid} failed: ${String(e)}`)
+        }
+        const ok = await (host?.waitForExit(5000) ?? Promise.resolve(false))
+        if (!ok) throw new Error(`exact pid ${beforePid} did not exit after kill`)
+        const afterKillPid = privateObservation.getHost()?.getPid()
+        // Reconnect path after exact kill
+        const reconnectResult = await privateObservation.reconnect()
+        const after = {
+          hostState: privateObservation.getHostState(),
+          isStarted: privateObservation.isStarted(),
+          pid: privateObservation.getHost()?.getPid(),
+          pendingPid: privateObservation.getPendingShutdownHost()?.getPid() ?? null,
+          pendingAlive: (() => {
+            const h = privateObservation.getPendingShutdownHost()
+            return h ? h.isAlive() : false
+          })(),
+        }
+        return { beforePid, afterKillPid, after, reconnectResult }
+      }),
+      vscode.commands.registerCommand(
+        "kilo-code.new.e2eFixture.privateObservationMutate",
+        async (params: unknown) => {
+          return privateObservation.request("test/mutateChangefeed", params)
+        },
+      ),
+      // R9 fixture-only bounded notification recorder: read/clear the JSON-safe
+      // onNotification envelope sequence (max 50, in-memory, no persistence).
+      // Ordinal watermark is monotonic independent of bounded retention to avoid length-watermark loss.
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationNotifications", async () => {
+        return privateObservation.getNotificationSnapshot()
+      }),
+      // Back-compat: legacy array view for older harnesses/tests — returns entries array only
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationNotificationsRaw", async () => {
+        return privateObservation.getNotificationLog()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationClearNotifications", async () => {
+        privateObservation.clearNotificationLog()
+        return true
       }),
     )
   }

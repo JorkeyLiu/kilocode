@@ -1,0 +1,64 @@
+{
+  "mut2": {
+    "v": "1.0",
+    "cursor": 3,
+    "entry": {
+      "seq": 3,
+      "session_id": "e2e-probe-d3cbd796-B",
+      "revision": 2,
+      "kind": "changed",
+      "time": 7001
+    }
+  },
+  "evict1": {
+    "v": "1.0",
+    "cursor": 4,
+    "entry": {
+      "seq": 4,
+      "session_id": "r9-evict-1",
+      "revision": 1,
+      "kind": "changed",
+      "time": 7002
+    }
+  },
+  "evict2": {
+    "v": "1.0",
+    "cursor": 5,
+    "entry": {
+      "seq": 5,
+      "session_id": "r9-evict-2",
+      "revision": 1,
+      "kind": "changed",
+      "time": 7003
+    }
+  },
+  "killRes": {
+    "beforePid": 83477,
+    "afterKillPid": 83477,
+    "after": {
+      "hostState": "open",
+      "isStarted": true,
+      "pid": 83485,
+      "pendingPid": null,
+      "pendingAlive": false
+    },
+    "reconnectResult": {
+      "protocolVersion": "1.0",
+      "serverInfo": {
+        "name": "kilo-private-worker",
+        "version": "7.4.11"
+      },
+      "capabilities": {}
+    }
+  },
+  "statusAfter": {
+    "enabled": true,
+    "hostState": "open",
+    "pid": 83485,
+    "isStarted": true,
+    "persistedCursor": 3,
+    "dbPath": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-H680A1/xdg-data/kilo/kilo.db",
+    "testBridge": true,
+    "envDb": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-H680A1/xdg-data/kilo/kilo.db"
+  }
+}

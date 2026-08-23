@@ -25,9 +25,11 @@
  *
  * Choice: debounce is TRAILING (not leading) ~150ms — the last reason in the
  * burst wins and one execution follows the quiet period. Documented per spec.
- * Peer-closed is an explicit onPeerClosed() entrypoint; no additive HostOptions.onClosed
- * emitter is introduced — trigger relies on explicit caller (or host-state polling)
- * to avoid altering existing host/peer start/shutdown behaviour. Minimal and additive.
+ * Peer-closed is an explicit onPeerClosed() entrypoint driven by the
+ * event-driven HostOptions.onClosed / JsonRpcPeer onClosed seam: PrivateWorkerHost
+ * fires onClosed exactly once on peer close (EOF/stream closed/child exit/explicit
+ * dispose) and PrivateObservationService forwards it via setOnPeerClosed to this
+ * trigger's onPeerClosed(). No polling, no host-state polling interval.
  *
  * No setInterval, no background timer beyond single debounce timeout, no second store,
  * no selector/readiness change. Reconnect is bounded shutdown/reinitialize single attempt
@@ -42,6 +44,7 @@ export type TriggerResult = {
   reconnectResult: unknown
   readResult?: unknown
   rehydrate?: boolean
+  readError?: string
 }
 
 export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
@@ -172,6 +175,7 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
         const reconnectResult = await this.service.reconnect()
         let readResult: unknown = undefined
         let rehydrate: boolean | undefined = undefined
+        let readError: string | undefined = undefined
         try {
           const c = this.service.getPersistedCursor()
           if (c !== undefined) {
@@ -180,10 +184,11 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
             if (r && typeof r.rehydrate === "boolean") rehydrate = r.rehydrate
           }
         } catch (e) {
-          // read failures are surfaced via readResult undefined; reconnect still succeeded
-          console.warn("[Kilo] PrivateObservationLifecycleTriggers read failed:", e)
+          readError = String((e as Error)?.message ?? String(e))
+          console.warn("[Kilo] PrivateObservationLifecycleTriggers read failed:", e, { reason, readError })
         }
-        const out: TriggerResult = { reason, reconnectResult, readResult, rehydrate }
+        const out: TriggerResult = { reason, reconnectResult, readResult, rehydrate, ...(readError ? { readError } : {}) }
+        // Do not claim successful convergence when read is unavailable — callers observe readError
         return out
       } catch (e) {
         throw e
@@ -274,7 +279,9 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
     }
     if (vscodeApi) {
       const d1 = vscodeApi.window.onDidChangeWindowState((e) => {
-        void triggers.onWindowStateChanged(e.focused)
+        void triggers.onWindowStateChanged(e.focused).catch((err) => {
+          console.warn("[Kilo] privateObservation window trigger failed:", err)
+        })
       })
       const d2 = vscodeApi.workspace.onDidChangeConfiguration((e) => {
         // Filtered: only kilo-relevant config triggers coalesced observation gap handling.
@@ -282,7 +289,9 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
         const relevant =
           e.affectsConfiguration("kilo") || e.affectsConfiguration("kilocode") || e.affectsConfiguration("kilo-code")
         if (!relevant) return
-        void triggers.onConfigChanged(e)
+        void triggers.onConfigChanged(e).catch((err) => {
+          console.warn("[Kilo] privateObservation config trigger failed:", err)
+        })
       })
       context.subscriptions.push(d1, d2)
     }
@@ -296,7 +305,9 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
           },
         } as vscode.Disposable
         maybe.onPanelVisibilityChange((visible: boolean) => {
-          void triggers.onPanelVisibilityChanged(visible)
+          void triggers.onPanelVisibilityChanged(visible).catch((err) => {
+            console.warn("[Kilo] privateObservation panel trigger failed:", err)
+          })
         })
         context.subscriptions.push(disp)
       }

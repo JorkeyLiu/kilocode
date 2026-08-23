@@ -38,6 +38,10 @@ export interface HostOptions {
   env?: NodeJS.ProcessEnv
   initializeTimeoutMs?: number
   onNotification?: (method: string, params: unknown) => void
+  // Optional peer-close hook — invoked exactly once when the underlying
+  // JsonRpcPeer transitions to closed (EOF, stream closed, child exit,
+  // explicit closeTransport). No polling, owned by PrivateObservationService.
+  onClosed?: () => void
 }
 
 export class PrivateWorkerHost {
@@ -52,6 +56,7 @@ export class PrivateWorkerHost {
   private closeHandler: (() => void) | null = null
   private killTimer: ReturnType<typeof setTimeout> | null = null
   private killTarget: ChildProcess | null = null
+  private closedFired = false
 
   constructor(private readonly opts: HostOptions = {}) {
     this.stderrTail = new StderrTail({
@@ -60,6 +65,17 @@ export class PrivateWorkerHost {
         console.error("[Kilo PrivateWorker] stderr:", line)
       },
     })
+  }
+
+  private fireClosedOnce(): void {
+    if (this.closedFired) return
+    this.closedFired = true
+    this.state = "closed"
+    try {
+      this.opts.onClosed?.()
+    } catch {
+      // onClosed failures never propagate
+    }
   }
 
   /**
@@ -82,10 +98,12 @@ export class PrivateWorkerHost {
     const onExit = () => {
       this.stderrTail.flush()
       this.state = "closed"
+      this.fireClosedOnce()
     }
     const onClose = () => {
       this.stderrTail.flush()
       this.state = "closed"
+      this.fireClosedOnce()
     }
     this.stderrHandler = onData
     this.stderrTarget = this.proc.stderr
@@ -99,6 +117,7 @@ export class PrivateWorkerHost {
       writer: this.proc.stdin,
       child: this.proc,
       onNotification: this.opts.onNotification,
+      onClosed: () => this.fireClosedOnce(),
     })
     // Initialize handshake replaces port detection/health (R1) with bounded timeout.
     const timeoutMs = this.opts.initializeTimeoutMs ?? 5000
@@ -210,6 +229,29 @@ export class PrivateWorkerHost {
       }, timeoutMs)
       if ((timer as unknown as { unref?: () => void })?.unref) (timer as unknown as { unref: () => void }).unref()
     })
+  }
+
+  /** Fixture-only: close the underlying JsonRpcPeer transport without killing the child process. */
+  closePeerTransport(): { closed: boolean; aliveBefore: boolean; aliveAfter: boolean; beforePid?: number; afterPid?: number } {
+    const beforePid = this.getPid()
+    const aliveBefore = this.isAlive()
+    if (!this.peer) return { closed: false, aliveBefore, aliveAfter: aliveBefore, beforePid, afterPid: beforePid }
+    if (this.peer.getState() === "closed")
+      return { closed: false, aliveBefore, aliveAfter: this.isAlive(), beforePid, afterPid: this.getPid() }
+    // Capture proc alive before close for evidence
+    this.peer.dispose()
+    // peer dispose triggers fireClosedOnce via onClosed, but ensure direct if not yet
+    this.fireClosedOnce()
+    // Keep proc alive: do NOT dispose host (which kills). Just mark state closed.
+    // State already closed by peer.
+    const aliveAfter = this.isAlive()
+    const afterPid = this.getPid()
+    return { closed: true, aliveBefore, aliveAfter, beforePid, afterPid }
+  }
+
+  /** Accessor for tests/fixtures — current peer if any. */
+  getPeer(): JsonRpcPeer | null {
+    return this.peer
   }
 
   getStderrTail(): string[] {
@@ -353,6 +395,9 @@ export class PrivateWorkerHost {
   dispose(): void {
     this.peer?.dispose()
     this.peer = null
+    // Ensure close hook fires even when peer was absent or already closed but host is being disposed
+    // fireClosedOnce is idempotent; if already fired via peer onClosed, this is no-op.
+    this.fireClosedOnce()
     if (this.proc) this.lastProc = this.proc
     if (this.proc) {
       if (this.stderrHandler && this.stderrTarget) {

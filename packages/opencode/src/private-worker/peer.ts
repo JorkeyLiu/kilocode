@@ -19,6 +19,9 @@ export interface PeerOptions {
   child?: ChildProcess
   onRequest?: (method: string, params: unknown) => unknown | Promise<unknown>
   onNotification?: (method: string, params: unknown) => void
+  // Optional close hook — invoked exactly once when peer transitions to closed
+  // (EOF, stream closed, child exit, or explicit dispose). No polling.
+  onClosed?: () => void
 }
 
 export class JsonRpcPeer {
@@ -31,6 +34,8 @@ export class JsonRpcPeer {
   private readonly child?: ChildProcess
   private readonly onRequest?: PeerOptions["onRequest"]
   private readonly onNotification?: PeerOptions["onNotification"]
+  private readonly onClosed?: PeerOptions["onClosed"]
+  private closedNotified = false
   private initialized = false
 
   constructor(opts: PeerOptions) {
@@ -39,6 +44,7 @@ export class JsonRpcPeer {
     this.child = opts.child
     this.onRequest = opts.onRequest
     this.onNotification = opts.onNotification
+    this.onClosed = opts.onClosed
     this.bindReader()
     if (this.child) this.bindChild()
   }
@@ -76,6 +82,7 @@ export class JsonRpcPeer {
     this.state = "closed"
     this.unbind()
     this.rejectAllPending("Peer disposed")
+    this.notifyClosed()
   }
 
   private write(frame: Buffer, id: JsonRpcId | null, reject: ((e: unknown) => void) | null): void {
@@ -156,6 +163,17 @@ export class JsonRpcPeer {
     this.state = "closed"
     this.unbind()
     this.rejectAllPending("Peer closed")
+    this.notifyClosed()
+  }
+
+  private notifyClosed(): void {
+    if (this.closedNotified) return
+    this.closedNotified = true
+    try {
+      this.onClosed?.()
+    } catch {
+      // onClosed failures never propagate to transport
+    }
   }
 
   private rejectAllPending(message: string): void {

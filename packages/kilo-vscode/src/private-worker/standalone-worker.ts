@@ -58,10 +58,6 @@ async function safeAsync(fn: () => Promise<void>): Promise<void> {
   } catch {}
 }
 
-function clearPolling(iv: ReturnType<typeof setInterval> | undefined): void {
-  if (iv) safe(() => clearInterval(iv))
-}
-
 function safeOff(target: unknown, event: string, handler: () => void): void {
   const t = target as { off?: (e: string, h: () => void) => void; removeListener?: (e: string, h: () => void) => void }
   safe(() => t.off?.(event, handler as unknown as () => void))
@@ -98,6 +94,21 @@ function attachStdin(onEnd: () => void): void {
   })
 }
 
+export function createSharedCleanup(cleanup: () => Promise<void>): () => Promise<void> {
+  let promise: Promise<void> | undefined
+  return () => {
+    if (promise) return promise
+    promise = cleanup()
+    return promise
+  }
+}
+
+export function createSignalExitHandler(doCleanup: () => Promise<void>, exit: (code: number) => void): () => void {
+  return () => {
+    void doCleanup().finally(() => exit(0))
+  }
+}
+
 const isMain =
   typeof process !== "undefined" &&
   typeof process.argv[1] === "string" &&
@@ -108,7 +119,30 @@ if (isMain) {
       try {
         const { deps, dispose, db } = await createStandaloneDeps()
         const useBridge = isTestBridgeEnabled()
+        // Event-driven cleanup: peer onClosed + stdin end + signals, no polling.
+        // Shared promise ensures concurrent signal handlers await the same in-progress cleanup before exit.
         let peer: JsonRpcPeer
+        let origDispose: (() => void) | undefined
+        let cleanupPromise: Promise<void> | undefined
+        const doCleanup = (): Promise<void> => {
+          if (cleanupPromise) return cleanupPromise
+          cleanupPromise = (async () => {
+            if (origDispose) safe(() => origDispose!())
+            else if (peer) safe(() => peer.dispose())
+            await safeAsync(() => dispose())
+            detachProcessSignals(sigIntHandler, sigTermHandler)
+            detachStdin(onEnd)
+          })()
+          return cleanupPromise
+        }
+        const onEnd = () => {
+          void doCleanup()
+        }
+        const sigIntHandler = createSignalExitHandler(doCleanup, (c) => process.exit(c))
+        const sigTermHandler = createSignalExitHandler(doCleanup, (c) => process.exit(c))
+        const onPeerClosed = () => {
+          void doCleanup()
+        }
         if (useBridge) {
           const ctrl = new ObservationController(deps)
           if (typeof (process.stdin as unknown as { resume?: () => void }).resume === "function") {
@@ -118,6 +152,7 @@ if (isMain) {
           peer = new JsonRpcPeer({
             reader: process.stdin,
             writer: process.stdout,
+            onClosed: onPeerClosed,
             // eslint-disable-next-line complexity
             onRequest: async (method, params) => {
               if (method === "test/mutateChangefeed") {
@@ -160,41 +195,14 @@ if (isMain) {
           })
           peerRef = peer
         } else {
-          peer = startWorker({ observationDeps: deps })
+          peer = startWorker({ observationDeps: deps, onClosed: onPeerClosed })
         }
-        const origDispose = peer.dispose.bind(peer)
-        let cleaned = false
-        let iv: ReturnType<typeof setInterval> | undefined
-        const onEnd = () => {
-          void doCleanup()
-        }
-        const sigIntHandler = () => {
-          void doCleanup().finally(() => process.exit(0))
-        }
-        const sigTermHandler = () => {
-          void doCleanup().finally(() => process.exit(0))
-        }
-        const doCleanup = async () => {
-          if (cleaned) return
-          cleaned = true
-          clearPolling(iv)
-          safe(() => origDispose())
-          await safeAsync(() => dispose())
-          detachProcessSignals(sigIntHandler, sigTermHandler)
-          detachStdin(onEnd)
-        }
+        origDispose = peer.dispose.bind(peer)
         ;(peer as unknown as { dispose: () => void }).dispose = () => {
           void doCleanup()
         }
         attachProcessSignals(sigIntHandler, sigTermHandler)
         attachStdin(onEnd)
-        iv = setInterval(() => {
-          if (peer.getState() === "closed") {
-            clearPolling(iv)
-            void doCleanup()
-          }
-        }, 50)
-        if (iv.unref) iv.unref()
       } catch (e) {
         console.error("[private-worker] standalone bootstrap failed:", e)
         process.exit(1)

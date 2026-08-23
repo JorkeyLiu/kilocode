@@ -1,0 +1,257 @@
+{
+  "boundary": "restart",
+  "before": {
+    "pid": 83477,
+    "hostState": "open",
+    "cursor": 2,
+    "rehydrate": false
+  },
+  "after": {
+    "pid": 83485,
+    "hostState": "open",
+    "cursor": 5,
+    "rehydrate": true
+  },
+  "duplicate": false,
+  "continuity": true,
+  "rehydrate": true,
+  "beforeEntriesCount": 1,
+  "afterEntriesCount": 0,
+  "notifications": {
+    "before": [
+      {
+        "ordinal": 1,
+        "method": "observation/changed",
+        "params": {
+          "v": "1.0",
+          "cursor": 2,
+          "entries": [
+            {
+              "seq": 2,
+              "session_id": "r9-reconnect-1787493545558",
+              "revision": 1,
+              "kind": "changed",
+              "time": 1787493545558
+            }
+          ]
+        },
+        "at": "2026-08-23T13:59:05.564Z"
+      }
+    ],
+    "after": [
+      {
+        "ordinal": 2,
+        "method": "observation/changed",
+        "params": {
+          "v": "1.0",
+          "cursor": 3,
+          "entries": [
+            {
+              "seq": 3,
+              "session_id": "e2e-probe-d3cbd796-B",
+              "revision": 2,
+              "kind": "changed",
+              "time": 7001
+            }
+          ]
+        },
+        "at": "2026-08-23T13:59:06.378Z"
+      },
+      {
+        "ordinal": 3,
+        "method": "observation/changed",
+        "params": {
+          "v": "1.0",
+          "cursor": 4,
+          "entries": [
+            {
+              "seq": 4,
+              "session_id": "r9-evict-1",
+              "revision": 1,
+              "kind": "changed",
+              "time": 7002
+            }
+          ]
+        },
+        "at": "2026-08-23T13:59:06.386Z"
+      },
+      {
+        "ordinal": 4,
+        "method": "observation/changed",
+        "params": {
+          "v": "1.0",
+          "cursor": 5,
+          "entries": [
+            {
+              "seq": 5,
+              "session_id": "r9-evict-2",
+              "revision": 1,
+              "kind": "changed",
+              "time": 7003
+            }
+          ]
+        },
+        "at": "2026-08-23T13:59:06.388Z"
+      }
+    ]
+  },
+  "notificationsBefore": [
+    {
+      "ordinal": 1,
+      "method": "observation/changed",
+      "params": {
+        "v": "1.0",
+        "cursor": 2,
+        "entries": [
+          {
+            "seq": 2,
+            "session_id": "r9-reconnect-1787493545558",
+            "revision": 1,
+            "kind": "changed",
+            "time": 1787493545558
+          }
+        ]
+      },
+      "at": "2026-08-23T13:59:05.564Z"
+    }
+  ],
+  "notificationsAfter": [
+    {
+      "ordinal": 2,
+      "method": "observation/changed",
+      "params": {
+        "v": "1.0",
+        "cursor": 3,
+        "entries": [
+          {
+            "seq": 3,
+            "session_id": "e2e-probe-d3cbd796-B",
+            "revision": 2,
+            "kind": "changed",
+            "time": 7001
+          }
+        ]
+      },
+      "at": "2026-08-23T13:59:06.378Z"
+    },
+    {
+      "ordinal": 3,
+      "method": "observation/changed",
+      "params": {
+        "v": "1.0",
+        "cursor": 4,
+        "entries": [
+          {
+            "seq": 4,
+            "session_id": "r9-evict-1",
+            "revision": 1,
+            "kind": "changed",
+            "time": 7002
+          }
+        ]
+      },
+      "at": "2026-08-23T13:59:06.386Z"
+    },
+    {
+      "ordinal": 4,
+      "method": "observation/changed",
+      "params": {
+        "v": "1.0",
+        "cursor": 5,
+        "entries": [
+          {
+            "seq": 5,
+            "session_id": "r9-evict-2",
+            "revision": 1,
+            "kind": "changed",
+            "time": 7003
+          }
+        ]
+      },
+      "at": "2026-08-23T13:59:06.388Z"
+    }
+  ],
+  "actionResult": {
+    "mut2": {
+      "v": "1.0",
+      "cursor": 3,
+      "entry": {
+        "seq": 3,
+        "session_id": "e2e-probe-d3cbd796-B",
+        "revision": 2,
+        "kind": "changed",
+        "time": 7001
+      }
+    },
+    "evict1": {
+      "v": "1.0",
+      "cursor": 4,
+      "entry": {
+        "seq": 4,
+        "session_id": "r9-evict-1",
+        "revision": 1,
+        "kind": "changed",
+        "time": 7002
+      }
+    },
+    "evict2": {
+      "v": "1.0",
+      "cursor": 5,
+      "entry": {
+        "seq": 5,
+        "session_id": "r9-evict-2",
+        "revision": 1,
+        "kind": "changed",
+        "time": 7003
+      }
+    },
+    "killRes": {
+      "beforePid": 83477,
+      "afterKillPid": 83477,
+      "after": {
+        "hostState": "open",
+        "isStarted": true,
+        "pid": 83485,
+        "pendingPid": null,
+        "pendingAlive": false
+      },
+      "reconnectResult": {
+        "protocolVersion": "1.0",
+        "serverInfo": {
+          "name": "kilo-private-worker",
+          "version": "7.4.11"
+        },
+        "capabilities": {}
+      }
+    }
+  },
+  "notes": [
+    "before pid 83477 after 83485",
+    "beforeEntries 1 afterEntries 0",
+    "notifs before 1 after 3"
+  ],
+  "subscribe": {
+    "v": "1.0",
+    "cursor": 5,
+    "subscribed": true
+  },
+  "kill": {
+    "beforePid": 83477,
+    "afterKillPid": 83477,
+    "after": {
+      "hostState": "open",
+      "isStarted": true,
+      "pid": 83485,
+      "pendingPid": null,
+      "pendingAlive": false
+    },
+    "reconnectResult": {
+      "protocolVersion": "1.0",
+      "serverInfo": {
+        "name": "kilo-private-worker",
+        "version": "7.4.11"
+      },
+      "capabilities": {}
+    }
+  }
+}

@@ -1,0 +1,36 @@
+{
+  "snap0": {
+    "v": "1.0",
+    "cursor": 0,
+    "snapshot": null
+  },
+  "mut1": {
+    "v": "1.0",
+    "cursor": 1,
+    "entry": {
+      "seq": 1,
+      "session_id": "e2e-probe-d3cbd796-A",
+      "revision": 1,
+      "kind": "changed",
+      "time": 7000
+    }
+  },
+  "ack1": {
+    "v": "1.0",
+    "cursor": 1
+  },
+  "status0": {
+    "enabled": true,
+    "hostState": "open",
+    "pid": 83218,
+    "isStarted": true,
+    "dbPath": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-H680A1/xdg-data/kilo/kilo.db",
+    "testBridge": true,
+    "envDb": "/var/folders/9v/733tfwtj2jvgwygmtrbwj9gm0000gn/T/kilo-e2e-H680A1/xdg-data/kilo/kilo.db"
+  },
+  "subscribe": {
+    "v": "1.0",
+    "cursor": 0,
+    "subscribed": true
+  }
+}

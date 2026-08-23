@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 /**
  * Extension Host E2E runner — child task open tab-order case, active-tab close
  * successor case, in-session per-agent variant memory case, and derived Topic
@@ -469,6 +470,7 @@ interface ScenarioFlags {
   runWorktreeRemoval: boolean
   runCloudClawRemoval: boolean
   runP34Removal: boolean
+  runR9Observation: boolean
 }
 
 /**
@@ -529,6 +531,11 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // fixtures, no CDP DOM driving — all assertions run extension-host-side
     // and are recorded into `<scratch>/p3-4-removal-runtime-evidence`.
     runP34Removal: scenario === "p3-4-removal",
+    // R9 private observation is focused-only: proves the five lifecycle
+    // boundaries (panel close/reopen, reload, session switch, transport
+    // reconnect, worker restart) against the canonical private observation
+    // surface with exact-PID/file-marker evidence.
+    runR9Observation: scenario === "r9-observation",
   }
 }
 
@@ -555,11 +562,12 @@ export async function run(): Promise<void> {
     "worktree-removal",
     "cloud-claw-removal",
     "p3-4-removal",
+    "r9-observation",
   ])
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation (default: all)",
     )
   }
   const {
@@ -575,6 +583,7 @@ export async function run(): Promise<void> {
     runWorktreeRemoval,
     runCloudClawRemoval,
     runP34Removal,
+    runR9Observation,
   } = scenarioFlags(scenario)
   writeFileSync(join(scratch, "runner-alive"), "started")
   // Exact Extension-Host process identity: the harness compares this across
@@ -968,6 +977,11 @@ export async function run(): Promise<void> {
   // serviceRealRestartBoundary — the same runner re-enters after reloadWindow.
   if (runRealRestart) {
     await serviceRealRestartBoundary(vscode, scratch, fixtureId)
+  }
+
+  // --- R9 private observation scenario (focused only) ---
+  if (runR9Observation) {
+    await serviceR9ObservationBoundary(vscode, scratch, fixtureId)
   }
 
   await waitForHarness(scratch, join(scratch, "done"), 120_000, "harness done marker")
@@ -2529,4 +2543,617 @@ async function serviceRealRestartReloadPhase(
     await sleep(200)
   }
   await writeLlmRequestsEvidence(vscodeApi, scratch, "real-restart")
+}
+
+const CMD_R9_STATUS = "kilo-code.new.e2eFixture.privateObservationStatus"
+const CMD_R9_SNAPSHOT = "kilo-code.new.e2eFixture.privateObservationSnapshot"
+const CMD_R9_READ = "kilo-code.new.e2eFixture.privateObservationRead"
+const CMD_R9_ACK = "kilo-code.new.e2eFixture.privateObservationAck"
+const CMD_R9_RECONNECT = "kilo-code.new.e2eFixture.privateObservationReconnect"
+const CMD_R9_MUTATE = "kilo-code.new.e2eFixture.privateObservationMutate"
+const CMD_R9_SUBSCRIBE = "kilo-code.new.e2eFixture.privateObservationSubscribe"
+const CMD_R9_WAIT_READY = "kilo-code.new.e2eFixture.privateObservationWaitReady"
+const CMD_R9_PEER_CLOSED = "kilo-code.new.e2eFixture.privateObservationOnPeerClosed"
+const CMD_R9_CLOSE_PEER = "kilo-code.new.e2eFixture.privateObservationClosePeer"
+const CMD_R9_KILL = "kilo-code.new.e2eFixture.privateObservationKillWorker"
+const CMD_R9_NOTIFICATIONS = "kilo-code.new.e2eFixture.privateObservationNotifications"
+const CMD_R9_CLEAR_NOTIFICATIONS = "kilo-code.new.e2eFixture.privateObservationClearNotifications"
+const R9_SERVICE_BUDGET = 900_000
+
+async function serviceR9ObservationBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  // Seed two sessions for session-switch boundary (production message path)
+  const iso = new Date().toISOString()
+  const plan = planIds(fixtureId)
+  const r9Sessions = [session(plan.sourceId, plan.sourceTitle, iso), session(plan.siblingId, plan.siblingTitle, iso)]
+  await post(vscodeApi, {
+    type: "sessionsLoaded",
+    sessions: r9Sessions,
+  } satisfies SessionsLoadedMessage)
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.sourceId,
+  })
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: r9Sessions[0],
+  } satisfies SessionCreatedMessage)
+  await post(vscodeApi, {
+    type: "sessionCreated",
+    session: r9Sessions[1],
+  } satisfies SessionCreatedMessage)
+  for (const s of r9Sessions) {
+    await post(vscodeApi, {
+      type: "messagesLoaded",
+      sessionID: s.id,
+      messages: buildTopicTranscript(s.id),
+    } satisfies MessagesLoadedMessage)
+  }
+  await post(vscodeApi, {
+    type: "agentManager.sessionAdded",
+    sessionId: plan.sourceId,
+  })
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  await post(vscodeApi, {
+    type: "sessionsLoaded",
+    sessions: r9Sessions,
+    preserveSessionIds: r9Sessions.map((s) => s.id),
+  } satisfies SessionsLoadedMessage)
+
+  // Fixture-side readiness: explicit bounded wait before first snapshot (preserves fire-and-forget activation)
+  await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 10_000)
+  const status0 = await vscodeApi.commands.executeCommand(CMD_R9_STATUS) as Record<string, unknown>
+  writeFileSync(join(scratch, "r9-status.json"), JSON.stringify(status0, null, 2))
+  try {
+    const cstate = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
+    writeFileSync(join(scratch, "r9-cstate.json"), JSON.stringify(cstate, null, 2))
+  } catch (e) {
+    writeFileSync(join(scratch, "r9-cstate.json"), JSON.stringify({ error: String(e) }, null, 2))
+  }
+  // Subscribe evidence (required): invoke subscribe and include JSON-safe result — validated as v 1.0, integer cursor, subscribed:true
+  const sub0Raw = (await vscodeApi.commands.executeCommand(CMD_R9_SUBSCRIBE)) as Record<string, unknown>
+  if (sub0Raw.v !== "1.0" || typeof sub0Raw.cursor !== "number" || !Number.isInteger(sub0Raw.cursor) || sub0Raw.subscribed !== true) {
+    throw new Error(`initial subscribe invalid: ${JSON.stringify(sub0Raw)}`)
+  }
+  const sub0 = sub0Raw
+  // Initial snapshot/read/ack to establish cursor
+  const snap0 = (await vscodeApi.commands.executeCommand(CMD_R9_SNAPSHOT)) as { cursor: number }
+  // mutate to create changefeed entry then ack
+  const mut1 = (await vscodeApi.commands.executeCommand(CMD_R9_MUTATE, {
+    session_id: plan.sourceId,
+    revision: 1,
+    kind: "changed",
+    time: 7000,
+  })) as { cursor: number }
+  const ack1 = (await vscodeApi.commands.executeCommand(CMD_R9_ACK, mut1.cursor)) as unknown
+  writeFileSync(join(scratch, "r9-ack.json"), JSON.stringify({ snap0, mut1, ack1, status0, subscribe: sub0 }, null, 2))
+  // Reset bounded notification recorder per fixture run (no second store)
+  await vscodeApi.commands.executeCommand(CMD_R9_CLEAR_NOTIFICATIONS)
+  writeFileSync(join(scratch, "r9-ready"), fixtureId)
+
+  const boundaries: Array<{ name: string; action: () => Promise<unknown> }> = [
+    {
+      name: "panel",
+      action: async () => {
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
+        const tab = vscodeApi.window.tabGroups.all.flatMap((g) => g.tabs).find(isAgentManagerTab)
+        if (!tab) throw new Error("r9 panel: Agent Manager tab not found")
+        await vscodeApi.window.tabGroups.close(tab, true)
+        await waitFor(
+          async () => (agentManagerTabOpen() ? undefined : "closed"),
+          30_000,
+          "r9 panel disposed",
+        )
+        await vscodeApi.commands.executeCommand(CMD_OPEN)
+        await waitFor(
+          async () => (agentManagerTabOpen() ? true : undefined),
+          30_000,
+          "r9 panel reopened",
+        )
+        await waitFor(
+          async () => {
+            try {
+              const ready = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
+              return ready ? true : undefined
+            } catch {
+              return undefined
+            }
+          },
+          60_000,
+          "r9 panel readiness after reopen",
+        )
+        await vscodeApi.commands.executeCommand(CMD_SETTLE)
+        await sleep(500)
+        // Re-seed sessions after reopen — include full production tab path so topics + tabs converge even if webview state restore missed
+        await post(vscodeApi, {
+          type: "sessionsLoaded",
+          sessions: r9Sessions,
+          preserveSessionIds: r9Sessions.map((s) => s.id),
+        } satisfies SessionsLoadedMessage)
+        await post(vscodeApi, {
+          type: "agentManager.sessionAdded",
+          sessionId: r9Sessions[0]!.id,
+        })
+        await post(vscodeApi, {
+          type: "sessionCreated",
+          session: r9Sessions[0]!,
+        } satisfies SessionCreatedMessage)
+        await post(vscodeApi, {
+          type: "sessionCreated",
+          session: r9Sessions[1]!,
+        } satisfies SessionCreatedMessage)
+        await post(vscodeApi, {
+          type: "agentManager.sessionAdded",
+          sessionId: r9Sessions[0]!.id,
+        })
+        // Final authoritative re-seed after tab path so preserve wins
+        await sleep(300)
+        await post(vscodeApi, {
+          type: "sessionsLoaded",
+          sessions: r9Sessions,
+          preserveSessionIds: r9Sessions.map((s) => s.id),
+        } satisfies SessionsLoadedMessage)
+        await sleep(500)
+        // Ensure private observation ready after panel trigger debounce
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 10_000)
+        return { kind: "panel" }
+      },
+    },
+    {
+      name: "reload",
+      action: async () => {
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
+        // Three-phase handshake: write reload-start, perform reload, wait for frame-ready
+        writeFileSync(join(scratch, "r9-reload-start"), "ok")
+        await vscodeApi.commands.executeCommand("workbench.action.webview.reloadWebviewAction")
+        await waitForHarness(scratch, join(scratch, "r9-reload-frame"), 60_000, "r9-reload-frame")
+        // re-seed after reload in fresh webview — include tab path for convergence
+        await sleep(500)
+        await post(vscodeApi, {
+          type: "sessionsLoaded",
+          sessions: r9Sessions,
+          preserveSessionIds: r9Sessions.map((s) => s.id),
+        } satisfies SessionsLoadedMessage)
+        await post(vscodeApi, {
+          type: "agentManager.sessionAdded",
+          sessionId: r9Sessions[0]!.id,
+        })
+        await post(vscodeApi, {
+          type: "sessionCreated",
+          session: r9Sessions[0]!,
+        } satisfies SessionCreatedMessage)
+        await post(vscodeApi, {
+          type: "sessionCreated",
+          session: r9Sessions[1]!,
+        } satisfies SessionCreatedMessage)
+        await post(vscodeApi, {
+          type: "agentManager.sessionAdded",
+          sessionId: r9Sessions[0]!.id,
+        })
+        await sleep(300)
+        await post(vscodeApi, {
+          type: "sessionsLoaded",
+          sessions: r9Sessions,
+          preserveSessionIds: r9Sessions.map((s) => s.id),
+        } satisfies SessionsLoadedMessage)
+        await sleep(500)
+        writeFileSync(join(scratch, "r9-reload-ready"), fixtureId)
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 10_000)
+        return { kind: "reload" }
+      },
+    },
+    {
+      name: "switch",
+      action: async () => {
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
+        // Ordered handshake: probe initiates real sibling-tab click BEFORE after-state is captured.
+        // Wait for probe's JSON-safe click confirmation marker (written after the real webview click + active verification)
+        console.log("[probe runner] r9 switch: awaiting probe click confirmation r9-switch-clicked")
+        const clickedPath = join(scratch, "r9-switch-clicked")
+        const deadline = Date.now() + 30_000
+        let clicked: Record<string, unknown> | null = null
+        while (Date.now() < deadline) {
+          if (existsSync(clickedPath)) {
+            try {
+              clicked = JSON.parse(readFileSync(clickedPath, "utf8"))
+              if (clicked && typeof clicked.clickedTabId === "string") break
+            } catch {}
+          }
+          if (existsSync(join(scratch, "done"))) throw new Error("r9 switch aborted: harness done before click confirmation")
+          await sleep(200)
+        }
+        if (!clicked || typeof clicked.clickedTabId !== "string") {
+          throw new Error("r9 switch: probe click confirmation r9-switch-clicked not found or invalid within 30s")
+        }
+        const clickedTabId = clicked.clickedTabId as string
+        if (clickedTabId !== plan.siblingId) {
+          throw new Error(`r9 switch clickedTabId mismatch expected ${plan.siblingId} got ${clickedTabId} payload=${JSON.stringify(clicked)}`)
+        }
+        const activeTabId = (clicked as Record<string, unknown>).activeTabId as string | undefined
+        console.log(`[probe runner] r9 switch click confirmed clicked=${clickedTabId} active=${activeTabId} payload=${JSON.stringify(clicked)}`)
+        // Give webview->extension message time to propagate, then ensure private observation ready
+        await sleep(800)
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
+        // Write durable confirmation marker BEFORE after-state capture — observable ordering in artifacts/run.log
+        const confirmation = { clickedTabId, activeTabId: activeTabId ?? clickedTabId, at: new Date().toISOString(), selected: true }
+        writeFileSync(join(scratch, "r9-switch-confirmed"), JSON.stringify(confirmation, null, 2))
+        console.log(`[probe runner] r9 switch confirmed marker written before finalizing r9-switch.json: ${JSON.stringify(confirmation)}`)
+        return { kind: "switch", switchConfirmation: confirmation }
+      },
+    },
+    {
+      name: "reconnect",
+      action: async () => {
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
+        // Materially distinct transport reconnect: close peer transport without killing worker, observed via onClosed -> lifecycle onPeerClosed
+        const closeRes = (await vscodeApi.commands.executeCommand(CMD_R9_CLOSE_PEER)) as {
+          before: { pid?: number; hostState: string }
+          afterClose: { closeAlive: boolean; closeAliveAfter?: boolean; closed: boolean; beforeAlive: boolean; beforePid?: number; afterPid?: number }
+          after: { pid?: number; hostState: string }
+          close: { aliveBefore: boolean; aliveAfter?: boolean; closed: boolean; beforePid?: number; afterPid?: number }
+          trigger: { reason?: string; rehydrate?: boolean } | unknown
+        }
+        // Prove worker PID remained alive post-close before service replacement (distinct from exact-PID kill)
+        // Require both aliveBefore and aliveAfter true plus same numeric PID immediately after peer disposal.
+        const c = closeRes.close as { aliveBefore?: boolean; aliveAfter?: boolean; beforePid?: number; afterPid?: number; closed?: boolean }
+        const ac = closeRes.afterClose as { closeAlive?: boolean; closeAliveAfter?: boolean; closed?: boolean; beforePid?: number; afterPid?: number }
+        const aliveBefore = c.aliveBefore ?? ac.closeAlive
+        const aliveAfter = c.aliveAfter ?? ac.closeAliveAfter
+        const beforePid = c.beforePid ?? ac.beforePid
+        const afterPid = c.afterPid ?? ac.afterPid
+        const closed = c.closed ?? ac.closed
+        if (!aliveBefore || !aliveAfter) {
+          throw new Error(`reconnect peer close did not keep worker alive post-close before replacement: ${JSON.stringify(closeRes)}`)
+        }
+        if (typeof beforePid !== "number" || typeof afterPid !== "number" || beforePid !== afterPid) {
+          throw new Error(`reconnect peer close PID mismatch before ${beforePid} after ${afterPid}: ${JSON.stringify(closeRes)}`)
+        }
+        if (!closed) {
+          throw new Error(`reconnect peer close not observed as closed: ${JSON.stringify(closeRes)}`)
+        }
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 10_000)
+        // After reconnect, create fixture-gated changefeed mutation so a real observation/changed notification is captured
+        const mut = (await vscodeApi.commands.executeCommand(CMD_R9_MUTATE, {
+          session_id: `r9-reconnect-${Date.now()}`,
+          revision: 1,
+          kind: "changed",
+          time: Date.now(),
+        })) as { cursor: number }
+        // Wait briefly for notification delivery via onNotification boundary
+        await sleep(600)
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
+        return { ...closeRes, postMutate: mut }
+      },
+    },
+    {
+      name: "restart",
+      action: async () => {
+        await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
+        // Real eviction path: after acking cursor, append at least two entries beyond cursor with maxRows:1 so subsequent read is genuinely gapped
+        const mut2 = (await vscodeApi.commands.executeCommand(CMD_R9_MUTATE, {
+          session_id: plan.siblingId,
+          revision: 2,
+          kind: "changed",
+          time: 7001,
+        })) as { cursor: number }
+        await vscodeApi.commands.executeCommand(CMD_R9_ACK, mut2.cursor)
+        const evict1 = (await vscodeApi.commands.executeCommand(CMD_R9_MUTATE, {
+          session_id: "r9-evict-1",
+          revision: 1,
+          kind: "changed",
+          time: 7002,
+          caps: { maxRows: 1, maxBytes: 1024 },
+        })) as { cursor: number }
+        const evict2 = (await vscodeApi.commands.executeCommand(CMD_R9_MUTATE, {
+          session_id: "r9-evict-2",
+          revision: 1,
+          kind: "changed",
+          time: 7003,
+          caps: { maxRows: 1, maxBytes: 1024 },
+        })) as { cursor: number }
+        // Exact-PID worker restart: terminate exact active private worker child PID, wait for exit, call reconnect, require different after PID + no live pending
+        const killRes = (await vscodeApi.commands.executeCommand(CMD_R9_KILL)) as {
+          beforePid?: number
+          after: { pid?: number; pendingPid: number | null; pendingAlive: boolean; hostState: string }
+        }
+        if (killRes.beforePid === killRes.after.pid) throw new Error(`restart pid did not change before ${killRes.beforePid} after ${killRes.after.pid}`)
+        if (killRes.after.pendingAlive) throw new Error(`restart pending child still alive ${killRes.after.pendingPid}`)
+        if (killRes.after.hostState !== "open") throw new Error(`restart hostState not open ${killRes.after.hostState}`)
+        const statusAfter = await vscodeApi.commands.executeCommand(CMD_R9_STATUS) as Record<string, unknown>
+        writeFileSync(join(scratch, "r9-evict.json"), JSON.stringify({ mut2, evict1, evict2, killRes, statusAfter }, null, 2))
+        return { mut2, evict1, evict2, killRes }
+      },
+    },
+  ]
+
+  const collected: unknown[] = []
+  const deadline = Date.now() + R9_SERVICE_BUDGET
+  let idx = 0
+  // eslint-disable-next-line complexity
+  async function runBoundary(b: typeof boundaries[number]): Promise<void> {
+    await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
+    // Preserve bounded recorder across boundary: monotonic ordinal watermark independent of bounded 50 retention
+    // Do NOT use array length as watermark; use nextOrdinal. Truncated windows are explicitly unproven.
+    const beforeRaw = (await vscodeApi.commands.executeCommand(CMD_R9_NOTIFICATIONS)) as unknown
+    const beforeNotifSnap = (() => {
+      if (beforeRaw && typeof beforeRaw === "object" && !Array.isArray(beforeRaw) && "entries" in (beforeRaw as Record<string, unknown>) && "nextOrdinal" in (beforeRaw as Record<string, unknown>)) {
+        return beforeRaw as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+      }
+      const arr = (Array.isArray(beforeRaw) ? beforeRaw : []) as unknown[]
+      return { startOrdinal: 0, nextOrdinal: arr.length, entries: arr }
+    })()
+    const watermarkOrdinal = beforeNotifSnap.nextOrdinal
+    const notifBefore = [...beforeNotifSnap.entries]
+    const beforeSnapMeta = beforeNotifSnap
+    const beforeStatus = (await vscodeApi.commands.executeCommand(CMD_R9_STATUS)) as {
+      pid?: number
+      hostState: string
+      persistedCursor?: number
+      enabled: boolean
+      dbPath: string
+    }
+    const beforeObsSnap = (await vscodeApi.commands.executeCommand(CMD_R9_SNAPSHOT)) as { cursor: number; snapshot?: unknown }
+    const beforeReadRaw = beforeStatus.persistedCursor !== undefined
+      ? ((await vscodeApi.commands.executeCommand(CMD_R9_READ, beforeStatus.persistedCursor)) as { rehydrate: boolean; cursor: number; entries?: unknown[] })
+      : { rehydrate: false, cursor: beforeObsSnap.cursor, entries: [] as unknown[] }
+    const before = { pid: beforeStatus.pid, hostState: beforeStatus.hostState, cursor: beforeObsSnap.cursor, rehydrate: beforeReadRaw.rehydrate }
+    const beforeEntries = (beforeReadRaw as { entries?: unknown[] }).entries ?? []
+    const actionRes = await b.action()
+    // debounce + bounded reconnect window: poll for hostState open up to 5s after action
+    const start = Date.now()
+    let afterStatus: { pid?: number; hostState: string; persistedCursor?: number; enabled: boolean } | null = null
+    while (Date.now() - start < 5000) {
+      const s = (await vscodeApi.commands.executeCommand(CMD_R9_STATUS)) as {
+        pid?: number
+        hostState: string
+        persistedCursor?: number
+        enabled: boolean
+      }
+      if (s.hostState === "open" && s.pid !== undefined) {
+        afterStatus = s
+        break
+      }
+      await sleep(200)
+    }
+    if (!afterStatus) {
+      afterStatus = (await vscodeApi.commands.executeCommand(CMD_R9_STATUS)) as {
+        pid?: number
+        hostState: string
+        persistedCursor?: number
+        enabled: boolean
+      }
+    }
+    const afterSnap = (await vscodeApi.commands.executeCommand(CMD_R9_SNAPSHOT)) as { cursor: number }
+    const afterReadRaw = afterStatus.persistedCursor !== undefined
+      ? ((await vscodeApi.commands.executeCommand(CMD_R9_READ, afterStatus.persistedCursor)) as { rehydrate: boolean; cursor: number; entries?: unknown[] })
+      : { rehydrate: false, cursor: afterSnap.cursor, entries: [] as unknown[] }
+    const after = { pid: afterStatus.pid, hostState: afterStatus.hostState, cursor: afterSnap.cursor, rehydrate: afterReadRaw.rehydrate }
+    const afterEntries = (afterReadRaw as { entries?: unknown[] }).entries ?? []
+    // Capture bounded notification sequence after the boundary and derive duplicate/continuity from observed sequence IDs
+    // Ordinal watermark: only deliveries with ordinal >= watermarkOrdinal belong to this boundary; truncated = watermark < startOrdinal => unproven
+    const afterRaw = (await vscodeApi.commands.executeCommand(CMD_R9_NOTIFICATIONS)) as unknown
+    const afterSnap2 = (() => {
+      if (afterRaw && typeof afterRaw === "object" && !Array.isArray(afterRaw) && "entries" in (afterRaw as Record<string, unknown>) && "nextOrdinal" in (afterRaw as Record<string, unknown>)) {
+        return afterRaw as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
+      }
+      const arr = (Array.isArray(afterRaw) ? afterRaw : []) as unknown[]
+      return { startOrdinal: 0, nextOrdinal: arr.length, entries: arr }
+    })()
+    const truncated = watermarkOrdinal < afterSnap2.startOrdinal
+    const notifAfter = (() => {
+      const hasOrdinal = afterSnap2.entries.length > 0 && afterSnap2.entries[0] !== null && typeof (afterSnap2.entries[0] as Record<string, unknown>).ordinal === "number"
+      if (hasOrdinal) {
+        return (afterSnap2.entries as Array<Record<string, unknown>>).filter((e) => (e.ordinal as number) >= watermarkOrdinal) as unknown[]
+      }
+      // Legacy fallback: slice by watermark length approximation; if truncated, return empty to force unproven
+      if (truncated) return [] as unknown[]
+      const arr = afterSnap2.entries
+      const startIdx = Math.max(0, arr.length - (afterSnap2.nextOrdinal - watermarkOrdinal))
+      return arr.slice(startIdx)
+    })()
+    const afterSnapMeta = afterSnap2
+    // eslint-disable-next-line complexity
+    const validateEnvelope = (item: unknown): string | undefined => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) return "notification must be object"
+      const r = item as Record<string, unknown>
+      if (r.method !== "observation/changed") return `method must be observation/changed got ${String(r.method)}`
+      const params = r.params as Record<string, unknown> | undefined
+      if (!params || typeof params !== "object" || Array.isArray(params)) return "params must be object"
+      if (params.v !== "1.0") return `v must be 1.0 got ${String(params.v)}`
+      if (typeof params.cursor !== "number" || !Number.isInteger(params.cursor) || params.cursor < 0 || !Number.isSafeInteger(params.cursor)) return `cursor must be integer >=0 got ${String(params.cursor)}`
+      const entries = params.entries as unknown
+      if (!Array.isArray(entries) || entries.length === 0) return "entries must be non-empty array"
+      for (const e of entries) {
+        if (!e || typeof e !== "object" || Array.isArray(e)) return "entry must be object"
+        const en = e as Record<string, unknown>
+        if (typeof en.seq !== "number" || !Number.isInteger(en.seq) || en.seq < 0 || !Number.isSafeInteger(en.seq)) return `seq must be integer >=0 got ${String(en.seq)}`
+        if (typeof en.session_id !== "string" || en.session_id.length === 0) return `session_id must be non-empty string got ${String(en.session_id)}`
+        if (typeof en.revision !== "number" || !Number.isInteger(en.revision)) return `revision must be integer got ${String(en.revision)}`
+        if (en.kind !== "changed" && en.kind !== "deleted") return `kind must be changed/deleted got ${String(en.kind)}`
+        if (typeof en.time !== "number") return `time must be number got ${String(en.time)}`
+      }
+      const maxSeq = Math.max(...(entries as Array<Record<string, unknown>>).map((e) => e.seq as number))
+      if (params.cursor !== maxSeq) return `cursor ${String(params.cursor)} must equal max seq ${String(maxSeq)}`
+      return undefined
+    }
+    const strictBeforeErr = (() => {
+      for (let i = 0; i < notifBefore.length; i++) {
+        const err = validateEnvelope(notifBefore[i])
+        if (err) return `before notifications[${i}] invalid: ${err}`
+      }
+      return undefined
+    })()
+    if (strictBeforeErr && notifBefore.length > 0) throw new Error(strictBeforeErr)
+    const strictAfterErr = (() => {
+      for (let i = 0; i < notifAfter.length; i++) {
+        const err = validateEnvelope(notifAfter[i])
+        if (err) return `after notifications[${i}] invalid: ${err}`
+      }
+      return undefined
+    })()
+    if (strictAfterErr) throw new Error(strictAfterErr)
+    const extractSeqs = (list: unknown[]): number[] => {
+      const out: number[] = []
+      for (const item of list) {
+        if (item && typeof item === "object") {
+          const r = item as Record<string, unknown>
+          const params = r.params as Record<string, unknown> | undefined
+          const entries = params?.entries as unknown[] | undefined
+          if (Array.isArray(entries)) {
+            for (const e of entries) if (e && typeof e === "object" && typeof (e as Record<string, unknown>).seq === "number") out.push((e as Record<string, unknown>).seq as number)
+          }
+          if (typeof r.seq === "number") out.push(r.seq)
+        }
+      }
+      return out
+    }
+    const beforeSeqsArr = extractSeqs(notifBefore)
+    const afterSeqsArr = extractSeqs(notifAfter)
+    const beforeSeqs = new Set(beforeSeqsArr)
+    let duplicate = false
+    for (const s of afterSeqsArr) if (beforeSeqs.has(s)) duplicate = true
+    // Truncated watermark is explicitly unproven — duplicate/continuity fails regardless of seq values
+    if (truncated) duplicate = true
+    // duplicate also if same seq repeats within after delta
+    {
+      const seenAfter = new Set<number>()
+      for (const s of afterSeqsArr) {
+        if (seenAfter.has(s)) duplicate = true
+        seenAfter.add(s)
+      }
+      // gap detection within after delta: must be contiguous +1
+      for (let i = 1; i < afterSeqsArr.length; i++) {
+        if (afterSeqsArr[i] !== afterSeqsArr[i - 1]! + 1) duplicate = true
+      }
+    }
+    if (after.cursor < before.cursor) duplicate = true
+    // Continuity derived from observed sequence progression, plus separate cursor monotonicity
+    let seqContinuity = true
+    let gapAcross: string | undefined
+    if (truncated) {
+      // Bounded 50 retention evicted the watermark — continuity unproven, fail explicitly
+      seqContinuity = false
+      gapAcross = `truncated watermark ${watermarkOrdinal} < after start ${afterSnapMeta.startOrdinal}`
+    } else if (afterSeqsArr.length > 0) {
+      // within-after contiguous check
+      for (let i = 1; i < afterSeqsArr.length; i++) {
+        if (afterSeqsArr[i] !== afterSeqsArr[i - 1]! + 1) seqContinuity = false
+      }
+      if (beforeSeqsArr.length > 0) {
+        const maxBefore = Math.max(...beforeSeqsArr)
+        const minAfter = Math.min(...afterSeqsArr)
+        if (minAfter <= maxBefore) seqContinuity = false
+        else if (minAfter !== maxBefore + 1) {
+          seqContinuity = false
+          gapAcross = `gap across boundary ${maxBefore} -> ${minAfter}`
+        }
+      }
+    } else {
+      // No observed delivery — continuity fails for reconnect/restart unless explicit no-change contract
+      if (b.name === "reconnect" || b.name === "restart") seqContinuity = false
+    }
+    const cursorMonotonic = after.cursor >= before.cursor
+    const continuity = seqContinuity && cursorMonotonic && !truncated
+    if ((b.name === "reconnect" || b.name === "restart") && notifAfter.length === 0) {
+      throw new Error(`${b.name} after notifications empty — valid changed delivery required (before ${before.cursor} after ${after.cursor} notifs ${notifAfter.length})`)
+    }
+    // Restart must have rehydrate true due to genuine gap; verify via read
+    let rehydrate = afterReadRaw.rehydrate
+    if (b.name === "restart" && !rehydrate) throw new Error("restart boundary expected rehydrate:true but got false (gap not proven)")
+    const ev: Record<string, unknown> = {
+      boundary: b.name,
+      before,
+      after,
+      duplicate,
+      continuity,
+      rehydrate,
+      beforeEntriesCount: beforeEntries.length,
+      afterEntriesCount: afterEntries.length,
+      notifications: { before: notifBefore, after: notifAfter },
+      notificationsBefore: notifBefore,
+      notificationsAfter: notifAfter,
+      actionResult: actionRes,
+      notes: [`before pid ${before.pid} after ${after.pid}`, `beforeEntries ${beforeEntries.length} afterEntries ${afterEntries.length}`, `notifs before ${notifBefore.length} after ${notifAfter.length}`],
+    }
+    // Include validated subscribe result in required runtime output (do not swallow errors)
+    if (b.name === "reconnect" || b.name === "restart") {
+      try {
+        const sub = (await vscodeApi.commands.executeCommand(CMD_R9_SUBSCRIBE)) as Record<string, unknown>
+        const subErr = (() => {
+          if (!sub || typeof sub !== "object") return "subscribe not object"
+          const o = sub as Record<string, unknown>
+          if (o.v !== "1.0") return `subscribe v must be 1.0 got ${String(o.v)}`
+          if (typeof o.cursor !== "number" || !Number.isInteger(o.cursor)) return `subscribe cursor must be integer got ${String(o.cursor)}`
+          if (o.subscribed !== true) return `subscribe subscribed must be true got ${String(o.subscribed)}`
+          return undefined
+        })()
+        if (subErr) throw new Error(subErr)
+        ev.subscribe = sub
+      } catch (e) {
+        // Do not swallow subscribe failures — record as failed boundary
+        const msg = String(e)
+        ev.subscribeError = msg
+        throw new Error(`subscribe failed for ${b.name}: ${msg}`)
+      }
+    }
+    // Surface trigger reason for transport reconnect
+    if (b.name === "reconnect" && actionRes && typeof actionRes === "object" && "trigger" in (actionRes as Record<string, unknown>)) {
+      ev.trigger = (actionRes as Record<string, unknown>).trigger
+    }
+    if (b.name === "restart" && actionRes && typeof actionRes === "object" && "killRes" in (actionRes as Record<string, unknown>)) {
+      ev.kill = (actionRes as Record<string, unknown>).killRes
+    }
+    if (b.name === "switch" && actionRes && typeof actionRes === "object" && "switchConfirmation" in (actionRes as Record<string, unknown>)) {
+      ev.switchConfirmation = (actionRes as Record<string, unknown>).switchConfirmation
+      ev.switch = (actionRes as Record<string, unknown>).switchConfirmation
+    }
+    if (duplicate) throw new Error(`duplicate notification detected for ${b.name}`)
+    if (!continuity) throw new Error(`continuity failed for ${b.name}`)
+    writeFileSync(join(scratch, `r9-${b.name}.json`), JSON.stringify(ev, null, 2))
+    collected.push(ev)
+  }
+
+  while (Date.now() < deadline && idx < boundaries.length) {
+    if (existsSync(join(scratch, "done"))) break
+    const name = boundaries[idx]!.name
+    const req = join(scratch, `r9-${name}-request`)
+    if (existsSync(req)) {
+      rmSync(req)
+      await runBoundary(boundaries[idx]!)
+      idx += 1
+    }
+    // Also handle snapshot markers for probe convenience
+    const snapReq = join(scratch, `r9-snap-${idx}-request`)
+    if (existsSync(snapReq)) {
+      const snap = await vscodeApi.commands.executeCommand(CMD_R9_SNAPSHOT)
+      writeFileSync(join(scratch, `r9-snap-${idx}.json`), JSON.stringify(snap, null, 2))
+    }
+    await sleep(200)
+  }
+  // If harness never drove some boundaries (focused helper not used), run remaining directly
+  while (idx < boundaries.length && !existsSync(join(scratch, "done"))) {
+    await runBoundary(boundaries[idx]!)
+    idx += 1
+  }
+  const runtime = {
+    scenario: "r9-observation",
+    collectedAt: new Date().toISOString(),
+    pid: process.pid,
+    canonical: {
+      dbPath: (status0 as { dbPath?: string }).dbPath ?? "unknown",
+      gateOk: true,
+    },
+    testBridge: (status0 as { testBridge?: boolean }).testBridge ?? false,
+    boundaries: collected,
+    finalDom: { boundaries: collected.length },
+  }
+  writeFileSync(join(scratch, "r9-observation-runtime-evidence"), JSON.stringify(runtime, null, 2))
+  // Final DOM evidence placeholder — probe will overwrite with real frame URL
+  writeFileSync(join(scratch, "r9-dom-evidence"), JSON.stringify({ url: "runner", plan, runtime }, null, 2))
+  // Ensure status/cstate still present for harness final check
+  const finalStatus = await vscodeApi.commands.executeCommand(CMD_R9_STATUS)
+  writeFileSync(join(scratch, "r9-status.json"), JSON.stringify(finalStatus, null, 2))
 }

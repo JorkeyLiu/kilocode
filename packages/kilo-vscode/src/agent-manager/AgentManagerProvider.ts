@@ -49,7 +49,8 @@ export class AgentManagerProvider implements Disposable {
   private unsubFont: (() => void) | undefined
   private timing: SessionTiming
   private closing: Promise<void> | undefined
-  private onVisibilityChange: ((visible: boolean) => void) | undefined
+  private visibilityCbs: Array<(visible: boolean) => void> = []
+  private activeSessionCbs: Array<(id: string) => void> = []
   // Tracks sessions owned by this panel until they are explicitly closed.
   private panelSessions = new Set<string>()
   private managedSessions = new Map<string, ManagedSession>()
@@ -167,8 +168,44 @@ export class AgentManagerProvider implements Disposable {
     )
   }
 
-  public onPanelVisibilityChange(cb: (visible: boolean) => void): void {
-    this.onVisibilityChange = cb
+  public onPanelVisibilityChange(cb: (visible: boolean) => void): Disposable {
+    this.visibilityCbs.push(cb)
+    return {
+      dispose: () => {
+        const idx = this.visibilityCbs.indexOf(cb)
+        if (idx >= 0) this.visibilityCbs.splice(idx, 1)
+      },
+    }
+  }
+
+  public onActiveSessionChanged(cb: (id: string) => void): Disposable {
+    this.activeSessionCbs.push(cb)
+    return {
+      dispose: () => {
+        const idx = this.activeSessionCbs.indexOf(cb)
+        if (idx >= 0) this.activeSessionCbs.splice(idx, 1)
+      },
+    }
+  }
+
+  private emitVisibilityChanged(visible: boolean): void {
+    for (const cb of [...this.visibilityCbs]) {
+      try {
+        cb(visible)
+      } catch (e) {
+        this.log("onPanelVisibilityChange callback failed:", e)
+      }
+    }
+  }
+
+  private emitActiveSessionChanged(id: string): void {
+    for (const cb of [...this.activeSessionCbs]) {
+      try {
+        cb(id)
+      } catch (e) {
+        this.log("onActiveSessionChanged callback failed:", e)
+      }
+    }
   }
 
   /** Restore the Agent Manager panel from a previously serialized state. */
@@ -198,10 +235,11 @@ export class AgentManagerProvider implements Disposable {
     this.panel = ctx
 
     this.statsPoller.setVisible(ctx.visible)
-    this.onVisibilityChange?.(ctx.visible)
+    this.emitVisibilityChanged(ctx.visible)
     ctx.onDidChangeVisibility((visible) => {
       this.statsPoller.setVisible(visible)
       this.visiblePresence.flush()
+      this.emitVisibilityChanged(visible)
     })
 
     this.stateReady = this.initializeState()
@@ -218,7 +256,7 @@ export class AgentManagerProvider implements Disposable {
         this.activeSessionId = undefined
         this.visiblePresence.clear()
         this.panel = undefined
-        this.onVisibilityChange?.(false)
+        this.emitVisibilityChanged(false)
       }
       ctx.sessions.dispose()
     })
@@ -329,6 +367,7 @@ export class AgentManagerProvider implements Disposable {
     if (m.type === "loadMessages") {
       this.activeSessionId = m.sessionID
       this.terminalManager.syncOnSessionSwitch(m.sessionID)
+      this.emitActiveSessionChanged(m.sessionID)
       return msg
     }
 

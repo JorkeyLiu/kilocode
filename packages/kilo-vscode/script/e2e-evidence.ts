@@ -118,6 +118,7 @@ const DOM_EVIDENCE: Record<string, string[]> = {
   "real-overflow": ["real-overflow-dom-evidence"],
   "real-restart": ["rr-dom-evidence"],
   "worktree-removal": ["worktree-removal-dom-evidence"],
+  "r9-observation": ["r9-dom-evidence", "r9-observation-runtime-evidence"],
 }
 
 /** Backend-snapshot file prefixes per real scenario (written by the runner loop). */
@@ -127,6 +128,7 @@ const SNAP_PREFIXES: Record<string, string[]> = {
   "real-overflow": ["of-snap-"],
   "real-restart": ["rr-snap-", "rr-c-snap-"],
   "worktree-removal": ["p32-snap-"],
+  "r9-observation": ["r9-snap-"],
 }
 
 /** The scenario readiness marker written by the extension-host runner. */
@@ -136,6 +138,7 @@ const READY_MARKERS: Record<string, string[]> = {
   "real-overflow": ["real-overflow-ready"],
   "real-restart": ["rr-ready"],
   "worktree-removal": ["worktree-removal-ready"],
+  "r9-observation": ["r9-ready"],
 }
 
 /** Env vars worth recording in the manifest (whitelist — never arbitrary config). */
@@ -361,6 +364,38 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
   }
   if (scenarios.has("real-session") || scenarios.has("real-overflow") || scenarios.has("worktree-removal")) {
     optional.push({ rel: ".kilo/package-lock.json", base: "workspace" })
+  }
+  if (scenarios.has("r9-observation")) {
+    required.push(
+      { rel: "canonical-gate.json", base: "scratch" },
+      { rel: "canonical-archive-before.json", base: "scratch" },
+      { rel: "canonical-archive-after.json", base: "scratch" },
+      { rel: "r9-observation-runtime-evidence", base: "scratch" },
+      { rel: "r9-dom-evidence", base: "scratch" },
+      { rel: "r9-cstate.json", base: "scratch" },
+    )
+    optional.push(
+      { rel: "r9-ready", base: "scratch" },
+      { rel: "r9-snap-*.json", base: "scratch", glob: true },
+      { rel: "r9-panel-request", base: "scratch" },
+      { rel: "r9-panel.json", base: "scratch" },
+      { rel: "r9-reload-request", base: "scratch" },
+      { rel: "r9-reload.json", base: "scratch" },
+      { rel: "r9-reload-start", base: "scratch" },
+      { rel: "r9-reload-frame", base: "scratch" },
+      { rel: "r9-reload-ready", base: "scratch" },
+      { rel: "r9-switch-request", base: "scratch" },
+      { rel: "r9-switch.json", base: "scratch" },
+      { rel: "r9-switch-clicked", base: "scratch" },
+      { rel: "r9-switch-confirmed", base: "scratch" },
+      { rel: "r9-reconnect-request", base: "scratch" },
+      { rel: "r9-reconnect.json", base: "scratch" },
+      { rel: "r9-restart-request", base: "scratch" },
+      { rel: "r9-restart.json", base: "scratch" },
+      { rel: "r9-ack.json", base: "scratch" },
+      { rel: "r9-evict.json", base: "scratch" },
+      { rel: "r9-status.json", base: "scratch" },
+    )
   }
   return { required, optional }
 }
