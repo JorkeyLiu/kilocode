@@ -27,6 +27,7 @@ import { resolveReloadDirectory } from "./reload-directory"
 import { CanonicalConfigService } from "./config/service"
 import { createVscodeStateAdapter, createVscodeWatcherAdapter } from "./config/state-adapter"
 import { Roots } from "./config/paths"
+import { PrivateObservationService } from "./private-worker/private-observation-service"
 
 let agentManager: AgentManagerProvider | undefined
 let shuttingDown = false
@@ -165,6 +166,21 @@ export function activate(context: vscode.ExtensionContext) {
   canonicalConfig.initialize().catch((err) => {
     console.error("[Kilo New] CanonicalConfigService initialization failed:", err)
   })
+
+  // P4.2b: Additive private-worker observation service — extension-owned,
+  // gated, reversible. Owns one PrivateWorkerHost and delegates observation
+  // snapshot/read/ack/subscribe over private stdio via canonical leased DB
+  // (ADR-0005, migration bridge remains). Gate is internal, explicit,
+  // fail-closed, non-user-authored: disabled by default preserves HTTP/SSE,
+  // selector readiness, and extensionDataReady. Notifications forward through
+  // injectable consumer boundary; no second store, no webview operational
+  // facts. Full UI convergence is a follow-up — this increment exposes only
+  // the internal service callback/request API when no suitable consumer exists.
+  const privateObservation = new PrivateObservationService({
+    enabled: false,
+  })
+  context.subscriptions.push(privateObservation)
+
   let restore = context.workspaceState.get<RestoreState>(RESTORE_KEY) ?? {}
   const remember = (patch: RestoreState) => {
     const next = { ...restore, ...patch }
