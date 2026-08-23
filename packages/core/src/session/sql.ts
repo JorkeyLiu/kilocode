@@ -1,4 +1,5 @@
-import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex } from "drizzle-orm/sqlite-core"
+import { sqliteTable, text, integer, index, primaryKey, real, uniqueIndex, check } from "drizzle-orm/sqlite-core"
+import { sql } from "drizzle-orm"
 import * as DatabasePath from "../database/path"
 import { ProjectTable } from "../project/sql"
 import type { SessionMessage } from "./message"
@@ -177,3 +178,33 @@ export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   replacement_seq: integer(),
   revision: integer().notNull().default(0),
 })
+
+export const SessionOperationTable = sqliteTable(
+  "session_operation",
+  {
+    op_id: text().primaryKey(),
+    session_id: text()
+      .$type<SessionSchema.ID>()
+      .notNull()
+      .references(() => SessionTable.id, { onDelete: "cascade" }),
+    op_kind: text().$type<"prompt" | "provider" | "tool" | "permission" | "task">().notNull(),
+    outcome: text().$type<"succeeded" | "failed" | "ambiguous" | "in-flight" | "superseded" | "abandoned">().notNull(),
+    code: text().notNull(),
+    message: text().notNull(),
+    time: integer().notNull(),
+    cancel: text(),
+    detail: text(),
+    stack: text(),
+    revision: integer().notNull(),
+  },
+  (table) => [
+    index("session_operation_session_idx").on(table.session_id),
+    index("session_operation_session_kind_idx").on(table.session_id, table.op_kind),
+    index("session_operation_session_time_idx").on(table.session_id, table.time),
+    check("session_operation_op_kind_check", sql`${table.op_kind} IN ('prompt','provider','tool','permission','task')`),
+    check(
+      "session_operation_outcome_check",
+      sql`${table.outcome} IN ('succeeded','failed','ambiguous','in-flight','superseded','abandoned')`,
+    ),
+  ],
+)
