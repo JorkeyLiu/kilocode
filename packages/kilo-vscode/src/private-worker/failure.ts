@@ -113,6 +113,7 @@ function cap(s: string, max: number): string {
   return s
 }
 
+// eslint-disable-next-line complexity
 export function classify(domain: Domain, err: unknown): string {
   if (err === null || err === undefined) return "unknown"
   const status = getStatus(err)
@@ -193,6 +194,7 @@ export function redact(value: unknown): unknown {
   }
 }
 
+// eslint-disable-next-line complexity
 export function normalize(input: NormalizeInput): FailureRecord {
   if (typeof input.opId !== "string" || input.opId.length === 0) throw new TypeError("opId must be non-empty string")
   if (!opKindSet.has(input.opKind as string)) throw new TypeError(`opKind must be one of ${OP_KINDS.join(", ")}`)
