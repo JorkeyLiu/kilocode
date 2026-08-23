@@ -163,6 +163,47 @@ function recordsEqual(a: DispositionRecord, b: DispositionRecord): boolean {
   return true
 }
 
+function assertCreateOpId(opId: unknown, opKind: unknown): void {
+  if (typeof opId !== "string" || (opId as string).length === 0) throw new TypeError("opId must be non-empty string")
+  if (typeof opKind !== "string" || !opKindSet.has(opKind as string)) throw new TypeError(`opKind must be one of ${OP_KINDS.join(", ")}`)
+  parseOpId(opId as string)
+  const parsed = parseOpId(opId as string)
+  if (parsed.kind !== (opKind as string)) throw new TypeError(`opId kind ${parsed.kind} does not match opKind ${opKind as string}`)
+}
+
+function assertCreateTimes(occurrenceTime: unknown, receiptTime: unknown): void {
+  if (!isFiniteNumber(occurrenceTime)) throw new TypeError("occurrenceTime must be finite number")
+  if (!isFiniteNumber(receiptTime)) throw new TypeError("receiptTime must be finite number")
+  if ((receiptTime as number) < (occurrenceTime as number)) throw new TypeError("receiptTime must be >= occurrenceTime")
+}
+
+function assertCreateCrashId(crashId: unknown): void {
+  if (typeof crashId !== "string" || (crashId as string).length === 0) throw new TypeError("crashId must be non-empty string")
+}
+
+function assertCreateOutcome(outcome: unknown): void {
+  if (outcome === undefined) return
+  if (typeof outcome !== "string" || !outcomeSet.has(outcome as string)) throw new TypeError(`outcome must be one of ${OUTCOMES.join(", ")}`)
+  if ((outcome as string) !== "in-flight") throw new TypeError("create outcome must be in-flight: direct terminal creation not allowed")
+}
+
+function assertCreateProvenance(provenance: unknown): void {
+  if (provenance === undefined) return
+  if (typeof provenance !== "string" || !provenanceSet.has(provenance as string)) throw new TypeError(`provenance must be one of ${PROVENANCES.join(", ")}`)
+  if ((provenance as string) !== "worker-crash") throw new TypeError("create provenance must be worker-crash")
+}
+
+function resolveCreateCleanup(cleanup: unknown): Cleanup {
+  if (cleanup === undefined) return { released: false }
+  validateCleanup(cleanup)
+  return { released: (cleanup as Cleanup).released }
+}
+
+function assertCreateFields(r: Record<string, unknown>): void {
+  const allowed = new Set(["opId", "opKind", "occurrenceTime", "receiptTime", "crashId", "cleanup", "outcome", "provenance"])
+  for (const k of Object.keys(r)) if (!allowed.has(k)) throw new TypeError(`create has unexpected field ${k}`)
+}
+
 export function create(input: CreateInput): DispositionRecord {
   if (input === null || typeof input !== "object") throw new TypeError("input must be object")
   const r = input as unknown as Record<string, unknown>
@@ -174,40 +215,19 @@ export function create(input: CreateInput): DispositionRecord {
   const cleanup = r["cleanup"]
   const outcome = r["outcome"]
   const provenance = r["provenance"]
-  if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
-  if (typeof opKind !== "string" || !opKindSet.has(opKind as string)) throw new TypeError(`opKind must be one of ${OP_KINDS.join(", ")}`)
-  parseOpId(opId)
-  const parsed = parseOpId(opId)
-  if (parsed.kind !== opKind) throw new TypeError(`opId kind ${parsed.kind} does not match opKind ${opKind}`)
-  if (!isFiniteNumber(occurrenceTime)) throw new TypeError("occurrenceTime must be finite number")
-  if (!isFiniteNumber(receiptTime)) throw new TypeError("receiptTime must be finite number")
-  if ((receiptTime as number) < (occurrenceTime as number)) throw new TypeError("receiptTime must be >= occurrenceTime")
-  if (typeof crashId !== "string" || crashId.length === 0) throw new TypeError("crashId must be non-empty string")
-  if (outcome !== undefined) {
-    if (typeof outcome !== "string" || !outcomeSet.has(outcome as string)) throw new TypeError(`outcome must be one of ${OUTCOMES.join(", ")}`)
-    if ((outcome as string) !== "in-flight") throw new TypeError("create outcome must be in-flight: direct terminal creation not allowed")
-  }
-  if (provenance !== undefined) {
-    if (typeof provenance !== "string" || !provenanceSet.has(provenance as string)) throw new TypeError(`provenance must be one of ${PROVENANCES.join(", ")}`)
-    if ((provenance as string) !== "worker-crash") throw new TypeError("create provenance must be worker-crash")
-  }
-  const outOutcome: Outcome = "in-flight"
-  const outProvenance: Provenance = "worker-crash"
-  let outCleanup: Cleanup
-  if (cleanup !== undefined) {
-    validateCleanup(cleanup)
-    outCleanup = { released: (cleanup as Cleanup).released }
-  } else {
-    outCleanup = { released: false }
-  }
-  const allowed = new Set(["opId", "opKind", "occurrenceTime", "receiptTime", "crashId", "cleanup", "outcome", "provenance"])
-  for (const k of Object.keys(r)) if (!allowed.has(k)) throw new TypeError(`create has unexpected field ${k}`)
+  assertCreateOpId(opId, opKind)
+  assertCreateTimes(occurrenceTime, receiptTime)
+  assertCreateCrashId(crashId)
+  assertCreateOutcome(outcome)
+  assertCreateProvenance(provenance)
+  const outCleanup = resolveCreateCleanup(cleanup)
+  assertCreateFields(r)
   const rec: DispositionRecord = {
     version: DISPOSITION_VERSION,
-    opId,
+    opId: opId as string,
     opKind: opKind as OpKind,
-    outcome: outOutcome,
-    provenance: outProvenance,
+    outcome: "in-flight",
+    provenance: "worker-crash",
     occurrenceTime: occurrenceTime as number,
     receiptTime: receiptTime as number,
     crashId: crashId as string,
