@@ -28,6 +28,8 @@ import { CanonicalConfigService } from "./config/service"
 import { createVscodeStateAdapter, createVscodeWatcherAdapter } from "./config/state-adapter"
 import { Roots } from "./config/paths"
 import { PrivateObservationService } from "./private-worker/private-observation-service"
+import { createMementoCursorStore } from "./private-worker/observation-cursor-store"
+import { PrivateObservationLifecycleTriggers } from "./private-worker/private-observation-lifecycle-triggers"
 
 let agentManager: AgentManagerProvider | undefined
 let shuttingDown = false
@@ -178,8 +180,20 @@ export function activate(context: vscode.ExtensionContext) {
   // the internal service callback/request API when no suitable consumer exists.
   const privateObservation = new PrivateObservationService({
     enabled: false,
+    cursorStore: createMementoCursorStore(context.globalState),
   })
   context.subscriptions.push(privateObservation)
+  // R9-C3: debounced singleflight lifecycle triggers (panel visibility, window
+  // focus, config change, session switch, peer-closed) -> reconnect + read(persisted)
+  // gap->rehydrate. Gate-off (enabled:false) so no host spawn/lease in production
+  // until enabled; trailing 150ms coalescence, no polling, no Failure wiring.
+  const privateObservationTriggers = PrivateObservationLifecycleTriggers.wireVscode(privateObservation, context, {
+    agentManagerProvider: undefined as unknown as { onPanelVisibilityChange: (cb: (v: boolean) => void) => void } | undefined,
+  })
+  // Wire real AgentManagerProvider visibility when available (created below).
+  // We create triggers now but re-wire after provider exists via direct adapter
+  // subscription below to keep core vscode-free and avoid circular import.
+  context.subscriptions.push(privateObservationTriggers)
 
   let restore = context.workspaceState.get<RestoreState>(RESTORE_KEY) ?? {}
   const remember = (patch: RestoreState) => {
@@ -292,6 +306,10 @@ export function activate(context: vscode.ExtensionContext) {
   const agentManagerHost = new VscodeHost(context.extensionUri, connectionService, context, remoteService, canonicalConfig)
   const agentManagerProvider = new AgentManagerProvider(agentManagerHost, connectionService)
   agentManagerProvider.onPanelVisibilityChange((visible) => remember({ agentManager: visible }))
+  // R9-C3: wire panel visibility trigger without altering existing remember wiring
+  agentManagerProvider.onPanelVisibilityChange((visible) => {
+    void privateObservationTriggers.onPanelVisibilityChanged(visible)
+  })
   agentManager = agentManagerProvider
   context.subscriptions.push(agentManagerProvider)
 

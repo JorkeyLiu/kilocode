@@ -183,6 +183,7 @@ export class PrivateObservationService implements Disposable {
     }
   }
 
+  // eslint-disable-next-line complexity
   private async doReconnect(): Promise<unknown> {
     const old = this.host
     if (old) {
