@@ -64,6 +64,7 @@ export function isPrivateObservationGateEnabled(opts: PrivateObservationServiceO
 export class PrivateObservationService implements Disposable {
   private host: PrivateWorkerHost | null = null
   private initPromise: Promise<unknown> | null = null
+  private reconnectPromise: Promise<unknown> | null = null
   private disposed = false
   private readonly consumer: ((method: string, params: unknown) => void) | undefined
   private readonly opts: PrivateObservationServiceOptions
@@ -122,18 +123,109 @@ export class PrivateObservationService implements Disposable {
    * Initialize the private worker host when gate is enabled.
    * Fail-closed: no-op when gate disabled or already disposed.
    * Idempotent: concurrent callers share the same promise.
-   * Returns initialize result when gate on, undefined when gate off.
+   * If a reconnect is in-flight, initialize shares that reconnect promise
+   * (no second concurrent lease acquisition) and resolves with the reconnect
+   * result. This avoids duplicate host creation and lease contention.
+   * Returns initialize result when gate on, undefined when gate off or already open.
    */
   async initialize(): Promise<unknown> {
     if (this.disposed) throw new Error("Service disposed")
     if (!this.isEnabled()) return undefined
     if (this.host && this.host.getState() === "open") return undefined
     if (this.initPromise) return this.initPromise
+    if (this.reconnectPromise) return this.reconnectPromise
     this.initPromise = this.doInitialize()
     try {
       return await this.initPromise
     } finally {
       this.initPromise = null
+    }
+  }
+
+  /**
+   * R9-C1 bounded reconnect/reacquire.
+   * Bounded, exact-PID shutdown: captures the old host, awaits its exit
+   * via host.shutdown(2000) (exact child ownership, no global kills, bounded),
+   * clears init state, and re-enters initialization with the same canonical
+   * environment (KILO_PRIVATE_WORKER_STANDALONE=1 + absolute KILO_DB).
+   * Fail-closed and idempotent: concurrent callers share the same promise,
+   * gate-off returns undefined, disposed throws.
+   * If an initialize is in-flight, reconnect awaits it to settle before
+   * superseding (initialize promise is not cancelled — reconnect starts after).
+   * No old worker can retain the DB lease when replacement initialization begins:
+   * shutdown is awaited boundedly; if initialization still fails with live-PID
+   * lease contention, a bounded retry (two attempts with 300ms/500ms backoff)
+   * recovers without unbounded waits.
+   */
+  async reconnect(): Promise<unknown> {
+    if (this.disposed) throw new Error("Service disposed")
+    if (!this.isEnabled()) return undefined
+    if (this.reconnectPromise) return this.reconnectPromise
+    // If an initialize is in flight, let it settle — reconnect supersedes after.
+    // Initialize's promise is awaited, not cancelled; reconnectPromise will be the sole
+    // subsequent acquisition. Concurrent initialize callers during reconnect share reconnectPromise.
+    if (this.initPromise) {
+      try {
+        await this.initPromise
+      } catch {}
+    }
+    this.reconnectPromise = this.doReconnect()
+    try {
+      return await this.reconnectPromise
+    } finally {
+      this.reconnectPromise = null
+    }
+  }
+
+  private async doReconnect(): Promise<unknown> {
+    const old = this.host
+    if (old) {
+      this.host = null
+      try {
+        // Bounded awaitable shutdown — exact PID, no global kills, no unbounded wait.
+        // If shutdown times out (still live), initialization retry below handles residual lease contention.
+        await old.shutdown(2000)
+      } catch {}
+    }
+    // Bounded lease-contention retry: if old worker's exit raced with new acquisition,
+    // Database.layerFromPath will fail with "lease held by live PID". Retry boundedly.
+    const attempt = async (): Promise<unknown> => {
+      this.initPromise = this.doInitialize()
+      try {
+        return await this.initPromise
+      } finally {
+        this.initPromise = null
+      }
+    }
+    try {
+      return await attempt()
+    } catch (e) {
+      const msg = String((e as Error)?.message ?? "")
+      const isLeaseContention =
+        msg.includes("lease held") ||
+        msg.includes("exclusivity") ||
+        msg.includes("concurrent acquisition") ||
+        msg.includes("DB lease") ||
+        msg.includes("timed out") ||
+        msg.includes("Peer closed") ||
+        msg.includes("Not started")
+      if (!isLeaseContention) throw e
+      await new Promise((r) => setTimeout(r, 300))
+      try {
+        return await attempt()
+      } catch (e2) {
+        const msg2 = String((e2 as Error)?.message ?? "")
+        const stillLease =
+          msg2.includes("lease held") ||
+          msg2.includes("exclusivity") ||
+          msg2.includes("concurrent acquisition") ||
+          msg2.includes("DB lease") ||
+          msg2.includes("timed out") ||
+          msg2.includes("Peer closed")
+        if (!stillLease) throw e2
+        await new Promise((r) => setTimeout(r, 500))
+        return await attempt()
+      }
     }
   }
 
@@ -212,6 +304,7 @@ export class PrivateObservationService implements Disposable {
     if (this.disposed) return
     this.disposed = true
     this.initPromise = null
+    this.reconnectPromise = null
     if (this.host) {
       try {
         this.host.dispose()

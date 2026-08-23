@@ -141,6 +141,75 @@ export class PrivateWorkerHost {
     return this.stderrTail.pending()
   }
 
+  /**
+   * Bounded awaitable shutdown for reconnect lease-release races.
+   * Captures exact child ownership (single PID), kills the exact child,
+   * and waits boundedly for exit/close without global kills or unbounded waits.
+   * Exact listener cleanup — only the awaited PID's listeners are touched.
+   * Returns true if the child exited within timeout, false if timeout expired.
+   */
+  async shutdown(timeoutMs = 2000): Promise<boolean> {
+    const proc = this.proc
+    if (!proc) {
+      this.dispose()
+      return true
+    }
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      this.dispose()
+      return true
+    }
+    // Attach exact listeners before dispose kills the PID
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let done = false
+    const exited = new Promise<boolean>((resolve) => {
+      const onExit = () => {
+        if (done) return
+        done = true
+        if (timer) clearTimeout(timer)
+        try {
+          proc.off?.("exit", onExit as unknown as () => void)
+        } catch {}
+        try {
+          proc.removeListener?.("exit", onExit as unknown as () => void)
+        } catch {}
+        try {
+          proc.off?.("close", onExit as unknown as () => void)
+        } catch {}
+        try {
+          proc.removeListener?.("close", onExit as unknown as () => void)
+        } catch {}
+        resolve(true)
+      }
+      try {
+        proc.on("exit", onExit as unknown as () => void)
+      } catch {}
+      try {
+        proc.on("close", onExit as unknown as () => void)
+      } catch {}
+      timer = setTimeout(() => {
+        if (done) return
+        done = true
+        try {
+          proc.off?.("exit", onExit as unknown as () => void)
+        } catch {}
+        try {
+          proc.removeListener?.("exit", onExit as unknown as () => void)
+        } catch {}
+        try {
+          proc.off?.("close", onExit as unknown as () => void)
+        } catch {}
+        try {
+          proc.removeListener?.("close", onExit as unknown as () => void)
+        } catch {}
+        resolve(false)
+      }, timeoutMs)
+      if ((timer as unknown as { unref?: () => void })?.unref) (timer as unknown as { unref: () => void }).unref()
+    })
+    // Dispose kills the exact PID synchronously and cleans internal handlers
+    this.dispose()
+    return exited
+  }
+
   dispose(): void {
     this.peer?.dispose()
     this.peer = null
