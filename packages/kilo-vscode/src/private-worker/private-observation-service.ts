@@ -1,6 +1,7 @@
 import { isAbsolute } from "path"
 import { PrivateWorkerHost, type HostOptions } from "./host"
 import { OBSERVATION_METHODS } from "./observation"
+import type { ObservationCursorStore } from "./observation-cursor-store"
 
 /**
  * P4.2b additive production private-worker observation wiring.
@@ -55,6 +56,8 @@ export interface PrivateObservationServiceOptions {
   env?: NodeJS.ProcessEnv
   /** Initialize handshake timeout ms. */
   initializeTimeoutMs?: number
+  /** Optional bounded cursor store (single integer, no timers). Injected per instance, no singleton. */
+  cursorStore?: ObservationCursorStore
 }
 
 export function isPrivateObservationGateEnabled(opts: PrivateObservationServiceOptions): boolean {
@@ -68,6 +71,7 @@ export class PrivateObservationService implements Disposable {
   private disposed = false
   private readonly consumer: ((method: string, params: unknown) => void) | undefined
   private readonly opts: PrivateObservationServiceOptions
+  private readonly cursorStore: ObservationCursorStore | undefined
 
   constructor(opts?: PrivateObservationServiceOptions)
   constructor(context: unknown, opts: PrivateObservationServiceOptions)
@@ -84,7 +88,8 @@ export class PrivateObservationService implements Disposable {
         "command" in (contextOrOpts as Record<string, unknown>) ||
         "args" in (contextOrOpts as Record<string, unknown>) ||
         "env" in (contextOrOpts as Record<string, unknown>) ||
-        "initializeTimeoutMs" in (contextOrOpts as Record<string, unknown>))
+        "initializeTimeoutMs" in (contextOrOpts as Record<string, unknown>) ||
+        "cursorStore" in (contextOrOpts as Record<string, unknown>))
     ) {
       this.opts = contextOrOpts as PrivateObservationServiceOptions
     } else if (contextOrOpts !== null && typeof contextOrOpts === "object" && Object.keys(contextOrOpts as object).length === 0) {
@@ -96,6 +101,7 @@ export class PrivateObservationService implements Disposable {
       this.opts = {}
     }
     this.consumer = this.opts.onNotification
+    this.cursorStore = this.opts.cursorStore
   }
 
   /** Whether the internal gate is enabled (explicit, fail-closed). */
@@ -277,10 +283,39 @@ export class PrivateObservationService implements Disposable {
     return this.host.request(OBSERVATION_METHODS.READ, p)
   }
 
-  /** Delegate observation/ack. */
+  /** R9-C2 persisted cursor helpers — single integer, no polling/timers. Only ack is authoritative. */
+  getPersistedCursor(): number | undefined {
+    try {
+      return this.cursorStore?.get()
+    } catch {
+      return undefined
+    }
+  }
+
+  async setPersistedCursor(cursor: number): Promise<void> {
+    if (!this.cursorStore) return
+    try {
+      await this.cursorStore.set(cursor)
+    } catch {}
+  }
+
+  async clearPersistedCursor(): Promise<void> {
+    if (!this.cursorStore) return
+    try {
+      await this.cursorStore.clear()
+    } catch {}
+  }
+
+  /** Delegate observation/ack. On success, persist cursor via store (never throws to caller). */
   async ack(cursor: number): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
-    return this.host.request(OBSERVATION_METHODS.ACK, { cursor })
+    const res = await this.host.request(OBSERVATION_METHODS.ACK, { cursor })
+    if (this.cursorStore) {
+      try {
+        await this.cursorStore.set(cursor)
+      } catch {}
+    }
+    return res
   }
 
   /** Delegate observation/subscribe. */
