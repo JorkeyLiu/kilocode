@@ -288,7 +288,8 @@ export class PrivateObservationService implements Disposable {
   getPersistedCursor(): number | undefined {
     try {
       return this.cursorStore?.get()
-    } catch {
+    } catch (e) {
+      console.warn("[Kilo] PrivateObservationService getPersistedCursor failed:", e)
       return undefined
     }
   }
@@ -297,14 +298,18 @@ export class PrivateObservationService implements Disposable {
     if (!this.cursorStore) return
     try {
       await this.cursorStore.set(cursor)
-    } catch {}
+    } catch (e) {
+      console.warn("[Kilo] PrivateObservationService setPersistedCursor failed:", e)
+    }
   }
 
   async clearPersistedCursor(): Promise<void> {
     if (!this.cursorStore) return
     try {
       await this.cursorStore.clear()
-    } catch {}
+    } catch (e) {
+      console.warn("[Kilo] PrivateObservationService clearPersistedCursor failed:", e)
+    }
   }
 
   /** Delegate observation/ack. On success, persist cursor via store (never throws to caller). */
@@ -314,7 +319,9 @@ export class PrivateObservationService implements Disposable {
     if (this.cursorStore) {
       try {
         await this.cursorStore.set(cursor)
-      } catch {}
+      } catch (e) {
+        console.warn("[Kilo] PrivateObservationService ack persist failed:", e)
+      }
     }
     return res
   }

@@ -40,7 +40,9 @@ export class InMemoryCursorStore implements ObservationCursorStore {
   }
 }
 
-export function createMementoCursorStore(memento: Memento, key: string = OBSERVATION_CURSOR_KEY): ObservationCursorStore {
+export function createMementoCursorStore(memento: Memento): ObservationCursorStore {
+  // Single fixed key — no arbitrary override, preserves single persisted cursor invariant (R9-C2).
+  const key = OBSERVATION_CURSOR_KEY
   return {
     get(): number | undefined {
       const v = memento.get<number>(key)

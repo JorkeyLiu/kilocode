@@ -187,12 +187,9 @@ export function activate(context: vscode.ExtensionContext) {
   // focus, config change, session switch, peer-closed) -> reconnect + read(persisted)
   // gap->rehydrate. Gate-off (enabled:false) so no host spawn/lease in production
   // until enabled; trailing 150ms coalescence, no polling, no Failure wiring.
-  const privateObservationTriggers = PrivateObservationLifecycleTriggers.wireVscode(privateObservation, context, {
-    agentManagerProvider: undefined as unknown as { onPanelVisibilityChange: (cb: (v: boolean) => void) => void } | undefined,
-  })
+  const privateObservationTriggers = PrivateObservationLifecycleTriggers.wireVscode(privateObservation, context)
   // Wire real AgentManagerProvider visibility when available (created below).
-  // We create triggers now but re-wire after provider exists via direct adapter
-  // subscription below to keep core vscode-free and avoid circular import.
+  // Explicit wiring via onPanelVisibilityChanged keeps core vscode-free and avoids cast.
   context.subscriptions.push(privateObservationTriggers)
 
   let restore = context.workspaceState.get<RestoreState>(RESTORE_KEY) ?? {}

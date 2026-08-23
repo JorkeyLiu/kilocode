@@ -89,21 +89,22 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
   private schedule(reason: string): Promise<TriggerResult | undefined> {
     if (this.disposed) return Promise.resolve(undefined)
     // Gate-off fast path: still respect debounce coalescence but never spawn host.
-    // If inflight exists, share it (idempotent concurrent trigger shares same promise).
+    // If inflight exists, coalesce into pending for next burst after inflight settles.
+    // Do NOT arm timer while inflight is active — defer until inflight settles to avoid
+    // concurrent flush overwriting inflight and lease contention.
     if (this.inflight) {
-      // While inflight, coalesce into pending for next burst after inflight settles.
-      // For immediate concurrent callers during inflight, share inflight directly.
-      // If timer already pending, just update reason and share pending.
       if (this.pending) {
         this.pendingReason = reason
         return this.pending
       }
-      // No pending yet — if caller arrives during inflight, schedule next trailing run
-      // after inflight completes, but current caller still shares inflight per spec
-      // "idempotent concurrent trigger() shares same promise". To keep that contract,
-      // return inflight for now; schedule next burst only if they call again after.
-      // Simpler: return inflight directly (sharing).
-      return this.inflight
+      // No pending yet — queue trailing coalesced run; timer will be armed in finally after inflight=null.
+      this.pendingReason = reason
+      this.pending = new Promise<TriggerResult | undefined>((resolve, reject) => {
+        this.pendingResolve = resolve
+        this.pendingReject = reject
+      })
+      void this.pending.catch(() => {})
+      return this.pending
     }
     if (this.pending) {
       this.pendingReason = reason
@@ -126,6 +127,21 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
   private async flush(): Promise<void> {
     if (this.disposed) {
       this.clearPending(undefined)
+      return
+    }
+    if (this.inflight) {
+      // Gate: do not run concurrently — defer trailing burst until inflight settles.
+      // Timer that fired (if any) is now consumed; clear stale reference before re-arm.
+      if (this.timer) {
+        clearTimeout(this.timer)
+        this.timer = null
+      }
+      if (this.pending && !this.disposed) {
+        this.timer = setTimeout(() => void this.flush(), this.debounceMs)
+        if ((this.timer as unknown as { unref?: () => void })?.unref) {
+          ;(this.timer as unknown as { unref: () => void }).unref()
+        }
+      }
       return
     }
     const reason = this.pendingReason ?? "unknown"
@@ -158,8 +174,9 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
             const r = readResult as { rehydrate?: boolean }
             if (r && typeof r.rehydrate === "boolean") rehydrate = r.rehydrate
           }
-        } catch {
+        } catch (e) {
           // read failures are surfaced via readResult undefined; reconnect still succeeded
+          console.warn("[Kilo] PrivateObservationLifecycleTriggers read failed:", e)
         }
         const out: TriggerResult = { reason, reconnectResult, readResult, rehydrate }
         return out
@@ -178,8 +195,13 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
       reject(e)
     } finally {
       this.inflight = null
-      // If a new pending was queued while inflight executed, its timer is already running.
-      // Otherwise, nothing to do.
+      // Deferred timer: if pending was queued during inflight, arm trailing debounce now.
+      if (this.pending && !this.timer && !this.disposed) {
+        this.timer = setTimeout(() => void this.flush(), this.debounceMs)
+        if ((this.timer as unknown as { unref?: () => void })?.unref) {
+          ;(this.timer as unknown as { unref: () => void }).unref()
+        }
+      }
     }
   }
 
@@ -189,6 +211,7 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
       this.timer = null
     }
     if (this.pendingResolve) {
+      // Intentional no-op resolve on dispose/cancel — callers receive undefined, not an error.
       this.pendingResolve(value)
     }
     this.pending = null
@@ -205,6 +228,7 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
       this.timer = null
     }
     if (this.pendingResolve) {
+      // Intentional no-op resolve on dispose — trailing debounce coalescence is cancelled, not failed.
       this.pendingResolve(undefined)
     }
     this.pending = null
