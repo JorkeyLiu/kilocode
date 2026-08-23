@@ -4,23 +4,26 @@ import { OBSERVATION_METHODS } from "./observation"
 import type { ObservationCursorStore } from "./observation-cursor-store"
 
 /**
- * P4.2b additive production private-worker observation wiring.
+ * R9 production private-worker observation wiring — enabled no-lease observer.
  *
  * Extension-owned service that owns one PrivateWorkerHost lifecycle and
  * delegates observation snapshot/read/ack/subscribe requests over the
- * private JSON-RPC carrier. Additive, gated, reversible, and preserves
- * the HTTP/SSE migration bridge.
+ * private JSON-RPC carrier. Additive, reversible, and preserves
+ * the HTTP/SSE migration bridge (legacy bridge remains active,
+ * private failure never blocks activation).
  *
  * Gate:
  *  - Explicit internal bootstrap gate, fail-closed, non-user-authored.
  *  - Enabled only when opts.enabled === true AND opts.dbPath is absolute.
  *  - No arbitrary user config/workspace/env overlay is consulted.
- *  - Default gate-off preserves current extension behavior (no host, no DB,
- *    no selector/readiness change, no second store per ADR-0005).
- *  - Gate-on creates a real PrivateWorkerHost with canonical leased DB
- *    (KILO_PRIVATE_WORKER_STANDALONE=1 + absolute KILO_DB) and delegates
- *    via leased Database.layerFromPath + createChangefeedDeps in the
- *    standalone worker.
+ *  - One canonical DB identity — canonical absolute KILO_DB
+ *    via resolveCanonicalDbPath / Global.Path.data/kilo.db (legacy owns
+ *    exclusive lease, private worker uses Database.layerNoLease only).
+ *  - When enabled, creates a real PrivateWorkerHost with
+ *    KILO_PRIVATE_WORKER_STANDALONE=1 + absolute KILO_DB and delegates
+ *    via non-leased Database.layerNoLease as derived observer
+ *    + createChangefeedDeps in the standalone worker. Additive, gated,
+ *    reversible, no second store per ADR-0005.
  *
  * Notification boundary:
  *  - Private observation/changed notifications are forwarded through the
@@ -29,11 +32,20 @@ import type { ObservationCursorStore } from "./observation-cursor-store"
  *    consumer exists, only the internal service callback/request API is
  *    exposed and full UI convergence is a follow-up.
  *
- * Lifecycle:
- *  - One host per service instance. Explicit ownership, idempotent disposal.
- *  - Does not interrupt active generations.
+ * Lifecycle — bounded shutdown/reinitialize (no polling, no lease retry):
+ *  - One active host per service instance + explicit pending-shutdown owner
+ *    for the still-live old child when bounded shutdown (2000ms, exact PID,
+ *    no global kills) times out. Pending host remains owned until the exact
+ *    child process has exited (proc exitCode/signalCode, not host state) and
+ *    is disposed on service disposal; no replacement is spawned on timeout
+ *    and both reconnect and initialize are blocked while pending is alive.
+ *  - Idempotent disposal, does not interrupt active generations.
  *  - No polling/timers, no Failure/Outcome/Recovery wiring, no selector
- *    changes, no schema changes.
+ *    changes, no schema changes. On reconnect, exact-PID bounded shutdown,
+ *    then single bounded reinitialize with same canonical env (no lease).
+ *  - Singleflight: reconnect installs its promise before awaiting any
+ *    in-flight initialize, preventing concurrent callers from entering
+ *    doReconnect twice.
  */
 
 export interface PrivateObservationServiceOptions {
@@ -42,7 +54,7 @@ export interface PrivateObservationServiceOptions {
    * Must be true with an absolute dbPath to enable. Default false.
    */
   enabled?: boolean
-  /** Canonical leased DB path for the private worker (ADR-0005). Must be absolute when enabled. */
+  /** Canonical DB path for the private worker (ADR-0005). Must be absolute when enabled. */
   dbPath?: string
   /** Internal test-only bridge for live notification proof. */
   testBridge?: boolean
@@ -66,6 +78,9 @@ export function isPrivateObservationGateEnabled(opts: PrivateObservationServiceO
 
 export class PrivateObservationService implements Disposable {
   private host: PrivateWorkerHost | null = null
+  /** Explicit owner for still-live old child when bounded shutdown times out — no orphan, explicit disposal. Ownership is based on actual child exit (proc exitCode), not host state. */
+  private pendingShutdownHost: PrivateWorkerHost | null = null
+  private pendingShutdownProc: import("child_process").ChildProcess | null = null
   private initPromise: Promise<unknown> | null = null
   private reconnectPromise: Promise<unknown> | null = null
   private disposed = false
@@ -92,7 +107,11 @@ export class PrivateObservationService implements Disposable {
         "cursorStore" in (contextOrOpts as Record<string, unknown>))
     ) {
       this.opts = contextOrOpts as PrivateObservationServiceOptions
-    } else if (contextOrOpts !== null && typeof contextOrOpts === "object" && Object.keys(contextOrOpts as object).length === 0) {
+    } else if (
+      contextOrOpts !== null &&
+      typeof contextOrOpts === "object" &&
+      Object.keys(contextOrOpts as object).length === 0
+    ) {
       this.opts = {}
     } else if (contextOrOpts === undefined || contextOrOpts === null) {
       this.opts = {}
@@ -125,6 +144,37 @@ export class PrivateObservationService implements Disposable {
     return this.host
   }
 
+  /** Direct pending shutdown host for tests — explicit ownership when bounded shutdown timed out. */
+  getPendingShutdownHost(): PrivateWorkerHost | null {
+    return this.pendingShutdownHost
+  }
+
+  /** Exact-PID pending proc for tests — retained until the exact child has exited */
+  getPendingShutdownProc(): import("child_process").ChildProcess | null {
+    return this.pendingShutdownProc
+  }
+
+  private isPendingAlive(): boolean {
+    if (!this.pendingShutdownHost) return false
+    const proc = this.pendingShutdownProc ?? this.pendingShutdownHost.getProc()
+    if (!proc) return false
+    return proc.exitCode === null && proc.signalCode === null
+  }
+
+  private clearPendingIfExited(): void {
+    if (!this.pendingShutdownHost) return
+    const proc = this.pendingShutdownProc ?? this.pendingShutdownHost.getProc()
+    if (!proc) {
+      this.pendingShutdownHost = null
+      this.pendingShutdownProc = null
+      return
+    }
+    if (proc.exitCode !== null || proc.signalCode !== null) {
+      this.pendingShutdownHost = null
+      this.pendingShutdownProc = null
+    }
+  }
+
   /**
    * Initialize the private worker host when gate is enabled.
    * Fail-closed: no-op when gate disabled or already disposed.
@@ -137,9 +187,11 @@ export class PrivateObservationService implements Disposable {
   async initialize(): Promise<unknown> {
     if (this.disposed) throw new Error("Service disposed")
     if (!this.isEnabled()) return undefined
-    if (this.host && this.host.getState() === "open") return undefined
-    if (this.initPromise) return this.initPromise
     if (this.reconnectPromise) return this.reconnectPromise
+    if (this.initPromise) return this.initPromise
+    this.clearPendingIfExited()
+    if (this.isPendingAlive()) throw new Error("Private worker shutdown timed out — initialize aborted")
+    if (this.host && this.host.getState() === "open") return undefined
     this.initPromise = this.doInitialize()
     try {
       return await this.initPromise
@@ -149,94 +201,94 @@ export class PrivateObservationService implements Disposable {
   }
 
   /**
-   * R9-C1 bounded reconnect/reacquire.
+   * R9 bounded reconnect — bounded shutdown/reinitialize (no lease, no retry).
    * Bounded, exact-PID shutdown: captures the old host, awaits its exit
    * via host.shutdown(2000) (exact child ownership, no global kills, bounded),
-   * clears init state, and re-enters initialization with the same canonical
+   * then re-enters initialization with the same canonical
    * environment (KILO_PRIVATE_WORKER_STANDALONE=1 + absolute KILO_DB).
    * Fail-closed and idempotent: concurrent callers share the same promise,
    * gate-off returns undefined, disposed throws.
+   * If shutdown times out (false), reconnect throws without spawning a
+   * replacement and retains the still-live old child in an explicit
+   * pending-shutdown field until service disposal cleans it. This guarantees
+   * no orphaned child after a timeout — the service remains the bounded owner.
    * If an initialize is in-flight, reconnect awaits it to settle before
    * superseding (initialize promise is not cancelled — reconnect starts after).
-   * No old worker can retain the DB lease when replacement initialization begins:
-   * shutdown is awaited boundedly; if initialization still fails with live-PID
-   * lease contention, a bounded retry (two attempts with 300ms/500ms backoff)
-   * recovers without unbounded waits.
+   * With no-lease (Database.layerNoLease), lease-contention retry is
+   * not meaningful; reconnect does a single bounded initialization after shutdown.
    */
   async reconnect(): Promise<unknown> {
     if (this.disposed) throw new Error("Service disposed")
     if (!this.isEnabled()) return undefined
     if (this.reconnectPromise) return this.reconnectPromise
-    // If an initialize is in flight, let it settle — reconnect supersedes after.
-    // Initialize's promise is awaited, not cancelled; reconnectPromise will be the sole
-    // subsequent acquisition. Concurrent initialize callers during reconnect share reconnectPromise.
-    if (this.initPromise) {
-      try {
-        await this.initPromise
-      } catch {}
-    }
-    this.reconnectPromise = this.doReconnect()
+    // Singleflight before awaiting initPromise — prevents concurrent callers from entering doReconnect twice
+    const task = (async () => {
+      if (this.initPromise) {
+        try {
+          await this.initPromise
+        } catch {}
+      }
+      return this.doReconnect()
+    })()
+    this.reconnectPromise = task
     try {
-      return await this.reconnectPromise
+      return await task
     } finally {
-      this.reconnectPromise = null
+      if (this.reconnectPromise === task) this.reconnectPromise = null
     }
   }
 
-  // eslint-disable-next-line complexity
   private async doReconnect(): Promise<unknown> {
+    // If a prior bounded shutdown timed out, the still-live old child remains
+    // explicitly owned until its exact PID has exited (proc exitCode, not host state).
+    // Do not spawn a replacement while pending is still live — fail closed.
+    this.clearPendingIfExited()
+    if (this.isPendingAlive()) {
+      if (this.disposed) throw new Error("Service disposed")
+      throw new Error("Private worker shutdown timed out — reconnect aborted")
+    }
     const old = this.host
     if (old) {
       this.host = null
+      this.pendingShutdownHost = old
+      this.pendingShutdownProc = old.getProc()
+      let ok = false
       try {
         // Bounded awaitable shutdown — exact PID, no global kills, no unbounded wait.
-        // If shutdown times out (still live), initialization retry below handles residual lease contention.
-        await old.shutdown(2000)
-      } catch {}
-    }
-    // Bounded lease-contention retry: if old worker's exit raced with new acquisition,
-    // Database.layerFromPath will fail with "lease held by live PID". Retry boundedly.
-    const attempt = async (): Promise<unknown> => {
-      this.initPromise = this.doInitialize()
-      try {
-        return await this.initPromise
-      } finally {
-        this.initPromise = null
+        ok = await old.shutdown(2000)
+      } catch {
+        ok = false
+      }
+      if (!ok) {
+        // Re-check actual exit after bounded wait — proc may have exited concurrently
+        const proc = this.pendingShutdownProc ?? old.getProc()
+        const exited = proc ? proc.exitCode !== null || proc.signalCode !== null : true
+        if (exited) {
+          this.pendingShutdownHost = null
+          this.pendingShutdownProc = null
+        } else {
+          if (this.disposed) throw new Error("Service disposed")
+          // Keep pendingShutdownHost + proc owned for bounded cleanup, no replacement.
+          throw new Error("Private worker shutdown timed out — reconnect aborted")
+        }
+      } else {
+        // Shutdown succeeded — old child exited, clear pending ownership.
+        this.pendingShutdownHost = null
+        this.pendingShutdownProc = null
       }
     }
+    if (this.disposed) throw new Error("Service disposed")
+    // No-lease mode: no lease-contention retry needed; single initialization.
+    this.initPromise = this.doInitialize()
     try {
-      return await attempt()
-    } catch (e) {
-      const msg = String((e as Error)?.message ?? "")
-      const isLeaseContention =
-        msg.includes("lease held") ||
-        msg.includes("exclusivity") ||
-        msg.includes("concurrent acquisition") ||
-        msg.includes("DB lease") ||
-        msg.includes("timed out") ||
-        msg.includes("Peer closed") ||
-        msg.includes("Not started")
-      if (!isLeaseContention) throw e
-      await new Promise((r) => setTimeout(r, 300))
-      try {
-        return await attempt()
-      } catch (e2) {
-        const msg2 = String((e2 as Error)?.message ?? "")
-        const stillLease =
-          msg2.includes("lease held") ||
-          msg2.includes("exclusivity") ||
-          msg2.includes("concurrent acquisition") ||
-          msg2.includes("DB lease") ||
-          msg2.includes("timed out") ||
-          msg2.includes("Peer closed")
-        if (!stillLease) throw e2
-        await new Promise((r) => setTimeout(r, 500))
-        return await attempt()
-      }
+      return await this.initPromise
+    } finally {
+      this.initPromise = null
     }
   }
 
   private async doInitialize(): Promise<unknown> {
+    if (this.disposed) throw new Error("Service disposed")
     const hostEnv: NodeJS.ProcessEnv = {
       ...(this.opts.env ?? {}),
       KILO_PRIVATE_WORKER_STANDALONE: "1",
@@ -262,10 +314,28 @@ export class PrivateObservationService implements Disposable {
       const res = await host.start()
       return res
     } catch (e) {
-      // Ensure failed host is torn down and not retained as started
+      // Ensure failed host is torn down and not retained as started; if exact child remains live after
+      // graceful SIGTERM, retain explicit ownership in pending fields (no orphan, no replacement while live).
       try {
         host.dispose()
       } catch {}
+      const proc = host.getProc()
+      const alive = proc ? proc.exitCode === null && proc.signalCode === null : false
+      // Use host liveness (exact PID) rather than host state — disposed host reports closed but proc may be live
+      if (alive && host.isAlive()) {
+        this.pendingShutdownHost = host
+        this.pendingShutdownProc = proc
+      } else if (!alive) {
+        // Child already exited — no pending ownership needed; ensure any stale pending referencing this host is cleared
+        if (this.pendingShutdownHost === host) {
+          this.pendingShutdownHost = null
+          this.pendingShutdownProc = null
+        }
+      } else {
+        // Defensive: proc check and host.isAlive disagreed — retain for bounded cleanup
+        this.pendingShutdownHost = host
+        this.pendingShutdownProc = proc
+      }
       if (this.host === host) this.host = null
       throw e
     }
@@ -353,6 +423,18 @@ export class PrivateObservationService implements Disposable {
         this.host.dispose()
       } catch {}
       this.host = null
+    }
+    if (this.pendingShutdownHost) {
+      try {
+        this.pendingShutdownHost.dispose()
+      } catch {}
+      this.pendingShutdownHost = null
+      this.pendingShutdownProc = null
+    } else if (this.pendingShutdownProc) {
+      try {
+        this.pendingShutdownProc.kill()
+      } catch {}
+      this.pendingShutdownProc = null
     }
   }
 }

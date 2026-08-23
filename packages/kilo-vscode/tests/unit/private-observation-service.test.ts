@@ -153,7 +153,8 @@ describe("PrivateObservationService P4.2b additive gate and delegation", () => {
       expect(svc.isStarted()).toBe(true)
       expect(svc.getHostState()).toBe("open")
       expect(svc.getHost()).not.toBeNull()
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(await waitForFileGone(lease, 500)).toBe(true)
       expect(fs.existsSync(dbPath)).toBe(true)
       const snap0 = await svc.snapshot({}) as { v: string; cursor: number }
       expect(snap0.v).toBe(OBSERVATION_VERSION)
@@ -182,7 +183,8 @@ describe("PrivateObservationService P4.2b additive gate and delegation", () => {
       await new Promise((r) => setTimeout(r, 200))
       expect(svc.isStarted()).toBe(false)
       expect(svc.getHost()).toBeNull()
-      expect(await waitForFileGone(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(await waitForFileGone(lease, 500)).toBe(true)
       await cleanup()
     }
   }, 20000)
@@ -205,15 +207,16 @@ describe("PrivateObservationService P4.2b additive gate and delegation", () => {
       const init = await svc.initialize() as { protocolVersion: string }
       expect(init.protocolVersion).toBe("1.0")
       expect(svc.isStarted()).toBe(true)
-      // canonical lease must exist, spoof must not
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      // canonical DB must exist, spoof must not; no-lease observer must not create lease
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(await waitForFileGone(lease, 500)).toBe(true)
       expect(fs.existsSync(spoofDb)).toBe(false)
       expect(fs.existsSync(spoofLease)).toBe(false)
       expect(fs.existsSync(dbPath)).toBe(true)
     } finally {
       svc.dispose()
       await new Promise((r) => setTimeout(r, 200))
-      expect(await waitForFileGone(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
       await cleanup()
       try { fs.rmSync(spoofLease, { force: true }) } catch {}
       try { fs.rmSync(spoofDb, { force: true }) } catch {}
@@ -238,7 +241,8 @@ describe("PrivateObservationService P4.2b additive gate and delegation", () => {
     try {
       await svc.initialize()
       expect(svc.isStarted()).toBe(true)
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(await waitForFileGone(lease, 500)).toBe(true)
       const snap0 = await svc.snapshot({}) as { cursor: number }
       expect(snap0.cursor).toBe(0)
       const mutate = await svc.request("test/mutateChangefeed", { session_id: "ses_obs_svc_a", revision: 1, kind: "changed", time: 4000 }) as { cursor: number; entry: { seq: number } }
@@ -258,7 +262,7 @@ describe("PrivateObservationService P4.2b additive gate and delegation", () => {
       expect(svc.isStarted()).toBe(false)
       expect(svc.getHost()).toBeNull()
       expect(svc.getHostState()).toBe("closed")
-      expect(await waitForFileGone(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
       // requests after dispose must reject
       let threw = false
       try { await svc.snapshot({}) } catch (e) { threw = true; expect(String((e as Error).message)).toMatch(/Not started/) }

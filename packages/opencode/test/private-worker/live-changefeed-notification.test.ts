@@ -119,7 +119,8 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
       peer1 = first.peer
       const init1 = (await peer1.request("initialize", { clientInfo: { name: "live-test", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
       expect(init1.protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      // No-lease observer: Database.layerNoLease never creates a lease file
+      expect(fs.existsSync(lease)).toBe(false)
       expect(fs.existsSync(dbPath)).toBe(true)
       const snap0 = (await peer1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
       expect(snap0.v).toBe(OBSERVATION_VERSION)
@@ -202,7 +203,7 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
       await waitForExit(proc1, 3000)
       await new Promise((r) => setTimeout(r, 200))
       expect(peer1.getState()).toBe("closed")
-      expect(await waitForFileGone(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
       // no duplicate notification from prior host after close: count should stay same
       await new Promise((r) => setTimeout(r, 200))
       expect(notifs1.length).toBe(notifs1CountBeforeClose)
@@ -212,7 +213,7 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
       peer2 = second.peer
       const init2 = (await peer2.request("initialize", { clientInfo: { name: "live-test2", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
       expect(init2.protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
       const snap2 = (await peer2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { cursor: number; v: string }
       expect(snap2.v).toBe(OBSERVATION_VERSION)
       // cursor preserved monotonic from prior host (latest_seq retained despite ack of first entry, but second entry not acked)
@@ -262,7 +263,7 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
       try { if (proc2) proc2.kill() } catch {}
       if (proc1) await waitForExit(proc1, 2000)
       if (proc2) await waitForExit(proc2, 2000)
-      if (proc1 || proc2) await waitForFileGone(lease, 3000).catch(() => {})
+      expect(fs.existsSync(lease)).toBe(false)
       await cleanup()
     }
   }, 30000)
@@ -271,10 +272,12 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
     const base = path.resolve(process.cwd(), "src/private-worker")
     const def = fs.readFileSync(path.join(base, "worker.ts"), "utf8")
     expect(def).not.toContain("Database.layerFromPath")
+    expect(def).not.toContain("Database.layerNoLease")
     expect(def).not.toContain("createChangefeedDeps")
     expect(def).not.toContain("KILO_PRIVATE_WORKER_STANDALONE")
     const standalone = fs.readFileSync(path.join(base, "standalone-worker.ts"), "utf8")
-    expect(standalone).toContain("Database.layerFromPath")
+    expect(standalone).toContain("Database.layerNoLease")
+    expect(standalone).not.toContain("Database.layerFromPath")
     expect(standalone).toContain("createChangefeedDeps")
     expect(standalone).toContain("KILO_PRIVATE_WORKER_STANDALONE")
     expect(standalone).toContain("KILO_DB")

@@ -309,9 +309,23 @@ describe("server workspace helpers", () => {
   })
 
   it("uses the shared database for the managed backend while preserving the environment", () => {
-    expect(resolveManagedServerEnv({ PATH: "/usr/bin", KILO_DISABLE_CHANNEL_DB: "false" })).toEqual({
-      PATH: "/usr/bin",
-      KILO_DISABLE_CHANNEL_DB: "true",
-    })
+    const env = resolveManagedServerEnv({ PATH: "/usr/bin", KILO_DISABLE_CHANNEL_DB: "false" } as NodeJS.ProcessEnv)
+    expect(env.PATH).toBe("/usr/bin")
+    expect(env.KILO_DISABLE_CHANNEL_DB).toBe("true")
+    expect(env.KILO_DB).toBeDefined()
+    expect(path.isAbsolute(env.KILO_DB!)).toBe(true)
+    expect(env.KILO_DB!.endsWith(path.join("kilo", "kilo.db"))).toBe(true)
+    // ambient divergent KILO_DB must be overwritten with absolute canonical, never leaked
+    const spoofed = resolveManagedServerEnv({ PATH: "/usr/bin", KILO_DB: "/tmp/spoof.db" } as NodeJS.ProcessEnv)
+    expect(spoofed.KILO_DB).not.toBe("/tmp/spoof.db")
+    expect(path.isAbsolute(spoofed.KILO_DB!)).toBe(true)
+    expect(spoofed.KILO_DB!.endsWith(path.join("kilo", "kilo.db"))).toBe(true)
+    // explicit canonical override honored when absolute
+    const overridden = resolveManagedServerEnv({ PATH: "/usr/bin" } as NodeJS.ProcessEnv, "/custom/kilo.db")
+    expect(overridden.KILO_DB).toBe("/custom/kilo.db")
+    // empty override means fail-closed: ambient removed, not leaked
+    const fallback = resolveManagedServerEnv({ KILO_DB: "/tmp/spoof.db" } as NodeJS.ProcessEnv, "")
+    expect(fallback.KILO_DB).toBeUndefined()
+    expect(fallback.KILO_DISABLE_CHANNEL_DB).toBe("true")
   })
 })

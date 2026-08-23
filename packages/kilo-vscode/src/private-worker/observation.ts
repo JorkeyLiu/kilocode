@@ -1,15 +1,16 @@
 /**
- * R9 observation wire foundation over the private JSON-RPC carrier.
- * Additive, protocol-level, no DB/migration/timer/production wiring.
- *
- * Versioned envelope with explicit method names for snapshot hydration,
- * changefeed read/subscribe delivery, and acknowledgement. Payload-free
- * entries only: { seq, session_id, revision, kind, time }.
+ * Observation wire foundation over the private JSON-RPC carrier.
+ * Additive, protocol-level, versioned envelope with explicit method names
+ * for snapshot hydration, changefeed read/subscribe delivery, and acknowledgement.
+ * Payload-free entries only: { seq, session_id, revision, kind, time }.
  * Gap semantics: any stale/gapped cursor produces explicit rehydrate,
  * never fabricated deltas. Duplicate delivery idempotent via cursor/seq.
  *
- * Controller is injectable against callbacks for authoritative snapshot,
- * readAfter, and ack so behavior is testable without storage.
+ * Controller responsibility: ObservationController routes observation/snapshot,
+ * read, ack, and subscribe RPCs to injected deps (getSnapshot, readAfter, ack).
+ * Production wiring is via standalone worker's no-lease observer (Database.layerNoLease
+ * + createChangefeedDeps) and PrivateObservationService; controller remains injectable
+ * and testable without storage.
  */
 
 import { ErrorCode } from "./json-rpc"

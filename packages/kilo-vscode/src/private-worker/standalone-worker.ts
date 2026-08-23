@@ -11,10 +11,11 @@ import { ErrorCode } from "./json-rpc"
 import { OBSERVATION_VERSION } from "./observation"
 
 /**
- * Standalone private worker entry (R9) for VS Code packaging.
- * Gate: KILO_PRIVATE_WORKER_STANDALONE=1 + absolute KILO_DB.
+ * Standalone private worker entry for VS Code packaging.
+ * Gate: KILO_PRIVATE_WORKER_STANDALONE=1 + absolute KILO_DB (canonical DB path).
  * Bundled as ESM artifact dist/private-worker/standalone-worker.mjs.
- * Uses leased Database.layerFromPath + createChangefeedDeps.
+ * No-lease observer: uses Database.layerNoLease + createChangefeedDeps.
+ * Legacy kilo serve owns the exclusive data-root lease; this worker never creates it.
  * Default worker remains lightweight CJS without this graph.
  */
 
@@ -29,7 +30,7 @@ export function isTestBridgeEnabled(env: NodeJS.ProcessEnv = process.env): boole
 export async function createStandaloneDeps(): Promise<{ deps: ObservationDeps; dispose: () => Promise<void>; db: Database.Interface["db"] }> {
   const file = process.env.KILO_DB!
   if (!isAbsolute(file)) throw new Error(`KILO_DB must be absolute for standalone worker: ${file}`)
-  const layer = Database.layerFromPath(file)
+  const layer = Database.layerNoLease(file)
   const runtime = ManagedRuntime.make(layer)
   const svc = await runtime.runPromise(
     Effect.gen(function* () {

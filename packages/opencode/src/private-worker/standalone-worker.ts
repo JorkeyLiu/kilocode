@@ -11,9 +11,10 @@ import { ErrorCode } from "./json-rpc"
 import { OBSERVATION_VERSION } from "./observation"
 
 /**
- * Standalone private worker entry (R9).
- * Gate: KILO_PRIVATE_WORKER_STANDALONE=1 + absolute KILO_DB.
- * Uses leased Database.layerFromPath + createChangefeedDeps.
+ * Standalone private worker entry.
+ * Gate: KILO_PRIVATE_WORKER_STANDALONE=1 + absolute KILO_DB (canonical DB path).
+ * No-lease observer: uses Database.layerNoLease + createChangefeedDeps.
+ * Legacy kilo serve owns the exclusive data-root lease; this worker never creates it.
  * Default worker remains lightweight CJS without this graph.
  * This file is bundled as ESM for VS Code; Bun can run it directly under Node conditions.
  */
@@ -29,7 +30,7 @@ export function isTestBridgeEnabled(env: NodeJS.ProcessEnv = process.env): boole
 export async function createStandaloneDeps(): Promise<{ deps: ObservationDeps; dispose: () => Promise<void>; db: Database.Interface["db"] }> {
   const file = process.env.KILO_DB!
   if (!isAbsolute(file)) throw new Error(`KILO_DB must be absolute for standalone worker: ${file}`)
-  const layer = Database.layerFromPath(file)
+  const layer = Database.layerNoLease(file)
   const runtime = ManagedRuntime.make(layer)
   const svc = await runtime.runPromise(
     Effect.gen(function* () {
@@ -106,9 +107,9 @@ if (isMain) {
     void (async () => {
       try {
         const { deps, dispose, db } = await createStandaloneDeps()
-        // Test-only bridge for P4.2b live notification proof: when KILO_PRIVATE_WORKER_TEST_BRIDGE=1
-        // expose a narrow mutation->notify path reusing real Changefeed APIs.
-        // Not production wiring; gated strictly by env and not used when bridge disabled (LOCK-009).
+        // Controller responsibility: ObservationController routes observation RPCs to real Changefeed deps.
+        // Test-only bridge when KILO_PRIVATE_WORKER_TEST_BRIDGE=1 exposes narrow mutation->notify path reusing
+        // real Changefeed APIs, gated strictly by env and not used when bridge disabled.
         const useBridge = isTestBridgeEnabled()
         let peer: JsonRpcPeer
         if (useBridge) {

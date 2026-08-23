@@ -78,8 +78,8 @@ function readLeasePid(p: string): number | undefined {
 }
 
 function getHostProc(svc: PrivateObservationService): import("child_process").ChildProcess | null {
-  const host = svc.getHost() as unknown as { proc: import("child_process").ChildProcess | null } | null
-  return host?.proc ?? null
+  const host = svc.getHost()
+  return host?.getProc() ?? null
 }
 
 describe("PrivateObservationLifecycleTriggers R9-C3 bounded proof (real standalone worker)", () => {
@@ -143,11 +143,18 @@ describe("PrivateObservationLifecycleTriggers R9-C3 bounded proof (real standalo
     try {
       const init = (await svc.initialize()) as { protocolVersion: string }
       expect(init.protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const pid1 = readLeasePid(lease)
-      expect(pid1).toBeDefined()
+      expect(fs.existsSync(lease)).toBe(false)
+      const proc1 = getHostProc(svc)
+      expect(proc1).not.toBeNull()
+      expect(proc1!.pid).toBeDefined()
+      const pid1 = proc1!.pid!
       // mutate to have cursor
-      const m1 = (await svc.request("test/mutateChangefeed", { session_id: "ses_lc_a", revision: 1, kind: "changed", time: 5000 })) as { cursor: number }
+      const m1 = (await svc.request("test/mutateChangefeed", {
+        session_id: "ses_lc_a",
+        revision: 1,
+        kind: "changed",
+        time: 5000,
+      })) as { cursor: number }
       await svc.ack(m1.cursor)
       expect(store.get()).toBe(m1.cursor)
       // instrument reconnect counting
@@ -192,8 +199,10 @@ describe("PrivateObservationLifecycleTriggers R9-C3 bounded proof (real standalo
       expect(readCalls).toBe(1)
       expect(res!.rehydrate).toBe(false)
       expect(res!.readResult).toBeDefined()
-      const pid2 = readLeasePid(lease)
-      expect(pid2).toBeDefined()
+      const proc2 = getHostProc(svc)
+      expect(proc2).not.toBeNull()
+      expect(proc2!.pid).toBeDefined()
+      const pid2 = proc2!.pid!
       expect(pid2).not.toBe(pid1)
 
       // second burst after quiet period should trigger new execution
@@ -239,14 +248,22 @@ describe("PrivateObservationLifecycleTriggers R9-C3 bounded proof (real standalo
     const triggers = new PrivateObservationLifecycleTriggers(svc, { debounceMs: 150 })
     try {
       await svc.initialize()
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const m1 = (await svc.request("test/mutateChangefeed", { session_id: "ses_lc_peer", revision: 1, kind: "changed", time: 6000 })) as { cursor: number }
+      expect(fs.existsSync(lease)).toBe(false)
+      const m1 = (await svc.request("test/mutateChangefeed", {
+        session_id: "ses_lc_peer",
+        revision: 1,
+        kind: "changed",
+        time: 6000,
+      })) as { cursor: number }
       await svc.ack(m1.cursor)
       expect(store.get()).toBe(m1.cursor)
-      const pid1 = readLeasePid(lease)
-      expect(pid1).toBeDefined()
+      const procAtPeer = getHostProc(svc)
+      expect(procAtPeer).not.toBeNull()
+      expect(procAtPeer!.pid).toBeDefined()
+      const pid1 = procAtPeer!.pid!
       const proc = getHostProc(svc)
-      expect(proc?.pid).toBe(pid1)
+      expect(proc).not.toBeNull()
+      expect(proc!.pid).toBe(pid1)
       // abrupt SIGKILL exact PID
       try {
         proc!.kill("SIGKILL")
@@ -260,18 +277,20 @@ describe("PrivateObservationLifecycleTriggers R9-C3 bounded proof (real standalo
         await new Promise((r) => setTimeout(r, 25))
       }
       await new Promise((r) => setTimeout(r, 200))
-      expect(fs.existsSync(lease)).toBe(true)
-      expect(readLeasePid(lease)).toBe(pid1)
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(svc.getHostState()).toBe("closed")
 
       const res = await triggers.onPeerClosed()
       expect(res).toBeDefined()
       expect(res!.reconnectResult).toBeDefined()
       expect(svc.isStarted()).toBe(true)
       expect(svc.getHostState()).toBe("open")
-      const pid2 = readLeasePid(lease)
-      expect(pid2).toBeDefined()
+      const proc2 = getHostProc(svc)
+      expect(proc2).not.toBeNull()
+      expect(proc2!.pid).toBeDefined()
+      const pid2 = proc2!.pid!
       expect(pid2).not.toBe(pid1)
-      expect(getHostProc(svc)?.pid).toBe(pid2)
+      expect(getHostProc(svc)!.pid).toBe(pid2)
       // read via persisted cursor still valid (no gap)
       expect(res!.rehydrate).toBe(false)
       const snapAfter = (await svc.snapshot({})) as { cursor: number }
@@ -305,12 +324,22 @@ describe("PrivateObservationLifecycleTriggers R9-C3 bounded proof (real standalo
     const triggers = new PrivateObservationLifecycleTriggers(svc, { debounceMs: 150 })
     try {
       await svc.initialize()
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const m1 = (await svc.request("test/mutateChangefeed", { session_id: "ses_gap_a", revision: 1, kind: "changed", time: 7000 })) as { cursor: number }
+      expect(fs.existsSync(lease)).toBe(false)
+      const m1 = (await svc.request("test/mutateChangefeed", {
+        session_id: "ses_gap_a",
+        revision: 1,
+        kind: "changed",
+        time: 7000,
+      })) as { cursor: number }
       await svc.ack(m1.cursor)
       expect(store.get()).toBe(m1.cursor)
       const persisted = store.get()!
-      const m2 = (await svc.request("test/mutateChangefeed", { session_id: "ses_gap_b", revision: 1, kind: "changed", time: 7001 })) as { cursor: number }
+      const m2 = (await svc.request("test/mutateChangefeed", {
+        session_id: "ses_gap_b",
+        revision: 1,
+        kind: "changed",
+        time: 7001,
+      })) as { cursor: number }
       expect(m2.cursor).toBeGreaterThan(m1.cursor)
       // force eviction via caps: keep only latest row
       const evict = (await svc.request("test/mutateChangefeed", {
@@ -364,9 +393,11 @@ describe("PrivateObservationLifecycleTriggers R9-C3 bounded proof (real standalo
     const triggers = new PrivateObservationLifecycleTriggers(svc, { debounceMs: 150 })
     try {
       await svc.initialize()
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const pid1 = readLeasePid(lease)
-      // schedule a trigger but dispose before debounce fires
+      expect(fs.existsSync(lease)).toBe(false)
+      const procInit = getHostProc(svc)
+      expect(procInit).not.toBeNull()
+      expect(procInit!.pid).toBeDefined()
+      const pid1 = procInit!.pid!
       let reconnectCalls = 0
       const origReconnect = svc.reconnect.bind(svc)
       svc.reconnect = async () => {
@@ -382,7 +413,7 @@ describe("PrivateObservationLifecycleTriggers R9-C3 bounded proof (real standalo
       expect(r).toBeUndefined()
       expect(reconnectCalls).toBe(0)
       expect(svc.isStarted()).toBe(true)
-      expect(readLeasePid(lease)).toBe(pid1)
+      expect(getHostProc(svc)?.pid).toBe(pid1)
 
       // after dispose, further triggers are no-ops (no new timer, no reconnect)
       reconnectCalls = 0

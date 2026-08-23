@@ -30,6 +30,7 @@ import { Roots } from "./config/paths"
 import { PrivateObservationService } from "./private-worker/private-observation-service"
 import { createMementoCursorStore } from "./private-worker/observation-cursor-store"
 import { PrivateObservationLifecycleTriggers } from "./private-worker/private-observation-lifecycle-triggers"
+import { resolveCanonicalDbPath } from "./private-worker/canonical-db-path"
 
 let agentManager: AgentManagerProvider | undefined
 let shuttingDown = false
@@ -157,9 +158,7 @@ export function activate(context: vscode.ExtensionContext) {
   // canonical disk state. Initialization failure is logged and does not block
   // unrelated extension functionality.
   const canonicalConfig = new CanonicalConfigService(context, {
-    roots: new Roots(
-      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
-    ),
+    roots: new Roots(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath),
     globalState: createVscodeStateAdapter(context.globalState),
     workspaceState: createVscodeStateAdapter(context.workspaceState),
     watcherAdapter: createVscodeWatcherAdapter(),
@@ -171,22 +170,44 @@ export function activate(context: vscode.ExtensionContext) {
 
   // P4.2b: Additive private-worker observation service — extension-owned,
   // gated, reversible. Owns one PrivateWorkerHost and delegates observation
-  // snapshot/read/ack/subscribe over private stdio via canonical leased DB
-  // (ADR-0005, migration bridge remains). Gate is internal, explicit,
-  // fail-closed, non-user-authored: disabled by default preserves HTTP/SSE,
-  // selector readiness, and extensionDataReady. Notifications forward through
+  // snapshot/read/ack/subscribe over private stdio via canonical DB
+  // (canonical KILO_DB via resolveCanonicalDbPath, legacy HTTP/SSE migration
+  // bridge remains active, private no-lease observer). Gate is internal,
+  // explicit, fail-closed, non-user-authored; notifications forward through
   // injectable consumer boundary; no second store, no webview operational
-  // facts. Full UI convergence is a follow-up — this increment exposes only
-  // the internal service callback/request API when no suitable consumer exists.
-  const privateObservation = new PrivateObservationService({
-    enabled: false,
-    cursorStore: createMementoCursorStore(context.globalState),
-  })
+  // facts. Production path is enabled:true with absolute canonical DB and
+  // Memento-backed cursor store; failure in path resolution or service
+  // construction falls back to enabled:false and never blocks activation.
+  let privateObservation: PrivateObservationService
+  try {
+    const dbPath = resolveCanonicalDbPath()
+    privateObservation = new PrivateObservationService({
+      enabled: true,
+      dbPath,
+      cursorStore: createMementoCursorStore(context.globalState),
+    })
+  } catch (err) {
+    console.warn("[Kilo] PrivateObservationService canonical DB path resolution failed, fail-closed:", err)
+    let fallback: PrivateObservationService | null = null
+    try {
+      fallback = new PrivateObservationService({
+        enabled: false,
+        cursorStore: createMementoCursorStore(context.globalState),
+      })
+    } catch (e) {
+      console.warn("[Kilo] PrivateObservationService fallback construction failed:", e)
+      fallback = new PrivateObservationService({ enabled: false })
+    }
+    privateObservation = fallback
+  }
   context.subscriptions.push(privateObservation)
+  // Private observation failures never block activation — fire-and-forget init
+  privateObservation.initialize().catch((err) => {
+    console.warn("[Kilo] PrivateObservationService initialize failed (fail-closed):", err)
+  })
   // R9-C3: debounced singleflight lifecycle triggers (panel visibility, window
   // focus, config change, session switch, peer-closed) -> reconnect + read(persisted)
-  // gap->rehydrate. Gate-off (enabled:false) so no host spawn/lease in production
-  // until enabled; trailing 150ms coalescence, no polling, no Failure wiring.
+  // gap->rehydrate. Trailing 150ms coalescence, no polling, no Failure wiring.
   const privateObservationTriggers = PrivateObservationLifecycleTriggers.wireVscode(privateObservation, context)
   // Wire real AgentManagerProvider visibility when available (created below).
   // Explicit wiring via onPanelVisibilityChanged keeps core vscode-free and avoids cast.
@@ -289,7 +310,14 @@ export function activate(context: vscode.ExtensionContext) {
   const ensureChatTab = async (): Promise<KiloProvider> => {
     const tab = activeTabProvider()
     if (tab) return tab
-    return openKiloInNewTab(context, connectionService, agentManagerProvider, remoteService, autoApprove, canonicalConfig)
+    return openKiloInNewTab(
+      context,
+      connectionService,
+      agentManagerProvider,
+      remoteService,
+      autoApprove,
+      canonicalConfig,
+    )
   }
 
   // Ensure Agent Manager navigation keybindings work when a VS Code terminal has focus.
@@ -300,7 +328,13 @@ export function activate(context: vscode.ExtensionContext) {
   ensureCommandsSkipShell(skip)
 
   // Create Agent Manager provider for editor panel
-  const agentManagerHost = new VscodeHost(context.extensionUri, connectionService, context, remoteService, canonicalConfig)
+  const agentManagerHost = new VscodeHost(
+    context.extensionUri,
+    connectionService,
+    context,
+    remoteService,
+    canonicalConfig,
+  )
   const agentManagerProvider = new AgentManagerProvider(agentManagerHost, connectionService)
   agentManagerProvider.onPanelVisibilityChange((visible) => remember({ agentManager: visible }))
   // R9-C3: wire panel visibility trigger without altering existing remember wiring
@@ -501,7 +535,14 @@ export function activate(context: vscode.ExtensionContext) {
       remoteService.toggle().catch((err) => console.error("[Kilo New] toggleRemote command failed:", err))
     }),
     vscode.commands.registerCommand("kilo-code.new.openInTab", () => {
-      return openKiloInNewTab(context, connectionService, agentManagerProvider, remoteService, autoApprove, canonicalConfig)
+      return openKiloInNewTab(
+        context,
+        connectionService,
+        agentManagerProvider,
+        remoteService,
+        autoApprove,
+        canonicalConfig,
+      )
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.previousSession", () => {
       agentManagerProvider.postMessage({ type: "action", action: "sessionPrevious" })

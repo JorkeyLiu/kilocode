@@ -36,28 +36,6 @@ async function waitForFileGone(p: string, timeoutMs = 3000): Promise<boolean> {
   return !fs.existsSync(p)
 }
 
-function readLeasePid(p: string): number | undefined {
-  try {
-    const raw = fs.readFileSync(p, "utf8")
-    const data = JSON.parse(raw)
-    return typeof data.pid === "number" ? data.pid : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e: unknown) {
-    const code = (e as { code?: string }).code
-    if (code === "ESRCH") return false
-    if (code === "EPERM") return true
-    return true
-  }
-}
-
 function getHostProc(host: PrivateWorkerHost): import("child_process").ChildProcess | null {
   return (host as unknown as { proc: import("child_process").ChildProcess | null }).proc
 }
@@ -126,7 +104,7 @@ function makeTmpEnv(): { tmp: string; dbPath: string; env: NodeJS.ProcessEnv; cl
 }
 
 describe("standalone private worker DB lease bootstrap (real child via PrivateWorkerHost)", () => {
-  it("opens isolated file-backed DB with lease, routes observation, releases on close, reacquires", async () => {
+  it("opens isolated file-backed DB without lease, routes observation, releases on close, reacquires", async () => {
     const { dbPath, env, cleanup } = makeTmpEnv()
     const lease = leasePathForDbFile(dbPath)
     try {
@@ -148,7 +126,8 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
       const echo = (await host.request("echo", { x: 99 })) as { x: number }
       expect(echo.x).toBe(99)
 
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      // No-lease observer: Database.layerNoLease never creates a lease file
+      expect(fs.existsSync(lease)).toBe(false)
       expect(fs.existsSync(dbPath)).toBe(true)
 
       const snap = (await host.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
@@ -183,15 +162,15 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
       }
 
       const aheadRead = (await host.request(OBSERVATION_METHODS.READ, { cursor: 9999 })) as { rehydrate: boolean }
-      // cursor ahead returns rehydrate true (not InvalidParams); InvalidParams is for truly invalid cursor like -1
       expect(aheadRead.rehydrate).toBe(true)
 
       host.dispose()
       await new Promise((r) => setTimeout(r, 300))
       expect(host.getState()).toBe("closed")
-      expect(await waitForFileGone(lease, 3000)).toBe(true)
+      // No lease file was ever created, so none to remove
+      expect(fs.existsSync(lease)).toBe(false)
 
-      // second worker can reacquire same DB sequentially; lease exclusivity is provided by Database.layerFromPath but concurrent-owner behavior was not exercised in this increment
+      // second worker can reacquire same DB sequentially; no lease exclusivity, sequential reuse via canonical DB path
       const host2 = new PrivateWorkerHost({
         command: "bun",
         args: ["--conditions=browser", standaloneTs],
@@ -200,7 +179,7 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
       })
       const init2 = await host2.start()
       expect((init2 as { protocolVersion: string }).protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
       const snap2 = (await host2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { cursor: number; v: string }
       expect(snap2.v).toBe(OBSERVATION_VERSION)
       expect(snap2.cursor).toBe(0)
@@ -209,7 +188,7 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
       expect(read2.entries.length).toBe(0)
       host2.dispose()
       await new Promise((r) => setTimeout(r, 300))
-      expect(await waitForFileGone(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
     } finally {
       await cleanup()
     }
@@ -261,7 +240,7 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
     }
   }, 15000)
 
-  it("concurrent second real child fails to acquire same DB lease while first holds it; winner remains healthy (real-child lease contention)", async () => {
+  it("concurrent second real child coexists on same DB without lease while first holds it; both remain healthy (real-child coexistence)", async () => {
     const { dbPath, env, cleanup } = makeTmpEnv()
     const lease = leasePathForDbFile(dbPath)
     const standaloneTs = path.resolve(process.cwd(), "src/private-worker/standalone-worker.ts")
@@ -270,57 +249,57 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
     try {
       const init1 = await host1.start()
       expect((init1 as { protocolVersion: string }).protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const winnerPid = readLeasePid(lease)
+      // No-lease: no lease file is created
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(fs.existsSync(dbPath)).toBe(true)
       const proc1 = getHostProc(host1)
-      expect(winnerPid).toBe(proc1?.pid)
+      expect(proc1?.pid).toBeDefined()
       const pong1 = (await host1.request("ping")) as { pong: boolean }
       expect(pong1.pong).toBe(true)
 
-      host2 = new PrivateWorkerHost({ command: "bun", args: ["--conditions=browser", standaloneTs], env, initializeTimeoutMs: 3500 })
-      let loserFailed = false
-      let loserError: unknown = null
-      try {
-        await host2.start()
-      } catch (e) {
-        loserFailed = true
-        loserError = e
-      }
-      if (!loserFailed) {
-        // if start unexpectedly succeeded, check state
-        if (host2.getState() === "closed") loserFailed = true
-      }
-      // ensure loser is observably failed (closed)
-      await waitForHostClosed(host2, 2000)
-      expect(loserFailed).toBe(true)
-      expect(host2.getState()).toBe("closed")
-      if (loserError) expect(String((loserError as Error).message).length > 0).toBe(true)
-
-      // winner lease intact and healthy
-      expect(fs.existsSync(lease)).toBe(true)
-      expect(readLeasePid(lease)).toBe(winnerPid)
-      expect(isPidAlive(winnerPid!)).toBe(true)
+      host2 = new PrivateWorkerHost({ command: "bun", args: ["--conditions=browser", standaloneTs], env, initializeTimeoutMs: 5000 })
+      const init2 = await host2.start()
+      expect((init2 as { protocolVersion: string }).protocolVersion).toBe("1.0")
+      // Both hosts should be open and healthy; no lease file contention
       expect(host1.getState()).toBe("open")
+      expect(host2.getState()).toBe("open")
+      expect(fs.existsSync(lease)).toBe(false)
+      const proc2 = getHostProc(host2)
+      expect(proc2?.pid).toBeDefined()
+      expect(proc2?.pid).not.toBe(proc1?.pid)
+
+      const pong2 = (await host2.request("ping")) as { pong: boolean }
+      expect(pong2.pong).toBe(true)
+      // Both can observe same DB without lease exclusivity
+      const snap1 = (await host1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
+      const snap2 = (await host2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
+      expect(snap1.v).toBe(OBSERVATION_VERSION)
+      expect(snap2.v).toBe(OBSERVATION_VERSION)
+      expect(snap1.cursor).toBe(0)
+      expect(snap2.cursor).toBe(0)
+
+      const read2 = (await host2.request(OBSERVATION_METHODS.READ, { cursor: 0 })) as { rehydrate: boolean; entries: unknown[] }
+      expect(read2.rehydrate).toBe(false)
+      expect(read2.entries.length).toBe(0)
+
+      // Both remain healthy after coexistence
       const pongAfter = (await host1.request("ping")) as { pong: boolean }
       expect(pongAfter.pong).toBe(true)
       const snapAfter = (await host1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
       expect(snapAfter.v).toBe(OBSERVATION_VERSION)
       expect(snapAfter.cursor).toBe(0)
-      const proc2 = host2 ? getHostProc(host2) : null
-      // loser proc, if still referenced, should be exited or killed; dispose ensures exact-PID cleanup
-      if (proc2) expect(proc2.exitCode !== null || proc2.signalCode !== null || host2.getState() === "closed").toBe(true)
     } finally {
       host1.dispose()
       host2?.dispose()
       await waitForHostClosed(host1, 2000)
       if (host2) await waitForHostClosed(host2, 2000)
       await new Promise((r) => setTimeout(r, 200))
-      await waitForFileGone(lease, 3000).catch(() => {})
+      expect(fs.existsSync(lease)).toBe(false)
       await cleanup()
     }
   }, 20000)
 
-  it("abrupt SIGKILL of worker leaves recoverable lease; next real child reacquires and observes valid cursor (crash-recovery)", async () => {
+  it("abrupt SIGKILL of worker leaves recoverable DB without lease; next real child reacquires and observes valid cursor (crash-recovery)", async () => {
     const { dbPath, env, cleanup } = makeTmpEnv()
     const lease = leasePathForDbFile(dbPath)
     const standaloneTs = path.resolve(process.cwd(), "src/private-worker/standalone-worker.ts")
@@ -329,10 +308,11 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
     try {
       const init1 = await host1.start()
       expect((init1 as { protocolVersion: string }).protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const victimPid = readLeasePid(lease)
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(fs.existsSync(dbPath)).toBe(true)
       const proc1 = getHostProc(host1)
-      expect(victimPid).toBe(proc1?.pid)
+      const victimPid = proc1?.pid
+      expect(victimPid).toBeDefined()
       const snap1 = (await host1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { cursor: number }
       expect(snap1.cursor).toBe(0)
 
@@ -342,20 +322,17 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
       await waitForHostClosed(host1, 3000)
       await new Promise((r) => setTimeout(r, 150))
       expect(host1.getState()).toBe("closed")
-      expect(fs.existsSync(lease)).toBe(true)
-      const stalePid = readLeasePid(lease)
-      expect(stalePid).toBe(victimPid)
-      expect(isPidAlive(stalePid!)).toBe(false)
+      // No-lease observer never creates lease file, so no stale lease remains
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(fs.existsSync(dbPath)).toBe(true)
 
       host2 = new PrivateWorkerHost({ command: "bun", args: ["--conditions=browser", standaloneTs], env, initializeTimeoutMs: 5000 })
       const init2 = await host2.start()
       expect((init2 as { protocolVersion: string }).protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const recoveredPid = readLeasePid(lease)
+      expect(fs.existsSync(lease)).toBe(false)
       const proc2 = getHostProc(host2)
-      expect(recoveredPid).toBe(proc2?.pid)
-      expect(recoveredPid).not.toBe(victimPid)
-      expect(isPidAlive(recoveredPid!)).toBe(true)
+      expect(proc2?.pid).toBeDefined()
+      expect(proc2?.pid).not.toBe(victimPid)
       const pong2 = (await host2.request("ping")) as { pong: boolean }
       expect(pong2.pong).toBe(true)
       const snap2 = (await host2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
@@ -371,8 +348,7 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
       host1.dispose()
       host2?.dispose()
       await new Promise((r) => setTimeout(r, 200))
-      if (host2) await waitForFileGone(lease, 3000).catch(() => {})
-      else await waitForFileGone(lease, 3000).catch(() => {})
+      expect(fs.existsSync(lease)).toBe(false)
       await cleanup()
     }
   }, 25000)
@@ -406,10 +382,12 @@ describe("standalone private worker DB lease bootstrap (real child via PrivateWo
     const base = path.resolve(process.cwd(), "src/private-worker")
     const def = fs.readFileSync(path.join(base, "worker.ts"), "utf8")
     expect(def).not.toContain("Database.layerFromPath")
+    expect(def).not.toContain("Database.layerNoLease")
     expect(def).not.toContain("createChangefeedDeps")
     expect(def).not.toContain("KILO_PRIVATE_WORKER_STANDALONE")
     const standalone = fs.readFileSync(path.join(base, "standalone-worker.ts"), "utf8")
-    expect(standalone).toContain("Database.layerFromPath")
+    expect(standalone).toContain("Database.layerNoLease")
+    expect(standalone).not.toContain("Database.layerFromPath")
     expect(standalone).toContain("createChangefeedDeps")
     expect(standalone).toContain("KILO_PRIVATE_WORKER_STANDALONE")
     const { isStandaloneEnabled } = await import("../../src/private-worker/host")

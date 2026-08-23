@@ -4,7 +4,11 @@ import * as fs from "fs"
 import * as os from "os"
 import { PrivateObservationService } from "../../src/private-worker/private-observation-service"
 import { OBSERVATION_NOTIFICATION, OBSERVATION_VERSION } from "../../src/private-worker/observation"
-import { InMemoryCursorStore, createMementoCursorStore, OBSERVATION_CURSOR_KEY } from "../../src/private-worker/observation-cursor-store"
+import {
+  InMemoryCursorStore,
+  createMementoCursorStore,
+  OBSERVATION_CURSOR_KEY,
+} from "../../src/private-worker/observation-cursor-store"
 import { ErrorCode } from "../../src/private-worker/json-rpc"
 
 function leasePathForDbFile(file: string): string {
@@ -53,6 +57,11 @@ function readLeasePid(p: string): number | undefined {
   }
 }
 
+function getHostProc(svc: PrivateObservationService): import("child_process").ChildProcess | null {
+  const host = svc.getHost()
+  return host?.getProc() ?? null
+}
+
 function makeTmpEnv(): { tmp: string; dbPath: string; xdg: Record<string, string>; cleanup: () => Promise<void> } {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-vscode-obs-cursor-"))
   const dataDir = path.join(tmp, "data")
@@ -75,11 +84,6 @@ function makeTmpEnv(): { tmp: string; dbPath: string; xdg: Record<string, string
     } catch {}
   }
   return { tmp, dbPath, xdg, cleanup }
-}
-
-function getHostProc(svc: PrivateObservationService): import("child_process").ChildProcess | null {
-  const host = svc.getHost() as unknown as { proc: import("child_process").ChildProcess | null } | null
-  return host?.proc ?? null
 }
 
 describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real standalone worker)", () => {
@@ -116,12 +120,17 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
       expect(mStore.get()).toBeUndefined()
       expect(svc.getPersistedCursor()).toBeUndefined()
       await svc.initialize()
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      expect(await waitForFileExists(lease, 3000)).toBe(false)
       const snap0 = (await svc.snapshot({})) as { cursor: number }
       expect(snap0.cursor).toBe(0)
       expect(svc.getPersistedCursor()).toBeUndefined()
       // notifications must NOT auto-persist
-      const mutate = (await svc.request("test/mutateChangefeed", { session_id: "ses_cursor_a", revision: 1, kind: "changed", time: 5000 })) as { cursor: number }
+      const mutate = (await svc.request("test/mutateChangefeed", {
+        session_id: "ses_cursor_a",
+        revision: 1,
+        kind: "changed",
+        time: 5000,
+      })) as { cursor: number }
       expect(await waitForNotificationCount(notifs, 1, 3000)).toBe(true)
       expect(notifs.length).toBe(1)
       // notification cursor should not be persisted automatically
@@ -151,7 +160,13 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
       expect(readPersisted.rehydrate).toBe(false)
       expect(readPersisted.entries.length).toBe(0)
       // after ack, prefix truncated — stale read(0) now forces rehydrate deterministically
-      const read0 = (await svc.read(0)) as { rehydrate: boolean; cursor: number; entries: unknown[]; v: string; reason: string }
+      const read0 = (await svc.read(0)) as {
+        rehydrate: boolean
+        cursor: number
+        entries: unknown[]
+        v: string
+        reason: string
+      }
       expect(read0.rehydrate).toBe(true)
       expect(read0.cursor).toBe(mutate.cursor)
       expect(read0.entries.length).toBe(0)
@@ -175,11 +190,14 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
       try {
         expect(svc2.getPersistedCursor()).toBe(persistedBeforeDispose)
         await svc2.initialize()
-        expect(await waitForFileExists(lease, 3000)).toBe(true)
+        expect(await waitForFileExists(lease, 3000)).toBe(false)
         expect(svc2.getPersistedCursor()).toBe(persistedBeforeDispose)
         const snapAfter = (await svc2.snapshot({})) as { cursor: number }
         expect(snapAfter.cursor).toBe(persistedBeforeDispose)
-        const readViaPersisted = (await svc2.read(svc2.getPersistedCursor()!)) as { rehydrate: boolean; entries: unknown[] }
+        const readViaPersisted = (await svc2.read(svc2.getPersistedCursor()!)) as {
+          rehydrate: boolean
+          entries: unknown[]
+        }
         expect(readViaPersisted.rehydrate).toBe(false)
         expect(readViaPersisted.entries.length).toBe(0)
       } finally {
@@ -214,11 +232,16 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
     })
     try {
       await svc.initialize()
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const pid1 = readLeasePid(lease)
-      expect(pid1).toBeDefined()
-      expect(getHostProc(svc)?.pid).toBe(pid1)
-      const m1 = (await svc.request("test/mutateChangefeed", { session_id: "ses_cursor_b1", revision: 1, kind: "changed", time: 6000 })) as { cursor: number }
+      expect(await waitForFileExists(lease, 3000)).toBe(false)
+      const proc1 = getHostProc(svc)
+      expect(proc1?.pid).toBeDefined()
+      const pid1 = proc1!.pid!
+      const m1 = (await svc.request("test/mutateChangefeed", {
+        session_id: "ses_cursor_b1",
+        revision: 1,
+        kind: "changed",
+        time: 6000,
+      })) as { cursor: number }
       expect(await waitForNotificationCount(notifs, 1, 3000)).toBe(true)
       expect(notifs.length).toBe(1)
       await svc.ack(m1.cursor)
@@ -244,11 +267,11 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
       try {
         expect(svc2.getPersistedCursor()).toBe(m1.cursor)
         await svc2.initialize()
-        expect(await waitForFileExists(lease, 3000)).toBe(true)
-        const pid2 = readLeasePid(lease)
-        expect(pid2).toBeDefined()
+        expect(await waitForFileExists(lease, 3000)).toBe(false)
+        const proc2 = getHostProc(svc2)
+        expect(proc2?.pid).toBeDefined()
+        const pid2 = proc2!.pid!
         expect(pid2).not.toBe(pid1)
-        expect(getHostProc(svc2)?.pid).toBe(pid2)
         expect(svc2.getPersistedCursor()).toBe(m1.cursor)
         const snapAfter = (await svc2.snapshot({})) as { cursor: number; v: string }
         expect(snapAfter.cursor).toBe(m1.cursor)
@@ -258,7 +281,12 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
         const readAtPersisted = (await svc2.read(store.get()!)) as { rehydrate: boolean; entries: unknown[] }
         expect(readAtPersisted.rehydrate).toBe(false)
         expect(readAtPersisted.entries.length).toBe(0)
-        const m2 = (await svc2.request("test/mutateChangefeed", { session_id: "ses_cursor_b2", revision: 1, kind: "changed", time: 6001 })) as { cursor: number }
+        const m2 = (await svc2.request("test/mutateChangefeed", {
+          session_id: "ses_cursor_b2",
+          revision: 1,
+          kind: "changed",
+          time: 6001,
+        })) as { cursor: number }
         expect(m2.cursor).toBeGreaterThan(m1.cursor)
         expect(await waitForNotificationCount(notifs, 2, 3000)).toBe(true)
         expect(notifs.length).toBe(2)
@@ -301,12 +329,22 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
     })
     try {
       await svc.initialize()
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const m1 = (await svc.request("test/mutateChangefeed", { session_id: "ses_cursor_c1", revision: 1, kind: "changed", time: 7000 })) as { cursor: number }
+      expect(await waitForFileExists(lease, 3000)).toBe(false)
+      const m1 = (await svc.request("test/mutateChangefeed", {
+        session_id: "ses_cursor_c1",
+        revision: 1,
+        kind: "changed",
+        time: 7000,
+      })) as { cursor: number }
       await svc.ack(m1.cursor)
       expect(store.get()).toBe(m1.cursor)
       const persisted = store.get()!
-      const m2 = (await svc.request("test/mutateChangefeed", { session_id: "ses_cursor_c2", revision: 1, kind: "changed", time: 7001 })) as { cursor: number }
+      const m2 = (await svc.request("test/mutateChangefeed", {
+        session_id: "ses_cursor_c2",
+        revision: 1,
+        kind: "changed",
+        time: 7001,
+      })) as { cursor: number }
       expect(m2.cursor).toBeGreaterThan(m1.cursor)
       const snapBefore = (await svc.snapshot({})) as { cursor: number }
       expect(snapBefore.cursor).toBe(m2.cursor)
@@ -320,7 +358,13 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
       })) as { cursor: number }
       expect(evict.cursor).toBeGreaterThan(m2.cursor)
       // stale read on persisted cursor (which is now evicted) must rehydrate deterministically
-      const staleViaPersisted = (await svc.read(persisted)) as { rehydrate: boolean; reason: string; cursor: number; entries: unknown[]; v: string }
+      const staleViaPersisted = (await svc.read(persisted)) as {
+        rehydrate: boolean
+        reason: string
+        cursor: number
+        entries: unknown[]
+        v: string
+      }
       expect(staleViaPersisted.rehydrate).toBe(true)
       expect(typeof staleViaPersisted.reason).toBe("string")
       expect(staleViaPersisted.cursor).toBe(evict.cursor)
@@ -350,7 +394,7 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
       try {
         expect(svc2.getPersistedCursor()).toBe(persisted)
         await svc2.initialize()
-        expect(await waitForFileExists(lease, 3000)).toBe(true)
+        expect(await waitForFileExists(lease, 3000)).toBe(false)
         const staleAfterReinit = (await svc2.read(svc2.getPersistedCursor()!)) as { rehydrate: boolean; cursor: number }
         expect(staleAfterReinit.rehydrate).toBe(true)
         expect(staleAfterReinit.cursor).toBe(evict.cursor)
@@ -443,9 +487,15 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
     })
     try {
       await svc.initialize()
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const pid1 = readLeasePid(lease)
-      const m1 = (await svc.request("test/mutateChangefeed", { session_id: "ses_cursor_d1", revision: 1, kind: "changed", time: 8000 })) as { cursor: number }
+      expect(await waitForFileExists(lease, 3000)).toBe(false)
+      const proc1c = getHostProc(svc)
+      expect(proc1c?.pid).toBeDefined()
+      const m1 = (await svc.request("test/mutateChangefeed", {
+        session_id: "ses_cursor_d1",
+        revision: 1,
+        kind: "changed",
+        time: 8000,
+      })) as { cursor: number }
       expect(await waitForNotificationCount(notifs, 1, 3000)).toBe(true)
       expect(notifs.length).toBe(1)
       // initial ack persists
@@ -458,13 +508,18 @@ describe("PrivateObservationService R9-C2 persisted cursor bounded proof (real s
       const pAck2 = svc.ack(m1.cursor).catch(() => undefined)
       const results = await Promise.allSettled([pAck, pRecon1, pRecon2, pAck2])
       // at least one reconnect must have succeeded with protocolVersion
-      const reconResult = results[1].status === "fulfilled" ? (results[1] as PromiseFulfilledResult<unknown>).value : undefined
-      const reconResult2 = results[2].status === "fulfilled" ? (results[2] as PromiseFulfilledResult<unknown>).value : undefined
-      expect((reconResult as { protocolVersion: string })?.protocolVersion ?? (reconResult2 as { protocolVersion: string })?.protocolVersion).toBe("1.0")
+      const reconResult =
+        results[1].status === "fulfilled" ? (results[1] as PromiseFulfilledResult<unknown>).value : undefined
+      const reconResult2 =
+        results[2].status === "fulfilled" ? (results[2] as PromiseFulfilledResult<unknown>).value : undefined
+      expect(
+        (reconResult as { protocolVersion: string })?.protocolVersion ??
+          (reconResult2 as { protocolVersion: string })?.protocolVersion,
+      ).toBe("1.0")
       expect(svc.isStarted()).toBe(true)
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const pid2 = readLeasePid(lease)
-      expect(pid2).toBeDefined()
+      expect(await waitForFileExists(lease, 3000)).toBe(false)
+      const proc2c = getHostProc(svc)
+      expect(proc2c?.pid).toBeDefined()
       // persisted cursor preserved after concurrent ops
       expect(store.get()).toBe(m1.cursor)
       expect(svc.getPersistedCursor()).toBe(m1.cursor)

@@ -58,28 +58,6 @@ async function waitForExit(proc: ChildProcess, timeoutMs = 3000): Promise<boolea
   })
 }
 
-function readLeasePid(p: string): number | undefined {
-  try {
-    const raw = fs.readFileSync(p, "utf8")
-    const data = JSON.parse(raw)
-    return typeof data.pid === "number" ? data.pid : undefined
-  } catch {
-    return undefined
-  }
-}
-
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0)
-    return true
-  } catch (e: unknown) {
-    const code = (e as { code?: string }).code
-    if (code === "ESRCH") return false
-    if (code === "EPERM") return true
-    return true
-  }
-}
-
 function makeTmpEnv(): { tmp: string; dbPath: string; env: NodeJS.ProcessEnv; cleanup: () => Promise<void> } {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-standalone-"))
   const dataDir = path.join(tmp, "data")
@@ -94,7 +72,6 @@ function makeTmpEnv(): { tmp: string; dbPath: string; env: NodeJS.ProcessEnv; cl
     XDG_CACHE_HOME: path.join(tmp, "xdg-cache"),
     XDG_STATE_HOME: path.join(tmp, "xdg-state"),
   }
-  // ensure XDG dirs exist
   for (const k of ["XDG_DATA_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_STATE_HOME"]) {
     const v = env[k]!
     fs.mkdirSync(v, { recursive: true })
@@ -103,7 +80,6 @@ function makeTmpEnv(): { tmp: string; dbPath: string; env: NodeJS.ProcessEnv; cl
     try {
       fs.rmSync(tmp, { recursive: true, force: true })
     } catch {}
-    // also clean sibling lease file that lives beside tmp
     const lease = leasePathForDbFile(dbPath)
     try {
       fs.rmSync(lease, { force: true })
@@ -135,11 +111,10 @@ function spawnDefault(env: NodeJS.ProcessEnv): { proc: ChildProcess; peer: JsonR
 }
 
 describe("standalone private worker DB lease bootstrap (real child)", () => {
-  it("opens isolated file-backed DB with lease, routes observation, releases on close, reacquires", async () => {
+  it("opens isolated file-backed DB without lease, routes observation, releases on close, reacquires", async () => {
     const { dbPath, env, cleanup } = makeTmpEnv()
     const lease = leasePathForDbFile(dbPath)
     try {
-      // ensure clean start
       expect(fs.existsSync(dbPath)).toBe(false)
       expect(fs.existsSync(lease)).toBe(false)
 
@@ -147,17 +122,15 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
       try {
         const init = (await peer1.request("initialize", { clientInfo: { name: "test", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
         expect(init.protocolVersion).toBe("1.0")
-        // ping/echo still work
         const pong = (await peer1.request("ping")) as { pong: boolean }
         expect(pong.pong).toBe(true)
         const echo = (await peer1.request("echo", { x: 42 })) as { x: number }
         expect(echo.x).toBe(42)
 
-        // lease should be held while worker lives
-        expect(await waitForFileExists(lease, 2000)).toBe(true)
+        // No-lease observer: Database.layerNoLease never creates a lease file
+        expect(fs.existsSync(lease)).toBe(false)
         expect(fs.existsSync(dbPath)).toBe(true)
 
-        // observation routing over real child with empty DB
         const snap = (await peer1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number; snapshot: unknown }
         expect(snap.v).toBe(OBSERVATION_VERSION)
         expect(typeof snap.cursor).toBe("number")
@@ -178,7 +151,6 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
         expect(ack.v).toBe(OBSERVATION_VERSION)
         expect(ack.cursor).toBe(0)
 
-        // invalid cursor maps to InvalidParams (-32602)
         try {
           await peer1.request(OBSERVATION_METHODS.ACK, { cursor: 9999 })
           expect(false).toBe(true)
@@ -192,30 +164,26 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
           expect((e as { code?: number }).code).toBe(ErrorCode.InvalidParams)
         }
         const aheadRead = (await peer1.request(OBSERVATION_METHODS.READ, { cursor: 9999 })) as { rehydrate: boolean; reason: string }
-        // cursor ahead returns rehydrate true (not InvalidParams); InvalidParams is for truly invalid cursor like -1
         expect(aheadRead.rehydrate).toBe(true)
 
-        // ensure second concurrent open is not attempted while first holds; instead we dispose first and verify lease release
         peer1.dispose()
         try { proc1.kill() } catch {}
         await new Promise((r) => setTimeout(r, 200))
-        // peer should be closed, lease should be gone after disposal (allow small delay)
         expect(peer1.getState()).toBe("closed")
-        expect(await waitForFileGone(lease, 3000)).toBe(true)
+        expect(fs.existsSync(lease)).toBe(false)
       } finally {
         try { peer1.dispose() } catch {}
         try { proc1.kill() } catch {}
       }
 
-      // second worker can reacquire same DB sequentially; lease exclusivity is provided by Database.layerFromPath but concurrent-owner behavior was not exercised in this increment
+      // second worker can reacquire same DB sequentially; no-lease observer allows sequential reuse via canonical DB path
       const { proc: proc2, peer: peer2 } = spawnStandalone(env)
       try {
         const init2 = (await peer2.request("initialize", { clientInfo: { name: "test2", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
         expect(init2.protocolVersion).toBe("1.0")
-        expect(await waitForFileExists(lease, 2000)).toBe(true)
+        expect(fs.existsSync(lease)).toBe(false)
         const snap2 = (await peer2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { cursor: number; v: string }
         expect(snap2.v).toBe(OBSERVATION_VERSION)
-        // still empty cursor 0 (no mutation via protocol)
         expect(snap2.cursor).toBe(0)
         const read2 = (await peer2.request(OBSERVATION_METHODS.READ, { cursor: 0 })) as { rehydrate: boolean; entries: unknown[] }
         expect(read2.rehydrate).toBe(false)
@@ -223,7 +191,7 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
         peer2.dispose()
         try { proc2.kill() } catch {}
         await new Promise((r) => setTimeout(r, 200))
-        expect(await waitForFileGone(lease, 3000)).toBe(true)
+        expect(fs.existsSync(lease)).toBe(false)
       } finally {
         try { peer2.dispose() } catch {}
         try { proc2.kill() } catch {}
@@ -263,11 +231,8 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
         expect(init.protocolVersion).toBe("1.0")
         const pong = (await peer.request("ping")) as { pong: boolean }
         expect(pong.pong).toBe(true)
-        // lease must not be created when standalone gate disabled
         await new Promise((r) => setTimeout(r, 200))
         expect(fs.existsSync(lease)).toBe(false)
-        // also DB file should not be created via leased layer (worker runs without DB)
-        // we allow DB file to remain absent; absence confirms no leased acquisition
         peer.dispose()
         try { proc.kill() } catch {}
         await new Promise((r) => setTimeout(r, 200))
@@ -282,7 +247,7 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
     }
   }, 15000)
 
-  it("concurrent second real child fails to acquire same DB lease while first holds it; winner remains healthy (real-child lease contention)", async () => {
+  it("concurrent second real child coexists on same DB without lease while first holds it; both remain healthy (real-child coexistence)", async () => {
     const { dbPath, env, cleanup } = makeTmpEnv()
     const lease = leasePathForDbFile(dbPath)
     let proc1: ChildProcess | undefined
@@ -296,84 +261,57 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
       peer1 = first.peer
       const init1 = (await peer1.request("initialize", { clientInfo: { name: "winner", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
       expect(init1.protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const winnerPid = readLeasePid(lease)
-      expect(typeof winnerPid).toBe("number")
-      expect(winnerPid).toBe(proc1.pid)
-      // winner healthy before contention
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(fs.existsSync(dbPath)).toBe(true)
       const pong1 = (await peer1.request("ping")) as { pong: boolean }
       expect(pong1.pong).toBe(true)
 
-      // concurrent second child with same DB/env
       const second = spawnStandalone(env)
       proc2 = second.proc
       peer2 = second.peer
-      // loser must fail observably: initialize rejects or peer closes or proc exits non-zero
-      let loserFailed = false
-      let loserError: unknown = null
-      let initSucceeded = false
-      try {
-        const init2 = peer2.request("initialize", { clientInfo: { name: "loser", version: "1" }, protocolVersion: "1.0" })
-        // bound wait: either initialize resolves/rejects or proc exits
-        const raced = await Promise.race([
-          init2.then(
-            () => ({ ok: true as const }),
-            (e) => ({ ok: false as const, err: e }),
-          ),
-          new Promise<{ ok: boolean; err?: unknown }>((resolve) =>
-            setTimeout(() => resolve({ ok: false, err: new Error("initialize did not settle") }), 4000),
-          ),
-        ])
-        if (!raced.ok) {
-          loserError = (raced as { err?: unknown }).err
-          initSucceeded = false
-        } else {
-          // if it unexpectedly succeeded, that is failure of exclusivity
-          initSucceeded = true
-        }
-      } catch (e) {
-        loserError = e
-        initSucceeded = false
-      }
-      // Strict observability: timeout alone does not count; require peer closed or proc exited within bound
-      const procExited = await waitForExit(proc2, 3000)
-      if (peer2.getState() !== "closed") await new Promise((r) => setTimeout(r, 100))
-      const peerClosed = peer2.getState() === "closed"
-      loserFailed = !initSucceeded && (peerClosed || procExited)
-      expect(loserFailed).toBe(true)
-      // error should be observable (InternalError from peer closed or lease message in stderr if available)
-      if (loserError) {
-        const msg = String((loserError as Error).message ?? loserError)
-        // at least contains closed/timeout/lease exclusivity signal
-        expect(msg.length > 0).toBe(true)
-      }
-      // loser must not have corrupted winner lease
-      expect(fs.existsSync(lease)).toBe(true)
-      expect(readLeasePid(lease)).toBe(winnerPid)
-      expect(isPidAlive(winnerPid!)).toBe(true)
-      // winner remains healthy after contention
+      const init2 = (await peer2.request("initialize", { clientInfo: { name: "coexist", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
+      expect(init2.protocolVersion).toBe("1.0")
+      // Both should be open and healthy; no lease file contention
       expect(peer1.getState()).toBe("open")
+      expect(peer2.getState()).toBe("open")
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(proc1.pid).toBeDefined()
+      expect(proc2.pid).toBeDefined()
+      expect(proc2.pid).not.toBe(proc1.pid)
+
+      const pong2 = (await peer2.request("ping")) as { pong: boolean }
+      expect(pong2.pong).toBe(true)
+
+      const snap1 = (await peer1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
+      const snap2 = (await peer2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
+      expect(snap1.v).toBe(OBSERVATION_VERSION)
+      expect(snap2.v).toBe(OBSERVATION_VERSION)
+      expect(snap1.cursor).toBe(0)
+      expect(snap2.cursor).toBe(0)
+
+      const read2 = (await peer2.request(OBSERVATION_METHODS.READ, { cursor: 0 })) as { rehydrate: boolean; entries: unknown[] }
+      expect(read2.rehydrate).toBe(false)
+      expect(read2.entries.length).toBe(0)
+
       const pongAfter = (await peer1.request("ping")) as { pong: boolean }
       expect(pongAfter.pong).toBe(true)
       const snapAfter = (await peer1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
       expect(snapAfter.v).toBe(OBSERVATION_VERSION)
       expect(snapAfter.cursor).toBe(0)
-      // loser peer should be closed; if not, close it
-      expect(peer2.getState()).toBe("closed")
+      expect(peer2.getState()).toBe("open")
     } finally {
       try { peer1?.dispose() } catch {}
       try { if (proc1) proc1.kill() } catch {}
       try { peer2?.dispose() } catch {}
       try { if (proc2) proc2.kill() } catch {}
-      // wait bounded for winner lease release after dispose
       if (proc1) await waitForExit(proc1, 2000)
       if (proc2) await waitForExit(proc2, 2000)
-      await waitForFileGone(lease, 3000).catch(() => {})
+      expect(fs.existsSync(lease)).toBe(false)
       await cleanup()
     }
   }, 20000)
 
-  it("abrupt SIGKILL of worker leaves recoverable lease; next real child reacquires and observes valid cursor (crash-recovery)", async () => {
+  it("abrupt SIGKILL of worker leaves recoverable DB without lease; next real child reacquires and observes valid cursor (crash-recovery)", async () => {
     const { dbPath, env, cleanup } = makeTmpEnv()
     const lease = leasePathForDbFile(dbPath)
     let proc1: ChildProcess | undefined
@@ -386,35 +324,29 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
       peer1 = first.peer
       const init1 = (await peer1.request("initialize", { clientInfo: { name: "crash-victim", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
       expect(init1.protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const victimPid = readLeasePid(lease)
-      expect(victimPid).toBe(proc1.pid)
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(fs.existsSync(dbPath)).toBe(true)
+      const victimPid = proc1.pid
       const snap1 = (await peer1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { cursor: number; v: string }
       expect(snap1.cursor).toBe(0)
 
-      // abrupt exact-PID termination via SIGKILL (no graceful cleanup)
       expect(proc1.pid).toBeDefined()
       try { proc1.kill("SIGKILL") } catch {}
       await waitForExit(proc1, 3000)
       await new Promise((r) => setTimeout(r, 150))
       expect(peer1.getState()).toBe("closed")
-      // lease file should remain with stale PID (worker had no chance to clean)
-      expect(fs.existsSync(lease)).toBe(true)
-      const stalePid = readLeasePid(lease)
-      expect(stalePid).toBe(victimPid)
-      expect(isPidAlive(stalePid!)).toBe(false)
+      // No-lease observer never creates lease file
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(fs.existsSync(dbPath)).toBe(true)
 
-      // next real child should recover stale lease and succeed
       const second = spawnStandalone(env)
       proc2 = second.proc
       peer2 = second.peer
       const init2 = (await peer2.request("initialize", { clientInfo: { name: "recovery", version: "1" }, protocolVersion: "1.0" })) as { protocolVersion: string }
       expect(init2.protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
-      const recoveredPid = readLeasePid(lease)
-      expect(recoveredPid).toBe(proc2.pid)
-      expect(recoveredPid).not.toBe(victimPid)
-      expect(isPidAlive(recoveredPid!)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
+      expect(proc2.pid).toBeDefined()
+      expect(proc2.pid).not.toBe(victimPid)
       const pong2 = (await peer2.request("ping")) as { pong: boolean }
       expect(pong2.pong).toBe(true)
       const snap2 = (await peer2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
@@ -433,13 +365,12 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
       try { if (proc2) proc2.kill() } catch {}
       if (proc1) await waitForExit(proc1, 2000)
       if (proc2) await waitForExit(proc2, 2000)
-      await waitForFileGone(lease, 3000).catch(() => {})
+      expect(fs.existsSync(lease)).toBe(false)
       await cleanup()
     }
   }, 25000)
 
   it("preserves existing injected deps precedence and default startup without env", async () => {
-    // In-process startWorker with injected deps should still work without lease
     const { startWorker } = await import("../../src/private-worker/worker")
     const { PassThrough } = await import("stream")
     const { ObservationController } = await import("../../src/private-worker/observation")
@@ -457,7 +388,6 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
     client.dispose()
     server.dispose()
 
-    // Default worker without env and without injected deps should still start and handle ping
     const aToB2 = new PassThrough()
     const bToA2 = new PassThrough()
     const server2 = startWorker({ reader: aToB2, writer: bToA2 })
@@ -472,14 +402,15 @@ describe("standalone private worker DB lease bootstrap (real child)", () => {
     const base = path.resolve(process.cwd(), "src/private-worker")
     const def = fs.readFileSync(path.join(base, "worker.ts"), "utf8")
     expect(def).not.toContain("Database.layerFromPath")
+    expect(def).not.toContain("Database.layerNoLease")
     expect(def).not.toContain("createChangefeedDeps")
     expect(def).not.toContain("KILO_PRIVATE_WORKER_STANDALONE")
     const standalone = fs.readFileSync(path.join(base, "standalone-worker.ts"), "utf8")
-    expect(standalone).toContain("Database.layerFromPath")
+    expect(standalone).toContain("Database.layerNoLease")
+    expect(standalone).not.toContain("Database.layerFromPath")
     expect(standalone).toContain("createChangefeedDeps")
     expect(standalone).toContain("KILO_PRIVATE_WORKER_STANDALONE")
     expect(standalone).toContain("KILO_DB")
-    // default still handles observation via injection
     expect(def).toContain("ObservationController")
   })
 })

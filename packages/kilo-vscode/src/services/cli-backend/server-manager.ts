@@ -2,6 +2,7 @@ import { type ChildProcess } from "child_process"
 import { spawn } from "../../util/process"
 import * as crypto from "crypto"
 import * as fs from "fs"
+import * as os from "os"
 import * as path from "path"
 import * as vscode from "vscode"
 import { resolveLocalBwrapEnv, resolveTreeSitterEnv } from "./cli-resources"
@@ -10,6 +11,7 @@ import { parseServerPort } from "./server-utils"
 import { StderrTail } from "./stderr-tail"
 import { LlmRequestCollector, type LlmRequestRecord } from "./llm-request-collector"
 import { p0Stage, isP0PerfEnabled } from "../../perf/perf-instrument"
+import { resolveCanonicalDbPath } from "../../private-worker/canonical-db-path"
 
 export interface ServerInstance {
   port: number
@@ -26,8 +28,27 @@ export function resolveServerCwd(folders: readonly WorkspaceFolderLike[] | undef
   return folders?.[0]?.uri.fsPath ?? storage
 }
 
-export function resolveManagedServerEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
-  return { ...env, KILO_DISABLE_CHANNEL_DB: "true" }
+export function resolveManagedServerEnv(env: NodeJS.ProcessEnv, canonicalOverride?: string): NodeJS.ProcessEnv {
+  const out: NodeJS.ProcessEnv = { ...env, KILO_DISABLE_CHANNEL_DB: "true" }
+  let canonical: string | undefined
+  if (canonicalOverride !== undefined) {
+    if (canonicalOverride.trim() === "") canonical = undefined
+    else if (path.isAbsolute(canonicalOverride)) canonical = canonicalOverride
+    else canonical = undefined
+  } else {
+    try {
+      const resolved = resolveCanonicalDbPath({ env, homedir: os.homedir() })
+      if (path.isAbsolute(resolved)) canonical = resolved
+    } catch {
+      canonical = undefined
+    }
+  }
+  if (canonical && path.isAbsolute(canonical)) {
+    out.KILO_DB = canonical
+  } else {
+    delete out.KILO_DB
+  }
+  return out
 }
 
 /**

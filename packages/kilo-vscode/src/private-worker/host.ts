@@ -27,7 +27,7 @@ export function resolveWorkerArtifact(env: NodeJS.ProcessEnv = process.env): str
  * replacing port detection/health, and owns lifecycle via EOF/exit.
  * Requests are commands, notifications are event envelopes (scaffold).
  * Stderr is bounded via StderrTail (16 KiB / 100 lines). Does NOT interrupt
- * generations or introduce process-global config convergence (LOCK-011).
+ * generations or introduce process-global config convergence.
  */
 
 export interface HostOptions {
@@ -42,6 +42,7 @@ export interface HostOptions {
 
 export class PrivateWorkerHost {
   private proc: ChildProcess | null = null
+  private lastProc: ChildProcess | null = null
   private peer: JsonRpcPeer | null = null
   private readonly stderrTail: StderrTail
   private state: PeerState = "open"
@@ -49,6 +50,8 @@ export class PrivateWorkerHost {
   private stderrTarget: NodeJS.ReadableStream | null = null
   private exitHandler: (() => void) | null = null
   private closeHandler: (() => void) | null = null
+  private killTimer: ReturnType<typeof setTimeout> | null = null
+  private killTarget: ChildProcess | null = null
 
   constructor(private readonly opts: HostOptions = {}) {
     this.stderrTail = new StderrTail({
@@ -73,6 +76,8 @@ export class PrivateWorkerHost {
     if (!this.proc.stdout || !this.proc.stdin || !this.proc.stderr) {
       throw new Error("Worker stdio not available")
     }
+    // Retain exact child reference for post-dispose exit observation (no polling)
+    this.lastProc = this.proc
     const onData = (chunk: Buffer) => this.stderrTail.write(chunk)
     const onExit = () => {
       this.stderrTail.flush()
@@ -131,6 +136,80 @@ export class PrivateWorkerHost {
   getState(): PeerState {
     if (this.peer) return this.peer.getState()
     return this.state
+  }
+
+  /** Exact PID for diagnostics — retained after dispose for bounded exact-PID cleanup */
+  getPid(): number | undefined {
+    return (this.proc ?? this.lastProc)?.pid
+  }
+
+  /** Exact child liveness based on actual proc exitCode/signalCode, not host state */
+  isAlive(): boolean {
+    const p = this.proc ?? this.lastProc
+    if (!p) return false
+    return p.exitCode === null && p.signalCode === null
+  }
+
+  hasExited(): boolean {
+    return !this.isAlive()
+  }
+
+  /** Narrow accessor for exact-PID observation (bounded, no polling, no global kills) */
+  getProc(): ChildProcess | null {
+    return this.proc ?? this.lastProc
+  }
+
+  /** Bounded exact-PID exit wait — attaches exact listeners to the live proc */
+  async waitForExit(timeoutMs: number): Promise<boolean> {
+    const p = this.proc ?? this.lastProc
+    if (!p) return true
+    if (p.exitCode !== null || p.signalCode !== null) return true
+    return new Promise<boolean>((resolve) => {
+      let done = false
+      let timer: ReturnType<typeof setTimeout> | null = null
+      const onExit = () => {
+        if (done) return
+        done = true
+        if (timer) clearTimeout(timer)
+        try {
+          p.off?.("exit", onExit as unknown as () => void)
+        } catch {}
+        try {
+          p.removeListener?.("exit", onExit as unknown as () => void)
+        } catch {}
+        try {
+          p.off?.("close", onExit as unknown as () => void)
+        } catch {}
+        try {
+          p.removeListener?.("close", onExit as unknown as () => void)
+        } catch {}
+        resolve(true)
+      }
+      try {
+        p.on("exit", onExit as unknown as () => void)
+      } catch {}
+      try {
+        p.on("close", onExit as unknown as () => void)
+      } catch {}
+      timer = setTimeout(() => {
+        if (done) return
+        done = true
+        try {
+          p.off?.("exit", onExit as unknown as () => void)
+        } catch {}
+        try {
+          p.removeListener?.("exit", onExit as unknown as () => void)
+        } catch {}
+        try {
+          p.off?.("close", onExit as unknown as () => void)
+        } catch {}
+        try {
+          p.removeListener?.("close", onExit as unknown as () => void)
+        } catch {}
+        resolve(false)
+      }, timeoutMs)
+      if ((timer as unknown as { unref?: () => void })?.unref) (timer as unknown as { unref: () => void }).unref()
+    })
   }
 
   getStderrTail(): string[] {
@@ -210,13 +289,78 @@ export class PrivateWorkerHost {
     return exited
   }
 
+  private killExact(proc: ChildProcess, sig?: NodeJS.Signals): void {
+    if (proc.exitCode !== null || proc.signalCode !== null) return
+    try {
+      proc.kill(sig as unknown as NodeJS.Signals)
+    } catch {
+      // ignore
+    }
+  }
+
+  private clearKillTimer(): void {
+    if (this.killTimer) {
+      try {
+        clearTimeout(this.killTimer)
+      } catch {}
+      this.killTimer = null
+      this.killTarget = null
+    }
+  }
+
+  private scheduleKillFallback(proc: ChildProcess, graceMs = 1000): void {
+    if (this.killTimer && this.killTarget === proc) {
+      if (proc.exitCode !== null || proc.signalCode !== null) this.clearKillTimer()
+      return
+    }
+    this.clearKillTimer()
+    if (proc.exitCode !== null || proc.signalCode !== null) return
+    this.killTarget = proc
+    const onExitClear = () => {
+      if (this.killTarget === proc) this.clearKillTimer()
+      try {
+        proc.off?.("exit", onExitClear as unknown as () => void)
+      } catch {}
+      try {
+        proc.removeListener?.("exit", onExitClear as unknown as () => void)
+      } catch {}
+      try {
+        proc.off?.("close", onExitClear as unknown as () => void)
+      } catch {}
+      try {
+        proc.removeListener?.("close", onExitClear as unknown as () => void)
+      } catch {}
+    }
+    try {
+      proc.on("exit", onExitClear as unknown as () => void)
+    } catch {}
+    try {
+      proc.on("close", onExitClear as unknown as () => void)
+    } catch {}
+    const t = setTimeout(() => {
+      if (this.killTarget !== proc) return
+      if (proc.exitCode !== null || proc.signalCode !== null) {
+        this.clearKillTimer()
+        return
+      }
+      this.killExact(proc, "SIGKILL" as unknown as NodeJS.Signals)
+      this.clearKillTimer()
+    }, graceMs)
+    if ((t as unknown as { unref?: () => void })?.unref) (t as unknown as { unref: () => void }).unref()
+    this.killTimer = t
+  }
+
   dispose(): void {
     this.peer?.dispose()
     this.peer = null
+    if (this.proc) this.lastProc = this.proc
     if (this.proc) {
       if (this.stderrHandler && this.stderrTarget) {
         try {
-          const t = this.stderrTarget as unknown as { off?: (e: string, h: unknown) => void; removeListener?: (e: string, h: unknown) => void }
+          const t = this.stderrTarget as unknown as {
+            off?: (e: string, h: unknown) => void
+            removeListener?: (e: string, h: unknown) => void
+          }
           const off = t.off ?? t.removeListener
           off?.call(t, "data", this.stderrHandler as unknown as never)
         } catch {
@@ -225,7 +369,10 @@ export class PrivateWorkerHost {
       }
       if (this.exitHandler) {
         try {
-          const c = this.proc as unknown as { off?: (e: string, h: unknown) => void; removeListener?: (e: string, h: unknown) => void }
+          const c = this.proc as unknown as {
+            off?: (e: string, h: unknown) => void
+            removeListener?: (e: string, h: unknown) => void
+          }
           const off = c.off ?? c.removeListener
           off?.call(c, "exit", this.exitHandler as unknown as never)
         } catch {
@@ -234,19 +381,33 @@ export class PrivateWorkerHost {
       }
       if (this.closeHandler) {
         try {
-          const c = this.proc as unknown as { off?: (e: string, h: unknown) => void; removeListener?: (e: string, h: unknown) => void }
+          const c = this.proc as unknown as {
+            off?: (e: string, h: unknown) => void
+            removeListener?: (e: string, h: unknown) => void
+          }
           const off = c.off ?? c.removeListener
           off?.call(c, "close", this.closeHandler as unknown as never)
         } catch {
           // ignore
         }
       }
-      try {
-        this.proc.kill()
-      } catch {
-        // ignore
-      }
+      const p = this.proc
+      this.killExact(p)
+      this.scheduleKillFallback(p, 1000)
       this.proc = null
+    } else if (this.lastProc) {
+      // Timed-out shutdown nulled active proc but retained lastProc still alive.
+      // Service disposal must kill the exact retained child (no global kills).
+      const p = this.lastProc
+      if (p.exitCode === null && p.signalCode === null) {
+        this.killExact(p)
+        this.scheduleKillFallback(p, 1000)
+      } else {
+        this.clearKillTimer()
+      }
+      // retain lastProc for bounded exact-PID exit observation
+    } else {
+      this.clearKillTimer()
     }
     this.stderrHandler = null
     this.stderrTarget = null
@@ -264,13 +425,12 @@ export class PrivateWorkerHost {
     const standalone = resolveWorkerArtifact(effectiveEnv)
     if (standalone) return { command: process.execPath, args: [standalone] }
     // Resolvable packaged worker artifact emitted by esbuild (dist/private-worker/worker.js).
-    const candidates = [
-      path.join(__dirname, "private-worker/worker.js"),
-      path.join(__dirname, "worker.js"),
-    ]
+    const candidates = [path.join(__dirname, "private-worker/worker.js"), path.join(__dirname, "worker.js")]
     for (const p of candidates) {
       if (fs.existsSync(p)) return { command: process.execPath, args: [p] }
     }
-    throw new Error("No worker entrypoint found — build the private worker (run esbuild) or provide host command override")
+    throw new Error(
+      "No worker entrypoint found — build the private worker (run esbuild) or provide host command override",
+    )
   }
 }

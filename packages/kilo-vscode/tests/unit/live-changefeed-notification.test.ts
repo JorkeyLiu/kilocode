@@ -100,7 +100,8 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
       expect(fs.existsSync(lease)).toBe(false)
       const init1 = await host1.start()
       expect((init1 as { protocolVersion: string }).protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      // No-lease observer: Database.layerNoLease never creates a lease file
+      expect(fs.existsSync(lease)).toBe(false)
       expect(fs.existsSync(dbPath)).toBe(true)
       const snap0 = (await host1.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { v: string; cursor: number }
       expect(snap0.v).toBe(OBSERVATION_VERSION)
@@ -157,7 +158,7 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
       await waitForHostClosed(host1, 3000)
       await new Promise((r) => setTimeout(r, 200))
       expect(host1.getState()).toBe("closed")
-      expect(await waitForFileGone(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
       await new Promise((r) => setTimeout(r, 200))
       expect(notifs1.length).toBe(notifs1CountBeforeClose)
       host2 = new PrivateWorkerHost({
@@ -169,7 +170,7 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
       })
       const init2 = await host2.start()
       expect((init2 as { protocolVersion: string }).protocolVersion).toBe("1.0")
-      expect(await waitForFileExists(lease, 3000)).toBe(true)
+      expect(fs.existsSync(lease)).toBe(false)
       const snap2 = (await host2.request(OBSERVATION_METHODS.SNAPSHOT, {})) as { cursor: number; v: string }
       expect(snap2.v).toBe(OBSERVATION_VERSION)
       expect(snap2.cursor).toBe(mutate2.cursor)
@@ -206,7 +207,7 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
       await waitForHostClosed(host1, 2000)
       if (host2) await waitForHostClosed(host2, 2000)
       await new Promise((r) => setTimeout(r, 200))
-      await waitForFileGone(lease, 3000).catch(() => {})
+      expect(fs.existsSync(lease)).toBe(false)
       await cleanup()
     }
   }, 30000)
@@ -239,10 +240,12 @@ describe("live canonical changefeed notification delivery and reconnect (real ch
     const base = path.resolve(process.cwd(), "src/private-worker")
     const def = fs.readFileSync(path.join(base, "worker.ts"), "utf8")
     expect(def).not.toContain("Database.layerFromPath")
+    expect(def).not.toContain("Database.layerNoLease")
     expect(def).not.toContain("createChangefeedDeps")
     expect(def).not.toContain("KILO_PRIVATE_WORKER_STANDALONE")
     const standalone = fs.readFileSync(path.join(base, "standalone-worker.ts"), "utf8")
-    expect(standalone).toContain("Database.layerFromPath")
+    expect(standalone).toContain("Database.layerNoLease")
+    expect(standalone).not.toContain("Database.layerFromPath")
     expect(standalone).toContain("createChangefeedDeps")
     expect(standalone).toContain("KILO_PRIVATE_WORKER_STANDALONE")
     expect(standalone).toContain("KILO_PRIVATE_WORKER_TEST_BRIDGE")

@@ -1,16 +1,20 @@
 /**
- * R9-C3 extension lifecycle triggers for private observation.
+ * R9 production extension lifecycle triggers for private observation.
  *
- * Additive, gated, no polling, no Failure/Outcome wiring, no DB migration,
- * no protocol/storage change. Still gate-off (enabled:false) so HTTP/SSE
- * remains carrier.
+ * Additive, no polling, no Failure/Outcome wiring, no DB migration,
+ * no protocol/storage change. Enabled production no-lease observer
+ * (single canonical DB, legacy lease / private no-lease)
+ * with bounded shutdown/reinitialize semantics; legacy HTTP/SSE bridge
+ * remains active.
  *
  * Core: vscode-free, single debounce timer (setTimeout once per burst,
  * trailing coalesce, ~150ms), singleflight promise for trigger(reason).
- * - Gate check: if (!service.isEnabled()) return undefined (no host spawn, no lease).
- * - Else: await service.reconnect() (bounded exact-PID, handles peer closed)
- *         then await service.read(persistedCursor) when cursor defined and
- *         surface rehydrate:true/false. Do not fabricate UI mutation.
+ * - Gate check: if (!service.isEnabled()) return undefined (no host spawn).
+ * - Else: await service.reconnect() (bounded exact-PID shutdown 2000ms,
+ *         explicit pending-shutdown ownership based on actual child exit
+ *         (proc exitCode, not host state), no global kills, no replacement
+ *         on timeout, handles peer closed) then await service.read(persistedCursor)
+ *         when cursor defined and surface rehydrate:true/false. Do not fabricate UI mutation.
  * - Coalesce rapid 5x flap in 100ms into 1 call via trailing debounce.
  * - Each entrypoint shares same debounced promise, idempotent, clear timer on dispose.
  *
@@ -25,8 +29,9 @@
  * emitter is introduced — trigger relies on explicit caller (or host-state polling)
  * to avoid altering existing host/peer start/shutdown behaviour. Minimal and additive.
  *
- * No setInterval, no background timer beyond single debounce timeout and existing
- * bounded 300/500ms reconnect retry, no second store, no selector/readiness change.
+ * No setInterval, no background timer beyond single debounce timeout, no second store,
+ * no selector/readiness change. Reconnect is bounded shutdown/reinitialize single attempt
+ * (no lease-contention retry) per no-lease observer.
  */
 
 import type * as vscode from "vscode"
@@ -275,9 +280,7 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
         // Filtered: only kilo-relevant config triggers coalesced observation gap handling.
         // Keep check lightweight and do not fabricate UI mutation.
         const relevant =
-          e.affectsConfiguration("kilo") ||
-          e.affectsConfiguration("kilocode") ||
-          e.affectsConfiguration("kilo-code")
+          e.affectsConfiguration("kilo") || e.affectsConfiguration("kilocode") || e.affectsConfiguration("kilo-code")
         if (!relevant) return
         void triggers.onConfigChanged(e)
       })
