@@ -150,9 +150,9 @@ exports[`Kilo CLI help-text snapshots every documented command emits stable help
 manage AI providers and credentials
 
 Commands:
-  kilo providers list         list providers and credentials                       [aliases: ls]
-  kilo providers login [url]  log in to a provider
-  kilo providers logout       log out from a configured provider
+  kilo providers list    list providers and credentials                            [aliases: ls]
+  kilo providers login   log in to a provider
+  kilo providers logout  log out from a configured provider
 
 Options:
   -h, --help        show help                                                              [boolean]
@@ -487,12 +487,9 @@ Options:
 `;
 
 exports[`Kilo CLI help-text snapshots every documented command emits stable help text: kilo providers login --help 1`] = `
-"kilo providers login [url]
+"kilo providers login
 
 log in to a provider
-
-Positionals:
-  url  kilo auth provider                                                                   [string]
 
 Options:
   -h, --help        show help                                                              [boolean]
