@@ -9,7 +9,6 @@ import {
   invalidateAfterProviderAuthChange, // kilocode_change
   invalidatePresence,
 } from "@/kilocode/server/provider-auth-lifecycle" // kilocode_change
-import { providerMetadata } from "@/kilocode/provider/metadata" // kilocode_change
 import { filterPromptTrainingModels } from "@/kilocode/provider/model-filter" // kilocode_change
 import { overlay as overlayAnacondaDesktop } from "@/kilocode/anaconda-desktop/provider" // kilocode_change
 import { Effect, Schema } from "effect"
@@ -80,10 +79,7 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         (item, id) => Object.keys(item.models).length > 0 || id in connected || failedSet.has(id),
       )
       return {
-        all: Object.values(validProviders).map((item) => ({
-          ...Provider.toPublicInfo(item),
-          metadata: providerMetadata(item.id),
-        })), // kilocode_change
+        all: Object.values(validProviders).map((item) => Provider.toPublicInfo(item)),
         default: Provider.defaultModelIDs(pickBy(validProviders, (item) => Object.keys(item.models).length > 0)),
         connected: Object.keys(connected),
         failed,
