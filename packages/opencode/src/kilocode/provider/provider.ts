@@ -3,13 +3,12 @@
 // functions and data that the provider module calls at well-defined injection
 // points.
 
-import { createKilo, type KiloProvider, AI_SDK_PROVIDERS, PROMPTS } from "@kilocode/kilo-gateway"
+import { type KiloProvider, AI_SDK_PROVIDERS, PROMPTS } from "@kilocode/kilo-gateway"
 import { DEFAULT_HEADERS } from "@/kilocode/const"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { optionalOmitUndefined } from "@opencode-ai/core/schema"
 import { Effect, Schema } from "effect"
-import type { LanguageModelV3 } from "@ai-sdk/provider"
 import { mapValues, omit, pickBy } from "remeda"
 
 /**
@@ -31,16 +30,6 @@ export const REQUEST_TIMEOUT_MS = 60_000 // 1 minute
  */
 export function resolveFirstChunkTimeout(firstChunkTimeout: unknown, timeout: unknown): number | false {
   return (firstChunkTimeout ?? timeout ?? REQUEST_TIMEOUT_MS) as number | false
-}
-
-// ---------------------------------------------------------------------------
-// Bundled providers
-// ---------------------------------------------------------------------------
-
-type BundledSDK = { languageModel(modelId: string): LanguageModelV3 }
-
-export const KILO_BUNDLED_PROVIDERS: Record<string, () => Promise<(options: any) => BundledSDK>> = {
-  "@kilocode/kilo-gateway": async () => createKilo as unknown as (options: any) => BundledSDK,
 }
 
 // ---------------------------------------------------------------------------

@@ -33,6 +33,7 @@ export namespace TestProfile {
           "kilocode/cli/install-artifact.test.ts",
           "kilocode/config/config.test.ts",
           "kilocode/core-watcher.test.ts",
+          "kilocode/p4-4-bundled-provider-loader-removal.test.ts",
           "kilocode/p4-4-managed-removal.test.ts",
           "kilocode/p4-4-primary-worktree-removal.test.ts",
           "kilocode/p4-4-provider-metadata-removal.test.ts",
