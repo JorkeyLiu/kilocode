@@ -4,7 +4,6 @@ import { Effect, Exit, Layer, Option } from "effect"
 import { FetchHttpClient, HttpClient, HttpClientResponse } from "effect/unstable/http"
 import { NodeFileSystem, NodePath } from "@effect/platform-node"
 import { Config } from "@/config/config"
-import { ConfigManaged } from "@/config/managed"
 import { ConfigParse } from "../../src/config/parse"
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
 
@@ -131,8 +130,6 @@ const clearEffect = (wait = false) =>
       Effect.andThen(wait ? Effect.promise(() => InstanceRuntime.disposeAllInstances()) : Effect.void),
     )
 const clear = (wait = false) => Effect.runPromise(clearEffect(wait))
-// Get managed config directory from environment (set in preload.ts)
-const managedConfigDir = process.env.KILO_TEST_MANAGED_CONFIG_DIR!
 const originalTestToken = process.env.TEST_TOKEN
 const originalConsoleToken = process.env.KILO_CONSOLE_TOKEN
 
@@ -141,16 +138,12 @@ beforeEach(async () => {
 })
 
 afterEach(async () => {
-  await fs.rm(managedConfigDir, { force: true, recursive: true }).catch(() => {})
   if (originalTestToken === undefined) delete process.env.TEST_TOKEN
   else process.env.TEST_TOKEN = originalTestToken
   if (originalConsoleToken === undefined) delete process.env.KILO_CONSOLE_TOKEN
   else process.env.KILO_CONSOLE_TOKEN = originalConsoleToken
   await clear(true)
 })
-
-const writeManagedSettingsEffect = (settings: object, filename?: string) =>
-  FSUtil.use.writeWithDirs(path.join(managedConfigDir, filename ?? "kilo.jsonc"), JSON.stringify(settings)) // kilocode_change
 
 // kilocode_change start
 async function writeConfig(dir: string, config: object, name = "kilo.jsonc") {
@@ -1422,114 +1415,4 @@ describe("deduplicatePluginOrigins", () => {
       }),
     ),
   )
-})
-
-
-// parseManagedPlist unit tests — pure function, no OS interaction
-
-test("parseManagedPlist strips MDM metadata keys", async () => {
-  const config = ConfigParse.schema(
-    ConfigV1.Info,
-    ConfigParse.jsonc(
-      await ConfigManaged.parseManagedPlist(
-        JSON.stringify({
-          PayloadDisplayName: "OpenCode Managed",
-          PayloadIdentifier: "ai.opencode.managed.test",
-          PayloadType: "ai.opencode.managed",
-          PayloadUUID: "AAAA-BBBB-CCCC",
-          PayloadVersion: 1,
-          _manualProfile: true,
-          share: "disabled",
-          model: "mdm/model",
-        }),
-      ),
-      "test:mobileconfig",
-    ),
-    "test:mobileconfig",
-  )
-  expect(config.share).toBe("disabled")
-  expect(config.model).toBe("mdm/model")
-  // MDM keys must not leak into the parsed config
-  expect((config as any).PayloadUUID).toBeUndefined()
-  expect((config as any).PayloadType).toBeUndefined()
-  expect((config as any)._manualProfile).toBeUndefined()
-})
-
-test("parseManagedPlist parses server settings", async () => {
-  const config = ConfigParse.schema(
-    ConfigV1.Info,
-    ConfigParse.jsonc(
-      await ConfigManaged.parseManagedPlist(
-        JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          server: { hostname: "127.0.0.1", mdns: false },
-          autoupdate: true,
-        }),
-      ),
-      "test:mobileconfig",
-    ),
-    "test:mobileconfig",
-  )
-  expect(config.server?.hostname).toBe("127.0.0.1")
-  expect(config.server?.mdns).toBe(false)
-  expect(config.autoupdate).toBe(true)
-})
-
-test("parseManagedPlist parses permission rules", async () => {
-  const config = ConfigParse.schema(
-    ConfigV1.Info,
-    ConfigParse.jsonc(
-      await ConfigManaged.parseManagedPlist(
-        JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          permission: {
-            "*": "ask",
-            bash: { "*": "ask", "rm -rf *": "deny", "curl *": "deny" },
-            grep: "allow",
-            glob: "allow",
-            webfetch: "ask",
-            "~/.ssh/*": "deny",
-          },
-        }),
-      ),
-      "test:mobileconfig",
-    ),
-    "test:mobileconfig",
-  )
-  expect(config.permission?.["*"]).toBe("ask")
-  expect(config.permission?.grep).toBe("allow")
-  expect(config.permission?.webfetch).toBe("ask")
-  expect(config.permission?.["~/.ssh/*"]).toBe("deny")
-  const bash = config.permission?.bash as Record<string, string>
-  expect(bash?.["rm -rf *"]).toBe("deny")
-  expect(bash?.["curl *"]).toBe("deny")
-})
-
-test("parseManagedPlist parses enabled_providers", async () => {
-  const config = ConfigParse.schema(
-    ConfigV1.Info,
-    ConfigParse.jsonc(
-      await ConfigManaged.parseManagedPlist(
-        JSON.stringify({
-          $schema: "https://opencode.ai/config.json",
-          enabled_providers: ["anthropic", "google"],
-        }),
-      ),
-      "test:mobileconfig",
-    ),
-    "test:mobileconfig",
-  )
-  expect(config.enabled_providers).toEqual(["anthropic", "google"])
-})
-
-test("parseManagedPlist handles empty config", async () => {
-  const config = ConfigParse.schema(
-    ConfigV1.Info,
-    ConfigParse.jsonc(
-      await ConfigManaged.parseManagedPlist(JSON.stringify({ $schema: "https://opencode.ai/config.json" })),
-      "test:mobileconfig",
-    ),
-    "test:mobileconfig",
-  )
-  expect(config.$schema).toBe("https://opencode.ai/config.json")
 })

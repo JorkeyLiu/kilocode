@@ -34,6 +34,7 @@ export namespace TestProfile {
           "kilocode/config/config.test.ts",
           "kilocode/core-watcher.test.ts",
           "kilocode/p4-4-primary-worktree-removal.test.ts",
+          "kilocode/p4-4-managed-removal.test.ts",
           "kilocode/sandbox/*.test.ts",
           "kilocode/server/{config-overlay,listener-runtime,tui-config,worktree-list}.test.ts",
           "kilocode/session-export/{e2e,sequence,worker,workspace-provider}.test.ts",
