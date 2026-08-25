@@ -79,6 +79,8 @@ export type Event =
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
   | EventMessagePartDelta
+  | EventSessionStatus
+  | EventSessionIdle
   | EventSessionDiff
   | EventSessionError
   | EventInstallationUpdated
@@ -86,8 +88,6 @@ export type Event =
   | EventPermissionAsked
   | EventPermissionReplied
   | EventTodoUpdated
-  | EventSessionStatus
-  | EventSessionIdle
   | EventSessionCompacted
   | EventCommandExecuted
   | EventLspUpdated
@@ -893,30 +893,6 @@ export type EventTuiSessionSelect = {
   }
 }
 
-export type AgentRequirementError = {
-  name: "AgentRequirementError"
-  data: {
-    message: string
-    agent: string
-    directory: string
-    state: "blocked" | "error"
-    skills: Array<{
-      name: string
-      status: "ready" | "missing" | "error"
-      message?: string
-    }>
-    mcps: Array<{
-      name: string
-      status: "ready" | "missing" | "error"
-      message?: string
-    }>
-    vscode_extensions: Array<{
-      name: string
-      id: string
-    }>
-  }
-}
-
 export type SessionStatus =
   | {
       type: "idle"
@@ -943,6 +919,30 @@ export type SessionStatus =
       requestID: string
       message: string
     }
+
+export type AgentRequirementError = {
+  name: "AgentRequirementError"
+  data: {
+    message: string
+    agent: string
+    directory: string
+    state: "blocked" | "error"
+    skills: Array<{
+      name: string
+      status: "ready" | "missing" | "error"
+      message?: string
+    }>
+    mcps: Array<{
+      name: string
+      status: "ready" | "missing" | "error"
+      message?: string
+    }>
+    vscode_extensions: Array<{
+      name: string
+      id: string
+    }>
+  }
+}
 
 export type Pty = {
   id: string
@@ -1035,6 +1035,8 @@ export type GlobalEvent = {
     | EventMcpToolsChanged
     | EventMcpBrowserOpenFailed
     | EventMessagePartDelta
+    | EventSessionStatus
+    | EventSessionIdle
     | EventSessionDiff
     | EventSessionError
     | EventInstallationUpdated
@@ -1042,8 +1044,6 @@ export type GlobalEvent = {
     | EventPermissionAsked
     | EventPermissionReplied
     | EventTodoUpdated
-    | EventSessionStatus
-    | EventSessionIdle
     | EventSessionCompacted
     | EventCommandExecuted
     | EventLspUpdated
@@ -2766,17 +2766,6 @@ export type ConfigOverlayResponse = {
   effective: Config
   global: Config
   project: Config
-  sources: Array<{
-    order: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    kind: string
-    scope: string
-    label: string
-    source: string
-    path?: string
-    exists: boolean
-    editable: boolean
-    reason?: string
-  }>
   targets: {
     global?: string
     project?: string
@@ -2810,20 +2799,6 @@ export type ConfigOverlayResponse = {
       reason?: string
     }>
   }
-}
-
-export type ConfigSourcesResponse = {
-  sources: Array<{
-    order: number | "NaN" | "Infinity" | "-Infinity" | "Infinity" | "-Infinity" | "NaN"
-    kind: string
-    scope: string
-    label: string
-    source: string
-    path?: string
-    exists: boolean
-    editable: boolean
-    reason?: string
-  }>
 }
 
 export type ConfigTransactionResponse = {
@@ -4169,6 +4144,23 @@ export type EventMessagePartDelta = {
   }
 }
 
+export type EventSessionStatus = {
+  id: string
+  type: "session.status"
+  properties: {
+    sessionID: string
+    status: SessionStatus
+  }
+}
+
+export type EventSessionIdle = {
+  id: string
+  type: "session.idle"
+  properties: {
+    sessionID: string
+  }
+}
+
 export type EventSessionDiff = {
   id: string
   type: "session.diff"
@@ -4261,23 +4253,6 @@ export type EventTodoUpdated = {
   properties: {
     sessionID: string
     todos: Array<SessionTodoInfo>
-  }
-}
-
-export type EventSessionStatus = {
-  id: string
-  type: "session.status"
-  properties: {
-    sessionID: string
-    status: SessionStatus
-  }
-}
-
-export type EventSessionIdle = {
-  id: string
-  type: "session.idle"
-  properties: {
-    sessionID: string
   }
 }
 
@@ -10347,34 +10322,6 @@ export type ConfigOverlayUpdateResponses = {
 }
 
 export type ConfigOverlayUpdateResponse = ConfigOverlayUpdateResponses[keyof ConfigOverlayUpdateResponses]
-
-export type ConfigSourcesData = {
-  body?: never
-  path?: never
-  query?: {
-    directory?: string
-    workspace?: string
-  }
-  url: "/config/sources"
-}
-
-export type ConfigSourcesErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type ConfigSourcesError = ConfigSourcesErrors[keyof ConfigSourcesErrors]
-
-export type ConfigSourcesResponses = {
-  /**
-   * Config source inventory
-   */
-  200: ConfigSourcesResponse
-}
-
-export type ConfigSourcesResponse2 = ConfigSourcesResponses[keyof ConfigSourcesResponses]
 
 export type ConfigEffectiveData = {
   body?: never

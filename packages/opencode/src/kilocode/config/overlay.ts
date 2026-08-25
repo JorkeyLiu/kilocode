@@ -10,7 +10,6 @@ import { ConfigParse } from "@/config/parse"
 import { ConfigVariable } from "@/config/variable"
 import { isRecord } from "@/util/record"
 import { KilocodeConfig } from "./config"
-import { KilocodeConfigSources } from "./sources"
 import { canonicalRoot } from "@/project/instance-context"
 
 export namespace KilocodeConfigOverlay {
@@ -53,7 +52,6 @@ export namespace KilocodeConfigOverlay {
     effective: z.custom<Config.Info>(Schema.is(Config.Info)),
     global: z.custom<Config.Info>(Schema.is(Config.Info)),
     project: z.custom<Config.Info>(Schema.is(Config.Info)),
-    sources: z.array(KilocodeConfigSources.Source),
     targets: z.object({
       global: z.string().optional(),
       project: z.string().optional(),
@@ -70,7 +68,6 @@ export namespace KilocodeConfigOverlay {
     scope: Scope
     effective: Config.Info
     global: Config.Info
-    sources: KilocodeConfigSources.Source[]
   }
 
   const files = ["kilo.jsonc"] as const
@@ -128,7 +125,6 @@ export namespace KilocodeConfigOverlay {
       effective: input.effective,
       global,
       project: local,
-      sources: input.sources,
       targets,
       fields: Object.fromEntries(
         fieldPaths.map((parts) => [parts.join("."), field(input.scope, input.effective, global, local, [...parts])]),

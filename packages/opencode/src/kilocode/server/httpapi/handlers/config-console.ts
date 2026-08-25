@@ -1,10 +1,7 @@
-import { Account } from "@/account/account"
-import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
 import { isHotPatch } from "@/kilocode/config/hot-keys"
 import { KilocodeConfigOverlay } from "@/kilocode/config/overlay"
-import { KilocodeConfigSources } from "@/kilocode/config/sources"
 import { KilocodeModelState } from "@/kilocode/config/model-state"
 import { ConfigRules } from "@/kilocode/server/routes/config-rules"
 import { KilocodeKeybinds } from "@/kilocode/tui/keybinds"
@@ -13,7 +10,7 @@ import { InstanceHttpApi } from "@/server/routes/instance/httpapi/api"
 import { withColdMutation } from "@/kilocode/server/config-convergence"
 import { configFailure } from "@/kilocode/server/config-failure"
 import { executeTransaction } from "@/kilocode/server/config-transaction"
-import { Effect, Option } from "effect"
+import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
 import {
   ConfigModelStatePatch,
@@ -28,33 +25,12 @@ import {
 export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "config-console", (handlers) =>
   Effect.gen(function* () {
     const config = yield* Config.Service
-    const auth = yield* Auth.Service
-    const account = yield* Account.Service
 
     const overlay = Effect.fn("ConfigConsoleHttpApi.overlay")(function* (ctx: {
       query: typeof ConfigOverlayQuery.Type
     }) {
       const instance = yield* InstanceState.context
-      const all = yield* auth.all().pipe(Effect.orElseSucceed(() => ({})))
-      const active = yield* account.active().pipe(
-        Effect.map(Option.getOrUndefined),
-        Effect.orElseSucceed(() => undefined),
-      )
-      const [base, global, sources] = yield* Effect.all(
-        [
-          config.get(),
-          config.getGlobal(),
-          Effect.promise(() =>
-            KilocodeConfigSources.list({
-              directory: instance.directory,
-              worktree: instance.worktree,
-              auth: all,
-              account: active,
-            }),
-          ),
-        ],
-        { concurrency: 3 },
-      )
+      const [base, global] = yield* Effect.all([config.get(), config.getGlobal()], { concurrency: 2 })
       return yield* Effect.promise(() =>
         KilocodeConfigOverlay.resolve({
           directory: instance.directory,
@@ -62,7 +38,6 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
           scope: ctx.query.scope ?? "project",
           effective: base,
           global,
-          sources: sources.sources,
         }),
       )
     })
@@ -123,23 +98,6 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
             }
           }),
       })
-    })
-
-    const sources = Effect.fn("ConfigConsoleHttpApi.sources")(function* () {
-      const instance = yield* InstanceState.context
-      const all = yield* auth.all().pipe(Effect.orElseSucceed(() => ({})))
-      const active = yield* account.active().pipe(
-        Effect.map(Option.getOrUndefined),
-        Effect.orElseSucceed(() => undefined),
-      )
-      return yield* Effect.promise(() =>
-        KilocodeConfigSources.list({
-          directory: instance.directory,
-          worktree: instance.worktree,
-          auth: all,
-          account: active,
-        }),
-      )
     })
 
     const effective = Effect.fn("ConfigConsoleHttpApi.effective")(function* () {
@@ -222,7 +180,6 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
       .handle("overlay", overlay)
       .handle("overlayUpdate", overlayUpdate)
       .handle("configTransaction", configTransaction)
-      .handle("sources", sources)
       .handle("effective", effective)
       .handle("rules", rules)
       .handle("rulesUpdate", rulesUpdate)

@@ -334,7 +334,7 @@ Historical sources (retired at the P4.3 atomic legacy-reader cutover — no reta
 | `kilo.json` filename | Legacy global filename (canonical is `kilo.jsonc` JSONC only) |
 | Managed config directory and macOS managed preferences | Enterprise managed sources |
 
-The pre-cutover manual reconciliation of the P0 15-source inventory to 13 removal classes vs 4 retained legal classes (`specs/vscode-orchestrator/evidence/p4.3-pre-cutover-reconciliation-checklist.md`, operator `jorkeyliu` 2026-08-24, clean-reset decision) is the sole bridge; residual `.opencode` directories are detected only for the reference-only `kilo.local.opencode-config-detected` notification via `KilocodeConfig.detectOpencodeConfig` and never read as config. The `KilocodeConfigSources` inventory/Console reporting surface remains as deferred historical/diagnostic reporting only (P4.4) and is not effective-config authority; its rows are not treated as retained sources in P4.3.
+The pre-cutover manual reconciliation of the P0 15-source inventory to 13 removal classes vs 4 retained legal classes (`specs/vscode-orchestrator/evidence/p4.3-pre-cutover-reconciliation-checklist.md`, operator `jorkeyliu` 2026-08-24, clean-reset decision) is the sole bridge; residual `.opencode` directories are detected only for the reference-only `kilo.local.opencode-config-detected` notification via `KilocodeConfig.detectOpencodeConfig` and never read as config. The legacy source-inventory reader that reported the retired source classes and its config-console reporting endpoint were physically removed in P4.4; no diagnostic source-listing surface remains and none of the rows it listed are treated as retained sources.
 
 P4.3 / P4.4 / P4.5 boundary (canonical-only cutover):
 

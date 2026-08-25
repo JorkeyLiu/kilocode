@@ -39,7 +39,6 @@ describe("P4.3 overlay — mode/modes not in retained effective config", () => {
         scope: "project",
         effective: {},
         global: {},
-        sources: [],
       })
 
       expect(result.project.agent?.good).toBeDefined()
@@ -81,7 +80,6 @@ describe("P4.3 overlay — mode/modes not in retained effective config", () => {
         scope: "project",
         effective: {},
         global: {},
-        sources: [],
       })
 
       expect(result.global.agent?.["global-good"]).toBeDefined()
@@ -128,12 +126,10 @@ describe("P4.3 overlay — mode/modes not in retained effective config", () => {
     // docs: global typed assets distinction
     expect(docs).toContain("plus `${Global.Path.config}/{agent,agents,command,commands,skill,skills,rules}` typed assets directly under the global root")
     expect(docs).toContain("no `${Global.Path.config}/.kilo/` subdirectory")
-    // deferred source inventory note
-    expect(docs).toContain("KilocodeConfigSources")
-    expect(docs).toContain("not effective-config authority")
+    // removed source inventory: docs describe the deletion, not a surviving diagnostic surface
+    expect(docs).not.toContain("KilocodeConfigSources")
 
-    // skill deferred note
-    expect(skill).toContain("KilocodeConfigSources")
-    expect(skill).toContain("not effective-config authority")
+    // skill: the source inventory is removed in P4.4, not a surviving deferred surface
+    expect(skill).not.toContain("KilocodeConfigSources")
   })
 })

@@ -33,17 +33,6 @@ const Resolved = Schema.Struct({
   editable: Schema.Boolean,
   reason: Schema.optional(Schema.String),
 })
-const Source = Schema.Struct({
-  order: Schema.Number,
-  kind: Schema.String,
-  scope: Schema.String,
-  label: Schema.String,
-  source: Schema.String,
-  path: Schema.optional(Schema.String),
-  exists: Schema.Boolean,
-  editable: Schema.Boolean,
-  reason: Schema.optional(Schema.String),
-})
 
 export const ConfigOverlayQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
@@ -98,7 +87,6 @@ export const ConfigOverlayResponse = Schema.Struct({
   effective: Config.Info,
   global: Config.Info,
   project: Config.Info,
-  sources: Schema.Array(Source),
   targets: Schema.Struct({
     global: Schema.optional(Schema.String),
     project: Schema.optional(Schema.String),
@@ -107,9 +95,6 @@ export const ConfigOverlayResponse = Schema.Struct({
   fields: Schema.Record(Schema.String, Resolved),
   collections: Schema.Record(Schema.String, Schema.Array(Resolved)),
 }).annotate({ identifier: "ConfigOverlayResponse" })
-export const ConfigSourcesResponse = Schema.Struct({ sources: Schema.Array(Source) }).annotate({
-  identifier: "ConfigSourcesResponse",
-})
 export const ConfigModelStatePatch = Schema.Struct({ favorite: Schema.optional(Schema.Array(ModelRef)) })
 export const ConfigModelStateResponse = Schema.Struct({
   model: Schema.Record(Schema.String, ModelRef),
@@ -164,7 +149,6 @@ export const ConfigTransactionResponse = Schema.Struct({
 }).annotate({ identifier: "ConfigTransactionResponse" })
 
 export const ConfigConsolePaths = {
-  sources: "/config/sources",
   effective: "/config/effective",
   overlay: "/config/overlay",
   transaction: "/config/transaction", // combined global+project save
@@ -187,16 +171,6 @@ export const ConfigConsoleApi = HttpApi.make("config-console")
             summary: "Get config overlay",
             description:
               "Resolve global, project, and effective config values with source metadata for inheritance-aware settings UI.",
-          }),
-        ),
-        HttpApiEndpoint.get("sources", ConfigConsolePaths.sources, {
-          query: WorkspaceRoutingQuery,
-          success: described(ConfigSourcesResponse, "Config source inventory"),
-        }).annotateMerge(
-          OpenApi.annotations({
-            identifier: "config.sources",
-            summary: "List config sources",
-            description: "List config source metadata in load order without exposing config contents or secrets.",
           }),
         ),
         HttpApiEndpoint.get("effective", ConfigConsolePaths.effective, {

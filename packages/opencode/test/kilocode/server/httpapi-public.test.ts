@@ -112,7 +112,6 @@ describe("Kilo PublicApi OpenAPI contract", () => {
       { method: "post", path: NetworkPaths.reject },
       { method: "post", path: TelemetryPaths.capture },
       { method: "post", path: TelemetryPaths.setEnabled },
-      { method: "get", path: ConfigConsolePaths.sources },
       { method: "get", path: ConfigConsolePaths.effective },
       { method: "get", path: ConfigConsolePaths.rules },
       { method: "put", path: ConfigConsolePaths.rules },

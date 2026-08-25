@@ -10968,60 +10968,6 @@
         ]
       }
     },
-    "/config/sources": {
-      "get": {
-        "tags": ["config-console"],
-        "operationId": "config.sources",
-        "parameters": [
-          {
-            "name": "directory",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          },
-          {
-            "name": "workspace",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            },
-            "required": false
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Config source inventory",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConfigSourcesResponse"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          }
-        },
-        "description": "List config source metadata in load order without exposing config contents or secrets.",
-        "summary": "List config sources",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.config.sources({\n  ...\n})"
-          }
-        ]
-      }
-    },
     "/config/effective": {
       "get": {
         "tags": ["config-console"],
@@ -18483,6 +18429,12 @@
             "$ref": "#/components/schemas/EventMessagePartDelta"
           },
           {
+            "$ref": "#/components/schemas/EventSessionStatus"
+          },
+          {
+            "$ref": "#/components/schemas/EventSessionIdle"
+          },
+          {
             "$ref": "#/components/schemas/EventSessionDiff"
           },
           {
@@ -18502,12 +18454,6 @@
           },
           {
             "$ref": "#/components/schemas/EventTodoUpdated"
-          },
-          {
-            "$ref": "#/components/schemas/EventSessionStatus"
-          },
-          {
-            "$ref": "#/components/schemas/EventSessionIdle"
           },
           {
             "$ref": "#/components/schemas/EventSessionCompacted"
@@ -20926,6 +20872,97 @@
         "required": ["id", "type", "properties"],
         "additionalProperties": false
       },
+      "SessionStatus": {
+        "anyOf": [
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["idle"]
+              }
+            },
+            "required": ["type"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["retry"]
+              },
+              "attempt": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "message": {
+                "type": "string"
+              },
+              "action": {
+                "type": "object",
+                "properties": {
+                  "reason": {
+                    "type": "string"
+                  },
+                  "provider": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "label": {
+                    "type": "string"
+                  },
+                  "link": {
+                    "type": "string"
+                  }
+                },
+                "required": ["reason", "provider", "title", "message", "label"],
+                "additionalProperties": false
+              },
+              "next": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": ["type", "attempt", "message", "next"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["busy"]
+              }
+            },
+            "required": ["type"],
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "enum": ["offline"]
+              },
+              "requestID": {
+                "type": "string",
+                "pattern": "^que"
+              },
+              "message": {
+                "type": "string"
+              }
+            },
+            "required": ["type", "requestID", "message"],
+            "additionalProperties": false
+          }
+        ]
+      },
       "AgentRequirementError": {
         "type": "object",
         "properties": {
@@ -21018,97 +21055,6 @@
         },
         "required": ["name", "data"],
         "additionalProperties": false
-      },
-      "SessionStatus": {
-        "anyOf": [
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": ["idle"]
-              }
-            },
-            "required": ["type"],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": ["retry"]
-              },
-              "attempt": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "message": {
-                "type": "string"
-              },
-              "action": {
-                "type": "object",
-                "properties": {
-                  "reason": {
-                    "type": "string"
-                  },
-                  "provider": {
-                    "type": "string"
-                  },
-                  "title": {
-                    "type": "string"
-                  },
-                  "message": {
-                    "type": "string"
-                  },
-                  "label": {
-                    "type": "string"
-                  },
-                  "link": {
-                    "type": "string"
-                  }
-                },
-                "required": ["reason", "provider", "title", "message", "label"],
-                "additionalProperties": false
-              },
-              "next": {
-                "type": "integer",
-                "minimum": 0
-              }
-            },
-            "required": ["type", "attempt", "message", "next"],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": ["busy"]
-              }
-            },
-            "required": ["type"],
-            "additionalProperties": false
-          },
-          {
-            "type": "object",
-            "properties": {
-              "type": {
-                "type": "string",
-                "enum": ["offline"]
-              },
-              "requestID": {
-                "type": "string",
-                "pattern": "^que"
-              },
-              "message": {
-                "type": "string"
-              }
-            },
-            "required": ["type", "requestID", "message"],
-            "additionalProperties": false
-          }
-        ]
       },
       "Pty": {
         "type": "object",
@@ -21395,6 +21341,12 @@
                 "$ref": "#/components/schemas/EventMessagePartDelta"
               },
               {
+                "$ref": "#/components/schemas/EventSessionStatus"
+              },
+              {
+                "$ref": "#/components/schemas/EventSessionIdle"
+              },
+              {
                 "$ref": "#/components/schemas/EventSessionDiff"
               },
               {
@@ -21414,12 +21366,6 @@
               },
               {
                 "$ref": "#/components/schemas/EventTodoUpdated"
-              },
-              {
-                "$ref": "#/components/schemas/EventSessionStatus"
-              },
-              {
-                "$ref": "#/components/schemas/EventSessionIdle"
               },
               {
                 "$ref": "#/components/schemas/EventSessionCompacted"
@@ -26499,63 +26445,6 @@
           "project": {
             "$ref": "#/components/schemas/Config"
           },
-          "sources": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "order": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "string",
-                      "enum": ["NaN"]
-                    },
-                    {
-                      "type": "string",
-                      "enum": ["Infinity"]
-                    },
-                    {
-                      "type": "string",
-                      "enum": ["-Infinity"]
-                    },
-                    {
-                      "type": "string",
-                      "enum": ["Infinity", "-Infinity", "NaN"]
-                    }
-                  ]
-                },
-                "kind": {
-                  "type": "string"
-                },
-                "scope": {
-                  "type": "string"
-                },
-                "label": {
-                  "type": "string"
-                },
-                "source": {
-                  "type": "string"
-                },
-                "path": {
-                  "type": "string"
-                },
-                "exists": {
-                  "type": "boolean"
-                },
-                "editable": {
-                  "type": "boolean"
-                },
-                "reason": {
-                  "type": "string"
-                }
-              },
-              "required": ["order", "kind", "scope", "label", "source", "exists", "editable"],
-              "additionalProperties": false
-            }
-          },
           "targets": {
             "type": "object",
             "properties": {
@@ -26651,71 +26540,7 @@
             }
           }
         },
-        "required": ["scope", "effective", "global", "project", "sources", "targets", "fields", "collections"],
-        "additionalProperties": false
-      },
-      "ConfigSourcesResponse": {
-        "type": "object",
-        "properties": {
-          "sources": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "properties": {
-                "order": {
-                  "anyOf": [
-                    {
-                      "type": "number"
-                    },
-                    {
-                      "type": "string",
-                      "enum": ["NaN"]
-                    },
-                    {
-                      "type": "string",
-                      "enum": ["Infinity"]
-                    },
-                    {
-                      "type": "string",
-                      "enum": ["-Infinity"]
-                    },
-                    {
-                      "type": "string",
-                      "enum": ["Infinity", "-Infinity", "NaN"]
-                    }
-                  ]
-                },
-                "kind": {
-                  "type": "string"
-                },
-                "scope": {
-                  "type": "string"
-                },
-                "label": {
-                  "type": "string"
-                },
-                "source": {
-                  "type": "string"
-                },
-                "path": {
-                  "type": "string"
-                },
-                "exists": {
-                  "type": "boolean"
-                },
-                "editable": {
-                  "type": "boolean"
-                },
-                "reason": {
-                  "type": "string"
-                }
-              },
-              "required": ["order", "kind", "scope", "label", "source", "exists", "editable"],
-              "additionalProperties": false
-            }
-          }
-        },
-        "required": ["sources"],
+        "required": ["scope", "effective", "global", "project", "targets", "fields", "collections"],
         "additionalProperties": false
       },
       "ConfigTransactionResponse": {
@@ -30829,6 +30654,59 @@
         "required": ["id", "type", "properties"],
         "additionalProperties": false
       },
+      "EventSessionStatus": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["session.status"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              },
+              "status": {
+                "$ref": "#/components/schemas/SessionStatus"
+              }
+            },
+            "required": ["sessionID", "status"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
+      "EventSessionIdle": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["session.idle"]
+          },
+          "properties": {
+            "type": "object",
+            "properties": {
+              "sessionID": {
+                "type": "string",
+                "pattern": "^ses"
+              }
+            },
+            "required": ["sessionID"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "type", "properties"],
+        "additionalProperties": false
+      },
       "EventSessionDiff": {
         "type": "object",
         "properties": {
@@ -31097,59 +30975,6 @@
               }
             },
             "required": ["sessionID", "todos"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
-      "EventSessionStatus": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["session.status"]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "sessionID": {
-                "type": "string",
-                "pattern": "^ses"
-              },
-              "status": {
-                "$ref": "#/components/schemas/SessionStatus"
-              }
-            },
-            "required": ["sessionID", "status"],
-            "additionalProperties": false
-          }
-        },
-        "required": ["id", "type", "properties"],
-        "additionalProperties": false
-      },
-      "EventSessionIdle": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": ["session.idle"]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {
-              "sessionID": {
-                "type": "string",
-                "pattern": "^ses"
-              }
-            },
-            "required": ["sessionID"],
             "additionalProperties": false
           }
         },

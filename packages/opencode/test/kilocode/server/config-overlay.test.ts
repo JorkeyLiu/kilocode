@@ -131,7 +131,6 @@ describe("config overlay routes", () => {
       scope: "project",
       effective: {},
       global: {},
-      sources: [],
     })
 
     // P4.3 canonical-only: only .kilo is retained; legacy .kilocode/.opencode are ignored
@@ -160,7 +159,6 @@ describe("config overlay routes", () => {
       scope: "project",
       effective: {},
       global: {},
-      sources: [],
     })
 
     expect(body.project.username ?? "").not.toContain("root:")

@@ -58,8 +58,6 @@ import type {
   ConfigRulesResponses,
   ConfigRulesUpdateErrors,
   ConfigRulesUpdateResponses,
-  ConfigSourcesErrors,
-  ConfigSourcesResponses,
   ConfigTransactionErrors,
   ConfigTransactionResponses,
   ConfigUpdateErrors,
@@ -1723,36 +1721,6 @@ export class Config2 extends HeyApiClient {
         ...options?.headers,
         ...params.headers,
       },
-    })
-  }
-
-  /**
-   * List config sources
-   *
-   * List config source metadata in load order without exposing config contents or secrets.
-   */
-  public sources<ThrowOnError extends boolean = false>(
-    parameters?: {
-      directory?: string
-      workspace?: string
-    },
-    options?: Options<never, ThrowOnError>,
-  ) {
-    const params = buildClientParams(
-      [parameters],
-      [
-        {
-          args: [
-            { in: "query", key: "directory" },
-            { in: "query", key: "workspace" },
-          ],
-        },
-      ],
-    )
-    return (options?.client ?? this.client).get<ConfigSourcesResponses, ConfigSourcesErrors, ThrowOnError>({
-      url: "/config/sources",
-      ...options,
-      ...params,
     })
   }
 

@@ -150,7 +150,6 @@ export const kiloScenarios: Scenario[] = [
       body: { name: "httpapi-mcp", config: { type: "remote", url: "https://mcp-edit.example.test" } },
     }))
     .json(200, object),
-  http.protected.get("/config/sources", "config.sources").json(200, object),
   http.protected.get("/tui/config", "tui.config.get").json(200, object),
   http.protected.get("/tui/keybinds", "tui.keybind.list").json(200, object),
   http.protected
