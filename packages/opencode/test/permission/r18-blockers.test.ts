@@ -16,7 +16,6 @@ import * as Evaluator from "../../src/permission/evaluator"
 import path from "path"
 import fs from "fs/promises"
 import os from "os"
-import { KilocodeConfig } from "../../src/kilocode/config/config"
 import { createTestTrustedAgentContext as createTrustedAgentContext } from "../helpers/trusted-helpers"
 import { TestInstance } from "../fixture/fixture"
 
@@ -71,8 +70,6 @@ describe("R18 blockers - focused regressions", () => {
       const perm = yield* Permission.Service
       const original = Global.Path.config
       const tmpGlobal = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "opencode-test-global-")))
-      const originalMigrate = (KilocodeConfig as any).migrateBashPermission
-      ;(KilocodeConfig as any).migrateBashPermission = async () => {}
       try {
         Global.Path.config = tmpGlobal
         yield* Effect.promise(() => fs.writeFile(path.join(tmpGlobal, "kilo.jsonc"), JSON.stringify({ model: "test/model" }, null, 2)))
@@ -113,7 +110,6 @@ describe("R18 blockers - focused regressions", () => {
         yield* Fiber.join(fiber).pipe(Effect.catchCause((cause) => Effect.sync(() => console.warn("expected fiber termination suppressed", cause))))
       } finally {
         Global.Path.config = original
-        ;(KilocodeConfig as any).migrateBashPermission = originalMigrate
         yield* Effect.promise(() => fs.rm(tmpGlobal, { recursive: true, force: true }).catch((err) => console.warn("cleanup rm failed", err))).pipe(Effect.catchCause((cause) => Effect.sync(() => console.warn("expected fiber termination suppressed", cause))))
       }
     }), { git: true })

@@ -759,7 +759,7 @@ function convertMcpServer(server: LegacyMcpServer): McpLocalConfig | McpRemoteCo
 // Internal — custom mode conversion (legacy → AgentConfig)
 // ---------------------------------------------------------------------------
 
-// Group name → CLI permission key (mirrors ModesMigrator.convertPermissions in the CLI)
+// Group name → CLI permission key.
 const GROUP_TO_PERMISSION: Record<string, string> = {
   read: "read",
   edit: "edit",

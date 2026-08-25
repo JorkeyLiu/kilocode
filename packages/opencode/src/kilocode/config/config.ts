@@ -1,8 +1,6 @@
 import path from "path"
-import { pathToFileURL } from "url"
 import { existsSync } from "fs"
-import { Effect, Option, Schema } from "effect"
-import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser"
+import { Effect, Option } from "effect"
 import { mergeDeep } from "remeda"
 import * as Log from "@opencode-ai/core/util/log"
 import { Global } from "@opencode-ai/core/global"
@@ -15,13 +13,7 @@ import { InstanceRef } from "@/effect/instance-ref"
 import { isRecord } from "@/util/record"
 import { ConfigErrorV1 as ConfigError } from "@opencode-ai/core/v1/config/error"
 import type { Config } from "../../config/config"
-import type { ConfigAgentV1 } from "@opencode-ai/core/v1/config/agent"
-import { ModesMigrator } from "../modes-migrator"
-import { fetchOrganizationModes } from "@kilocode/kilo-gateway"
-import { RulesMigrator } from "../rules-migrator"
-import { WorkflowsMigrator } from "../workflows-migrator"
-import { McpMigrator } from "../mcp-migrator"
-import { IgnoreMigrator } from "../ignore-migrator"
+import { canonicalRoot } from "@/project/instance-context"
 
 export namespace KilocodeConfig {
   const log = Log.create({ service: "kilocode.config" })
@@ -61,67 +53,57 @@ export namespace KilocodeConfig {
     `config:discover:global:${Hash.fast(path.resolve(Global.Path.config))}`
 
   /**
-   * Canonical discovery lock key for a project config domain (LOCK-001).
-   * Keyed on the canonical normalized directory only — never on a config
-   * candidate and never on a caller-derived worktree (the worktree is a
-   * derived property of the directory and callers do not derive it
-   * identically, e.g. non-git instances report "/" while direct callers pass
-   * nothing) — so it is deterministic across processes and every writer of
-   * any target inside the directory serializes through the same single key.
+   * Canonical discovery lock key for a project config domain (LOCK-001/005).
+   * Keyed on the canonical project root (canonicalRoot(directory, worktree))
+   * — the same domain that projectConfigUpdateTarget and projectTarget use to
+   * derive the canonical `.kilo/kilo.jsonc` target — so every writer of that
+   * single canonical file serializes through one identical key, even when
+   * callers present the same workspace via different directory/worktree pairs
+   * (e.g. workspace root vs nested child, or non-git instances reporting "/").
+   * The key is deterministic across processes and independent of the eventual
+   * candidate file.
    */
-  export const configDiscoveryProjectKey = (directory: string) =>
-    `config:discover:project:${Hash.fast(path.resolve(directory))}`
+  export const configDiscoveryProjectKey = (directory: string, worktree?: string) =>
+    `config:discover:project:${Hash.fast(path.resolve(canonicalRoot(directory, worktree)))}`
 
-  /** Global config target file (mirror of the Config module's discovery). */
+  /** Global config target file (canonical only). */
   export function globalConfigTarget(): string {
-    const candidates = ["kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json", "config.json"].map((file) =>
-      path.join(Global.Path.config, file),
-    )
-    return candidates.find((file) => existsSync(file)) ?? candidates[0]!
+    return path.join(Global.Path.config, "kilo.jsonc")
   }
 
   // ── Config file constants ────────────────────────────────────────────
 
-  /** Kilo-specific config file names (highest-to-lowest precedence within kilo). */
-  export const KILO_CONFIG_FILES = ["kilo.jsonc", "kilo.json"] as const
+  /** Kilo-specific config file names (canonical only). */
+  export const KILO_CONFIG_FILES = ["kilo.jsonc"] as const
 
-  /** All config file names in precedence order (kilo + opencode). */
-  export const ALL_CONFIG_FILES = ["kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json"] as const
+  /** All config file names (canonical only). */
+  export const ALL_CONFIG_FILES = ["kilo.jsonc"] as const
 
-  /** Config directory suffixes in update-target preference order. */
-  export const KILO_DIR_SUFFIXES = [".kilo", ".kilocode"] as const
+  /** Config directory suffix (canonical only). */
+  export const KILO_DIR_SUFFIXES = [".kilo"] as const
 
-  /** Path patterns for resolving kilo agent names from file paths. */
-  export const AGENT_PATTERNS = ["/.kilo/agent/", "/.kilo/agents/", "/.kilocode/agent/", "/.kilocode/agents/"] as const
+  /** Path patterns for resolving kilo agent names from file paths (canonical only). */
+  export const AGENT_PATTERNS = ["/.kilo/agent/", "/.kilo/agents/"] as const
 
-  /** Path patterns for resolving kilo command names from file paths. */
-  export const COMMAND_PATTERNS = [
-    "/.kilo/command/",
-    "/.kilo/commands/",
-    "/.kilocode/command/",
-    "/.kilocode/commands/",
-  ] as const
+  /** Path patterns for resolving kilo command names from file paths (canonical only). */
+  export const COMMAND_PATTERNS = ["/.kilo/command/", "/.kilo/commands/"] as const
 
   /**
    * Choose the project config file that Config.update should patch.
    *
-   * This mirrors the Kilo project-config load chain: prefer existing config files
-   * in ancestor config directories, then existing root config files, and create
-   * `.kilo/kilo.jsonc` when no project config exists yet.
+   * Deterministic canonical workspace/worktree-root target with no
+   * discovery/legacy fallback: always `path.join(canonicalRoot(directory,
+   * worktree), ".kilo", "kilo.jsonc")`. No ancestor scanning, no
+   * candidate preference, no legacy source.
    */
   export const projectConfigUpdateTarget = Effect.fn("KilocodeConfig.projectConfigUpdateTarget")(function* (input: {
     fs: FSUtil.Interface
     directory: string
     worktree?: string
   }) {
-    const dirs = yield* input.fs
-      .up({ targets: [...KILO_DIR_SUFFIXES], start: input.directory, stop: input.worktree })
-      .pipe(Effect.orDie)
-    const roots = yield* input.fs
-      .up({ targets: [...ALL_CONFIG_FILES], start: input.directory, stop: input.worktree })
-      .pipe(Effect.orDie)
-    const files = [...dirs.flatMap((dir) => ALL_CONFIG_FILES.map((file) => path.join(dir, file))), ...roots]
-    return files.find((file) => existsSync(file)) ?? path.join(input.directory, ".kilo", "kilo.jsonc")
+    void input.fs
+    const root = canonicalRoot(input.directory, input.worktree)
+    return path.join(root, ".kilo", "kilo.jsonc")
   })
 
   /**
@@ -209,7 +191,7 @@ export namespace KilocodeConfig {
     const flock = yield* Effect.serviceOption(EffectFlock.Service)
     if (Option.isSome(flock)) {
       return yield* flock.value
-        .withLock(write, configDiscoveryProjectKey(input.directory))
+        .withLock(write, configDiscoveryProjectKey(input.directory, input.worktree))
         .pipe(
           Effect.catchTag("LockTimeoutError", (error) => Effect.die(error)),
           Effect.catchTag("LockCompromisedError", (error) => Effect.die(error)),
@@ -322,185 +304,6 @@ export namespace KilocodeConfig {
     throw err
   }
 
-  // ── Legacy config loading ────────────────────────────────────────────
-
-  type MergeFn = (target: Config.Info, source: Config.Info) => Config.Info
-
-  /**
-   * Load all Kilocode legacy configs (modes, workflows, rules, MCP, ignore).
-   * These have the lowest precedence in the config chain.
-   */
-  export async function loadLegacyConfigs(input: {
-    projectDir: string
-    merge: MergeFn
-  }): Promise<{ config: Config.Info; warnings: Config.Warning[] }> {
-    const warnings: Config.Warning[] = []
-    let result: Config.Info = {}
-
-    // Load Kilocode custom modes
-    try {
-      const migration = await ModesMigrator.migrate({ projectDir: input.projectDir })
-      if (Object.keys(migration.agents).length > 0) {
-        result = input.merge(result, { agent: migration.agents })
-        log.debug("loaded kilocode custom modes", {
-          count: Object.keys(migration.agents).length,
-          modes: Object.keys(migration.agents),
-        })
-      }
-      for (const skipped of migration.skipped) {
-        log.debug("skipped kilocode mode", { slug: skipped.slug, reason: skipped.reason })
-      }
-    } catch (err) {
-      log.warn("failed to load kilocode modes", { error: err })
-    }
-
-    // Load Kilocode workflows as commands
-    try {
-      const migration = await WorkflowsMigrator.migrate({ projectDir: input.projectDir })
-      if (Object.keys(migration.commands).length > 0) {
-        result = input.merge(result, { command: migration.commands })
-        log.debug("loaded kilocode workflows as commands", {
-          count: Object.keys(migration.commands).length,
-          commands: Object.keys(migration.commands),
-        })
-      }
-    } catch (err) {
-      log.warn("failed to load kilocode workflows", { error: err })
-    }
-
-    // Load Kilocode rules
-    try {
-      const migration = await RulesMigrator.migrate({ projectDir: input.projectDir })
-      if (migration.instructions.length > 0) {
-        result = input.merge(result, { instructions: migration.instructions })
-        log.debug("loaded kilocode rules", {
-          count: migration.instructions.length,
-          files: migration.instructions,
-        })
-      }
-      for (const warning of migration.warnings) {
-        log.debug("kilocode rules warning", { warning })
-      }
-    } catch (err) {
-      log.warn("failed to load kilocode rules", { error: err })
-    }
-
-    // Load Kilocode MCP servers (skip global VSCode extension paths unless running in an editor or Console daemon)
-    const skipGlobal = process.env["KILO_PLATFORM"] !== "vscode" && process.env["KILOCODE_FEATURE"] !== "daemon"
-    const mcp = await McpMigrator.loadMcpConfig(input.projectDir, skipGlobal)
-    if (Object.keys(mcp).length > 0) {
-      result = input.merge(result, { mcp })
-    }
-
-    // Load .kilocodeignore patterns
-    try {
-      const permission = await IgnoreMigrator.loadIgnoreConfig(input.projectDir)
-      if (Object.keys(permission).length > 0) {
-        result = input.merge(result, { permission })
-        log.debug("loaded kilocode ignore patterns", {
-          hasRead: !!(permission as Record<string, unknown>).read,
-          hasEdit: !!(permission as Record<string, unknown>).edit,
-        })
-      }
-    } catch (err) {
-      log.warn("failed to load kilocode ignore patterns", { error: err })
-    }
-
-    return { config: result, warnings }
-  }
-
-  // ── Organization modes ───────────────────────────────────────────────
-
-  /**
-   * Load organization custom modes from the Kilo Cloud API.
-   * Returns empty agents + warnings if the user is not authenticated.
-   */
-  export async function loadOrganizationModes(
-    auth: Record<string, any>,
-  ): Promise<{ agents: Record<string, ConfigAgentV1.Info>; warnings: Config.Warning[] }> {
-    const warnings: Config.Warning[] = []
-    try {
-      const kilo = auth["kilo"]
-      if (kilo?.type === "oauth" && kilo.access && kilo.accountId) {
-        const modes = await fetchOrganizationModes(kilo.access, kilo.accountId)
-        if (modes.length > 0) {
-          const agents = ModesMigrator.convertOrganizationModes(modes)
-          log.debug("loaded organization custom modes", {
-            count: modes.length,
-            modes: modes.map((m: any) => m.slug),
-          })
-          return { agents, warnings }
-        }
-      }
-    } catch (err) {
-      log.warn("failed to load organization custom modes", { error: err })
-    }
-    return { agents: {}, warnings }
-  }
-
-  // ── Bash permission migration ────────────────────────────────────────
-
-  const GLOBAL_CONFIG_FILES = ["config.json", "kilo.json", "kilo.jsonc", "opencode.json", "opencode.jsonc"]
-
-  /**
-   * Migrate bash permission for existing users before config is consumed.
-   *
-   * Existing users (those with at least one global config file or the legacy TOML
-   * config) who have no explicit `permission.bash` setting get `bash: "allow"`
-   * written to their highest-precedence config file. This preserves their current
-   * behavior now that the new default is `bash: "ask"`.
-   */
-  export async function migrateBashPermission() {
-    const files = GLOBAL_CONFIG_FILES.map((f) => path.join(Global.Path.config, f))
-    const legacy = path.join(Global.Path.config, "config")
-    const existing = files.filter((f) => existsSync(f))
-    const hasLegacy = existsSync(legacy)
-
-    // no global config → new user, they'll get the new bash:ask default
-    if (existing.length === 0 && !hasLegacy) return
-
-    const configs: Array<{ file: string; data: Record<string, unknown> }> = []
-    // check if any config file already has an explicit bash permission
-    for (const file of existing) {
-      const text = await Bun.file(file)
-        .text()
-        .catch(() => "")
-      const data = parseJsonc(text) ?? {}
-      configs.push({ file, data })
-      if (typeof data.permission === "string" || (isRecord(data.permission) && data.permission.bash)) return
-    }
-
-    // A schema-only file is generated for editor completion. It does not mean
-    // the user predates the bash permission default.
-    if (!hasLegacy && configs.every((item) => Object.keys(item.data).every((key) => key === "$schema"))) return
-
-    // also check legacy TOML config for bash permission
-    if (hasLegacy) {
-      const toml = await import(pathToFileURL(legacy).href, { with: { type: "toml" } }).catch(() => undefined)
-      if (toml?.default?.permission?.bash) return
-    }
-
-    // existing user without bash permission → write bash:allow to highest-precedence file
-    const target = existing.length > 0 ? existing[existing.length - 1] : path.join(Global.Path.config, "config.json")
-    const text = await Bun.file(target)
-      .text()
-      .catch(() => "{}")
-
-    if (target.endsWith(".jsonc")) {
-      const edits = modify(text, ["permission", "bash"], "allow", {
-        formattingOptions: { insertSpaces: true, tabSize: 2 },
-      })
-      await Bun.write(target, applyEdits(text, edits))
-      log.info("migrated bash permission to allow for existing user", { path: target })
-      return
-    }
-
-    const data = parseJsonc(text) ?? {}
-    const merged = { ...data, permission: { ...data.permission, bash: "allow" } }
-    await Bun.write(target, JSON.stringify(merged, null, 2))
-    log.info("migrated bash permission to allow for existing user", { path: target })
-  }
-
   // ── Config merge utilities ───────────────────────────────────────────
 
   /** Recursively remove null values and drop objects left empty after removal. */
@@ -549,9 +352,10 @@ export namespace KilocodeConfig {
 
   // ── Directory check helper ───────────────────────────────────────────
 
-  /** Check whether a directory path should be treated as a config directory (for loading config files). */
+  /** Check whether a directory path should be treated as a config directory (canonical only). */
   export function isConfigDir(dir: string, flagDir?: string): boolean {
-    return dir.endsWith(".kilo") || dir.endsWith(".kilocode") || dir === flagDir
+    void flagDir
+    return dir.endsWith(".kilo")
   }
 
   // ── Opencode config migration notice ─────────────────────────────────

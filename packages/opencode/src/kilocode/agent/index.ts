@@ -1,4 +1,5 @@
 // kilocode_change - new file
+import * as Log from "@opencode-ai/core/util/log"
 import { Permission } from "@/permission"
 import { NamedError } from "@opencode-ai/core/util/error"
 import { Glob } from "@opencode-ai/core/util/glob"
@@ -10,6 +11,8 @@ import path from "path"
 import { Global } from "@opencode-ai/core/global"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { applyEdits, modify, parse as parseJsonc } from "jsonc-parser"
+
+const log = Log.create({ service: "kilocode.agent" })
 
 import PROMPT_DEBUG from "../../agent/prompt/debug.txt"
 import PROMPT_ORCHESTRATOR from "../../agent/prompt/orchestrator.txt"
@@ -504,12 +507,10 @@ export const RemoveError = NamedError.create("AgentRemoveError", {
 })
 
 /**
- * Remove a custom agent by deleting its markdown source file, removing it from
- * config-backed agent entries, and/or removing it from legacy .kilocodemodes YAML files.
- * Scans all config directories for agent/mode .md files matching the name,
- * then also checks the .kilocodemodes files the ModesMigrator reads.
+ * Remove a custom agent by deleting its markdown source file and removing it
+ * from config-backed agent entries (canonical typed assets only).
  */
-export async function remove(input: { name: string; agent?: AgentInfo; dirs: string[]; directory: string }) {
+export async function remove(input: { name: string; agent?: AgentInfo; dirs: string[]; directory: string; worktree?: string }) {
   if (!input.agent) throw new RemoveError({ name: input.name, message: "agent not found" })
   if (input.agent.native) throw new RemoveError({ name: input.name, message: "cannot remove native agent" })
   // Prevent removal of organization-managed agents
@@ -519,81 +520,98 @@ export async function remove(input: { name: string; agent?: AgentInfo; dirs: str
       message: "cannot remove organization agent — manage it from the cloud dashboard",
     })
 
-  const { unlink, writeFile } = await import("fs/promises")
-  let found = false
-
-  // 1. Delete .md files from config directories
-  const patterns = ["{agent,agents}/**/" + input.name + ".md", "{mode,modes}/" + input.name + ".md"]
-  for (const dir of input.dirs) {
-    for (const pattern of patterns) {
-      const matches = await Glob.scan(pattern, { cwd: dir, absolute: true, dot: true })
-      for (const file of matches) {
-        if (await Bun.file(file).exists()) {
-          await unlink(file)
-          found = true
-        }
-      }
-    }
-  }
-
-  if (await removeConfigAgent(input.name, input.directory)) found = true
-
-  // 2. Remove from legacy .kilocodemodes YAML files (read by ModesMigrator)
-  const { ModesMigrator } = await import("@/kilocode/modes-migrator")
-  const { KilocodePaths } = await import("@/kilocode/paths")
-  const os = await import("os")
-  const matter = (await import("gray-matter")).default
-  const home = os.default.homedir()
-  const modesFiles = [
-    path.join(KilocodePaths.vscodeGlobalStorage(), "settings", "custom_modes.yaml"),
-    path.join(home, ".kilocode", "cli", "global", "settings", "custom_modes.yaml"),
-    path.join(home, ".kilocodemodes"),
-    path.join(input.directory, ".kilocodemodes"),
-  ]
-
-  for (const file of modesFiles) {
-    const modes = await ModesMigrator.readModesFile(file)
-    if (!modes.length) continue
-
-    const filtered = modes.filter((m: { slug: string }) => m.slug !== input.name)
-    if (filtered.length === modes.length) continue
-
-    // Rewrite the file without the removed mode
-    const yaml = matter
-      .stringify("", { customModes: filtered })
-      .replace(/^---\n/, "")
-      .replace(/\n---\n?$/, "")
-    await writeFile(file, yaml)
-    found = true
-  }
+  // Canonical markdown asset deletion and JSONC removal are serialized together
+  // under the same per-target discovery lock (LOCK-005). The scan+delete of
+  // `.kilo/agent|agents` markdown files occurs inside the global/project
+  // lock that also guards the kilo.jsonc atomic write, so a concurrent config
+  // mutation cannot race the file scan.
+  // Residual: multi-file markdown unlink is not a single atomic filesystem
+  // transaction — a crash between unlinks can leave a partial set deleted;
+  // JSONC persistence itself remains atomic via temp-file+rename.
+  void input.dirs
+  const found = await removeConfigAgent(input.name, input.directory, input.worktree)
 
   if (!found) throw new RemoveError({ name: input.name, message: "no agent file found on disk" })
 }
 
-async function removeConfigAgent(name: string, directory: string) {
+async function removeConfigAgent(name: string, directory: string, worktree?: string) {
   const { KilocodeConfigOverlay } = await import("@/kilocode/config/overlay")
-  const files = [
-    KilocodeConfigOverlay.globalTarget(),
-    await KilocodeConfigOverlay.projectTarget({ directory }),
-  ]
+  const { KilocodeConfig } = await import("@/kilocode/config/config")
+  const globalFile = KilocodeConfigOverlay.globalTarget()
+  const projectFile = await KilocodeConfigOverlay.projectTarget({ directory, worktree })
+  const files = [globalFile, projectFile]
   let found = false
 
   for (const file of new Set(files)) {
-    const cfg = Bun.file(file)
-    if (!(await cfg.exists())) continue
-
-    const text = await cfg.text()
-    const root = parseJsonc(text)
-    if (!root?.agent || !Object.hasOwn(root.agent, name)) continue
-
-    const opts = { formattingOptions: { insertSpaces: true, tabSize: 2 } }
-    const next = applyEdits(text, modify(text, ["agent", name], undefined, opts))
-    const parsed = parseJsonc(next)
-    const final = parsed.default_agent === name
-      ? applyEdits(next, modify(next, ["default_agent"], undefined, opts))
-      : next
-    await Bun.write(file, final)
-    found = true
+    const isGlobal = file === globalFile
+    const dir = path.dirname(file)
+    const key = isGlobal
+      ? KilocodeConfig.configDiscoveryGlobalKey()
+      : KilocodeConfig.configDiscoveryProjectKey(directory, worktree)
+    const { Effect, Layer } = await import("effect")
+    const { FSUtil } = await import("@opencode-ai/core/fs-util")
+    const { KilocodeAtomicWrite } = await import("@/kilocode/config/atomic-write")
+    const { EffectFlock } = await import("@opencode-ai/core/util/effect-flock")
+    const did = await Effect.runPromise(
+      Effect.gen(function* () {
+        const fs = yield* FSUtil.Service
+        const flock = yield* EffectFlock.Service
+        const ok = yield* flock
+          .withLock(
+            Effect.gen(function* () {
+              let localFound = false
+              // Canonical agent markdown deletion serialized under the same lock as JSONC.
+              // Retired `mode`/`modes` assets are never scanned or deleted here (P4.3).
+              const patterns = ["{agent,agents}/**/" + name + ".md"]
+              for (const pattern of patterns) {
+                const matches: string[] = yield* Effect.promise(() =>
+                  Glob.scan(pattern, { cwd: dir, absolute: true, dot: true }).catch((err: unknown) => {
+                    const code = (err as { code?: string })?.code
+                    if (code === "ENOENT") return [] as string[]
+                    log.error("failed to scan agent markdown", { pattern, dir, cause: String(err) })
+                    throw err
+                  }),
+                )
+                for (const m of matches) {
+                  const exists = yield* Effect.promise(() => Bun.file(m).exists())
+                  if (!exists) continue
+                  yield* Effect.promise(() => import("fs/promises").then(({ unlink }) => unlink(m))).pipe(
+                    Effect.tapError((cause) =>
+                      Effect.sync(() => log.error("failed to delete agent markdown", { file: m, cause: String(cause) })),
+                    ),
+                    Effect.orDie,
+                  )
+                  localFound = true
+                }
+              }
+              const exists = yield* Effect.promise(() => Bun.file(file).exists())
+              if (exists) {
+                const text = yield* Effect.promise(() => Bun.file(file).text())
+                const root = parseJsonc(text)
+                if (root?.agent && Object.hasOwn(root.agent, name)) {
+                  const opts = { formattingOptions: { insertSpaces: true, tabSize: 2 } }
+                  const next = applyEdits(text, modify(text, ["agent", name], undefined, opts))
+                  const parsed = parseJsonc(next)
+                  const final =
+                    parsed.default_agent === name
+                      ? applyEdits(next, modify(next, ["default_agent"], undefined, opts))
+                      : next
+                  yield* KilocodeAtomicWrite.write(fs, file, final)
+                  localFound = true
+                }
+              }
+              return localFound
+            }),
+            key,
+          )
+          .pipe(
+            Effect.catchTag("LockTimeoutError", (error) => Effect.die(error)),
+            Effect.catchTag("LockCompromisedError", (error) => Effect.die(error)),
+          )
+        return ok
+      }).pipe(Effect.provide(Layer.merge(EffectFlock.defaultLayer, FSUtil.defaultLayer))),
+    )
+    if (did) found = true
   }
 
   return found

@@ -110,7 +110,14 @@ export const kilocodeHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilocode"
         run: () =>
           Effect.gen(function* () {
             yield* Effect.tryPromise({
-              try: () => KiloAgent.remove({ name: ctx.payload.name, agent, dirs, directory: instance.directory }),
+              try: () =>
+                KiloAgent.remove({
+                  name: ctx.payload.name,
+                  agent,
+                  dirs,
+                  directory: instance.directory,
+                  worktree: instance.worktree,
+                }),
               catch: (err) => err,
             }).pipe(
               Effect.catch((err) => {

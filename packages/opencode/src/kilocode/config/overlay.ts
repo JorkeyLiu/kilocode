@@ -8,10 +8,10 @@ import { ConfigAgent } from "@/config/agent"
 import { Config } from "@/config/config"
 import { ConfigParse } from "@/config/parse"
 import { ConfigVariable } from "@/config/variable"
-import { Filesystem } from "@/util/filesystem"
 import { isRecord } from "@/util/record"
 import { KilocodeConfig } from "./config"
 import { KilocodeConfigSources } from "./sources"
+import { canonicalRoot } from "@/project/instance-context"
 
 export namespace KilocodeConfigOverlay {
   const log = Log.create({ service: "kilocode.config.overlay" })
@@ -73,8 +73,8 @@ export namespace KilocodeConfigOverlay {
     sources: KilocodeConfigSources.Source[]
   }
 
-  const files = ["kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json"] as const
-  const dirs = [".kilocode", ".kilo"] as const
+  const files = ["kilo.jsonc"] as const
+  const dirs = [".kilo"] as const
 
   const fieldPaths = [
     ["model"],
@@ -95,29 +95,26 @@ export namespace KilocodeConfigOverlay {
 
   export async function project(input: { directory: string; worktree?: string }): Promise<Config.Info> {
     const found = await projectFiles(input)
-    // kilocode_change - project config is untrusted; confine {file:} reads to the project root
-    const root = input.worktree && input.worktree !== "/" ? input.worktree : input.directory
+    // kilocode_change - project config is untrusted; confine {file:} reads to the project root (canonical only)
+    const root = canonicalRoot(input.directory, input.worktree)
     const configs = await Promise.all(found.map((file) => load(file, { root, source: file })))
     return configs.reduce((result, cfg) => KilocodeConfig.mergeConfig(result, cfg), {} as Config.Info)
   }
 
   export async function projectTarget(input: { directory: string; worktree?: string }) {
-    const found = await Filesystem.findUp(dirs.toReversed(), input.directory, input.worktree)
-    const roots = await Filesystem.findUp([...files], input.directory, input.worktree)
-    const candidates = [...found.flatMap((dir) => files.map((file) => path.join(dir, file))), ...roots]
-    return candidates.find((file) => existsSync(file)) ?? path.join(input.directory, ".kilo", "kilo.jsonc")
+    const root = canonicalRoot(input.directory, input.worktree)
+    // canonical project target: path.join(root, ".kilo", "kilo.jsonc") via worktree root
+    return path.join(root, ".kilo", "kilo.jsonc")
   }
 
   export function globalTarget() {
-    const candidates = ["kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json", "config.json"].map((file) =>
-      path.join(Global.Path.config, file),
-    )
+    const candidates = ["kilo.jsonc"].map((file) => path.join(Global.Path.config, file))
     return candidates.find((file) => existsSync(file)) ?? candidates[0]
   }
 
   export async function resolve(input: Input): Promise<Result> {
     // kilocode_change start - project agents untrusted, {file:} confined to the project root; global agents trusted
-    const root = input.worktree && input.worktree !== "/" ? input.worktree : input.directory
+    const root = canonicalRoot(input.directory, input.worktree)
     const local = await withAgents(await project(input), await projectDirs(input), false, root)
     const global = await withAgents(input.global, globalDirs(), true)
     // kilocode_change end
@@ -149,32 +146,29 @@ export namespace KilocodeConfigOverlay {
   }
 
   async function projectFiles(input: { directory: string; worktree?: string }) {
-    const roots = await Filesystem.findUp([...files], input.directory, input.worktree, { rootFirst: true })
-    const found = await Filesystem.findUp([...dirs], input.directory, input.worktree)
-    const nested = found.flatMap((dir) => files.map((file) => path.join(dir, file)))
-    const checks = await Promise.all(
-      [...roots, ...nested].map(async (file) => ({ file, exists: await Bun.file(file).exists() })),
-    )
-    return [...new Set(checks.filter((item) => item.exists).map((item) => item.file))]
+    const root = canonicalRoot(input.directory, input.worktree)
+    const canonical = path.join(root, ".kilo", "kilo.jsonc")
+    if (await Bun.file(canonical).exists()) return [canonical]
+    return []
   }
 
   async function projectDirs(input: { directory: string; worktree?: string }) {
-    return Filesystem.findUp([...dirs], input.directory, input.worktree)
+    const root = canonicalRoot(input.directory, input.worktree)
+    return [path.join(root, ".kilo")]
   }
 
   function globalDirs() {
-    return [Global.Path.config, path.join(Global.Path.home, ".kilocode"), path.join(Global.Path.home, ".kilo")]
+    return [Global.Path.config]
   }
 
-  // kilocode_change start - root confines untrusted agent {file:} reads
+  // kilocode_change start - root confines untrusted agent {file:} reads; mode/modes are not retained canonical assets (P4.3)
   async function withAgents(input: Config.Info, dirs: string[], trusted: boolean, root?: string): Promise<Config.Info> {
     const [dir, ...rest] = dirs
     if (!dir) return input
     if (!existsSync(dir)) return withAgents(input, rest, trusted, root)
     const fileScope = trusted || !root ? undefined : { root, source: dir }
     const agent = await ConfigAgent.load(dir, undefined, trusted, fileScope, fileScope)
-    const mode = await ConfigAgent.loadMode(dir, undefined, trusted, fileScope, fileScope)
-    const next = KilocodeConfig.mergeConfig(KilocodeConfig.mergeConfig(input, { agent }), { agent: mode })
+    const next = KilocodeConfig.mergeConfig(input, { agent })
     return withAgents(next, rest, trusted, root)
   }
   // kilocode_change end

@@ -298,7 +298,7 @@ export const executeTransaction = Effect.fn("ConfigTransaction.execute")(
     // like the legacy global paths; a project-only cold transaction fences and
     // rebuilds only its directory.
     const discoveryProjectKey = hasProjectPatch
-      ? KilocodeConfig.configDiscoveryProjectKey(ref!.directory)
+      ? KilocodeConfig.configDiscoveryProjectKey(ref!.directory, ref!.worktree)
       : undefined
     const globalCold = hasGlobalPatch ? !globalHot : false
     // LOCK-002/003/004: the ConfigUpdated publishes are DEFERRED after the

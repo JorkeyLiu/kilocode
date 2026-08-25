@@ -16,10 +16,8 @@ import { Glob } from "@opencode-ai/core/util/glob"
 import * as Log from "@opencode-ai/core/util/log"
 import { Discovery } from "./discovery"
 import { BUILTIN_SKILLS } from "../kilocode/skills/builtin" // kilocode_change
-import { primaryPaths } from "../kilocode/primary-worktree" // kilocode_change
 import { Git } from "@/git" // kilocode_change
 import { isRecord } from "@/util/record"
-import { Flag } from "@opencode-ai/core/flag/flag" // kilocode_change
 
 const log = Log.create({ service: "skill" })
 const CLAUDE_EXTERNAL_DIR = ".claude"
@@ -218,42 +216,30 @@ const discoverSkills = Effect.fnUntraced(function* (
       yield* scan(state, root, EXTERNAL_SKILL_PATTERN, { dot: true, scope: "global", trusted: true }) // kilocode_change
     }
 
-    // kilocode_change start
-    const local = yield* fsys
+    const upDirs = yield* fsys
       .up({ targets: externalDirs, start: directory, stop: worktree })
       .pipe(Effect.catch(() => Effect.succeed([] as string[])))
-    const fallbacks = yield* primaryPaths(directory, worktree, externalDirs) // kilocode_change
-    const upDirs = [...fallbacks, ...local]
-    // kilocode_change end
 
     for (const root of upDirs) {
-      const scope = fallbacks.includes(root) ? path.dirname(root) : projectRoot // kilocode_change
-      // kilocode_change start
       yield* scan(state, root, EXTERNAL_SKILL_PATTERN, {
         dot: true,
         scope: "project",
         root: projectRoot,
-        sourceRoot: scope,
+        sourceRoot: projectRoot,
       })
-      // kilocode_change end
     }
   }
 
   const configDirs = yield* config.directories()
-  const primary = new Set(yield* primaryPaths(directory, worktree, [".kilocode", ".kilo"])) // kilocode_change
   for (const dir of configDirs) {
-    // kilocode_change start - global and explicit KILO_CONFIG_DIR skills are trusted; project and primary-checkout
-    // skills remain confined to the active project boundary.
     const rel = path.relative(projectRoot, dir)
-    const local = primary.has(dir) || rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
-    const trusted = dir === Flag.KILO_CONFIG_DIR || !local
-    const sourceRoot = primary.has(dir) ? path.dirname(dir) : projectRoot
+    const local = rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel))
+    const trusted = !local
     yield* scan(state, dir, KILO_SKILL_PATTERN, {
       trusted,
       root: trusted ? undefined : projectRoot,
-      sourceRoot: trusted ? undefined : sourceRoot,
+      sourceRoot: trusted ? undefined : projectRoot,
     })
-    // kilocode_change end
   }
 
   const cfg = yield* config.get()

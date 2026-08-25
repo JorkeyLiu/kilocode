@@ -302,30 +302,51 @@ Regenerate checked-in JavaScript SDK output after server endpoint changes. Do no
 
 ## Config precedence
 
-Later sources override earlier values during instance config load:
+Canonical-only as of P4.3. The retained effective config is the deterministic merge of exactly two authored JSONC scopes plus retained legal inputs. No other source, alias, ancestor scan, dual-read, or migration/import reader participates in retained effective config or mutations.
 
-| Order | Source |
+| Order | Source | File / assets | Semantics |
+|---|---|---|---|
+| 1 | Global canonical | `${Global.Path.config}/kilo.jsonc` plus `${Global.Path.config}/{agent,agents,command,commands,skill,skills,rules}` typed assets directly under the global root | Trusted scope; `SecretStorage` opaque credential refs and runtime defaults are also retained legal inputs; no `${Global.Path.config}/.kilo/` subdirectory exists in retained paths. `rules` is a normative canonical registered asset class (R10/`ASSET_DIRECTORIES`) but its opencode effective consumption is deferred — see gap note below |
+| 2 | Workspace / worktree canonical | `canonicalRoot(directory, worktree)/.kilo/kilo.jsonc` and `canonicalRoot/.kilo/{agent,agents,command,commands,skill,skills,rules}` typed assets | Untrusted scope; `canonicalRoot(directory, worktree)` is worktree when present and not "/" else directory; `{file:}` reads confined to canonicalRoot. `rules` registered as canonical class; not yet materialized by this opencode path (deferred) |
+
+CanonicalRoot / worktree: `canonicalRoot(directory, worktree)` (`packages/opencode/src/project/instance-context.ts`) is the single project root for every directory-keyed operation. All config/asset discovery, target resolution, locks, and scans use this root, so workspace-root and child-directory callers serialize through the same file and the same discovery lock. Non-git instances report worktree "/" and fall back to directory. No ancestor walk, no `.kilocode` discovery, no `opencode.json[c]` reader, and no `kilo.json` alias exists in retained paths.
+
+Discovery locks and atomic persistence: every authored-scope mutation serializes through a shared cross-process `EffectFlock` discovery lock held **before** target resolution and persists via `KilocodeAtomicWrite.write` (temp-file + rename, missing dirs created on ENOENT, temp cleaned on failure/interrupt).
+
+| Domain | Lock key | Behavior |
+|---|---|---|
+| Global | `config:discover:global:<hash(Global.Path.config)>` | Acquired before global target resolution; commit via atomic writer; `prepare` validates in memory without writing/invalidating |
+| Project | `config:discover:project:<hash(canonicalRoot)>` | Acquired before project target resolution; commit via atomic writer; combined global+project transactions acquire global-then-project with reverse-order compensating rollback |
+
+The locked key is always the written path; `prepare`/`prepareGlobal` validate in memory, `commit`/`commitGlobal` persist atomically under the lock, and combined coordinator `KilocodeConfigOverlay` + `config-transaction` uses the same keys. Loader paths perform no writes — `$schema` injection and missing-file seeding are in-memory only; no `fs.writeFileString` or `writeWithDirs` occurs outside lock + atomic writer, avoiding load/update races and partial JSONC exposure.
+
+Rules contract gap (P4.3 deferred — LOCK-006): `rules` is a normative canonical typed-asset class in the extension registry/spec (R10, `packages/kilo-vscode/src/config/types.ts:169` `ASSET_DIRECTORIES` includes `rules`) — the locations above are the registered canonical definitions and are preserved. However, the current opencode effective snapshot/materialization (`packages/opencode/src/config/config.ts` / `overlay.ts`) does not yet load `rules` assets into its effective `Config.Info`; no `rules` loader or composition operator participates in this path. This is a recorded contract gap, explicitly deferred beyond P4.3; no new rules loader/runtime was created in P4.3. Evidence: `specs/vscode-orchestrator/evidence/p4.3-rules-contract-gap.md`.
+
+Historical sources (retired at the P4.3 atomic legacy-reader cutover — no retained reader, no dual-read, no migration tool):
+
+| Retired source | Former location / behavior |
 |---|---|
-| 1 | Legacy Kilo migrations |
-| 2 | Organization modes |
-| 3 | Auth-record `.well-known/opencode` remote config |
-| 4 | Global config files |
-| 5 | Explicit `KILO_CONFIG` file |
-| 6 | Project `kilo.json[c]` and `opencode.json[c]` files plus discovered config directories |
-| 7 | `KILO_CONFIG_DIR` directory |
-| 8 | `KILO_CONFIG_CONTENT` |
-| 9 | Active Kilo Cloud organization config |
-| 10 | Managed config directory |
-| 11 | macOS managed preferences |
-| 12 | Runtime flag-derived permission, tool, compaction, and plugin behavior |
+| Legacy Kilo migrations (`loadLegacyConfigs`) | Automatic migration readers that copied legacy values into canonical files |
+| Organization modes and Active Kilo Cloud organization config | Signed-in org modes merged as agent config |
+| Auth-record `.well-known/opencode` remote config | Well-known remote config fetched from auth records |
+| Explicit `KILO_CONFIG` / `KILO_CONFIG_DIR` / `KILO_CONFIG_CONTENT` | Explicit file/dir/content env overrides |
+| Ancestor `.kilo`/`.kilocode` discovery and `opencode.json[c]` | Ancestor scanning and `opencode.json[c]` readers |
+| `kilo.json` filename | Legacy global filename (canonical is `kilo.jsonc` JSONC only) |
+| Managed config directory and macOS managed preferences | Enterprise managed sources |
 
-Global config files load from `${Global.Path.config}`. Project updates prefer existing config files found in ancestor `.kilo` or legacy `.kilocode` directories, then existing project root config files, then create `.kilo/kilo.json`.
+The pre-cutover manual reconciliation of the P0 15-source inventory to 13 removal classes vs 4 retained legal classes (`specs/vscode-orchestrator/evidence/p4.3-pre-cutover-reconciliation-checklist.md`, operator `jorkeyliu` 2026-08-24, clean-reset decision) is the sole bridge; residual `.opencode` directories are detected only for the reference-only `kilo.local.opencode-config-detected` notification via `KilocodeConfig.detectOpencodeConfig` and never read as config. The `KilocodeConfigSources` inventory/Console reporting surface remains as deferred historical/diagnostic reporting only (P4.4) and is not effective-config authority; its rows are not treated as retained sources in P4.3.
 
-Signed-in organization modes become normal agent configuration during load. They override migrated legacy modes and remain overridable by later config sources in table.
+P4.3 / P4.4 / P4.5 boundary (canonical-only cutover):
 
-How a config change applies at runtime is a separate concern from merge order: every field is classified hot or cold at introduction, and saves converge as described in [Config update lifecycle](#config-update-lifecycle).
+| Phase | Scope |
+|---|---|
+| P4.3 complete | Atomic legacy-reader cutover/deletion — canonical loader/mutations own the retained sources above; shared discovery locks and atomic writes preserved; no legacy alias/import/dual-read in retained paths |
+| P4.4 open | Per-row inactive/removal evidence for the 13 removal classes and transport narrowing |
+| P4.5 open | Deletion of old CLI/TUI/Console surfaces (deferred; `packages/opencode/src/cli`, `src/kilocode/tui`, and TUI handlers untouched in P4.3) |
 
-Runtime config loading is separate from editor-facing JSON Schema publication. A cloud-served schema currently improves validation and completion for `kilo.json` and `kilo.jsonc`; it does not load, apply, or override effective runtime config, and it is a non-authoritative external surface. When adding or changing a config key, follow [CLI Config Schema](/docs/contributing/architecture/config-schema); the key completes within this repository regardless of the overlay.
+How a config change applies at runtime is a separate concern from merge order: every field is classified hot or cold at introduction (`packages/opencode/src/kilocode/config/hot-keys.ts`), and saves converge as described in [Config update lifecycle](#config-update-lifecycle).
+
+Runtime loading is separate from editor-facing JSON Schema publication. A cloud-served schema currently improves validation and completion for `kilo.jsonc`; it does not load, apply, or override effective runtime config, and it is a non-authoritative external surface. When adding or changing a config key, follow [CLI Config Schema](/docs/contributing/architecture/config-schema); the key completes within this repository regardless of the overlay.
 
 ## Config update lifecycle
 

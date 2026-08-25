@@ -70,7 +70,7 @@ URL-based instruction sources are fetched at session start with a 5-second timeo
 
 ## Legacy `.kilocoderules` Support
 
-If your project contains `.kilocoderules` files from the VSCode extension, these are still loaded via auto-migration. However, migrating to `AGENTS.md` is recommended for new projects.
+The CLI no longer auto-migrates `.kilocoderules` files. Move their content to `AGENTS.md` or configure the canonical `instructions` field in `kilo.jsonc`.
 
 {% /tab %}
 {% tab label="CLI" %}
@@ -150,7 +150,7 @@ URL-based instruction sources are fetched at session start with a 5-second timeo
 
 ## Legacy `.kilocoderules` Support
 
-If your project contains `.kilocoderules` files from the VSCode extension, these are still loaded via auto-migration. However, migrating to `AGENTS.md` is recommended for new projects.
+The CLI no longer auto-migrates `.kilocoderules` files. Move their content to `AGENTS.md` or configure the canonical `instructions` field in `kilo.jsonc`.
 
 {% /tab %}
 {% /tabs %}

@@ -181,7 +181,7 @@ export const execute = Effect.fn("CustomProviderDelete.execute")(function* (inpu
   // convergence fence while holding a flock. A not-custom revalidation or
   // prepared no-op aborts the fence cleanly without a rebuild.
   const discoveryProjectKey = directory
-    ? KilocodeConfig.configDiscoveryProjectKey(directory)
+    ? KilocodeConfig.configDiscoveryProjectKey(directory, worktree)
     : undefined
 
   const body = Effect.gen(function* () {

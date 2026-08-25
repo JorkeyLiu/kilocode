@@ -15,8 +15,6 @@ import { Global } from "@opencode-ai/core/global"
 import path from "path"
 import fs from "fs/promises"
 import os from "os"
-import { KilocodeConfig } from "../../src/kilocode/config/config"
-
 const events = EventV2Bridge.defaultLayer
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
 const env = Layer.mergeAll(
@@ -696,8 +694,6 @@ describe("r18 service - real authored-empty and provenance regressions", () => {
       const perm = yield* Permission.Service
       const original = Global.Path.config
       const tmpGlobal = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "opencode-test-global-")))
-      const originalMigrate = KilocodeConfig.migrateBashPermission
-      ;(KilocodeConfig as any).migrateBashPermission = async () => {}
       const testEffect = Effect.gen(function* () {
         Global.Path.config = tmpGlobal
         yield* Effect.promise(() => fs.writeFile(path.join(tmpGlobal, "kilo.jsonc"), JSON.stringify({ permission: {} }, null, 2)))
@@ -729,7 +725,6 @@ describe("r18 service - real authored-empty and provenance regressions", () => {
         Effect.ensuring(
           Effect.gen(function* () {
             Global.Path.config = original
-            ;(KilocodeConfig as any).migrateBashPermission = originalMigrate
             yield* Effect.promise(() => fs.rm(tmpGlobal, { recursive: true, force: true }).catch((err) => console.warn("cleanup rm failed", err)))
           }),
         ),
@@ -1071,8 +1066,6 @@ describe("r18 service - real authored-empty and provenance regressions", () => {
       const perm = yield* Permission.Service
       const original = Global.Path.config
       const tmpGlobal = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "opencode-test-global-")))
-      const originalMigrate = (yield* Effect.promise(() => import("../../src/kilocode/config/config"))).KilocodeConfig.migrateBashPermission
-      ;((yield* Effect.promise(() => import("../../src/kilocode/config/config"))).KilocodeConfig as any).migrateBashPermission = async () => {}
       try {
         Global.Path.config = tmpGlobal
         // No file, but inject global permission via Config service mock? For service-level provenance, we can directly test evaluator with global-override layer
@@ -1097,7 +1090,6 @@ describe("r18 service - real authored-empty and provenance regressions", () => {
         // For now evaluator-level check suffices
       } finally {
         Global.Path.config = original
-        ;((yield* Effect.promise(() => import("../../src/kilocode/config/config"))).KilocodeConfig as any).migrateBashPermission = originalMigrate
         yield* Effect.promise(() => fs.rm(tmpGlobal, { recursive: true, force: true }).catch((err) => console.warn("cleanup rm failed", err)))
       }
     }), { git: true })

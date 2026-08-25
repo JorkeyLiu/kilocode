@@ -124,21 +124,23 @@ describe("config validation (LOCK-007)", () => {
 
   test.serial("project json invalid patch returns 400 and does not corrupt the existing file", async () => {
     await using global = await tmpdir({ retain: true })
-    await using project = await tmpdir({ retain: true, config: { model: "keep/model", username: "kilo" } })
+    await using project = await tmpdir({ retain: true })
+    // Seed canonical project config for jsonc path
+    const projectFile = path.join(project.path, ".kilo", "kilo.jsonc")
+    await Bun.write(projectFile, JSON.stringify({ $schema: "https://app.kilo.ai/config.json", model: "keep/model", username: "kilo" }, null, 2))
     await seedGlobalConfig(global.path, "kilo.jsonc")
     ;(Global.Path as { config: string }).config = global.path
     const events = captureEvents()
 
     try {
-      // The tmpdir fixture writes opencode.json (a json, non-jsonc target).
-      const before = fs.readFileSync(path.join(project.path, "opencode.json"), "utf-8")
+      const before = fs.readFileSync(projectFile, "utf-8")
 
       const patch = await patchProject(project.path, { model: 123 })
       expect(patch.status).toBe(400)
       expect(patch.body?.name).toBe("ConfigInvalidError")
 
       // The file is byte-identical: no partial write, no invalid value.
-      expect(fs.readFileSync(path.join(project.path, "opencode.json"), "utf-8")).toBe(before)
+      expect(fs.readFileSync(projectFile, "utf-8")).toBe(before)
       const saved = JSON.parse(before) as Record<string, unknown>
       expect(saved.model).toBe("keep/model")
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(false)
@@ -151,7 +153,7 @@ describe("config validation (LOCK-007)", () => {
   test.serial("global json invalid patch returns 400 and does not write", async () => {
     await using global = await tmpdir({ retain: true })
     await using project = await tmpdir({ retain: true })
-    await seedGlobalConfig(global.path, "kilo.json", { model: "keep/model" })
+    await seedGlobalConfig(global.path, "kilo.jsonc", { model: "keep/model" })
     ;(Global.Path as { config: string }).config = global.path
     const events = captureEvents()
 
@@ -176,7 +178,9 @@ describe("config validation (LOCK-007)", () => {
 
   test.serial("valid project json patch still writes through", async () => {
     await using global = await tmpdir({ retain: true })
-    await using project = await tmpdir({ retain: true, config: { model: "keep/model" } })
+    await using project = await tmpdir({ retain: true })
+    const projectFile = path.join(project.path, ".kilo", "kilo.jsonc")
+    await Bun.write(projectFile, JSON.stringify({ $schema: "https://app.kilo.ai/config.json", model: "keep/model" }, null, 2))
     await seedGlobalConfig(global.path, "kilo.jsonc")
     ;(Global.Path as { config: string }).config = global.path
     const events = captureEvents()
@@ -184,10 +188,7 @@ describe("config validation (LOCK-007)", () => {
     try {
       const patch = await patchProject(project.path, { small_model: "another/model" })
       expect(patch.status).toBe(200)
-      const saved = JSON.parse(fs.readFileSync(path.join(project.path, "opencode.json"), "utf-8")) as Record<
-        string,
-        unknown
-      >
+      const saved = JSON.parse(fs.readFileSync(projectFile, "utf-8")) as Record<string, unknown>
       expect(saved.model).toBe("keep/model")
       expect(saved.small_model).toBe("another/model")
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(true)

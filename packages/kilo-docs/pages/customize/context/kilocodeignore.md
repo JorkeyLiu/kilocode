@@ -27,7 +27,7 @@ The primary mechanism for controlling file access is the **permission system** i
 }
 ```
 
-If you have an existing `.kilocodeignore` file, it is still supported. The **IgnoreMigrator** automatically converts `.kilocodeignore` patterns into permission `deny` rules on `read` and `edit` tools, so your existing rules continue to work without manual changes.
+If you use the VS Code extension, an existing `.kilocodeignore` file is still supported by its file-ignore handling. For CLI configuration, use permission `deny` rules in `kilo.jsonc`.
 
 You can also exclude paths from the file watcher separately using `watcher.ignore`:
 
@@ -53,7 +53,7 @@ The primary mechanism for controlling file access is the **permission system** i
 }
 ```
 
-If you have an existing `.kilocodeignore` file, it is still supported. The **IgnoreMigrator** automatically converts `.kilocodeignore` patterns into permission `deny` rules on `read` and `edit` tools, so your existing rules continue to work without manual changes.
+If you use the VS Code extension, an existing `.kilocodeignore` file is still supported by its file-ignore handling. For CLI configuration, use permission `deny` rules in `kilo.jsonc`.
 
 You can also exclude paths from the file watcher separately using `watcher.ignore`:
 
@@ -138,7 +138,7 @@ Permission rules are defined per-tool in `kilo.jsonc`. Patterns are evaluated in
 
 ### Migrating from .kilocodeignore
 
-If you already have a `.kilocodeignore` file, you don't need to do anything — the IgnoreMigrator reads your existing patterns and applies them as `deny` rules on `read` and `edit` tools automatically. You can optionally move your rules into `kilo.jsonc` for more granular control (e.g. denying edits but allowing reads).
+The CLI does not import `.kilocodeignore` into `kilo.jsonc`. Move the patterns into explicit `permission` rules when configuring CLI access; the VS Code extension continues to use `.kilocodeignore` for its file-ignore behavior.
 
 ### File Watcher Exclusions
 
@@ -178,7 +178,7 @@ Permission rules are defined per-tool in `kilo.jsonc`. Patterns are evaluated in
 
 ### Migrating from .kilocodeignore
 
-If you already have a `.kilocodeignore` file, you don't need to do anything — the IgnoreMigrator reads your existing patterns and applies them as `deny` rules on `read` and `edit` tools automatically. You can optionally move your rules into `kilo.jsonc` for more granular control (e.g. denying edits but allowing reads).
+The CLI does not import `.kilocodeignore` into `kilo.jsonc`. Move the patterns into explicit `permission` rules when configuring CLI access; the VS Code extension continues to use `.kilocodeignore` for its file-ignore behavior.
 
 ### File Watcher Exclusions
 
@@ -203,4 +203,4 @@ Checkpoint tracking is separate from file access rules. Files blocked by `.kiloc
 
 - **Kilo can't access a file you want:** Remove or narrow the matching rule in `.kilocodeignore` (legacy) or adjust the permission rules in `kilo.jsonc` (VSCode extension & CLI).
 - **A file still appears in lists:** In the legacy extension, check the setting that shows ignored files in lists and searches. In the extension & CLI, verify your permission and watcher ignore configuration.
-- **`.kilocodeignore` patterns not working in the new platform:** Ensure the file is at the workspace root. The IgnoreMigrator reads it automatically — check that your patterns use valid `.gitignore` syntax.
+- **`.kilocodeignore` patterns not working in the extension:** Ensure the file is at the workspace root and uses valid `.gitignore` syntax. For CLI access, configure equivalent `permission` rules in `kilo.jsonc`.

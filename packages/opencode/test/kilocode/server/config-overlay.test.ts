@@ -115,7 +115,7 @@ describe("config overlay routes", () => {
 
     for (const item of entries) {
       const dir = path.join(project.path, item.root)
-      await Filesystem.write(path.join(dir, "kilo.json"), JSON.stringify(item.value))
+      await Filesystem.write(path.join(dir, "kilo.jsonc"), JSON.stringify(item.value))
       await Filesystem.write(
         path.join(dir, "agent", "shared.md"),
         `---\ndescription: ${item.source} agent\nmode: subagent\n---\n${item.source} agent prompt`,
@@ -134,15 +134,16 @@ describe("config overlay routes", () => {
       sources: [],
     })
 
+    // P4.3 canonical-only: only .kilo is retained; legacy .kilocode/.opencode are ignored
     expect(body.project.username).toBe("kilo")
-    expect(body.project.model).toBe("test/kilocode")
+    expect(body.project.model).toBeUndefined()
     expect(body.project.small_model).toBeUndefined()
     expect(body.project.agent?.shared).toMatchObject({
       description: "kilo agent",
       prompt: "kilo agent prompt",
     })
     expect(body.project.agent?.["opencode-only"]).toBeUndefined()
-    expect(body.targets.project).toBe(path.join(project.path, ".kilo", "kilo.json"))
+    expect(body.targets.project).toBe(path.join(project.path, ".kilo", "kilo.jsonc"))
   })
 
   test.serial("tolerates unsafe project config instead of failing the overlay", async () => {
@@ -150,7 +151,7 @@ describe("config overlay routes", () => {
     // A project config that references a file outside the project root throws during substitution.
     // The overlay must skip it and still resolve, rather than rejecting the whole request.
     await Filesystem.write(
-      path.join(project.path, ".kilo", "kilo.json"),
+      path.join(project.path, ".kilo", "kilo.jsonc"),
       JSON.stringify({ username: "{file:/etc/passwd}" }),
     )
 
@@ -215,7 +216,7 @@ describe("config overlay routes", () => {
       }),
     )
     const body = await json<Overlay>(await req(project.path, "/config/overlay?scope=project"))
-    const saved = (await Bun.file(path.join(project.path, "opencode.json")).json()) as Record<string, unknown>
+    const saved = (await Bun.file(path.join(project.path, ".kilo", "kilo.jsonc")).json()) as Record<string, unknown>
 
     expect(body.fields.model).toMatchObject({ source: "global", inherited: true })
     expect(saved.model).toBeUndefined()

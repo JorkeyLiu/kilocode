@@ -59,7 +59,7 @@ const saveGlobal = (config: Config.Info) =>
 const saveProject = (config: Config.Info) =>
   Effect.runPromise(Config.Service.use((svc) => svc.update(config)).pipe(Effect.scoped, Effect.provide(layer)))
 
-async function writeConfig(dir: string, config: object, name = "kilo.json") {
+async function writeConfig(dir: string, config: object, name = "kilo.jsonc") {
   await Filesystem.write(path.join(dir, name), JSON.stringify(config))
 }
 
@@ -158,7 +158,7 @@ describe("kilocode sandbox config", () => {
           allowed_hosts: ["api.github.com"],
         },
       })
-      await writeConfig(tmp.path, {
+      await writeConfig(path.join(tmp.path, ".kilo"), {
         sandbox: {
           enabled: false,
           network: "allow",
@@ -204,7 +204,7 @@ describe("kilocode sandbox config", () => {
           allowed_hosts: ["api.github.com"],
         },
       })
-      await writeConfig(tmp.path, {
+      await writeConfig(path.join(tmp.path, ".kilo"), {
         sandbox: {
           enabled: true,
           network: "deny",
@@ -236,7 +236,7 @@ describe("kilocode sandbox config", () => {
 describe("custom provider model config", () => {
   test("persists and removes reasoning across a global config reload", async () => {
     await using globalTmp = await tmpdir()
-    const file = path.join(globalTmp.path, "kilo.json")
+    const file = path.join(globalTmp.path, "kilo.jsonc")
     const prev = Global.Path.config
     ;(Global.Path as { config: string }).config = globalTmp.path
     await clear()
@@ -291,7 +291,7 @@ describe("custom provider model config", () => {
 describe("retired product config keys", () => {
   test("ignores retired compaction and indexing keys so existing configs still load", async () => {
     await using tmp = await tmpdir({ git: true })
-    await writeConfig(tmp.path, {
+    await writeConfig(path.join(tmp.path, ".kilo"), {
       model: "test/model",
       compaction: { auto: false, threshold_percent: 75 },
       indexing: { enabled: true, provider: "ollama" },
@@ -483,32 +483,27 @@ describe("project config directory precedence", () => {
       fn: async () => {
         const config = await load()
 
+        // Canonical-only: only .kilo is effective; .kilocode/.opencode are ignored entirely
         expect(config.username).toBe("kilo")
-        expect(config.model).toBe("test/kilocode")
+        expect(config.model).toBeUndefined()
         expect(config.small_model).toBeUndefined()
 
         expect(config.command?.shared).toMatchObject({
           description: "kilo command",
           template: "kilo command template",
         })
-        expect(config.command?.legacy).toMatchObject({
-          description: "kilocode command",
-          template: "kilocode command template",
-        })
+        expect(config.command?.legacy).toBeUndefined()
         expect(config.command?.["opencode-only"]).toBeUndefined()
 
         expect(config.agent?.shared).toMatchObject({
           description: "kilo agent",
           prompt: "kilo agent prompt",
         })
-        expect(config.agent?.legacy).toMatchObject({
-          description: "kilocode agent",
-          prompt: "kilocode agent prompt",
-        })
+        expect(config.agent?.legacy).toBeUndefined()
         expect(config.agent?.["opencode-only"]).toBeUndefined()
 
         const plugins = JSON.stringify(config.plugin)
-        expect(plugins).toContain("kilocode.ts")
+        expect(plugins).not.toContain("kilocode.ts")
         expect(plugins).toContain("kilo.ts")
         expect(plugins).not.toContain("opencode.ts")
       },
@@ -535,7 +530,8 @@ describe("linked worktree config", () => {
 
       const config = await provideTestInstance({ directory: worktree, fn: load })
 
-      expect(config.model).toBe("test/worktree")
+      // Canonical-only: primary worktree mirror and root kilo.json are ignored; only worktree .kilo is effective
+      expect(config.model).toBeUndefined()
       expect(config.username).toBe("worktree-dir")
     } finally {
       await $`git worktree remove --force ${worktree}`.cwd(primary.path).quiet().nothrow()
@@ -559,12 +555,14 @@ describe("linked worktree config", () => {
         JSON.stringify({ snapshot: true, autoupdate: "notify", share: "disabled" }),
       )
       await Bun.write(path.join(primary.path, "packages", ".kilo", "kilo.jsonc"), JSON.stringify({ snapshot: false }))
-      await Bun.write(path.join(directory, ".kilo", "kilo.jsonc"), JSON.stringify({ share: "manual" }))
+      await Bun.write(path.join(worktree, ".kilo", "kilo.jsonc"), JSON.stringify({ share: "manual" }))
+      await Bun.write(path.join(directory, ".kilo", "kilo.jsonc"), JSON.stringify({ share: "ignored-nested" }))
 
       const config = await provideTestInstance({ directory, fn: load })
 
-      expect(config.snapshot).toBe(false)
-      expect(config.autoupdate).toBe("notify")
+      // Canonical-only: worktree root .kilo is effective for nested directory; primary, legacy and nested dirs ignored
+      expect(config.snapshot).toBeUndefined()
+      expect(config.autoupdate).toBeUndefined()
       expect(config.share).toBe("manual")
       expect(config.default_agent).toBeUndefined()
     } finally {
@@ -572,7 +570,7 @@ describe("linked worktree config", () => {
     }
   })
 
-  test("keeps KILO_CONFIG_DIR above the primary fallback", async () => {
+  test("ignores KILO_CONFIG_DIR for effective config (canonical-only)", async () => {
     await using primary = await tmpdir({ git: true })
     await using explicit = await tmpdir()
     const worktree = path.join(path.dirname(primary.path), `${path.basename(primary.path)}-config-explicit`)
@@ -584,7 +582,9 @@ describe("linked worktree config", () => {
 
     try {
       const config = await provideTestInstance({ directory: worktree, fn: load })
-      expect(config.username).toBe("explicit-dir")
+      // Effective config is canonical-only; KILO_CONFIG_DIR is not a config source and primary mirror is ignored
+      expect(config.username).not.toBe("explicit-dir")
+      expect(config.username).not.toBe("primary-dir")
     } finally {
       if (previous === undefined) delete process.env["KILO_CONFIG_DIR"]
       else process.env["KILO_CONFIG_DIR"] = previous
@@ -664,105 +664,4 @@ describe("opencode config migration notice", () => {
   })
 })
 
-describe("bash permission migration", () => {
-  for (const action of ["allow", "ask", "deny"] as const) {
-    test(`preserves string-form ${action} permission in jsonc`, async () => {
-      const input = `{
-  "$schema": "https://app.kilo.ai/config.json",
-  "permission": "${action}"
-}`
-      await using tmp = await tmpdir({
-        init: async (dir) => {
-          await Filesystem.write(path.join(dir, "kilo.jsonc"), input)
-        },
-      })
-
-      const prev = Global.Path.config
-      ;(Global.Path as { config: string }).config = tmp.path
-      await clear()
-      await disposeAllInstances()
-
-      try {
-        await KilocodeConfig.migrateBashPermission()
-
-        const file = path.join(tmp.path, "kilo.jsonc")
-        const text = await Filesystem.readText(file)
-        const parsed = ConfigParse.schema(Config.Info, ConfigParse.jsonc(text, file), file)
-        expect(text).toBe(input)
-        expect(parsed.permission?.["*"]).toBe(action)
-        expect(parsed.permission?.bash).toBeUndefined()
-      } finally {
-        ;(Global.Path as { config: string }).config = prev
-        await clear()
-        await disposeAllInstances()
-      }
-    })
-
-    test(`preserves string-form ${action} permission in json`, async () => {
-      const input = JSON.stringify({
-        $schema: "https://app.kilo.ai/config.json",
-        permission: action,
-      })
-      await using tmp = await tmpdir({
-        init: async (dir) => {
-          await Filesystem.write(path.join(dir, "kilo.json"), input)
-        },
-      })
-
-      const prev = Global.Path.config
-      ;(Global.Path as { config: string }).config = tmp.path
-      await clear()
-      await disposeAllInstances()
-
-      try {
-        await KilocodeConfig.migrateBashPermission()
-
-        const file = path.join(tmp.path, "kilo.json")
-        const text = await Filesystem.readText(file)
-        const parsed = ConfigParse.schema(Config.Info, ConfigParse.jsonc(text, file), file)
-        expect(text).toBe(input)
-        expect(parsed.permission?.["*"]).toBe(action)
-        expect(parsed.permission?.bash).toBeUndefined()
-      } finally {
-        ;(Global.Path as { config: string }).config = prev
-        await clear()
-        await disposeAllInstances()
-      }
-    })
-  }
-
-  test("migrates object-form global permission in jsonc", async () => {
-    await using tmp = await tmpdir({
-      init: async (dir) => {
-        await Filesystem.write(
-          path.join(dir, "kilo.jsonc"),
-          `{
-  "$schema": "https://app.kilo.ai/config.json",
-  "permission": {
-    "read": "allow"
-  }
-}`,
-        )
-      },
-    })
-
-    const prev = Global.Path.config
-    ;(Global.Path as { config: string }).config = tmp.path
-    await clear()
-    await disposeAllInstances()
-
-    try {
-      await KilocodeConfig.migrateBashPermission()
-
-      const file = path.join(tmp.path, "kilo.jsonc")
-      const text = await Filesystem.readText(file)
-      const parsed = ConfigParse.schema(Config.Info, ConfigParse.jsonc(text, file), file)
-      expect(parsed.permission?.read).toBe("allow")
-      expect(parsed.permission?.bash).toBe("allow")
-    } finally {
-      ;(Global.Path as { config: string }).config = prev
-      await clear()
-      await disposeAllInstances()
-    }
-  })
-})
+// bash permission migration removed in P4.3 cutover — legacy global migration deleted

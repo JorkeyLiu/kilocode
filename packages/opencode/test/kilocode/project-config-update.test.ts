@@ -63,6 +63,10 @@ const save = (config: Config.Info) =>
   Effect.runPromise(Config.Service.use((svc) => svc.update(config)).pipe(Effect.scoped, Effect.provide(layer)))
 
 async function writeConfig(dir: string, config: unknown) {
+  await Filesystem.write(path.join(dir, "kilo.jsonc"), JSON.stringify(config, null, 2))
+}
+
+async function writeLegacyConfig(dir: string, config: unknown) {
   await Filesystem.write(path.join(dir, "kilo.json"), JSON.stringify(config, null, 2))
 }
 
@@ -71,7 +75,7 @@ test("project config update creates .kilo/kilo.jsonc and reloads it", async () =
   await provideTestInstance({
     directory: tmp.path,
     fn: async () => {
-      await save({ model: "updated/model" } as any)
+      await save({ model: "updated/model" } as Config.Info)
 
       const written = await Filesystem.readJson<{ model: string }>(path.join(tmp.path, ".kilo", "kilo.jsonc"))
       expect(written.model).toBe("updated/model")
@@ -87,30 +91,34 @@ test("project config update skips empty delete-only writes when no config exists
   await provideTestInstance({
     directory: tmp.path,
     fn: async () => {
-      await save({ provider: { missing: null } } as any)
+      await save({ provider: { missing: null } } as unknown as Config.Info)
 
       await expect(fs.access(path.join(tmp.path, ".kilo", "kilo.jsonc"))).rejects.toThrow()
     },
   })
 })
 
-test("project config update prefers existing root kilo.json", async () => {
+test("project config update ignores legacy root kilo.json and writes canonical .kilo/kilo.jsonc", async () => {
   await using tmp = await tmpdir({ retain: true })
-  await writeConfig(tmp.path, { username: "alice" })
+  await writeLegacyConfig(tmp.path, { username: "alice" })
 
   await provideTestInstance({
     directory: tmp.path,
     fn: async () => {
-      await save({ model: "updated/model" } as any)
+      await save({ model: "updated/model" } as Config.Info)
 
-      const merged = await Filesystem.readJson<{ model: string; username: string }>(path.join(tmp.path, "kilo.json"))
-      expect(merged.model).toBe("updated/model")
-      expect(merged.username).toBe("alice")
+      const written = await Filesystem.readJson<{ model: string; username: string }>(
+        path.join(tmp.path, ".kilo", "kilo.jsonc"),
+      )
+      expect(written.model).toBe("updated/model")
+      const legacy = await Filesystem.readJson<{ username: string }>(path.join(tmp.path, "kilo.json"))
+      expect(legacy.username).toBe("alice")
+      expect("model" in legacy).toBe(false)
     },
   })
 })
 
-test("project config update patches ancestor .kilo/kilo.json from nested directory", async () => {
+test("project config update from nested directory without worktree creates nested canonical file, not ancestor", async () => {
   await using tmp = await tmpdir({ retain: true })
   const child = path.join(tmp.path, "nested", "workspace")
   await fs.mkdir(child, { recursive: true })
@@ -120,14 +128,35 @@ test("project config update patches ancestor .kilo/kilo.json from nested directo
   await provideTestInstance({
     directory: child,
     fn: async () => {
-      await save({ model: "updated/model" } as any)
+      await save({ model: "updated/model" } as Config.Info)
+
+      const nestedWritten = await Filesystem.readJson<{ model: string }>(path.join(child, ".kilo", "kilo.jsonc"))
+      expect(nestedWritten.model).toBe("updated/model")
+      const ancestor = await Filesystem.readJson<{ username: string }>(path.join(tmp.path, ".kilo", "kilo.jsonc"))
+      expect(ancestor.username).toBe("alice")
+      expect("model" in ancestor).toBe(false)
+    },
+  })
+})
+
+test("project config update from nested directory with worktree patches workspace-root canonical file", async () => {
+  await using tmp = await tmpdir({ git: true, retain: true })
+  const child = path.join(tmp.path, "nested", "workspace")
+  await fs.mkdir(child, { recursive: true })
+  await fs.mkdir(path.join(tmp.path, ".kilo"), { recursive: true })
+  await writeConfig(path.join(tmp.path, ".kilo"), { username: "alice" })
+
+  await provideTestInstance({
+    directory: child,
+    fn: async () => {
+      await save({ model: "updated/model" } as Config.Info)
 
       const merged = await Filesystem.readJson<{ model: string; username: string }>(
-        path.join(tmp.path, ".kilo", "kilo.json"),
+        path.join(tmp.path, ".kilo", "kilo.jsonc"),
       )
       expect(merged.model).toBe("updated/model")
       expect(merged.username).toBe("alice")
-      await expect(fs.access(path.join(child, ".kilo", "kilo.json"))).rejects.toThrow()
+      await expect(fs.access(path.join(child, ".kilo", "kilo.jsonc"))).rejects.toThrow()
     },
   })
 })
@@ -198,7 +227,7 @@ test("updateProjectConfig serializes with the shared Config.update lock on the s
       // snapshot-disable write race on the same `.kilo/kilo.jsonc` target.
       // Both use the identical lock key, so both values survive.
       await Promise.all([
-        save({ small_model: "legacy/model" } as any),
+        save({ small_model: "legacy/model" } as Config.Info),
         applyUpdate(tmp.path, { snapshot: false }),
       ])
 
@@ -215,21 +244,21 @@ test("updateProjectConfig serializes with the shared Config.update lock on the s
 
 test("Config.update locks and writes the resolved .kilo target even when a root config file exists (LOCK-001)", async () => {
   await using tmp = await tmpdir({ retain: true })
-  // Both `.kilo/kilo.json` (preferred update target) and a root `kilo.json`
-  // exist. Discovery resolves `.kilo/kilo.json` once; the update must lock
-  // and write EXACTLY that path — never switch to the root file under the
+  // Both `.kilo/kilo.jsonc` (canonical update target) and a legacy root `kilo.json`
+  // exist. Discovery resolves `.kilo/kilo.jsonc` once; the update must lock
+  // and write EXACTLY that path — never switch to the legacy file under the
   // lock.
   await fs.mkdir(path.join(tmp.path, ".kilo"), { recursive: true })
   await writeConfig(path.join(tmp.path, ".kilo"), { username: "alice" })
-  await writeConfig(tmp.path, { username: "root" })
+  await writeLegacyConfig(tmp.path, { username: "root" })
 
   await provideTestInstance({
     directory: tmp.path,
     fn: async () => {
-      await save({ model: "locked/model" } as any)
+      await save({ model: "locked/model" } as Config.Info)
 
       const project = await Filesystem.readJson<{ model: string; username: string }>(
-        path.join(tmp.path, ".kilo", "kilo.json"),
+        path.join(tmp.path, ".kilo", "kilo.jsonc"),
       )
       expect(project.model).toBe("locked/model")
       expect(project.username).toBe("alice")
@@ -253,12 +282,12 @@ test("prepareProjectConfig honors the exact pre-resolved target when rediscovery
       return yield* KilocodeConfig.projectConfigUpdateTarget({ fs: fsu, directory: tmp.path })
     }),
   )
-  expect(resolved).toBe(path.join(kiloDir, "kilo.json"))
+  expect(resolved).toBe(path.join(kiloDir, "kilo.jsonc"))
 
-  // Race: the resolved target disappears and a root config file appears, so a
-  // naive rediscovery would now select the root file — a DIFFERENT lock key.
+  // Race: the resolved target disappears and a legacy root config file appears, so a
+  // naive rediscovery would still resolve the canonical .kilo path — not the legacy file.
   await fs.rm(resolved)
-  await writeConfig(tmp.path, { beta: 2 })
+  await writeLegacyConfig(tmp.path, { beta: 2 })
 
   // Prepare must target the pre-resolved (locked) path, not rediscover.
   const prepared = await flockRt.runPromise(
@@ -299,7 +328,7 @@ test("Config.updateGlobal locks and writes the resolved global file (LOCK-001)",
       ),
     )
     const written = await Filesystem.readJson<{ model: string; username: string }>(
-      path.join(tmp.path, "kilo.json"),
+      path.join(tmp.path, "kilo.jsonc"),
     )
     expect(written.model).toBe("global/model")
     expect(written.username).toBe("alice")

@@ -255,7 +255,7 @@ The current VSCode extension reads the legacy `custom_modes.yaml` file from its 
 | Linux | `~/.config/Code/User/globalStorage/kilocode.kilo-code/settings/custom_modes.yaml` |
 | Windows | `%APPDATA%\Code\User\globalStorage\kilocode.kilo-code\settings\custom_modes.yaml` |
 
-Project-level `.kilocodemodes` and workspace-scoped files are handled by the CLI backend that the extension delegates to — see the [CLI tab](#cli) for the full load-order table. After the extension migrates on startup, the legacy file is no longer consulted; remove new modes through the extension UI instead of editing `custom_modes.yaml` directly.
+Project-level `.kilocodemodes` and workspace-scoped files are handled by the extension's legacy migration flow. After migration, define new agents in canonical Markdown files and remove them through the extension UI instead of editing `custom_modes.yaml` directly.
 
 {% /tab %}
 {% tab label="CLI" %}
@@ -263,7 +263,7 @@ Project-level `.kilocodemodes` and workspace-scoped files are handled by the CLI
 In the CLI, custom behavioral profiles are called **agents** instead of modes. Agents are defined as Markdown files with YAML frontmatter or as entries in the `agent` key of your config file.
 
 {% callout type="warning" %}
-**Legacy `custom_modes.yaml` is not loaded from `~/.config/kilo/`.** If you're migrating from the previous VS Code extension, global custom modes are read from `~/.kilocode/cli/global/settings/custom_modes.yaml` (not from the CLI's XDG config directory). The recommended approach is to convert legacy modes to agent `.md` files and place them in `~/.config/kilo/agent/` instead — see [Markdown files](#3-markdown-files-with-yaml-frontmatter) and [Migration](#migration-from-vscode-extension-modes) below.
+**Legacy `custom_modes.yaml` is not loaded by the current CLI.** If you're migrating from the previous VS Code extension, use the extension migration flow or convert modes to agent `.md` files and place them in `~/.config/kilo/agent/` — see [Markdown files](#3-markdown-files-with-yaml-frontmatter) below.
 {% /callout %}
 
 ## What's Included in a Custom Agent?
@@ -471,7 +471,7 @@ You are a Python specialist. Only edit Python files.
 
 ## Migration from VSCode Extension Modes
 
-If you have existing `.kilocodemodes` or `custom_modes.yaml` files from the VSCode extension, the CLI automatically migrates them on startup. The migration converts:
+If you have existing `.kilocodemodes` or `custom_modes.yaml` files from the VS Code extension, use the extension's legacy migration flow or convert them manually to canonical agent Markdown files. The CLI no longer reads these retired mode sources. The conversion maps:
 
 - `slug` to the agent name (key)
 - `roleDefinition` + `customInstructions` to `prompt`
@@ -483,7 +483,7 @@ Default legacy mode slugs (`code`, `build`, `architect`, `ask`, `debug`, `orches
 
 ### Legacy File Lookup Paths
 
-The CLI reads legacy mode files from the following locations (in load order). When the same slug appears in multiple sources, the **last loaded source wins**:
+The retired CLI reader previously used the following locations. They are documented for migration reference only and are not read by the current CLI:
 
 | Load Order | Path | Format | Scope |
 |---|---|---|---|
@@ -717,7 +717,7 @@ Focus on:
 - **Keep prompts focused:** The markdown body is your system prompt — write it as if briefing a colleague
 - **Use `mode: subagent`** for helper agents that shouldn't be directly selectable by users
 - **Use the Settings UI** to view and edit agents through the **Settings → Agent Behaviour → Agents** subtab
-- **Legacy modes are auto-migrated:** If you have `.kilocodemodes` files, they'll be converted on startup — no manual migration needed
+- **Retired mode files:** Convert `.kilocodemodes` files to canonical agent Markdown; the current CLI does not read them.
 
 {% /tab %}
 {% tab label="CLI" %}
@@ -734,7 +734,7 @@ Focus on:
 - **Keep prompts focused:** The markdown body is your system prompt — write it as if briefing a colleague
 - **Use `mode: subagent`** for helper agents that shouldn't be directly selectable by users
 - **Test with `kilo agent create`** to see how the CLI generates agent definitions, then customize from there
-- **Legacy modes are auto-migrated:** If you have `.kilocodemodes` files, they'll be converted on startup — no manual migration needed
+- **Retired mode files:** Convert `.kilocodemodes` files to canonical agent Markdown; the current CLI does not read them.
 
 {% /tab %}
 {% /tabs %}

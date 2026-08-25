@@ -137,8 +137,9 @@ export async function tmpdir<T>(options?: TmpDirOptions<T>) {
     await $`git commit --allow-empty -m "root commit ${dirpath}"`.cwd(dirpath).quiet()
   }
   if (options?.config) {
+    await fs.mkdir(path.join(dirpath, ".kilo"), { recursive: true })
     await Bun.write(
-      path.join(dirpath, "opencode.json"),
+      path.join(dirpath, ".kilo", "kilo.jsonc"),
       JSON.stringify({
         $schema: "https://app.kilo.ai/config.json",
         ...options.config,
@@ -213,9 +214,10 @@ export function tmpdirScoped<E = never, R = never>(options?: {
 
     if (options?.config) {
       const resolved = typeof options.config === "function" ? options.config() : options.config
+      yield* Effect.promise(() => fs.mkdir(path.join(dir, ".kilo"), { recursive: true }))
       yield* Effect.promise(() =>
         fs.writeFile(
-          path.join(dir, "opencode.json"),
+          path.join(dir, ".kilo", "kilo.jsonc"),
           JSON.stringify({ $schema: "https://app.kilo.ai/config.json", ...resolved }), // kilocode_change
         ),
       )

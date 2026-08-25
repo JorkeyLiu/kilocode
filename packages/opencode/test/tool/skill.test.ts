@@ -165,9 +165,10 @@ Use this skill.
           expect(result.metadata.dir).toBe("builtin")
           expect(result.output).toContain("Finding a named command")
           expect(result.output).toContain("~/.config/kilo/")
-          expect(result.output).toContain("~/.kilocode/")
+          expect(result.output).toContain("Global.Path.config")
           expect(result.output).toContain("**/command/")
-          expect(result.output).toContain("explicit search")
+          expect(result.output).toContain("canonicalRoot/.kilo")
+          expect(result.output).not.toContain("~/.config/kilo/.kilo")
         }),
       { git: true },
     ),

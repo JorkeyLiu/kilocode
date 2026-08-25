@@ -1,37 +1,30 @@
-# Kilo CLI Configuration Reference
+# Kilo CLI Configuration Reference (Canonical, P4.3)
 
-All config lives in `kilo.json` (or `kilo.jsonc`). Sources are deep-merged in this order (low-to-high precedence); later sources override earlier ones for scalar values. Objects deep-merge; arrays generally replace, with two verified exceptions: `instructions` arrays are concatenated and deduplicated across all sources, and `plugin` entries are deduplicated by plugin identity. The final step is a **permission-only** overlay (`KILO_PERMISSION`) that merges only the `permission` key and does not affect any other field.
+All effective config is the deterministic merge of exactly two authored JSONC scopes plus retained legal inputs. Later scopes override earlier scalars. Objects deep-merge; arrays generally replace, except `instructions` arrays are concatenated and deduplicated and `plugin` entries are deduplicated by identity. Canonical loader reads are side-effect free; all writes use shared discovery locks and `KilocodeAtomicWrite` (temp-file + rename).
 
-### General-config sources (low → high precedence)
+### Canonical sources (P4.3, low → high precedence)
 
-1. **Legacy migration** — `.opencode` → `.kilo` conversions: custom modes, workflows (converted to commands), rules/instructions, MCP servers, `.kilocodeignore` patterns. Lowest precedence in the chain.
-2. **Organization agent modes** — fetched from legacy org config via Kilo OAuth, if authenticated.
-3. **Remote well-known** — for each auth entry with `type === "wellknown"`, fetches `<url>/.well-known/opencode` (and optionally its `remote_config` URL). Scope: global. Trusted.
-4. **Global config files** in `~/.config/kilo/` (or `$XDG_CONFIG_HOME/kilo/`), loaded in order: `config.json` (legacy), `kilo.json`, `kilo.jsonc`, `opencode.json` (legacy), `opencode.jsonc` (legacy). A legacy TOML `config` file is auto-migrated to `config.json` and deleted. Scope: global. Trusted.
-5. **`KILO_CONFIG`** env var — loads the file at the explicit path. Scope: global. Trusted.
-6. **Project root-level config files** — walks CWD up to the git worktree root, discovering `kilo.json`, `kilo.jsonc`, `opencode.json` (legacy), `opencode.jsonc` (legacy) at each directory level (NOT inside `.kilo`/`.kilocode` directories). Scope: local. Untrusted (tokens confined to project root).
-7. **Config directories pass** — iterates directories in this order, loading `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` plus commands, agents, modes, and plugins from each:
-   1. XDG global config dir (`~/.config/kilo/`)
-   2. Primary worktree fallback dirs (`.kilocode`/`.kilo` in the primary checkout, for linked git worktrees only)
-   3. Project config dirs (`.kilocode`/`.kilo` walking CWD up to worktree root)
-   4. Home config dirs (`~/.kilocode/`, `~/.kilo/`)
-   5. `KILO_CONFIG_DIR` env var (if set)
-   
-   Scope depends on directory: XDG global and `KILO_CONFIG_DIR` are global/trusted; project and home dirs are local/untrusted (tokens confined to project root).
-8. **`KILO_CONFIG_CONTENT`** env var — inline JSON string. Scope: local. Trusted.
-9. **Active org config** — fetched from `<url>/api/config` if the user has an active organization. Scope: global. Trusted.
-10. **Managed config dir** — platform-specific read-only directory: Linux: `/etc/kilo/`, macOS: `/Library/Application Support/kilo/`, Windows: `%ProgramData%\kilo\`. Loads `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`. Scope: global. Trusted.
-11. **macOS managed preferences** — `.mobileconfig` profiles deployed via MDM (`ai.opencode.managed.plist` under `/Library/Managed Preferences/`). macOS only. Scope: global. Trusted. This is the **last general-config source**.
+| Order | Scope | File / assets | Semantics |
+|---|---|---|---|
+| 1 | Global | `${Global.Path.config}/kilo.jsonc` (`~/.config/kilo/kilo.jsonc` or `$XDG_CONFIG_HOME/kilo/kilo.jsonc`) plus `${Global.Path.config}/{command,commands,agent,agents,skill,skills,rules}` typed assets directly under the global root | Trusted. Empty when missing; created only by `prepare`/`commit` under the global discovery lock. |
+| 2 | Workspace / worktree | `canonicalRoot(directory, worktree)/.kilo/kilo.jsonc` and `canonicalRoot/.kilo/{command,commands,agent,agents,skill,skills,rules}` typed assets | Untrusted; `{file:}` reads confined to `canonicalRoot`. `canonicalRoot(directory, worktree)` is `worktree` when present and not `"/"` else `directory`. No ancestor walk. |
 
-### Permission overlay (highest overall precedence)
+Retained legal inputs beyond these two files: opaque `SecretStorage` credential refs and runtime defaults. No other source participates in retained effective config or mutations.
 
-12. **`KILO_PERMISSION`** env var — a permission-only overlay. Merges only the `permission` key via `mergeDeep`; no other config fields are affected. This is the **absolute highest-precedence** source in the entire chain — it overrides the `permission` key from all general-config sources above.
+Discovery locks and atomic persistence: every mutation serializes through a shared cross-process `EffectFlock` discovery lock held **before** target resolution.
 
-This also covers where Kilo looks for config files, commands, agents, and skills across project, global, and legacy paths such as `.kilo/`, `.kilocode/`, and `~/.config/kilo/`, plus the VS Code extension's Agent Manager.
+| Domain | Lock key |
+|---|---|
+| Global | `config:discover:global:<hash(Global.Path.config)>` |
+| Project | `config:discover:project:<hash(canonicalRoot)>` |
 
-## Commands (`.kilo/command/*.md`)
+The locked key is always the written path; `$schema` injection for missing files is in-memory only.
 
-Markdown files with YAML frontmatter. The filename (minus `.md`) becomes the command name invoked via `/name`. Commands can live in `.kilo/`, legacy `.kilocode/`, and global config roots, with both `command/` and `commands/` directory names supported. See Config File Locations for the full search order.
+## Commands (`.kilo/command/*.md` and `.kilo/commands/*.md`)
+
+Canonical only: `canonicalRoot/.kilo/command/**/*.md` and `canonicalRoot/.kilo/commands/**/*.md`, plus the same directly under the global `${Global.Path.config}` (e.g., `${Global.Path.config}/command/**/*.md` and `${Global.Path.config}/commands/**/*.md`). No `.kilocode` / `.opencode` fallback. Do not create a global `.kilo` subdirectory — global assets live directly under `${Global.Path.config}/`.
+
+Markdown files with YAML frontmatter. The filename (minus `.md`) becomes the command name invoked via `/name`.
 
 ```yaml
 ---
@@ -47,26 +40,22 @@ Reference files with @file and shell output with !`cmd`.
 
 Template variables: `$1`-`$N` (positional args), `$ARGUMENTS` (full string), `@file` (file contents), `` !`cmd` `` (shell output).
 
-### Finding a named command
+### Finding a named command (canonical only)
 
-When asked where `/name` lives, do not search only the repo root. Search these roots explicitly, and use an explicit search `path` for each one:
+Search these canonical roots explicitly with explicit `path`:
 
-1. `~/.config/kilo/`
-2. `~/.kilo/`
-3. `~/.kilocode/`
-4. The `KILO_CONFIG_DIR` directory (if the env var is set)
-5. project `.kilo/` and `.kilocode/` directories from the current working directory up to the git root
+1. `${Global.Path.config}/` (global, e.g., `~/.config/kilo/`)
+2. `canonicalRoot/.kilo/` (workspace/worktree root)
 
-Use exact patterns first:
-
+Use exact patterns:
 - `**/command/<name>.md`
 - `**/commands/<name>.md`
 
-If found, return the full path. If not found in those roots, explain that the command is not present in the loaded config paths.
+If not found in those canonical roots, the command is not present in loaded config. Do not search `.kilocode`, `.opencode`, `KILO_CONFIG_DIR`, or ancestor directories.
 
-## Agents (`.kilo/agent/*.md`)
+## Agents (`.kilo/agent/*.md` and `.kilo/agents/*.md`)
 
-Also loaded from legacy `.kilocode/` directories and plural `agents/` variants.
+Canonical only: `canonicalRoot/.kilo/agent/**/*.md` / `canonicalRoot/.kilo/agents/**/*.md` and the same directly under the global `${Global.Path.config}` (e.g., `${Global.Path.config}/agent/**/*.md`). Do not create a global `.kilo` subdirectory — global assets live directly under `${Global.Path.config}/`.
 
 ```yaml
 ---
@@ -87,10 +76,6 @@ System prompt for this agent.
 
 `mode` values: `primary` = selectable as main agent, `subagent` = only via Task tool, `all` = both.
 
-## Workflows (legacy)
-
-Markdown files in `.kilo/workflows/` or `.kilocode/workflows/` (project-level) and `~/.kilo/workflows/` or `~/.kilocode/workflows/` (global). These are automatically converted to commands at startup. The filename (minus `.md`) becomes the command name. Project workflows override global ones with the same name.
-
 ## Agent Manager
 
 For the full product guidance, use the canonical [Agent Manager reference](https://kilo.ai/docs/automate/agent-manager). Prefer these links instead of guessing documentation paths.
@@ -104,12 +89,11 @@ Scalar form applies to all patterns. Object form maps glob patterns to actions. 
 ```jsonc
 {
   "permission": {
-    "bash": "allow", // scalar: allow all bash
+    "bash": "allow",
     "edit": {
-      // object: pattern-matched
       "src/**": "allow",
       "*.lock": "deny",
-      "*": "ask", // fallback
+      "*": "ask",
     },
     "read": "ask",
     "skill": { "my-skill": "allow" },
@@ -154,19 +138,12 @@ MCP tools use the same permission system as built-in tools. Each MCP tool's perm
 ```jsonc
 {
   "permission": {
-    // Require approval for all tools on this server by default
     "github_*": "ask",
-
-    // Auto-approve a specific safe tool
     "github_get_file_contents": "allow",
-
-    // Block a dangerous tool entirely
     "github_delete_file": "deny",
   },
 }
 ```
-
-Rules are evaluated top-to-bottom — the **last** matching rule wins. Put broad patterns first, then specific overrides after.
 
 ## Providers
 
@@ -222,7 +199,7 @@ To disable all auto-detected providers except one:
 
 ## Skills
 
-Additional skill directories and remote URLs:
+Canonical only: `canonicalRoot/.kilo/skill/<name>/SKILL.md` or `canonicalRoot/.kilo/skills/<name>/SKILL.md` and the same directly under the global `${Global.Path.config}` (e.g., `${Global.Path.config}/skill/<name>/SKILL.md`). Do not create a global `.kilo` subdirectory — global assets live directly under `${Global.Path.config}/`. Additional skill directories may be listed in `skills.paths` (resolved relative to canonical roots; no legacy `.kilocode` discovery).
 
 ```jsonc
 {
@@ -232,8 +209,6 @@ Additional skill directories and remote URLs:
   },
 }
 ```
-
-Skills are markdown files at `skills/<name>/SKILL.md` (or `skill/<name>/SKILL.md`) with `name` and `description` in frontmatter. Discovered inside `.kilo/` and legacy `.kilocode/` directories.
 
 ## Other Top-Level Fields
 
@@ -303,58 +278,63 @@ Notification settings are managed through `attention` in `tui.json` / `tui.jsonc
 | Exit | `/exit`, `/quit`, `/q` |
 | Open editor | `/editor` |
 
-## Config File Locations
-
-### Config files (kilo.json)
+## Config File Locations (canonical only)
 
 | Scope | Path |
 |---|---|
-| Project | `./kilo.json`, `./kilo.jsonc`, `./opencode.json` (legacy), `./opencode.jsonc` (legacy) |
-| Global | `~/.config/kilo/kilo.json`, `~/.config/kilo/kilo.jsonc`, `~/.config/kilo/opencode.json` (legacy), `~/.config/kilo/opencode.jsonc` (legacy), `~/.config/kilo/config.json` (legacy) |
-| Managed | Linux: `/etc/kilo/`, macOS: `/Library/Application Support/kilo/`, Windows: `%ProgramData%\kilo\` — loads `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json` (enterprise; second-highest general-config precedence — only macOS MDM `.mobileconfig` preferences load later, and `KILO_PERMISSION` overrides the `permission` key last) |
+| Project | `canonicalRoot/.kilo/kilo.jsonc` |
+| Global | `~/.config/kilo/kilo.jsonc` (or `$XDG_CONFIG_HOME/kilo/kilo.jsonc`) |
 
-Each config directory (`.kilo/` and legacy `.kilocode/`) can also contain `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, or `opencode.json`.
+No other filenames are read in retained paths. In particular: `kilo.json`, `opencode.json`, `opencode.jsonc`, `config.json`, and any file outside the canonical roots is not a retained source. The project canonical directory `canonicalRoot/.kilo/` may contain `command/`, `commands/`, `agent/`, `agents/`, `skill/`, `skills/`, `rules/` typed assets; the global canonical directory `${Global.Path.config}/` may contain the same typed asset directories directly under the global root (e.g., `${Global.Path.config}/agent/`, `${Global.Path.config}/command/`). Do not create `${Global.Path.config}/.kilo/` — implementation does not read it.
 
-### Config directories
+> **Rules — canonical registered asset class, deferred materialization (P4.3 LOCK-006):** `rules` is a normative canonical typed-asset class in the extension registry/spec (`ASSET_DIRECTORIES` includes `rules`, R10) and is therefore a legal canonical file location as above. However, the current opencode effective-snapshot / materialization path does **not** yet consume `rules` assets into its effective config — no `rules` loader participates in `Config.Service`/`overlay`. This is a recorded contract gap, not a P4.3 reader to invent. See `specs/vscode-orchestrator/evidence/p4.3-rules-contract-gap.md`; no new rules loader/composition is created here.
 
-Two directory names are scanned: `.kilo` (canonical) and `.kilocode` (legacy fallback). Both are checked at each level, and `.kilo` wins when both define the same entry. `.opencode` directories are not loaded. Files within each directory are loaded in `ALL_CONFIG_FILES` order: `kilo.jsonc`, `kilo.json`, `opencode.jsonc`, `opencode.json`.
+### Config directories (canonical only)
 
-The config directories pass iterates in this order:
+Exactly two directories are considered:
 
-1. **XDG global**: `~/.config/kilo/` (always loaded, lowest file-based precedence)
-2. **Primary worktree fallback**: `.kilocode`/`.kilo` in the primary checkout root (for linked git worktrees only — not present in single-checkout projects)
-3. **Project**: walks up from CWD to the git root, checking both `.kilocode` and `.kilo` at each level
-4. **Home**: `~/.kilocode/`, `~/.kilo/`
-5. **`KILO_CONFIG_DIR`**: extra config directory from the env var (if set)
+1. Global: `~/.config/kilo/` (or `$XDG_CONFIG_HOME/kilo/`)
+2. Workspace/worktree: `canonicalRoot/.kilo/`
 
-XDG global and `KILO_CONFIG_DIR` directories are treated as global/trusted. Project and home directories are treated as local/untrusted (tokens confined to project root).
+No ancestor walk, no `.kilocode`/`.opencode` fallback, no `KILO_CONFIG_DIR`, no home `~/.kilo` / `~/.kilocode` scan in retained paths.
 
-### Commands, agents, modes, plugins
+### Commands, agents, plugins (canonical only)
 
-Glob patterns run inside every discovered config directory (including legacy):
-
-| Type | Pattern |
+| Type | Pattern (inside each canonical root: `canonicalRoot/.kilo/` for project, `${Global.Path.config}/` for global) |
 |---|---|
 | Command | `{command,commands}/**/*.md` |
 | Agent | `{agent,agents}/**/*.md` |
-| Mode | `{mode,modes}/*.md` |
 | Plugin | `{plugin,plugins}/*.{ts,js}` |
 
-Example: `~/.config/kilo/command/*.md` (global), `~/.kilocode/command/*.md` (legacy home), and `.kilo/commands/*.md` (project) all load commands.
-
-### Skills and instructions
+### Skills and instructions (canonical only)
 
 | Scope | Path |
 |---|---|
-| Skills | `{skill,skills}/<name>/SKILL.md` inside any config directory |
+| Skills | `{skill,skills}/<name>/SKILL.md` inside a canonical `.kilo` |
 | Instructions | `AGENTS.md`, `CLAUDE.md`, `CONTEXT.md`, glob patterns from `instructions` config field |
 
-### Environment variable overrides
+## Retired sources — historical context only (not active)
 
-| Variable | Description |
-|---|---|
-| `KILO_CONFIG` | Path to an additional config file (loaded after global config, before project files) |
-| `KILO_CONFIG_DIR` | Path to an additional config directory (appended to the config directories pass) |
-| `KILO_CONFIG_CONTENT` | Inline JSON config string (loaded after config directories, before active org config) |
-| `KILO_DISABLE_PROJECT_CONFIG` | Skip all project-level config (root-level files and `.kilo`/`.kilocode` directories) |
-| `KILO_PERMISSION` | Permission-only JSON overlay — merges only the `permission` key; highest precedence overall |
+The following were active before the P4.3 atomic legacy-reader cutover and are now retired. They are listed here so older docs and configs can be understood, but they must not be used for current instructions and no retained loader/mutation reads them.
+
+- Legacy Kilo migrations (`.opencode` → `.kilo` conversions of modes, workflows→commands, rules/instructions, MCP servers, `.kilocodeignore` patterns)
+- `mode`/`modes` typed assets (`{mode,modes}/*.md` and `{mode,modes}/**/*.md`) — legacy agent mode presets; not retained canonical assets in P4.3 and not scanned by the retained overlay/effective config
+- Organization agent modes and Active Kilo Cloud organization config (fetched via OAuth / `<url>/api/config`)
+- Auth-record `.well-known/opencode` remote config and optional `remote_config` URL
+- Explicit env overrides: `KILO_CONFIG` (file), `KILO_CONFIG_DIR` (directory), `KILO_CONFIG_CONTENT` (inline JSON), `KILO_PERMISSION` (permission-only overlay), `KILO_DISABLE_PROJECT_CONFIG`
+- Ancestor `.kilo`/`.kilocode` discovery walking CWD up to worktree root and primary-worktree fallback dirs; home `~/.kilocode`/`~/.kilo` scans
+- Legacy filenames: `kilo.json`, `opencode.json`/`opencode.jsonc`, `config.json` (including global legacy TOML `config` auto-migration)
+- Managed config dir (`/etc/kilo/`, `/Library/Application Support/kilo/`, `%ProgramData%\kilo\`) and macOS managed preferences (`ai.opencode.managed.plist` under `/Library/Managed Preferences/`)
+
+Residual `.opencode` directories are detected only for the reference-only `kilo.local.opencode-config-detected` notification via `KilocodeConfig.detectOpencodeConfig` and are never read as config. Source inventory/Console reporting (`KilocodeConfigSources`) remains as deferred historical/diagnostic surface only (P4.4) and is not effective-config authority in P4.3.
+
+## Rules contract gap (P4.3 deferred — LOCK-006)
+
+`rules` is a normative canonical typed-asset class in the extension registry/spec (R10, `ASSET_DIRECTORIES` includes `rules`), but the current opencode effective snapshot does not consume it. The class is preserved as the canonical registered definition; its opencode materialization (loader/composition/snapshot participation) is deferred follow-up. No new rules runtime was created in P4.3. See `specs/vscode-orchestrator/evidence/p4.3-rules-contract-gap.md`.
+
+## Deferred boundaries
+
+- **P4.4 open:** per-row inactive/removal evidence for the 13 retired removal classes and transport narrowing, plus `KilocodeConfigSources` inventory narrowing. Source inventory remains deferred historical/diagnostic and is not effective-config authority. Do not assume row-level evidence is complete.
+- **P4.5 open:** deletion of old CLI/TUI/Console surfaces (`packages/opencode/src/cli`, `src/kilocode/tui`, and TUI handlers). Those surfaces remain in the repository during P4.3 and must not be edited as part of a P4.3 config change.
+
+Configuration behavior described above is canonical-only as of P4.3 (LOCK-002). For runtime hot/cold classification and convergence, see `packages/opencode/src/kilocode/config/hot-keys.ts` and `packages/kilo-docs/pages/contributing/architecture/cli-runtime.md#config-update-lifecycle`.

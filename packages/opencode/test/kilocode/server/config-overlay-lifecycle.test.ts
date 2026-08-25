@@ -15,8 +15,6 @@
  * - Table-driven patches within one lifecycle reduce redundant serial tests
  * - File reads use fs.readFileSync for determinism (avoids Bun.file lazy-read races)
  * - Each tmpdir is seeded with a kilo.jsonc that includes permission.bash:"allow"
- *   to prevent migrateBashPermission() from injecting bash:allow during loadGlobal,
- *   which would race with the handler's updateGlobal file writes
  *
  * Unverified boundary (LOCK-005):
  * - The HTTP middleware disposal path (disposeMiddleware) is not exercised by
@@ -93,9 +91,7 @@ function request(dir: string | undefined, input: string, init?: RequestInit) {
 
 /**
  * Seed a global config directory with a kilo.jsonc that already has
- * permission.bash set. This prevents migrateBashPermission() from
- * injecting bash:allow during loadGlobal, which would race with the
- * handler's updateGlobal file writes and cause intermittent flakiness.
+ * permission.bash set.
  */
 async function seedGlobalConfig(dir: string) {
   await Bun.write(

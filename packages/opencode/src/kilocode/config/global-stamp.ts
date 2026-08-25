@@ -3,7 +3,7 @@ import type { FSUtil } from "@opencode-ai/core/fs-util"
 import { Effect } from "effect"
 
 export namespace KilocodeGlobalConfigStamp {
-  const files = ["config.json", "kilo.json", "kilo.jsonc", "opencode.json", "opencode.jsonc", "config"]
+  const files = ["kilo.jsonc"]
 
   export const read = Effect.fnUntraced(function* (
     fs: Pick<FSUtil.Interface, "readFileStringSafe">,

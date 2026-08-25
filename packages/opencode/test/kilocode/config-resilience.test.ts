@@ -22,7 +22,7 @@ describe("config resilience", () => {
         const project = path.join(dir, "project")
         const instruction = path.join(dir, "external.md")
         await Filesystem.write(
-          path.join(project, "kilo.json"),
+          path.join(project, ".kilo", "kilo.jsonc"),
           JSON.stringify({ instructions: [instruction], skills: { paths: ["../external-skills"] } }),
         )
         await Filesystem.write(instruction, "external")
@@ -274,7 +274,7 @@ Broken command`,
   test("collects warnings for invalid JSON in .kilo directory config", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
-        await Filesystem.write(path.join(dir, ".kilo", "kilo.json"), "{ not valid json !!!")
+        await Filesystem.write(path.join(dir, ".kilo", "kilo.jsonc"), "{ not valid json !!!")
       },
     })
 
@@ -287,7 +287,7 @@ Broken command`,
         // Config loading should not crash
         expect(cfg).toBeDefined()
         // Warning should reference the bad file
-        expect(warns.some((w) => w.path.includes("kilo.json") && w.message.includes("not valid JSON"))).toBe(true)
+        expect(warns.some((w) => w.path.includes("kilo.jsonc") && w.message.includes("not valid JSON"))).toBe(true)
       },
     })
   })
@@ -295,7 +295,7 @@ Broken command`,
   test("collects warnings for invalid schema in .kilo directory config", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
-        await Filesystem.write(path.join(dir, ".kilo", "kilo.json"), JSON.stringify({ unknownField: true }))
+        await Filesystem.write(path.join(dir, ".kilo", "kilo.jsonc"), JSON.stringify({ unknownField: true }))
       },
     })
 
@@ -306,7 +306,7 @@ Broken command`,
         const warns = await warnings()
 
         expect(cfg).toBeDefined()
-        expect(warns.some((w) => w.path.includes("kilo.json") && w.message.includes("invalid"))).toBe(true)
+        expect(warns.some((w) => w.path.includes("kilo.jsonc") && w.message.includes("invalid"))).toBe(true)
       },
     })
   })

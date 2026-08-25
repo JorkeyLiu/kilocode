@@ -3,12 +3,13 @@ import { existsSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 
 // P4.3 readiness inventory — test-only, bounded.
-// Encodes the closed P4.3 source taxonomy and proves the current config
-// reader surface is fully classified.
+// Historical anchor taxonomy (pre-cutover, 2026-08-24) vs post-cutover absence evidence.
+// - Historical P0 inventory §6.1 (15-source enumeration) is preserved verbatim as taxonomy; anchors are historical and must NOT be asserted as live readers after cutover.
+// - Post-cutover absence is proven in p4-3-cutover.test.ts (effective-config readers absent); this file proves closed taxonomy without claiming live reader presence.
 // Spec anchors:
-// - P0 inventory §6.1 (15-source enumeration, evidence lines)
-// - Runtime direction §3.1 (4 retained legal classes)
-// - Runtime direction §7 + §8.1 (13 removal classes, no dual-read/import)
+// - P0 inventory §6.1 (15-source enumeration, evidence lines) — historical, pre-cutover
+// - Runtime direction §3.1 (4 retained legal classes) — retained
+// - Runtime direction §7 + §8.1 (13 removal classes, no dual-read/import) — removal taxonomy, historical mapping
 // No dual-read/import tooling; do not delete production readers; P4 remains Active.
 
 const opencode = join(import.meta.dir, "../../src")
@@ -61,6 +62,7 @@ const RETAINED_CLASSES = Object.values(RETAINED) as readonly string[]
 const REMOVAL_CLASSES = Object.values(REMOVAL) as readonly string[]
 
 // Each P0 source maps exactly once to a retained legal class or a single removal class.
+// P0 entries are historical anchors (pre-cutover enumeration, 2026-08-24 reconciliation) — not live reader claims.
 const P0: readonly Source[] = [
   {
     id: "P0-01",
@@ -171,12 +173,12 @@ const P0: readonly Source[] = [
   },
 ] as const
 
-// Anchors that prove each removal class still has a live reader in the
-// current implementation (until the P4.3 cutover). These are stable
-// file/content checks using call-site / exact multi-token patterns.
-// Only effective-config readers are listed here. Classes without a distinct
+// Historical anchors that proved each removal class had a live reader pre-cutover (historical, until P4.3 cutover).
+// These are stable file/content checks using call-site / exact multi-token patterns and are preserved as
+// historical reconciliation evidence only — NOT as post-cutover live reader claims.
+// Only effective-config readers were listed here pre-cutover. Classes without a distinct
 // source-specific reader (notification-only or generic derived conversions)
-// are intentionally omitted and documented via REMOVAL_WITHOUT_DISTINCT_READER.
+// were intentionally omitted and documented via REMOVAL_WITHOUT_DISTINCT_READER.
 const REMOVAL_ANCHORS: Array<{ cls: string; file: string; substr: string }> = [
   { cls: REMOVAL.kiloConfig, file: "config/config.ts", substr: "if (Flag.KILO_CONFIG)" },
   { cls: REMOVAL.kiloConfigDir, file: "config/config.ts", substr: "Flag.KILO_CONFIG_DIR" },
@@ -374,38 +376,25 @@ describe("P4.3 readiness inventory — closed taxonomy", () => {
     for (const cls of REMOVAL_WITHOUT_DISTINCT_READER) expect(anchorClss.has(cls)).toBe(false)
   })
 
-  test("legacy reader anchors remain present and are classified as removal (effective-config readers only)", () => {
-    for (const src of P0.filter((s) => s.classification.kind === "removal")) {
-      const p = join(opencode, src.file)
-      expect(existsSync(p), `${src.id} anchor file missing: ${src.file}`).toBe(true)
-      const txt = read(p)
-      expect(txt.includes(src.anchor), `${src.id} anchor missing in ${src.file}: ${JSON.stringify(src.anchor)}`).toBe(true)
-      for (const extra of src.extraAnchors ?? []) {
-        expect(txt.includes(extra), `${src.id} extra anchor missing in ${src.file}: ${JSON.stringify(extra)}`).toBe(true)
-      }
-    }
-    for (const a of REMOVAL_ANCHORS) {
-      const p = join(opencode, a.file)
-      expect(existsSync(p), `removal anchor file missing: ${a.file} for ${a.cls}`).toBe(true)
-      const txt = read(p)
-      expect(txt.includes(a.substr), `removal anchor missing: ${a.cls} -> ${a.substr} in ${a.file}`).toBe(true)
+  test("taxonomy documents 15 P0 sources and 13 removal classes without claiming live reader presence", () => {
+    // After P4.3 cutover this test remains a taxonomy proof; live reader absence is verified in p4-3-cutover.test.ts.
+    // Verify the 15 P0 sources are still classified exactly once and the notification helper is taxonomy-only.
+    expect(P0.length).toBe(15)
+    const removal = P0.filter((s) => s.classification.kind === "removal")
+    expect(removal.length).toBe(12)
+    for (const src of removal) {
+      expect(REMOVAL_CLASSES).toContain(src.classification.name)
     }
     // Explicitly verify that the .opencode notification helper is NOT treated as a live reader
     const notifyFile = join(opencode, "kilocode/config/config.ts")
     const notifyTxt = read(notifyFile)
     expect(notifyTxt).toContain("detectOpencodeConfig")
     expect(notifyTxt).toContain("Kilo no longer falls back to opencode configuration")
-    // result.permission is a derived conversion, not an Arbitrary CLI/env source reader
-    const cfgTxt = read(join(opencode, "config/config.ts"))
-    // primaryPaths is the effective-config reader for both globalProjectAsset and primaryWorktree
-    expect(cfgTxt).toContain("primaryPaths(")
-    expect(cfgTxt).toContain("ConfigPaths.files")
-    expect(cfgTxt).toContain("ConfigPaths.directories")
-    expect(cfgTxt).toContain("managedConfigDir()")
-    expect(cfgTxt).toContain("result.tools")
     const canonical = join(opencode, "kilocode/config/config.ts")
     expect(existsSync(canonical)).toBe(true)
     expect(read(canonical)).toContain("ALL_CONFIG_FILES")
+    // Legacy anchor presence is not asserted here; cutover test verifies absence.
+    expect(REMOVAL_ANCHORS.length).toBe(11)
   })
 
   test("readiness artifact introduces no dual-read or import helper surface", () => {

@@ -34,7 +34,7 @@ const log = Log.create({ service: "permission" })
 // Merged logical override -> sourceKind global-override with memory:global-override
 // Runtime approvals -> sourceKind approval with memory:global-approved (preserved)
 function globalCandidateFiles(): string[] {
-  return ["kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json", "config.json"].map((f) => path.join(Global.Path.config, f))
+  return ["kilo.jsonc"].map((f) => path.join(Global.Path.config, f))
 }
 
 export function resolveAuthoredGlobalLayers(gPerm: unknown, workspaceRoot: string): Evaluator.LayerInput[] {
@@ -380,7 +380,7 @@ export const layer = Layer.effect(
         let projLayer: Evaluator.LayerInput | undefined
         let callerFallbackLayer: Evaluator.LayerInput | undefined
         {
-          const cands = [".kilo/kilo.jsonc", ".kilo/kilo.json", ".kilocode/kilo.jsonc", ".kilocode/kilo.json", "kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json"] as const
+          const cands = [".kilo/kilo.jsonc"] as const
           let pr: Ruleset | undefined
           let pcp = `${ws}/.kilo/kilo.jsonc`
           let found = false
@@ -586,7 +586,7 @@ export const layer = Layer.effect(
         let projectRuleset: Ruleset | undefined
         let projectCanonicalPath = `${workspaceRoot}/.kilo/kilo.jsonc`
         let projectFound = false
-        for (const cand of [".kilo/kilo.jsonc", ".kilo/kilo.json", ".kilocode/kilo.jsonc", ".kilocode/kilo.json", "kilo.jsonc", "kilo.json", "opencode.jsonc", "opencode.json"] as const) {
+        for (const cand of [".kilo/kilo.jsonc"] as const) {
           const full = path.join(workspaceRoot, cand)
           if (!existsSync(full)) continue
           try {

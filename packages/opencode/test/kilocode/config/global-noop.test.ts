@@ -67,7 +67,7 @@ function captureEvents() {
 }
 
 function readGlobalFile(globalDir: string): string {
-  for (const name of ["kilo.jsonc", "kilo.json"]) {
+  for (const name of ["kilo.jsonc"]) {
     const fp = path.join(globalDir, name)
     try {
       return fs.readFileSync(fp, "utf-8")
@@ -107,9 +107,8 @@ describe("global no-op: hot patch (overlay route)", () => {
   test.serial("unchanged hot JSON patch writes nothing and emits no events", async () => {
     await using global = await tmpdir({ retain: true })
     await using project = await tmpdir({ retain: true })
-    // Seed with permission.bash to prevent migrateBashPermission race
     await Bun.write(
-      path.join(global.path, "kilo.json"),
+      path.join(global.path, "kilo.jsonc"),
       JSON.stringify(
         { $schema: "https://app.kilo.ai/config.json", model: "test/model", permission: { bash: "allow" } },
         null,
@@ -166,7 +165,7 @@ describe("global no-op: hot patch (overlay route)", () => {
     await using project = await tmpdir({ retain: true })
     // Seed with keys in a specific order, including $schema to prevent loadGlobal from injecting it
     await Bun.write(
-      path.join(global.path, "kilo.json"),
+      path.join(global.path, "kilo.jsonc"),
       JSON.stringify(
         { $schema: "https://app.kilo.ai/config.json", permission: { bash: "allow" }, model: "test/model" },
         null,
@@ -198,7 +197,7 @@ describe("global no-op: hot patch (legacy /global/config route)", () => {
     await using global = await tmpdir({ retain: true })
     await using project = await tmpdir({ retain: true })
     await Bun.write(
-      path.join(global.path, "kilo.json"),
+      path.join(global.path, "kilo.jsonc"),
       JSON.stringify(
         { $schema: "https://app.kilo.ai/config.json", model: "test/model", permission: { bash: "allow" } },
         null,
@@ -228,7 +227,7 @@ describe("global no-op: cold patch (overlay route)", () => {
     await using global = await tmpdir({ retain: true })
     await using project = await tmpdir({ retain: true })
     await Bun.write(
-      path.join(global.path, "kilo.json"),
+      path.join(global.path, "kilo.jsonc"),
       JSON.stringify({ $schema: "https://app.kilo.ai/config.json", permission: { bash: "allow" } }, null, 2),
     )
     ;(Global.Path as { config: string }).config = global.path
@@ -287,7 +286,7 @@ describe("global no-op: cold patch (legacy /global/config route)", () => {
     await using global = await tmpdir({ retain: true })
     await using project = await tmpdir({ retain: true })
     await Bun.write(
-      path.join(global.path, "kilo.json"),
+      path.join(global.path, "kilo.jsonc"),
       JSON.stringify({ $schema: "https://app.kilo.ai/config.json", permission: { bash: "allow" } }, null, 2),
     )
     ;(Global.Path as { config: string }).config = global.path
@@ -320,7 +319,7 @@ describe("global no-op: semantic equivalence", () => {
     await using project = await tmpdir({ retain: true })
     // Noncanonical: extra spaces, different key order, includes $schema
     await Bun.write(
-      path.join(global.path, "kilo.json"),
+      path.join(global.path, "kilo.jsonc"),
       '{\n  "$schema": "https://app.kilo.ai/config.json",\n  "permission": {\n    "bash" :  "allow"\n  },\n  "model" : "test/model"\n}\n',
     )
     ;(Global.Path as { config: string }).config = global.path
@@ -344,7 +343,7 @@ describe("global no-op: semantic equivalence", () => {
     await using global = await tmpdir({ retain: true })
     await using project = await tmpdir({ retain: true })
     await Bun.write(
-      path.join(global.path, "kilo.json"),
+      path.join(global.path, "kilo.jsonc"),
       JSON.stringify(
         { $schema: "https://app.kilo.ai/config.json", model: "test/model", permission: { bash: "allow" } },
         null,
