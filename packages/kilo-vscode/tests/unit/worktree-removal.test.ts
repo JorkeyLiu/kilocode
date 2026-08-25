@@ -19,8 +19,9 @@
  *   remoteSessions, generic terminals (slotId), permissions/questions,
  *   reload-directory, H-12 SessionRevert/Snapshot revert/unrevert, the
  *   session.diff backend route, local diff helpers, and agentManager.localStats.
- * - The P4.4 exception is honored: `primary-worktree.ts` and its mirror-read
- *   consumers (config/skill/indexing) remain untouched.
+ * - The P4.4 primary-worktree mirror-read helper (`primary-worktree.ts`,
+ *   `primaryPaths`/`primaryWorktree`) is physically removed (P4.4-T2): no
+ *   mirror-read consumers remain after the canonical `canonicalRoot` cutover.
  * - Core schema `worktree` fields (Session.Instance / Project schema, SDK
  *   Project/workspace `worktree` and `git_worktree` strategy) are retained and
  *   not flagged by the absence checks.
@@ -64,10 +65,12 @@ const webview = readTree(path.join(ROOT, "webview-ui/src"))
 const amWebview = readTree(path.join(ROOT, "webview-ui/agent-manager"))
 const cli = readTree(path.join(OPENCODE_ROOT, "src"))
 
-// Forbidden managed-worktree identifiers. P4.4/core-schema names are NOT here:
-// `primaryPaths`/`primaryWorktree` (P4.4 mirror reads), `ctx.worktree` /
-// `worktree: Schema.String` (core session/project schema), `git_worktree`
-// strategy and `worktree?: string` SDK fields (core workspace schema).
+// Forbidden managed-worktree identifiers. Core-schema names are NOT here:
+// `ctx.worktree` / `worktree: Schema.String` (core session/project schema),
+// `git_worktree` strategy and `worktree?: string` SDK fields (core workspace
+// schema). `primaryPaths`/`primaryWorktree` (P4.4 mirror reads) are now
+// forbidden and asserted absent via the P4.4-T2 physical-removal contract
+// below, not via this allowlist.
 const FORBIDDEN_EXT = [
   "WorktreeManager",
   "WorktreeStateManager",
@@ -328,14 +331,21 @@ describe("P3.2 preservation — retained root-local orchestration and P4.4 bound
     expect(fs.existsSync(path.join(OPENCODE_ROOT, "src/kilocode/agent-manager/service.ts"))).toBe(false)
   })
 
-  it("honors the P4.4 exception: primary-worktree.ts and mirror-read consumers remain", () => {
-    expect(fs.existsSync(path.join(OPENCODE_ROOT, "src/kilocode/primary-worktree.ts"))).toBe(true)
-    expect(cli).toContain("primaryWorktree")
-    expect(cli).toContain("primaryPaths")
-    const config = fs.readFileSync(path.join(OPENCODE_ROOT, "src/config/config.ts"), "utf-8")
-    expect(config).toContain("../kilocode/primary-worktree")
+  it("proves the P4.4 primary-worktree mirror-read helper is physically removed", () => {
+    expect(fs.existsSync(path.join(OPENCODE_ROOT, "src/kilocode/primary-worktree.ts"))).toBe(false)
+    expect(fs.existsSync(path.join(OPENCODE_ROOT, "test/kilocode/primary-worktree.test.ts"))).toBe(false)
+    expect(cli).not.toContain("primaryWorktree")
+    expect(cli).not.toContain("primaryPaths")
+    // Historical retired-source documentation may still mention the helper name
+    // in markdown (e.g., kilo-config.md retired list); the import surface
+    // itself must be absent from code. The hyphenated filename check is scoped
+    // to TypeScript sources via the dedicated opencode regression test.
+    const cfg = fs.readFileSync(path.join(OPENCODE_ROOT, "src/config/config.ts"), "utf-8")
+    expect(cfg).not.toContain("primary-worktree")
+    expect(cfg).not.toContain("primaryPaths")
     const skill = fs.readFileSync(path.join(OPENCODE_ROOT, "src/skill/index.ts"), "utf-8")
-    expect(skill).toContain("../kilocode/primary-worktree")
+    expect(skill).not.toContain("primary-worktree")
+    expect(skill).not.toContain("primaryPaths")
   })
 
   it("allows the retained core-schema worktree references in CLI source", () => {

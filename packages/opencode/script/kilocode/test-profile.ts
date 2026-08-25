@@ -28,11 +28,12 @@ export namespace TestProfile {
           "util/{filesystem,glob,module,process,which}.test.ts",
         ],
         kilo: [
-          "kilocode/{background-process,daemon,diff-full,external-directory-boundary,indexing-worktree,interactive-terminal,mcp-oauth-callback,primary-worktree,project-id,read-directory,session-diff-restore,snapshot-cache,snapshot-freeze-repro,snapshot-revert-move,snapshot-seed,task-nesting}.test.ts",
+          "kilocode/{background-process,daemon,diff-full,external-directory-boundary,indexing-worktree,interactive-terminal,mcp-oauth-callback,project-id,read-directory,session-diff-restore,snapshot-cache,snapshot-freeze-repro,snapshot-revert-move,snapshot-seed,task-nesting}.test.ts",
           "kilocode/cli/cmd/serve.test.ts",
           "kilocode/cli/install-artifact.test.ts",
           "kilocode/config/config.test.ts",
           "kilocode/core-watcher.test.ts",
+          "kilocode/p4-4-primary-worktree-removal.test.ts",
           "kilocode/sandbox/*.test.ts",
           "kilocode/server/{config-overlay,listener-runtime,tui-config,worktree-list}.test.ts",
           "kilocode/session-export/{e2e,sequence,worker,workspace-provider}.test.ts",

@@ -334,7 +334,7 @@ Residual `.opencode` directories are detected only for the reference-only `kilo.
 
 ## Deferred boundaries
 
-- **P4.4 open:** per-row inactive/removal evidence for the 13 retired removal classes and transport narrowing. The legacy source-inventory reader and its reporting endpoint are removed; remaining inventory-adjacent residues (TUI/instruction/`ConfigPaths`, sandbox policy, SDK wrapper forwarding, managed/primary-worktree helpers) and provider/catalog (LOCK-006) work stay open. Do not assume row-level evidence is complete.
+- **P4.4 open:** per-row inactive/removal evidence for the 13 retired removal classes and transport narrowing. The legacy source-inventory reader and its reporting endpoint are removed; remaining inventory-adjacent residues (TUI/instruction/`ConfigPaths`, sandbox policy, SDK wrapper forwarding, managed helpers) and provider/catalog (LOCK-006) work stay open. Do not assume row-level evidence is complete.
 - **P4.5 open:** deletion of old CLI/TUI/Console surfaces (`packages/opencode/src/cli`, `src/kilocode/tui`, and TUI handlers). Those surfaces remain in the repository during P4.3 and must not be edited as part of a P4.3 config change.
 
 Configuration behavior described above is canonical-only as of P4.3 (LOCK-002). For runtime hot/cold classification and convergence, see `packages/opencode/src/kilocode/config/hot-keys.ts` and `packages/kilo-docs/pages/contributing/architecture/cli-runtime.md#config-update-lifecycle`.
