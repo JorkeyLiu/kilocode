@@ -5,6 +5,7 @@ import { testEffect } from "../lib/effect"
 import { Agent } from "../../src/agent/agent"
 import { Permission } from "../../src/permission"
 import { Global } from "@opencode-ai/core/global"
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 const it = testEffect(Agent.defaultLayer)
 
@@ -13,6 +14,6 @@ it.instance("code agent allows global config directory reads by default", () =>
     const agent = yield* Agent.Service
     const code = yield* agent.get("code")
     expect(code).toBeDefined()
-    expect(Permission.evaluate("external_directory", `${Global.Path.config}/*`, code!.permission).action).toBe("allow")
+    expect(legacyEvaluate("external_directory", `${Global.Path.config}/*`, code!.permission).action).toBe("allow")
   }),
 )

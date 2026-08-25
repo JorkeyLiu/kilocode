@@ -6,8 +6,8 @@ import type { Agent } from "@/agent/agent"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { InstanceState } from "@/effect/instance-state"
 import { Global } from "@opencode-ai/core/global"
-import { Permission } from "@/permission"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { Config } from "@/config/config"
 import { FrontmatterError } from "@opencode-ai/core/v1/config/error"
 import { ConfigMarkdown } from "@/config/markdown"
@@ -365,7 +365,13 @@ export const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       const list = Object.values(s.skills).toSorted((a, b) => a.name.localeCompare(b.name))
       if (!agent) return list
-      return list.filter((skill) => Permission.evaluate("skill", skill.name, agent.permission).action !== "deny")
+      // R18: non-authorizing deny filter — not a final allow/deny decision
+      return list.filter((skill) => {
+        const rule = (agent.permission as readonly { permission: string; pattern: string; action: string }[]).findLast(
+          (r) => Wildcard.match("skill", r.permission) && Wildcard.match(skill.name, r.pattern),
+        )
+        return rule?.action !== "deny"
+      })
     })
 
     return Service.of({ get, require, all, dirs, available })

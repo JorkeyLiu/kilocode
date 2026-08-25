@@ -14,6 +14,7 @@ import { Database } from "@opencode-ai/core/database/database"
 import { SessionID } from "../../../src/session/schema"
 import { provideTmpdirInstance } from "../../fixture/fixture"
 import { testEffect } from "../../lib/effect"
+import { legacyEvaluate, legacyResolve } from "../../lib/legacy-permission"
 
 const bus = Bus.layer
 const env = Layer.mergeAll(
@@ -93,9 +94,9 @@ describe("env read permissions", () => {
   it.live("broad read allow does not bypass env ask", () =>
     Effect.sync(() => {
       const set = Permission.merge(rules(), Permission.fromConfig({ read: { "*": "allow" } }))
-      expect(Permission.resolve("read", "project/.env", set).action).toBe("ask")
-      expect(Permission.resolve("read", "project/.env.local", set).action).toBe("ask")
-      expect(Permission.resolve("read", "project/.env.example", set).action).toBe("allow")
+      expect(legacyResolve("read", "project/.env", set).action).toBe("ask")
+      expect(legacyResolve("read", "project/.env.local", set).action).toBe("ask")
+      expect(legacyResolve("read", "project/.env.example", set).action).toBe("allow")
     }),
   )
 
@@ -115,7 +116,7 @@ describe("env read permissions", () => {
 
         yield* waitForPending(1)
         yield* reply({ requestID: PermissionV1.ID.make("per_env_first"), reply: "always" })
-        yield* Fiber.join(first)
+        yield* Fiber.await(first)
 
         const second = yield* ask({
           id: PermissionV1.ID.make("per_env_second"),

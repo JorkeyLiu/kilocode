@@ -3,7 +3,7 @@ import { Cause, Duration, Effect, Layer, Option, Schedule, Context } from "effec
 import path from "path"
 import type { Agent } from "../agent/agent"
 import { FSUtil } from "@opencode-ai/core/fs-util"
-import { evaluate } from "@/permission/evaluate"
+import { Permission } from "@/permission"
 import { Config } from "@/config/config"
 import { Identifier } from "../id/id"
 import * as Log from "@opencode-ai/core/util/log"
@@ -28,7 +28,7 @@ export interface Options {
 
 function hasTaskTool(agent?: Agent.Info) {
   if (!agent?.permission) return false
-  return evaluate("task", "*", agent.permission).action !== "deny"
+  return !agent.permission.some((r) => r.permission === "task" && r.pattern === "*" && r.action === "deny")
 }
 
 export interface Interface {

@@ -1,6 +1,7 @@
 import { test, expect, describe } from "bun:test"
 import { Permission } from "../../src/permission"
 import { readOnlyBash } from "../../src/kilocode/agent"
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 /** Build the Ask agent ruleset without MCP servers */
 function askRuleset() {
@@ -79,7 +80,7 @@ describe("Ask agent bash permissions", () => {
 
     for (const [name, cmd] of allowed) {
       test(`${name}: "${cmd}" → allow`, () => {
-        const result = Permission.evaluate("bash", cmd, ruleset)
+        const result = legacyEvaluate("bash", cmd, ruleset)
         expect(result.action).toBe("allow")
       })
     }
@@ -99,7 +100,7 @@ describe("Ask agent bash permissions", () => {
 
     for (const cmd of allowed) {
       test(`"${cmd}" → allow`, () => {
-        const result = Permission.evaluate("bash", cmd, ruleset)
+        const result = legacyEvaluate("bash", cmd, ruleset)
         expect(result.action).toBe("allow")
       })
     }
@@ -135,7 +136,7 @@ describe("Ask agent bash permissions", () => {
 
     for (const cmd of denied) {
       test(`"${cmd}" → deny`, () => {
-        const result = Permission.evaluate("bash", cmd, ruleset)
+        const result = legacyEvaluate("bash", cmd, ruleset)
         expect(result.action).toBe("deny")
       })
     }
@@ -177,7 +178,7 @@ describe("Ask agent bash permissions", () => {
 
     for (const cmd of denied) {
       test(`"${cmd}" → deny`, () => {
-        const result = Permission.evaluate("bash", cmd, ruleset)
+        const result = legacyEvaluate("bash", cmd, ruleset)
         expect(result.action).toBe("deny")
       })
     }
@@ -202,16 +203,16 @@ describe("Ask agent bash permissions", () => {
 
     for (const cmd of denied) {
       test(`"${cmd}" → deny`, () => {
-        const result = Permission.evaluate("bash", cmd, ruleset)
+        const result = legacyEvaluate("bash", cmd, ruleset)
         expect(result.action).toBe("deny")
       })
     }
   })
 
   test("gh commands → ask", () => {
-    expect(Permission.evaluate("bash", "gh pr view 123", ruleset).action).toBe("ask")
-    expect(Permission.evaluate("bash", "gh issue list", ruleset).action).toBe("ask")
-    expect(Permission.evaluate("bash", "gh api repos/org/repo", ruleset).action).toBe("ask")
+    expect(legacyEvaluate("bash", "gh pr view 123", ruleset).action).toBe("ask")
+    expect(legacyEvaluate("bash", "gh issue list", ruleset).action).toBe("ask")
+    expect(legacyEvaluate("bash", "gh api repos/org/repo", ruleset).action).toBe("ask")
   })
 })
 
@@ -261,14 +262,14 @@ describe("Ask agent MCP permissions", () => {
 
   test("MCP tools evaluate to ask", () => {
     const ruleset = askRulesetWithMcp(["my-server"])
-    const result = Permission.evaluate("my-server_read_file", "*", ruleset)
+    const result = legacyEvaluate("my-server_read_file", "*", ruleset)
     expect(result.action).toBe("ask")
   })
 
   test("user config allow overrides MCP ask rules", () => {
     const allow = Permission.fromConfig({ "my-server_read_file": "allow" })
     const ruleset = askRulesetWithMcp(["my-server"], allow)
-    const result = Permission.evaluate("my-server_read_file", "*", ruleset)
+    const result = legacyEvaluate("my-server_read_file", "*", ruleset)
     expect(result.action).toBe("allow")
   })
 
@@ -284,16 +285,16 @@ describe("Ask agent MCP permissions", () => {
     const result = Permission.disabled(["my_special_server__sometool"], ruleset)
     expect(result.has("my_special_server__sometool")).toBe(false)
 
-    const eval_ = Permission.evaluate("my_special_server__sometool", "*", ruleset)
+    const eval_ = legacyEvaluate("my_special_server__sometool", "*", ruleset)
     expect(eval_.action).toBe("ask")
   })
 
   test("MCP rules don't interfere with built-in tool permissions", () => {
     const ruleset = askRulesetWithMcp(["server1"])
     // Built-in tools should still work normally
-    expect(Permission.evaluate("read", "src/index.ts", ruleset).action).toBe("allow")
-    expect(Permission.evaluate("bash", "ls -la", ruleset).action).toBe("allow")
-    expect(Permission.evaluate("bash", "git commit -m test", ruleset).action).toBe("deny")
+    expect(legacyEvaluate("read", "src/index.ts", ruleset).action).toBe("allow")
+    expect(legacyEvaluate("bash", "ls -la", ruleset).action).toBe("allow")
+    expect(legacyEvaluate("bash", "git commit -m test", ruleset).action).toBe("deny")
 
     // Edit tools should still be disabled
     const disabled = Permission.disabled(["edit", "write"], ruleset)

@@ -10,10 +10,78 @@ import type { MessageV2 } from "../../../session/message-v2"
 import { MessageID, PartID } from "../../../session/schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Permission } from "../../../permission"
+import * as Evaluator from "../../../permission/evaluator"
 import { iife } from "../../../util/iife"
 import { fail } from "../../effect-cmd"
 import { InstanceRef } from "@/effect/instance-ref"
 import type { InstanceContext } from "@/project/instance-context"
+import { registerDisposer } from "@/effect/instance-registry"
+import * as Log from "@opencode-ai/core/util/log"
+
+const log = Log.create({ service: "debug.agent" })
+
+const debugStore = new Map<string, Evaluator.Provenance>()
+registerDisposer(async (dir) => {
+  for (const key of [...debugStore.keys()]) {
+    if (key.startsWith(dir + ":")) debugStore.delete(key)
+  }
+})
+
+export const getDebugProvenance = Effect.fn(function* (id: string) {
+  const ctx = yield* InstanceRef
+  if (!ctx) return undefined
+  return debugStore.get(`${ctx.directory}:${id}`)
+})
+
+export function getDebugProvenanceSync(id: string, directory?: string): Evaluator.Provenance | undefined {
+  let dir = directory
+  if (!dir) {
+    try {
+      // Attempt to get current instance via global Instance if available
+      const { Instance } = require("@/kilocode/instance") as any
+      const cur = Instance.current as InstanceContext | undefined
+      dir = cur?.directory
+    } catch (err) {
+      log.warn("getDebugProvenanceSync: no directory and no instance context", { err, id })
+      return undefined
+    }
+  }
+  if (!dir) return undefined
+  return debugStore.get(`${dir}:${id}`)
+}
+
+export const clearDebugProvenanceEffect = Effect.fn(function* () {
+  const ctx = yield* InstanceRef
+  if (!ctx) {
+    debugStore.clear()
+    return
+  }
+  for (const key of [...debugStore.keys()]) {
+    if (key.startsWith(ctx.directory + ":")) debugStore.delete(key)
+  }
+})
+
+export function clearDebugProvenance(directory?: string): void {
+  if (!directory) {
+    try {
+      const { Instance } = require("@/kilocode/instance") as any
+      const cur = Instance.current as InstanceContext | undefined
+      if (cur?.directory) {
+        for (const key of [...debugStore.keys()]) {
+          if (key.startsWith(cur.directory + ":")) debugStore.delete(key)
+        }
+        return
+      }
+    } catch (err) {
+      log.warn("clearDebugProvenance: failed to get instance", { err })
+    }
+    debugStore.clear()
+    return
+  }
+  for (const key of [...debugStore.keys()]) {
+    if (key.startsWith(directory + ":")) debugStore.delete(key)
+  }
+}
 
 export const debugAgent = Effect.fn("Cli.debug.agent")(function* (args: {
   name: string
@@ -109,6 +177,7 @@ function parseToolParams(input?: string) {
       try {
         return new Function(`return (${trimmed})`)()
       } catch (evalError) {
+        log.warn("parseToolParams: failed to parse params", { jsonError, evalError, input })
         throw new Error(
           `Failed to parse --params. Use JSON or a JS object literal. JSON error: ${jsonError}. Eval error: ${evalError}.`,
           { cause: evalError },
@@ -123,11 +192,12 @@ function parseToolParams(input?: string) {
   return parsed as Record<string, unknown>
 }
 
-const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(function* (
+export const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(function* (
   agent: Agent.Info,
   ctx: InstanceContext,
 ) {
   const sessionSvc = yield* Session.Service
+  const permission = yield* Effect.serviceOption(Permission.Service)
   const session = yield* sessionSvc.create({ title: `Debug tool run (${agent.name})` })
   const messageID = MessageID.ascending()
   const model = agent.model
@@ -169,8 +239,6 @@ const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(functio
   }
   yield* sessionSvc.updateMessage(message)
 
-  const ruleset = Permission.merge(agent.permission, session.permission ?? [])
-
   return {
     sessionID: session.id,
     messageID,
@@ -179,14 +247,34 @@ const createToolContext = Effect.fn("Cli.debug.agent.createToolContext")(functio
     abort: new AbortController().signal,
     messages: [],
     metadata: () => Effect.void,
-    ask(req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">) {
-      return Effect.sync(() => {
-        for (const pattern of req.patterns) {
-          const rule = Permission.evaluate(req.permission, pattern, ruleset)
-          if (rule.action === "deny") {
-            throw new PermissionV1.DeniedError({ ruleset })
+    ask(req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">): any {
+      return Effect.gen(function* () {
+        // LOCK-001: debug uses the same complete evaluator context as Permission.Service via shared builder (no duplicate policy composition)
+        if (permission._tag === "Some") {
+          const isHardMode = ["ask", "plan", "architect"].includes(agent.name.toLowerCase())
+          const out = yield* permission.value.evaluateForDebug({
+            permission: req.permission,
+            patterns: [...req.patterns],
+            metadata: req.metadata as any,
+            sessionID: String(session.id),
+            agent: agent.name,
+            agentPermission: (agent as any).permission as any,
+            hardRuleset: isHardMode && (agent as any).permission && (agent as any).permission.length > 0 ? [...(agent as any).permission] as any : undefined,
+            sessionPermission: (session as any).permission as any,
+            trustedReadCapability: (req as any).trustedReadCapability,
+          })
+          const key = `${ctx.directory}:${out.provenance.request.permissionRequestId}`
+          debugStore.set(key, out.provenance)
+          if (out.result === "deny") {
+            return yield* Effect.fail(new PermissionV1.DeniedError({ ruleset: agent.permission }))
           }
+          if (out.result !== "allow") {
+            return yield* Effect.fail(new PermissionV1.RejectedError())
+          }
+          return
         }
+        // Fallback when Permission service unavailable (should not happen in production): fail closed
+        return yield* Effect.fail(new PermissionV1.RejectedError())
       })
     },
   }

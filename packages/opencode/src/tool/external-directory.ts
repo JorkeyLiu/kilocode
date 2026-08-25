@@ -4,12 +4,14 @@ import * as EffectLogger from "@opencode-ai/core/effect/logger"
 import { InstanceState } from "@/effect/instance-state"
 import type * as Tool from "./tool"
 import { FSUtil } from "@opencode-ai/core/fs-util"
+import { createTrustedReadCapability } from "@/kilocode/permission/trusted-read"
 
 type Kind = "file" | "directory"
 
 type Options = {
   bypass?: boolean
   kind?: Kind
+  access?: "read"
 }
 
 // kilocode_change start - root boundaries must not auto-allow external_directory
@@ -51,8 +53,10 @@ export const assertExternalDirectoryEffect = Effect.fn("Tool.assertExternalDirec
     metadata: {
       filepath: full,
       parentDir: dir,
+      ...(options?.access === "read" ? { access: "read" as const } : {}),
     },
-  })
+    ...(options?.access === "read" ? { trustedReadCapability: createTrustedReadCapability() } : {}),
+  } as any)
 })
 
 export async function assertExternalDirectory(ctx: Tool.Context, target?: string, options?: Options) {

@@ -16,7 +16,18 @@ import { KiloSession } from "@/kilocode/session"
 import { KiloSessionMessageOrder } from "@/kilocode/session/message-order"
 import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue"
 import { Permission } from "@/permission"
+import { setPromptCapability, getTrustedBrand, isTrustedAgentContext } from "@/kilocode/session/trusted-gate"
+import type { TrustedAgentContext } from "@/kilocode/session/trusted-gate"
 import { Question } from "@/question"
+
+const PromptCapability = Symbol("PromptCapability")
+setPromptCapability(PromptCapability)
+const TrustedAgentBrandLocal = getTrustedBrand(PromptCapability)
+if (!TrustedAgentBrandLocal) throw new Error("trusted gate not initialized")
+function createTrustedAgentContext(agent: string): TrustedAgentContext {
+  return { [TrustedAgentBrandLocal as symbol]: true, __trustedAgentBrand: true, agent } as unknown as TrustedAgentContext
+}
+void isTrustedAgentContext
 import { environmentDetails } from "@/kilocode/editor-context"
 import { Identifier } from "@/id/id"
 import { Filesystem } from "@/util/filesystem"
@@ -238,12 +249,13 @@ export namespace KiloSessionPrompt {
       // kilocode_change start - LOCK-002: the session layer owns the authoritative
       // agent identity for protected-file approval scoping. Overwrites any
       // tool-supplied metadata value; the backend never trusts project-supplied
-      // metadata for protected trust.
+      // metadata for protected trust. Also pass trustedContext explicitly so service ignores metadata/trustedAgent spoofing.
       metadata: { ...input.request.metadata, [ConfigProtection.AGENT_KEY]: input.agent.name },
       // kilocode_change end
+      trustedContext: createTrustedAgentContext(input.agent.name),
       ruleset: Permission.merge(agent.permission, guardPermissions({ agent, session })),
       hardRuleset: hardPermissions({ agent }),
-    })
+    } as any)
   })
 
   /**

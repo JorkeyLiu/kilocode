@@ -26,6 +26,7 @@ import {
 import { testEffect } from "../lib/effect"
 import { Reference } from "@/reference/reference"
 import { RepositoryCache } from "@/reference/repository-cache"
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
 // kilocode_change start - canonical models snapshot moved to src/kilocode/provider
@@ -337,7 +338,7 @@ describe("tool.read env file permissions", () => {
                   ask: (req: Omit<PermissionV1.Request, "id" | "sessionID" | "tool">) =>
                     Effect.sync(() => {
                       for (const pattern of req.patterns) {
-                        const rule = Permission.evaluate(req.permission, pattern, info.permission)
+                        const rule = legacyEvaluate(req.permission, pattern, info.permission)
                         if (rule.action === "ask" && req.permission === "read") {
                           asked = true
                         }

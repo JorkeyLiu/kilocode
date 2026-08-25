@@ -22,6 +22,7 @@ import { Config } from "@/config/config"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { Git } from "@/git"
 import { Filesystem } from "@/util/filesystem"
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 const referenceLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   Reference.layer.pipe(
@@ -193,7 +194,7 @@ describe("tool.grep", () => {
         ask: (req) =>
           Effect.sync(() => {
             const needsAsk = req.patterns.some(
-              (pattern) => Permission.evaluate(req.permission, pattern, ruleset).action !== "allow",
+              (pattern) => legacyEvaluate(req.permission, pattern, ruleset).action !== "allow",
             )
             if (needsAsk) requests.push(req)
           }),

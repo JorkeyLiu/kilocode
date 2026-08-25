@@ -23,6 +23,10 @@
     "kilocode": "./bin/kilo"
   },
   "exports": {
+    "./permission/trusted-context": null,
+    "./kilocode/session/trusted-agent-context": null,
+    "./kilocode/permission/trusted-read": null,
+    "./kilocode/session/trusted-gate": null,
     "./*": "./src/*.ts"
   },
   "imports": {

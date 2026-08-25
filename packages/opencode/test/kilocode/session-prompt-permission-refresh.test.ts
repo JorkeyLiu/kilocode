@@ -57,6 +57,7 @@ import { provideTmpdirServer } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
 import { reply, TestLLMServer } from "../lib/llm-server"
 import * as Ownership from "@/retention/ownership"
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 void Log.init({ print: false })
 
@@ -317,7 +318,7 @@ it.live(
         const agents = yield* AgentSvc.Service
         const agent = yield* agents.defaultInfo()
         const session = yield* sessions.create({})
-        expect(Permission.evaluate("read", "ask.txt", agent.permission).action).toBe("ask")
+        expect(legacyEvaluate("read", "ask.txt", agent.permission).action).toBe("ask")
         const fiber = yield* prompt
           .prompt({
             sessionID: session.id,

@@ -115,7 +115,7 @@ describe("reply routing", () => {
             requestID: PermissionV1.ID.make("permission_accepted"),
             reply: "once",
           })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
         }),
       { git: true },
     ),
@@ -150,7 +150,7 @@ describe("reply routing", () => {
           yield* waitForPending(1)
           const requestID = PermissionV1.ID.make("permission_double")
           yield* reply({ requestID, reply: "once" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           const exit = yield* reply({ requestID, reply: "once" }).pipe(Effect.exit)
           expectNotFound(exit, requestID)
@@ -186,7 +186,7 @@ describe("reply routing", () => {
       expect(yield* list().pipe(runB)).toHaveLength(0)
 
       yield* reply({ requestID, reply: "once" }).pipe(runA)
-      yield* Fiber.join(fiber)
+      yield* Fiber.await(fiber)
     }),
   )
 })

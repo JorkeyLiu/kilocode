@@ -11,6 +11,7 @@ import { awaitRebuilds } from "../../src/kilocode/server/config-rebuild"
 import * as Log from "@opencode-ai/core/util/log"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, tmpdir } from "../fixture/fixture"
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 void Log.init({ print: false })
 
@@ -40,7 +41,7 @@ async function config(dir: string, value: object) {
 async function edit(target: ReturnType<typeof app>, directory: string) {
   const response = await target.request("/config", { headers: { "x-kilo-directory": directory } })
   const body = (await response.json()) as { permission?: unknown }
-  return Permission.evaluate(
+  return legacyEvaluate(
     "edit",
     "*",
     Permission.fromConfig((body.permission ?? {}) as Parameters<typeof Permission.fromConfig>[0]),

@@ -89,7 +89,7 @@ export const ReadTool = Tool.define<
       const dir = path.dirname(filepath)
       const parent = yield* fs.realPath(dir).pipe(Effect.option)
       if (parent._tag === "None") return yield* Effect.fail(new Error(`File not found: ${filepath}`))
-      yield* assertExternalDirectoryEffect(ctx, parent.value, { bypass: false, kind: "directory" })
+      yield* assertExternalDirectoryEffect(ctx, parent.value, { bypass: false, kind: "directory", access: "read" })
       yield* ctx.ask({
         permission: "read",
         patterns: [...new Set([filepath, parent.value].map((item) => path.relative(worktree, item)))],
@@ -233,7 +233,7 @@ export const ReadTool = Tool.define<
           explicit ||
           ((yield* reference.contains(requested)) &&
             (yield* KiloReference.contains({ fs, references: reference, target })))
-        yield* assertExternalDirectoryEffect(ctx, target, { bypass: referenced, kind: "directory" })
+        yield* assertExternalDirectoryEffect(ctx, target, { bypass: referenced, kind: "directory", access: "read" })
         yield* ctx.ask({
           permission: "read",
           patterns: [...new Set([requested, target].map((item) => path.relative(instance.worktree, item)))],
@@ -295,7 +295,7 @@ export const ReadTool = Tool.define<
         explicit ||
         ((yield* reference.contains(requested)) &&
           (yield* KiloReference.contains({ fs, references: reference, target: file.target })))
-      yield* assertExternalDirectoryEffect(ctx, file.target, { bypass: referenced, kind: "file" })
+      yield* assertExternalDirectoryEffect(ctx, file.target, { bypass: referenced, kind: "file", access: "read" })
       yield* ctx.ask({
         permission: "read",
         patterns: [...new Set([requested, file.target].map((item) => path.relative(instance.worktree, item)))],

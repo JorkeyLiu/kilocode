@@ -22,6 +22,7 @@ import { disposeAllInstances, provideTmpdirInstance, tmpdir } from "../../fixtur
 import { testEffect } from "../../lib/effect"
 import { ConfigProtection } from "../../../src/kilocode/permission/config-paths"
 import { KilocodePaths } from "../../../src/kilocode/paths"
+import { createTestTrustedReadCapability as createTrustedReadCapability } from "../../helpers/trusted-helpers"
 
 const runtime = ManagedRuntime.make(
   Layer.mergeAll(
@@ -176,10 +177,11 @@ describe("external_directory allow config protection", () => {
             sessionID: SessionID.make("session_file_external_read"),
             permission: "external_directory",
             patterns: [configGlob],
-            metadata: { filepath: configFile, parentDir: config },
+            metadata: { filepath: configFile, parentDir: config, access: "read" },
             always: [configGlob],
             ruleset,
-          }),
+            trustedReadCapability: createTrustedReadCapability(),
+          } as any),
         ),
       { git: true },
     ),
@@ -197,7 +199,8 @@ describe("external_directory allow config protection", () => {
             metadata: { command: `cat ${quote(configFile)}`, access: "read" },
             always: [configGlob],
             ruleset,
-          }),
+            trustedReadCapability: createTrustedReadCapability(),
+          } as any),
         ),
       { git: true },
     ),
@@ -258,7 +261,7 @@ describe("external_directory allow config protection", () => {
             patterns: [pattern],
             metadata: { command: "node scripts/query.mjs", rules: ["*"] },
             always: [pattern],
-            ruleset,
+            ruleset: [],
           } as const
           const pending = yield* ask({
             ...input,
@@ -280,8 +283,16 @@ describe("external_directory allow config protection", () => {
           expect(requests[0]?.metadata).not.toMatchObject({ disableAlways: true, configProtected: true })
 
           yield* reply({ requestID: PermissionV1.ID.make("permission_global_skill"), reply: "always" })
-          yield* Fiber.join(pending)
-          yield* immediate(ask(input))
+          yield* Fiber.await(pending)
+          // Wildcard skill approvals are rejected at service boundary and not persisted to ordinary approved;
+          // same skill should still require approval, not immediate
+          const sameSkill = yield* ask({
+            ...input,
+            id: PermissionV1.ID.make("permission_global_skill_same"),
+          }).pipe(Effect.forkScoped)
+          expect(yield* wait(1)).toMatchObject([{ id: PermissionV1.ID.make("permission_global_skill_same") }])
+          yield* reply({ requestID: PermissionV1.ID.make("permission_global_skill_same"), reply: "reject" })
+          expect(Exit.isFailure(yield* Fiber.await(sameSkill))).toBe(true)
 
           const sibling = glob(path.join(KilocodePaths.globalDirs()[0], "skills", "other", "*"))
           const next = yield* ask({
@@ -310,7 +321,7 @@ describe("external_directory allow config protection", () => {
             patterns: [pattern],
             metadata: { command: "node scripts/query.mjs", rules: ["*"] },
             always: ["*"],
-            ruleset,
+            ruleset: [],
           } as const
           const pending = yield* ask({ ...input, id }).pipe(Effect.forkScoped)
 
@@ -322,10 +333,15 @@ describe("external_directory allow config protection", () => {
           const rules = (reqs[0]?.metadata?.rules ?? []) as string[]
           expect(rules).toHaveLength(1)
           expect(rules[0]).toMatch(/skills\/selected-skill\/\*$/)
+          // saveAlwaysRules with wildcard skill pattern is rejected; should not persist
           yield* saveAlwaysRules({ requestID: id, approvedAlways: ["*", rules[0]] })
           yield* reply({ requestID: id, reply: "once" })
-          yield* Fiber.join(pending)
-          yield* immediate(ask(input))
+          yield* Fiber.await(pending)
+          // Same skill should still require approval (wildcard not persisted)
+          const same = yield* ask({ ...input, id: PermissionV1.ID.make("permission_selected_skill_same") }).pipe(Effect.forkScoped)
+          expect(yield* wait(1)).toMatchObject([{ id: PermissionV1.ID.make("permission_selected_skill_same") }])
+          yield* reply({ requestID: PermissionV1.ID.make("permission_selected_skill_same"), reply: "reject" })
+          expect(Exit.isFailure(yield* Fiber.await(same))).toBe(true)
         }),
       { git: true },
     ),
@@ -342,7 +358,7 @@ describe("external_directory allow config protection", () => {
             patterns: [pattern],
             metadata: { command: "node scripts/query.mjs" },
             always: [pattern],
-            ruleset,
+            ruleset: [],
           } as const
           const first = yield* ask({
             ...input,
@@ -356,10 +372,13 @@ describe("external_directory allow config protection", () => {
           }).pipe(Effect.forkScoped)
 
           expect(yield* wait(2)).toHaveLength(2)
+          // Wildcard skill always is rejected, so second should NOT be drained
           yield* reply({ requestID: PermissionV1.ID.make("permission_drain_first"), reply: "always" })
-          yield* Fiber.join(first)
-          yield* Fiber.join(second)
-          expect(yield* list()).toEqual([])
+          yield* Fiber.await(first)
+          // second remains pending because wildcard skill not persisted to ordinary approved
+          expect(yield* list()).toMatchObject([{ id: PermissionV1.ID.make("permission_drain_second") }])
+          yield* reply({ requestID: PermissionV1.ID.make("permission_drain_second"), reply: "reject" })
+          expect(Exit.isFailure(yield* Fiber.await(second))).toBe(true)
         }),
       { git: true },
     ),
@@ -376,7 +395,7 @@ describe("external_directory allow config protection", () => {
             patterns: [pattern],
             metadata: { command: "node scripts/query.mjs" },
             always: [pattern],
-            ruleset,
+            ruleset: [],
           } as const
           const firstID = PermissionV1.ID.make("permission_selected_drain_first")
           const first = yield* ask({
@@ -392,11 +411,14 @@ describe("external_directory allow config protection", () => {
 
           const requests = yield* wait(2)
           const rule = (requests.find((item) => item.id === firstID)?.metadata?.rules as string[])[0]
+          // Wildcard skill saveAlwaysRules is rejected, so second should remain pending
           yield* saveAlwaysRules({ requestID: firstID, approvedAlways: [rule] })
-          yield* Fiber.join(second)
-          expect(yield* list()).toMatchObject([{ id: firstID }])
+          expect(yield* list()).toHaveLength(2)
           yield* reply({ requestID: firstID, reply: "once" })
-          yield* Fiber.join(first)
+          yield* Fiber.await(first)
+          expect(yield* list()).toMatchObject([{ id: PermissionV1.ID.make("permission_selected_drain_second") }])
+          yield* reply({ requestID: PermissionV1.ID.make("permission_selected_drain_second"), reply: "reject" })
+          expect(Exit.isFailure(yield* Fiber.await(second))).toBe(true)
         }),
       { git: true },
     ),
@@ -420,7 +442,7 @@ describe("external_directory allow config protection", () => {
             patterns: [target],
             metadata: { command: "node scripts/query.mjs" },
             always: [target],
-            ruleset: [{ permission: "external_directory", pattern: target, action: "allow" }],
+            ruleset: [],
           }).pipe(Effect.forkScoped)
           const approvedID = PermissionV1.ID.make("permission_project_rule_approved")
           const approvedPending = yield* ask({
@@ -430,12 +452,12 @@ describe("external_directory allow config protection", () => {
             patterns: [approved],
             metadata: { command: "node scripts/query.mjs" },
             always: [approved],
-            ruleset,
+            ruleset: [],
           }).pipe(Effect.forkScoped)
 
           expect(yield* wait(2)).toHaveLength(2)
           yield* reply({ requestID: approvedID, reply: "always" })
-          yield* Fiber.join(approvedPending)
+          yield* Fiber.await(approvedPending)
           expect(yield* list()).toMatchObject([{ id: targetID }])
           yield* reply({ requestID: targetID, reply: "reject" })
           expect(Exit.isFailure(yield* Fiber.await(targetPending))).toBe(true)

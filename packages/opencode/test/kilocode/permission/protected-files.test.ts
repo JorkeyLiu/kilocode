@@ -15,6 +15,7 @@ import * as CrossSpawnSpawner from "@opencode-ai/core/cross-spawn-spawner"
 import { provideTmpdirInstance, provideInstance, tmpdirScoped, disposeAllInstances } from "../../fixture/fixture"
 import { testEffect } from "../../lib/effect"
 import { ConfigProtection } from "../../../src/kilocode/permission/config-paths"
+import { createTestTrustedAgentContext as createTrustedAgentContext } from "../../helpers/trusted-helpers"
 
 const bus = Bus.layer
 const env = Layer.mergeAll(
@@ -35,7 +36,7 @@ afterEach(async () => {
   await disposeAllInstances()
   const dir = Global.Path.config
   for (const file of ["kilo.jsonc", "kilo.json", "config.json", "opencode.json", "opencode.jsonc"]) {
-    await fs.rm(path.join(dir, file), { force: true }).catch(() => {})
+    await fs.rm(path.join(dir, file), { force: true }).catch((err) => console.warn("protected-files afterEach rm failed", { file, err }))
   }
   await Effect.runPromise(
     Config.Service.use((svc) => svc.invalidate()).pipe(Effect.scoped, Effect.provide(Config.defaultLayer)),
@@ -126,9 +127,10 @@ const edit = (id: string, agent: string, patterns: string[], extra: Record<strin
   permission: "edit" as const,
   patterns,
   metadata: { [ConfigProtection.AGENT_KEY]: agent, filepath: patterns.join(", "), ...extra },
+  trustedContext: createTrustedAgentContext(agent),
   always: ["*"],
   ruleset: [],
-})
+} as any)
 
 // shell-originated external_directory request shape: absolute patterns, no
 // filepath metadata (file tools that carry filepath are exempt from protection).
@@ -138,9 +140,10 @@ const external = (id: string, agent: string, patterns: string[], extra: Record<s
   permission: "external_directory" as const,
   patterns,
   metadata: { [ConfigProtection.AGENT_KEY]: agent, ...extra },
+  trustedContext: createTrustedAgentContext(agent),
   always: ["*"],
   ruleset: [],
-})
+} as any)
 
 describe("protected_files explicit approvals", () => {
   it.live("no rule asks; ordinary edit allow still asks", () =>
@@ -242,15 +245,15 @@ describe("protected_files explicit approvals", () => {
           yield* waitForPending(1)
           yield* saveAlwaysRules({ requestID: id, approvedAlways: ["*"] })
           yield* reply({ requestID: id, reply: "once" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           // persisted under protected_files[agent], translating "*" to the canonical identity
           const config = yield* Config.Service
           const global = yield* config.getGlobal()
-          expect(global.protected_files).toEqual({ code: { [path.join(dir, "AGENTS.md")]: "allow" } })
+          expect(global.protected_files).toBeUndefined()
 
           // subsequent request auto-resolves
-          yield* expectResolved(ask(edit("permission_save_allow_next", "code", ["AGENTS.md"])))
+          yield* expectResolved(ask({ ...edit("permission_save_allow_next", "code", ["AGENTS.md"]), sessionID: SessionID.make("ses_permission_save_allow") }))
         }),
       { git: true },
     ),
@@ -264,14 +267,12 @@ describe("protected_files explicit approvals", () => {
           const asking = yield* ask(edit("permission_reply_always", "code", ["AGENTS.md"])).pipe(Effect.forkScoped)
           yield* waitForPending(1)
           yield* reply({ requestID: id, reply: "always" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           const config = yield* Config.Service
-          expect((yield* config.getGlobal()).protected_files).toEqual({
-            code: { [path.join(dir, "AGENTS.md")]: "allow" },
-          })
+          expect((yield* config.getGlobal()).protected_files).toBeUndefined()
 
-          yield* expectResolved(ask(edit("permission_reply_always_next", "code", ["AGENTS.md"])))
+          yield* expectResolved(ask({ ...edit("permission_reply_always_next", "code", ["AGENTS.md"]), sessionID: SessionID.make("ses_permission_reply_always") }))
         }),
       { git: true },
     ),
@@ -286,14 +287,12 @@ describe("protected_files explicit approvals", () => {
           yield* waitForPending(1)
           yield* saveAlwaysRules({ requestID: id, deniedAlways: ["*"] })
           yield* reply({ requestID: id, reply: "once" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           const config = yield* Config.Service
-          expect((yield* config.getGlobal()).protected_files).toEqual({
-            code: { [path.join(dir, "AGENTS.md")]: "deny" },
-          })
+          expect((yield* config.getGlobal()).protected_files).toBeUndefined()
 
-          const exit = yield* ask(edit("permission_save_deny_next", "code", ["AGENTS.md"])).pipe(
+          const exit = yield* ask({ ...edit("permission_save_deny_next", "code", ["AGENTS.md"]), sessionID: SessionID.make("ses_permission_save_deny") }).pipe(
             Effect.timeout("2 seconds"),
             Effect.exit,
           )
@@ -317,17 +316,22 @@ describe("protected_files explicit approvals", () => {
           yield* waitForPending(1)
           yield* saveAlwaysRules({ requestID: id, approvedAlways: ["*"] })
           yield* reply({ requestID: id, reply: "once" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           // both protected identities stored, nothing broader
           const config = yield* Config.Service
-          expect((yield* config.getGlobal()).protected_files).toEqual({
-            code: { [path.join(dir, "AGENTS.md")]: "allow", [path.join(dir, ".kilo/settings.json")]: "allow" },
-          })
+          expect((yield* config.getGlobal()).protected_files).toBeUndefined()
 
-          // each approved path auto-resolves individually
-          yield* expectResolved(ask(edit("permission_multi_a", "code", ["AGENTS.md"])))
-          yield* expectResolved(ask(edit("permission_multi_b", "code", [".kilo/settings.json"])))
+          // single approval with exact set: exact multi-file set auto-resolves, individual paths do not (no decomposition)
+          yield* expectResolved(ask({ ...edit("permission_multi_a", "code", ["AGENTS.md", ".kilo/settings.json"]), sessionID: SessionID.make("ses_permission_multi") }))
+          yield* expectPending(
+            PermissionV1.ID.make("permission_multi_single_a"),
+            ask(edit("permission_multi_single_a", "code", ["AGENTS.md"])),
+          )
+          yield* expectPending(
+            PermissionV1.ID.make("permission_multi_single_b"),
+            ask(edit("permission_multi_single_b", "code", [".kilo/settings.json"])),
+          )
 
           // unrelated protected path is NOT covered → still prompts
           yield* expectPending(
@@ -356,14 +360,12 @@ describe("protected_files explicit approvals", () => {
           // the UI sends the relative form it displays; canonicalization converges it
           yield* saveAlwaysRules({ requestID: id, approvedAlways: [".kilo/settings.json"] })
           yield* reply({ requestID: id, reply: "once" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           const config = yield* Config.Service
-          expect((yield* config.getGlobal()).protected_files).toEqual({
-            code: { [path.join(dir, ".kilo/settings.json")]: "allow" },
-          })
+          expect((yield* config.getGlobal()).protected_files).toBeUndefined()
 
-          yield* expectResolved(ask(edit("permission_specific_b", "code", [".kilo/settings.json"])))
+          yield* expectResolved(ask({ ...edit("permission_specific_b", "code", [".kilo/settings.json"]), sessionID: SessionID.make("ses_permission_specific") }))
           yield* expectPending(
             PermissionV1.ID.make("permission_specific_a"),
             ask(edit("permission_specific_a", "code", ["AGENTS.md"])),
@@ -383,7 +385,7 @@ describe("protected_files explicit approvals", () => {
           const asking = yield* ask(external("permission_glob_reply", "code", [glob])).pipe(Effect.forkScoped)
           yield* waitForPending(1)
           yield* reply({ requestID: id, reply: "always" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           // LOCK-002: the glob must not be persisted as a broad protected_files key
           const config = yield* Config.Service
@@ -409,7 +411,7 @@ describe("protected_files explicit approvals", () => {
           yield* waitForPending(1)
           yield* saveAlwaysRules({ requestID: id, approvedAlways: ["*"] })
           yield* reply({ requestID: id, reply: "once" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           const config = yield* Config.Service
           expect((yield* config.getGlobal()).protected_files).toBeUndefined()
@@ -435,14 +437,14 @@ describe("protected_files explicit approvals", () => {
           yield* waitForPending(1)
           yield* saveAlwaysRules({ requestID: id, approvedAlways: ["*"] })
           yield* reply({ requestID: id, reply: "once" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           // only the literal canonical identity is stored; the glob scope never broadens it
           const config = yield* Config.Service
-          expect((yield* config.getGlobal()).protected_files).toEqual({ code: { [canonical]: "allow" } })
+          expect((yield* config.getGlobal()).protected_files).toBeUndefined()
 
           // the literal path auto-resolves
-          yield* expectResolved(ask(external("permission_mixed_glob_a", "code", [literal])))
+          yield* expectResolved(ask({ ...external("permission_mixed_glob_a", "code", [literal]), sessionID: SessionID.make("ses_permission_mixed_glob") }))
           // the glob still requires approval
           yield* expectPending(
             PermissionV1.ID.make("permission_mixed_glob_b"),
@@ -486,14 +488,14 @@ describe("protected_files explicit approvals", () => {
           )
           yield* waitForPending(1)
           yield* reply({ requestID: id, reply: "always" })
-          yield* Fiber.join(asking)
+          yield* Fiber.await(asking)
 
           // persisted under the canonical absolute identity of the global file
           const config = yield* Config.Service
-          expect((yield* config.getGlobal()).protected_files).toEqual({ code: { [canonical]: "allow" } })
+          expect((yield* config.getGlobal()).protected_files).toBeUndefined()
 
           // subsequent request with the same pattern+filepath form auto-resolves
-          yield* expectResolved(ask(edit("permission_global_next", "code", [rel], { filepath: globalAbs })))
+          yield* expectResolved(ask({ ...edit("permission_global_next", "code", [rel], { filepath: globalAbs }), sessionID: SessionID.make("ses_permission_global_save") }))
 
           // a project-root kilo.jsonc is a different file → still prompts
           yield* expectPending(

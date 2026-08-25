@@ -39,9 +39,9 @@ export namespace ConfigProtection {
 
   /**
    * Metadata key carrying the exact canonical protected paths the backend will
-   * persist for an "always" approval (LOCK-002). Computed by the permission layer
+   * persist for an "always" approval. Computed by the permission layer
    * via ProtectedFiles.requestPaths; clients display this list verbatim so a
-   * confirmation enumerates exactly the set persisted (LOCK-003) — never a
+   * confirmation enumerates exactly the set persisted () — never a
    * client-side approximation of protected scope. Overwrites any tool-supplied
    * value the same way the protected flags do.
    */
@@ -183,6 +183,27 @@ export namespace ConfigProtection {
     return globalSkillPattern(request) !== undefined
   }
 
+  /**
+   * Lexical skill-wildcard detection independent of filesystem existence.
+   * Returns true when an approval pattern lexically targets a global skill subtree
+   * with glob/prefix syntax, e.g. `.../skills/<name>/*`, `.../skill/<name>/**`, or any
+   * glob under `/skills/` or `/skill/`. Used at the reply/saveAlwaysRules service
+   * boundary to reject wildcard/prefix skill approvals even when the target directory
+   * does not yet exist on disk. Filesystem-independent: recognizes `skill`/`skills`
+   * at the beginning or after any separator (`/` or `\` normalized to `/`).
+   */
+  export function isLexicalSkillWildcard(pattern: string): boolean {
+    if (!/[*?\[\]{}]/.test(pattern)) return false
+    const norm = normalize(pattern)
+    const segments = norm.split("/")
+    return segments.includes("skill") || segments.includes("skills")
+  }
+
+  /** Whether any approved pattern in the set is a lexical skill wildcard (for boundary rejection). */
+  export function hasLexicalSkillWildcard(patterns: readonly string[]): boolean {
+    return patterns.some((p) => isLexicalSkillWildcard(p))
+  }
+
   /** Check a single path (absolute or relative) against config protection. */
   function protected_(p: string): boolean {
     return path.isAbsolute(p) ? isAbsolute(p) : isRelative(p)
@@ -201,7 +222,7 @@ export namespace ConfigProtection {
   /**
    * True when a path carries glob syntax (`* ? [ ] { }`, the same set the
    * skill-root check uses). A glob/directory pattern is not an exact file
-   * identity (LOCK-002) and can never be a persisted `protected_files` key or a
+   * identity and can never be a persisted `protected_files` key or a
    * consulted rule: rejecting these paths keeps approvals scoped to literal
    * canonical file identities only.
    */
@@ -211,7 +232,7 @@ export namespace ConfigProtection {
 
   /**
    * Canonical protected-file identity used as the persisted `protected_files`
-   * key (LOCK-002): an absolute, posix-normalized path, resolved through the
+   * key: an absolute, posix-normalized path, resolved through the
    * nearest existing ancestor so symlinked roots (`/var`, `/tmp`, `~`) converge.
    *
    * Relative forms are resolved against `base` (the request project's worktree

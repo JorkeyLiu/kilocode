@@ -10,6 +10,7 @@ import { PtyPaths } from "../../../src/server/routes/instance/httpapi/groups/pty
 import { Filesystem } from "../../../src/util/filesystem"
 import { resetDatabase } from "../../fixture/db"
 import { disposeAllInstances, tmpdir } from "../../fixture/fixture"
+import { legacyEvaluate, legacyResolve } from "../../lib/legacy-permission"
 
 void Log.init({ print: false })
 
@@ -272,7 +273,7 @@ describe("config overlay routes", () => {
     await setGlobal(global.path, { permission: { edit: "allow" } })
 
     const before = await json<Agent[]>(await req(project.path, "/agent"))
-    expect(Permission.evaluate("edit", "*", before.find((item) => item.name === "code")?.permission ?? []).action).toBe(
+    expect(legacyEvaluate("edit", "*", before.find((item) => item.name === "code")?.permission ?? []).action).toBe(
       "allow",
     )
 
@@ -290,7 +291,7 @@ describe("config overlay routes", () => {
     const after = await json<Agent[]>(await req(project.path, "/agent"))
 
     expect(typeof edit === "string" ? edit : edit["*"]).toBe("ask")
-    expect(Permission.evaluate("edit", "*", after.find((item) => item.name === "code")?.permission ?? []).action).toBe(
+    expect(legacyEvaluate("edit", "*", after.find((item) => item.name === "code")?.permission ?? []).action).toBe(
       "ask",
     )
     expect(body.collections.permission.find((item) => item.key === "edit")).toMatchObject({
@@ -305,7 +306,7 @@ describe("config overlay routes", () => {
     await setGlobal(global.path, { permission: { edit: "allow" } })
 
     const before = await json<Agent[]>(await req(project.path, "/agent"))
-    expect(Permission.evaluate("edit", "*", before.find((item) => item.name === "code")?.permission ?? []).action).toBe(
+    expect(legacyEvaluate("edit", "*", before.find((item) => item.name === "code")?.permission ?? []).action).toBe(
       "allow",
     )
 
@@ -323,7 +324,7 @@ describe("config overlay routes", () => {
     const after = await json<Agent[]>(await req(project.path, "/agent"))
 
     expect(typeof edit === "string" ? edit : edit["*"]).toBe("ask")
-    expect(Permission.evaluate("edit", "*", after.find((item) => item.name === "code")?.permission ?? []).action).toBe(
+    expect(legacyEvaluate("edit", "*", after.find((item) => item.name === "code")?.permission ?? []).action).toBe(
       "ask",
     )
   })
@@ -369,7 +370,7 @@ describe("config overlay routes", () => {
 
         const before = await json<Agent[]>(await request(target, project.path, "/agent"))
         expect(
-          Permission.evaluate("edit", "*", before.find((item) => item.name === "code")?.permission ?? []).action,
+          legacyEvaluate("edit", "*", before.find((item) => item.name === "code")?.permission ?? []).action,
         ).toBe("ask")
 
         await json(
@@ -382,7 +383,7 @@ describe("config overlay routes", () => {
         const after = await json<Agent[]>(await request(target, project.path, "/agent"))
 
         expect(
-          Permission.evaluate("edit", "*", after.find((item) => item.name === "code")?.permission ?? []).action,
+          legacyEvaluate("edit", "*", after.find((item) => item.name === "code")?.permission ?? []).action,
         ).toBe("allow")
       },
     )

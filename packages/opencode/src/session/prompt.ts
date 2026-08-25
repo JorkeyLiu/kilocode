@@ -52,6 +52,7 @@ import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
 import { Permission } from "@/permission"
 import { SessionStatus } from "./status"
+import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { LLM } from "./llm"
 import { Shell } from "@/shell/shell"
 import { ShellID } from "@/tool/shell/id"
@@ -124,8 +125,8 @@ function isOrphanedInterruptedTool(part: SessionV1.ToolPart) {
 }
 
 // kilocode_change start - bounded auto-continuation for truncated responses:
-// the continuation instruction, the LOCK-005 correlation marker, and the
-// LOCK-003 unsafe-tool predicate live in the leaf module shared with the task
+// the continuation instruction, the  correlation marker, and the
+//  unsafe-tool predicate live in the leaf module shared with the task
 // tool report helper.
 export { UNKNOWN_FINISH_CONTINUE_INSTRUCTION } // kilocode_change - retained for the prompt loop tests
 // kilocode_change end
@@ -1255,8 +1256,11 @@ export const layer = Layer.effect(
         }
 
         if (part.type === "agent") {
-          const perm = Permission.evaluate("task", part.name, ag.permission)
-          const hint = perm.action === "deny" ? " . Invoked by user; guaranteed to exist." : ""
+          // R18: non-authorizing deny filter — not a final allow/deny decision
+          const rule = (ag.permission as readonly { permission: string; pattern: string; action: string }[]).findLast(
+            (r) => Wildcard.match("task", r.permission) && Wildcard.match(part.name, r.pattern),
+          )
+          const hint = rule?.action === "deny" ? " . Invoked by user; guaranteed to exist." : ""
           return [
             { ...part, messageID: info.id, sessionID: input.sessionID },
             {
@@ -1518,7 +1522,7 @@ export const layer = Layer.effect(
       const envCache: KiloSessionPrompt.EnvCache = {}
       closeReasons.delete(sessionID) // kilocode_change
       let compactionAttempts = 0 // kilocode_change - cap compaction attempts per turn to avoid infinite loops
-      // kilocode_change start - LOCK-002: at most one automatic continuation per
+      // kilocode_change start - : at most one automatic continuation per
       // original user turn. The set holds the IDs of the injected continuation
       // user messages; a second unknown finish whose turn anchor is an injected
       // message breaks normally and preserves the existing warning/report.
@@ -1596,7 +1600,7 @@ export const layer = Layer.effect(
           lastAssistant.parentID === lastUser.id && // kilocode_change - unrelated later assistants do not answer this turn
           userBeforeAssistant // kilocode_change - compare chronology, not generated IDs
         ) {
-          // kilocode_change start - LOCK-001/002/003: bounded auto-continuation
+          // kilocode_change start - /002/003: bounded auto-continuation
           // when the trailing assistant ended with finish="unknown" after partial
           // output. Eligibility: no assistant error, no unresolved/errored tool
           // parts (pending/running/error), and this turn has not already been
@@ -1612,7 +1616,7 @@ export const layer = Layer.effect(
             !autoContinued.has(lastUser.id) &&
             // LOCK-007: the persisted marker is the durable one-continuation
             // bound. A fresh runLoop after an interrupt has an empty in-memory
-            // set, but the continuation user message (with its LOCK-005 marker)
+            // set, but the continuation user message (with its  marker)
             // survives in history, so an unknown assistant parented to it must
             // not inject a second continuation.
             !isAutoContinueMarker(latest.userMessage) &&
@@ -1643,7 +1647,7 @@ export const layer = Layer.effect(
               type: "text",
               synthetic: true,
               text: UNKNOWN_FINISH_CONTINUE_INSTRUCTION,
-              // kilocode_change - LOCK-005: correlate the continuation to the
+              // kilocode_change - : correlate the continuation to the
               // exact truncated source assistant so the task tool report can
               // fetch and prepend the pre-truncation text.
               metadata: { [CONTINUE_FROM_KEY]: lastAssistant.id },
@@ -1969,7 +1973,7 @@ export const layer = Layer.effect(
           }
           // kilocode_change start — adopt every non-cancelled prompt waiting at
           // this safe post-stream boundary into the current run's visible scope
-          // instead of closing the turn (LOCK-001/LOCK-002). The current
+          // instead of closing the turn (/). The current
           // handle.process has fully drained (tokens + inline tool calls) by the
           // time we get here, so nothing is cut off; the adopted prompts appear
           // in the next LLM input and the loop continues in the same run.

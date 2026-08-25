@@ -25,6 +25,7 @@ import { Agent } from "../../src/agent/agent"
 import { deriveSubagentSessionPermission } from "../../src/agent/subagent-permissions"
 import { Permission } from "../../src/permission"
 import { testEffect } from "../lib/effect"
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 const it = testEffect(Agent.defaultLayer)
 
@@ -55,7 +56,7 @@ it.instance("[#26514] subagent spawned from plan mode inherits read-only restric
     // Sanity: the plan agent itself blocks edit. (Note: `write` and
     // `apply_patch` route through the `edit` permission at the runtime
     // tool layer — see Permission.disabled / EDIT_TOOLS.)
-    expect(Permission.evaluate("edit", "/some/file.ts", planAgent!.permission).action).toBe("deny")
+    expect(legacyEvaluate("edit", "/some/file.ts", planAgent!.permission).action).toBe("deny")
 
     // Simulate the plan-mode parent session: in real flow the plan
     // session's `permission` field is empty (Plan Mode lives on the agent
@@ -73,8 +74,8 @@ it.instance("[#26514] subagent spawned from plan mode inherits read-only restric
     //   ruleset: Permission.merge(agent.permission, session.permission ?? [])
     const effective = Permission.merge(generalAgent!.permission, subagentSessionPermission)
 
-    expect(Permission.evaluate("edit", "/some/file.ts", effective).action).toBe("deny")
-    expect(Permission.evaluate("edit", "/another/path/index.tsx", effective).action).toBe("deny")
+    expect(legacyEvaluate("edit", "/some/file.ts", effective).action).toBe("deny")
+    expect(legacyEvaluate("edit", "/another/path/index.tsx", effective).action).toBe("deny")
   }),
 )
 
@@ -98,7 +99,7 @@ it.instance("[#26514] explore subagent launched from plan mode also stays read-o
     const effective = Permission.merge(explore!.permission, subagentSessionPermission)
 
     // Already deny — sanity check.
-    expect(Permission.evaluate("edit", "/x.ts", effective).action).toBe("deny")
+    expect(legacyEvaluate("edit", "/x.ts", effective).action).toBe("deny")
   }),
 )
 
@@ -124,7 +125,7 @@ it.instance(
 
       // BUG: on origin/dev edit resolves to "allow" because the plan
       // agent's `edit: deny *` rule never reaches the subagent.
-      expect(Permission.evaluate("edit", "/some/file.ts", effective).action).toBe("deny")
+      expect(legacyEvaluate("edit", "/some/file.ts", effective).action).toBe("deny")
     }),
   {
     config: {
@@ -180,10 +181,10 @@ it.effect("[#26700] controller self-restrictions do not erase executor permissio
       }),
     )
 
-    expect(Permission.evaluate("read", "README.md", effective).action).toBe("allow")
-    expect(Permission.evaluate("bash", "git status", effective).action).toBe("allow")
-    expect(Permission.evaluate("task", "worker", effective).action).toBe("allow")
-    expect(Permission.evaluate("task", "other", effective).action).toBe("deny")
+    expect(legacyEvaluate("read", "README.md", effective).action).toBe("allow")
+    expect(legacyEvaluate("bash", "git status", effective).action).toBe("allow")
+    expect(legacyEvaluate("task", "worker", effective).action).toBe("allow")
+    expect(legacyEvaluate("task", "other", effective).action).toBe("deny")
     expect(Permission.disabled(["edit", "write", "apply_patch"], effective)).toEqual(
       new Set(["edit", "write", "apply_patch"]),
     )
@@ -208,6 +209,6 @@ it.effect("subagent inherits parent session deny rules as hard runtime ceilings"
       }),
     )
 
-    expect(Permission.evaluate("bash", "git status", effective).action).toBe("deny")
+    expect(legacyEvaluate("bash", "git status", effective).action).toBe("deny")
   }),
 )

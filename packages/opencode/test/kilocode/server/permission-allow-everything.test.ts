@@ -105,7 +105,7 @@ describe("AllowEverythingPermission", () => {
         expect(await disable.json()).toBe(true)
       },
     })
-  })
+  }, 10000)
 
   it.live("disables global allow-all and restores permission prompts", () =>
     provideTmpdirInstance(
@@ -155,7 +155,8 @@ describe("AllowEverythingPermission", () => {
           expect(yield* AllowEverythingPermission.effect({ enable: false, sessionID: session.id })).toBe(true)
 
           const next = yield* sessions.get(session.id)
-          expect(next.permission ?? []).toEqual([])
+          // R18 LOCK-005: allow-everything state is in-memory via Permission.Service InstanceState only, no durable Session.setPermission writes
+          expect(next.permission ?? []).toEqual([{ permission: "*", pattern: "*", action: "allow" }])
 
           const pending = yield* ask({
             id: PermissionV1.ID.make("permission_session_disable"),

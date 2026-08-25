@@ -27,6 +27,7 @@ import { Truncate } from "../../src/tool/truncate"
 import { ToolRegistry } from "../../src/tool/registry"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 const ref = {
   providerID: ProviderV2.ID.make("test"),
@@ -346,8 +347,8 @@ describe("Kilo task nesting", () => {
           expect(validator).toBeDefined()
           if (!validator) return
 
-          expect(Permission.evaluate("bash", "ansible-lint --version", validator.permission).action).toBe("allow")
-          expect(Permission.evaluate("bash", "rm -rf build", validator.permission).action).toBe("deny")
+          expect(legacyEvaluate("bash", "ansible-lint --version", validator.permission).action).toBe("allow")
+          expect(legacyEvaluate("bash", "rm -rf build", validator.permission).action).toBe("deny")
 
           const effective = Permission.merge(
             validator.permission,
@@ -356,8 +357,8 @@ describe("Kilo task nesting", () => {
           expect(child.permission).not.toContainEqual({ permission: "bash", pattern: "*", action: "ask" })
           expect(child.permission).toContainEqual({ permission: "bash", pattern: "rm -rf *", action: "deny" })
           expect({
-            allowed: Permission.evaluate("bash", "ansible-lint --version", effective).action,
-            denied: Permission.evaluate("bash", "rm -rf build", effective).action,
+            allowed: legacyEvaluate("bash", "ansible-lint --version", effective).action,
+            denied: legacyEvaluate("bash", "rm -rf build", effective).action,
           }).toEqual({ allowed: "allow", denied: "deny" })
         }),
       {

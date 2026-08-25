@@ -18,6 +18,7 @@ import { InvalidTool } from "./invalid"
 import { SkillTool } from "./skill"
 import * as Tool from "./tool"
 import { Config } from "@/config/config"
+import { Wildcard } from "@opencode-ai/core/util/wildcard"
 import { type ToolContext as PluginToolContext, type ToolDefinition } from "@kilocode/plugin"
 import type { JSONSchema7, JSONSchema7Definition } from "@ai-sdk/provider"
 import { Schema } from "effect"
@@ -57,7 +58,6 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Bus } from "../bus"
 import { Agent } from "../agent/agent"
 import { Skill } from "../skill"
-import { Permission } from "@/permission"
 import { SessionStatus } from "@/session/status" // kilocode_change
 import { Reference } from "@/reference/reference"
 import { RepositoryCache } from "@/reference/repository-cache" // kilocode_change
@@ -359,9 +359,13 @@ export const layer: Layer.Layer<
 
     const describeTask = Effect.fn("ToolRegistry.describeTask")(function* (agent: Agent.Info) {
       const items = (yield* agents.list()).filter((item) => item.mode !== "primary")
-      const filtered = items.filter(
-        (item) => Permission.evaluate("task", item.name, agent.permission).action !== "deny",
-      )
+      // R18: non-authorizing deny filter — exact rule lookup, not a final allow/deny decision
+      const filtered = items.filter((item) => {
+        const rule = (agent.permission as readonly { permission: string; pattern: string; action: string }[]).findLast(
+          (r) => Wildcard.match("task", r.permission) && Wildcard.match(item.name, r.pattern),
+        )
+        return rule?.action !== "deny"
+      })
       const list = filtered.toSorted((a, b) => a.name.localeCompare(b.name))
       const description = list
         .map(

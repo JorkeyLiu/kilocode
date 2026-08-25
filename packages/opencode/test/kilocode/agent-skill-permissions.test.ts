@@ -4,11 +4,12 @@ import { Effect } from "effect"
 import { testEffect } from "../lib/effect"
 import { Agent } from "../../src/agent/agent"
 import { Permission } from "../../src/permission"
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 const it = testEffect(Agent.defaultLayer)
 
 function action(name: string, ruleset: Permission.Ruleset) {
-  return Permission.evaluate("skill", name, ruleset).action
+  return legacyEvaluate("skill", name, ruleset).action
 }
 
 it.instance("skill tool available for non-system native agents and denied for system agents", () =>

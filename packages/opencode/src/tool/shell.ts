@@ -6,6 +6,7 @@ import path from "path"
 import * as Log from "@opencode-ai/core/util/log"
 import { containsPath, type InstanceContext } from "../project/instance-context"
 import { InstanceState } from "@/effect/instance-state"
+import { createTrustedReadCapability } from "@/kilocode/permission/trusted-read"
 import { lazy } from "@/util/lazy"
 import { Language, type Node } from "web-tree-sitter"
 
@@ -38,6 +39,7 @@ const FILES = new Set([
   "touch",
   "chmod",
   "chown",
+  "sed",
   "cat",
   // Leave PowerShell aliases out for now. Common ones like cat/cp/mv/rm/mkdir
   // already hit the entries above, and alias normalization should happen in one
@@ -85,6 +87,7 @@ type Scan = {
   patterns: Set<string>
   always: Set<string>
   access: Access // kilocode_change
+  files: Set<string>
 }
 
 type Chunk = {
@@ -306,16 +309,22 @@ const ask = Effect.fn("ShellTool.ask")(function* (
         patterns: globs,
         ...(scan.access === "read" ? { access: "read" as const } : {}),
       },
+      ...(scan.access === "read" ? { trustedReadCapability: createTrustedReadCapability() } : {}),
       // kilocode_change end
-    })
+    } as any)
   }
 
   if (scan.patterns.size === 0) return
+  const bashFiles = scan.files.size > 0 ? Array.from(scan.files).map((p) => ({ filePath: p })) : undefined
   yield* ctx.ask({
     permission: ShellID.ToolID,
     patterns: Array.from(scan.patterns),
     always: Array.from(scan.always),
-    metadata: { command: normalizeUrls(command), ...(description ? { description } : {}) }, // kilocode_change
+    metadata: {
+      command: normalizeUrls(command),
+      ...(description ? { description } : {}),
+      ...(bashFiles ? { files: bashFiles, filepath: Array.from(scan.files).join(", ") } : {}),
+    }, // kilocode_change - preserve resolved mutation targets for class-b ceiling via buildCanonicalTargets
   })
 })
 
@@ -372,6 +381,7 @@ export const ShellPermission = Effect.gen(function* () {
       patterns: new Set<string>(),
       always: new Set<string>(),
       access: "read",
+      files: new Set<string>(),
     }
     const kind = ShellID.toKind(Shell.name(shell))
 
@@ -391,10 +401,25 @@ export const ShellPermission = Effect.gen(function* () {
         for (const arg of pathArgs(command, ps, kind === "cmd")) {
           const resolved = yield* argpath(arg, cwd, ps, shell)
           log.info("resolved path", { arg, resolved })
-          if (!resolved || containsPath(resolved, instance)) continue
+          if (!resolved) continue
+          // Preserve in-workspace mutation targets for bash class-b ceiling via metadata.files
+          scan.files.add(resolved)
+          if (accessKind !== "read") scan.access = "unknown"
+          if (containsPath(resolved, instance)) continue
           const dir = (yield* fs.isDir(resolved)) ? resolved : path.dirname(resolved)
           scan.dirs.add(dir)
-          if (accessKind !== "read") scan.access = "unknown"
+        }
+      } else if (cmd) {
+        // For non-FILES commands (e.g., sed -i not yet in FILES before fix), still capture potential mutation targets if they resolve to paths
+        // This handles generic bash mutators like sed that were previously missed
+        for (const arg of pathArgs(command, ps, kind === "cmd")) {
+          const resolved = yield* argpath(arg, cwd, ps, shell)
+          if (!resolved) continue
+          // Heuristic: only preserve if arg looks like a file path that exists or is under instance
+          // For sed, we already added sed to FILES, so this branch is fallback for unknown mutators
+          if (containsPath(resolved, instance) || resolved.includes(".kilo")) {
+            scan.files.add(resolved)
+          }
         }
       }
 

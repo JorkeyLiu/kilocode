@@ -15,6 +15,7 @@ import { Provider } from "../../src/provider/provider"
 import { Skill } from "../../src/skill"
 import { Truncate } from "../../src/tool/truncate"
 import { MCP } from "../../src/mcp" // kilocode_change
+import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 const agentLayer = (flags: Partial<RuntimeFlags.Info> = {}) =>
   Agent.layer.pipe(
@@ -33,7 +34,7 @@ const scout = testEffect(agentLayer({ experimentalScout: true })) // kilocode_ch
 // Helper to evaluate permission for a tool with wildcard pattern
 function evalPerm(agent: Agent.Info | undefined, permission: string): PermissionV1.Action | undefined {
   if (!agent) return undefined
-  return Permission.evaluate(permission, "*", agent.permission).action
+  return legacyEvaluate(permission, "*", agent.permission).action
 }
 
 function load<A>(fn: (svc: Agent.Interface) => Effect.Effect<A>) {
@@ -87,7 +88,7 @@ it.instance("plan agent denies edits except .opencode/plans/*", () =>
     expect(evalPerm(plan, "edit")).toBe("deny")
     expect(evalPerm(plan, "interactive_terminal")).toBe("deny") // kilocode_change
     // But specific path is allowed
-    expect(Permission.evaluate("edit", ".opencode/plans/foo.md", plan!.permission).action).toBe("allow")
+    expect(legacyEvaluate("edit", ".opencode/plans/foo.md", plan!.permission).action).toBe("allow")
   }),
 )
 
@@ -107,10 +108,10 @@ it.instance("explore agent asks for external directories and allows whitelisted 
   Effect.gen(function* () {
     const explore = yield* load((svc) => svc.get("explore"))
     expect(explore).toBeDefined()
-    expect(Permission.evaluate("external_directory", "/some/other/path", explore!.permission).action).toBe("ask")
-    expect(Permission.evaluate("external_directory", Truncate.GLOB, explore!.permission).action).toBe("allow")
+    expect(legacyEvaluate("external_directory", "/some/other/path", explore!.permission).action).toBe("ask")
+    expect(legacyEvaluate("external_directory", Truncate.GLOB, explore!.permission).action).toBe("allow")
     expect(
-      Permission.evaluate("external_directory", path.join(Global.Path.tmp, "agent-work"), explore!.permission).action,
+      legacyEvaluate("external_directory", path.join(Global.Path.tmp, "agent-work"), explore!.permission).action,
     ).toBe("allow")
   }),
 )
@@ -125,7 +126,7 @@ scout.instance("scout agent allows repo cloning and repo cache reads", () =>
     expect(evalPerm(agent, "repo_overview")).toBe("allow")
     expect(evalPerm(agent, "edit")).toBe("deny")
     expect(
-      Permission.evaluate(
+      legacyEvaluate(
         "external_directory",
         path.join(Global.Path.repos, "github.com", "owner", "repo", "README.md"),
         agent!.permission,
@@ -265,7 +266,7 @@ it.instance(
       const build = yield* load((svc) => svc.get("build"))
       expect(build).toBeDefined()
       // Specific pattern is denied
-      expect(Permission.evaluate("bash", "rm -rf *", build!.permission).action).toBe("deny")
+      expect(legacyEvaluate("bash", "rm -rf *", build!.permission).action).toBe("deny")
       // Edit still allowed
       expect(evalPerm(build, "edit")).toBe("allow")
     }),
@@ -531,9 +532,9 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const build = yield* load((svc) => svc.get("build"))
-      expect(Permission.evaluate("external_directory", Truncate.GLOB, build!.permission).action).toBe("allow")
-      expect(Permission.evaluate("external_directory", Truncate.DIR, build!.permission).action).toBe("deny")
-      expect(Permission.evaluate("external_directory", "/some/other/path", build!.permission).action).toBe("deny")
+      expect(legacyEvaluate("external_directory", Truncate.GLOB, build!.permission).action).toBe("allow")
+      expect(legacyEvaluate("external_directory", Truncate.DIR, build!.permission).action).toBe("deny")
+      expect(legacyEvaluate("external_directory", "/some/other/path", build!.permission).action).toBe("deny")
     }),
   {
     config: {
@@ -548,9 +549,9 @@ it.instance("global tmp directory children are allowed for external_directory", 
   Effect.gen(function* () {
     const build = yield* load((svc) => svc.get("build"))
     expect(
-      Permission.evaluate("external_directory", path.join(Global.Path.tmp, "scratch"), build!.permission).action,
+      legacyEvaluate("external_directory", path.join(Global.Path.tmp, "scratch"), build!.permission).action,
     ).toBe("allow")
-    expect(Permission.evaluate("external_directory", "/some/other/path", build!.permission).action).toBe("ask")
+    expect(legacyEvaluate("external_directory", "/some/other/path", build!.permission).action).toBe("ask")
   }),
 )
 
@@ -559,9 +560,9 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const build = yield* load((svc) => svc.get("build"))
-      expect(Permission.evaluate("external_directory", Truncate.GLOB, build!.permission).action).toBe("allow")
-      expect(Permission.evaluate("external_directory", Truncate.DIR, build!.permission).action).toBe("deny")
-      expect(Permission.evaluate("external_directory", "/some/other/path", build!.permission).action).toBe("deny")
+      expect(legacyEvaluate("external_directory", Truncate.GLOB, build!.permission).action).toBe("allow")
+      expect(legacyEvaluate("external_directory", Truncate.DIR, build!.permission).action).toBe("deny")
+      expect(legacyEvaluate("external_directory", "/some/other/path", build!.permission).action).toBe("deny")
     }),
   {
     config: {
@@ -581,8 +582,8 @@ it.instance(
   () =>
     Effect.gen(function* () {
       const build = yield* load((svc) => svc.get("build"))
-      expect(Permission.evaluate("external_directory", Truncate.GLOB, build!.permission).action).toBe("deny")
-      expect(Permission.evaluate("external_directory", Truncate.DIR, build!.permission).action).toBe("deny")
+      expect(legacyEvaluate("external_directory", Truncate.GLOB, build!.permission).action).toBe("deny")
+      expect(legacyEvaluate("external_directory", Truncate.DIR, build!.permission).action).toBe("deny")
     }),
   {
     config: {
@@ -625,7 +626,7 @@ description: Permission skill.
 
       const build = yield* load((svc) => svc.get("build"))
       const target = path.join(skillDir, "reference", "notes.md")
-      expect(Permission.evaluate("external_directory", target, build!.permission).action).toBe("allow")
+      expect(legacyEvaluate("external_directory", target, build!.permission).action).toBe("allow")
     }),
   { git: true },
 )
