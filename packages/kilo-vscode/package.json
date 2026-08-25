@@ -113,11 +113,6 @@
         }
       },
       {
-        "command": "kilo-code.new.openMigrationWizard",
-        "title": "Migrate Settings from Legacy Version",
-        "category": "Kilo Code"
-      },
-      {
         "command": "kilo-code.new.agentManager.previousSession",
         "title": "Agent Manager: Previous Session",
         "category": "Kilo Code"

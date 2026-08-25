@@ -527,26 +527,6 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("kilo-code.new.settingsButtonClicked", (tab?: string) => {
       settingsEditorProvider.openPanel("settings", tab)
     }),
-    // legacy-migration start
-    vscode.commands.registerCommand("kilo-code.new.openMigrationWizard", async () => {
-      const tab = activeTabProvider()
-      if (tab) {
-        await tab.waitForReady()
-        tab.postMessage({ type: "migrationState", needed: true, source: "legacy" })
-        return
-      }
-      const tabProvider = await openKiloInNewTab(
-        context,
-        connectionService,
-        agentManagerProvider,
-        remoteService,
-        autoApprove,
-        canonicalConfig,
-      )
-      await tabProvider.waitForReady()
-      tabProvider.postMessage({ type: "migrationState", needed: true, source: "legacy" })
-    }),
-    // legacy-migration end
     vscode.commands.registerCommand("kilo-code.new.generateTerminalCommand", async () => {
       const input = await vscode.window.showInputBox({
         prompt: "Describe the terminal command you want to generate",

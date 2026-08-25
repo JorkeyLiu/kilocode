@@ -194,7 +194,6 @@ function createConnection(client: ReturnType<typeof createClient>) {
     onStateChange: (_l: (s: State) => void) => () => undefined,
     onLanguageChanged: () => () => undefined,
     onProfileChanged: () => () => undefined,
-    onMigrationComplete: () => () => undefined,
     onFavoritesChanged: () => () => undefined,
     onModelSelectorExpandedChanged: () => () => undefined,
     getConfigRevision: () => 0,

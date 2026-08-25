@@ -848,7 +848,7 @@ export async function run(): Promise<void> {
 
   // --- Topic-navigation lifecycle-convergence scenario (focused only) ---
   // Seeds the parentID hierarchy [root T1 → child T1C] + sibling root T2 and
-  // hands the harness three extension-owned view boundaries over the migration
+  // hands the harness three extension-owned view boundaries over the runtime
   // bridge:
   //   1. session navigation — the harness clicks the Topic rows and the child
   //      row in the real Agent Manager and asserts active tab / header / active
@@ -1825,7 +1825,7 @@ function assertNoP34Contributions(contributes: Record<string, unknown>): {
  * P3.4 runtime command-table check (part 2 of assertP34Removal): the RUNTIME
  * command table must contain no registered removed-feature command
  * (LOCK-PERF-3) while the retained surface commands exist (agentManagerOpen /
- * openInTab / agentManager.newTab / openMigrationWizard / explainCode /
+ * openInTab / agentManager.newTab / explainCode /
  * addToContext). Throws on any violation and returns the runtime evidence.
  */
 async function assertNoP34RuntimeCommands(vscodeApi: typeof vscode): Promise<{
@@ -1843,7 +1843,6 @@ async function assertNoP34RuntimeCommands(vscodeApi: typeof vscode): Promise<{
     "kilo-code.new.agentManagerOpen",
     "kilo-code.new.openInTab",
     "kilo-code.new.agentManager.newTab",
-    "kilo-code.new.openMigrationWizard",
     "kilo-code.new.explainCode",
     "kilo-code.new.addToContext",
     "kilo-code.new.toggleAutoApprove",

@@ -7,13 +7,6 @@ import type { Config } from "./config"
 import type { ReviewMessageData } from "../../../../src/shared/review-comments"
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
 import type { AnacondaDesktopWebviewMessage } from "../../../../src/shared/anaconda-desktop-messages"
-import type {
-  ClearLegacyDataMessage,
-  FinalizeLegacyMigrationMessage,
-  RequestMigrationDataMessage,
-  SkipLegacyMigrationMessage,
-  StartMigrationMessage,
-} from "./migration"
 
 // ============================================
 // Messages FROM webview TO extension
@@ -1060,13 +1053,6 @@ export type WebviewMessage =
   | SetSidebarCollapsedRequest
   | PersistVariantRequest
   | RequestVariantsMessage
-  // legacy-migration start
-  | RequestMigrationDataMessage
-  | StartMigrationMessage
-  | SkipLegacyMigrationMessage
-  | ClearLegacyDataMessage
-  | FinalizeLegacyMigrationMessage
-  // legacy-migration end
   | EnhancePromptRequest
   | RetryConnectionRequest
   | ReloadRequest

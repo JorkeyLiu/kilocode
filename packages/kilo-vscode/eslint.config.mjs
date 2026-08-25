@@ -64,14 +64,6 @@ export default [
     rules: { complexity: ["error", 48] },
   },
   {
-    files: ["src/legacy-migration/migration-service.ts"],
-    rules: { complexity: ["error", 45] },
-  },
-  {
-    files: ["webview-ui/src/components/migration/MigrationWizard.tsx"],
-    rules: { complexity: ["error", 37] },
-  },
-  {
     files: ["webview-ui/src/context/session.tsx"],
     // Raised from the default 3000 as this session context grew past the cap;
     // kept as a targeted override rather than loosening the global limit.

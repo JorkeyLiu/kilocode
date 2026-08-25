@@ -21,12 +21,10 @@ import AboutKiloCodeTab from "./AboutKiloCodeTab"
 import SandboxingTab from "./SandboxingTab"
 import * as Sandboxing from "./sandboxing"
 import { useServer } from "../../context/server"
-import type { MigrationSource } from "../../types/messages"
 
 export interface SettingsProps {
   tab?: string
   onTabChange?: (tab: string) => void
-  onMigrationClick?: (source: MigrationSource) => void // legacy-migration
 }
 
 const Settings: Component<SettingsProps> = (props) => {
@@ -233,7 +231,6 @@ const Settings: Component<SettingsProps> = (props) => {
             port={server.serverInfo()?.port ?? null}
             connectionState={server.connectionState()}
             extensionVersion={server.extensionVersion()}
-            onMigrationClick={props.onMigrationClick}
           />
         </Tabs.Content>
       </Tabs>

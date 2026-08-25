@@ -1,4 +1,4 @@
-import { Component, createSignal, Switch, Match, Show, onMount, onCleanup } from "solid-js"
+import { Component, createSignal, Switch, Match, onMount, onCleanup } from "solid-js"
 import { ThemeProvider } from "@kilocode/kilo-ui/theme"
 import { DialogProvider } from "@kilocode/kilo-ui/context/dialog"
 import { MarkedProvider } from "@kilocode/kilo-ui/context/marked"
@@ -34,7 +34,6 @@ registerExpandedTaskTool()
 // Apply VS Code chat UI preferences to other tools (e.g. bash expanded by default).
 registerVscodeToolOverrides()
 import HistoryView from "./components/history/HistoryView"
-import { MigrationWizard } from "./components/migration" // legacy-migration
 import { FeedbackProvider } from "./context/feedback"
 import { ImageModelsProvider } from "./context/image-models"
 // Side-effect-free bridges (shared with the Agent Manager webview). Imported
@@ -52,10 +51,6 @@ const VALID_VIEWS = new Set<string>(["newTask", "history", "profile", "settings"
 const AppContent: Component = () => {
   const [currentView, setCurrentView] = createSignal<ViewType>("newTask")
   const [settingsTab, setSettingsTab] = createSignal<string | undefined>()
-  // legacy-migration: state-driven flag independent of currentView to avoid
-  // race conditions with SettingsEditorProvider's navigate messages.
-  const [migrationNeeded, setMigrationNeeded] = createSignal(false)
-  const [migrationSource, setMigrationSource] = createSignal<"legacy" | "roo">("legacy")
   const session = useSession()
   const tabs = useLocalTabs()
   const server = useServer()
@@ -146,12 +141,6 @@ const AppContent: Component = () => {
         console.log("[Kilo New] App: 🔍 viewChildSession:", message.sessionID)
         openSession(message.sessionID)
       }
-      // legacy-migration: state-driven migration wizard
-      if (message?.type === "migrationState") {
-        console.log("[Kilo New] App: 🔄 migrationState:", message.needed)
-        setMigrationSource(message.source)
-        setMigrationNeeded(message.needed)
-      }
     }
     window.addEventListener("message", handler)
     onCleanup(() => window.removeEventListener("message", handler))
@@ -167,58 +156,38 @@ const AppContent: Component = () => {
 
   return (
     <div class="container">
-      {/* legacy-migration start — state-driven overlay, independent of currentView */}
-      <Show
-        when={migrationNeeded()}
+      <Switch
         fallback={
-          <Switch
-            fallback={
-              <ChatView
-                onForkMessage={session.status() === "idle" ? handleForkMessage : undefined}
-                promptBoxId="sidebar:fallback"
-                emptyState={emptyState}
-              />
-            }
-          >
-            <Match when={currentView() === "newTask"}>
-              <ChatView
-                onSelectSession={openSession}
-                onShowHistory={() => setCurrentView("history")}
-                onForkMessage={session.status() === "idle" ? handleForkMessage : undefined}
-                promptBoxId="sidebar:new-task"
-                emptyState={emptyState}
-              />
-            </Match>
-            <Match when={currentView() === "history"}>
-              <HistoryView onSelectSession={openSession} onBack={() => setCurrentView("newTask")} />
-            </Match>
-            <Match when={currentView() === "profile"}>
-              <ProfileView
-                profileData={server.profileData()}
-                deviceAuth={server.deviceAuth()}
-                onLogin={server.startLogin}
-              />
-            </Match>
-            <Match when={currentView() === "settings"}>
-              <Settings
-                tab={settingsTab()}
-                onTabChange={setSettingsTab}
-                onMigrationClick={(source) => {
-                  setMigrationSource(source)
-                  setMigrationNeeded(true)
-                }}
-              />
-            </Match>
-          </Switch>
+          <ChatView
+            onForkMessage={session.status() === "idle" ? handleForkMessage : undefined}
+            promptBoxId="sidebar:fallback"
+            emptyState={emptyState}
+          />
         }
       >
-        <MigrationWizard
-          source={migrationSource()}
-          onBack={() => setMigrationNeeded(false)}
-          onComplete={() => setMigrationNeeded(false)}
-        />
-      </Show>
-      {/* legacy-migration end */}
+        <Match when={currentView() === "newTask"}>
+          <ChatView
+            onSelectSession={openSession}
+            onShowHistory={() => setCurrentView("history")}
+            onForkMessage={session.status() === "idle" ? handleForkMessage : undefined}
+            promptBoxId="sidebar:new-task"
+            emptyState={emptyState}
+          />
+        </Match>
+        <Match when={currentView() === "history"}>
+          <HistoryView onSelectSession={openSession} onBack={() => setCurrentView("newTask")} />
+        </Match>
+        <Match when={currentView() === "profile"}>
+          <ProfileView
+            profileData={server.profileData()}
+            deviceAuth={server.deviceAuth()}
+            onLogin={server.startLogin}
+          />
+        </Match>
+        <Match when={currentView() === "settings"}>
+          <Settings tab={settingsTab()} onTabChange={setSettingsTab} />
+        </Match>
+      </Switch>
     </div>
   )
 }

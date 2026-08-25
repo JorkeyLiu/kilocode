@@ -261,9 +261,9 @@ flowchart LR
 
 Every GUI write applies a partial set/unset patch to the current stamped document (not replacement). Both scoped candidates and cross-scope composition are validated before any byte is changed. Writes use temp-file + rename for atomicity. Final CAS (content-address stamp) checks immediately before rename detect concurrent external edits and return stale-write conflicts instead of silent overwrites.
 
-### Retained migration bridge
+### Retained transport bridge
 
-The current `kilo serve` HTTP/SSE/SDK transport remains the active migration bridge (LOCK-009). The CLI backend continues to consume config through its own readers during the transition. P4.3 will atomically cut over legacy readers; until then, the CLI remains a bridge and the canonical file-authoritative GUI layer described above is the new extension-owned config surface. VS Code settings (`kilo-code.new.*` extension UI, proxy, and integration settings) remain separate from the canonical config boundary.
+The current `kilo serve` HTTP/SSE/SDK transport remains the active bridge (LOCK-009). The extension legacy-migration importer and Roo import wiring are removed: no legacy-data migration or Roo import path is retained, and no dual-read compatibility surface is retained. Generic current-settings import/export is separate and retained. The CLI/backend transport remains separately scoped for later narrowing. VS Code settings (`kilo-code.new.*` extension UI, proxy, and integration settings) remain separate from the canonical config boundary.
 
 ## Bundled resources
 

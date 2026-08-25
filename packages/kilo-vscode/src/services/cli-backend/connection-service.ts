@@ -13,7 +13,6 @@ type StateListener = (state: ConnectionState, error?: Error) => void
 type SSEEventFilter = (event: SSEPayload, directory?: string) => boolean
 type LanguageChangeListener = (locale: string) => void
 type ProfileChangeListener = (data: unknown) => void
-type MigrationCompleteListener = () => void
 type FavoritesChangeListener = (favorites: Array<{ providerID: string; modelID: string }>) => void
 type ModelSelectorExpandedListener = (value: boolean) => void
 type DirectoryProvider = () => string[]
@@ -49,7 +48,6 @@ export class KiloConnectionService {
   private readonly stateListeners: Set<StateListener> = new Set()
   private readonly languageChangeListeners: Set<LanguageChangeListener> = new Set()
   private readonly profileChangeListeners: Set<ProfileChangeListener> = new Set()
-  private readonly migrationCompleteListeners: Set<MigrationCompleteListener> = new Set()
   private readonly favoritesChangeListeners: Set<FavoritesChangeListener> = new Set()
   private readonly modelSelectorExpandedListeners: Set<ModelSelectorExpandedListener> = new Set()
   private readonly directoryProviders: Set<DirectoryProvider> = new Set()
@@ -413,25 +411,6 @@ export class KiloConnectionService {
   }
 
   /**
-   * Subscribe to migration-complete events broadcast from any KiloProvider. Returns unsubscribe function.
-   */
-  onMigrationComplete(listener: MigrationCompleteListener): () => void {
-    this.migrationCompleteListeners.add(listener)
-    return () => {
-      this.migrationCompleteListeners.delete(listener)
-    }
-  }
-
-  /**
-   * Broadcast a migration-complete event to all subscribed KiloProvider instances.
-   */
-  notifyMigrationComplete(): void {
-    for (const listener of this.migrationCompleteListeners) {
-      listener()
-    }
-  }
-
-  /**
    * Subscribe to favorites change events broadcast from any KiloProvider. Returns unsubscribe function.
    */
   onFavoritesChanged(listener: FavoritesChangeListener): () => void {
@@ -632,7 +611,6 @@ export class KiloConnectionService {
     this.eventListeners.clear()
     this.stateListeners.clear()
     this.profileChangeListeners.clear()
-    this.migrationCompleteListeners.clear()
     this.favoritesChangeListeners.clear()
     this.directoryProviders.clear()
     this.rootDirectory = undefined

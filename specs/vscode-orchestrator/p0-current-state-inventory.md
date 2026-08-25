@@ -11,6 +11,22 @@ Audience: the hub, P3 removal subphases, P4 runtime/config subphases, P5 startup
 phases, and any future session that needs the current-state baseline without
 re-searching the repository.
 
+> **Amendment (2026-08-25).** The original inventory was collected against the
+> working tree at commit `6ecc440507` on 2026-08-10 (see section 1 and section 11)
+> and recorded the extension legacy-migration/importer and Roo-import surfaces
+> as present. On 2026-08-25 those extension surfaces were removed in a separate
+> bounded P4.4 implementation unit; the current-state is updated at the
+> "Legacy migration / Roo import" surface row and the section 3 note: the
+> extension legacy-migration and Roo-import trees are gone, with removal
+> assertions in `packages/kilo-vscode/tests/unit/p3-4-removal.test.ts:420-444`.
+> The CLI/TUI migration helper
+> (`packages/opencode/src/cli/cmd/tui/config/tui-migrate.ts:33-80,148-166`)
+> remains and is not part of the removed extension importer. No other inventory
+> row was reclassified by this amendment; disposition and residual scope for all
+> other surfaces (including the preset-provider/catalog LOCK-006 row) are
+> unchanged. This is migration evidence only — it does not edit canonical
+> architecture docs (LOCK-013).
+
 ## 1. Status And Classification Rules
 
 - Status of every claim: `Evidence` (verified file:line reference),
@@ -21,7 +37,7 @@ re-searching the repository.
   section 8) with evidence links, not in this artifact.
 - No P0 phase is claimed complete. This artifact is an input to P0 exit, not
   evidence of P0 exit.
-- Counts are reproducible via the commands in section 10. A count that is not
+- Counts are reproducible via the commands in section 11. A count that is not
   reproducible is labeled `Unknown`, never estimated.
 - Working-tree note: the inventory below was collected against commit
   `6ecc440507` on branch `jorkey/integration` **including uncommitted
@@ -69,14 +85,15 @@ re-searching the repository.
   types are `Used`. Because dispatch can be dynamic (string-built types,
   generic handlers, remote-controlled flows), `Used`/`Unused (static)` are
   static classifications; final truth needs the runtime probe in section 9.
-- Counts: reproducible commands are listed beside every count (section 10).
+- Counts: reproducible commands are listed beside every count (section 11).
 - Evidence date: 2026-08-10.
 
 ## 3. Surface Inventory
 
 Expansion of direction spec section 1.3 with verified current implementation
-locations. "Target classification" is copied from the direction spec; nothing
-here claims removal has happened.
+locations. "Target classification" is copied from the direction spec. Rows
+explicitly updated with post-implementation evidence record removal; other
+rows remain current-state or target evidence only.
 
 | Surface | Current implementation (evidence) | Role today | Target classification |
 |---|---|---|---|
@@ -99,15 +116,18 @@ here claims removal has happened.
 | Preset provider catalog/onboarding | `packages/opencode/src/kilocode/provider/provider.ts:42` (`KILO_BUNDLED_PROVIDERS` → `@kilocode/kilo-gateway`); `packages/opencode/src/kilocode/provider/models-api.json` (3.0 MB checked-in catalog); `packages/opencode/src/kilocode/provider/metadata.ts`; `packages/opencode/src/provider/provider.ts:1383-1392` (models.dev service); `packages/opencode/src/provider/models.ts:47-51` (models.dev fallback) | Preset provider identities/catalogs, models.dev dependency | Removed (LOCK-006) |
 | Notebook | `extension.ts:137` (`createNotebookBridge`); `src/services/notebook/`; `Notebook.defaultLayer` in `app-runtime.ts:136` | Notebook integration | Not in the direction's removal rows; residual harness integration (removal row: not listed in tracker section 7 — see section 4 note) |
 | Browser automation | `src/services/browser-automation/` (MCP registration) | Browser automation MCP | Residual integration; disposition not in tracker removal rows |
-| Legacy migration / Roo import | `src/legacy-migration/`, `src/roo-import/` | Migration from legacy extension / Roo | Residual; not in tracker removal rows |
+| Legacy migration / Roo import | Extension legacy-migration and Roo-import trees are removed; removal assertions are in `packages/kilo-vscode/tests/unit/p3-4-removal.test.ts:420-444`. The remaining CLI/TUI migration helper is `packages/opencode/src/cli/cmd/tui/config/tui-migrate.ts:33-80,148-166`. | Extension importer/Roo wiring removed; CLI/TUI migration helper remains | Residual retained; extension removal evidenced, CLI/TUI residual remains open |
 | Speech-to-text | `src/speech-to-text/`; messages `speechToTextStart/Stop/Cancel/Prewarm` | Dictation | Residual; not in tracker removal rows |
 | Image generation/preview | `src/image-generation/`, `src/image-preview.ts` | Image features | Residual; not in tracker removal rows |
 
 Note on rows not in the tracker removal table (Notebook, browser automation,
-legacy migration, speech-to-text, image generation): the tracker section 7 rows
-cover only the LOCK-002/003/004/006 removals. These additional surfaces are
-recorded here so the surface inventory is complete; their disposition is
-`Unknown` (not decided by any lock) and is returned to the hub.
+speech-to-text, image generation): the tracker section 7 rows cover only the
+LOCK-002/003/004/006 removals. These additional surfaces are recorded here so
+the surface inventory is complete; their disposition is `Unknown` (not decided
+by any lock) and is returned to the hub. Legacy migration/Roo import is no
+longer an extension surface: its extension implementation is removed, while
+the remaining CLI/TUI migration helper is retained open work and must not be
+confused with the deleted extension importer.
 
 Shared current-state facts (from the direction spec and verified): one
 `KiloConnectionService` (`src/services/cli-backend/connection-service.ts:32-38`)
@@ -125,46 +145,43 @@ scope (LOCK-002; documented at
 
 Source of truth: `packages/kilo-vscode/webview-ui/src/types/messages/`
 (`webview-messages.ts`, `extension-messages.ts`, plus parts/agents/config/
-memory/migration/permissions/profile/providers/questions/sessions/
+permissions/profile/providers/questions/sessions/
 agent-manager/connection).
 
 | Protocol | Direction | Union members | Distinct `type` literals | Evidence |
 |---|---|---|---|---|
-| `WebviewMessage` | webview → extension | 199 | 189 | `webview-ui/src/types/messages/webview-messages.ts:1150-1364` |
-| `ExtensionMessage` | extension → webview | 154 | 143 | `webview-ui/src/types/messages/extension-messages.ts:1056-1212` |
+| `WebviewMessage` | webview → extension | 141 | 139 | `webview-ui/src/types/messages/webview-messages.ts:963-1104` |
+| `ExtensionMessage` | extension → webview | 132 | 120 | `webview-ui/src/types/messages/extension-messages.ts:992-1124` |
 
-The two sets are disjoint (0 shared type strings). Total distinct webview
-message types: **332** (reproducible count, section 10).
+The top-level union member sets remain disjoint. At counting-command level the
+two files now share one `type:` literal — `retryProviderCleanup` (a
+`WebviewMessage` union discriminator at `webview-messages.ts:804` and a nested
+retry payload shape inside `extension-messages.ts:900,906`) — so combined
+distinct webview message types are **258** (139 + 120 − 1 shared; reproducible
+count, section 11). Historical baseline (2026-08-10 collection):
+**332** (189 + 143) with 0 shared type strings (section 13).
 
 Static classification (method in section 2.2):
 
 | Class | Webview → extension | Extension → webview | Notes |
 |---|---|---|---|
-| Used (referenced in extension `src/` or webview code) | 161 of 189 | 136 of 143 | Includes `case "X"`, `=== "X"`, and webview-side `post`/dispatch references |
-| Unused (static) — referenced only inside the type-definition directory | 28 | 7 | All are worktree/section/PR/import/multi-version `agentManager.*` types plus `filterMarketplaceItems` (webview→ext) and `agentManager.branches/externalWorktrees/importResult/multiVersionProgress/prStatus/sessionMeta/worktreeSetup` (ext→webview) |
+| Used (referenced in extension `src/` or webview code) | 136 of 139 | 119 of 120 | Includes `case "X"`, `=== "X"`, and webview-side `post`/dispatch references |
+| Unused (static) — referenced only inside the type-definition directory | 3 | 1 | `agentManager.setDefaultBaseBranch`, `filterMarketplaceItems`, `selectSource` (webview→ext) and `agentManager.multiVersionProgress` (ext→webview) |
 | Unknown (needs runtime probe) | all `Used`/`Unused (static)` labels | same | Dynamic dispatch, string-built types, and remote-controlled flows are not provable statically |
 
-The 28 statically-unused webview→extension types:
-`agentManager.addSessionToWorktree`, `configureSetupScript`,
-`createMultiVersion`, `createSection`, `createWorktreeSession`,
-`deleteSection`, `deleteWorktree`, `importAllExternalWorktrees`,
-`importExternalWorktree`, `importFromBranch`, `importFromPR`, `moveSection`,
-`moveToSection`, `openLocally`, `openPR`, `openWorktree`, `promoteSession`,
-`refreshPR`, `removeStaleWorktree`, `renameSection`, `renameWorktree`,
-`requestBranches`, `requestExternalWorktrees`, `setDefaultBaseBranch`,
-`setSectionColor`, `setWorktreeOrder`, `toggleSectionCollapsed`,
-`filterMarketplaceItems`.
+The 3 statically-unused webview→extension types:
+`agentManager.setDefaultBaseBranch`, `filterMarketplaceItems`, `selectSource`.
 
-The 7 statically-unused extension→webview types:
-`agentManager.branches`, `agentManager.externalWorktrees`,
-`agentManager.importResult`, `agentManager.multiVersionProgress`,
-`agentManager.prStatus`, `agentManager.sessionMeta`,
-`agentManager.worktreeSetup`.
+The 1 statically-unused extension→webview type:
+`agentManager.multiVersionProgress`.
 
-All 35 statically-unused types belong to removal-target surfaces (worktree
-infrastructure, marketplace). Static deadness is consistent with residual
-worktree/Diff/marketplace implementation (LOCK-002, direction spec 1.2), but is
-**not** proof of absence of runtime dispatch — see section 9.
+All 4 statically-unused types belong to removal-target or retired surfaces:
+worktree base-branch and multi-version agent-manager
+(`agentManager.setDefaultBaseBranch`, `agentManager.multiVersionProgress`),
+marketplace (`filterMarketplaceItems`), and legacy source selection
+(`selectSource`). Static deadness is consistent with the removals that landed
+since the 2026-08-10 collection (LOCK-002, LOCK-006, direction spec 1.2), but
+is **not** proof of absence of runtime dispatch — see section 10 (U-1).
 
 ### 4.2 SSE event protocol (server → extension)
 
@@ -217,9 +234,9 @@ indexing status, memory fetch, session-status seed — plus
 
 | Count | Value | Reproducible |
 |---|---|---|
-| Webview message types (distinct `type` literals, both directions) | 332 | Yes (section 10) |
-| WebviewMessage union members | 199 | Yes |
-| ExtensionMessage union members | 154 | Yes |
+| Webview message types (distinct `type` literals, both directions) | 258 | Yes (section 11) |
+| WebviewMessage union members | 141 | Yes |
+| ExtensionMessage union members | 132 | Yes |
 | v2 SDK provider methods | 250 | Yes |
 | Webview entry points (esbuild) | 6 (+1 shiki worker asset) | Yes |
 | SSE `GlobalEvent` union members | 149 | Yes |
@@ -403,19 +420,21 @@ open question 3 ("What exact counts form the P0 complexity baseline: message
 types, provider methods, webview entry points"). These definitions are the P0
 complexity baseline; later-phase delta comparisons (tracker section 8 "Delta at
 P3/P4/P5") must reuse the same definitions and the same reproducible counting
-commands (section 10) for before/after comparison.
+commands (section 11) for before/after comparison.
 
-| Metric | Approved definition | Current value (this artifact) | Counting command (section 10) |
+| Metric | Approved definition | Current value (this artifact) | Counting command (section 11) |
 |---|---|---|---|
-| Webview message types | Number of distinct `type:` string literals in the `WebviewMessage` union (webview→extension) plus the `ExtensionMessage` union (extension→webview); disjoint sets so the sum is unambiguous | 332 (189 + 143) | `msg-count.sh` |
+| Webview message types | Number of distinct `type:` string literals in the `WebviewMessage` union (webview→extension) plus the `ExtensionMessage` union (extension→webview); the union-member sets are disjoint, with each literal counted once (the one file-level shared literal is noted in section 4.1) | 258 (139 + 120 − 1 shared; baseline 2026-08-10: 332 = 189 + 143) | `rg` literal counts over `webview-messages.ts` + `extension-messages.ts` (section 11) |
 | Provider methods | Number of public methods on the generated v2 SDK client used by the extension (`@kilocode/sdk/v2/client`) | 250 | `awk` over `sdk.gen.ts` |
 | Webview entry points | Number of webview HTML entry points built by `esbuild.js` (excluding the shiki worker asset) | 6 | `esbuild.js` entries |
 
 Alternatives considered and rejected at approval:
 
-- Message types could instead count union members (199 + 154 = 353) instead of
-  distinct literals (332). Distinct literals were chosen because they count
-  the wire discriminator once.
+- Message types could instead count union members (141 + 132 = 273) instead of
+  distinct literals (258) — the baseline arithmetic at the 2026-08-12 approval
+  was 199 + 154 = 353 members vs 332 distinct literals; both the rationale and
+  the relationship (members > literals) are unchanged. Distinct literals were
+  chosen because they count the wire discriminator once.
 - Provider methods could count the legacy `src/gen` SDK (78) instead of the
   v2 SDK (250). The v2 SDK is the one actually imported by the extension
   (`connection-service.ts:3`), so it is the faithful protocol surface.
@@ -435,7 +454,7 @@ measurement. No claim about any of them is made here.
 
 | # | Unknown | Why static evidence is insufficient | What would resolve it |
 |---|---|---|---|
-| U-1 | Whether the 35 statically-unused message types are ever dispatched at runtime | Dispatch can be string-built, remote-controlled, or via generic handlers not matched by literal search | Runtime probe: instrument webview `postMessage` senders and extension `onDidReceiveMessage` receivers under representative flows (sidebar, Agent Manager, diff, marketplace) |
+| U-1 | Whether the 4 statically-unused message types are ever dispatched at runtime | Dispatch can be string-built, remote-controlled, or via generic handlers not matched by literal search | Runtime probe: instrument webview `postMessage` senders and extension `onDidReceiveMessage` receivers under representative flows (sidebar, Agent Manager, diff, marketplace) |
 | U-2 | Actual per-workspace config source count and merge order | `config.ts` enumerates 15 sources but active sources depend on env, auth records, org membership, and platform (macOS managed prefs) | Runtime log of merged source origins (`instruction_origins`, `skill_path_origins`, config warnings) in a probe workspace |
 | U-3 | Which removed-feature services actually initialize at worker startup | The layer graph (`app-runtime.ts:160-177`) declares services; Effect builds lazily per use, so declaration ≠ construction | P0 instrumentation on `KiloListener.build` / `Layer.buildWithMemoMap` construction (runtime spec 10.8) |
 | U-4 | Per-stage cold/warm startup durations | Instrumentation points exist (extension `perf/perf-instrument.ts`; CLI `kilocode/perf/instrument`; `cli/cmd/debug/startup.ts`); measurements are now recorded for the measured stages in the six accepted P0 campaigns (tracker section 8 performance rows, evidence links under `specs/vscode-orchestrator/evidence/p0-baseline/`) | Executed — per-stage timings recorded in the tracker (section 8) as descriptive n=5 statistics with evidence links (LOCK-PERF-6); stages without an accepted campaign or an existing extension-owned index (e.g. persisted-selector paint) are later-phase gates (P2/P3/P4.4/P5), not inventory claims |
@@ -448,17 +467,22 @@ measurement. No claim about any of them is made here.
 
 ## 11. Verification
 
-Commands run against the working tree at commit `6ecc440507` (2026-08-10).
+Commands run against the working tree at commit `6ecc440507` (2026-08-10);
+the message-protocol outputs below were re-run against the current working tree
+on 2026-08-25 after the P3.1–P3.4 removal commits and the uncommitted
+`migration` message-module deletion. The 2026-08-10 baseline outputs were:
+webview literals 189, extension literals 143, union members 199/154, 28 + 7
+statically-unused. Current values replace them in sections 4.1, 4.4, and 9.
 Reproducible counting commands:
 
 ```bash
 # WebviewMessage / ExtensionMessage distinct type literals
-rg -o 'type: "[a-zA-Z0-9_.-]+"' packages/kilo-vscode/webview-ui/src/types/messages/webview-messages.ts | sort -u | wc -l   # 189
-rg -o 'type: "[a-zA-Z0-9_.-]+"' packages/kilo-vscode/webview-ui/src/types/messages/extension-messages.ts | sort -u | wc -l  # 143
+rg -o 'type: "[a-zA-Z0-9_.-]+"' packages/kilo-vscode/webview-ui/src/types/messages/webview-messages.ts | sort -u | wc -l   # 139
+rg -o 'type: "[a-zA-Z0-9_.-]+"' packages/kilo-vscode/webview-ui/src/types/messages/extension-messages.ts | sort -u | wc -l  # 120
 
 # Union members
-sed -n '/^export type WebviewMessage =/,/^export type /p' packages/kilo-vscode/webview-ui/src/types/messages/webview-messages.ts | grep -c "^\s*|"    # 199
-sed -n '/^export type ExtensionMessage =/,/^export type \|^export interface/p' packages/kilo-vscode/webview-ui/src/types/messages/extension-messages.ts | grep -c "^\s*|"  # 154
+sed -n '/^export type WebviewMessage =/,/^export type /p' packages/kilo-vscode/webview-ui/src/types/messages/webview-messages.ts | grep -c "^\s*|"    # 141
+sed -n '/^export type ExtensionMessage =/,/^export type \|^export interface/p' packages/kilo-vscode/webview-ui/src/types/messages/extension-messages.ts | grep -c "^\s*|"  # 132
 
 # v2 SDK methods (the client the extension imports)
 awk '/^class [A-Za-z]+ extends/ {cls=$2} /^  public [a-zA-Z]+</ {count[cls]++} END {total=0; for (c in count) total+=count[c]; print total}' packages/sdk/js/src/v2/gen/sdk.gen.ts   # 250
@@ -469,9 +493,15 @@ awk '/^export type GlobalEvent =/{f=1;next} f&&/\| Event|\| SyncEvent/{n++} f&&/
 # Webview entry points (esbuild.js lines 209-232): agent-manager, kiloclaw, marketplace, diff-viewer, diff-virtual, main = 6 (+ shiki worker asset)
 
 # Statically-unused message types (excludes type-definition dir)
+# webview→extension: literals defined in webview-messages.ts not referenced elsewhere
 for t in $(rg -o 'type: "[a-zA-Z0-9_.-]+"' packages/kilo-vscode/webview-ui/src/types/messages/webview-messages.ts | sed 's/.*type: "//;s/"$//' | sort -u); do
   grep -rq --exclude-dir=messages "\"$t\"" packages/kilo-vscode/src packages/kilo-vscode/webview-ui 2>/dev/null || echo "ONLY-DEFINED: $t"
-done   # 28 webview→extension, 7 extension→webview
+done   # 3 webview→extension (re-run 2026-08-25)
+
+# extension→webview: literals defined in extension-messages.ts not referenced elsewhere
+for t in $(rg -o 'type: "[a-zA-Z0-9_.-]+"' packages/kilo-vscode/webview-ui/src/types/messages/extension-messages.ts | sed 's/.*type: "//;s/"$//' | sort -u); do
+  grep -rq --exclude-dir=messages "\"$t\"" packages/kilo-vscode/src packages/kilo-vscode/webview-ui 2>/dev/null || echo "ONLY-DEFINED: $t"
+done   # 1 extension→webview (re-run 2026-08-25)
 ```
 
 Live checks run:
@@ -500,8 +530,8 @@ suites.
   Q3 and R1/R2/R5/R6/R8 are resolved with decisions recorded in the tracker
   (section 9) and the runtime spec (section 9) as applicable. This artifact
   introduces no new decisions and does not modify `migration-tracker.md`.
-- The 35 statically-unused message types and the residual surfaces recorded in
-  section 3 are current-state facts. P3 removal phases must treat them as
+- The 4 statically-unused message types (section 4.1) and the residual surfaces
+  (section 3) are current-state facts. P3 removal phases must treat them as
   cleanup scope, never as retained capabilities (direction spec 1.2, tracker
   section 10 risk row 1).
 - The uncommitted P0 instrumentation and baseline fixture in the working tree
@@ -513,5 +543,7 @@ suites.
 
 | Date | Change | By |
 |---|---|---|
-| 2026-08-10 | Initial creation: current-state inventory from static investigation (surfaces, protocols, removals, runtime/config graph, redundancy candidates, H-1..H-13 map, proposed baseline counts, dynamic unknowns); no source changes, no tracker edits, no performance claims | Manifestor execution of P0 inventory task |
+| 2026-08-10 | Initial creation: current-state inventory from static investigation (surfaces, protocols, removals, runtime/config graph, redundancy candidates, H-1..H-13 map, proposed baseline counts, dynamic unknowns); no source changes were part of that inventory unit, no tracker edits, no performance claims | Manifestor execution of P0 inventory task |
 | 2026-08-10 | Correction: fixture status updated from "fails all 4 live tests" to current green baseline (4 pass / 0 fail / 51 expect() calls) after the earlier `SessionRevert` layer wiring gap was fixed by providing `SessionRevert.defaultLayer` (fixture `:263`) in this work unit; fixture line count/citations updated to the stable 1253-line state (H-1/H-9/H-10/H-11 `:516-704`, H-12 `:710-833`, H-2/H-7/H-8 `:839-1042`, H-13 `:1048-1202`); U-6 and the section 11 live-check table updated consistently; H-3..H-6 gaps and unproven target-surface parity unchanged; no tracker/code edits, no performance claims | Manifestor correction of P0 inventory fixture status |
+| 2026-08-25 | Amendment: clarified provenance split between the 2026-08-10 `6ecc440507` baseline and the 2026-08-25 extension importer/Roo removal; the "Legacy migration / Roo import" surface row and section 3 note now record the post-removal state (extension legacy-migration/Roo trees removed, assertions `p3-4-removal.test.ts:420-444`) while the CLI/TUI migration helper remains retained open work; no other row reclassified, no tracker/spec edits, no performance claims | Manifestor correction of P0 inventory post-removal state |
+| 2026-08-25 | Correction: message-protocol counts and line citations refreshed after the P3.1–P3.4 removal commits and the uncommitted `migration` message-module deletion in the working tree. WebviewMessage union: 199 → 141 members, 189 → 139 distinct literals (`webview-messages.ts:963-1104`); ExtensionMessage union: 154 → 132 members, 143 → 120 distinct literals (`extension-messages.ts:992-1124`); combined distinct literals 332 → 258 (139 + 120 − 1 shared `retryProviderCleanup`, section 4.1). Statically-unused types 28 + 7 → 3 + 1 (`agentManager.setDefaultBaseBranch`, `filterMarketplaceItems`, `selectSource`; `agentManager.multiVersionProgress`). Sections 4.1, 4.4, 9, 10 (U-1), 11, and 12 updated consistently; the 2026-08-10 baseline values are preserved as labeled historical baselines in sections 4.1, 9, and 11. No source changes, no tracker/spec edits, no performance claims | Manifestor correction of P0 inventory message counts |

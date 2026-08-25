@@ -28,13 +28,6 @@ import type {
   SessionTimingEntry,
   TerminalFont,
 } from "./agent-manager"
-import type {
-  MigrationCompleteMessage,
-  MigrationDataMessage,
-  MigrationProgressMessage,
-  MigrationSessionProgressMessage,
-  MigrationStateMessage,
-} from "./migration"
 
 // ============================================
 // Messages FROM extension TO webview
@@ -1096,13 +1089,6 @@ export type ExtensionMessage =
   | AgentManagerTerminalFontChangedMessage
   | AgentManagerTerminalClosedMessage
   | AgentManagerTerminalErrorMessage
-  // legacy-migration start
-  | MigrationStateMessage
-  | MigrationDataMessage
-  | MigrationProgressMessage
-  | MigrationSessionProgressMessage
-  | MigrationCompleteMessage
-  // legacy-migration end
   | EnhancePromptResultMessage
   | EnhancePromptErrorMessage
   | MarketplaceDataMessage

@@ -5,14 +5,13 @@ import { showToast } from "@kilocode/kilo-ui/toast"
 import { useLanguage } from "../../context/language"
 import { useVSCode } from "../../context/vscode"
 import { useConfig } from "../../context/config"
-import type { Config, ConnectionState, ExtensionMessage, MigrationSource } from "../../types/messages"
+import type { Config, ConnectionState, ExtensionMessage } from "../../types/messages"
 import { buildExport, parseImport, MAX_IMPORT_SIZE } from "./settings-io"
 
 export interface AboutKiloCodeTabProps {
   port: number | null
   connectionState: ConnectionState
   extensionVersion?: string
-  onMigrationClick?: (source: MigrationSource) => void // legacy-migration
 }
 
 const AboutKiloCodeTab: Component<AboutKiloCodeTabProps> = (props) => {
@@ -301,35 +300,6 @@ const AboutKiloCodeTab: Component<AboutKiloCodeTabProps> = (props) => {
           </Button>
         </div>
       </div>
-
-      {/* legacy-migration start */}
-      <div style={{ ...sectionStyle, "margin-bottom": "0" }}>
-        <h4 style={headingStyle}>{language.t("settings.aboutKiloCode.legacyMigration.title")}</h4>
-        <p
-          style={{
-            "font-size": "var(--kilo-font-size-12)",
-            color: "var(--vscode-descriptionForeground)",
-            margin: "0 0 12px 0",
-            "line-height": "1.5",
-          }}
-        >
-          {language.t("settings.aboutKiloCode.legacyMigration.description")}
-        </p>
-        <div style={{ display: "flex", gap: "8px", "flex-wrap": "wrap" }}>
-          <Button variant="secondary" size="small" onClick={() => props.onMigrationClick?.("legacy")}>
-            {language.t("settings.legacyMigration.link")}
-          </Button>
-          <Button
-            variant="secondary"
-            size="small"
-            onClick={() => props.onMigrationClick?.("roo")}
-            title={language.t("settings.aboutKiloCode.rooImport.description")}
-          >
-            {language.t("settings.aboutKiloCode.rooImport.button")}
-          </Button>
-        </div>
-      </div>
-      {/* legacy-migration end */}
 
       {/* Reset Settings */}
       <div style={sectionStyle}>

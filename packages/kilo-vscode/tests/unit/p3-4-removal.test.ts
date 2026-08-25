@@ -31,7 +31,7 @@
  *   longer advertise the removed inline-autocomplete feature.
  * - Retained-presence: notebook helpers, Agent Manager + Open-in-Tab
  *   serializers, automatic CompactionPart mapping/rendering, custom provider
- *   surfaces, checkpoints, the migration bridge, generic chat/code actions,
+ *   surfaces, checkpoints, generic chat/code actions,
  *   selectKiloModel, and the agent manager / openInTab / newTab commands
  *   survive.
  * - E2E wiring: the focused `p3-4-removal` Extension Host scenario is
@@ -384,6 +384,24 @@ describe("P3.4 retention — preserved surfaces survive (LOCK-005/006/007/008)",
     }
   })
 
+  it("keeps the generic settings import/export surface (settings-io, not the removed importer)", () => {
+    // LOCK-014/015: generic settings transfer is retained and distinct from the
+    // deleted legacy-migration/importer. Assert the presence of the transfer
+    // module, its UI host, and the export/import markers without reimplementing
+    // the logic.
+    expect(fs.existsSync(path.join(ROOT, "webview-ui/src/components/settings/settings-io.ts"))).toBe(true)
+    expect(fs.existsSync(path.join(ROOT, "webview-ui/src/components/settings/AboutKiloCodeTab.tsx"))).toBe(true)
+    expect(webview).toContain("./settings-io")
+    expect(webview).toContain("buildExport")
+    expect(webview).toContain("parseImport")
+    expect(webview).toContain("MAX_IMPORT_SIZE")
+    expect(webview).toContain("settings.aboutKiloCode.settingsTransfer")
+    expect(webview).toContain("requestGlobalConfig")
+    expect(webview).toContain("globalConfigLoaded")
+    expect(webview).toContain("settings.aboutKiloCode.exportSettings")
+    expect(webview).toContain("settings.aboutKiloCode.importSettings")
+  })
+
   it("keeps invisible automatic CompactionPart rendering with no manual control (LOCK-005)", () => {
     const parts = fs.readFileSync(path.join(ROOT, "webview-ui/src/types/messages/parts.ts"), "utf-8")
     expect(parts).toContain("export interface CompactionPart")
@@ -392,13 +410,37 @@ describe("P3.4 retention — preserved surfaces survive (LOCK-005/006/007/008)",
     expect(queue).toContain('part.type === "compaction"')
   })
 
-  it("keeps the generic chat/code actions, agent-manager surface, and migration bridge", () => {
+  it("keeps the generic chat/code actions and agent-manager surface", () => {
     expect(ext).toContain("registerCodeActions(context, resolveChatTarget)")
     expect(ext).toContain("registerTerminalActions(context, resolveChatTarget)")
     expect(ext).toContain('vscode.commands.registerCommand("kilo-code.new.agentManagerOpen"')
-    expect(ext).toContain('vscode.commands.registerCommand("kilo-code.new.openMigrationWizard"')
     expect(ext).toContain("selectKiloModel")
-    expect(fs.existsSync(path.join(ROOT, "src/legacy-migration/migration-service.ts"))).toBe(true)
+  })
+
+  it("removes the extension legacy migration/importer surface", () => {
+    for (const file of [
+      "src/legacy-migration/migration-service.ts",
+      "src/roo-import/service.ts",
+      "webview-ui/src/components/migration/MigrationWizard.tsx",
+      "webview-ui/src/types/messages/migration.ts",
+      "src/kilo-provider/handlers/migration.ts",
+    ]) {
+      expect(fs.existsSync(path.join(ROOT, file)), `${file} must not exist`).toBe(false)
+    }
+    for (const id of [
+      "openMigrationWizard",
+      "requestMigrationData",
+      "startMigration",
+      "skipLegacyMigration",
+      "clearLegacyData",
+      "finalizeLegacyMigration",
+      "migrationState",
+      "legacy-migration",
+      "roo-import",
+    ]) {
+      expect(extTree, `extension source must not reference ${id}`).not.toContain(id)
+      expect(webview, `webview source must not reference ${id}`).not.toContain(id)
+    }
   })
 
   it("keeps checkpoint and revert paths and the SDK-backed session endpoints", () => {
