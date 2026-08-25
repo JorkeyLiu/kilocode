@@ -282,9 +282,8 @@ Speech-to-text captures audio locally, then sends completed recording through sh
 |---|---|
 | Missing SSE events for 15 seconds | SSE adapter aborts attempt and reconnects |
 | SSE reconnect | Starts at 250 ms delay and backs off to 5 seconds until stream opens |
-| Health poll | Every 10 seconds, checks `/global/health` with 3 second timeout; failure forces SSE reconnect |
 | Server exit | Clears connection state, reports error, and lets later retry or connection attempt spawn replacement |
-| Extension disposal | Stops polls, disposes SSE, and sends server process group termination with kill fallback |
+| Extension disposal | Stops periodic check-in, disposes SSE, and sends server process group termination with kill fallback |
 
 ## Builds
 
