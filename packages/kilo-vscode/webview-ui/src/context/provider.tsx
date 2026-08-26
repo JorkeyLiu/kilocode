@@ -7,7 +7,13 @@
 import { createContext, useContext, createSignal, createMemo, onCleanup } from "solid-js"
 import type { ParentComponent, Accessor } from "solid-js"
 import { useVSCode } from "./vscode"
-import type { ProviderView, ProviderModel, ModelSelection, ExtensionMessage, ProviderAuthState } from "../types/messages"
+import type {
+  ProviderView,
+  ProviderModel,
+  ModelSelection,
+  ExtensionMessage,
+  ProviderAuthState,
+} from "../types/messages"
 import type { ProviderAuthMethod } from "@kilocode/sdk/v2/client"
 import { flattenModels, findModel as _findModel, isModelValid as isValid } from "./provider-utils"
 import type { CanonicalStamp } from "../../../src/config/types"
@@ -18,7 +24,13 @@ interface ProviderDiagnostics {
   action: string
   message: string
   kind?: string
-  retry?: { type: "retryProviderCleanup"; mode: "delete" | "restore"; scope: "global" | "project"; stamp: CanonicalStamp; retryID: string }
+  retry?: {
+    type: "retryProviderCleanup"
+    mode: "delete" | "restore"
+    scope: "global" | "project"
+    stamp: CanonicalStamp
+    retryID: string
+  }
 }
 
 interface ProviderContextValue {
@@ -35,7 +47,13 @@ interface ProviderContextValue {
   canonicalMode?: Accessor<boolean>
   stamp?: Accessor<CanonicalStamp | undefined>
   isModelValid: (selection: ModelSelection | null) => boolean
-  retryProviderCleanup?: (retry: { type: "retryProviderCleanup"; mode: "delete" | "restore"; scope: "global" | "project"; stamp: CanonicalStamp; retryID: string }) => void
+  retryProviderCleanup?: (retry: {
+    type: "retryProviderCleanup"
+    mode: "delete" | "restore"
+    scope: "global" | "project"
+    stamp: CanonicalStamp
+    retryID: string
+  }) => void
   clearDiagnostics?: () => void
 }
 
@@ -69,22 +87,35 @@ export const ProviderProvider: ParentComponent = (props) => {
   }
 
   function handleProvidersLoaded(message: Extract<ExtensionMessage, { type: "providersLoaded" }>) {
-    if (message.canonical && message.materializationVersion !== undefined && message.materializationVersion < (stamp()?.materializationVersion ?? -1)) return
+    if (
+      message.canonical &&
+      message.materializationVersion !== undefined &&
+      message.materializationVersion < (stamp()?.materializationVersion ?? -1)
+    )
+      return
 
     // P4.1: canonical mode is sticky — once established, noncanonical providers
     // are ignored so legacy updates cannot reset mode or overwrite canonical state.
     if (message.canonical) setCanonicalMode(true)
     else if (canonicalMode()) return
 
-    const views = Object.fromEntries(Object.entries(message.providers).map(([id, item]) => {
-      const models = Object.fromEntries(Object.entries(item.models).map(([modelID, model]) => {
-        const view = model as { id?: unknown; name?: unknown; variants?: unknown }
-        const variants = view.variants && typeof view.variants === "object" && !Array.isArray(view.variants) ? (view.variants as Record<string, Record<string, unknown>>) : undefined
-        if (typeof view.id !== "string" || typeof view.name !== "string") return [modelID, { id: modelID, name: modelID, ...(variants ? { variants } : {}) }]
-        return [modelID, { id: view.id, name: view.name, ...(variants ? { variants } : {}) }]
-      }))
-      return [id, { id: item.id, name: item.name, hasCredential: item.hasCredential, models }]
-    }))
+    const views = Object.fromEntries(
+      Object.entries(message.providers).map(([id, item]) => {
+        const models = Object.fromEntries(
+          Object.entries(item.models).map(([modelID, model]) => {
+            const view = model as { id?: unknown; name?: unknown; variants?: unknown }
+            const variants =
+              view.variants && typeof view.variants === "object" && !Array.isArray(view.variants)
+                ? (view.variants as Record<string, Record<string, unknown>>)
+                : undefined
+            if (typeof view.id !== "string" || typeof view.name !== "string")
+              return [modelID, { id: modelID, name: modelID, ...(variants ? { variants } : {}) }]
+            return [modelID, { id: view.id, name: view.name, ...(variants ? { variants } : {}) }]
+          }),
+        )
+        return [id, { id: item.id, name: item.name, hasCredential: item.hasCredential, models }]
+      }),
+    )
     setProviders(views)
     setConnected([...message.connected])
     setDefaults({ ...message.defaults })
@@ -93,9 +124,15 @@ export const ProviderProvider: ParentComponent = (props) => {
     setAuthStates(message.canonical ? {} : message.authStates)
     setDiagnostics(message.diagnostics ?? null)
     // P4.1: ready:false closes readiness; ready:true/error-free opens it.
-    if (message.canonical && message.materializationVersion !== undefined && message.materializationVersion > 0 && message.ready !== false) setCanonical(true)
+    if (
+      message.canonical &&
+      message.materializationVersion !== undefined &&
+      message.materializationVersion > 0 &&
+      message.ready !== false
+    )
+      setCanonical(true)
     else if (message.canonical && message.ready === false) setCanonical(false)
-   if (message.canonical && "stamp" in message) setStamp(message.stamp)
+    if (message.canonical && "stamp" in message) setStamp(message.stamp)
   }
 
   // Register handler immediately (not in onMount) so we never miss
@@ -118,8 +155,10 @@ export const ProviderProvider: ParentComponent = (props) => {
 
   onCleanup(unsubscribe)
 
-  // Request providers immediately; if the extension's httpClient is not yet ready,
-  // extensionDataReady will fire once initialization completes and we retry once.
+  // P4.4-T22: provider selector readiness is canonical-first. Request
+  // immediately; HTTP/SSE/generated-SDK is background reconciliation only.
+  // Fallback covers legacy noncanonical slow-init (bridge still posts
+  // providersLoaded via fetchAndSend).
   vscode.postMessage({ type: "requestProviders" })
 
   const fallback = setTimeout(() => {
@@ -128,21 +167,17 @@ export const ProviderProvider: ParentComponent = (props) => {
     }
   }, 3000)
 
-  const unsubReady = vscode.onMessage((message: ExtensionMessage) => {
-    if (message.type !== "extensionDataReady") return
-    unsubReady()
-    clearTimeout(fallback)
-    if (Object.keys(providers()).length === 0) {
-      vscode.postMessage({ type: "requestProviders" })
-    }
-  })
-
   onCleanup(() => {
-    unsubReady()
     clearTimeout(fallback)
   })
 
-  const retryProviderCleanup = (retry: { type: "retryProviderCleanup"; mode: "delete" | "restore"; scope: "global" | "project"; stamp: CanonicalStamp; retryID: string }) => {
+  const retryProviderCleanup = (retry: {
+    type: "retryProviderCleanup"
+    mode: "delete" | "restore"
+    scope: "global" | "project"
+    stamp: CanonicalStamp
+    retryID: string
+  }) => {
     // Host-owned: the request carries the opaque retryID only — no authority
     // refs. The host looks up its stored record for scope/mode/ref/stamp.
     vscode.postMessage({ type: "retryProviderCleanup", requestId: retry.retryID, retryID: retry.retryID })

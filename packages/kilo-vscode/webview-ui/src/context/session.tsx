@@ -248,15 +248,36 @@ interface SessionContextValue {
   agents: Accessor<AgentInfo[]>
   allAgents: Accessor<AgentInfo[]>
   removeAgent: (name: string) => void
-  mutateAgent: (input: { action: "create" | "edit" | "import"; name: string; frontmatter: Record<string, unknown>; body: string }) => void
+  mutateAgent: (input: {
+    action: "create" | "edit" | "import"
+    name: string
+    frontmatter: Record<string, unknown>
+    body: string
+  }) => void
   agentDiagnostic: Accessor<string | null>
   removeMcp: (name: string) => void
 
   // MCP server status (runtime connect/disconnect)
   mcpStatus: Accessor<Record<string, McpStatusEntry>>
   mcpLoading: Accessor<string | null>
-  mcpCleanupDiagnostic: Accessor<{ name: string; message: string; retry?: { requestId: string; name: string; scope: "global" | "project"; retryID: string; stamp: import("../../../src/config/types").CanonicalStamp } } | null>
-  retryMcpCleanup: (retry: { requestId: string; name: string; scope: "global" | "project"; retryID: string; stamp: import("../../../src/config/types").CanonicalStamp }) => void
+  mcpCleanupDiagnostic: Accessor<{
+    name: string
+    message: string
+    retry?: {
+      requestId: string
+      name: string
+      scope: "global" | "project"
+      retryID: string
+      stamp: import("../../../src/config/types").CanonicalStamp
+    }
+  } | null>
+  retryMcpCleanup: (retry: {
+    requestId: string
+    name: string
+    scope: "global" | "project"
+    retryID: string
+    stamp: import("../../../src/config/types").CanonicalStamp
+  }) => void
   connectMcp: (name: string) => void
   disconnectMcp: (name: string) => void
   authenticateMcp: (name: string) => void
@@ -451,7 +472,14 @@ export const SessionProvider: ParentComponent = (props) => {
     if (item?.scope) {
       const stamp = agentStamp()
       if (!stamp) return
-      vscode.postMessage({ type: "removeAgent", canonical: true, name, scope: item.scope, expectedHash: item.assetHash ?? "absent", stamp: { ...stamp, assetHash: item.assetHash ?? "absent" } })
+      vscode.postMessage({
+        type: "removeAgent",
+        canonical: true,
+        name,
+        scope: item.scope,
+        expectedHash: item.assetHash ?? "absent",
+        stamp: { ...stamp, assetHash: item.assetHash ?? "absent" },
+      })
       return
     }
     setAgents((prev) => prev.filter((a) => a.name !== name))
@@ -472,7 +500,12 @@ export const SessionProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "removeAgent", name })
   }
 
-  const mutateAgent = (input: { action: "create" | "edit" | "import"; name: string; frontmatter: Record<string, unknown>; body: string }) => {
+  const mutateAgent = (input: {
+    action: "create" | "edit" | "import"
+    name: string
+    frontmatter: Record<string, unknown>
+    body: string
+  }) => {
     const item = allAgents().find((agent) => agent.name === input.name)
     if (canonical?.() && !agentStamp()) return
     vscode.postMessage({
@@ -480,7 +513,7 @@ export const SessionProvider: ParentComponent = (props) => {
       ...input,
       scope: item?.scope ?? "project",
       expectedHash: item?.assetHash ?? "absent",
-       ...(agentStamp() ? { stamp: { ...agentStamp()!, assetHash: item?.assetHash ?? "absent" } } : {}),
+      ...(agentStamp() ? { stamp: { ...agentStamp()!, assetHash: item?.assetHash ?? "absent" } } : {}),
       requestId: crypto.randomUUID(),
     })
   }
@@ -506,7 +539,17 @@ export const SessionProvider: ParentComponent = (props) => {
   // MCP runtime status
   const [mcpStatus, setMcpStatus] = createSignal<Record<string, McpStatusEntry>>({})
   const [mcpLoading, setMcpLoading] = createSignal<string | null>(null)
-  const [mcpCleanupDiagnostic, setMcpCleanupDiagnostic] = createSignal<{ name: string; message: string; retry?: { requestId: string; name: string; scope: "global" | "project"; retryID: string; stamp: import("../../../src/config/types").CanonicalStamp } } | null>(null)
+  const [mcpCleanupDiagnostic, setMcpCleanupDiagnostic] = createSignal<{
+    name: string
+    message: string
+    retry?: {
+      requestId: string
+      name: string
+      scope: "global" | "project"
+      retryID: string
+      stamp: import("../../../src/config/types").CanonicalStamp
+    }
+  } | null>(null)
 
   const connectMcp = (name: string) => {
     if (canonical?.()) return
@@ -536,7 +579,13 @@ export const SessionProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "requestMcpStatus" })
   }
 
-  const retryMcpCleanup = (retry: { requestId: string; name: string; scope: "global" | "project"; retryID: string; stamp: import("../../../src/config/types").CanonicalStamp }) => {
+  const retryMcpCleanup = (retry: {
+    requestId: string
+    name: string
+    scope: "global" | "project"
+    retryID: string
+    stamp: import("../../../src/config/types").CanonicalStamp
+  }) => {
     // Host-owned: the request carries the opaque retryID only — no authority
     // refs. The host looks up its stored record for scope/name/ref/stamp.
     vscode.postMessage({ type: "retryMcpCleanup", requestId: retry.requestId, retryID: retry.retryID })
@@ -957,19 +1006,19 @@ export const SessionProvider: ParentComponent = (props) => {
     }
     // P4.1: ignore legacy (non-canonical) agentsLoaded when canonical mode is active.
     if (canonicalMode?.() && !message.canonical) return
-     const stamp = message.canonical && "stamp" in message ? message.stamp : undefined
-     const fresh = !stamp || stamp.materializationVersion >= (agentStamp()?.materializationVersion ?? -1)
-     if (stamp && fresh) setAgentStamp(stamp)
-     if (fresh) {
-       setAgents(message.agents)
-       setAllAgents(message.allAgents ?? message.agents)
-     }
-      if (fresh && message.diagnostics && Object.keys(message.diagnostics).length > 0) {
-       setAgentDiagnostic(JSON.stringify(message.diagnostics))
-      } else if (fresh && stamp) {
-       setAgentDiagnostic(null)
-      }
-     if (!fresh) return
+    const stamp = message.canonical && "stamp" in message ? message.stamp : undefined
+    const fresh = !stamp || stamp.materializationVersion >= (agentStamp()?.materializationVersion ?? -1)
+    if (stamp && fresh) setAgentStamp(stamp)
+    if (fresh) {
+      setAgents(message.agents)
+      setAllAgents(message.allAgents ?? message.agents)
+    }
+    if (fresh && message.diagnostics && Object.keys(message.diagnostics).length > 0) {
+      setAgentDiagnostic(JSON.stringify(message.diagnostics))
+    } else if (fresh && stamp) {
+      setAgentDiagnostic(null)
+    }
+    if (!fresh) return
     setDefaultAgent(message.defaultAgent)
 
     const names = new Set(message.agents.map((a) => a.name))
@@ -1002,8 +1051,8 @@ export const SessionProvider: ParentComponent = (props) => {
     })
   })
 
-  // Request agents immediately; if the extension's httpClient is not yet ready,
-  // extensionDataReady will fire once initialization completes and we retry once.
+  // P4.4-T22: request agents immediately; canonical-first readiness does not
+  // wait for global extensionDataReady. HTTP/SSE bridge remains background.
   vscode.postMessage({ type: "requestAgents" })
 
   // Skills loaded from the CLI backend
@@ -1053,16 +1102,29 @@ export const SessionProvider: ParentComponent = (props) => {
         // A retry record exists only when the host stored one (retryID set);
         // terminal failures (no owned ref / invalid scope) carry an empty
         // retryID and no retry.
-        ...(message.retryID && message.scope ? { retry: { requestId: message.retryID, name: message.name, scope: message.scope, retryID: message.retryID, stamp: message.stamp } } : {}),
+        ...(message.retryID && message.scope
+          ? {
+              retry: {
+                requestId: message.retryID,
+                name: message.name,
+                scope: message.scope,
+                retryID: message.retryID,
+                stamp: message.stamp,
+              },
+            }
+          : {}),
       })
     }
     if (message.type === "mcpCleanupRetryResult") {
       if (message.ok) setMcpCleanupDiagnostic(null)
-      else if (mcpCleanupDiagnostic()) setMcpCleanupDiagnostic((prev) => prev ? { ...prev, message: message.message ?? prev.message } : null)
+      else if (mcpCleanupDiagnostic())
+        setMcpCleanupDiagnostic((prev) => (prev ? { ...prev, message: message.message ?? prev.message } : null))
     }
   })
 
-  // Request MCP status immediately; retry once on extensionDataReady if still missing.
+  // P4.4-T22: agent selector readiness is canonical-first; MCP remains SDK-only.
+  // Agents publish from canonical materialization without global extensionDataReady.
+  // HTTP/SSE bridge remains for noncanonical/background reconciliation.
   vscode.postMessage({ type: "requestMcpStatus" })
 
   const fallback = setTimeout(() => {
@@ -1074,7 +1136,6 @@ export const SessionProvider: ParentComponent = (props) => {
     if (message.type !== "extensionDataReady") return
     unsubReady()
     clearTimeout(fallback)
-    if (agents().length === 0) vscode.postMessage({ type: "requestAgents" })
     if (Object.keys(mcpStatus()).length === 0) vscode.postMessage({ type: "requestMcpStatus" })
   })
 

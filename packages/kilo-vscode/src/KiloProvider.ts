@@ -132,7 +132,17 @@ import { stopSessionProcesses } from "./kilo-provider/background-process"
 import { sandboxDefault, sandboxSessionMetadata } from "./shared/sandbox-session"
 import type { CanonicalConfigService, CanonicalConfigEvent, CanonicalConfigError } from "./config/service"
 import { sameStamp } from "./config/types"
-import { toCanonicalPayload, type CanonicalConfigPayload, type CanonicalMcpPayload, type CanonicalProviderPayload, type CanonicalStamp, type CleanupRetryRecord, parseCanonicalProviderRecord, narrowProviderEntry, isValidCanonicalProviderEntry } from "./config/types"
+import {
+  toCanonicalPayload,
+  type CanonicalConfigPayload,
+  type CanonicalMcpPayload,
+  type CanonicalProviderPayload,
+  type CanonicalStamp,
+  type CleanupRetryRecord,
+  parseCanonicalProviderRecord,
+  narrowProviderEntry,
+  isValidCanonicalProviderEntry,
+} from "./config/types"
 import { parseSecretKey } from "./config/secret-adapter"
 import { CLOSED_JSONC_FIELDS, isGuiField } from "./config/registry"
 import { mapProviderIndexToWebviewProviders } from "./config/selectors"
@@ -174,8 +184,12 @@ function redactCanonical(value: unknown): unknown {
 function canonicalConfigPayload(value: Record<string, unknown>): CanonicalConfigPayload {
   const redacted = redactCanonical(value)
   const raw = filterCanonicalScope(isRecord(redacted) ? redacted : {})
-  if (isRecord(raw.provider)) raw.provider = Object.fromEntries(Object.entries(raw.provider).map(([id, item]) => [id, canonicalProviderValue(item)]))
-  if (isRecord(raw.mcp)) raw.mcp = Object.fromEntries(Object.entries(raw.mcp).map(([id, item]) => [id, canonicalMcpValue(item)]))
+  if (isRecord(raw.provider))
+    raw.provider = Object.fromEntries(
+      Object.entries(raw.provider).map(([id, item]) => [id, canonicalProviderValue(item)]),
+    )
+  if (isRecord(raw.mcp))
+    raw.mcp = Object.fromEntries(Object.entries(raw.mcp).map(([id, item]) => [id, canonicalMcpValue(item)]))
   const payload = toCanonicalPayload(raw)
   return payload ?? {}
 }
@@ -226,10 +240,13 @@ function isCredentialFreeMetadata(value: unknown): boolean {
 
 function isCanonicalStamp(value: unknown): value is CanonicalStamp {
   if (!isRecord(value)) return false
-  if ((typeof value.globalHash !== "string" && value.globalHash !== null) ||
-      (typeof value.projectHash !== "string" && value.projectHash !== null) ||
-      typeof value.materializationVersion !== "number" ||
-      (typeof value.assetHash !== "string" && value.assetHash !== null)) return false
+  if (
+    (typeof value.globalHash !== "string" && value.globalHash !== null) ||
+    (typeof value.projectHash !== "string" && value.projectHash !== null) ||
+    typeof value.materializationVersion !== "number" ||
+    (typeof value.assetHash !== "string" && value.assetHash !== null)
+  )
+    return false
   return true
 }
 
@@ -540,8 +557,20 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // the current authoritative value rather than hardcoding false.
     this.canonicalReady = this.canonicalConfig.materializationReady
     const stamp = { ...this.canonicalConfig.stamp, assetHash: null }
-    this.cachedCanonicalError = { type: "canonicalConfigError", kind: error.kind, message: error.message, diagnostics: error.errors, stamp }
-    this.postMessage({ type: "canonicalConfigError", kind: error.kind, message: error.message, diagnostics: error.errors, stamp })
+    this.cachedCanonicalError = {
+      type: "canonicalConfigError",
+      kind: error.kind,
+      message: error.message,
+      diagnostics: error.errors,
+      stamp,
+    }
+    this.postMessage({
+      type: "canonicalConfigError",
+      kind: error.kind,
+      message: error.message,
+      diagnostics: error.errors,
+      stamp,
+    })
     if (this.canonicalConfig?.providerIndex) void this.sendCanonicalProviders()
     if (this.canonicalConfig?.agentIndex) void this.sendCanonicalAgents()
   }
@@ -554,7 +583,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
    * Never publishes rehydrated or backend-derived state pre-ready.
    */
   private publishCanonicalNotReady(): void {
-    const stamp = this.canonicalConfig?.stamp ?? { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null }
+    const stamp = this.canonicalConfig?.stamp ?? {
+      globalHash: null,
+      projectHash: null,
+      materializationVersion: 0,
+      assetHash: null,
+    }
     const settings = { maxCost: this.maxCostSetting() }
     const features = configFeatures()
     this.postMessage({
@@ -630,7 +664,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       ready: true,
       contentHash: snapshot.contentHash,
       materializationVersion: snapshot.generation,
-      diagnostics: [...(event?.errors ?? []), ...unsupported.map((key) => ({ path: [key], message: `Unsupported setting is read-only: ${key}` }))],
+      diagnostics: [
+        ...(event?.errors ?? []),
+        ...unsupported.map((key) => ({ path: [key], message: `Unsupported setting is read-only: ${key}` })),
+      ],
       stamp: service.stamp,
       ...(event?.source === "gui" ? {} : {}),
     }
@@ -647,12 +684,20 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.publishCanonicalNotReady()
       return
     }
-    const index = await service.buildProviderIndexAsync(this.cachedProvidersMessage && typeof this.cachedProvidersMessage === "object" && "defaultSelection" in this.cachedProvidersMessage
-      ? ((this.cachedProvidersMessage as { defaultSelection?: { providerID?: string } }).defaultSelection?.providerID ?? null)
-      : null)
+    const index = await service.buildProviderIndexAsync(
+      this.cachedProvidersMessage &&
+        typeof this.cachedProvidersMessage === "object" &&
+        "defaultSelection" in this.cachedProvidersMessage
+        ? ((this.cachedProvidersMessage as { defaultSelection?: { providerID?: string } }).defaultSelection
+            ?.providerID ?? null)
+        : null,
+    )
     if (!index) return
     const providers = mapProviderIndexToWebviewProviders(index)
-    const selected = typeof (service.snapshot?.config.value.model) === "string" ? String(service.snapshot?.config.value.model).split("/") : []
+    const selected =
+      typeof service.snapshot?.config.value.model === "string"
+        ? String(service.snapshot?.config.value.model).split("/")
+        : []
     const providerID = selected[0] && index.providers.some((item) => item.id === selected[0]) ? selected[0] : ""
     const message = {
       type: "providersLoaded" as const,
@@ -686,11 +731,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       name: item.id,
       displayName: item.displayName,
       description: item.description,
-      mode: item.mode === "specialized" ? "subagent" as const : item.mode === "primary" ? "primary" as const : "all" as const,
+      mode:
+        item.mode === "specialized"
+          ? ("subagent" as const)
+          : item.mode === "primary"
+            ? ("primary" as const)
+            : ("all" as const),
       hidden: item.hidden,
-       color: item.color,
-       scope: item.source,
-       path: item.filePath,
+      color: item.color,
+      scope: item.source,
+      path: item.filePath,
       assetHash: item.assetHash ?? service.getAssetStamp("agent", item.id, item.source),
       frontmatter: item.frontmatter,
       body: item.body,
@@ -749,16 +799,47 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const id = typeof msg.providerID === "string" ? msg.providerID : ""
     const requestId = typeof msg.requestId === "string" ? msg.requestId : ""
     if (!service || !this.canonicalReady) {
-      this.postMessage({ type: "providerActionError", requestId: requestId || crypto.randomUUID(), providerID: id, action: msg.type === "deleteCustomProvider" ? "delete" : msg.type === "disconnectProvider" ? "disconnect" : "connect", message: "Canonical provider authority is not ready", canonical: true, kind: "not-ready", stamp: service?.stamp })
+      this.postMessage({
+        type: "providerActionError",
+        requestId: requestId || crypto.randomUUID(),
+        providerID: id,
+        action:
+          msg.type === "deleteCustomProvider" ? "delete" : msg.type === "disconnectProvider" ? "disconnect" : "connect",
+        message: "Canonical provider authority is not ready",
+        canonical: true,
+        kind: "not-ready",
+        stamp: service?.stamp,
+      })
       return
     }
     if (!id || !requestId) {
-      this.postMessage({ type: "providerActionError", requestId: requestId || crypto.randomUUID(), providerID: id, action: msg.type === "deleteCustomProvider" ? "delete" : msg.type === "disconnectProvider" ? "disconnect" : "connect", message: "Canonical provider request is incomplete", canonical: true, kind: "invalid", stamp: service.stamp })
+      this.postMessage({
+        type: "providerActionError",
+        requestId: requestId || crypto.randomUUID(),
+        providerID: id,
+        action:
+          msg.type === "deleteCustomProvider" ? "delete" : msg.type === "disconnectProvider" ? "disconnect" : "connect",
+        message: "Canonical provider request is incomplete",
+        canonical: true,
+        kind: "invalid",
+        stamp: service.stamp,
+      })
       return
     }
     const scope = this.providerScope(id)
     const stamp = isCanonicalStamp(msg.stamp) ? msg.stamp : undefined
-    const fail = (message: string, kind = "invalid", retry?: { scope: "global" | "project"; stamp: CanonicalStamp; mode?: "delete" | "restore"; ref?: string; priorRecord?: Record<string, unknown>; priorValue?: string }) => {
+    const fail = (
+      message: string,
+      kind = "invalid",
+      retry?: {
+        scope: "global" | "project"
+        stamp: CanonicalStamp
+        mode?: "delete" | "restore"
+        ref?: string
+        priorRecord?: Record<string, unknown>
+        priorValue?: string
+      },
+    ) => {
       // True operation-unique opaque retry ID: every cleanup failure gets its
       // own record key, so overlapping failures for the same resource can never
       // overwrite each other. The record itself carries kind/scope/id/mode/ref/
@@ -782,18 +863,31 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         type: "providerActionError",
         requestId,
         providerID: id,
-        action: msg.type === "deleteCustomProvider" ? "delete" : msg.type === "disconnectProvider" ? "disconnect" : "connect",
+        action:
+          msg.type === "deleteCustomProvider" ? "delete" : msg.type === "disconnectProvider" ? "disconnect" : "connect",
         message,
-         canonical: true,
-         stamp: service.stamp,
+        canonical: true,
+        stamp: service.stamp,
         kind,
-          ...(retry ? { retry: { type: "retryProviderCleanup" as const, mode: retry.mode ?? "delete", scope: retry.scope, stamp: retry.stamp, retryID } } : {}),
+        ...(retry
+          ? {
+              retry: {
+                type: "retryProviderCleanup" as const,
+                mode: retry.mode ?? "delete",
+                scope: retry.scope,
+                stamp: retry.stamp,
+                retryID,
+              },
+            }
+          : {}),
       })
     }
     const expected = stamp?.[scope === "global" ? "globalHash" : "projectHash"]
-    if (!stamp || expected === undefined || stamp.assetHash !== null || !sameStamp(stamp, service.stamp)) return fail("Provider draft stamp is stale or incomplete", "stale")
+    if (!stamp || expected === undefined || stamp.assetHash !== null || !sameStamp(stamp, service.stamp))
+      return fail("Provider draft stamp is stale or incomplete", "stale")
     const current = service.getScopeConfig(scope)
-    const rawProviders = current.provider && typeof current.provider === "object" ? current.provider as Record<string, unknown> : {}
+    const rawProviders =
+      current.provider && typeof current.provider === "object" ? (current.provider as Record<string, unknown>) : {}
     const parsedProviders = parseCanonicalProviderRecord(rawProviders)
     if (!parsedProviders) return fail("Provider record contains invalid entries", "invalid")
     const providers: Record<string, CanonicalProviderPayload> = { ...parsedProviders }
@@ -802,29 +896,76 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       return fail("OAuth provider authentication is unavailable in canonical GUI authority", "unsupported")
     }
     if (msg.type === "connectProvider") {
-      if (msg.canonical !== true || Object.keys(msg).some((key) => CREDENTIAL_KEY.test(key)) || !isCredentialFreeMetadata(msg.metadata)) return fail("Canonical provider requests must use the host credential prompt", "invalid")
-      const key = msg.credentialRequested === true
-        ? (await vscode.window.showInputBox({ password: true, prompt: `Enter credential for ${id}`, ignoreFocusOut: true }))?.trim() ?? ""
-        : ""
+      if (
+        msg.canonical !== true ||
+        Object.keys(msg).some((key) => CREDENTIAL_KEY.test(key)) ||
+        !isCredentialFreeMetadata(msg.metadata)
+      )
+        return fail("Canonical provider requests must use the host credential prompt", "invalid")
+      const key =
+        msg.credentialRequested === true
+          ? ((
+              await vscode.window.showInputBox({
+                password: true,
+                prompt: `Enter credential for ${id}`,
+                ignoreFocusOut: true,
+              })
+            )?.trim() ?? "")
+          : ""
       if (!key) return fail("Credential entry was cancelled or empty", "cancelled")
       const existingEntry = isRecord(providers[id]) && narrowProviderEntry(providers[id])
       const provider: Record<string, unknown> = existingEntry ? { ...existingEntry } : { name: id }
-      const priorRef = existingEntry && typeof existingEntry.credential === "string" ? existingEntry.credential : undefined
-      const result = await service.processCredentialIntent(scope, "provider", id, key, { provider: { ...providers, [id]: { ...provider, credential: ref } } }, expected ?? "absent", stamp, priorRef)
+      const priorRef =
+        existingEntry && typeof existingEntry.credential === "string" ? existingEntry.credential : undefined
+      const result = await service.processCredentialIntent(
+        scope,
+        "provider",
+        id,
+        key,
+        { provider: { ...providers, [id]: { ...provider, credential: ref } } },
+        expected ?? "absent",
+        stamp,
+        priorRef,
+      )
       if (!result.ok) return fail(result.message, result.kind)
-       this.postMessage({ type: "providerConnected", requestId, providerID: id, canonical: true, stamp: service.stamp })
+      this.postMessage({ type: "providerConnected", requestId, providerID: id, canonical: true, stamp: service.stamp })
       return
     }
     if (msg.type === "disconnectProvider") {
       const prior = providers[id]
-      const provider: Record<string, unknown> = prior ? { ...prior } : undefined as unknown as Record<string, unknown>
+      const provider: Record<string, unknown> = prior ? { ...prior } : (undefined as unknown as Record<string, unknown>)
       if (provider) delete provider.credential
       const next = provider ? { ...providers, [id]: provider as CanonicalProviderPayload } : providers
       const result = await service.writeConfig(scope, { provider: next }, expected ?? "absent")
       if (!result.ok) return fail(result.message, result.kind)
-      const cleanup = await service.cleanupProviderCredential(scope, id, prior ? { ...prior } : undefined, service.stamp)
-        if (!cleanup.ok) return fail(cleanup.message, cleanup.retry ? "cleanupRetry" : "cleanup", cleanup.retry ? { scope, stamp: cleanup.stamp, mode: cleanup.mode, ref: cleanup.ref, priorRecord: cleanup.priorRecord, priorValue: cleanup.priorValue } : undefined)
-       this.postMessage({ type: "providerDisconnected", requestId, providerID: id, canonical: true, stamp: service.stamp })
+      const cleanup = await service.cleanupProviderCredential(
+        scope,
+        id,
+        prior ? { ...prior } : undefined,
+        service.stamp,
+      )
+      if (!cleanup.ok)
+        return fail(
+          cleanup.message,
+          cleanup.retry ? "cleanupRetry" : "cleanup",
+          cleanup.retry
+            ? {
+                scope,
+                stamp: cleanup.stamp,
+                mode: cleanup.mode,
+                ref: cleanup.ref,
+                priorRecord: cleanup.priorRecord,
+                priorValue: cleanup.priorValue,
+              }
+            : undefined,
+        )
+      this.postMessage({
+        type: "providerDisconnected",
+        requestId,
+        providerID: id,
+        canonical: true,
+        stamp: service.stamp,
+      })
       return
     }
     if (msg.type === "deleteCustomProvider") {
@@ -832,14 +973,35 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       delete providers[id]
       const result = await service.writeConfig(scope, { provider: providers }, expected ?? "absent")
       if (!result.ok) return fail(result.message, result.kind)
-      const cleanup = await service.cleanupProviderCredential(scope, id, prior ? { ...prior } : undefined, service.stamp)
-        if (!cleanup.ok) return fail(cleanup.message, cleanup.retry ? "cleanupRetry" : "cleanup", cleanup.retry ? { scope, stamp: cleanup.stamp, mode: cleanup.mode, ref: cleanup.ref, priorRecord: cleanup.priorRecord, priorValue: cleanup.priorValue } : undefined)
-       this.postMessage({ type: "providerDeleted", requestId, providerID: id, canonical: true, stamp: service.stamp })
+      const cleanup = await service.cleanupProviderCredential(
+        scope,
+        id,
+        prior ? { ...prior } : undefined,
+        service.stamp,
+      )
+      if (!cleanup.ok)
+        return fail(
+          cleanup.message,
+          cleanup.retry ? "cleanupRetry" : "cleanup",
+          cleanup.retry
+            ? {
+                scope,
+                stamp: cleanup.stamp,
+                mode: cleanup.mode,
+                ref: cleanup.ref,
+                priorRecord: cleanup.priorRecord,
+                priorValue: cleanup.priorValue,
+              }
+            : undefined,
+        )
+      this.postMessage({ type: "providerDeleted", requestId, providerID: id, canonical: true, stamp: service.stamp })
       return
     }
     const raw = msg.config
-    if (msg.canonical !== true || Object.keys(msg).some((key) => CREDENTIAL_KEY.test(key))) return fail("Canonical provider requests must not contain credential-bearing fields", "invalid")
-    if (!isValidCanonicalProviderEntry(raw, id)) return fail("Canonical provider payload failed shared schema validation", "invalid")
+    if (msg.canonical !== true || Object.keys(msg).some((key) => CREDENTIAL_KEY.test(key)))
+      return fail("Canonical provider requests must not contain credential-bearing fields", "invalid")
+    if (!isValidCanonicalProviderEntry(raw, id))
+      return fail("Canonical provider payload failed shared schema validation", "invalid")
     // Canonical-only serialization: emit name/endpoint/protocol/models.
     // Never reuse legacy {npm, env, options:{baseURL,headers}, models} shape.
     // ID is the map key — never injected into the persisted record (LOCK-002).
@@ -851,20 +1013,43 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     const changed = msg.canonical === true && msg.credentialRequested === true
     const key = changed
-      ? (await vscode.window.showInputBox({ password: true, prompt: `Enter credential for ${id}`, ignoreFocusOut: true }))?.trim() || undefined
+      ? (
+          await vscode.window.showInputBox({
+            password: true,
+            prompt: `Enter credential for ${id}`,
+            ignoreFocusOut: true,
+          })
+        )?.trim() || undefined
       : undefined
     if (changed && !key) return fail("Credential entry was cancelled or empty", "cancelled")
     const existingEntry = isRecord(providers[id]) && narrowProviderEntry(providers[id])
     const existing: Record<string, unknown> = existingEntry ? { ...existingEntry } : {}
     const existingPriorRef = typeof existing.credential === "string" ? existing.credential : undefined
-    const provider = { ...canonical, ...(key && changed ? { credential: ref } : existing.credential && !changed ? { credential: existing.credential } : {}) }
-    const result = key && changed
-      ? await service.processCredentialIntent(scope, "provider", id, key, { provider: { ...providers, [id]: provider } }, expected ?? "absent", stamp, existingPriorRef)
-      : await service.writeConfig(scope, { provider: { ...providers, [id]: provider } }, expected ?? "absent")
+    const provider = {
+      ...canonical,
+      ...(key && changed
+        ? { credential: ref }
+        : existing.credential && !changed
+          ? { credential: existing.credential }
+          : {}),
+    }
+    const result =
+      key && changed
+        ? await service.processCredentialIntent(
+            scope,
+            "provider",
+            id,
+            key,
+            { provider: { ...providers, [id]: provider } },
+            expected ?? "absent",
+            stamp,
+            existingPriorRef,
+          )
+        : await service.writeConfig(scope, { provider: { ...providers, [id]: provider } }, expected ?? "absent")
     if (!result.ok) return fail(result.message, result.kind)
     // credentialRequested=false preserves the existing opaque reference; explicit
     // removal is a separate disconnectProvider operation.
-     this.postMessage({ type: "providerConnected", requestId, providerID: id, canonical: true, stamp: service.stamp })
+    this.postMessage({ type: "providerConnected", requestId, providerID: id, canonical: true, stamp: service.stamp })
   }
 
   /**
@@ -884,8 +1069,24 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // Host-owned record is the authority — look up by opaque retryID only.
     const retry = this.cleanupRetries.get(retryID)
     const action = "disconnect"
-    if (!service || !this.canonicalReady || !retry || retry.kind !== "provider" || retry.state !== "available" || !sameStamp(retry.stamp, service.stamp)) {
-      this.postMessage({ type: "providerActionError", requestId, providerID: retry?.id ?? "", action, message: "Provider cleanup retry is stale", canonical: true, kind: "stale", stamp: service.stamp })
+    if (
+      !service ||
+      !this.canonicalReady ||
+      !retry ||
+      retry.kind !== "provider" ||
+      retry.state !== "available" ||
+      !sameStamp(retry.stamp, service.stamp)
+    ) {
+      this.postMessage({
+        type: "providerActionError",
+        requestId,
+        providerID: retry?.id ?? "",
+        action,
+        message: "Provider cleanup retry is stale",
+        canonical: true,
+        kind: "stale",
+        stamp: service.stamp,
+      })
       return
     }
     // Reject mismatch/replay: the stored record's scope/mode/id are the exact
@@ -898,7 +1099,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (ref) {
       const parsed = parseSecretKey(ref.slice("secret:".length))
       if (!parsed || parsed.kind !== "provider" || parsed.id !== id || parsed.scope !== scope) {
-        this.postMessage({ type: "providerActionError", requestId, providerID: id, action, message: "Provider cleanup retry has invalid stored record", canonical: true, kind: "stale", stamp: service.stamp })
+        this.postMessage({
+          type: "providerActionError",
+          requestId,
+          providerID: id,
+          action,
+          message: "Provider cleanup retry has invalid stored record",
+          canonical: true,
+          kind: "stale",
+          stamp: service.stamp,
+        })
         return
       }
     }
@@ -906,7 +1116,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // there is nothing verifiably owned to remove — never reconstruct a key
     // from scope/id.
     if (mode !== "restore" && !ref) {
-      this.postMessage({ type: "providerActionError", requestId, providerID: id, action, message: "Provider cleanup retry record has no credential ref", canonical: true, kind: "stale", stamp: service.stamp })
+      this.postMessage({
+        type: "providerActionError",
+        requestId,
+        providerID: id,
+        action,
+        message: "Provider cleanup retry record has no credential ref",
+        canonical: true,
+        kind: "stale",
+        stamp: service.stamp,
+      })
       return
     }
     // P4.1 target-level reservation: a concurrent distinct retry with the same
@@ -914,7 +1133,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const targetKey = this.cleanupTargetKey("provider", scope, id, ref)
     const owner = this.cleanupTargets.get(targetKey)
     if (owner && owner !== retryID) {
-      this.postMessage({ type: "providerActionError", requestId, providerID: id, action, message: "Provider cleanup retry target is already in flight", canonical: true, kind: "stale", stamp: service.stamp })
+      this.postMessage({
+        type: "providerActionError",
+        requestId,
+        providerID: id,
+        action,
+        message: "Provider cleanup retry target is already in flight",
+        canonical: true,
+        kind: "stale",
+        stamp: service.stamp,
+      })
       return
     }
     // Reserve atomically BEFORE any side effect: a concurrent duplicate retry
@@ -924,7 +1152,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     try {
       if (mode === "restore" && retry.priorRecord) {
         if (retry.priorValue !== undefined && retry.ref) await service.restoreSecret(retry.ref, retry.priorValue)
-        const restored = await service.writeConfig(scope, { provider: { ...(parseCanonicalProviderRecord(service.getScopeConfig(scope).provider) ?? {}), [id]: retry.priorRecord } }, service.getConfigHash(scope) ?? "absent")
+        const restored = await service.writeConfig(
+          scope,
+          {
+            provider: {
+              ...(parseCanonicalProviderRecord(service.getScopeConfig(scope).provider) ?? {}),
+              [id]: retry.priorRecord,
+            },
+          },
+          service.getConfigHash(scope) ?? "absent",
+        )
         if (!restored.ok) {
           if (retry.ref) await service.removeSecretRef(retry.ref)
           throw new Error(restored.message)
@@ -935,30 +1172,71 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       // Success: consume the record and release the target reservation — one-shot.
       this.cleanupRetries.delete(retryID)
       this.cleanupTargets.delete(targetKey)
-      this.postMessage({ type: "providerDisconnected", requestId, providerID: id, canonical: true, stamp: service.stamp })
+      this.postMessage({
+        type: "providerDisconnected",
+        requestId,
+        providerID: id,
+        canonical: true,
+        stamp: service.stamp,
+      })
     } catch (err) {
       // Lossless restoration: restore the exact full record unchanged so the
       // operation can be retried later. Never reconstruct from webview fields.
       // Release the target reservation so a distinct retry ID can retry.
       this.cleanupRetries.set(retryID, { ...retry, state: "available" })
       this.cleanupTargets.delete(targetKey)
-      this.postMessage({ type: "providerActionError", requestId, providerID: id, action, message: `Credential cleanup retry failed: ${String(err)}`, canonical: true, kind: "cleanupRetry", stamp: service.stamp, retry: { type: "retryProviderCleanup", mode, scope, stamp: service.stamp, retryID } })
+      this.postMessage({
+        type: "providerActionError",
+        requestId,
+        providerID: id,
+        action,
+        message: `Credential cleanup retry failed: ${String(err)}`,
+        canonical: true,
+        kind: "cleanupRetry",
+        stamp: service.stamp,
+        retry: { type: "retryProviderCleanup", mode, scope, stamp: service.stamp, retryID },
+      })
     }
   }
 
-  private async handleCanonicalConfigUpdate(partial: CanonicalConfigPayload, project: CanonicalConfigPayload, globalUnset: string[][], projectUnset: string[][], saveID: string | undefined, stamp: CanonicalStamp): Promise<void> {
+  private async handleCanonicalConfigUpdate(
+    partial: CanonicalConfigPayload,
+    project: CanonicalConfigPayload,
+    globalUnset: string[][],
+    projectUnset: string[][],
+    saveID: string | undefined,
+    stamp: CanonicalStamp,
+  ): Promise<void> {
     const service = this.canonicalConfig
     if (!service || !this.canonicalReady) {
-      this.postMessage({ type: "configUpdateFailed", message: "Canonical config authority is not ready", kind: "not-ready", saveID, canonical: true, stamp: { ...(service?.stamp ?? { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null }), assetHash: null } })
+      this.postMessage({
+        type: "configUpdateFailed",
+        message: "Canonical config authority is not ready",
+        kind: "not-ready",
+        saveID,
+        canonical: true,
+        stamp: {
+          ...(service?.stamp ?? { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null }),
+          assetHash: null,
+        },
+      })
       return
     }
     if (!stamp || stamp.assetHash !== null || !sameStamp(stamp, { ...service.stamp, assetHash: null })) {
-       this.postMessage({ type: "configUpdateFailed", message: "Canonical config stamp is required", kind: "stale", saveID, canonical: true, stamp: { ...service.stamp, assetHash: null } })
+      this.postMessage({
+        type: "configUpdateFailed",
+        message: "Canonical config stamp is required",
+        kind: "stale",
+        saveID,
+        canonical: true,
+        stamp: { ...service.stamp, assetHash: null },
+      })
       return
     }
     // Meta keys ($schema) are backend-owned validation metadata: excluded
     // from GUI write patches and never unsettable from the webview.
-    const clean = (value: Record<string, unknown>) => Object.fromEntries(Object.entries(value).filter(([key]) => isGuiField(key)))
+    const clean = (value: Record<string, unknown>) =>
+      Object.fromEntries(Object.entries(value).filter(([key]) => isGuiField(key)))
     const unset = (value: Record<string, unknown>, paths: string[][]) => {
       for (const path of paths) if (path.length === 1 && isGuiField(path[0])) value[path[0]!] = undefined
       return value
@@ -967,15 +1245,39 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const projectPatch = unset(clean({ ...project }), projectUnset)
     const scopes = {
       ...(Object.keys(global).length ? { global: { patch: global, expectedHash: stamp.globalHash ?? "absent" } } : {}),
-      ...(Object.keys(projectPatch).length ? { project: { patch: projectPatch, expectedHash: stamp.projectHash ?? "absent" } } : {}),
+      ...(Object.keys(projectPatch).length
+        ? { project: { patch: projectPatch, expectedHash: stamp.projectHash ?? "absent" } }
+        : {}),
     }
     const result = await service.writeConfigScopes(scopes, stamp)
     if (!result.ok) {
-       this.postMessage({ type: "configUpdateFailed", message: result.message, kind: result.kind, saveID, canonical: true, stamp: { ...service.stamp, assetHash: null }, contentHash: service.snapshot?.contentHash, materializationVersion: service.snapshot?.generation, validationErrors: result.errors?.map((error) => ({ path: error.path, message: error.message })) })
+      this.postMessage({
+        type: "configUpdateFailed",
+        message: result.message,
+        kind: result.kind,
+        saveID,
+        canonical: true,
+        stamp: { ...service.stamp, assetHash: null },
+        contentHash: service.snapshot?.contentHash,
+        materializationVersion: service.snapshot?.generation,
+        validationErrors: result.errors?.map((error) => ({ path: error.path, message: error.message })),
+      })
       return
     }
     this.sendCanonicalConfig("configUpdated")
-    this.postMessage({ type: "configUpdated", config: canonicalConfigPayload(result.snapshot.config.value), globalConfig: canonicalConfigPayload(service.getScopeConfig("global")), projectConfig: canonicalConfigPayload(service.getScopeConfig("project")), settings: { maxCost: this.maxCostSetting() }, features: configFeatures(), canonical: true, saveID, contentHash: result.snapshot.contentHash, materializationVersion: result.materializationVersion, stamp: result.stamp })
+    this.postMessage({
+      type: "configUpdated",
+      config: canonicalConfigPayload(result.snapshot.config.value),
+      globalConfig: canonicalConfigPayload(service.getScopeConfig("global")),
+      projectConfig: canonicalConfigPayload(service.getScopeConfig("project")),
+      settings: { maxCost: this.maxCostSetting() },
+      features: configFeatures(),
+      canonical: true,
+      saveID,
+      contentHash: result.snapshot.contentHash,
+      materializationVersion: result.materializationVersion,
+      stamp: result.stamp,
+    })
   }
 
   setRemoteService(service: RemoteStatusService): void {
@@ -1202,7 +1504,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
       this.sendRemoteStatus()
     }
-
   }
 
   /** Resolve a WebviewPanel for displaying Kilo in an editor tab. */
@@ -1410,12 +1711,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.isWebviewReady = true
           this.visibleTaskStreams.clear()
           this.flushPendingKiloModel()
-          await this.syncWebviewState("webviewReady")
+          // P4.4-T22: publish canonical selectors immediately when canonical
+          // materialization is ready, without waiting for initializeConnection
+          // HTTP/SSE/generated-SDK connectivity or syncWebviewState.
           if (this.canonicalConfig) {
             this.sendCanonicalConfig("configLoaded")
             void this.sendCanonicalProviders()
             void this.sendCanonicalAgents()
           }
+          await this.syncWebviewState("webviewReady")
           this.recoverPendingPrompts()
           this.readyResolvers.splice(0).forEach((r) => r())
           break
@@ -1628,23 +1932,46 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         case "removeAgent": {
           // P4.1: canonical agent mutations require the canonical discriminator
           if (this.canonicalConfig && message.canonical !== true) {
-            this.postMessage({ type: "agentMutationError", requestId: typeof message.requestId === "string" ? message.requestId : crypto.randomUUID(), name: typeof message.name === "string" ? message.name : "", message: "Canonical agent mutation is missing the canonical discriminator", kind: "invalid", canonical: true, stamp: this.canonicalConfig.stamp })
+            this.postMessage({
+              type: "agentMutationError",
+              requestId: typeof message.requestId === "string" ? message.requestId : crypto.randomUUID(),
+              name: typeof message.name === "string" ? message.name : "",
+              message: "Canonical agent mutation is missing the canonical discriminator",
+              kind: "invalid",
+              canonical: true,
+              stamp: this.canonicalConfig.stamp,
+            })
             break
           }
-           this.handleRemoveAgent(message.name, message.scope, message.expectedHash, message.canonical ? message.stamp : undefined).catch((e) => console.error("[Kilo New] handleRemoveAgent failed:", e))
+          this.handleRemoveAgent(
+            message.name,
+            message.scope,
+            message.expectedHash,
+            message.canonical ? message.stamp : undefined,
+          ).catch((e) => console.error("[Kilo New] handleRemoveAgent failed:", e))
           break
         }
         case "mutateAgent": {
           // P4.1: canonical agent mutations require the canonical discriminator
           if (this.canonicalConfig && message.canonical !== true) {
-            this.postMessage({ type: "agentMutationError", requestId: typeof message.requestId === "string" ? message.requestId : crypto.randomUUID(), name: typeof message.name === "string" ? message.name : "", message: "Canonical agent mutation is missing the canonical discriminator", kind: "invalid", canonical: true, stamp: this.canonicalConfig.stamp })
+            this.postMessage({
+              type: "agentMutationError",
+              requestId: typeof message.requestId === "string" ? message.requestId : crypto.randomUUID(),
+              name: typeof message.name === "string" ? message.name : "",
+              message: "Canonical agent mutation is missing the canonical discriminator",
+              kind: "invalid",
+              canonical: true,
+              stamp: this.canonicalConfig.stamp,
+            })
             break
           }
           this.handleCanonicalAgentMutation(message).catch((e) => console.error("[Kilo New] mutateAgent failed:", e))
           break
         }
         case "removeMcp":
-          this.handleRemoveMcp(message.name, message).catch((e) => console.error("[Kilo New] handleRemoveMcp failed:", e))
+          this.handleRemoveMcp(message.name, message).catch((e) =>
+            console.error("[Kilo New] handleRemoveMcp failed:", e),
+          )
           break
         case "requestMcpStatus":
           this.fetchAndSendMcpStatus().catch((e) => console.error("[Kilo New] fetchAndSendMcpStatus failed:", e))
@@ -1717,9 +2044,22 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         case "updateConfig":
           if (message.canonical === true) {
             if (!message.stamp) break
-            await this.handleCanonicalConfigUpdate(message.config, message.projectConfig ?? {}, message.globalUnset ?? [], message.projectUnset ?? [], message.saveID, message.stamp)
+            await this.handleCanonicalConfigUpdate(
+              message.config,
+              message.projectConfig ?? {},
+              message.globalUnset ?? [],
+              message.projectUnset ?? [],
+              message.saveID,
+              message.stamp,
+            )
           } else {
-            await this.handleUpdateConfig(message.config, message.projectConfig, message.globalUnset, message.projectUnset, message.saveID)
+            await this.handleUpdateConfig(
+              message.config,
+              message.projectConfig,
+              message.globalUnset,
+              message.projectUnset,
+              message.saveID,
+            )
           }
           break
         case "setLanguage":
@@ -2050,16 +2390,32 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       await this.flushPendingSessionRefresh("initializeConnection")
       this.recoverPendingPrompts()
 
-      // Fetch providers, agents, skills, config, and session statuses in parallel
+      // P4.4-T22: canonical provider/agent/config selectors publish via
+      // CanonicalConfigService materialization (subscribeCanonical/onDidChange +
+      // webviewReady immediate publish) independently of HTTP/SSE/generated-SDK
+      // connectivity. HTTP/SSE/SDK fetch/reconcile remains as background.
       p0Stage("dataReady.start")
-      await Promise.all([
-        this.fetchAndSendProviders(),
-        this.fetchAndSendAgents(),
-        this.fetchAndSendSkills(),
-        this.fetchAndSendCommands(),
-        this.fetchAndSendConfig(),
-        this.seedSessionStatusMap(),
-      ])
+      if (this.canonicalConfig) {
+        // Canonical selectors are handled via canonical materialization path;
+        // reconcile them in background without blocking global data-ready.
+        void Promise.all([
+          this.fetchAndSendProviders().catch((e) =>
+            console.error("[Kilo New] fetchAndSendProviders background failed:", e),
+          ),
+          this.fetchAndSendAgents().catch((e) => console.error("[Kilo New] fetchAndSendAgents background failed:", e)),
+          this.fetchAndSendConfig().catch((e) => console.error("[Kilo New] fetchAndSendConfig background failed:", e)),
+        ])
+        await Promise.all([this.fetchAndSendSkills(), this.fetchAndSendCommands(), this.seedSessionStatusMap()])
+      } else {
+        await Promise.all([
+          this.fetchAndSendProviders(),
+          this.fetchAndSendAgents(),
+          this.fetchAndSendSkills(),
+          this.fetchAndSendCommands(),
+          this.fetchAndSendConfig(),
+          this.seedSessionStatusMap(),
+        ])
+      }
       this.cachedGitRepo = await hasGit(this.client!, this.getWorkspaceDirectory())
       this.postMessage({ type: "gitStatus", repo: this.cachedGitRepo })
       this.sendNotificationSettings()
@@ -2613,14 +2969,32 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   private async handleProviderAction(msg: Record<string, unknown>): Promise<void> {
-    if (this.canonicalConfig && (msg.type === "connectProvider" || msg.type === "authorizeProviderOAuth" || msg.type === "completeProviderOAuth" || msg.type === "disconnectProvider" || msg.type === "deleteCustomProvider" || msg.type === "saveCustomProvider")) {
+    if (
+      this.canonicalConfig &&
+      (msg.type === "connectProvider" ||
+        msg.type === "authorizeProviderOAuth" ||
+        msg.type === "completeProviderOAuth" ||
+        msg.type === "disconnectProvider" ||
+        msg.type === "deleteCustomProvider" ||
+        msg.type === "saveCustomProvider")
+    ) {
       // P4.1: every canonical mutation crossing the untrusted runtime boundary
       // requires the canonical === true discriminator; false/missing rejects.
       if (msg.type !== "authorizeProviderOAuth" && msg.type !== "completeProviderOAuth" && msg.canonical !== true) {
         const pid = typeof msg.providerID === "string" ? msg.providerID : ""
         const requestId = typeof msg.requestId === "string" ? msg.requestId : crypto.randomUUID()
-        const action = msg.type === "disconnectProvider" ? "disconnect" : msg.type === "deleteCustomProvider" ? "delete" : "connect"
-        this.postMessage({ type: "providerActionError", requestId, providerID: pid, action, message: "Canonical provider request is missing the canonical discriminator", canonical: true, kind: "invalid", stamp: this.canonicalConfig.stamp })
+        const action =
+          msg.type === "disconnectProvider" ? "disconnect" : msg.type === "deleteCustomProvider" ? "delete" : "connect"
+        this.postMessage({
+          type: "providerActionError",
+          requestId,
+          providerID: pid,
+          action,
+          message: "Canonical provider request is missing the canonical discriminator",
+          canonical: true,
+          kind: "invalid",
+          stamp: this.canonicalConfig.stamp,
+        })
         return
       }
       await this.handleCanonicalProviderAction(msg)
@@ -2694,7 +3068,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       if (!ref) return errReply("Provider has no valid credential reference")
       const value = await this.canonicalConfig.hasSecret(ref)
       if (!value) return errReply("Credential is not available in SecretStorage")
-      return this.postMessage({ type: "providerCredentialLoaded", requestID: rid, providerID: pid, hasCredential: true, canonical: true, stamp: { ...this.canonicalConfig.stamp, assetHash: null } })
+      return this.postMessage({
+        type: "providerCredentialLoaded",
+        requestID: rid,
+        providerID: pid,
+        hasCredential: true,
+        canonical: true,
+        stamp: { ...this.canonicalConfig.stamp, assetHash: null },
+      })
     }
     if (!this.client) return errReply("Unable to load API key")
     try {
@@ -2722,18 +3103,39 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const url = typeof msg.baseURL === "string" ? msg.baseURL : ""
     if (!rid || !url) return
     if (this.canonicalConfig && !this.canonicalReady) {
-      return this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: "Canonical model discovery authority is not ready" })
+      return this.postMessage({
+        type: "customProviderModelsFetched",
+        requestId: rid,
+        error: "Canonical model discovery authority is not ready",
+      })
     }
-    if (this.canonicalConfig && (typeof msg.apiKey === "string" || msg.headers !== undefined || !isCredentialFreeMetadata(msg))) {
-      return this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: "Canonical model discovery payload contains credential-bearing data" })
+    if (
+      this.canonicalConfig &&
+      (typeof msg.apiKey === "string" || msg.headers !== undefined || !isCredentialFreeMetadata(msg))
+    ) {
+      return this.postMessage({
+        type: "customProviderModelsFetched",
+        requestId: rid,
+        error: "Canonical model discovery payload contains credential-bearing data",
+      })
     }
     let key = typeof msg.apiKey === "string" ? msg.apiKey : undefined
     const stamp = isCanonicalStamp(msg.stamp) ? msg.stamp : undefined
     if (this.canonicalConfig && (!stamp || !sameStamp(stamp, this.canonicalConfig.stamp) || stamp.assetHash !== null)) {
-      return this.postMessage({ type: "customProviderModelsFetched", requestId: rid, error: "Canonical provider stamp is stale or incomplete" })
+      return this.postMessage({
+        type: "customProviderModelsFetched",
+        requestId: rid,
+        error: "Canonical provider stamp is stale or incomplete",
+      })
     }
     if (this.canonicalConfig && msg.canonical === true && msg.credentialRequested === true) {
-      key = (await vscode.window.showInputBox({ password: true, prompt: "Enter provider credential for model discovery", ignoreFocusOut: true }))?.trim()
+      key = (
+        await vscode.window.showInputBox({
+          password: true,
+          prompt: "Enter provider credential for model discovery",
+          ignoreFocusOut: true,
+        })
+      )?.trim()
     }
     if (!key && this.canonicalConfig && typeof msg.providerID === "string") {
       const scope = this.providerScope(msg.providerID)
@@ -2746,7 +3148,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     if (!key && !this.canonicalConfig) key = resolveStoredKey(this.storedProviderKeys, msg.providerID, url)
     // Canonical mode never passes headers — they are host-only credential data
-    const headers = this.canonicalConfig ? undefined : (msg.headers && typeof msg.headers === "object" ? (msg.headers as Record<string, string>) : undefined)
+    const headers = this.canonicalConfig
+      ? undefined
+      : msg.headers && typeof msg.headers === "object"
+        ? (msg.headers as Record<string, string>)
+        : undefined
     try {
       const models = await fetchOpenAIModels({ baseURL: url, apiKey: key, headers })
       this.postMessage({ type: "customProviderModelsFetched", requestId: rid, models })
@@ -2874,20 +3280,56 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /** Remove an agent via the CLI backend, then refresh. */
-  private async handleRemoveAgent(name: string, scope: "global" | "project" = "project", expectedHash?: string, stamp?: CanonicalStamp): Promise<void> {
-     if (this.canonicalConfig) {
-       if (!this.canonicalReady) {
-         // Canonical authority exists but has not materialized yet — never fall
-         // through to the legacy backend path.
-         this.postMessage({ type: "agentMutationError", requestId: crypto.randomUUID(), name, message: "Canonical agent authority is not ready", kind: "not-ready", canonical: true, stamp: this.canonicalConfig.stamp })
-         return
-       }
-       if (!stamp || !sameStamp(stamp, { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope) })) {
-         this.postMessage({ type: "agentMutationError", requestId: crypto.randomUUID(), name, message: "Agent composite stamp is required", kind: "stale", canonical: true, stamp: { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope) } })
-         return
-       }
-       const result = await this.canonicalConfig.deleteAsset("agent", name, scope, stamp.assetHash ?? "absent")
-       if (!result.ok) this.postMessage({ type: "agentMutationError", requestId: crypto.randomUUID(), name, message: result.message, kind: result.kind, canonical: true, stamp: { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope) } })
+  private async handleRemoveAgent(
+    name: string,
+    scope: "global" | "project" = "project",
+    expectedHash?: string,
+    stamp?: CanonicalStamp,
+  ): Promise<void> {
+    if (this.canonicalConfig) {
+      if (!this.canonicalReady) {
+        // Canonical authority exists but has not materialized yet — never fall
+        // through to the legacy backend path.
+        this.postMessage({
+          type: "agentMutationError",
+          requestId: crypto.randomUUID(),
+          name,
+          message: "Canonical agent authority is not ready",
+          kind: "not-ready",
+          canonical: true,
+          stamp: this.canonicalConfig.stamp,
+        })
+        return
+      }
+      if (
+        !stamp ||
+        !sameStamp(stamp, {
+          ...this.canonicalConfig.stamp,
+          assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope),
+        })
+      ) {
+        this.postMessage({
+          type: "agentMutationError",
+          requestId: crypto.randomUUID(),
+          name,
+          message: "Agent composite stamp is required",
+          kind: "stale",
+          canonical: true,
+          stamp: { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope) },
+        })
+        return
+      }
+      const result = await this.canonicalConfig.deleteAsset("agent", name, scope, stamp.assetHash ?? "absent")
+      if (!result.ok)
+        this.postMessage({
+          type: "agentMutationError",
+          requestId: crypto.randomUUID(),
+          name,
+          message: result.message,
+          kind: result.kind,
+          canonical: true,
+          stamp: { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope) },
+        })
       else void this.sendCanonicalAgents()
       return
     }
@@ -2910,7 +3352,18 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const id = typeof msg.name === "string" ? msg.name : ""
     const requestId = typeof msg.requestId === "string" ? msg.requestId : crypto.randomUUID()
     if (!service || !this.canonicalReady) {
-      this.postMessage({ type: "agentMutationError", requestId, name: id, message: "Canonical agent authority is not ready", kind: "not-ready", canonical: true, stamp: { ...(service?.stamp ?? { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null }), assetHash: null } })
+      this.postMessage({
+        type: "agentMutationError",
+        requestId,
+        name: id,
+        message: "Canonical agent authority is not ready",
+        kind: "not-ready",
+        canonical: true,
+        stamp: {
+          ...(service?.stamp ?? { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null }),
+          assetHash: null,
+        },
+      })
       return
     }
     if (!id || !isRecord(msg.frontmatter) || typeof msg.body !== "string") return
@@ -2919,19 +3372,45 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const stamp = isCanonicalStamp(msg.stamp) ? msg.stamp : undefined
     const current = { ...service.stamp, assetHash: service.getAssetStamp("agent", id, scope) }
     if (!stamp || !expectedHash || stamp.assetHash !== expectedHash || !sameStamp(stamp, current)) {
-       this.postMessage({ type: "agentMutationError", requestId, name: id, message: "Agent draft is stale", kind: "stale", canonical: true, stamp: current })
+      this.postMessage({
+        type: "agentMutationError",
+        requestId,
+        name: id,
+        message: "Agent draft is stale",
+        kind: "stale",
+        canonical: true,
+        stamp: current,
+      })
       return
     }
     const result = await service.writeAsset("agent", id, msg.frontmatter, msg.body, scope, expectedHash)
     if (!result.ok) {
-       this.postMessage({ type: "agentMutationError", requestId, name: id, message: result.message, kind: result.kind, canonical: true, stamp: current })
+      this.postMessage({
+        type: "agentMutationError",
+        requestId,
+        name: id,
+        message: result.message,
+        kind: result.kind,
+        canonical: true,
+        stamp: current,
+      })
       return
     }
-     this.postMessage({ type: "agentMutationApplied", requestId, name: id, contentHash: result.contentHash, stamp: { ...service.stamp, assetHash: result.contentHash }, canonical: true })
+    this.postMessage({
+      type: "agentMutationApplied",
+      requestId,
+      name: id,
+      contentHash: result.contentHash,
+      stamp: { ...service.stamp, assetHash: result.contentHash },
+      canonical: true,
+    })
     void this.sendCanonicalAgents()
   }
 
-  private async handleRemoveMcp(name: string, msg?: { canonical?: boolean; scope?: "global" | "project"; expectedHash?: string; stamp?: unknown }): Promise<void> {
+  private async handleRemoveMcp(
+    name: string,
+    msg?: { canonical?: boolean; scope?: "global" | "project"; expectedHash?: string; stamp?: unknown },
+  ): Promise<void> {
     if (this.canonicalConfig) {
       if (!this.canonicalReady) {
         // Canonical authority exists but has not materialized yet — never fall
@@ -2946,9 +3425,23 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       // Strict identity: the request must carry an explicit legal scope. Never
       // fall back to a default scope when scope is missing or invalid, and never
       // proceed without a matching stamp — report a structured failure instead.
-      if (msg?.canonical !== true || !scope || !stamp || !expected || !sameStamp(stamp, service.stamp) || stamp.assetHash !== null) {
+      if (
+        msg?.canonical !== true ||
+        !scope ||
+        !stamp ||
+        !expected ||
+        !sameStamp(stamp, service.stamp) ||
+        stamp.assetHash !== null
+      ) {
         console.error("[Kilo New] KiloProvider: Canonical MCP removal rejected as stale")
-        this.postMessage({ type: "mcpCleanupError", name, scope, retryID: "", stamp: service.stamp, message: "MCP removal rejected: canonical scope or stamp is missing or invalid" })
+        this.postMessage({
+          type: "mcpCleanupError",
+          name,
+          scope,
+          retryID: "",
+          stamp: service.stamp,
+          message: "MCP removal rejected: canonical scope or stamp is missing or invalid",
+        })
         return
       }
       const current = service.getScopeConfig(scope)
@@ -2966,7 +3459,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       const priorRef = isRecord(prior) && typeof prior.credential === "string" ? prior.credential : undefined
       const owned = priorRef ? parseSecretKey(priorRef.slice("secret:".length)) : null
       if (!priorRef || !owned || owned.kind !== "mcp" || owned.id !== name || owned.scope !== scope) {
-        this.postMessage({ type: "mcpCleanupError", name, scope, retryID: "", stamp: service.stamp, message: "MCP deletion committed; prior record has no owned credential ref — no credential was removed" })
+        this.postMessage({
+          type: "mcpCleanupError",
+          name,
+          scope,
+          retryID: "",
+          stamp: service.stamp,
+          message: "MCP deletion committed; prior record has no owned credential ref — no credential was removed",
+        })
         return
       }
       const ref = priorRef
@@ -2986,10 +3486,17 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           stamp: service.stamp,
           state: "available",
         })
-        this.postMessage({ type: "mcpCleanupError", name, scope, retryID, stamp: service.stamp, message: `MCP deletion committed; credential cleanup failed: ${String(error)}` })
+        this.postMessage({
+          type: "mcpCleanupError",
+          name,
+          scope,
+          retryID,
+          stamp: service.stamp,
+          message: `MCP deletion committed; credential cleanup failed: ${String(error)}`,
+        })
         return
       }
-       this.sendCanonicalConfig("configUpdated")
+      this.sendCanonicalConfig("configUpdated")
       return
     }
     const removed = await removeMcp(this.removeConfigItemCtx, name)
@@ -3005,8 +3512,22 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // Request carries the opaque retryID only; the stored record is the sole
     // authority for scope/name/ref — never accept webview-provided identity.
     const stored = retryID ? this.cleanupRetries.get(retryID) : undefined
-    if (!service || !this.canonicalReady || !stored || stored.kind !== "mcp" || stored.state !== "available" || !sameStamp(stored.stamp, service.stamp)) {
-      this.postMessage({ type: "mcpCleanupRetryResult", requestId, name: stored?.id ?? "", ok: false, message: "MCP cleanup retry is stale", stamp: service?.stamp })
+    if (
+      !service ||
+      !this.canonicalReady ||
+      !stored ||
+      stored.kind !== "mcp" ||
+      stored.state !== "available" ||
+      !sameStamp(stored.stamp, service.stamp)
+    ) {
+      this.postMessage({
+        type: "mcpCleanupRetryResult",
+        requestId,
+        name: stored?.id ?? "",
+        ok: false,
+        message: "MCP cleanup retry is stale",
+        stamp: service?.stamp,
+      })
       return
     }
     const name = stored.id
@@ -3015,7 +3536,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const ref = stored.ref
     const parsed = ref && ref.startsWith("secret:") ? parseSecretKey(ref.slice("secret:".length)) : null
     if (!parsed || parsed.kind !== "mcp" || parsed.id !== name || parsed.scope !== scope || !ref) {
-      this.postMessage({ type: "mcpCleanupRetryResult", requestId, name, ok: false, message: "MCP cleanup retry has invalid stored record", stamp: service.stamp })
+      this.postMessage({
+        type: "mcpCleanupRetryResult",
+        requestId,
+        name,
+        ok: false,
+        message: "MCP cleanup retry has invalid stored record",
+        stamp: service.stamp,
+      })
       return
     }
     // P4.1 target-level reservation: a concurrent distinct retry with the same
@@ -3023,7 +3551,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const targetKey = this.cleanupTargetKey("mcp", scope, name, ref)
     const owner = this.cleanupTargets.get(targetKey)
     if (owner && owner !== retryID) {
-      this.postMessage({ type: "mcpCleanupRetryResult", requestId, name, ok: false, message: "MCP cleanup retry target is already in flight", stamp: service.stamp })
+      this.postMessage({
+        type: "mcpCleanupRetryResult",
+        requestId,
+        name,
+        ok: false,
+        message: "MCP cleanup retry target is already in flight",
+        stamp: service.stamp,
+      })
       return
     }
     // Reserve atomically BEFORE the side effect — a concurrent duplicate retry
@@ -3042,7 +3577,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       // Release the target reservation so a distinct retry ID can retry.
       this.cleanupRetries.set(retryID, { ...stored, state: "available" })
       this.cleanupTargets.delete(targetKey)
-      this.postMessage({ type: "mcpCleanupRetryResult", requestId, name, ok: false, message: String(error), stamp: service.stamp })
+      this.postMessage({
+        type: "mcpCleanupRetryResult",
+        requestId,
+        name,
+        ok: false,
+        message: String(error),
+        stamp: service.stamp,
+      })
     }
   }
 
@@ -3489,14 +4031,29 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           kind: "not-ready",
           saveID,
           canonical: true,
-          stamp: { ...(this.canonicalConfig?.stamp ?? { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null }), assetHash: null },
+          stamp: {
+            ...(this.canonicalConfig?.stamp ?? {
+              globalHash: null,
+              projectHash: null,
+              materializationVersion: 0,
+              assetHash: null,
+            }),
+            assetHash: null,
+          },
         })
         return
       }
       if (!stamp) return
       const canonicalPartial = toCanonicalPayload(partial) ?? {}
       const canonicalProject = toCanonicalPayload(project) ?? {}
-      await this.handleCanonicalConfigUpdate(canonicalPartial, canonicalProject, globalUnset, projectUnset, saveID, stamp)
+      await this.handleCanonicalConfigUpdate(
+        canonicalPartial,
+        canonicalProject,
+        globalUnset,
+        projectUnset,
+        saveID,
+        stamp,
+      )
       return
     }
     if (!this.client || this.connectionState !== "connected") {
@@ -3675,8 +4232,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private scheduleReconcileRetry(): void {
     this.cancelReconcileRetry()
     const attempt = this.reconcileRetryAttempt
-    const delay =
-      KiloProvider.RECONCILE_BACKOFF_MS[Math.min(attempt, KiloProvider.RECONCILE_BACKOFF_MS.length - 1)]
+    const delay = KiloProvider.RECONCILE_BACKOFF_MS[Math.min(attempt, KiloProvider.RECONCILE_BACKOFF_MS.length - 1)]
     this.reconcileRetryAttempt = attempt + 1
     const schedule = this.opts.scheduleRetry ?? KiloProvider.defaultScheduleRetry
     this.reconcileRetryTimer = schedule(delay, () => {
@@ -4685,12 +5241,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // message.part.* events are always session-scoped; drop if session unknown.
     if (!sessionID && isSessionScopedPartEvent(event.type)) return
     if (this.postModelUsageChanged(event, sessionID)) return
-    if (
-      event.type !== "session.deleted" &&
-      sessionID &&
-      !this.trackedSessionIds.has(sessionID)
-    )
-      return
+    if (event.type !== "session.deleted" && sessionID && !this.trackedSessionIds.has(sessionID)) return
 
     if (event.type === "session.updated" && typeof event.properties.info.cost === "number") {
       const cost = this.costs.setSessionCost(event.properties.sessionID, event.properties.info.cost)

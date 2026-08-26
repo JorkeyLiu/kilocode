@@ -33,16 +33,31 @@ function has(value: Record<string, unknown>) {
 
 type ConfigStamp = CanonicalStamp
 
-function accepts(message: { canonical?: boolean; materializationVersion?: number }, stamp: ConfigStamp | undefined): boolean {
-  return !message.canonical || message.materializationVersion === undefined || message.materializationVersion >= (stamp?.materializationVersion ?? -1)
+function accepts(
+  message: { canonical?: boolean; materializationVersion?: number },
+  stamp: ConfigStamp | undefined,
+): boolean {
+  return (
+    !message.canonical ||
+    message.materializationVersion === undefined ||
+    message.materializationVersion >= (stamp?.materializationVersion ?? -1)
+  )
 }
 
 /** P4.1: canonical mode is only active after successful, error-free materialization. The explicit `ready` field carries the truth; canonical:true alone must not imply ready. */
 function isCanonicalReady(message: { canonical?: boolean; ready?: boolean; materializationVersion?: number }): boolean {
-  return !!message.canonical && message.materializationVersion !== undefined && message.materializationVersion > 0 && message.ready !== false
+  return (
+    !!message.canonical &&
+    message.materializationVersion !== undefined &&
+    message.materializationVersion > 0 &&
+    message.ready !== false
+  )
 }
 
-function diagnostics(message: { diagnostics?: Array<{ path: string[]; message: string }> }, set: (value: Array<{ path: string[]; message: string }>) => void): void {
+function diagnostics(
+  message: { diagnostics?: Array<{ path: string[]; message: string }> },
+  set: (value: Array<{ path: string[]; message: string }>) => void,
+): void {
   if (message.diagnostics) set(message.diagnostics)
 }
 
@@ -111,10 +126,7 @@ export const ConfigProvider: ParentComponent = (props) => {
   // Draft snapshots sent with each in-flight save, keyed by the save identity
   // (LOCK-002). The matching ack subtracts only paths whose current draft value
   // still equals the sent value, so same-field edits made after send survive.
-  const sentByID = new Map<
-    string,
-    { changes: Partial<Config>; globals: Partial<Config>; projects: Partial<Config> }
-  >()
+  const sentByID = new Map<string, { changes: Partial<Config>; globals: Partial<Config>; projects: Partial<Config> }>()
   // Error from the most recent saveConfig() attempt, or null if no error.
   // Cleared when the user edits the draft again or starts a new save.
   const [saveError, setSaveError] = createSignal<SaveError | null>(null)
@@ -183,33 +195,33 @@ export const ConfigProvider: ParentComponent = (props) => {
       setGlobalDraft(restGlobal)
       setProjectDraft(restProject)
       setSaveError(null)
-       setConfig(resolveConfig(config, rest, has(rest)))
-       if (global !== undefined) {
-         setGlobalConfig(mergeScopedConfig(global, restGlobal))
-         setSavedGlobal(global)
-       }
-       if (project !== undefined) {
-         setProjectConfig(mergeScopedConfig(project, restProject))
-         setSavedProject(project)
+      setConfig(resolveConfig(config, rest, has(rest)))
+      if (global !== undefined) {
+        setGlobalConfig(mergeScopedConfig(global, restGlobal))
+        setSavedGlobal(global)
+      }
+      if (project !== undefined) {
+        setProjectConfig(mergeScopedConfig(project, restProject))
+        setSavedProject(project)
       }
       setFeatures(message.features)
     } else {
       // configUpdated from a different source (e.g. PermissionDock save) or an
       // echo of the last confirmed save. Re-apply the draft on top so pending
       // settings changes are preserved.
-       setConfig(resolveConfig(config, draft(), has(draft() as Record<string, unknown>)))
-       if (global !== undefined) {
-         setGlobalConfig(mergeScopedConfig(global, globalDraft()))
-         setSavedGlobal(global)
-       }
-       if (project !== undefined) {
-         setProjectConfig(mergeScopedConfig(project, projectDraft()))
-         setSavedProject(project)
+      setConfig(resolveConfig(config, draft(), has(draft() as Record<string, unknown>)))
+      if (global !== undefined) {
+        setGlobalConfig(mergeScopedConfig(global, globalDraft()))
+        setSavedGlobal(global)
+      }
+      if (project !== undefined) {
+        setProjectConfig(mergeScopedConfig(project, projectDraft()))
+        setSavedProject(project)
       }
       setFeatures(message.features)
     }
     if (message.settings) mergeSettings(message.settings)
-     setSaved(config)
+    setSaved(config)
   }
 
   function handleConfigLoaded(message: Extract<ExtensionMessage, { type: "configLoaded" }>): void {
@@ -289,8 +301,9 @@ export const ConfigProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "requestConfig" })
   }
 
-  // Request config immediately; if the extension's httpClient is not yet ready,
-  // extensionDataReady will fire once initialization completes and we retry once.
+  // P4.4-T22: config selector readiness is canonical-first. Request
+  // immediately; HTTP/SSE/generated-SDK is background reconciliation only.
+  // Fallback covers legacy noncanonical slow-init.
   requestInitialData()
 
   const fallback = setTimeout(() => {
@@ -299,17 +312,7 @@ export const ConfigProvider: ParentComponent = (props) => {
     }
   }, 3000)
 
-  const unsubReady = vscode.onMessage((message: ExtensionMessage) => {
-    if (message.type !== "extensionDataReady") return
-    unsubReady()
-    clearTimeout(fallback)
-    if (loading()) {
-      requestInitialData()
-    }
-  })
-
   onCleanup(() => {
-    unsubReady()
     clearTimeout(fallback)
   })
 
