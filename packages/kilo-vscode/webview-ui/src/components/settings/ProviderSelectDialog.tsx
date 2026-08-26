@@ -9,12 +9,7 @@ import { useLanguage } from "../../context/language"
 import { useProvider } from "../../context/provider"
 import type { Provider } from "../../types/messages"
 import ProviderConnectDialog from "./ProviderConnectDialog"
-import {
-  CUSTOM_PROVIDER_ID,
-  isPopularProvider,
-  popularProviderIndex,
-  providerIcon,
-} from "./provider-catalog"
+import { CUSTOM_PROVIDER_ID, providerIcon } from "./provider-catalog"
 import CustomProviderDialog from "./CustomProviderDialog"
 
 type ProviderItem = {
@@ -68,25 +63,13 @@ const ProviderSelectDialog = () => {
         key={(item) => item.id}
         items={items()}
         filterKeys={["id", "name"]}
-        groupBy={(item) =>
-          item.id !== CUSTOM_PROVIDER_ID && isPopularProvider(item.provider ?? item.id)
-            ? language.t("settings.providers.group.recommended")
-            : language.t("dialog.provider.group.other")
-        }
+        groupBy={() => language.t("dialog.provider.group.other")}
         sortBy={(a, b) => {
           if (a.id === CUSTOM_PROVIDER_ID) return -1
           if (b.id === CUSTOM_PROVIDER_ID) return 1
-
-          const rank = popularProviderIndex(a.provider ?? a.id) - popularProviderIndex(b.provider ?? b.id)
-          if (rank !== 0) return rank
-          return a.name.localeCompare(b.name)
+          return a.name.localeCompare(b.name) || a.id.localeCompare(b.id)
         }}
-        sortGroupsBy={(a, b) => {
-          const recommended = language.t("settings.providers.group.recommended")
-          if (a.category === recommended && b.category !== recommended) return -1
-          if (b.category === recommended && a.category !== recommended) return 1
-          return 0
-        }}
+        sortGroupsBy={(a, b) => a.category.localeCompare(b.category)}
         onSelect={(item) => {
           if (!item) return
           open(item)

@@ -14,7 +14,8 @@ import { join, resolve } from "node:path"
 //   deleted; this file is the focused absence/preservation regression.
 // - Optional `providerMetadata` contract field remains (Provider.Info.metadata
 //   optional in OpenAPI/SDK) and must stay contract-compatible when omitted;
-//   webview `provider-catalog.ts` already has fallback priority/icon behavior.
+//   webview `provider-catalog.ts` generic `icon`/`noteKey`/`synthetic` fallback
+//   remains while preset `priority`/`popularity` fallback was removed by P4.4-T20.
 // - Generic provider adapters, custom-provider save/delete/validation,
 //   provider model/catalog loaders, auth lifecycle, and HTTP/SSE/generated SDK
 //   bridge are preserved per LOCK-006/009.
@@ -162,13 +163,17 @@ describe("P4.4 provider metadata removal — preset display metadata absent", ()
 
   test("webview provider-catalog fallback remains (missing metadata handled)", () => {
     const catalog = readRepo("packages/kilo-vscode/webview-ui/src/components/settings/provider-catalog.ts")
-    // Fallback when metadata is absent: synthetic icon and priority fallback
-    expect(catalog).toContain("provider.metadata?.priority")
+    // Generic fallback when metadata is absent: synthetic icon retained; preset priority/catalog removed (T20 alphabetical)
     expect(catalog).toContain("provider.metadata?.icon")
     expect(catalog).toContain("provider.metadata?.noteKey")
-    expect(catalog).toContain("FALLBACK_PROVIDER_IDS")
     expect(catalog).toContain('return "synthetic"')
     expect(catalog).toContain("validIcon")
+    expect(catalog).toContain("a.name.localeCompare(b.name)")
+    expect(catalog).not.toContain("FALLBACK_PROVIDER_IDS")
+    expect(catalog).not.toContain("PROVIDER_PRIORITY")
+    expect(catalog).not.toContain("provider.metadata?.priority")
+    expect(catalog).not.toContain("isPopularProvider")
+    expect(catalog).not.toContain("providerOrderIndex")
   })
 
   test("test-profile lists the new removal regression in sorted order", () => {

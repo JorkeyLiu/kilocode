@@ -207,12 +207,19 @@ describe("buildAddList", () => {
     obscure: makeProvider("obscure", "Obscure"),
   }
 
-  it("includes popular unconfigured providers", () => {
+  it("includes all unconfigured providers alphabetically (no popularity filter, P4.4-T20)", () => {
     const list = buildAddList(allProviders, new Set(["anthropic"]))
     const ids = list.map((p) => p.id)
+    // previously popular-only excluded groq/obscure; now generic includes them
     expect(ids).toContain(KILO_PROVIDER_ID)
     expect(ids).toContain("openai")
+    expect(ids).toContain("groq")
+    expect(ids).toContain("obscure")
     expect(ids).not.toContain("anthropic")
+    // alphabetical by name: Anthropic would be first but excluded, so Groq, Kilo Gateway, Obscure, OpenAI
+    const names = list.map((p) => p.name)
+    const sorted = [...names].sort((a, b) => a.localeCompare(b))
+    expect(names).toEqual(sorted)
   })
 
   it("excludes configured providers", () => {
@@ -221,12 +228,29 @@ describe("buildAddList", () => {
     expect(ids).not.toContain(KILO_PROVIDER_ID)
     expect(ids).not.toContain("anthropic")
     expect(ids).not.toContain("openai")
+    expect(ids).toContain("groq")
+    expect(ids).toContain("obscure")
   })
 
-  it("returns empty when all popular providers are configured", () => {
+  it("returns empty when all providers are configured", () => {
     const configured = new Set(Object.keys(allProviders))
     const list = buildAddList(allProviders, configured)
     expect(list).toEqual([])
+  })
+
+  it("sorts add list deterministically alphabetical regardless of input order", () => {
+    const providersA: Record<string, Provider> = {
+      zebra: makeProvider("zebra", "Zebra"),
+      apple: makeProvider("apple", "Apple"),
+      middle: makeProvider("middle", "Middle"),
+    }
+    const providersB: Record<string, Provider> = {
+      middle: makeProvider("middle", "Middle"),
+      zebra: makeProvider("zebra", "Zebra"),
+      apple: makeProvider("apple", "Apple"),
+    }
+    expect(buildAddList(providersA, new Set()).map((p) => p.id)).toEqual(["apple", "middle", "zebra"])
+    expect(buildAddList(providersB, new Set()).map((p) => p.id)).toEqual(["apple", "middle", "zebra"])
   })
 })
 

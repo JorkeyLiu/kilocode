@@ -1,11 +1,10 @@
 import { describe, it, expect } from "bun:test"
 import {
-  providerSortKey,
+  buildModelGroups,
   buildTriggerLabel,
   stripSubProviderPrefix,
   sanitizeName,
   KILO_GATEWAY_ID,
-  PROVIDER_ORDER,
   freeDataLabel,
   isDataCollectedModel,
   hasByok,
@@ -14,40 +13,62 @@ import {
   autoSummary,
   autoChoices,
 } from "../../webview-ui/src/components/shared/model-selector-utils"
+import type { EnrichedModel } from "../../webview-ui/src/context/provider"
 
 const labels = { select: "Select model", noProviders: "No providers", notSet: "Not set" }
 
-describe("providerSortKey", () => {
-  it("returns 0 for kilo gateway", () => {
-    expect(providerSortKey(KILO_GATEWAY_ID)).toBe(0)
+function enriched(
+  providerID: string,
+  id: string,
+  name: string,
+  providerName: string,
+  extra: Partial<EnrichedModel> = {},
+): EnrichedModel {
+  return {
+    providerID,
+    id,
+    name,
+    providerName,
+    ...extra,
+  } as EnrichedModel
+}
+
+describe("buildModelGroups alphabetical ordering (P4.4-T20)", () => {
+  it("sorts provider groups alphabetically by display name with id tie-break", () => {
+    const models: EnrichedModel[] = [
+      enriched("zebra", "m1", "Model 1", "Zebra"),
+      enriched("apple", "m2", "Model 2", "Apple"),
+      enriched("middle", "m3", "Model 3", "Middle"),
+    ]
+    const groups = buildModelGroups(models, [], "Favorites")
+    expect(groups.map((g) => g.key)).toEqual(["apple", "middle", "zebra"])
+    expect(groups.map((g) => g.label)).toEqual(["Apple", "Middle", "Zebra"])
   })
 
-  it("returns correct index for known providers", () => {
-    expect(providerSortKey("anthropic")).toBe(1)
-    expect(providerSortKey("openai")).toBe(3)
-    expect(providerSortKey("google")).toBe(4)
+  it("is deterministic regardless of input order", () => {
+    const a: EnrichedModel[] = [
+      enriched("google", "g1", "G", "Google"),
+      enriched("anthropic", "a1", "A", "Anthropic"),
+      enriched("openai", "o1", "O", "OpenAI"),
+    ]
+    const b: EnrichedModel[] = [
+      enriched("openai", "o1", "O", "OpenAI"),
+      enriched("google", "g1", "G", "Google"),
+      enriched("anthropic", "a1", "A", "Anthropic"),
+    ]
+    expect(buildModelGroups(a, [], "Fav").map((g) => g.key)).toEqual(
+      buildModelGroups(b, [], "Fav").map((g) => g.key),
+    )
+    expect(buildModelGroups(a, [], "Fav").map((g) => g.key)).toEqual(["anthropic", "google", "openai"])
   })
 
-  it("returns order length for unknown provider", () => {
-    expect(providerSortKey("unknown-provider")).toBe(PROVIDER_ORDER.length)
-  })
-
-  it("is case-insensitive", () => {
-    expect(providerSortKey("Anthropic")).toBe(providerSortKey("anthropic"))
-    expect(providerSortKey("OpenAI")).toBe(providerSortKey("openai"))
-  })
-
-  it("respects custom order array", () => {
-    const order = ["z-provider", "a-provider"]
-    expect(providerSortKey("z-provider", order)).toBe(0)
-    expect(providerSortKey("a-provider", order)).toBe(1)
-    expect(providerSortKey("other", order)).toBe(2)
-  })
-
-  it("sorts providers correctly when used with sort", () => {
-    const ids = ["google", "anthropic", "kilo", "openai", "deepseek"]
-    const sorted = ids.slice().sort((a, b) => providerSortKey(a) - providerSortKey(b))
-    expect(sorted).toEqual(["kilo", "anthropic", "deepseek", "openai", "google"])
+  it("uses id as tie-break when display names match", () => {
+    const models: EnrichedModel[] = [
+      enriched("bbb", "m1", "M", "Same"),
+      enriched("aaa", "m2", "M", "Same"),
+    ]
+    const groups = buildModelGroups(models, [], "Fav")
+    expect(groups.map((g) => g.key)).toEqual(["aaa", "bbb"])
   })
 })
 

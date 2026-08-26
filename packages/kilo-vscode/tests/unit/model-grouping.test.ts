@@ -143,11 +143,10 @@ describe("buildModelGroups", () => {
     expect(groups[0]!.rows[0]!.model.id).toBe("claude-sonnet-4")
   })
 
-  it("sorts provider groups by provider priority", () => {
+  it("sorts provider groups alphabetically by display name with id tie-break", () => {
     const groups = buildModelGroups([openaiGpt, anthropicSonnet, kiloAuto], [], "Favorites")
     const keys = groups.map((g) => g.key)
-    expect(keys.indexOf(KILO_GATEWAY_ID)).toBeLessThan(keys.indexOf("anthropic"))
-    expect(keys.indexOf("anthropic")).toBeLessThan(keys.indexOf("openai"))
+    expect(keys).toEqual(["anthropic", KILO_GATEWAY_ID, "openai"])
   })
 
   it("handles empty model list", () => {

@@ -7,7 +7,7 @@
 
 import type { Provider, ProviderAuthState } from "../../types/messages"
 import { isCustomProviderPackage, KILO_PROVIDER_ID } from "../../../../src/shared/provider-model"
-import { isPopularProvider, sortProviders } from "./provider-catalog"
+import { sortProviders } from "./provider-catalog"
 
 /** The single control rendered in the primary grid slot of a configured row. */
 export type PrimarySlot = "edit" | "apiKey" | "chatgpt" | "anaconda" | "placeholder"
@@ -110,11 +110,9 @@ export function buildConfiguredList(
   return sortConfigured(list)
 }
 
-/** Build the Add providers list: popular providers not yet configured. */
+/** Build the Add providers list: generic unconfigured providers (alphabetical; no preset popularity). */
 export function buildAddList(allProviders: Record<string, Provider>, configuredIds: Set<string>): Provider[] {
-  return sortProviders(
-    Object.values(allProviders).filter((item) => !configuredIds.has(item.id) && isPopularProvider(item)),
-  )
+  return sortProviders(Object.values(allProviders).filter((item) => !configuredIds.has(item.id)))
 }
 
 /**

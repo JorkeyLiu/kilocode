@@ -1,12 +1,8 @@
 import type { ModelSelection } from "../../types/messages"
 import type { EnrichedModel } from "../../context/provider"
-import {
-  KILO_PROVIDER_ID as KILO_GATEWAY_ID,
-  PROVIDER_PRIORITY as PROVIDER_ORDER,
-  providerOrderIndex,
-} from "../../../../src/shared/provider-model"
+import { KILO_PROVIDER_ID as KILO_GATEWAY_ID } from "../../../../src/shared/provider-model"
 
-export { KILO_GATEWAY_ID, PROVIDER_ORDER }
+export { KILO_GATEWAY_ID }
 
 // ---------------------------------------------------------------------------
 // Row / group key helpers — single source of truth for key formatting
@@ -44,7 +40,9 @@ interface ModelGroupData {
  * Favorites is the only special top-level group. All other models — including
  * Kilo Auto models and recommended models — are grouped under their provider.
  * Within each provider group auto models sort first, then recommended (by
- * recommendedIndex), then alphabetical.
+ * recommendedIndex), then alphabetical. Provider groups are sorted
+ * deterministically alphabetically by display name with provider ID as
+ * tie-breaker (generic provider discovery; no preset priority).
  */
 export function buildModelGroups(
   models: EnrichedModel[],
@@ -74,7 +72,11 @@ export function buildModelGroups(
   }
 
   const rest: ModelGroupData[] = [...map.entries()]
-    .sort(([a], [b]) => providerSortKey(a) - providerSortKey(b))
+    .sort(([aId, aList], [bId, bList]) => {
+      const aLabel = aList[0]?.providerName ?? aId
+      const bLabel = bList[0]?.providerName ?? bId
+      return aLabel.localeCompare(bLabel) || aId.localeCompare(bId)
+    })
     .map(([id, list]) => {
       list.sort((a, b) => {
         // Auto models first within provider group
@@ -140,10 +142,6 @@ export function autoSummary(model: Pick<EnrichedModel, "options">): string {
 
 export function isSmall(model: Pick<EnrichedModel, "providerID" | "id">): boolean {
   return model.providerID === KILO_GATEWAY_ID && KILO_AUTO_SMALL_IDS.has(model.id)
-}
-
-export function providerSortKey(providerID: string, order: readonly string[] = PROVIDER_ORDER): number {
-  return providerOrderIndex(providerID, order as typeof PROVIDER_ORDER)
 }
 
 export function isFree(model: Pick<EnrichedModel, "isFree">): boolean {
