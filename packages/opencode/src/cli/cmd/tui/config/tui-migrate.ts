@@ -155,7 +155,6 @@ async function opencodeFiles(input: { directories: string[]; cwd: string }) {
   for (const dir of unique(input.directories)) {
     files.push(...ConfigPaths.fileInDirectory(dir, "kilo"))
   }
-  if (Flag.KILO_CONFIG) files.push(Flag.KILO_CONFIG)
 
   const existing = await Promise.all(
     unique(files).map(async (file) => {
