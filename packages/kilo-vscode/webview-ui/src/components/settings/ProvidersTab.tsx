@@ -13,15 +13,13 @@ import { Component, For, Match, Show, Switch as SolidSwitch, createMemo, onClean
 import { useConfig } from "../../context/config"
 import { useLanguage } from "../../context/language"
 import { useProvider } from "../../context/provider"
-import { useServer } from "../../context/server"
 import { useVSCode } from "../../context/vscode"
 import type { ProviderView } from "../../types/messages"
 import CustomProviderDialog from "./CustomProviderDialog"
 import ProviderConnectDialog from "./ProviderConnectDialog"
 import ProviderSelectDialog from "./ProviderSelectDialog"
 import { providerIcon, providerNoteKey } from "./provider-catalog"
-import { providersWithKiloFallback } from "./provider-visibility"
-import { isCustomProviderPackage, KILO_PROVIDER_ID } from "../../../../src/shared/provider-model"
+import { isCustomProviderPackage } from "../../../../src/shared/provider-model"
 import { createProviderAction } from "../../utils/provider-action"
 import {
   buildConfiguredList,
@@ -29,7 +27,6 @@ import {
   allConfiguredIds,
   providerSource,
   showInlineApiKey,
-  isKiloProvider,
   isCustomConfigured,
   resolvePrimarySlot,
 } from "./provider-tab-helpers"
@@ -39,7 +36,6 @@ const ProvidersTab: Component = () => {
   const { config, updateConfig } = useConfig()
   const provider = useProvider()
   const language = useLanguage()
-  const server = useServer()
   const vscode = useVSCode()
   const action = createProviderAction(vscode)
   const canonicalMode = () => provider.canonical?.() === true
@@ -51,10 +47,7 @@ const ProvidersTab: Component = () => {
   // eagerly evaluates createMemo during initialisation. (LOCK-009)
   const disabledProviders = createMemo(() => config().disabled_providers ?? [])
   const disabledIds = createMemo(() => new Set(disabledProviders()))
-  const allProviders = createMemo(() => {
-    const items = Object.values(providersWithKiloFallback(provider.providers()))
-    return canonicalMode() ? items.filter((item: ProviderView) => item.id !== KILO_PROVIDER_ID) : items
-  })
+  const allProviders = createMemo(() => Object.values(provider.providers()))
   const providerMap = createMemo(() => Object.fromEntries(allProviders().map((item) => [item.id, item])) as Record<string, ProviderView>)
 
   // Configured IDs: connected + disabled + config entries + auth states
@@ -71,7 +64,6 @@ const ProvidersTab: Component = () => {
   // ── Actions ──────────────────────────────────────────────────────────────
 
   function sourceTag(item: ProviderView) {
-    if (item.id === KILO_PROVIDER_ID) return language.t("settings.providers.tag.gateway")
     if (item.id === "anaconda-desktop") return language.t("settings.providers.tag.local")
     const current = providerSource(item)
     if (current === "env") return language.t("settings.providers.tag.environment")
@@ -149,10 +141,6 @@ const ProvidersTab: Component = () => {
 
   function connectProvider(item: ProviderView) {
     if (canonicalMode()) return
-    if (item.id === KILO_PROVIDER_ID) {
-      server.goToLogin()
-      return
-    }
     dialog.show(() => <ProviderConnectDialog providerID={item.id} />)
   }
 
@@ -173,12 +161,7 @@ const ProvidersTab: Component = () => {
     dialog.show(() => <ProviderConnectDialog providerID={item.id} manageApiKey />)
   }
 
-  // ── Control policy predicates (LOCK-045) ──────────────────────────────────
-
-  function showAccountButton(item: ProviderView): boolean {
-    return isKiloProvider(item)
-  }
-
+  // ── Control policy predicates ──────────────────────────────────────────
   function showEditButton(item: ProviderView): boolean {
     return isCustomConfigured(item, config().provider)
   }
@@ -251,7 +234,6 @@ const ProvidersTab: Component = () => {
             {(item) => {
               const primary = () =>
                 resolvePrimarySlot({
-                  isKilo: showAccountButton(item),
                   isCustom: showEditButton(item),
                   hasApiKey: showInlineApiKey(item, provider.authStates()),
                   hasChatGPT: chatgpt(item),
@@ -270,19 +252,6 @@ const ProvidersTab: Component = () => {
                   <div class="settings-provider-row-controls">
                     {/* Primary slot: exactly one child per row */}
                     <SolidSwitch>
-                      <Match when={primary() === "account"}>
-                        <div class="settings-provider-row-credential-slot settings-provider-row-credential-slot--icon">
-                          <Tooltip value={language.t("settings.providers.action.account")}>
-                            <IconButton
-                              icon="person"
-                              size="large"
-                              variant="ghost"
-                              aria-label={language.t("settings.providers.action.account")}
-                              onClick={() => server.goToProfile()}
-                            />
-                          </Tooltip>
-                        </div>
-                      </Match>
                       <Match when={primary() === "edit"}>
                         <div class="settings-provider-row-credential-slot settings-provider-row-credential-slot--icon">
                           <Tooltip value={language.t("common.edit")}>
@@ -399,9 +368,7 @@ const ProvidersTab: Component = () => {
                   </Show>
                 </div>
                  <Button size="large" variant="secondary" icon="plus-small" onClick={() => connectProvider(item)} disabled={canonicalMode() === true}>
-                  {item.id === KILO_PROVIDER_ID
-                    ? language.t("common.signIn")
-                    : language.t("settings.providers.action.configure")}
+                  {language.t("settings.providers.action.configure")}
                 </Button>
               </div>
             )

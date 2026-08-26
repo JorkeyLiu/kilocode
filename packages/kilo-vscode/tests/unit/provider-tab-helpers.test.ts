@@ -6,7 +6,6 @@ import {
   providerSource,
   resolveConfiguredProvider,
   showInlineApiKey,
-  isKiloProvider,
   isCustomConfigured,
   resolvePrimarySlot,
 } from "../../webview-ui/src/components/settings/provider-tab-helpers"
@@ -61,37 +60,57 @@ describe("resolveConfiguredProvider", () => {
 
   it("returns backend provider when available", () => {
     const p = resolveConfiguredProvider("anthropic", allProviders)
-    expect(p.name).toBe("Anthropic")
+    expect(p!.name).toBe("Anthropic")
   })
 
   it("creates synthetic provider from config entry when backend is missing", () => {
     const p = resolveConfiguredProvider("myprovider", allProviders, {
       myprovider: { name: "My Provider", npm: "@ai-sdk/openai-compatible" },
     })
-    expect(p.name).toBe("My Provider")
-    expect(p.source).toBe("custom")
+    expect(p!.name).toBe("My Provider")
+    expect(p!.source).toBe("custom")
   })
 
   it("creates synthetic provider from config entry with config source", () => {
     const p = resolveConfiguredProvider("azure", allProviders, {
       azure: { name: "Azure" },
     })
-    expect(p.name).toBe("Azure")
-    expect(p.source).toBe("config")
+    expect(p!.name).toBe("Azure")
+    expect(p!.source).toBe("config")
   })
 
   it("falls back to ID as name when no backend or config", () => {
     const p = resolveConfiguredProvider("unknown-provider", allProviders)
-    expect(p.id).toBe("unknown-provider")
-    expect(p.name).toBe("unknown-provider")
+    expect(p!.id).toBe("unknown-provider")
+    expect(p!.name).toBe("unknown-provider")
   })
 
   it("uses config name when available for custom provider", () => {
     const p = resolveConfiguredProvider("custom1", allProviders, {
       custom1: { name: "Custom One", npm: "@ai-sdk/openai" },
     })
-    expect(p.name).toBe("Custom One")
-    expect(p.source).toBe("custom")
+    expect(p!.name).toBe("Custom One")
+    expect(p!.source).toBe("custom")
+  })
+
+  it("does not synthesize Kilo when backend omits it even with config entry (P4.4-T11 blocker)", () => {
+    const p = resolveConfiguredProvider(KILO_PROVIDER_ID, allProviders, {
+      [KILO_PROVIDER_ID]: { name: "Kilo Gateway", npm: "@ai-sdk/openai-compatible" },
+    })
+    expect(p).toBeUndefined()
+  })
+
+  it("does not synthesize Kilo when backend omits it with no config (auth/config-present/backend-absent path)", () => {
+    const p = resolveConfiguredProvider(KILO_PROVIDER_ID, allProviders)
+    expect(p).toBeUndefined()
+  })
+
+  it("still synthesizes generic custom provider when backend omits it", () => {
+    const p = resolveConfiguredProvider("my-custom-x", allProviders, {
+      "my-custom-x": { name: "My Custom X", npm: "@ai-sdk/openai-compatible" },
+    })
+    expect(p!.id).toBe("my-custom-x")
+    expect(p!.name).toBe("My Custom X")
   })
 })
 
@@ -140,6 +159,45 @@ describe("buildConfiguredList", () => {
   })
 })
 
+describe("buildConfiguredList Kilo reconstruction guard (P4.4-T11)", () => {
+  it("suppresses synthetic Kilo when backend omits it but auth/config contain kilo", () => {
+    const list = buildConfiguredList({}, [], new Set(), { [KILO_PROVIDER_ID]: { name: "Kilo" } }, { [KILO_PROVIDER_ID]: "oauth" })
+    expect(list.map((p) => p.id)).not.toContain(KILO_PROVIDER_ID)
+    expect(list.length).toBe(0)
+  })
+
+  it("suppresses Kilo even when connected/disabled/auth/config all contain kilo but backend omits it", () => {
+    const list = buildConfiguredList(
+      {},
+      [KILO_PROVIDER_ID],
+      new Set([KILO_PROVIDER_ID]),
+      { [KILO_PROVIDER_ID]: { name: "Kilo" } },
+      { [KILO_PROVIDER_ID]: "api" },
+    )
+    expect(list.find((p) => p.id === KILO_PROVIDER_ID)).toBeUndefined()
+  })
+
+  it("still reconstructs generic custom provider when backend omits it but auth/config contain it", () => {
+    const list = buildConfiguredList(
+      {},
+      [],
+      new Set(),
+      { "my-generic-custom": { name: "My Generic", npm: "@ai-sdk/openai-compatible" } },
+      { "my-generic-custom": "api" },
+    )
+    expect(list.map((p) => p.id)).toContain("my-generic-custom")
+    expect(list.find((p) => p.id === "my-generic-custom")?.name).toBe("My Generic")
+  })
+
+  it("renders Kilo when backend provides it even if also in auth/config", () => {
+    const backend: Record<string, Provider> = {
+      [KILO_PROVIDER_ID]: makeProvider(KILO_PROVIDER_ID, "Kilo Gateway", "custom"),
+    }
+    const list = buildConfiguredList(backend, [KILO_PROVIDER_ID], new Set(), { [KILO_PROVIDER_ID]: {} }, { [KILO_PROVIDER_ID]: "oauth" })
+    expect(list.map((p) => p.id)).toContain(KILO_PROVIDER_ID)
+  })
+})
+
 describe("buildAddList", () => {
   const allProviders: Record<string, Provider> = {
     [KILO_PROVIDER_ID]: makeProvider(KILO_PROVIDER_ID, "Kilo Gateway"),
@@ -169,17 +227,6 @@ describe("buildAddList", () => {
     const configured = new Set(Object.keys(allProviders))
     const list = buildAddList(allProviders, configured)
     expect(list).toEqual([])
-  })
-})
-
-describe("isKiloProvider", () => {
-  it("returns true for Kilo provider", () => {
-    expect(isKiloProvider(makeProvider(KILO_PROVIDER_ID, "Kilo Gateway"))).toBe(true)
-  })
-
-  it("returns false for non-Kilo providers", () => {
-    expect(isKiloProvider(makeProvider("anthropic", "Anthropic"))).toBe(false)
-    expect(isKiloProvider(makeProvider("custom1", "Custom", "custom"))).toBe(false)
   })
 })
 
@@ -274,39 +321,33 @@ describe("buildConfiguredList neutral ordering", () => {
 })
 
 describe("resolvePrimarySlot", () => {
-  it("returns account when isKilo is true regardless of other flags", () => {
+  it("returns edit when isCustom is true", () => {
     expect(
-      resolvePrimarySlot({ isKilo: true, isCustom: true, hasApiKey: true, hasChatGPT: true, isAnaconda: true }),
-    ).toBe("account")
-  })
-
-  it("returns edit when isCustom is true (non-Kilo)", () => {
-    expect(
-      resolvePrimarySlot({ isKilo: false, isCustom: true, hasApiKey: true, hasChatGPT: true, isAnaconda: true }),
+      resolvePrimarySlot({ isCustom: true, hasApiKey: true, hasChatGPT: true, isAnaconda: true }),
     ).toBe("edit")
   })
 
   it("returns apiKey when hasApiKey is true (no custom)", () => {
     expect(
-      resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: true, hasChatGPT: true, isAnaconda: true }),
+      resolvePrimarySlot({ isCustom: false, hasApiKey: true, hasChatGPT: true, isAnaconda: true }),
     ).toBe("apiKey")
   })
 
   it("returns chatgpt when hasChatGPT is true (no custom, no apiKey)", () => {
     expect(
-      resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: false, hasChatGPT: true, isAnaconda: true }),
+      resolvePrimarySlot({ isCustom: false, hasApiKey: false, hasChatGPT: true, isAnaconda: true }),
     ).toBe("chatgpt")
   })
 
   it("returns anaconda when isAnaconda is true (only flag set)", () => {
     expect(
-      resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: false, hasChatGPT: false, isAnaconda: true }),
+      resolvePrimarySlot({ isCustom: false, hasApiKey: false, hasChatGPT: false, isAnaconda: true }),
     ).toBe("anaconda")
   })
 
   it("returns placeholder when no flags are set", () => {
     expect(
-      resolvePrimarySlot({ isKilo: false, isCustom: false, hasApiKey: false, hasChatGPT: false, isAnaconda: false }),
+      resolvePrimarySlot({ isCustom: false, hasApiKey: false, hasChatGPT: false, isAnaconda: false }),
     ).toBe("placeholder")
   })
 })

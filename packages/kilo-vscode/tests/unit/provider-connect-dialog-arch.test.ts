@@ -4,7 +4,7 @@
  * These tests verify invariants that cannot be caught by visual regression alone:
  * - Remove path uses inline confirmation (no nested dialog.show)
  * - Close icon props remain icon='close', size='small', variant='ghost'
- * - Account button routes through server.goToProfile()
+ * - No account/profile Kilo slot remains (LOCK-006 bounded removal)
  * - Action-row CSS has explicit justify-content and no-wrap
  * - BYOK link exists as a sibling of the action row
  *
@@ -72,45 +72,25 @@ describe("ProviderConnectDialog — remove path is inline (LOCK-072/073)", () =>
   })
 })
 
-describe("ProvidersTab — Account uses server.goToProfile (LOCK-075)", () => {
-  it("Account button calls server.goToProfile", () => {
-    // Find the account button onClick handler
-    const match = TAB_SRC.match(/primary\(\) === "account"[\s\S]*?onClick=\{[\s\S]*?\}[\s\S]*?>/)
-    expect(match).not.toBeNull()
-    expect(match![0]).toContain("server.goToProfile()")
+describe("ProvidersTab — Account slot removed (LOCK-075 re-audit)", () => {
+  it("ProvidersTab has no account primary slot and no server.goToProfile in account context", () => {
+    expect(TAB_SRC).not.toContain('primary() === "account"')
+    expect(TAB_SRC).not.toContain("settings.providers.action.account")
+    // No Kilo account navigation remains in ProvidersTab; generic surfaces use edit/apiKey only
+    expect(TAB_SRC).not.toMatch(/server\.goToProfile\(\)/)
   })
 
-  it("Account button does NOT use vscode.postMessage directly", () => {
-    // The entire account match block
-    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "account"\}>([\s\S]*?)<\/Match>/)
-    expect(match).not.toBeNull()
-    expect(match![1]).not.toContain("vscode.postMessage")
+  it("ProvidersTab has no useServer import for account navigation", () => {
+    expect(TAB_SRC).not.toContain('from "../../context/server"')
+    expect(TAB_SRC).not.toContain("useServer")
   })
 })
 
 describe("ProvidersTab — action icon normalization", () => {
-  it("account slot renders person IconButton with Tooltip", () => {
-    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "account"\}>([\s\S]*?)<\/Match>/)
-    expect(match).not.toBeNull()
-    const block = match![1]
-    expect(block).toContain('icon="person"')
-    expect(block).toContain("<Tooltip")
-    expect(block).toContain("IconButton")
-    expect(block).toContain("server.goToProfile()")
-  })
-
-  it("account slot has localized aria-label and tooltip", () => {
-    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "account"\}>([\s\S]*?)<\/Match>/)
-    expect(match).not.toBeNull()
-    const block = match![1]
-    expect(block).toContain('aria-label={language.t("settings.providers.action.account")}')
-    expect(block).toContain('value={language.t("settings.providers.action.account")}')
-  })
-
-  it("account slot uses credential-slot wrapper", () => {
-    const match = TAB_SRC.match(/<Match when=\{primary\(\) === "account"\}>([\s\S]*?)<\/Match>/)
-    expect(match).not.toBeNull()
-    expect(match![1]).toContain("settings-provider-row-credential-slot")
+  it("account slot is absent", () => {
+    expect(TAB_SRC).not.toContain('primary() === "account"')
+    expect(TAB_SRC).not.toContain('icon="person"')
+    expect(TAB_SRC).not.toContain("settings.providers.action.account")
   })
 
   it("edit slot renders edit IconButton with Tooltip", () => {
@@ -161,8 +141,8 @@ describe("ProvidersTab — action icon normalization", () => {
     expect(match![1]).toContain("settings-provider-row-credential-slot")
   })
 
-  it("account, edit, and apiKey slots all use IconButton with ghost variant and large size", () => {
-    const slots = ["account", "edit", "apiKey"]
+  it("edit and apiKey slots use IconButton with ghost variant and large size", () => {
+    const slots = ["edit", "apiKey"]
     for (const slot of slots) {
       const match = TAB_SRC.match(new RegExp(`<Match when=\\{primary\\(\\) === "${slot}"\\}>([\\s\\S]*?)<\\/Match>`))
       expect(match).not.toBeNull()
@@ -192,7 +172,7 @@ describe("ProvidersTab — action icon normalization", () => {
 })
 
 describe("Icon credential-slot right-alignment (LOCK-033/034)", () => {
-  const iconSlots = ["account", "edit", "apiKey"]
+  const iconSlots = ["edit", "apiKey"]
 
   it("icon slots use the --icon modifier class", () => {
     for (const slot of iconSlots) {
