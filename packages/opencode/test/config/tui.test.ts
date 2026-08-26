@@ -199,6 +199,7 @@ it.instance("migrates tui-specific keys from kilo.json when tui.json does not ex
         tui: { scroll_speed: 5 },
         keybinds: { app_exit: "ctrl+q" },
       })
+      const original = yield* fs.readFileString(source)
 
       const config = yield* getTuiConfig(test.directory)
       expect(config.theme).toBe("migrated-theme")
@@ -208,11 +209,13 @@ it.instance("migrates tui-specific keys from kilo.json when tui.json does not ex
         theme: "migrated-theme",
         scroll_speed: 5,
       })
-      const server = JSON.parse(yield* fs.readFileString(source))
-      expect(server.theme).toBeUndefined()
-      expect(server.keybinds).toBeUndefined()
-      expect(server.tui).toBeUndefined()
-      expect(yield* fs.existsSafe(path.join(test.directory, "kilo.json.tui-migration.bak"))).toBe(true)
+      const after = yield* fs.readFileString(source)
+      expect(after).toBe(original)
+      const server = JSON.parse(after)
+      expect(server.theme).toBe("migrated-theme")
+      expect(server.keybinds).toEqual({ app_exit: "ctrl+q" })
+      expect(server.tui).toEqual({ scroll_speed: 5 })
+      expect(yield* fs.existsSafe(path.join(test.directory, "kilo.json.tui-migration.bak"))).toBe(false)
       expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
     }),
   ),
@@ -235,8 +238,8 @@ it.instance("migrates project legacy tui keys even when global tui.json already 
       expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
 
       const server = JSON.parse(yield* fs.readFileString(path.join(test.directory, "kilo.json")))
-      expect(server.theme).toBeUndefined()
-      expect(server.tui).toBeUndefined()
+      expect(server.theme).toBe("project-migrated")
+      expect(server.tui).toEqual({ scroll_speed: 2 })
     }),
   ),
 )
@@ -307,13 +310,14 @@ it.instance("skips migration when tui.json already exists", () =>
   ),
 )
 
-it.instance("continues loading tui config when legacy source cannot be stripped", () =>
+it.instance("materializes missing tui.json without modifying read-only legacy source", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
       const test = yield* TestInstance
       const source = path.join(test.directory, "kilo.json")
       yield* fs.writeJson(source, { theme: "readonly-theme" })
+      const original = yield* fs.readFileString(source)
 
       yield* Effect.acquireUseRelease(
         fs.chmod(source, 0o444),
@@ -322,8 +326,11 @@ it.instance("continues loading tui config when legacy source cannot be stripped"
             const config = yield* getTuiConfig(test.directory)
             expect(config.theme).toBe("readonly-theme")
             expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
+            expect(yield* fs.existsSafe(path.join(test.directory, "kilo.json.tui-migration.bak"))).toBe(false)
 
-            const server = JSON.parse(yield* fs.readFileString(source))
+            const after = yield* fs.readFileString(source)
+            expect(after).toBe(original)
+            const server = JSON.parse(after)
             expect(server.theme).toBe("readonly-theme")
           }),
         () => fs.chmod(source, 0o644).pipe(Effect.ignore),
@@ -332,29 +339,32 @@ it.instance("continues loading tui config when legacy source cannot be stripped"
   ),
 )
 
-it.instance("migration backup preserves JSONC comments", () =>
+it.instance("migration preserves source and does not create backup when materializing from JSONC", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
       const test = yield* TestInstance
-      yield* fs.writeFileString(
-        path.join(test.directory, "kilo.jsonc"),
-        `{
+      const original = `{
   // top-level comment
   "theme": "jsonc-theme",
   "tui": {
     // nested comment
     "scroll_speed": 1.5
   }
-}`,
-      )
+}`
+      yield* fs.writeFileString(path.join(test.directory, "kilo.jsonc"), original)
 
       yield* getTuiConfig(test.directory)
-      const backup = yield* fs.readFileString(path.join(test.directory, "kilo.jsonc.tui-migration.bak"))
-      expect(backup).toContain("// top-level comment")
-      expect(backup).toContain("// nested comment")
-      expect(backup).toContain('"theme": "jsonc-theme"')
-      expect(backup).toContain('"scroll_speed": 1.5')
+      expect(yield* fs.existsSafe(path.join(test.directory, "kilo.jsonc.tui-migration.bak"))).toBe(false)
+      const source = yield* fs.readFileString(path.join(test.directory, "kilo.jsonc"))
+      expect(source).toBe(original)
+      expect(source).toContain("// top-level comment")
+      expect(source).toContain("// nested comment")
+      expect(source).toContain('"theme": "jsonc-theme"')
+      expect(source).toContain('"scroll_speed": 1.5')
+      const migrated = JSON.parse(yield* fs.readFileString(path.join(test.directory, "tui.json")))
+      expect(migrated.theme).toBe("jsonc-theme")
+      expect(migrated.scroll_speed).toBe(1.5)
     }),
   ),
 )

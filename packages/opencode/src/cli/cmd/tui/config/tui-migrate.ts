@@ -1,6 +1,5 @@
 import path from "path"
-import { access, constants } from "fs/promises" // kilocode_change
-import { type ParseError as JsoncParseError, applyEdits, modify, parse as parseJsonc } from "jsonc-parser"
+import { type ParseError as JsoncParseError, parse as parseJsonc } from "jsonc-parser"
 import { unique } from "remeda"
 import { Option, Schema } from "effect"
 import { DiffStyle, ScrollAcceleration, ScrollSpeed } from "./tui-schema"
@@ -71,12 +70,6 @@ export async function migrateTuiConfig(input: MigrateInput) {
         return false
       })
     if (!wrote) continue
-
-    const stripped = await backupAndStripLegacy(file, source)
-    if (!stripped) {
-      log.warn("tui config migrated but source file was not stripped", { from: file, to: target })
-      continue
-    }
     log.info("migrated tui config", { from: file, to: target })
   }
 }
@@ -98,51 +91,6 @@ function normalizeTui(data: Record<string, unknown>):
     parsed.scroll_acceleration === undefined
     ? undefined
     : parsed
-}
-
-async function backupAndStripLegacy(file: string, source: string) {
-  // kilocode_change start
-  // On POSIX, `rename()` can overwrite a read-only file when the parent directory is
-  // writable, bypassing file-level write permissions. Check write access explicitly so
-  // that callers can distinguish "strip succeeded" from "strip skipped" correctly.
-  const writable = await access(file, constants.W_OK)
-    .then(() => true)
-    .catch(() => false)
-  if (!writable) return false
-  // kilocode_change end
-
-  const backup = file + ".tui-migration.bak"
-  const hasBackup = await Filesystem.exists(backup)
-  const backed = hasBackup
-    ? true
-    : await Filesystem.write(backup, source)
-        .then(() => true)
-        .catch((error) => {
-          log.warn("failed to backup source config during tui migration", { path: file, backup, error })
-          return false
-        })
-  if (!backed) return false
-
-  const text = ["theme", "keybinds", "tui"].reduce((acc, key) => {
-    const edits = modify(acc, [key], undefined, {
-      formattingOptions: {
-        insertSpaces: true,
-        tabSize: 2,
-      },
-    })
-    if (!edits.length) return acc
-    return applyEdits(acc, edits)
-  }, source)
-
-  return Filesystem.write(file, text)
-    .then(() => {
-      log.info("stripped tui keys from server config", { path: file, backup })
-      return true
-    })
-    .catch((error) => {
-      log.warn("failed to strip legacy tui keys from server config", { path: file, backup, error })
-      return false
-    })
 }
 
 async function opencodeFiles(input: { directories: string[]; cwd: string }) {
