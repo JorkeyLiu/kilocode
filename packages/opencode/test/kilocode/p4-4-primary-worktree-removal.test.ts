@@ -76,17 +76,23 @@ describe("P4.4 primary-worktree removal — orphaned helper physically absent", 
   })
 
   test("canonical-root and ConfigPaths behavior remains", () => {
-    // Must preserve canonical-root handling and ConfigPaths legacy surface.
+    // Must preserve canonical-root handling and ConfigPaths retained surface (P4.4-T16 ancestor walk removed, TUI-local discovery gated).
     expect(read("kilocode/config/config.ts")).toContain("canonicalRoot")
     expect(read("kilocode/config/overlay.ts")).toContain("canonicalRoot")
     const paths = read("config/paths.ts")
     expect(paths).toContain("Flag.KILO_CONFIG_DIR")
-    expect(paths).toContain('targets: [".kilo"]')
-    expect(paths.split('targets: [".kilo"]').length - 1).toBe(1)
+    expect(paths).not.toContain('targets: [".kilo"]')
+    expect(paths.split('targets: [".kilo"]').length - 1).toBe(0)
     expect(paths).not.toContain("Global.Path.home")
     expect(paths).toContain("Global.Path.config")
-    expect(paths).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
+    expect(paths).not.toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
+    expect(paths).not.toContain("void directory")
     expect(paths).toContain("export const files")
     expect(paths).toContain("fileInDirectory")
+    expect(paths).toContain('export const directories = Effect.fn("ConfigPaths.directories")(function* ()')
+    const tui = read("cli/cmd/tui/config/tui.ts")
+    expect(tui).toContain('targets: [".kilocode", ".kilo"]')
+    expect(tui).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
+    expect(tui).toContain("yield* afs.up")
   })
 })

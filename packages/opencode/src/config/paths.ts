@@ -20,17 +20,9 @@ export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
   })).toReversed()
 })
 
-export const directories = Effect.fn("ConfigPaths.directories")(function* (directory: string, worktree?: string) {
-  const afs = yield* FSUtil.Service
+export const directories = Effect.fn("ConfigPaths.directories")(function* () {
   return unique([
     Global.Path.config,
-    ...(!Flag.KILO_DISABLE_PROJECT_CONFIG
-      ? yield* afs.up({
-          targets: [".kilo"],
-          start: directory,
-          stop: worktree,
-        })
-      : []),
     ...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : []),
   ])
 })

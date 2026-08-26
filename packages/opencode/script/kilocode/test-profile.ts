@@ -40,6 +40,7 @@ export namespace TestProfile {
           "kilocode/p4-4-provider-login-preset-removal.test.ts",
           "kilocode/p4-4-provider-metadata-removal.test.ts",
           "kilocode/p4-4-sdk-config-forwarding-removal.test.ts",
+          "kilocode/p4-4-t16-tui-legacy-discovery.test.ts",
           "kilocode/p4-4-tui-migrate-kilo-config-removal.test.ts",
           "kilocode/p4-4-wellknown-provider-auth-removal.test.ts",
           "kilocode/sandbox/*.test.ts",

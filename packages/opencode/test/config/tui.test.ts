@@ -90,13 +90,13 @@ it.instance("keeps server and tui plugin merge semantics aligned", () =>
       const local = path.join(test.directory, ".kilo") // kilocode_change
       yield* fs.makeDirectory(local, { recursive: true })
 
-      yield* fs.writeJson(path.join(Global.Path.config, "kilo.json"), {
+      yield* fs.writeJson(path.join(Global.Path.config, "kilo.jsonc"), {
         plugin: [["shared-plugin@1.0.0", { source: "global" }], "global-only@1.0.0"],
       })
       yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), {
         plugin: [["shared-plugin@1.0.0", { source: "global" }], "global-only@1.0.0"],
       })
-      yield* fs.writeJson(path.join(local, "kilo.json"), {
+      yield* fs.writeJson(path.join(local, "kilo.jsonc"), {
         plugin: [["shared-plugin@2.0.0", { source: "local" }], "local-only@1.0.0"],
       })
       yield* fs.writeJson(path.join(local, "tui.json"), {

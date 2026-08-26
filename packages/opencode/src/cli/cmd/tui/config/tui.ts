@@ -204,11 +204,20 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
       acc.plugin_origins = plugins
     })
 
-  // kilocode_change start - discover canonical and legacy Kilo config directories
-  // Every config dir we may read from: global config, .kilo and legacy .kilocode
-  // folders between cwd and home, and KILO_CONFIG_DIR.
+  // kilocode_change start - TUI-local legacy directory discovery
+  // ConfigPaths.directories is canonical-only (global + KILO_CONFIG_DIR) per LOCK-010.
+  // Project .kilo/.kilocode ancestor discovery lives here, gated by the project-disable flag.
+  // Merged order is exactly global → enabled legacy project discovery → KILO_CONFIG_DIR (last wins).
   // kilocode_change end
-  const directories = yield* ConfigPaths.directories(ctx.directory)
+  const baseDirectories = yield* ConfigPaths.directories()
+  const legacyProjectDirs = Flag.KILO_DISABLE_PROJECT_CONFIG
+    ? []
+    : yield* afs.up({ targets: [".kilocode", ".kilo"], start: ctx.directory })
+  const directories = unique([
+    ...baseDirectories.filter((dir) => dir !== Flag.KILO_CONFIG_DIR),
+    ...legacyProjectDirs,
+    ...baseDirectories.filter((dir) => dir === Flag.KILO_CONFIG_DIR),
+  ])
   yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
 
   const projectFiles = Flag.KILO_DISABLE_PROJECT_CONFIG ? [] : yield* ConfigPaths.files("tui", ctx.directory)
@@ -235,10 +244,11 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     yield* mergeFile(acc, file, false, { root: ctx.directory, source: file }) // kilocode_change - untrusted, {file:} confined to project
   }
 
-  // kilocode_change start - load tui.json from supported Kilo config directories
-  // 4. `.kilo` and legacy `.kilocode` directories (and KILO_CONFIG_DIR)
-  // discovered while walking up the tree. Also returned below so callers can
-  // install plugin dependencies from each location.
+  // kilocode_change start - load tui.json from TUI-local legacy directories
+  // 4. `.kilo` and deferred `.kilocode` ancestor directories (discovered locally
+  // above when project config is enabled) plus canonical global/KILO_CONFIG_DIR
+  // from ConfigPaths. Also returned below so callers can install plugin
+  // dependencies from each location. ConfigPaths no longer owns ancestor discovery.
   const dirs = unique(directories).filter(
     (dir) => dir.endsWith(".kilo") || dir.endsWith(".kilocode") || dir === Flag.KILO_CONFIG_DIR,
   )
