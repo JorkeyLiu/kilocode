@@ -99,8 +99,12 @@ describe("P4.3 cutover — legacy readers absent (canonical-only effective confi
     expect(paths).toContain("Flag.KILO_CONFIG_DIR")
     expect(paths).toContain('targets: [".kilo"]')
     expect(paths).not.toContain('targets: [".kilocode", ".kilo"]')
-    expect(paths.split('targets: [".kilo"]').length - 1).toBe(2)
+    expect(paths.split('targets: [".kilo"]').length - 1).toBe(1)
+    // T15 bounded correction: prove remaining single ancestor walk has exact residual shape
+    expect(paths).toMatch(/targets:\s*\["\.kilo"\],\s*start:\s*directory,\s*stop:\s*worktree/)
     expect(paths).not.toContain("canonicalRoot")
+    expect(paths).not.toContain("Global.Path.home")
+    expect(paths).toContain("Global.Path.config")
   })
 
   test("no dual-read or import helper surface exists", () => {
@@ -163,10 +167,17 @@ describe("P4.3 cutover — legacy readers absent (canonical-only effective confi
     // Effective config (Config.Service) remains canonical-only and ignores KILO_CONFIG_DIR
     expect(cfg).not.toContain("Flag.KILO_CONFIG_DIR")
     // ConfigPaths retains legacy for TUI/CLI consumers (isolated from effective config)
+    // P4.4-T15: home `.kilo` walk deleted — only project ancestor walk remains.
     expect(paths).toContain("Flag.KILO_CONFIG_DIR")
     expect(paths).toContain('targets: [".kilo"]')
-    expect(paths).toContain("Global.Path.home")
+    expect(paths.split('targets: [".kilo"]').length - 1).toBe(1)
+    // T15 bounded correction: prove remaining single ancestor walk has exact residual shape
+    expect(paths).toMatch(/targets:\s*\["\.kilo"\],\s*start:\s*directory,\s*stop:\s*worktree/)
+    expect(paths).not.toContain("Global.Path.home")
     expect(paths).toContain("Global.Path.config")
+    expect(paths).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
+    expect(paths).toContain("export const files")
+    expect(paths).toContain("fileInDirectory")
     expect(paths).not.toContain("canonicalRoot")
   })
 

@@ -31,11 +31,6 @@ export const directories = Effect.fn("ConfigPaths.directories")(function* (direc
           stop: worktree,
         })
       : []),
-    ...(yield* afs.up({
-      targets: [".kilo"],
-      start: Global.Path.home,
-      stop: Global.Path.home,
-    })),
     ...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : []),
   ])
 })
