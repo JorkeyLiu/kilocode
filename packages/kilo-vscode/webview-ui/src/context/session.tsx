@@ -1127,15 +1127,18 @@ export const SessionProvider: ParentComponent = (props) => {
   // HTTP/SSE bridge remains for noncanonical/background reconciliation.
   vscode.postMessage({ type: "requestMcpStatus" })
 
-  const fallback = setTimeout(() => {
+  const agentFallback = setTimeout(() => {
     if (agents().length === 0) vscode.postMessage({ type: "requestAgents" })
+  }, 3000)
+
+  const mcpFallback = setTimeout(() => {
     if (Object.keys(mcpStatus()).length === 0) vscode.postMessage({ type: "requestMcpStatus" })
   }, 3000)
 
   const unsubReady = vscode.onMessage((message: ExtensionMessage) => {
     if (message.type !== "extensionDataReady") return
     unsubReady()
-    clearTimeout(fallback)
+    clearTimeout(mcpFallback)
     if (Object.keys(mcpStatus()).length === 0) vscode.postMessage({ type: "requestMcpStatus" })
   })
 
@@ -1144,7 +1147,8 @@ export const SessionProvider: ParentComponent = (props) => {
     unsubSkills()
     unsubMcpStatus()
     unsubReady()
-    clearTimeout(fallback)
+    clearTimeout(agentFallback)
+    clearTimeout(mcpFallback)
   })
 
   const variantList = (sessionID?: string) => {

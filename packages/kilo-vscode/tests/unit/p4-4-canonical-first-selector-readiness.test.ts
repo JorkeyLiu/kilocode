@@ -210,4 +210,144 @@ describe("P4.4-T22 canonical-first selector readiness decoupling", () => {
     // extensionDataReady must be posted in both branches (canonical and noncanonical)
     expect(block.match(/extensionDataReady/g)!.length).toBe(1)
   })
+
+  it("audit correction: stale canonical provider publish discarded after disposal/materialization/webview lifecycle change", async () => {
+    const src = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
+    const block = src.match(/private async sendCanonicalProviders[\s\S]*?this\.cachedProvidersMessage = message/)?.[0] ?? ""
+    expect(block).toContain("capturedService")
+    expect(block).toContain("capturedStamp")
+    expect(block).toContain("capturedReady")
+    expect(block).toContain("capturedDisposed")
+    expect(block).toContain("capturedWebviewReady")
+    expect(block).toContain("sameStamp(capturedStamp")
+    expect(block).toContain("this.canonicalConfig !== capturedService")
+    expect(block).toContain("this.isWebviewReady !== capturedWebviewReady")
+    expect(block).toContain("this.disposed")
+  })
+
+  it("audit correction: stale provider publish is actually discarded when service is replaced mid-flight", async () => {
+    const svc = makeCanonical()
+    await svc.initialize()
+    const conn = new KiloConnectionService({} as never)
+    const provider = new KiloProvider({} as never, conn as never, undefined, { canonicalConfig: svc } as never)
+    const internal = provider as unknown as {
+      sendCanonicalProviders: () => Promise<void>
+      postMessage: (m: unknown) => void
+      isWebviewReady: boolean
+      cachedProvidersMessage: unknown
+    }
+    const msgs: unknown[] = []
+    internal.postMessage = (m) => msgs.push(m)
+    internal.isWebviewReady = true
+    // Delay the async index work to create a window for lifecycle change
+    const orig = svc.buildProviderIndexAsync.bind(svc)
+    let delayed = false
+    svc.buildProviderIndexAsync = async (arg) => {
+      delayed = true
+      await new Promise((r) => setTimeout(r, 60))
+      return orig(arg)
+    }
+    const promise = internal.sendCanonicalProviders()
+    await new Promise((r) => setTimeout(r, 10))
+    expect(delayed).toBe(true)
+    // Simulate service replacement during async work
+    const svc2 = makeCanonical()
+    await svc2.initialize()
+    ;(provider as unknown as { canonicalConfig: unknown }).canonicalConfig = svc2
+    // Also flip readiness to simulate materialization change
+    await promise
+    // The stale svc result must not have been cached or posted as canonical ready with old data
+    // No new providersLoaded from the stale svc should appear after replacement
+    const stale = msgs.filter((m) => (m as Record<string, unknown>).type === "providersLoaded" && (m as Record<string, unknown>).canonical === true && (m as Record<string, unknown>).ready === true)
+    // The stale publish should have been discarded, so zero stale posts during replacement window
+    // (the only allowed publish is from the new service via subscription, not the stale promise)
+    expect(stale.length).toBe(0)
+    // Fresh publish after replacement should succeed
+    msgs.length = 0
+    const internal2 = provider as unknown as { sendCanonicalProviders: () => Promise<void>; isWebviewReady: boolean }
+    internal2.isWebviewReady = true
+    // Restore normal behavior for svc2
+    await internal2.sendCanonicalProviders()
+    const fresh = msgs.find((m) => (m as Record<string, unknown>).type === "providersLoaded" && (m as Record<string, unknown>).canonical === true)
+    expect(fresh).toBeDefined()
+    provider.dispose()
+    svc.dispose()
+    svc2.dispose()
+  })
+
+  it("audit correction: stale provider publish discarded after disposal mid-flight", async () => {
+    const svc = makeCanonical()
+    await svc.initialize()
+    const conn = new KiloConnectionService({} as never)
+    const provider = new KiloProvider({} as never, conn as never, undefined, { canonicalConfig: svc } as never)
+    const internal = provider as unknown as {
+      sendCanonicalProviders: () => Promise<void>
+      postMessage: (m: unknown) => void
+      isWebviewReady: boolean
+      disposed: boolean
+    }
+    const msgs: unknown[] = []
+    internal.postMessage = (m) => msgs.push(m)
+    internal.isWebviewReady = true
+    const orig = svc.buildProviderIndexAsync.bind(svc)
+    svc.buildProviderIndexAsync = async (arg) => {
+      await new Promise((r) => setTimeout(r, 50))
+      return orig(arg)
+    }
+    const promise = internal.sendCanonicalProviders()
+    await new Promise((r) => setTimeout(r, 10))
+    provider.dispose()
+    await promise
+    // After disposal, the stale publish must not post providersLoaded
+    const stale = msgs.filter((m) => (m as Record<string, unknown>).type === "providersLoaded")
+    expect(stale.length).toBe(0)
+    svc.dispose()
+  })
+
+  it("audit correction: stale provider publish discarded after webview becomes not ready", async () => {
+    const svc = makeCanonical()
+    await svc.initialize()
+    const conn = new KiloConnectionService({} as never)
+    const provider = new KiloProvider({} as never, conn as never, undefined, { canonicalConfig: svc } as never)
+    const internal = provider as unknown as {
+      sendCanonicalProviders: () => Promise<void>
+      postMessage: (m: unknown) => void
+      isWebviewReady: boolean
+    }
+    const msgs: unknown[] = []
+    internal.postMessage = (m) => msgs.push(m)
+    internal.isWebviewReady = true
+    const orig = svc.buildProviderIndexAsync.bind(svc)
+    svc.buildProviderIndexAsync = async (arg) => {
+      await new Promise((r) => setTimeout(r, 50))
+      return orig(arg)
+    }
+    const promise = internal.sendCanonicalProviders()
+    await new Promise((r) => setTimeout(r, 10))
+    internal.isWebviewReady = false
+    await promise
+    const stale = msgs.filter((m) => (m as Record<string, unknown>).type === "providersLoaded")
+    expect(stale.length).toBe(0)
+    provider.dispose()
+    svc.dispose()
+  })
+
+  it("audit correction: session separates agent and MCP fallback timers so dataReady does not cancel agent retry", async () => {
+    const src = await Bun.file(new URL("../../webview-ui/src/context/session.tsx", import.meta.url)).text()
+    expect(src).toContain("agentFallback")
+    expect(src).toContain("mcpFallback")
+    // extensionDataReady handler must clear only mcpFallback, not agentFallback
+    const readyHandler = src.match(/const unsubReady[\s\S]*?clearTimeout\(mcpFallback\)[\s\S]*?}\)/)?.[0] ?? ""
+    expect(readyHandler).toContain("clearTimeout(mcpFallback)")
+    expect(readyHandler).not.toContain("clearTimeout(agentFallback)")
+    // Cleanup must clear both timers
+    const cleanup = src.match(/onCleanup\(\(\) => \{[\s\S]*?clearTimeout\(agentFallback\)[\s\S]*?clearTimeout\(mcpFallback\)[\s\S]*?\}\)/)?.[0] ?? ""
+    expect(cleanup).toContain("clearTimeout(agentFallback)")
+    expect(cleanup).toContain("clearTimeout(mcpFallback)")
+    // Verify fallback definitions are separate
+    expect(src).toContain("if (agents().length === 0) vscode.postMessage({ type: \"requestAgents\" })")
+    expect(src).toContain("if (Object.keys(mcpStatus()).length === 0) vscode.postMessage({ type: \"requestMcpStatus\" })")
+    // Ensure the shared fallback variable no longer exists
+    expect(src).not.toMatch(/\n\s*const fallback = setTimeout/)
+  })
 })

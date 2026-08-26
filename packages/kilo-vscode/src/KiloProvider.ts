@@ -684,6 +684,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.publishCanonicalNotReady()
       return
     }
+    const capturedService = service
+    const capturedStamp: CanonicalStamp = { ...service.stamp }
+    const capturedReady = this.canonicalReady
+    const capturedDisposed = this.disposed
+    const capturedWebviewReady = this.isWebviewReady
     const index = await service.buildProviderIndexAsync(
       this.cachedProvidersMessage &&
         typeof this.cachedProvidersMessage === "object" &&
@@ -692,6 +697,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             ?.providerID ?? null)
         : null,
     )
+    if (this.disposed !== capturedDisposed || this.disposed) return
+    if (this.isWebviewReady !== capturedWebviewReady) return
+    if (this.canonicalConfig !== capturedService) return
+    if (!this.canonicalReady || this.canonicalReady !== capturedReady) return
+    if (!sameStamp(capturedStamp, capturedService.stamp)) return
+    if (!sameStamp(capturedStamp, this.canonicalConfig.stamp)) return
     if (!index) return
     const providers = mapProviderIndexToWebviewProviders(index)
     const selected =
