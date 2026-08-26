@@ -1,8 +1,5 @@
 import { Auth } from "@/auth"
-import {
-  invalidateAfterProviderAuthChange,
-  invalidatePresence,
-} from "@/kilocode/server/provider-auth-lifecycle" // kilocode_change
+import { invalidateAfterProviderAuthChange } from "@/kilocode/server/provider-auth-lifecycle" // kilocode_change
 import * as Log from "@opencode-ai/core/util/log"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -23,7 +20,6 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
         ctx.params.providerID,
         Effect.gen(function* () {
           yield* auth.set(ctx.params.providerID, ctx.payload).pipe(Effect.orDie)
-          if (ctx.params.providerID === "kilo") yield* invalidatePresence()
         }),
         // kilocode_change - LOCK-003: auth set (connect) also removes the
         // target ID from disabled_providers under the same ticket/lifecycle —
@@ -43,7 +39,6 @@ export const controlHandlers = HttpApiBuilder.group(RootHttpApi, "control", (han
         ctx.params.providerID,
         Effect.gen(function* () {
           yield* auth.remove(ctx.params.providerID).pipe(Effect.orDie)
-          if (ctx.params.providerID === "kilo") yield* invalidatePresence()
         }),
       )
       // kilocode_change end

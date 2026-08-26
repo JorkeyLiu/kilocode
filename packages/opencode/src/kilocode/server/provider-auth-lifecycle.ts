@@ -41,19 +41,12 @@ import { randomUUID } from "crypto"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
-import { KiloViewers } from "@/kilocode/presence/service"
 import { KilocodeConfig } from "@/kilocode/config/config"
 import { ModelCache } from "@/provider/model-cache"
 import { Cause, Effect, Option } from "effect"
 import { ConfigRollbackFailed } from "./config-transaction"
 import { restoreTarget } from "./config-rollback"
 import { withColdMutation } from "./config-convergence"
-
-// kilocode_change - drop the old presence socket; callers invoke this for the "kilo" provider only
-export const invalidatePresence = Effect.fn("KiloServer.invalidatePresence")(function* () {
-  const viewers = yield* KiloViewers.Service
-  yield* viewers.invalidateAuth()
-})
 
 /**
  * LOCK-003: prepare/commit removal of `providerID` from the global

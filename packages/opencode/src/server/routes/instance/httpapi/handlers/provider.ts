@@ -4,10 +4,7 @@ import * as ModelsDev from "@/provider/models" // kilocode_change - use Kilo wra
 import { Provider } from "@/provider/provider"
 
 import { mapValues, pickBy } from "remeda" // kilocode_change
-import {
-  invalidateAfterProviderAuthChange, // kilocode_change
-  invalidatePresence,
-} from "@/kilocode/server/provider-auth-lifecycle" // kilocode_change
+import { invalidateAfterProviderAuthChange } from "@/kilocode/server/provider-auth-lifecycle" // kilocode_change
 import { filterPromptTrainingModels } from "@/kilocode/provider/model-filter" // kilocode_change
 import { overlay as overlayAnacondaDesktop } from "@/kilocode/anaconda-desktop/provider" // kilocode_change
 import { Effect, Schema } from "effect"
@@ -117,7 +114,6 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
               code: ctx.payload.code,
             }),
           )
-          if (ctx.params.providerID === "kilo") yield* invalidatePresence()
         }),
         { cleanupDisabled: true },
       )
