@@ -350,4 +350,63 @@ describe("P4.4-T22 canonical-first selector readiness decoupling", () => {
     // Ensure the shared fallback variable no longer exists
     expect(src).not.toMatch(/\n\s*const fallback = setTimeout/)
   })
+
+  it("audit correction: stale provider publish discarded when service clears materializationReady mid-flight (active fence)", async () => {
+    const svc = makeCanonical()
+    await svc.initialize()
+    expect(svc.materializationReady).toBe(true)
+    const conn = new KiloConnectionService({} as never)
+    const provider = new KiloProvider({} as never, conn as never, undefined, { canonicalConfig: svc } as never)
+    const internal = provider as unknown as {
+      sendCanonicalProviders: () => Promise<void>
+      postMessage: (m: unknown) => void
+      isWebviewReady: boolean
+      cachedProvidersMessage: unknown
+      canonicalReady: boolean
+    }
+    const msgs: unknown[] = []
+    internal.postMessage = (m) => msgs.push(m)
+    internal.isWebviewReady = true
+    expect(internal.canonicalReady).toBe(true)
+    const orig = svc.buildProviderIndexAsync.bind(svc)
+    svc.buildProviderIndexAsync = async (arg) => {
+      await new Promise((r) => setTimeout(r, 50))
+      return orig(arg)
+    }
+    const promise = internal.sendCanonicalProviders()
+    await new Promise((r) => setTimeout(r, 10))
+    // Active materialization fence: service clears authoritative readiness
+    // before the later changed event updates stamp/provider readiness (service.ts:1776-1783).
+    // Provider-local canonicalReady still true at this instant — stale result must not publish.
+    ;(svc as unknown as { successfulMaterializationStamp: null }).successfulMaterializationStamp = null
+    expect(svc.materializationReady).toBe(false)
+    expect(internal.canonicalReady).toBe(true)
+    await promise
+    const stale = msgs.filter(
+      (m) => (m as Record<string, unknown>).type === "providersLoaded" && (m as Record<string, unknown>).canonical === true && (m as Record<string, unknown>).ready === true,
+    )
+    expect(stale.length).toBe(0)
+    expect(internal.cachedProvidersMessage).toBeNull()
+    // Restoring error-free materialization reopens authoritative readiness — fresh publish must succeed
+    ;(svc as unknown as { successfulMaterializationStamp: object }).successfulMaterializationStamp = {} as never
+    // Re-enter ready mirroring as onCanonicalChange would after successful materialization
+    ;(provider as unknown as { canonicalReady: boolean }).canonicalReady = true
+    // Restore direct index path for fresh publish
+    svc.buildProviderIndexAsync = orig
+    msgs.length = 0
+    await internal.sendCanonicalProviders()
+    const fresh = msgs.find(
+      (m) => (m as Record<string, unknown>).type === "providersLoaded" && (m as Record<string, unknown>).canonical === true && (m as Record<string, unknown>).ready === true,
+    )
+    expect(fresh).toBeDefined()
+    provider.dispose()
+    svc.dispose()
+  })
+
+  it("audit correction: sendCanonicalProviders guards authoritative service readiness after await", async () => {
+    const src = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
+    const block = src.match(/private async sendCanonicalProviders[\s\S]*?this\.cachedProvidersMessage = message/)?.[0] ?? ""
+    expect(block).toContain("capturedService.materializationReady")
+    expect(block).toContain("this.canonicalConfig.materializationReady")
+  })
 })

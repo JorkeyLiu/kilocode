@@ -701,6 +701,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (this.isWebviewReady !== capturedWebviewReady) return
     if (this.canonicalConfig !== capturedService) return
     if (!this.canonicalReady || this.canonicalReady !== capturedReady) return
+    if (!capturedService.materializationReady || !this.canonicalConfig.materializationReady) return
     if (!sameStamp(capturedStamp, capturedService.stamp)) return
     if (!sameStamp(capturedStamp, this.canonicalConfig.stamp)) return
     if (!index) return
