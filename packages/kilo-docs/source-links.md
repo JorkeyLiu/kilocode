@@ -4,9 +4,6 @@
 
 - <https://accounts.x.ai>
   <!-- packages/opencode/src/plugin/xai.ts -->
-- <https://api.apertis.ai/v1>
-  <!-- packages/opencode/src/provider/model-cache.ts -->
-  <!-- packages/opencode/src/provider/models.ts -->
 - <https://api.digitalocean.com>
   <!-- packages/opencode/src/plugin/digitalocean.ts -->
 - <https://api.kilo.ai>
