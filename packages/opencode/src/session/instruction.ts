@@ -58,9 +58,6 @@ export const layer: Layer.Layer<
     const flags = yield* RuntimeFlags.Service
     const http = HttpClient.filterStatusOk(withTransientReadRetry(yield* HttpClient.HttpClient))
     const globalFiles = [
-      // kilocode_change start - prefer KILO_CONFIG_DIR profile when set
-      ...(Flag.KILO_CONFIG_DIR ? [path.join(Flag.KILO_CONFIG_DIR, "AGENTS.md")] : []),
-      // kilocode_change end
       path.join(global.config, "AGENTS.md"),
       ...(!flags.disableClaudeCodePrompt ? [path.join(global.home, ".claude", "CLAUDE.md")] : []),
     ]
@@ -86,9 +83,8 @@ export const layer: Layer.Layer<
           .globUp(instruction, ctx.directory, ctx.worktree)
           .pipe(Effect.catch(() => Effect.succeed([] as string[])))
       }
-      // kilocode_change - prefer KILO_CONFIG_DIR profile when set, else fall back to global.config
-      const root = Flag.KILO_CONFIG_DIR ?? global.config
-      return yield* fs.globUp(instruction, root, root).pipe(Effect.catch(() => Effect.succeed([] as string[]))) // kilocode_change
+      const root = global.config
+      return yield* fs.globUp(instruction, root, root).pipe(Effect.catch(() => Effect.succeed([] as string[])))
     })
 
     // kilocode_change start - project instructions cannot read env or files outside the project root

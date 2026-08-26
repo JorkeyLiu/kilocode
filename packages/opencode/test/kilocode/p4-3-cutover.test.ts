@@ -168,15 +168,15 @@ describe("P4.3 cutover — legacy readers absent (canonical-only effective confi
     expect(perm).not.toContain("migrateBashPermission")
   })
 
-  test("instruction retains KILO_CONFIG_DIR profile fallback; effective config does not", () => {
+  test("instruction no longer retains KILO_CONFIG_DIR profile fallback; effective config does not (P4.4-T17)", () => {
     const instr = read("session/instruction.ts")
     const cfg = read("config/config.ts")
     const paths = read("config/paths.ts")
-    // Instruction service (open CLI/TUI/ACP shared) retains profile directory behavior
-    expect(instr).toContain("Flag.KILO_CONFIG_DIR")
-    expect(instr).toContain("KILO_CONFIG_DIR")
+    // Instruction service no longer has profile directory behavior — P4.4-T17 removed both reads
+    expect(instr).not.toContain("Flag.KILO_CONFIG_DIR")
+    expect(instr).not.toContain("KILO_CONFIG_DIR")
+    expect(instr).not.toContain("prefer KILO_CONFIG_DIR profile")
     expect(instr).toContain('path.join(global.config, "AGENTS.md")')
-    expect(instr).toContain("prefer KILO_CONFIG_DIR profile")
     // Effective config (Config.Service) remains canonical-only and ignores KILO_CONFIG_DIR
     expect(cfg).not.toContain("Flag.KILO_CONFIG_DIR")
     // ConfigPaths: P4.4-T16 ancestor .kilo walk physically removed — only Global + KILO_CONFIG_DIR remain (LOCK-010).

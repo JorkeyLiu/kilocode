@@ -139,7 +139,7 @@ describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", ()
     expect(kilo).toContain('KILO_DIR_SUFFIXES = [".kilo"]')
   })
 
-  test("ConfigPaths and instruction KILO_CONFIG_DIR profile behavior preserved", () => {
+  test("ConfigPaths and TUI KILO_CONFIG_DIR preserved; instruction KILO_CONFIG_DIR absent (P4.4-T17)", () => {
     const paths = read("config/paths.ts")
     expect(paths).toContain("Flag.KILO_CONFIG_DIR")
     expect(paths).not.toContain('targets: [".kilo"]')
@@ -153,8 +153,8 @@ describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", ()
     expect(paths).toContain('export const directories = Effect.fn("ConfigPaths.directories")(function* ()')
 
     const instr = read("session/instruction.ts")
-    expect(instr).toContain("Flag.KILO_CONFIG_DIR")
-    expect(instr).toContain("KILO_CONFIG_DIR")
+    expect(instr).not.toContain("Flag.KILO_CONFIG_DIR")
+    expect(instr).not.toContain("KILO_CONFIG_DIR")
 
     const tui = read("cli/cmd/tui/config/tui.ts")
     expect(tui).toContain("Flag.KILO_CONFIG_DIR")
