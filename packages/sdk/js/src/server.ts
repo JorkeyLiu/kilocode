@@ -2,39 +2,6 @@ import launch from "cross-spawn"
 import { type Config } from "./gen/types.gen.js"
 import { stop, bindAbort } from "./process.js"
 
-// kilocode_change start - Merge existing KILO_CONFIG_CONTENT with new config
-// This preserves Kilocode-injected modes when spawning nested CLI instances
-function mergeConfig(existing: Config | undefined, incoming: Config | undefined): Config {
-  const base = existing ?? {}
-  const override = incoming ?? {}
-  return {
-    ...base,
-    ...override,
-    agent: { ...base.agent, ...override.agent },
-    command: { ...base.command, ...override.command },
-    mcp: { ...base.mcp, ...override.mcp },
-    mode: { ...base.mode, ...override.mode },
-    plugin: [...(base.plugin ?? []), ...(override.plugin ?? [])],
-    instructions: [...(base.instructions ?? []), ...(override.instructions ?? [])],
-  }
-}
-
-function parseExistingConfig(): Config | undefined {
-  const content = process.env.KILO_CONFIG_CONTENT
-  if (!content) return undefined
-  try {
-    return JSON.parse(content)
-  } catch {
-    return undefined
-  }
-}
-
-export function buildConfigEnv(config?: Config): string {
-  const merged = mergeConfig(parseExistingConfig(), config)
-  return JSON.stringify(merged)
-}
-// kilocode_change end
-
 export type ServerOptions = {
   hostname?: string
   port?: number
@@ -66,10 +33,8 @@ export async function createKiloServer(options?: ServerOptions) {
   if (options.config?.logLevel) args.push(`--log-level=${options.config.logLevel}`)
 
   const proc = launch(`kilo`, args, {
-    // kilocode_change
     env: {
       ...process.env,
-      KILO_CONFIG_CONTENT: buildConfigEnv(options.config), // kilocode_change
     },
   })
   let clear = () => {}
@@ -152,12 +117,10 @@ export function createKiloTui(options?: TuiOptions) {
   }
 
   const proc = launch(`kilo`, args, {
-    // kilocode_change
     stdio: "inherit",
     windowsHide: true,
     env: {
       ...process.env,
-      KILO_CONFIG_CONTENT: buildConfigEnv(options?.config), // kilocode_change
     },
   })
 
