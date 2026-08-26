@@ -104,10 +104,10 @@ describe("P4.4 bundled provider loader removal — preset identity absent", () =
     expect(existsSync(join(opencode, "provider/models.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/provider/model-filter.ts"))).toBe(true)
     expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(true)
-    // Provider handler still depends on catalog and cache services
+    // Provider handler now depends on catalog only (ModelCache removed from handler in P4.4-T7)
     const handler = read("server/routes/instance/httpapi/handlers/provider.ts")
     expect(handler).toContain("ModelsDev.Service")
-    expect(handler).toContain("ModelCache.Service")
+    expect(handler).not.toContain("ModelCache.Service")
     expect(handler).toContain("Provider.Service")
     expect(handler).toContain("Config.Service")
     expect(handler).toContain("filterPromptTrainingModels")
@@ -125,16 +125,16 @@ describe("P4.4 bundled provider loader removal — preset identity absent", () =
 
   test("ModelsDev and ModelCache provider sources remain — static source presence, not runtime fallback proof", () => {
     const models = read("provider/models.ts")
-    expect(models).toContain("ModelCache")
+    expect(models).not.toContain("ModelCache")
     expect(models).toContain("overlay")
-    expect(models).toContain("KILO_OPENROUTER_BASE")
+    expect(models).not.toContain("KILO_OPENROUTER_BASE")
     const providerSrc = read("provider/provider.ts")
     expect(providerSrc).toContain("fromModelsDevProvider")
     expect(providerSrc).toContain("ModelsDev.Service")
     const cache = read("provider/model-cache.ts")
     expect(cache).toContain("ModelCache")
-    expect(cache).toContain("fetchKiloModels")
-    expect(cache).toContain("KiloModelsService")
+    expect(cache).not.toContain("fetchKiloModels")
+    expect(cache).not.toContain("KiloModelsService")
     // KILO constants for models snapshot remain
     expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
     const kProvider = read("kilocode/provider/provider.ts")

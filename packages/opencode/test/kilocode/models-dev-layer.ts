@@ -6,11 +6,6 @@ import { ModelCache } from "../../src/provider/model-cache"
 import * as Kilo from "../../src/provider/models"
 
 const cache = Layer.mock(ModelCache.Service)({
-  getFailure: () => Effect.succeed(undefined),
-  failedProviders: () => Effect.succeed([]),
-  get: () => Effect.succeed(undefined),
-  fetch: () => Effect.succeed({}),
-  refresh: () => Effect.succeed({}),
   clear: () => Effect.void,
 })
 

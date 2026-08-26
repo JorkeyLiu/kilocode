@@ -24,7 +24,7 @@ const auth = Layer.mock(Auth.Service)({
   get: () => Effect.succeed(new Auth.Api({ type: "api", key: "test-token" })),
 })
 const store = Layer.mock(InstanceStore.Service)({})
-const cache = Layer.mock(ModelCache.Service)({})
+const cache = Layer.mock(ModelCache.Service)({ clear: () => Effect.void })
 const session = Layer.mock(Session.Service)({})
 const passthroughAuthorization = Layer.succeed(
   Authorization,

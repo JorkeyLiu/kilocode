@@ -494,31 +494,46 @@ describe("customProviderSave - success matrix (LOCK-002/005)", () => {
   )
 
   it.live(
-    "model cache is cleared by a changed save (observable through the shared app)",
+    "model cache is cleared by a changed save (clear recorder)",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: (url) => saveConfig(url) })
         yield* Effect.sync(() => seedAuth("test"))
-        // LOCK-004: web() shares the memoized ModelCache with AppRuntime.
-        yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.fetch("test"))),
+        const clears: string[] = []
+        const trackedCache = Layer.succeed(
+          ModelCache.Service,
+          ModelCache.Service.of({
+            clear: (id) => Effect.sync(() => clears.push(id)),
+          }),
         )
-        const cacheBefore = yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.get("test"))),
+        const listener = yield* Effect.acquireRelease(
+          Effect.promise(() =>
+            Server.listen({
+              hostname: "127.0.0.1",
+              port: 0,
+              appLayer: makeAppLayer(Provider.defaultModels, Provider.defaultLayer, trackedCache),
+            }),
+          ),
+          (value) => Effect.promise(() => value.stop(true)).pipe(Effect.ignore),
         )
-        expect(cacheBefore).toBeDefined()
+        const base = listener.url.toString().replace(/\/$/, "")
+        const send = (input: string, init?: RequestInit) =>
+          Effect.promise(async () => {
+            const response = await fetch(`${base}${input}`, {
+              ...init,
+              headers: { "x-kilo-directory": f.project, ...init?.headers },
+            })
+            return response
+          })
 
-        const result = yield* saveVia(f.project, "test", {
-          config: saveConfig(f.llm.url, { name: "Changed" }),
-          auth: authPreserve,
+        const response = yield* send(`/custom-provider/test/save`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ config: saveConfig(f.llm.url, { name: "Changed" }), auth: authPreserve }),
         })
-        expect(result.status).toBe(200)
+        expect(response.status).toBe(200)
         yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle")
-
-        const cacheAfter = yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.get("test"))),
-        )
-        expect(cacheAfter).toBeUndefined()
+        expect(clears).toContain("test")
       }),
     30_000,
   )
@@ -558,15 +573,12 @@ describe("customProviderSave - no-op semantics (LOCK-006)", () => {
   )
 
   it.live(
-    "auth set on an identical config counts as a change: one rebuild, one event, cache cleared, auth updated",
+    "auth set on an identical config counts as a change: one rebuild, one event, auth updated",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: (url) => saveConfig(url) })
         yield* Effect.sync(() => seedAuth("test"))
         const globalOriginal = fs.readFileSync(globalFile(f.global), "utf-8")
-        yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.fetch("test"))),
-        )
         const events = captureEvents()
         probeRebuildRegistration.install()
 
@@ -582,10 +594,6 @@ describe("customProviderSave - no-op semantics (LOCK-006)", () => {
           // Config byte-identical; auth rotated; exactly one rebuild + one event.
           expect(fs.readFileSync(globalFile(f.global), "utf-8")).toBe(globalOriginal)
           expect(readAuth().test).toEqual({ type: "api", key: "rotated-key" })
-          const cacheAfter = yield* Effect.promise(() =>
-            AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.get("test"))),
-          )
-          expect(cacheAfter).toBeUndefined()
           const updated = configEvents(events.received)
           expect(updated.length).toBe(1)
           expect(updated[0]?.directory).toBe("global")
@@ -995,15 +1003,11 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
   )
 
   it.live(
-    "auth-set failure compensates config AND the exact auth file, never touches cache/events",
+    "auth-set failure compensates config AND the exact auth file, emits nothing",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: (url) => saveConfig(url) })
         yield* Effect.sync(() => seedAuth("test"))
-        // Seed the cache so a leaked clear would be observable.
-        yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.fetch("test"))),
-        )
         const authPath = authFile()
         const globalOriginal = fs.readFileSync(globalFile(f.global), "utf-8")
         const authOriginal = fs.readFileSync(authPath)
@@ -1011,8 +1015,7 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
 
         try {
           // The auth file is owned by this process, so making the FILE read-only
-          // fails auth.set (writeJson gets EACCES) while config commits (config
-          // dir) and cache clears (memory) remain functional.
+          // fails auth.set (writeJson gets EACCES) while config commits remain functional.
           yield* Effect.promise(() => fs.promises.chmod(authPath, 0o400))
           const result = yield* saveVia(f.project, "test", {
             config: saveConfig("https://new.example/v1", { name: "Changed" }),
@@ -1025,13 +1028,9 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
         }
 
         // Compensation restored the config target and the exact auth bytes
-        // (the set never wrote because the file is read-only); cache untouched.
+        // (the set never wrote because the file is read-only).
         expect(fs.readFileSync(globalFile(f.global), "utf-8")).toBe(globalOriginal)
         expect(Buffer.compare(fs.readFileSync(authPath), authOriginal)).toBe(0)
-        const cacheAfter = yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.get("test"))),
-        )
-        expect(cacheAfter).toBeDefined()
         expect(configEvents(events.received).length).toBe(0)
         expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
 
@@ -1070,11 +1069,6 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
         const failingCache = Layer.succeed(
           ModelCache.Service,
           ModelCache.Service.of({
-            getFailure: () => Effect.succeed(undefined),
-            failedProviders: () => Effect.succeed([]),
-            get: () => Effect.succeed(undefined),
-            fetch: () => Effect.die(new Error("cache fetch should not run during save")),
-            refresh: () => Effect.die(new Error("cache refresh should not run during save")),
             clear: () => (fail ? Effect.die(new Error("simulated cache-clear failure")) : Effect.void),
           }),
         )

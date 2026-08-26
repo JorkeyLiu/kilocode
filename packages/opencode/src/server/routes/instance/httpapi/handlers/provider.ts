@@ -4,7 +4,6 @@ import * as ModelsDev from "@/provider/models" // kilocode_change - use Kilo wra
 import { Provider } from "@/provider/provider"
 
 import { mapValues, pickBy } from "remeda" // kilocode_change
-import { ModelCache } from "@/provider/model-cache" // kilocode_change
 import {
   invalidateAfterProviderAuthChange, // kilocode_change
   invalidatePresence,
@@ -43,16 +42,11 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
     const cfg = yield* Config.Service
     const provider = yield* Provider.Service
     const svc = yield* ProviderAuth.Service
-    const cache = yield* ModelCache.Service // kilocode_change
 
     const list = Effect.fn("ProviderHttpApi.list")(function* () {
       const config = yield* cfg.get()
-      // kilocode_change start - catalog comes from the Kilo ModelsDev wrapper which
-      // already catches core service defects (timeout, network, etc.) and falls
-      // back to an empty catalog.  No defense-in-depth catchDefect needed here.
       const all = yield* ModelsDev.Service.use((s) => s.get())
       const overlaid = overlayAnacondaDesktop(all)
-      // kilocode_change end
       const disabled = new Set(config.disabled_providers ?? [])
       const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
       const filtered: Record<string, (typeof overlaid)[string]> = {}
@@ -60,7 +54,6 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) filtered[key] = value
       }
       const connected = yield* provider.list()
-      // kilocode_change start
       const providers = filterPromptTrainingModels(
         Object.assign(
           mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
@@ -68,15 +61,10 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         ),
         config.hide_prompt_training_models === true,
       )
-      // kilocode_change end
-      // kilocode_change start
-      const failed = yield* cache.failedProviders()
-      // Note: connected only contains providers with non-empty models after Provider.Service.list(),
-      // so failed must be checked explicitly for providers whose fetch returned an error.
-      const failedSet = new Set(failed)
+      const failed: string[] = []
       const validProviders = pickBy(
         providers,
-        (item, id) => Object.keys(item.models).length > 0 || id in connected || failedSet.has(id),
+        (item, id) => Object.keys(item.models).length > 0 || id in connected,
       )
       return {
         all: Object.values(validProviders).map((item) => Provider.toPublicInfo(item)),
@@ -84,7 +72,6 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
         connected: Object.keys(connected),
         failed,
       }
-      // kilocode_change end
     })
 
     const auth = Effect.fn("ProviderHttpApi.auth")(function* () {
@@ -112,9 +99,6 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       const payload = yield* Schema.decodeUnknownEffect(Schema.fromJsonString(ProviderAuth.AuthorizeInput))(body).pipe(
         Effect.mapError(() => new ProviderAuthApiError({ name: "BadRequest", data: {} })),
       )
-      // Match legacy route behavior: when authorize() resolves without a
-      // result (e.g. no further redirect), serialize as JSON `null` instead
-      // of an empty body so clients can `.json()` parse the response.
       const result = yield* authorize({ params: ctx.params, payload })
       return HttpServerResponse.jsonUnsafe(result ?? null)
     })
@@ -123,7 +107,6 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
       params: { providerID: ProviderV2.ID }
       payload: ProviderAuth.CallbackInput
     }) {
-      // kilocode_change start - OAuth persistence + invalidation under one canonical gate ticket
       yield* invalidateAfterProviderAuthChange(
         ctx.params.providerID,
         Effect.gen(function* () {
@@ -136,12 +119,8 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
           )
           if (ctx.params.providerID === "kilo") yield* invalidatePresence()
         }),
-        // kilocode_change - LOCK-003: the OAuth callback (connect) also removes
-        // the target ID from disabled_providers under the same ticket/lifecycle —
-        // one backend mutation, exactly one rebuild/event.
         { cleanupDisabled: true },
       )
-      // kilocode_change end
       return true
     })
 

@@ -1,19 +1,8 @@
-// kilocode_change - new file
-// Tests that unauthenticated Kilo models are assembled with paid models and autoloaded anonymously.
-
+// kilocode_change - P4.4-T7 simplified: kilo dynamic model injection removed, only generic loader helpers remain
 import { expect } from "bun:test"
-import { FSUtil } from "@opencode-ai/core/fs-util"
-import { ModelsDev } from "../../src/provider/models"
-import * as CoreModels from "@opencode-ai/core/models-dev"
 import { Effect, Layer } from "effect"
-import { FetchHttpClient } from "effect/unstable/http"
 import { kiloCustomLoaders, patchKiloProviderPrivacy } from "../../src/kilocode/provider/provider"
-import { Auth } from "../../src/auth"
-import { ModelCache } from "../../src/provider/model-cache"
-import { Provider } from "../../src/provider/provider"
-import { TestConfig } from "../fixture/config"
 import { testEffect } from "../lib/effect"
-import { provideInstance, testInstanceStoreLayer } from "../fixture/fixture"
 
 const input = {
   id: "kilo",
@@ -34,31 +23,6 @@ const input = {
   },
 }
 
-const seed: Record<string, ModelsDev.Provider> = {
-  apertis: {
-    id: "apertis",
-    name: "Apertis",
-    env: ["APERTIS_API_KEY"],
-    models: {},
-  },
-}
-
-const auth = Layer.mock(Auth.Service)({
-  get: () => Effect.succeed(undefined),
-})
-
-const files = Layer.effect(
-  FSUtil.Service,
-  Effect.gen(function* () {
-    const fs = yield* FSUtil.Service
-    return FSUtil.Service.of({
-      ...fs,
-      readJson: () => Effect.succeed(seed),
-      stat: () => fs.stat(import.meta.path),
-    })
-  }),
-).pipe(Layer.provide(FSUtil.defaultLayer))
-
 function load(data?: { auth?: object; config?: object; env?: Record<string, string | undefined> }) {
   return kiloCustomLoaders({
     auth: () => Effect.succeed(data?.auth),
@@ -68,86 +32,7 @@ function load(data?: { auth?: object; config?: object; env?: Record<string, stri
   }).kilo(input)
 }
 
-function layer() {
-  const cfg = TestConfig.layer()
-  const models = Layer.succeed(
-    ModelCache.KiloModelsService,
-    ModelCache.KiloModelsService.of({
-      fetch: () =>
-        Effect.succeed({
-          models: {
-            "free-model": {
-              id: "free-model",
-              name: "Free Model",
-              cost: { input: 0, output: 0 },
-              limit: { context: 128000, output: 4096 },
-            },
-            "paid-model": {
-              id: "paid-model",
-              name: "Paid Model",
-              cost: { input: 1, output: 2 },
-              isFree: false,
-              mayTrainOnYourPrompts: true,
-              limit: { context: 128000, output: 4096 },
-            },
-          },
-        }),
-    }),
-  )
-  const cache = Layer.fresh(ModelCache.layer).pipe(
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provide(cfg),
-    Layer.provide(auth),
-    Layer.provide(models),
-  )
-  const core = Layer.succeed(
-    CoreModels.Service,
-    CoreModels.Service.of({
-      get: () => Effect.succeed(seed),
-      refresh: () => Effect.void,
-    }),
-  )
-  return Layer.fresh(ModelsDev.layer).pipe(
-    Layer.provide(core),
-    Layer.provide(FetchHttpClient.layer),
-    Layer.provide(files),
-    Layer.provide(cfg),
-    Layer.provide(auth),
-    Layer.provide(cache),
-  )
-}
-
-const it = testEffect(testInstanceStoreLayer)
-
-it.live("assembles paid Kilo models without auth", () =>
-  Effect.gen(function* () {
-    const providers = yield* ModelsDev.Service.use((models) => models.get()).pipe(
-      Effect.provide(layer()),
-      provideInstance(process.cwd()),
-    )
-    const kilo = Provider.fromModelsDevProvider(providers.kilo)
-
-    expect(kilo.models["paid-model"]).toMatchObject({
-      id: "paid-model",
-      providerID: "kilo",
-      cost: { input: 1, output: 2 },
-      isFree: false,
-      mayTrainOnYourPrompts: true,
-    })
-  }),
-)
-
-it.live("does not infer free status from zero catalog prices", () =>
-  Effect.gen(function* () {
-    const providers = yield* ModelsDev.Service.use((models) => models.get()).pipe(
-      Effect.provide(layer()),
-      provideInstance(process.cwd()),
-    )
-    const kilo = Provider.fromModelsDevProvider(providers.kilo)
-
-    expect(kilo.models["free-model"].isFree).toBeUndefined()
-  }),
-)
+const it = testEffect(Layer.empty)
 
 it.effect("enables a paid catalog anonymously without auth", () =>
   Effect.gen(function* () {

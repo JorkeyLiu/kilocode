@@ -81,11 +81,6 @@ const wrappedModelsDev = (core: Layer.Layer<Core.Service, never, never>) => Mode
   Layer.provide(Auth.defaultLayer),
   Layer.provide(
     Layer.mock(ModelCache.Service)({
-      getFailure: () => Effect.succeed(undefined),
-      failedProviders: () => Effect.succeed([]),
-      get: () => Effect.succeed(undefined),
-      fetch: () => Effect.succeed({}),
-      refresh: () => Effect.succeed({}),
       clear: () => Effect.void,
     }),
   ),
@@ -475,11 +470,6 @@ it.instance(
       Layer.provide(Auth.defaultLayer),
       Layer.provide(
         Layer.mock(ModelCache.Service)({
-          getFailure: () => Effect.succeed(undefined),
-          failedProviders: () => Effect.succeed([]),
-          get: () => Effect.succeed(undefined),
-          fetch: () => Effect.succeed({}),
-          refresh: () => Effect.succeed({}),
           clear: () => Effect.void,
         }),
       ),

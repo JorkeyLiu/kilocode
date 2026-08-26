@@ -388,16 +388,6 @@ describe("customProviderDelete - scope matrix (LOCK-003)", () => {
         yield* Effect.sync(() => seedAuth("test"))
         const events = captureEvents()
 
-        // LOCK-004: the web() app shares the memoized ModelCache with
-        // AppRuntime, so the deletion's cache clear is observable.
-        yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.fetch("test"))),
-        )
-        const cacheBefore = yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.get("test"))),
-        )
-        expect(cacheBefore).toBeDefined()
-
         try {
           const result = yield* deleteVia(f.project, "test")
           expect(result.status).toBe(200)
@@ -407,10 +397,6 @@ describe("customProviderDelete - scope matrix (LOCK-003)", () => {
           expect(providerEntry(readGlobalConfig(f.global), "test")).toBeUndefined()
           expect(providerEntry(readProjectConfig(f.project), "test")).toBeUndefined()
           expect(readAuth().test).toBeUndefined()
-          const cacheAfter = yield* Effect.promise(() =>
-            AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.get("test"))),
-          )
-          expect(cacheAfter).toBeUndefined()
 
           // LOCK-007: exactly one ConfigUpdated per committed scope (global +
           // project), all sharing the same non-empty logical transaction id.
@@ -833,15 +819,11 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
   )
 
   it.live(
-    "auth removal failure compensates config, never touches cache/events, and releases the fence",
+    "auth removal failure compensates config, emits nothing, and releases the fence",
     () =>
       Effect.gen(function* () {
         const f = yield* makeFixture({ global: custom, project: custom })
         yield* Effect.sync(() => seedAuth("test", { type: "api", key: "test-key" }))
-        // Seed the cache so a leaked clear would be observable.
-        yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.fetch("test"))),
-        )
         const authPath = authFile()
         const globalOriginal = fs.readFileSync(globalFile(f.global), "utf-8")
         const projectOriginal = fs.readFileSync(projectFile(f.project), "utf-8")
@@ -860,15 +842,11 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
         }
         yield* Effect.promise(() => fs.promises.chmod(authPath, 0o600))
 
-        // Compensation restored both committed config targets and left auth,
-        // cache, and events untouched.
+        // Compensation restored both committed config targets and left auth
+        // and events untouched.
         expect(fs.readFileSync(globalFile(f.global), "utf-8")).toBe(globalOriginal)
         expect(fs.readFileSync(projectFile(f.project), "utf-8")).toBe(projectOriginal)
         expect(Buffer.compare(fs.readFileSync(authPath), authOriginal)).toBe(0)
-        const cacheAfter = yield* Effect.promise(() =>
-          AppRuntime.runPromise(ModelCache.Service.use((svc) => svc.get("test"))),
-        )
-        expect(cacheAfter).toBeDefined()
         expect(configEvents(events.received).length).toBe(0)
         expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
 
@@ -906,11 +884,6 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
         const failingCache = Layer.succeed(
           ModelCache.Service,
           ModelCache.Service.of({
-            getFailure: () => Effect.succeed(undefined),
-            failedProviders: () => Effect.succeed([]),
-            get: () => Effect.succeed(undefined),
-            fetch: () => Effect.die(new Error("cache fetch should not run during deletion")),
-            refresh: () => Effect.die(new Error("cache refresh should not run during deletion")),
             clear: () => (fail ? Effect.die(new Error("simulated cache-clear failure")) : Effect.void),
           }),
         )

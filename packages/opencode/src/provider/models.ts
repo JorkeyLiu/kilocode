@@ -1,10 +1,7 @@
-// kilocode_change - new file
-import { Config } from "@/config/config"
-import { Auth } from "@/auth"
-import { ModelCache } from "./model-cache"
+// kilocode_change - P4.4-T7: static catalog only, no kilo/apertis dynamic injection
 import * as Core from "@opencode-ai/core/models-dev"
 import { Context, Effect, Layer } from "effect"
-import { AI_SDK_PROVIDERS, KILO_OPENROUTER_BASE, PROMPTS } from "@kilocode/kilo-gateway"
+import { AI_SDK_PROVIDERS, PROMPTS } from "@kilocode/kilo-gateway"
 import { overlay } from "@/kilocode/anaconda-desktop/provider"
 import { Log } from "@opencode-ai/core/util/log"
 
@@ -21,120 +18,36 @@ export interface Interface extends Core.Interface {}
 
 export class Service extends Context.Service<Service, Interface>()("@kilocode/ModelsDev") {}
 
-function baseURL(url: string | undefined, org: string | undefined) {
-  if (!url) return
-  const base = url.replace(/\/+$/, "")
-  if (org) {
-    if (base.includes("/api/organizations/")) return base
-    if (base.endsWith("/api")) return `${base}/organizations/${org}`
-    return `${base}/api/organizations/${org}`
-  }
-  if (base.includes("/openrouter")) return base
-  if (base.endsWith("/api")) return `${base}/openrouter`
-  return `${base}/api/openrouter`
-}
+export const layer: Layer.Layer<Service, never, Core.Service> = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const core = yield* Core.Service
 
-export const layer: Layer.Layer<Service, never, Core.Service | Config.Service | Auth.Service | ModelCache.Service> =
-  Layer.effect(
-    Service,
-    Effect.gen(function* () {
-      const core = yield* Core.Service
-      const config = yield* Config.Service
-      const auth = yield* Auth.Service
-      const cache = yield* ModelCache.Service
+    const get = Effect.fn("ModelsDev.get")(function* () {
+      const coreProviders = yield* core.get().pipe(
+        Effect.catchDefect((defect) => {
+          log.warn("models.dev catalog unavailable, using empty catalog", {
+            category: "catalog-fetch",
+            errorClass: defect?.constructor?.name ?? "Unknown",
+          })
+          return Effect.succeed({} as Record<string, Core.Provider>)
+        }),
+      )
+      const providers = overlay(coreProviders)
+      return providers
+    })
 
-      const get = Effect.fn("ModelsDev.get")(function* () {
-        // kilocode_change start - fall back to empty catalog when models.dev is unavailable
-        const coreProviders = yield* core.get().pipe(
-          Effect.catchDefect((defect) => {
-            // LOCK-004: never serialize raw defect — may contain configured URL or PII
-            log.warn("models.dev catalog unavailable, using empty catalog", {
-              category: "catalog-fetch",
-              errorClass: defect?.constructor?.name ?? "Unknown",
-            })
-            return Effect.succeed({} as Record<string, Core.Provider>)
-          }),
-        )
-        const providers = overlay(coreProviders)
-        // kilocode_change end
-        delete providers.kilo
-
-        const cfg = yield* config.get()
-        const disabled = new Set(cfg.disabled_providers ?? [])
-        const enabled = cfg.enabled_providers ? new Set(cfg.enabled_providers) : undefined
-        const allowed = (!enabled || enabled.has("kilo")) && !disabled.has("kilo")
-        const apt = cfg.provider?.apertis?.options
-        const aptURL = apt?.baseURL ?? "https://api.apertis.ai/v1"
-        const aptOpts = apt?.baseURL ? { baseURL: apt.baseURL } : {}
-
-        const addApertis = Effect.fnUntraced(function* () {
-          if (providers.apertis) return
-          const models = yield* cache.fetch("apertis", aptOpts).pipe(Effect.catch(() => Effect.succeed({})))
-          providers.apertis = {
-            id: "apertis",
-            name: "Apertis",
-            env: ["APERTIS_API_KEY"],
-            api: aptURL,
-            npm: "@ai-sdk/openai-compatible",
-            models,
-          }
-          if (Object.keys(models).length === 0)
-            yield* cache.refresh("apertis", aptOpts).pipe(Effect.ignore, Effect.forkDetach)
-        })
-
-        if (!allowed) {
-          yield* addApertis()
-          return providers
-        }
-
-        const opts = cfg.provider?.kilo?.options
-        const info = yield* auth.get("kilo").pipe(Effect.catch(() => Effect.succeed(undefined)))
-        const org = opts?.kilocodeOrganizationId ?? (info?.type === "oauth" ? info.accountId : undefined)
-        const url = baseURL(opts?.baseURL, org)
-        const fetch = {
-          ...(url ? { baseURL: url } : {}),
-          ...(org ? { kilocodeOrganizationId: org } : {}),
-        }
-        const models = yield* cache.fetch("kilo", fetch).pipe(Effect.catch(() => Effect.succeed({})))
-        providers.kilo = {
-          id: "kilo",
-          name: "Kilo Gateway",
-          env: ["KILO_API_KEY"],
-          api: KILO_OPENROUTER_BASE.endsWith("/") ? KILO_OPENROUTER_BASE : `${KILO_OPENROUTER_BASE}/`,
-          npm: "@kilocode/kilo-gateway",
-          models,
-        }
-        if (Object.keys(models).length === 0) yield* cache.refresh("kilo", fetch).pipe(Effect.ignore, Effect.forkDetach)
-        yield* addApertis()
-        return providers
-      })
-
-      return Service.of({ get, refresh: core.refresh })
-    }),
-  )
-
-export const defaultLayer = layer.pipe(
-  Layer.provide(Core.defaultLayer),
-  Layer.provide(Config.defaultLayer),
-  Layer.provide(Auth.defaultLayer),
-  Layer.provide(ModelCache.defaultLayer),
+    return Service.of({ get, refresh: core.refresh })
+  }),
 )
 
+export const defaultLayer = layer.pipe(Layer.provide(Core.defaultLayer))
+
 // kilocode_change start - LOCK-001: canonical combined models layer
-// Produces both Core.Service and KiloModelsDev.Service from a single core
-// instance, eliminating duplicate service construction in application graphs.
 export const combinedLayer = (
   coreLayer: Layer.Layer<Core.Service, never, never> = Core.defaultLayer,
 ): Layer.Layer<Core.Service | Service, never, never> =>
-  Layer.merge(
-    coreLayer,
-    layer.pipe(
-      Layer.provide(coreLayer),
-      Layer.provide(Config.defaultLayer),
-      Layer.provide(Auth.defaultLayer),
-      Layer.provide(ModelCache.defaultLayer),
-    ),
-  )
+  Layer.merge(coreLayer, layer.pipe(Layer.provide(coreLayer)))
 // kilocode_change end
 
 export { AI_SDK_PROVIDERS, PROMPTS }
