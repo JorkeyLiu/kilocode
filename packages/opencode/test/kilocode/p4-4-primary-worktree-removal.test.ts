@@ -75,16 +75,18 @@ describe("P4.4 primary-worktree removal — orphaned helper physically absent", 
     expect(profile).toContain("p4-4-primary-worktree-removal")
   })
 
-  test("canonical-root and ConfigPaths behavior remains", () => {
-    // Must preserve canonical-root handling and ConfigPaths retained surface (P4.4-T16 ancestor walk removed, TUI-local discovery gated).
+  test("canonical-root and ConfigPaths behavior remains (P4.4-T18 — ConfigPaths no KILO_CONFIG_DIR, TUI owns it)", () => {
+    // Must preserve canonical-root handling and ConfigPaths retained surface (P4.4-T18 KILO_CONFIG_DIR removed from ConfigPaths, TUI-local discovery gated with explicit env last-wins).
     expect(read("kilocode/config/config.ts")).toContain("canonicalRoot")
     expect(read("kilocode/config/overlay.ts")).toContain("canonicalRoot")
     const paths = read("config/paths.ts")
-    expect(paths).toContain("Flag.KILO_CONFIG_DIR")
+    expect(paths).not.toContain("Flag.KILO_CONFIG_DIR")
+    expect(paths).not.toContain("KILO_CONFIG_DIR")
+    expect(paths).toContain("Global.Path.config")
+    expect(paths).toContain('return unique([Global.Path.config])')
     expect(paths).not.toContain('targets: [".kilo"]')
     expect(paths.split('targets: [".kilo"]').length - 1).toBe(0)
     expect(paths).not.toContain("Global.Path.home")
-    expect(paths).toContain("Global.Path.config")
     expect(paths).not.toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
     expect(paths).not.toContain("void directory")
     expect(paths).toContain("export const files")
@@ -94,5 +96,7 @@ describe("P4.4 primary-worktree removal — orphaned helper physically absent", 
     expect(tui).toContain('targets: [".kilocode", ".kilo"]')
     expect(tui).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
     expect(tui).toContain("yield* afs.up")
+    expect(tui).toContain("Flag.KILO_CONFIG_DIR")
+    expect(tui).toContain("...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : [])")
   })
 })

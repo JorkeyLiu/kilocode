@@ -139,13 +139,15 @@ describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", ()
     expect(kilo).toContain('KILO_DIR_SUFFIXES = [".kilo"]')
   })
 
-  test("ConfigPaths and TUI KILO_CONFIG_DIR preserved; instruction KILO_CONFIG_DIR absent (P4.4-T17)", () => {
+  test("ConfigPaths and TUI KILO_CONFIG_DIR preserved; instruction KILO_CONFIG_DIR absent (P4.4-T17, amended T18)", () => {
     const paths = read("config/paths.ts")
-    expect(paths).toContain("Flag.KILO_CONFIG_DIR")
+    expect(paths).not.toContain("Flag.KILO_CONFIG_DIR")
+    expect(paths).not.toContain("KILO_CONFIG_DIR")
+    expect(paths).toContain("Global.Path.config")
+    expect(paths).toContain('return unique([Global.Path.config])')
     expect(paths).not.toContain('targets: [".kilo"]')
     expect(paths.split('targets: [".kilo"]').length - 1).toBe(0)
     expect(paths).not.toContain("Global.Path.home")
-    expect(paths).toContain("Global.Path.config")
     expect(paths).not.toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
     expect(paths).not.toContain("void directory")
     expect(paths).toContain("export const files")
@@ -164,6 +166,7 @@ describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", ()
     expect(tui).toContain("ConfigPaths.directories()")
     expect(tui).toContain("ConfigPaths.fileInDirectory")
     expect(tui).toContain("migrateTuiConfig")
+    expect(tui).toContain("...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : [])")
   })
 
   test("generated SDK and OpenAPI unchanged (HTTP/SSE bridge preserved per LOCK-009)", () => {

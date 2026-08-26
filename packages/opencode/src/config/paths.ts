@@ -1,7 +1,6 @@
 export * as ConfigPaths from "./paths"
 
 import path from "path"
-import { Flag } from "@opencode-ai/core/flag/flag"
 import { Global } from "@opencode-ai/core/global"
 import { unique } from "remeda"
 import * as Effect from "effect/Effect"
@@ -21,10 +20,7 @@ export const files = Effect.fn("ConfigPaths.projectFiles")(function* (
 })
 
 export const directories = Effect.fn("ConfigPaths.directories")(function* () {
-  return unique([
-    Global.Path.config,
-    ...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : []),
-  ])
+  return unique([Global.Path.config])
 })
 
 export function fileInDirectory(dir: string, name: string) {

@@ -205,9 +205,9 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     })
 
   // kilocode_change start - TUI-local legacy directory discovery
-  // ConfigPaths.directories is canonical-only (global + KILO_CONFIG_DIR) per LOCK-010.
+  // ConfigPaths.directories is global-only — global is from ConfigPaths; the optional KILO_CONFIG_DIR directory is TUI-appended after legacy discovery (P4.4-T18).
   // Project .kilo/.kilocode ancestor discovery lives here, gated by the project-disable flag.
-  // Merged order is exactly global → enabled legacy project discovery → KILO_CONFIG_DIR (last wins).
+  // TUI explicitly appends KILO_CONFIG_DIR last when set, preserving global → legacy → env precedence (last wins).
   // kilocode_change end
   const baseDirectories = yield* ConfigPaths.directories()
   const legacyProjectDirs = Flag.KILO_DISABLE_PROJECT_CONFIG
@@ -216,7 +216,7 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   const directories = unique([
     ...baseDirectories.filter((dir) => dir !== Flag.KILO_CONFIG_DIR),
     ...legacyProjectDirs,
-    ...baseDirectories.filter((dir) => dir === Flag.KILO_CONFIG_DIR),
+    ...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : []),
   ])
   yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
 
@@ -246,9 +246,10 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
 
   // kilocode_change start - load tui.json from TUI-local legacy directories
   // 4. `.kilo` and deferred `.kilocode` ancestor directories (discovered locally
-  // above when project config is enabled) plus canonical global/KILO_CONFIG_DIR
-  // from ConfigPaths. Also returned below so callers can install plugin
-  // dependencies from each location. ConfigPaths no longer owns ancestor discovery.
+  // above when project config is enabled) plus canonical global from ConfigPaths
+  // and TUI-appended KILO_CONFIG_DIR. Also returned below so callers can install
+  // plugin dependencies from each location. ConfigPaths is global-only; KILO_CONFIG_DIR
+  // is sourced from TUI-local assembly.
   const dirs = unique(directories).filter(
     (dir) => dir.endsWith(".kilo") || dir.endsWith(".kilocode") || dir === Flag.KILO_CONFIG_DIR,
   )

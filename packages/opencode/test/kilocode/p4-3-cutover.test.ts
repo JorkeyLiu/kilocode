@@ -94,30 +94,34 @@ describe("P4.3 cutover — legacy readers absent (canonical-only effective confi
     expect(kilo).toContain("canonicalRoot")
     const overlay = read("kilocode/config/overlay.ts")
     expect(overlay).toContain("canonicalRoot")
-    // ConfigPaths: P4.4-T16 ancestor .kilo walk physically removed — only Global + KILO_CONFIG_DIR remain (LOCK-010).
+    // ConfigPaths: P4.4-T18 KILO_CONFIG_DIR removed — only Global remains; TUI owns KILO_CONFIG_DIR explicitly (LOCK-002).
     // TUI-local legacy .kilo/.kilocode discovery is owned by tui.ts, not ConfigPaths.
     const paths = read("config/paths.ts")
-    expect(paths).toContain("Flag.KILO_CONFIG_DIR")
+    expect(paths).not.toContain("Flag.KILO_CONFIG_DIR")
+    expect(paths).not.toContain("KILO_CONFIG_DIR")
     expect(paths).not.toContain('targets: [".kilo"]')
     expect(paths).not.toContain('targets: [".kilocode", ".kilo"]')
     expect(paths.split('targets: [".kilo"]').length - 1).toBe(0)
-    // T16 bounded correction: prove ancestor walk absent — no targets/start/stop afs.up shape
+    // T18 bounded correction: prove ConfigPaths has no KILO_CONFIG_DIR reader — only Global remains
+    expect(paths).toContain("Global.Path.config")
+    expect(paths).toContain('return unique([Global.Path.config])')
     expect(paths).not.toMatch(/targets:\s*\["\.kilo"\],\s*start:\s*directory,\s*stop:\s*worktree/)
     expect(paths).not.toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
     expect(paths).not.toContain("void directory")
     expect(paths).not.toContain("void worktree")
-    expect(paths).toContain("Global.Path.config")
     expect(paths).not.toContain("canonicalRoot")
     expect(paths).not.toContain("Global.Path.home")
     expect(paths).toContain("export const files")
     expect(paths).toContain("fileInDirectory")
     // ConfigPaths.directories must no longer declare directory/worktree params (clean signature)
     expect(paths).toContain('export const directories = Effect.fn("ConfigPaths.directories")(function* ()')
-    // TUI must now own the gated legacy discovery
+    // TUI must now own the gated legacy discovery and explicit KILO_CONFIG_DIR last-wins
     const tui = read("cli/cmd/tui/config/tui.ts")
     expect(tui).toContain('targets: [".kilocode", ".kilo"]')
     expect(tui).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
     expect(tui).toContain("yield* afs.up")
+    expect(tui).toContain("Flag.KILO_CONFIG_DIR")
+    expect(tui).toContain("...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : [])")
   })
 
   test("no dual-read or import helper surface exists", () => {
@@ -179,23 +183,27 @@ describe("P4.3 cutover — legacy readers absent (canonical-only effective confi
     expect(instr).toContain('path.join(global.config, "AGENTS.md")')
     // Effective config (Config.Service) remains canonical-only and ignores KILO_CONFIG_DIR
     expect(cfg).not.toContain("Flag.KILO_CONFIG_DIR")
-    // ConfigPaths: P4.4-T16 ancestor .kilo walk physically removed — only Global + KILO_CONFIG_DIR remain (LOCK-010).
+    // ConfigPaths: P4.4-T18 KILO_CONFIG_DIR removed — only Global remains; TUI owns KILO_CONFIG_DIR explicitly (LOCK-002).
     // TUI-local legacy discovery is gated there, not in ConfigPaths.
-    expect(paths).toContain("Flag.KILO_CONFIG_DIR")
+    expect(paths).not.toContain("Flag.KILO_CONFIG_DIR")
+    expect(paths).not.toContain("KILO_CONFIG_DIR")
+    expect(paths).toContain("Global.Path.config")
+    expect(paths).toContain('return unique([Global.Path.config])')
     expect(paths).not.toContain('targets: [".kilo"]')
     expect(paths.split('targets: [".kilo"]').length - 1).toBe(0)
-    // T16 bounded correction: prove ancestor walk absent — no targets/start/stop afs.up shape
+    // T18 bounded correction: prove ConfigPaths has no KILO_CONFIG_DIR reader — only Global remains
     expect(paths).not.toMatch(/targets:\s*\["\.kilo"\],\s*start:\s*directory,\s*stop:\s*worktree/)
     expect(paths).not.toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
     expect(paths).not.toContain("void directory")
     expect(paths).not.toContain("Global.Path.home")
-    expect(paths).toContain("Global.Path.config")
     expect(paths).toContain("export const files")
     expect(paths).toContain("fileInDirectory")
     expect(paths).not.toContain("canonicalRoot")
     const tui = read("cli/cmd/tui/config/tui.ts")
     expect(tui).toContain('targets: [".kilocode", ".kilo"]')
     expect(tui).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
+    expect(tui).toContain("Flag.KILO_CONFIG_DIR")
+    expect(tui).toContain("...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : [])")
   })
 
   test("overlay operational surface is canonical-only", () => {
