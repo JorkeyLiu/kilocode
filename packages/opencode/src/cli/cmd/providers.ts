@@ -233,6 +233,39 @@ export function resolvePluginProviders(input: {
   return result
 }
 
+export function buildProviderOptions(input: {
+  providers: Record<string, { id: string; name: string }>
+  pluginProviders: Array<{ id: string; name: string }>
+}): Array<{ label: string; value: string; hint?: string }> {
+  return [
+    ...pipe(
+      input.providers,
+      values(),
+      sortBy((x) => x.name ?? x.id),
+      map((x) => ({
+        label: x.name,
+        value: x.id,
+      })),
+    ),
+    ...input.pluginProviders.map((x) => ({
+      label: x.name,
+      value: x.id,
+      hint: "plugin",
+    })),
+  ]
+}
+
+export function matchProviderInput(
+  input: string,
+  options: Array<{ label: string; value: string }>,
+): { value: string } | undefined {
+  const byID = options.find((x) => x.value === input)
+  if (byID) return byID
+  const byName = options.find((x) => x.label.toLowerCase() === input.toLowerCase())
+  if (byName) return byName
+  return undefined
+}
+
 export const ProvidersCommand = cmd({
   // kilocode_change start - keep "auth" as primary command name
   command: "auth",
@@ -333,17 +366,6 @@ export const ProvidersLoginCommand = effectCmd({
     }
     const hooks = yield* pluginSvc.list()
 
-    // kilocode_change start
-    const priority: Record<string, number> = {
-      kilo: 0,
-      anthropic: 2,
-      "github-copilot": 3,
-      openai: 4,
-      google: 5,
-      openrouter: 6,
-      vercel: 7,
-    }
-    // kilocode_change end
     const pluginProviders = resolvePluginProviders({
       hooks,
       existingProviders: providers,
@@ -351,41 +373,14 @@ export const ProvidersLoginCommand = effectCmd({
       enabled,
       providerNames: Object.fromEntries(
         Object.entries(config.provider ?? {}).flatMap(([id, p]) => (p ? [[id, p.name]] : [])),
-      ), // kilocode_change
-    })
-    const options = [
-      ...pipe(
-        providers,
-        values(),
-        sortBy(
-          (x) => priority[x.id] ?? 99,
-          (x) => x.name ?? x.id,
-        ),
-        map((x) => ({
-          label: x.name,
-          value: x.id,
-          hint: {
-            kilo: "recommended", // kilocode_change
-            openai: "ChatGPT login or API key", // kilocode_change
-          }[x.id],
-        })),
       ),
-      ...pluginProviders.map((x) => ({
-        label: x.name,
-        value: x.id,
-        hint: "plugin",
-      })),
-    ]
+    })
+    const options = buildProviderOptions({ providers, pluginProviders })
 
     let provider: string
     if (args.provider) {
       const input = args.provider
-      const byID = options.find((x) => x.value === input)
-      const byName = options.find((x) => x.label.toLowerCase() === input.toLowerCase())
-      // kilocode_change start - accept codex as an alias for OpenAI ChatGPT auth
-      const alias = input.toLowerCase() === "codex" ? options.find((x) => x.value === "openai") : undefined
-      const match = byID ?? byName ?? alias
-      // kilocode_change end
+      const match = matchProviderInput(input, options)
       if (!match) {
         return yield* fail(`Unknown provider "${input}"`)
       }

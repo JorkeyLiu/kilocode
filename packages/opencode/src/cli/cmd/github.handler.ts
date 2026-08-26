@@ -153,6 +153,18 @@ const SUPPORTED_EVENTS = [...USER_EVENTS, ...REPO_EVENTS] as const
 type UserEvent = (typeof USER_EVENTS)[number]
 type RepoEvent = (typeof REPO_EVENTS)[number]
 
+export function buildGithubProviderOptions(providers: Record<string, { id: string; name: string }>): Array<{ label: string; value: string }> {
+  return pipe(
+    providers,
+    values(),
+    sortBy((x) => x.name ?? x.id),
+    map((x) => ({
+      label: x.name,
+      value: x.id,
+    })),
+  )
+}
+
 export const githubInstall = Effect.fn("Cli.github.install")(function* () {
   const maybeCtx = yield* InstanceRef
   if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
@@ -226,28 +238,10 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
       }
 
       async function promptProvider() {
-        const priority: Record<string, number> = {
-          kilo: 0, // kilocode_change
-          anthropic: 1,
-          openai: 2,
-          google: 3,
-        }
         let provider = await prompts.select({
           message: "Select provider",
           maxItems: 8,
-          options: pipe(
-            providers,
-            values(),
-            sortBy(
-              (x) => priority[x.id] ?? 99,
-              (x) => x.name ?? x.id,
-            ),
-            map((x) => ({
-              label: x.name,
-              value: x.id,
-              hint: priority[x.id] === 0 ? "recommended" : undefined,
-            })),
-          ),
+          options: buildGithubProviderOptions(providers),
         })
 
         if (prompts.isCancel(provider)) throw new UI.CancelledError()
