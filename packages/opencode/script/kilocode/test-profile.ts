@@ -34,6 +34,7 @@ export namespace TestProfile {
           "kilocode/config/config.test.ts",
           "kilocode/core-watcher.test.ts",
           "kilocode/p4-4-bundled-provider-loader-removal.test.ts",
+          "kilocode/p4-4-flag-legacy-getter-removal.test.ts",
           "kilocode/p4-4-managed-removal.test.ts",
           "kilocode/p4-4-model-cache-removal.test.ts",
           "kilocode/p4-4-primary-worktree-removal.test.ts",

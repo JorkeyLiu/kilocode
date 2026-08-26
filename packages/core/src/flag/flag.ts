@@ -39,8 +39,6 @@ export const Flag = {
   KILO_AUTO_SHARE: truthy("KILO_AUTO_SHARE"),
   KILO_AUTO_HEAP_SNAPSHOT: truthy("KILO_AUTO_HEAP_SNAPSHOT"),
   KILO_GIT_BASH_PATH: process.env["KILO_GIT_BASH_PATH"],
-  KILO_CONFIG: process.env["KILO_CONFIG"],
-  KILO_CONFIG_CONTENT: process.env["KILO_CONFIG_CONTENT"],
   KILO_DISABLE_AUTOUPDATE: truthy("KILO_DISABLE_AUTOUPDATE"),
   KILO_ALWAYS_NOTIFY_UPDATE: truthy("KILO_ALWAYS_NOTIFY_UPDATE"),
   KILO_DISABLE_TERMINAL_TITLE: truthy("KILO_DISABLE_TERMINAL_TITLE"),
@@ -105,9 +103,6 @@ export const Flag = {
   },
   get KILO_PURE() {
     return truthy("KILO_PURE")
-  },
-  get KILO_PERMISSION() {
-    return process.env["KILO_PERMISSION"]
   },
   get KILO_PLUGIN_META_FILE() {
     return process.env["KILO_PLUGIN_META_FILE"]
