@@ -179,7 +179,6 @@ export const dict = {
   "dialog.provider.search.placeholder": "공급자 검색",
   "dialog.provider.empty": "공급자 없음",
   "dialog.provider.group.other": "기타",
-  "dialog.provider.tag.recommended": "추천",
 
   "dialog.model.select.title": "모델 선택",
   "dialog.model.search.placeholder": "모델 검색",
@@ -873,7 +872,6 @@ export const dict = {
   "settings.providers.section.configured": "Configured providers",
   "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
   "settings.providers.section.add": "Add providers",
-  "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "환경",
   "settings.providers.tag.config": "구성",
   "settings.providers.tag.chatgpt": "ChatGPT",

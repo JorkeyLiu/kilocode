@@ -175,7 +175,6 @@ export const dict = {
   "dialog.provider.search.placeholder": "Pretraži provajdere",
   "dialog.provider.empty": "Nema pronađenih provajdera",
   "dialog.provider.group.other": "Ostalo",
-  "dialog.provider.tag.recommended": "Preporučeno",
 
   "dialog.model.select.title": "Odaberi model",
   "dialog.model.search.placeholder": "Pretraži modele",
@@ -882,7 +881,6 @@ export const dict = {
   "settings.providers.section.configured": "Configured providers",
   "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
   "settings.providers.section.add": "Add providers",
-  "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Okruženje",
   "settings.providers.tag.config": "Konfiguracija",
   "settings.providers.tag.chatgpt": "ChatGPT",

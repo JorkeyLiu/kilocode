@@ -174,7 +174,6 @@ export const dict = {
   "dialog.provider.search.placeholder": "Search providers",
   "dialog.provider.empty": "No providers found",
   "dialog.provider.group.other": "Other",
-  "dialog.provider.tag.recommended": "Recommended",
 
   "dialog.model.select.title": "Select model",
   "dialog.model.search.placeholder": "Search models",
@@ -877,7 +876,6 @@ export const dict = {
   "settings.providers.section.configured": "Configured providers",
   "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
   "settings.providers.section.add": "Add providers",
-  "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Environment",
   "settings.providers.tag.config": "Config",
   "settings.providers.tag.chatgpt": "ChatGPT",

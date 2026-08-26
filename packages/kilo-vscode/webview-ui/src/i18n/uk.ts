@@ -175,7 +175,6 @@ export const dict = {
   "dialog.provider.search.placeholder": "Пошук провайдера",
   "dialog.provider.empty": "Провайдерів не знайдено",
   "dialog.provider.group.other": "Інші",
-  "dialog.provider.tag.recommended": "Рекомендовано",
 
   "dialog.model.select.title": "Вибір моделі",
   "dialog.model.search.placeholder": "Пошук моделі",
@@ -885,7 +884,6 @@ export const dict = {
   "settings.providers.section.configured": "Configured providers",
   "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
   "settings.providers.section.add": "Add providers",
-  "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "Середовище",
   "settings.providers.tag.config": "Конфігурація",
   "settings.providers.tag.chatgpt": "ChatGPT",

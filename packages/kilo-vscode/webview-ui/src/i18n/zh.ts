@@ -176,7 +176,6 @@ export const dict = {
   "dialog.provider.search.placeholder": "搜索提供商",
   "dialog.provider.empty": "未找到提供商",
   "dialog.provider.group.other": "其他",
-  "dialog.provider.tag.recommended": "推荐",
 
   "dialog.model.select.title": "选择模型",
   "dialog.model.search.placeholder": "搜索模型",
@@ -857,7 +856,6 @@ export const dict = {
   "settings.providers.section.configured": "Configured providers",
   "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
   "settings.providers.section.add": "Add providers",
-  "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "环境",
   "settings.providers.tag.config": "配置",
   "settings.providers.tag.chatgpt": "ChatGPT",

@@ -174,7 +174,6 @@ export const dict = {
   "dialog.provider.search.placeholder": "البحث عن موفرين",
   "dialog.provider.empty": "لم يتم العثور على موفرين",
   "dialog.provider.group.other": "آخر",
-  "dialog.provider.tag.recommended": "موصى به",
 
   "dialog.model.select.title": "تحديد نموذج",
   "dialog.model.search.placeholder": "البحث عن نماذج",
@@ -866,7 +865,6 @@ export const dict = {
   "settings.providers.section.configured": "Configured providers",
   "settings.providers.configured.empty": "No configured providers yet. Connect a provider below to get started.",
   "settings.providers.section.add": "Add providers",
-  "settings.providers.tag.gateway": "Gateway",
   "settings.providers.tag.environment": "البيئة",
   "settings.providers.tag.config": "التكوين",
   "settings.providers.tag.chatgpt": "ChatGPT",

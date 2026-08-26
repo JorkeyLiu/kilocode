@@ -13,7 +13,6 @@ export const dict = {
 
   // Provider settings translations
   "settings.providers.group.recommended": "Önerilen",
-  "settings.providers.note.kilo": "500+ AI modeline erişim",
   "settings.providers.note.opencode": "Claude, GPT, Gemini ve daha fazlasını içeren seçilmiş modeller",
   "settings.providers.note.anthropic": "Pro ve Max dahil Claude modellerine doğrudan erişim",
   "settings.providers.note.deepseek": "Akıl yürütme ve kodlama görevleri için DeepSeek modelleri",

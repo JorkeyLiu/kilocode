@@ -13,7 +13,6 @@ export const dict = {
 
   // Provider settings translations
   "settings.providers.group.recommended": "Рекомендовані",
-  "settings.providers.note.kilo": "Доступ до 500+ моделей ШІ",
   "settings.providers.note.opencode": "Добірні моделі, зокрема Claude, GPT, Gemini та інші",
   "settings.providers.note.anthropic": "Прямий доступ до моделей Claude, зокрема Pro і Max",
   "settings.providers.note.deepseek": "Моделі DeepSeek для завдань міркування та програмування",
