@@ -142,7 +142,7 @@ describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", ()
   test("ConfigPaths and instruction KILO_CONFIG_DIR profile behavior preserved", () => {
     const paths = read("config/paths.ts")
     expect(paths).toContain("Flag.KILO_CONFIG_DIR")
-    expect(paths).toContain('targets: [".kilocode", ".kilo"]')
+    expect(paths).toContain('targets: [".kilo"]')
     expect(paths).toContain("Global.Path.config")
 
     const instr = read("session/instruction.ts")

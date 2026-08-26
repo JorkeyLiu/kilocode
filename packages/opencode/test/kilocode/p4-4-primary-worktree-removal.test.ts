@@ -80,6 +80,6 @@ describe("P4.4 primary-worktree removal — orphaned helper physically absent", 
     expect(read("kilocode/config/config.ts")).toContain("canonicalRoot")
     expect(read("kilocode/config/overlay.ts")).toContain("canonicalRoot")
     expect(read("config/paths.ts")).toContain("Flag.KILO_CONFIG_DIR")
-    expect(read("config/paths.ts")).toContain('targets: [".kilocode", ".kilo"]')
+    expect(read("config/paths.ts")).toContain('targets: [".kilo"]')
   })
 })
