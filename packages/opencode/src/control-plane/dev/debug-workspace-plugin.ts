@@ -7,13 +7,13 @@ const DEV_DATA_FILE = "/tmp/opencode-workspace-dev-data.json"
 const DEV_DATA_TEMP_FILE = `${DEV_DATA_FILE}.tmp`
 
 async function waitForHealth(port: number) {
-  const url = `http://127.0.0.1:${port}/global/health`
+  const url = `http://127.0.0.1:${port}/global/event`
   const started = Date.now()
 
   while (Date.now() - started < 30_000) {
     try {
       const response = await fetch(url)
-      if (response.ok) {
+      if (response.ok || response.status === 401) {
         return
       }
     } catch {}

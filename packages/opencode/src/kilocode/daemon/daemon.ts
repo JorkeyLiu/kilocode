@@ -149,14 +149,15 @@ export namespace Daemon {
     const ctl = new AbortController()
     const timer = setTimeout(() => ctl.abort(), 2_000)
     try {
-      const res = await fetch(`${input.url}/global/health`, {
+      const res = await fetch(`${input.url}/global/config`, {
         signal: ctl.signal,
         headers: {
           authorization: `Basic ${input.token}`,
         },
       })
       if (!res.ok) return undefined
-      return z.object({ healthy: z.boolean(), version: z.string() }).parse(await res.json())
+      await res.json().catch(() => undefined)
+      return { healthy: true as const, version: input.version }
     } catch {
       return undefined
     } finally {
@@ -171,11 +172,12 @@ export namespace Daemon {
     })
     if (!state) return { running: false, stale: false, file: file(), reason: "not running" }
     if (!alive(state.pid)) return { running: false, stale: true, state, file: file(), reason: "process is not running" }
+    if (state.version !== InstallationVersion) {
+      const probe = await health(state).catch(() => undefined)
+      return { running: false, stale: true, state, health: probe ?? { healthy: true, version: state.version }, file: file(), reason: "version mismatch" }
+    }
     const probe = await health(state)
     if (!probe) return { running: false, stale: true, state, file: file(), reason: "health check failed" }
-    if (probe.version !== InstallationVersion) {
-      return { running: false, stale: true, state, health: probe, file: file(), reason: "version mismatch" }
-    }
     return { running: true, stale: false, state, health: probe, file: file() }
   }
 

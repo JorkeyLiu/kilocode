@@ -186,8 +186,8 @@ Remote HTTP proxy responses can include sync fence metadata. Router waits for ma
 | Port allocation | For `--port 0`, scans `4097..4116` and chooses available port |
 | Child process | Detached `kilo serve --hostname <host> --port <port>` process |
 | Foreground mode | `--foreground` / `-f` keeps the invoking command attached; SIGINT, SIGTERM, or SIGHUP stops only the daemon identity it started or reused |
-| Health | Probes authenticated `/global/health` with 2 second timeout |
-| Reuse | Reuses daemon only when process is alive, health succeeds, and installed version matches |
+| Health | Probes authenticated `/global/config` with 2 second timeout |
+| Reuse | Reuses daemon only when process is alive, config probe succeeds, and installed version matches |
 | Cleanup | Terminates stale process when present, clears stale state, then starts replacement |
 | Opt-out | `KILO_NO_DAEMON` disables automatic attach by clients; explicit daemon commands still manage daemon |
 

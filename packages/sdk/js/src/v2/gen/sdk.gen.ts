@@ -132,8 +132,6 @@ import type {
   GlobalDisposeResponses,
   GlobalEventErrors,
   GlobalEventResponses,
-  GlobalHealthErrors,
-  GlobalHealthResponses,
   GlobalUpgradeErrors,
   GlobalUpgradeResponses,
   InstanceDisposeErrors,
@@ -1419,18 +1417,6 @@ export class Config extends HeyApiClient {
 }
 
 export class Global extends HeyApiClient {
-  /**
-   * Get health
-   *
-   * Get health information about the Kilo server.
-   */
-  public health<ThrowOnError extends boolean = false>(options?: Options<never, ThrowOnError>) {
-    return (options?.client ?? this.client).get<GlobalHealthResponses, GlobalHealthErrors, ThrowOnError>({
-      url: "/global/health",
-      ...options,
-    })
-  }
-
   /**
    * Get global events
    *

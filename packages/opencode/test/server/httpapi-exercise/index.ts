@@ -62,13 +62,6 @@ function locationData(validate: (value: any) => void) {
 
 const scenarios: Scenario[] = [
   http.protected
-    .get("/global/health", "global.health")
-    .global()
-    .json(200, (body) => {
-      object(body)
-      check(body.healthy === true, "server should report healthy")
-    }),
-  http.protected
     .get("/global/event", "global.event")
     .global()
     .stream()

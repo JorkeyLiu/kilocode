@@ -272,55 +272,6 @@
         ]
       }
     },
-    "/global/health": {
-      "get": {
-        "tags": ["global"],
-        "operationId": "global.health",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": "Health information",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "type": "object",
-                  "properties": {
-                    "healthy": {
-                      "type": "boolean",
-                      "enum": [true]
-                    },
-                    "version": {
-                      "type": "string"
-                    }
-                  },
-                  "required": ["healthy", "version"],
-                  "additionalProperties": false,
-                  "description": "Health information"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Bad request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/BadRequestError"
-                }
-              }
-            }
-          }
-        },
-        "description": "Get health information about the Kilo server.",
-        "summary": "Get health",
-        "x-codeSamples": [
-          {
-            "lang": "js",
-            "source": "import { createKiloClient } from \"@kilocode/sdk\"\n\nconst client = createKiloClient()\nawait client.global.health({\n  ...\n})"
-          }
-        ]
-      }
-    },
     "/global/event": {
       "get": {
         "tags": ["global"],

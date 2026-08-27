@@ -206,7 +206,7 @@ describe("daemon manager", () => {
     })
     expect(config.status).toBe(200)
 
-    const health = await fetch(`${started.state!.url}/global/health`, {
+    const health = await fetch(`${started.state!.url}/global/config`, {
       headers: { authorization: `Basic ${started.state!.token}` },
     })
     expect(health.status).toBe(200)
@@ -221,7 +221,7 @@ describe("daemon manager", () => {
 
     const again = await Daemon.start(opts(tmp.path))
     expect(again.running).toBe(true)
-    const restarted = await fetch(`${again.state!.url}/global/health`, {
+    const restarted = await fetch(`${again.state!.url}/global/config`, {
       headers: { authorization: `Basic ${again.state!.token}` },
     })
     expect(restarted.status).toBe(200)

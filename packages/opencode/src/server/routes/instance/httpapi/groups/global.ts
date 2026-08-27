@@ -10,11 +10,6 @@ import { HttpApi, HttpApiEndpoint, HttpApiError, HttpApiGroup, HttpApiSchema, Op
 import { described } from "./metadata"
 import { ConfigOverlayInvalidError } from "@/kilocode/server/httpapi/groups/config-console" // kilocode_change
 
-const GlobalHealth = Schema.Struct({
-  healthy: Schema.Literal(true),
-  version: Schema.String,
-})
-
 const SyncEventSchemas = EventV2.registry
   .values()
   .flatMap((definition) => {
@@ -67,7 +62,6 @@ const GlobalUpgradeResult = Schema.Union([
 ])
 
 export const GlobalPaths = {
-  health: "/global/health",
   event: "/global/event",
   config: "/global/config",
   dispose: "/global/dispose",
@@ -77,15 +71,6 @@ export const GlobalPaths = {
 export const GlobalApi = HttpApi.make("global").add(
   HttpApiGroup.make("global")
     .add(
-      HttpApiEndpoint.get("health", GlobalPaths.health, {
-        success: described(GlobalHealth, "Health information"),
-      }).annotateMerge(
-        OpenApi.annotations({
-          identifier: "global.health",
-          summary: "Get health",
-          description: "Get health information about the Kilo server.", // kilocode_change
-        }),
-      ),
       HttpApiEndpoint.get("event", GlobalPaths.event, {
         success: GlobalEventSchema,
       }).annotateMerge(

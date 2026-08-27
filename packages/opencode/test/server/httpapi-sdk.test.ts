@@ -349,11 +349,11 @@ describe("HttpApi SDK", () => {
     "uses the generated SDK for global and control routes",
     Effect.gen(function* () {
       const sdk = yield* client("raw")
-      const health = yield* call(() => sdk.global.health())
+      const config = yield* call(() => sdk.global.config.get())
       const log = yield* call(() => sdk.app.log({ service: "httpapi-sdk-test", level: "info", message: "hello" }))
 
-      expect(health.response.status).toBe(200)
-      expect(health.data).toMatchObject({ healthy: true })
+      expect(config.response.status).toBe(200)
+      expect(config.data).toBeDefined()
       expect(yield* firstEvent((signal) => sdk.global.event({ signal }))).toMatchObject({
         payload: { type: "server.connected" },
       })
@@ -416,13 +416,13 @@ describe("HttpApi SDK", () => {
   serverPathParity("matches generated SDK global and control behavior", (serverPath) =>
     Effect.gen(function* () {
       const sdk = yield* client(serverPath)
-      const health = yield* capture(() => sdk.global.health())
+      const config = yield* capture(() => sdk.global.config.get())
       const log = yield* capture(() => sdk.app.log({ service: "sdk-parity", level: "info", message: "hello" }))
       const invalidAuth = yield* capture(() => sdk.auth.set({ providerID: "test" }))
 
       return {
-        statuses: statuses({ health, log, invalidAuth }),
-        health: record(health.data).healthy,
+        statuses: statuses({ config, log, invalidAuth }),
+        config: record(config.data),
         log: log.data,
       }
     }),

@@ -17,7 +17,7 @@ AUTH="Authorization: Basic $(printf 'kilo:%s' "$PASS" | base64 | tr -d '\n')"
 BASE="http://127.0.0.1:$PORT"
 
 # Call any endpoint
-curl -sS -H "$AUTH" -H "x-kilo-directory: $PWD" "$BASE/global/health"
+curl -sS -H "$AUTH" -H "x-kilo-directory: $PWD" "$BASE/global/config"
 
 # Stop when done
 kill "$(cat /tmp/kilo-serve.pid)" 2>/dev/null || true
@@ -112,10 +112,10 @@ DIR_HEADER="x-kilo-directory: $PWD"
 
 All of the below assume `BASE`, `AUTH`, `DIR_HEADER` are set. Drop `-H "$AUTH"` if you're running without a password.
 
-### Health check (no auth, no directory)
+### Liveness probe (no auth, no directory)
 
 ```bash
-curl -sS "$BASE/global/health"
+curl -sS "$BASE/global/config"
 ```
 
 ### Full endpoint list (OpenAPI spec)

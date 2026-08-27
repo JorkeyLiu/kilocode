@@ -544,9 +544,9 @@ Options:
 manage AI providers and credentials
 
 Commands:
-  kilo auth list         list providers and credentials  [aliases: ls]
-  kilo auth login [url]  log in to a provider
-  kilo auth logout       log out from a configured provider
+  kilo auth list    list providers and credentials  [aliases: ls]
+  kilo auth login   log in to a provider
+  kilo auth logout  log out from a configured provider
 
 Options:
   --help     Show help  [boolean]
@@ -567,9 +567,6 @@ Options:
 
 ```
 log in to a provider
-
-Positionals:
-  url  kilo auth provider  [string]
 
 Options:
       --help      Show help  [boolean]

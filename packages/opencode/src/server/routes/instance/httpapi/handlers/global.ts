@@ -11,7 +11,6 @@ import { withColdMutation } from "@/kilocode/server/config-convergence" // kiloc
 import { configFailure } from "@/kilocode/server/config-failure" // kilocode_change
 import { isHotPatch } from "@/kilocode/config/hot-keys" // kilocode_change
 import { InstanceStore } from "@/project/instance-store" // kilocode_change
-import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import * as Log from "@opencode-ai/core/util/log"
 import { Effect, Option, Queue, Schema } from "effect"
 import * as Stream from "effect/Stream"
@@ -86,10 +85,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     const installation = yield* Installation.Service
     const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop) // kilocode_change
     const store = Option.getOrElse(yield* Effect.serviceOption(InstanceStore.Service), () => undefined) // kilocode_change
-
-    const health = Effect.fn("GlobalHttpApi.health")(function* () {
-      return { healthy: true as const, version: InstallationVersion }
-    })
 
     const event = Effect.fn("GlobalHttpApi.event")(function* () {
       const request = yield* HttpServerRequest.HttpServerRequest // kilocode_change
@@ -197,7 +192,6 @@ export const globalHandlers = HttpApiBuilder.group(RootHttpApi, "global", (handl
     })
 
     return handlers
-      .handle("health", health)
       .handleRaw("event", event)
       .handle("configGet", configGet)
       .handle("configUpdate", configUpdate)

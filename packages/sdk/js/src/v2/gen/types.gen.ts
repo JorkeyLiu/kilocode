@@ -5867,34 +5867,6 @@ export type ExperimentalControlPlaneMoveSessionResponses = {
 export type ExperimentalControlPlaneMoveSessionResponse =
   ExperimentalControlPlaneMoveSessionResponses[keyof ExperimentalControlPlaneMoveSessionResponses]
 
-export type GlobalHealthData = {
-  body?: never
-  path?: never
-  query?: never
-  url: "/global/health"
-}
-
-export type GlobalHealthErrors = {
-  /**
-   * Bad request
-   */
-  400: BadRequestError
-}
-
-export type GlobalHealthError = GlobalHealthErrors[keyof GlobalHealthErrors]
-
-export type GlobalHealthResponses = {
-  /**
-   * Health information
-   */
-  200: {
-    healthy: true
-    version: string
-  }
-}
-
-export type GlobalHealthResponse = GlobalHealthResponses[keyof GlobalHealthResponses]
-
 export type GlobalEventData = {
   body?: never
   path?: never
