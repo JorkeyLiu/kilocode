@@ -9,6 +9,9 @@
 import type { JSX } from "solid-js"
 import type { RGBA } from "@opentui/core"
 import type { ProviderAuthAuthorization } from "@kilocode/sdk/v2"
+import type { useSDK } from "@tui/context/sdk"
+import type { useTheme } from "@tui/context/theme"
+import type { DialogModel } from "@tui/component/dialog-model"
 import { KiloAutoMethod } from "@/kilocode/components/dialog-kilo-auto-method"
 export { selectProvider } from "@/kilocode/anaconda-desktop/tui/setup"
 
@@ -43,32 +46,8 @@ export function failedDescription(providerID: string, failed: string[]): string 
 }
 
 // ---------------------------------------------------------------------------
-// Provider priority (replaces the shared provider map entirely)
+// Local provider helpers (generic credential guidance)
 // ---------------------------------------------------------------------------
-
-export const PROVIDER_PRIORITY: Record<string, number> = {
-  kilo: -1,
-  anthropic: 0,
-  "github-copilot": 1,
-  openai: 2,
-  google: 3,
-  "anaconda-desktop": 4,
-}
-
-// ---------------------------------------------------------------------------
-// Provider descriptions shown next to the name in the selection list
-// ---------------------------------------------------------------------------
-
-export const PROVIDER_DESCRIPTIONS: Record<string, string> = {
-  kilo: "(Recommended)",
-  anthropic: "(Claude Max or API key)",
-  openai: "(ChatGPT login or API key)",
-  "anaconda-desktop": "(Local models)",
-}
-
-export const PROVIDER_TITLES: Record<string, string> = {
-  openai: "OpenAI / Codex",
-}
 
 /** Local OpenAI-compatible providers where API key is optional (localhost). */
 export const LOCAL_OPTIONAL_API_KEY = new Set(["atomic-chat", "lmstudio"])
@@ -95,9 +74,9 @@ export function renderAutoMethod(opts: {
   title: string
   index: number
   authorization: ProviderAuthAuthorization
-  useSDK: () => any
-  useTheme: () => any
-  DialogModel: any
+  useSDK: typeof useSDK
+  useTheme: typeof useTheme
+  DialogModel: typeof DialogModel
 }): (() => JSX.Element) | undefined {
   if (opts.providerID !== "kilo") return undefined
   return () => (
@@ -118,8 +97,9 @@ export function renderAutoMethod(opts: {
 // ---------------------------------------------------------------------------
 
 /**
- * Returns a custom description element for the API-key dialog when the
- * provider is Kilo Gateway. Returns `undefined` otherwise.
+ * Returns a custom description element for the API-key dialog for local
+ * providers where the API key is optional. Returns `undefined` otherwise
+ * so the caller falls through to generic handling.
  */
 export function renderApiDescription(
   providerID: string,
@@ -132,17 +112,7 @@ export function renderApiDescription(
       </text>
     )
   }
-  if (providerID !== "kilo") return undefined
-  return () => (
-    <box gap={1}>
-      <text fg={theme.textMuted}>
-        Kilo Gateway gives you access to all the best coding models at the cheapest prices with a single API key.
-      </text>
-      <text fg={theme.text}>
-        Go to <span style={{ fg: theme.primary }}>https://kilo.ai/gateway</span> to get a key
-      </text>
-    </box>
-  )
+  return undefined
 }
 
 export function apiKeyPlaceholder(providerID: string) {

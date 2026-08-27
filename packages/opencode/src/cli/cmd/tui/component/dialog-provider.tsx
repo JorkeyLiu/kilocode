@@ -1,7 +1,7 @@
 import { createMemo, createSignal, onMount, Show } from "solid-js"
 import { useSync } from "@tui/context/sync"
 import { map, pipe, sortBy } from "remeda"
-import { DialogSelect } from "@tui/ui/dialog-select"
+import { DialogSelect, type DialogSelectOption } from "@tui/ui/dialog-select"
 import { useDialog } from "@tui/ui/dialog"
 import { useSDK } from "../context/sdk"
 import { DialogPrompt } from "../ui/dialog-prompt"
@@ -17,8 +17,6 @@ import * as KiloProvider from "@/kilocode/cli/cmd/tui/component/dialog-provider"
 import { useConnected } from "./use-connected"
 import { useBindings } from "../keymap"
 import { errorMessage } from "@/util/error" // kilocode_change
-
-const PROVIDER_PRIORITY: Record<string, number> = KiloProvider.PROVIDER_PRIORITY // kilocode_change
 
 const CUSTOM_PROVIDER_OPTION_VALUE = "__opencode_custom_provider__"
 const CUSTOM_PROVIDER_ID = /^[a-z0-9][a-z0-9-_]*$/
@@ -43,14 +41,13 @@ export function providerOptions(list: { id: string; name: string }[]): ProviderO
   return [
     ...pipe(
       list,
-      sortBy((x) => PROVIDER_PRIORITY[x.id] ?? 99),
+      sortBy((x) => x.name.toLowerCase() + "\0" + x.id.toLowerCase()),
       map((provider) => ({
         type: "provider" as const,
         title: provider.name,
         value: provider.id,
         providerID: provider.id,
-        description: KiloProvider.PROVIDER_DESCRIPTIONS[provider.id], // kilocode_change
-        category: provider.id in PROVIDER_PRIORITY ? "Popular" : "Providers",
+        category: "Providers",
       })),
     ),
     {
@@ -69,15 +66,27 @@ export function normalizeCustomProviderID(value: string) {
   return providerID
 }
 
-export function createDialogProviderOptions() {
-  const sync = useSync()
-  const dialog = useDialog()
-  const sdk = useSDK()
-  const toast = useToast()
-  const { theme } = useTheme()
-  const onboarded = useConnected()
+export type CreateDialogProviderOptionsDeps = {
+  sync?: ReturnType<typeof useSync>
+  dialog?: ReturnType<typeof useDialog>
+  sdk?: ReturnType<typeof useSDK>
+  toast?: ReturnType<typeof useToast>
+  theme?: ReturnType<typeof useTheme>["theme"]
+  onboarded?: ReturnType<typeof useConnected>
+  promptCustomProviderID?: () => Promise<string | undefined>
+}
+
+export function createDialogProviderOptions(deps?: CreateDialogProviderOptionsDeps) {
+  const sync = deps?.sync ?? useSync()
+  const dialog = deps?.dialog ?? useDialog()
+  const sdk = deps?.sdk ?? useSDK()
+  const toast = deps?.toast ?? useToast()
+  const theme = deps?.theme ?? useTheme().theme
+  const onboarded = deps?.onboarded ?? useConnected()
 
   async function promptCustomProviderID(): Promise<string | undefined> {
+    if (deps?.promptCustomProviderID) return deps.promptCustomProviderID()
+
     const value = await DialogPrompt.show(dialog, "Other", {
       placeholder: "Provider id",
       description: () => (
@@ -124,13 +133,12 @@ export function createDialogProviderOptions() {
         const failed = sync.data.provider_next.failed ?? []
         const failedGutter = KiloProvider.renderGutter(providerID, failed, theme)
         const failedDesc = KiloProvider.failedDescription(providerID, failed)
-        const baseDesc = KiloProvider.PROVIDER_DESCRIPTIONS[providerID]
         // kilocode_change end
 
         return {
-          title: KiloProvider.PROVIDER_TITLES[providerID] ?? provider.title, // kilocode_change
+          title: provider.title,
           value: provider.value,
-          description: failedDesc ?? baseDesc ?? provider.description, // kilocode_change
+          description: failedDesc ?? provider.description,
           footer: consoleManaged ? sync.data.console_state.activeOrgName : undefined,
           category: provider.category,
           gutter: failedGutter ?? (connected && onboarded() ? () => <text fg={theme.success}>✓</text> : undefined), // kilocode_change
@@ -138,12 +146,12 @@ export function createDialogProviderOptions() {
             if (consoleManaged) return
             if (KiloProvider.selectProvider({ providerID, replace: dialog.replace, model: DialogModel })) return // kilocode_change
 
-            const methods = sync.data.provider_auth[providerID] ?? [
+            const methods = (sync.data.provider_auth[providerID] ?? [
               {
                 type: "api",
                 label: "API key",
               },
-            ]
+            ]) as ProviderAuthMethod[]
             let index: number | null = 0
             if (methods.length > 1) {
               index = await new Promise<number | null>((resolve) => {
@@ -151,11 +159,11 @@ export function createDialogProviderOptions() {
                   () => (
                     <DialogSelect
                       title="Select auth method"
-                      options={methods.map((x, index) => ({
+                      options={methods.map((x: ProviderAuthMethod, index: number) => ({
                         title: x.label,
                         value: index,
                       }))}
-                      onSelect={(option) => resolve(option.value)}
+                      onSelect={(option: DialogSelectOption<number>) => resolve(option.value)}
                     />
                   ),
                   () => resolve(null),

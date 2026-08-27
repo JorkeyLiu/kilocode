@@ -45,6 +45,7 @@ export namespace TestProfile {
           "kilocode/p4-4-t16-tui-legacy-discovery.test.ts",
           "kilocode/p4-4-t18-config-paths-kilo-config-dir-removal.test.ts",
           "kilocode/p4-4-tui-migrate-kilo-config-removal.test.ts",
+          "kilocode/p4-4-tui-provider-dialog-preset-removal.test.ts",
           "kilocode/p4-4-wellknown-provider-auth-removal.test.ts",
           "kilocode/sandbox/*.test.ts",
           "kilocode/server/{config-overlay,listener-runtime,tui-config,worktree-list}.test.ts",

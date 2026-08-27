@@ -14,21 +14,19 @@ import { useToast } from "@tui/ui/toast"
 import { Link } from "@tui/ui/link"
 import * as Clipboard from "@tui/util/clipboard"
 import { DialogKiloOrganization } from "./dialog-kilo-organization.js"
-
-// These types are OpenCode-internal and imported at runtime
-type UseSDK = any
-type UseTheme = any
-type ProviderAuthAuthorization = any
-type DialogModel = any
+import type { useSDK } from "@tui/context/sdk"
+import type { useTheme } from "@tui/context/theme"
+import type { DialogModel } from "@tui/component/dialog-model"
+import type { ProviderAuthAuthorization } from "@kilocode/sdk/v2"
 
 interface KiloAutoMethodProps {
   index: number
   providerID: string
   title: string
   authorization: ProviderAuthAuthorization
-  useSDK: () => UseSDK
-  useTheme: () => UseTheme
-  DialogModel: DialogModel
+  useSDK: typeof useSDK
+  useTheme: typeof useTheme
+  DialogModel: typeof DialogModel
 }
 
 export function KiloAutoMethod(props: KiloAutoMethodProps) {
