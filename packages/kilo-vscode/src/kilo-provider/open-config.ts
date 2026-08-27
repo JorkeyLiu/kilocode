@@ -5,7 +5,6 @@ import { content, globalFiles, localFiles, type Entry, type Scope, type Source }
 interface Labels extends Record<Source, string> {
   scope: string
   statusLoaded: string
-  statusLoadedLegacy: string
   statusNotLoaded: string
   statusCreate: string
   title: string
@@ -28,11 +27,10 @@ export async function openConfig(scope: Scope, labels: Labels, root?: string): P
 }
 
 async function pick(list: Entry[], labels: Labels) {
-  const editable = list.filter((item) => !item.virtual)
-  if (editable.length === 1) return editable[0]
+  if (list.length === 1) return list[0]
 
   const picked = await vscode.window.showQuickPick(
-    editable.map((item) => ({
+    list.map((item) => ({
       label: item.recommended && !item.exists ? `$(add) ${item.name}` : `$(json) ${item.name}`,
       description: item.exists ? status(item, labels) : labels.statusCreate,
       detail: `${labels[item.source]} - ${item.file}`,
@@ -49,7 +47,6 @@ async function pick(list: Entry[], labels: Labels) {
 
 function status(item: Entry, labels: Labels) {
   if (!item.loaded) return labels.statusNotLoaded
-  if (item.legacy) return labels.statusLoadedLegacy
   return labels.statusLoaded
 }
 

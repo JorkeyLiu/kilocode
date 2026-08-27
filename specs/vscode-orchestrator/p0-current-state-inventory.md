@@ -32,6 +32,8 @@ re-searching the repository.
 > unchanged. This is migration evidence only — it does not edit canonical
 > architecture docs (LOCK-013). P4.4 remains Active/residual (LOCK-001).
 
+> **Amendment (2026-08-27, P4.4 Open Config legacy diagnostic cleanup).** The VS Code Open Config diagnostic inventory (`packages/kilo-vscode/src/kilo-provider/config-file.ts` → `open-config.ts` → `KiloProvider` → `Settings.tsx`) is now limited to canonical authorities: resolved global `kilo.jsonc` (`KILO_CONFIG_DIR` controls resolved `Global.Path.config` root) and `<workspaceRoot>/.kilo/kilo.jsonc`. Legacy source taxonomy (`sourceXdg`/`home*`/`env*`/`project*`, `KILO_CONFIG`/`KILO_CONFIG_CONTENT`/`.kilocode`/`.opencode`/`project-root`/non-`kilo.jsonc` alternatives, `legacy`/`virtual`/`statusLoadedLegacy` badges) removed from `config-file.ts`, `open-config.ts` `Labels`/status, `webview-messages.ts` `OpenConfigFileRequest.labels`, `Settings.tsx`, and all 20 webview i18n dictionaries (replaced with `settings.config.source.global`/`local`). Canonical creation/opening, localization, `KILO_DISABLE_PROJECT_CONFIG` semantics, and `KILO_CONFIG_DIR`→`Global.Path.config` compatibility + sandbox deny remain. Evidence: `tests/unit/open-config.test.ts` and `tests/unit/p4-4-open-config-legacy-absence.test.ts`. P4.4 remains Active/residual; no canonical loader/server/SDK change.
+
 ## 1. Status And Classification Rules
 
 - Status of every claim: `Evidence` (verified file:line reference),
