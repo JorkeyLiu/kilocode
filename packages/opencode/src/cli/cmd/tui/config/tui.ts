@@ -6,7 +6,6 @@ import { mergeDeep, unique } from "remeda"
 import { Cause, Context, Effect, Fiber, Layer, Schema } from "effect"
 import { ConfigParse } from "@/config/parse"
 import * as ConfigPaths from "@/config/paths"
-import { migrateTuiConfig } from "./tui-migrate"
 import { KeymapLeaderTimeoutDefault, resolveAttentionSoundPaths, TuiInfo } from "./tui-schema"
 import { Flag } from "@opencode-ai/core/flag/flag"
 import { isRecord } from "@/util/record"
@@ -18,6 +17,7 @@ import { TuiKeybind } from "./keybind"
 import { InstallationLocal, InstallationVersion } from "@opencode-ai/core/installation/version"
 import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import { Filesystem } from "@/util/filesystem"
+import { canonicalRoot, resolveWorktree } from "@/project/instance-context"
 import * as Log from "@opencode-ai/core/util/log"
 import { ConfigVariable } from "@/config/variable"
 import { Npm } from "@opencode-ai/core/npm"
@@ -60,6 +60,10 @@ export interface Interface {
 export class Service extends Context.Service<Service, Interface>()("@opencode/TuiConfig") {}
 
 function pluginScope(file: string, ctx: { directory: string }): ConfigPlugin.Scope {
+  // LOCK-SOURCE: global config retains global scope even when physically located under the worktree.
+  // Explicit source identity is preferred at merge time (see mergeFile explicit scope param); this
+  // path heuristic remains as fallback for local inference and correctly classifies global-under-root.
+  if (Filesystem.contains(Global.Path.config, file)) return "global"
   if (Filesystem.contains(ctx.directory, file)) return "local"
   // if (ctx.worktree !== "/" && Filesystem.contains(ctx.worktree, file)) return "local"
   return "global"
@@ -100,6 +104,10 @@ function dropUnknownKeybinds(input: Record<string, unknown>, configFilepath: str
 
 const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: string }) {
   const afs = yield* FSUtil.Service
+  // Resolve trusted canonical Git worktree root (LOCK-SOURCE): nested CLI invocation must use workspace root.
+  const worktree = yield* Effect.promise(() => resolveWorktree(ctx.directory))
+  const root = canonicalRoot(ctx.directory, worktree)
+  const canonicalCtx = { directory: root }
   let appliedOrder = 0
 
   const resolvePlugins = (config: Info, configFilepath: string): Effect.Effect<Info> =>
@@ -184,7 +192,16 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
     })
 
   // kilocode_change start - trusted + fileScope threaded to loadFile
-  const mergeFile = (acc: Acc, file: string, trusted: boolean, fileScope?: ConfigVariable.FileScope) =>
+  // LOCK-SOURCE/LOCK-R6: explicit source identity at merge time — global files are always global scope
+  // regardless of physical containment under worktree; direct/.kilo remain local. Preserves source path,
+  // plugin directory derivation, dedup/overrides and precedence.
+  const mergeFile = (
+    acc: Acc,
+    file: string,
+    scope: ConfigPlugin.Scope,
+    trusted: boolean,
+    fileScope?: ConfigVariable.FileScope,
+  ) =>
     // kilocode_change end
     Effect.gen(function* () {
       const data = yield* loadFile(file, trusted, fileScope) // kilocode_change
@@ -195,7 +212,6 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
       acc.result = mergeDeep(acc.result, data)
       if (!data.plugin?.length) return
 
-      const scope = pluginScope(file, ctx)
       const plugins = ConfigPlugin.deduplicatePluginOrigins([
         ...acc.plugin_origins,
         ...data.plugin.map((spec) => ({ spec, scope, source: file })),
@@ -204,65 +220,36 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
       acc.plugin_origins = plugins
     })
 
-  // kilocode_change start - TUI-local legacy directory discovery
-  // ConfigPaths.directories is global-only — global is from ConfigPaths; the optional KILO_CONFIG_DIR directory is TUI-appended after legacy discovery (P4.4-T18).
-  // Project .kilo/.kilocode ancestor discovery lives here, gated by the project-disable flag.
-  // TUI explicitly appends KILO_CONFIG_DIR last when set, preserving global → legacy → env precedence (last wins).
-  // kilocode_change end
-  const baseDirectories = yield* ConfigPaths.directories()
-  const legacyProjectDirs = Flag.KILO_DISABLE_PROJECT_CONFIG
-    ? []
-    : yield* afs.up({ targets: [".kilocode", ".kilo"], start: ctx.directory })
-  const directories = unique([
-    ...baseDirectories.filter((dir) => dir !== Flag.KILO_CONFIG_DIR),
-    ...legacyProjectDirs,
-    ...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : []),
-  ])
-  yield* Effect.promise(() => migrateTuiConfig({ directories, cwd: ctx.directory }))
-
-  const projectFiles = Flag.KILO_DISABLE_PROJECT_CONFIG ? [] : yield* ConfigPaths.files("tui", ctx.directory)
+  // Canonical TUI config sources: global root and workspace .kilo only (LOCK-SOURCE, LOCK-R6).
+  // No ancestor walk, no legacy dirs, no legacy env overrides, no legacy migration import.
+  // Uses canonical root so nested Git invocation cannot load nested tui.json/.kilo as effective config.
+  const workspaceKiloDir = path.join(root, ".kilo")
+  const workspaceDirs = Flag.KILO_DISABLE_PROJECT_CONFIG ? [] : [workspaceKiloDir]
 
   const acc: Acc = {
     result: {},
     plugin_origins: [],
   }
 
-  // 1. Global tui config (lowest precedence).
+  // 1. Global tui config (lowest precedence) — explicit global scope (LOCK-SOURCE).
   for (const file of ConfigPaths.fileInDirectory(Global.Path.config, "tui")) {
-    yield* mergeFile(acc, file, true) // kilocode_change - global config is trusted
+    yield* mergeFile(acc, file, "global", true) // kilocode_change - global config is trusted
   }
 
-  // 2. Explicit KILO_TUI_CONFIG override, if set.
-  if (Flag.KILO_TUI_CONFIG) {
-    const configFile = Flag.KILO_TUI_CONFIG
-    yield* mergeFile(acc, configFile, true) // kilocode_change - explicit env-provided path is trusted
-    log.debug("loaded custom tui config", { path: configFile })
-  }
-
-  // 3. Project tui files, applied root-first so the closest file wins.
-  for (const file of projectFiles) {
-    yield* mergeFile(acc, file, false, { root: ctx.directory, source: file }) // kilocode_change - untrusted, {file:} confined to project
-  }
-
-  // kilocode_change start - load tui.json from TUI-local legacy directories
-  // 4. `.kilo` and deferred `.kilocode` ancestor directories (discovered locally
-  // above when project config is enabled) plus canonical global from ConfigPaths
-  // and TUI-appended KILO_CONFIG_DIR. Also returned below so callers can install
-  // plugin dependencies from each location. ConfigPaths is global-only; KILO_CONFIG_DIR
-  // is sourced from TUI-local assembly.
-  const dirs = unique(directories).filter(
-    (dir) => dir.endsWith(".kilo") || dir.endsWith(".kilocode") || dir === Flag.KILO_CONFIG_DIR,
-  )
-  // kilocode_change end
-
-  for (const dir of dirs) {
-    // kilocode_change start - trust global (home/KILO_CONFIG_DIR) dirs like config.ts; in-repo .kilo/.kilocode stay untrusted
-    const trusted = pluginScope(dir, ctx) === "global"
-    const fileScope = trusted ? undefined : { root: ctx.directory, source: dir }
-    for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
-      yield* mergeFile(acc, file, trusted, fileScope)
+  // 2. Workspace root tui.json (no ancestor walk, direct only — canonical file authority) — explicit local.
+  if (!Flag.KILO_DISABLE_PROJECT_CONFIG) {
+    for (const file of ConfigPaths.fileInDirectory(root, "tui")) {
+      yield* mergeFile(acc, file, "local", false, { root, source: file })
     }
-    // kilocode_change end
+  }
+
+  // 3. Canonical workspace .kilo/tui.json (workspace root only, no ancestor walk) — explicit local.
+  for (const dir of workspaceDirs) {
+    const trusted = false
+    const fileScope: ConfigVariable.FileScope = { root, source: dir }
+    for (const file of ConfigPaths.fileInDirectory(dir, "tui")) {
+      yield* mergeFile(acc, file, "local", trusted, fileScope)
+    }
   }
 
   const keybinds = { ...acc.result.keybinds }
@@ -297,10 +284,31 @@ const loadState = Effect.fn("TuiConfig.loadState")(function* (ctx: { directory: 
   info.plugin = result.plugin
   // kilocode_change end
 
+  // Derive plugin dependency dirs from actual canonical sources that contributed winning plugins.
+  // Only final effective plugin entries (after deduplication/precedence) determine dirs; overridden
+  // sources do not create dirs. Uses existing source metadata, not duplicate parsing. Unique order
+  // preserves first appearance in plugin_origins (consistent with merge precedence).
+  const dirs = (() => {
+    if (!result.plugin?.length) return [] as string[]
+    const origins = result.plugin_origins ?? []
+    if (!origins.length) return [] as string[]
+    const seen = new Set<string>()
+    const out: string[] = []
+    for (const origin of origins) {
+      if (origin.source === "builtin") continue
+      const dir = path.dirname(origin.source)
+      if (!seen.has(dir)) {
+        seen.add(dir)
+        out.push(dir)
+      }
+    }
+    return out
+  })()
+
   return {
     config: result,
     info,
-    dirs: result.plugin?.length ? dirs : [],
+    dirs,
   }
 })
 

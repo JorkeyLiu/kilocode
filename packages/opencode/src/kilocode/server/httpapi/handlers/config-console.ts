@@ -138,7 +138,9 @@ export const configConsoleHandlers = HttpApiBuilder.group(InstanceHttpApi, "conf
 
     const tuiConfigGet = Effect.fn("ConfigConsoleHttpApi.tuiConfigGet")(function* () {
       const instance = yield* InstanceState.context
-      return yield* Effect.promise(() => KilocodeTuiConfig.get({ directory: instance.directory }))
+      return yield* Effect.promise(() =>
+        KilocodeTuiConfig.get({ directory: instance.directory, worktree: instance.worktree }),
+      )
     })
 
     const tuiKeybindList = Effect.fn("ConfigConsoleHttpApi.tuiKeybindList")(function* () {

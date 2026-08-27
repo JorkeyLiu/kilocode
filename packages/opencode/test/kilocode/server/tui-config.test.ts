@@ -43,7 +43,7 @@ describe("TUI config routes", () => {
     expect(body.plugin_origins).toBeUndefined()
   })
 
-  test("loads legacy .kilocode TUI config and ignores .opencode", async () => {
+  test("ignores legacy .kilocode and .opencode TUI config — only canonical .kilo/direct (LOCK-SOURCE)", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
         await fs.mkdir(path.join(dir, ".opencode"), { recursive: true })
@@ -59,7 +59,7 @@ describe("TUI config routes", () => {
 
     expect(response.status).toBe(200)
     const body = (await response.json()) as { theme?: string }
-    expect(body.theme).toBe("nord")
+    expect(body.theme).toBeUndefined()
   })
 
   test("lists valid TUI keybinds", async () => {

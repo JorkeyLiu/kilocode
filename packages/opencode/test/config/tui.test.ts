@@ -1,5 +1,7 @@
 import { expect } from "bun:test"
 import path from "path"
+import os from "os"
+import fs from "fs/promises"
 import { pathToFileURL } from "url"
 import { Effect, Layer } from "effect"
 import { FSUtil } from "@opencode-ai/core/fs-util"
@@ -11,36 +13,44 @@ import { CurrentWorkingDirectory } from "@/cli/cmd/tui/config/cwd"
 import { TuiConfig } from "../../src/cli/cmd/tui/config/tui"
 import { TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { markPluginDependenciesReady } from "../fixture/plugin"
+import { Npm } from "@opencode-ai/core/npm"
 
 const it = testEffect(Layer.mergeAll(Config.defaultLayer, FSUtil.defaultLayer))
 const winIt = process.platform === "win32" ? it.instance : it.instance.skip
 
-const globalConfigFiles = ["kilo.json", "kilo.jsonc", "tui.json", "tui.jsonc"].map((file) =>
-  path.join(Global.Path.config, file),
-)
-
-const cleanState = Effect.gen(function* () {
-  const fs = yield* FSUtil.Service
-  delete process.env.KILO_CONFIG
-  delete process.env.KILO_TUI_CONFIG
-  yield* Effect.forEach(globalConfigFiles, (file) => fs.remove(file, { force: true }).pipe(Effect.ignore), {
-    discard: true,
-  })
-})
-
+// Isolated global config root — never touches user's real Global.Path.config.
+// Fallible mkdtemp completes before any global mutation; outer guard restores on failure.
 const withCleanState = <A, E, R>(self: Effect.Effect<A, E, R>) =>
   Effect.acquireUseRelease(
     Effect.gen(function* () {
+      const tmp = yield* Effect.promise(() => fs.mkdtemp(path.join(os.tmpdir(), "kilo-test-global-")))
       const disabled = Flag.KILO_DISABLE_DEFAULT_PLUGINS
+      const orig = Global.Path.config
+      const prev = {
+        KILO_CONFIG: process.env.KILO_CONFIG,
+        KILO_TUI_CONFIG: process.env.KILO_TUI_CONFIG,
+        KILO_CONFIG_DIR: process.env.KILO_CONFIG_DIR,
+        KILO_DISABLE_PROJECT_CONFIG: process.env.KILO_DISABLE_PROJECT_CONFIG,
+      }
       Flag.KILO_DISABLE_DEFAULT_PLUGINS = true
-      yield* cleanState
-      return disabled
+      delete process.env.KILO_CONFIG
+      delete process.env.KILO_TUI_CONFIG
+      delete process.env.KILO_CONFIG_DIR
+      delete process.env.KILO_DISABLE_PROJECT_CONFIG
+      ;(Global.Path as { config: string }).config = tmp
+      return { disabled, orig, prev, tmp }
     }),
     () => self,
-    (disabled) =>
+    ({ disabled, orig, prev, tmp }) =>
       Effect.gen(function* () {
         Flag.KILO_DISABLE_DEFAULT_PLUGINS = disabled
-        yield* cleanState
+        ;(Global.Path as { config: string }).config = orig
+        for (const [k, v] of Object.entries(prev) as Array<[string, string | undefined]>) {
+          if (v === undefined) delete process.env[k]
+          else process.env[k] = v
+        }
+        yield* Effect.promise(() => fs.rm(tmp, { recursive: true, force: true }).catch(() => undefined))
       }),
   )
 
@@ -102,6 +112,9 @@ it.instance("keeps server and tui plugin merge semantics aligned", () =>
       yield* fs.writeJson(path.join(local, "tui.json"), {
         plugin: [["shared-plugin@2.0.0", { source: "local" }], "local-only@1.0.0"],
       })
+      // Mark exact canonical dirs ready before get to prevent detached install outliving fixture
+      yield* Effect.promise(() => markPluginDependenciesReady(Global.Path.config))
+      yield* Effect.promise(() => markPluginDependenciesReady(local))
 
       const server = yield* Config.use.get()
       const tui = yield* getTuiConfig(test.directory)
@@ -117,6 +130,7 @@ it.instance("keeps server and tui plugin merge semantics aligned", () =>
       expect(serverOrigins.map((item) => ConfigPlugin.pluginSpecifier(item.spec))).toEqual(serverPlugins)
       expect(tuiOrigins.map((item) => ConfigPlugin.pluginSpecifier(item.spec))).toEqual(tuiPlugins)
       expect(serverOrigins.map((item) => item.scope)).toEqual(tuiOrigins.map((item) => item.scope))
+      yield* Effect.promise(() => TuiConfig.waitForDependencies().catch(() => undefined))
     }),
   ),
 )
@@ -188,7 +202,7 @@ it.instance("resolves attention config defaults and overrides", () =>
   ),
 )
 
-it.instance("migrates tui-specific keys from kilo.json when tui.json does not exist", () =>
+it.instance("legacy kilo.json does NOT migrate tui keys — no tui.json materialized (LOCK-R6)", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -202,13 +216,10 @@ it.instance("migrates tui-specific keys from kilo.json when tui.json does not ex
       const original = yield* fs.readFileString(source)
 
       const config = yield* getTuiConfig(test.directory)
-      expect(config.theme).toBe("migrated-theme")
-      expect(config.scroll_speed).toBe(5)
-      expect(config.keybinds.get("app.exit")?.[0]?.key).toBe("ctrl+q")
-      expect(JSON.parse(yield* fs.readFileString(path.join(test.directory, "tui.json")))).toMatchObject({
-        theme: "migrated-theme",
-        scroll_speed: 5,
-      })
+      expect(config.theme).toBeUndefined()
+      expect(config.scroll_speed).toBeUndefined()
+      expect(config.keybinds.get("app.exit")?.[0]?.key).not.toBe("ctrl+q")
+      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(false)
       const after = yield* fs.readFileString(source)
       expect(after).toBe(original)
       const server = JSON.parse(after)
@@ -216,12 +227,11 @@ it.instance("migrates tui-specific keys from kilo.json when tui.json does not ex
       expect(server.keybinds).toEqual({ app_exit: "ctrl+q" })
       expect(server.tui).toEqual({ scroll_speed: 5 })
       expect(yield* fs.existsSafe(path.join(test.directory, "kilo.json.tui-migration.bak"))).toBe(false)
-      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
     }),
   ),
 )
 
-it.instance("migrates project legacy tui keys even when global tui.json already exists", () =>
+it.instance("legacy kilo.json does NOT override global when global exists (no migrate, LOCK-R6)", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -233,9 +243,9 @@ it.instance("migrates project legacy tui keys even when global tui.json already 
       })
 
       const config = yield* getTuiConfig(test.directory)
-      expect(config.theme).toBe("project-migrated")
-      expect(config.scroll_speed).toBe(2)
-      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
+      expect(config.theme).toBe("global")
+      expect(config.scroll_speed).toBeUndefined()
+      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(false)
 
       const server = JSON.parse(yield* fs.readFileString(path.join(test.directory, "kilo.json")))
       expect(server.theme).toBe("project-migrated")
@@ -244,7 +254,7 @@ it.instance("migrates project legacy tui keys even when global tui.json already 
   ),
 )
 
-it.instance("drops unknown legacy tui keys during migration", () =>
+it.instance("legacy kilo.json unknown keys still not migrated (LOCK-R6)", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -255,12 +265,9 @@ it.instance("drops unknown legacy tui keys during migration", () =>
       })
 
       const config = yield* getTuiConfig(test.directory)
-      expect(config.theme).toBe("migrated-theme")
-      expect(config.scroll_speed).toBe(2)
-
-      const migrated = JSON.parse(yield* fs.readFileString(path.join(test.directory, "tui.json")))
-      expect(migrated.scroll_speed).toBe(2)
-      expect(migrated.foo).toBeUndefined()
+      expect(config.theme).toBeUndefined()
+      expect(config.scroll_speed).toBeUndefined()
+      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(false)
     }),
   ),
 )
@@ -310,7 +317,7 @@ it.instance("skips migration when tui.json already exists", () =>
   ),
 )
 
-it.instance("materializes missing tui.json without modifying read-only legacy source", () =>
+it.instance("read-only legacy source still not materialized (LOCK-R6)", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -324,10 +331,8 @@ it.instance("materializes missing tui.json without modifying read-only legacy so
         () =>
           Effect.gen(function* () {
             const config = yield* getTuiConfig(test.directory)
-            expect(config.theme).toBe("readonly-theme")
-            expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
-            expect(yield* fs.existsSafe(path.join(test.directory, "kilo.json.tui-migration.bak"))).toBe(false)
-
+            expect(config.theme).toBeUndefined()
+            expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(false)
             const after = yield* fs.readFileString(source)
             expect(after).toBe(original)
             const server = JSON.parse(after)
@@ -339,7 +344,7 @@ it.instance("materializes missing tui.json without modifying read-only legacy so
   ),
 )
 
-it.instance("migration preserves source and does not create backup when materializing from JSONC", () =>
+it.instance("JSONC legacy source not migrated — no tui.json created (LOCK-R6)", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -354,22 +359,18 @@ it.instance("migration preserves source and does not create backup when material
 }`
       yield* fs.writeFileString(path.join(test.directory, "kilo.jsonc"), original)
 
-      yield* getTuiConfig(test.directory)
+      const cfg = yield* getTuiConfig(test.directory)
+      expect(cfg.theme).toBeUndefined()
+      expect(cfg.scroll_speed).toBeUndefined()
       expect(yield* fs.existsSafe(path.join(test.directory, "kilo.jsonc.tui-migration.bak"))).toBe(false)
       const source = yield* fs.readFileString(path.join(test.directory, "kilo.jsonc"))
       expect(source).toBe(original)
-      expect(source).toContain("// top-level comment")
-      expect(source).toContain("// nested comment")
-      expect(source).toContain('"theme": "jsonc-theme"')
-      expect(source).toContain('"scroll_speed": 1.5')
-      const migrated = JSON.parse(yield* fs.readFileString(path.join(test.directory, "tui.json")))
-      expect(migrated.theme).toBe("jsonc-theme")
-      expect(migrated.scroll_speed).toBe(1.5)
+      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(false)
     }),
   ),
 )
 
-it.instance("migrates legacy tui keys across multiple kilo.json levels", () =>
+it.instance("legacy kilo.json across ancestor levels not migrated — no ancestor walk (LOCK-SOURCE)", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -380,9 +381,9 @@ it.instance("migrates legacy tui keys across multiple kilo.json levels", () =>
       yield* fs.writeJson(path.join(nested, "kilo.json"), { theme: "nested-theme" })
 
       const config = yield* getTuiConfig(nested)
-      expect(config.theme).toBe("nested-theme")
-      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(true)
-      expect(yield* fs.existsSafe(path.join(nested, "tui.json"))).toBe(true)
+      expect(config.theme).toBeUndefined()
+      expect(yield* fs.existsSafe(path.join(test.directory, "tui.json"))).toBe(false)
+      expect(yield* fs.existsSafe(path.join(nested, "tui.json"))).toBe(false)
     }),
   ),
 )
@@ -422,7 +423,7 @@ it.instance("top-level keys in tui.json take precedence over nested tui key", ()
   ),
 )
 
-it.instance("project config takes precedence over KILO_TUI_CONFIG (matches KILO_CONFIG)", () =>
+it.instance("KILO_TUI_CONFIG is ignored — canonical direct wins (LOCK-SOURCE)", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -438,6 +439,7 @@ it.instance("project config takes precedence over KILO_TUI_CONFIG (matches KILO_
           const config = yield* getTuiConfig(test.directory)
           expect(config.theme).toBe("project")
           expect(config.diff_style).toBe("auto")
+          expect(config.theme).not.toBe("custom")
         }),
       )
     }),
@@ -645,7 +647,7 @@ it.instance("keeps explicit configured keybind input undo on Windows", () =>
   ),
 )
 
-it.instance("KILO_TUI_CONFIG provides settings when no project config exists", () =>
+it.instance("KILO_TUI_CONFIG is ignored even when no project config exists (LOCK-SOURCE)", () =>
   withCleanState(
     Effect.gen(function* () {
       const fs = yield* FSUtil.Service
@@ -658,8 +660,9 @@ it.instance("KILO_TUI_CONFIG provides settings when no project config exists", (
         custom,
         Effect.gen(function* () {
           const config = yield* getTuiConfig(test.directory)
-          expect(config.theme).toBe("from-env")
-          expect(config.diff_style).toBe("stacked")
+          expect(config.theme).toBeUndefined()
+          expect(config.diff_style).toBeUndefined()
+          expect(config.theme).not.toBe("from-env")
         }),
       )
     }),
@@ -813,6 +816,7 @@ it.instance("supports tuple plugin specs with options in tui.json", () =>
       yield* fs.writeJson(path.join(test.directory, "tui.json"), {
         plugin: [["acme-plugin@1.2.3", { enabled: true, label: "demo" }]],
       })
+      yield* Effect.promise(() => markPluginDependenciesReady(test.directory))
 
       const config = yield* getTuiConfig(test.directory)
       expect(config.plugin).toEqual([["acme-plugin@1.2.3", { enabled: true, label: "demo" }]])
@@ -823,6 +827,7 @@ it.instance("supports tuple plugin specs with options in tui.json", () =>
           source: path.join(test.directory, "tui.json"),
         },
       ])
+      yield* Effect.promise(() => TuiConfig.waitForDependencies().catch(() => undefined))
     }),
   ),
 )
@@ -841,6 +846,8 @@ it.instance("deduplicates tuple plugin specs by name with higher precedence winn
           ["second-plugin@3.0.0", { source: "project" }],
         ],
       })
+      yield* Effect.promise(() => markPluginDependenciesReady(Global.Path.config))
+      yield* Effect.promise(() => markPluginDependenciesReady(test.directory))
 
       const config = yield* getTuiConfig(test.directory)
       expect(config.plugin).toEqual([
@@ -859,6 +866,7 @@ it.instance("deduplicates tuple plugin specs by name with higher precedence winn
           source: path.join(test.directory, "tui.json"),
         },
       ])
+      yield* Effect.promise(() => TuiConfig.waitForDependencies().catch(() => undefined))
     }),
   ),
 )
@@ -870,6 +878,8 @@ it.instance("tracks global and local plugin metadata in merged tui config", () =
       const test = yield* TestInstance
       yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), { plugin: ["global-plugin@1.0.0"] })
       yield* fs.writeJson(path.join(test.directory, "tui.json"), { plugin: ["local-plugin@2.0.0"] })
+      yield* Effect.promise(() => markPluginDependenciesReady(Global.Path.config))
+      yield* Effect.promise(() => markPluginDependenciesReady(test.directory))
 
       const config = yield* getTuiConfig(test.directory)
       expect(config.plugin).toEqual(["global-plugin@1.0.0", "local-plugin@2.0.0"])
@@ -885,6 +895,7 @@ it.instance("tracks global and local plugin metadata in merged tui config", () =
           source: path.join(test.directory, "tui.json"),
         },
       ])
+      yield* Effect.promise(() => TuiConfig.waitForDependencies().catch(() => undefined))
     }),
   ),
 )
@@ -952,6 +963,223 @@ it.instance("missing tui.json - silently treated as empty (ENOENT path)", () =>
       const config = yield* getTuiConfig(test.directory)
       expect(config).toBeDefined()
       expect(config.theme).toBeUndefined()
+    }),
+  ),
+)
+
+it.instance("global plugin origin produces global canonical dependency dir", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), { plugin: ["global-only@1.0.0"] })
+      yield* Effect.promise(() => markPluginDependenciesReady(Global.Path.config))
+      const config = yield* getTuiConfig(test.directory)
+      expect(config.plugin).toEqual(["global-only@1.0.0"])
+      expect(config.plugin_origins?.[0].source).toBe(path.join(Global.Path.config, "tui.json"))
+      expect(path.dirname(config.plugin_origins![0].source)).toBe(Global.Path.config)
+      yield* Effect.promise(() => TuiConfig.waitForDependencies().catch(() => undefined))
+    }),
+  ),
+)
+
+it.instance("direct plugin origin produces root canonical dependency dir", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      yield* fs.writeJson(path.join(test.directory, "tui.json"), { plugin: ["direct-only@1.0.0"] })
+      yield* Effect.promise(() => markPluginDependenciesReady(test.directory))
+      const config = yield* getTuiConfig(test.directory)
+      expect(config.plugin).toEqual(["direct-only@1.0.0"])
+      expect(config.plugin_origins?.[0].source).toBe(path.join(test.directory, "tui.json"))
+      expect(path.dirname(config.plugin_origins![0].source)).toBe(test.directory)
+      yield* Effect.promise(() => TuiConfig.waitForDependencies().catch(() => undefined))
+    }),
+  ),
+)
+
+it.instance("root .kilo plugin origin produces .kilo canonical dependency dir", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      yield* fs.writeWithDirs(path.join(test.directory, ".kilo", "tui.json"), JSON.stringify({ plugin: ["kilo-only@1.0.0"] }))
+      const kiloDir = path.join(test.directory, ".kilo")
+      yield* Effect.promise(() => markPluginDependenciesReady(kiloDir))
+      const config = yield* getTuiConfig(test.directory)
+      expect(config.plugin).toEqual(["kilo-only@1.0.0"])
+      expect(config.plugin_origins?.[0].source).toBe(path.join(kiloDir, "tui.json"))
+      expect(path.dirname(config.plugin_origins![0].source)).toBe(kiloDir)
+      yield* Effect.promise(() => TuiConfig.waitForDependencies().catch(() => undefined))
+    }),
+  ),
+)
+
+it.instance("deduped plugin derives dir only from winning canonical source (precedence preserved, duplicate avoided)", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      const kiloDir = path.join(test.directory, ".kilo")
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), { plugin: ["shared-plugin@1.0.0", "global-only@1.0.0"] })
+      yield* fs.writeJson(path.join(test.directory, "tui.json"), { plugin: ["shared-plugin@2.0.0", "direct-only@1.0.0"] })
+      yield* fs.writeWithDirs(path.join(kiloDir, "tui.json"), JSON.stringify({ plugin: ["shared-plugin@3.0.0", "kilo-only@1.0.0"] }))
+      // Only winning dirs should be considered: global still wins for global-only, but shared resolves to .kilo
+      yield* Effect.promise(() => markPluginDependenciesReady(Global.Path.config))
+      yield* Effect.promise(() => markPluginDependenciesReady(test.directory))
+      yield* Effect.promise(() => markPluginDependenciesReady(kiloDir))
+      const config = yield* getTuiConfig(test.directory)
+      expect([...(config.plugin ?? [])].sort()).toEqual(["global-only@1.0.0", "direct-only@1.0.0", "shared-plugin@3.0.0", "kilo-only@1.0.0"].sort())
+      // Order preserved is global, direct, .kilo winning; check origins
+      const dirs = [...new Set((config.plugin_origins ?? []).filter((o) => o.source !== "builtin").map((o) => path.dirname(o.source)))]
+      expect(dirs).toEqual([Global.Path.config, test.directory, kiloDir])
+      // Now test override: shared-plugin should only be from .kilo, so global shared not in dirs alone
+      const shared = config.plugin_origins?.find((o) => ConfigPlugin.pluginSpecifier(o.spec) === "shared-plugin@3.0.0")
+      expect(shared?.source).toBe(path.join(kiloDir, "tui.json"))
+      // Prove no duplicate dirs
+      expect(new Set(dirs).size).toBe(dirs.length)
+      yield* Effect.promise(() => TuiConfig.waitForDependencies().catch(() => undefined))
+    }),
+  ),
+)
+
+it.instance("global/direct/.kilo distinct plugins produce all three canonical dirs (unique, no duplicate installs)", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      const kiloDir = path.join(test.directory, ".kilo")
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), { plugin: ["global-one@1.0.0"] })
+      yield* fs.writeJson(path.join(test.directory, "tui.json"), { plugin: ["direct-one@1.0.0"] })
+      yield* fs.writeWithDirs(path.join(kiloDir, "tui.json"), JSON.stringify({ plugin: ["kilo-one@1.0.0"] }))
+      yield* Effect.promise(() => markPluginDependenciesReady(Global.Path.config))
+      yield* Effect.promise(() => markPluginDependenciesReady(test.directory))
+      yield* Effect.promise(() => markPluginDependenciesReady(kiloDir))
+      const config = yield* getTuiConfig(test.directory)
+      expect([...(config.plugin ?? [])].sort()).toEqual(["direct-one@1.0.0", "global-one@1.0.0", "kilo-one@1.0.0"].sort())
+      const dirs = [...new Set((config.plugin_origins ?? []).filter((o) => o.source !== "builtin").map((o) => path.dirname(o.source)))]
+      expect(dirs).toEqual([Global.Path.config, test.directory, kiloDir])
+      yield* Effect.promise(() => TuiConfig.waitForDependencies().catch(() => undefined))
+    }),
+  ),
+)
+
+const capturingNpm = (captured: string[]) =>
+  Layer.mock(Npm.Service, {
+    install: (dir: string) => Effect.sync(() => captured.push(dir)),
+  })
+
+it.instance("plugin install observes same-instance actual dirs — winning only, unique order, no duplicate", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      const kiloDir = path.join(test.directory, ".kilo")
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), { plugin: ["shared-plugin@1.0.0", "global-only@1.0.0"] })
+      yield* fs.writeJson(path.join(test.directory, "tui.json"), { plugin: ["shared-plugin@2.0.0", "direct-only@1.0.0"] })
+      yield* fs.writeWithDirs(path.join(kiloDir, "tui.json"), JSON.stringify({ plugin: ["shared-plugin@3.0.0", "kilo-only@1.0.0"] }))
+
+      const captured: string[] = []
+      const layer = TuiConfig.layer.pipe(
+        Layer.provide(capturingNpm(captured)),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Layer.succeed(CurrentWorkingDirectory, test.directory)),
+      )
+      const cfg = yield* Effect.gen(function* () {
+        const svc = yield* TuiConfig.Service
+        const c = yield* svc.get()
+        // same-instance wait proves fork target and ordering are observed, not module-level helper
+        yield* svc.waitForDependencies()
+        return c
+      }).pipe(Effect.provide(layer))
+
+      expect([...(cfg.plugin ?? [])].sort()).toEqual(
+        ["global-only@1.0.0", "direct-only@1.0.0", "shared-plugin@3.0.0", "kilo-only@1.0.0"].sort(),
+      )
+      const shared = cfg.plugin_origins?.find((o) => ConfigPlugin.pluginSpecifier(o.spec) === "shared-plugin@3.0.0")
+      expect(shared?.source).toBe(path.join(kiloDir, "tui.json"))
+      const expectedDirs = [Global.Path.config, test.directory, kiloDir]
+      const derivedDirs = [
+        ...new Set((cfg.plugin_origins ?? []).filter((o) => o.source !== "builtin").map((o) => path.dirname(o.source))),
+      ]
+      expect(derivedDirs).toEqual(expectedDirs)
+      // actual Npm.Service.install dirs from the same instance that loaded config
+      expect(captured).toEqual(expectedDirs)
+      expect(new Set(captured).size).toBe(captured.length)
+      expect(captured.length).toBe(3)
+      // mutation guard: extra/loser dir or duplicate call would fail this equality
+    }),
+  ),
+)
+
+it.instance("loser-only global source produces no install dir — same-instance capture", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      const kiloDir = path.join(test.directory, ".kilo")
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), { plugin: ["shared-plugin@1.0.0"] })
+      yield* fs.writeWithDirs(path.join(kiloDir, "tui.json"), JSON.stringify({ plugin: ["shared-plugin@2.0.0", "kilo-only@1.0.0"] }))
+
+      const captured: string[] = []
+      const layer = TuiConfig.layer.pipe(
+        Layer.provide(capturingNpm(captured)),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Layer.succeed(CurrentWorkingDirectory, test.directory)),
+      )
+      const cfg = yield* Effect.gen(function* () {
+        const svc = yield* TuiConfig.Service
+        const c = yield* svc.get()
+        yield* svc.waitForDependencies()
+        return c
+      }).pipe(Effect.provide(layer))
+
+      expect(cfg.plugin).toEqual(["shared-plugin@2.0.0", "kilo-only@1.0.0"])
+      const expectedDirs = [kiloDir]
+      const derivedDirs = [
+        ...new Set((cfg.plugin_origins ?? []).filter((o) => o.source !== "builtin").map((o) => path.dirname(o.source))),
+      ]
+      expect(derivedDirs).toEqual(expectedDirs)
+      expect(captured).toEqual(expectedDirs)
+      expect(captured).not.toContain(Global.Path.config)
+    }),
+  ),
+)
+
+it.instance("loser-only direct source produces no install dir — same-instance capture", () =>
+  withCleanState(
+    Effect.gen(function* () {
+      const fs = yield* FSUtil.Service
+      const test = yield* TestInstance
+      const kiloDir = path.join(test.directory, ".kilo")
+      yield* fs.writeJson(path.join(Global.Path.config, "tui.json"), { plugin: ["global-only@1.0.0"] })
+      yield* fs.writeJson(path.join(test.directory, "tui.json"), { plugin: ["shared-plugin@1.0.0"] })
+      yield* fs.writeWithDirs(path.join(kiloDir, "tui.json"), JSON.stringify({ plugin: ["shared-plugin@2.0.0", "kilo-only@1.0.0"] }))
+
+      const captured: string[] = []
+      const layer = TuiConfig.layer.pipe(
+        Layer.provide(capturingNpm(captured)),
+        Layer.provide(FSUtil.defaultLayer),
+        Layer.provide(Layer.succeed(CurrentWorkingDirectory, test.directory)),
+      )
+      const cfg = yield* Effect.gen(function* () {
+        const svc = yield* TuiConfig.Service
+        const c = yield* svc.get()
+        yield* svc.waitForDependencies()
+        return c
+      }).pipe(Effect.provide(layer))
+
+      expect([...(cfg.plugin ?? [])].sort()).toEqual(
+        ["global-only@1.0.0", "shared-plugin@2.0.0", "kilo-only@1.0.0"].sort(),
+      )
+      const expectedDirs = [Global.Path.config, kiloDir]
+      const derivedDirs = [
+        ...new Set((cfg.plugin_origins ?? []).filter((o) => o.source !== "builtin").map((o) => path.dirname(o.source))),
+      ]
+      expect(derivedDirs).toEqual(expectedDirs)
+      expect(captured).toEqual(expectedDirs)
+      expect(captured).not.toContain(test.directory)
     }),
   ),
 )

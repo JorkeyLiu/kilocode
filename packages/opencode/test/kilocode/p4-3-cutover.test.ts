@@ -115,13 +115,27 @@ describe("P4.3 cutover — legacy readers absent (canonical-only effective confi
     expect(paths).toContain("fileInDirectory")
     // ConfigPaths.directories must no longer declare directory/worktree params (clean signature)
     expect(paths).toContain('export const directories = Effect.fn("ConfigPaths.directories")(function* ()')
-    // TUI must now own the gated legacy discovery and explicit KILO_CONFIG_DIR last-wins
+    // TUI canonical — no legacy discovery, no KILO_CONFIG_DIR/KILO_TUI_CONFIG/migrate (LOCK-SOURCE, LOCK-R6)
     const tui = read("cli/cmd/tui/config/tui.ts")
-    expect(tui).toContain('targets: [".kilocode", ".kilo"]')
+    expect(tui).not.toContain('targets: [".kilocode", ".kilo"]')
+    expect(tui).not.toContain('targets: [".kilo"')
+    expect(tui).not.toContain("yield* afs.up")
+    expect(tui).not.toContain(".kilocode")
+    expect(tui).not.toContain("Flag.KILO_CONFIG_DIR")
+    expect(tui).not.toContain("KILO_CONFIG_DIR")
+    expect(tui).not.toContain("Flag.KILO_TUI_CONFIG")
+    expect(tui).not.toContain("KILO_TUI_CONFIG")
+    expect(tui).not.toContain("migrateTuiConfig")
+    expect(tui).not.toContain("ConfigPaths.directories()")
+    expect(tui).toContain("ConfigPaths.fileInDirectory")
+    expect(tui).toContain('path.join(root, ".kilo")')
     expect(tui).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
-    expect(tui).toContain("yield* afs.up")
-    expect(tui).toContain("Flag.KILO_CONFIG_DIR")
-    expect(tui).toContain("...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : [])")
+    expect(tui).toContain("Canonical TUI config sources")
+    // kilocode tui config-console also canonical
+    const kcfg = read("kilocode/tui/config.ts")
+    expect(kcfg).not.toContain(".kilocode")
+    expect(kcfg).not.toContain("Filesystem.findUp")
+    expect(kcfg).toContain('const dirs = [".kilo"]')
   })
 
   test("no dual-read or import helper surface exists", () => {
@@ -172,26 +186,22 @@ describe("P4.3 cutover — legacy readers absent (canonical-only effective confi
     expect(perm).not.toContain("migrateBashPermission")
   })
 
-  test("instruction no longer retains KILO_CONFIG_DIR profile fallback; effective config does not (P4.4-T17)", () => {
+  test("instruction no longer retains KILO_CONFIG_DIR profile fallback; effective config does not (P4.4-T17) — TUI canonical (T27-correction)", () => {
     const instr = read("session/instruction.ts")
     const cfg = read("config/config.ts")
     const paths = read("config/paths.ts")
-    // Instruction service no longer has profile directory behavior — P4.4-T17 removed both reads
     expect(instr).not.toContain("Flag.KILO_CONFIG_DIR")
     expect(instr).not.toContain("KILO_CONFIG_DIR")
     expect(instr).not.toContain("prefer KILO_CONFIG_DIR profile")
     expect(instr).toContain('path.join(global.config, "AGENTS.md")')
-    // Effective config (Config.Service) remains canonical-only and ignores KILO_CONFIG_DIR
     expect(cfg).not.toContain("Flag.KILO_CONFIG_DIR")
-    // ConfigPaths: P4.4-T18 KILO_CONFIG_DIR removed — only Global remains; TUI owns KILO_CONFIG_DIR explicitly (LOCK-002).
-    // TUI-local legacy discovery is gated there, not in ConfigPaths.
+    // ConfigPaths global-only, TUI canonical (no KILO_CONFIG_DIR/KILO_TUI_CONFIG/migrate) per LOCK-SOURCE/LOCK-R6
     expect(paths).not.toContain("Flag.KILO_CONFIG_DIR")
     expect(paths).not.toContain("KILO_CONFIG_DIR")
     expect(paths).toContain("Global.Path.config")
     expect(paths).toContain('return unique([Global.Path.config])')
     expect(paths).not.toContain('targets: [".kilo"]')
     expect(paths.split('targets: [".kilo"]').length - 1).toBe(0)
-    // T18 bounded correction: prove ConfigPaths has no KILO_CONFIG_DIR reader — only Global remains
     expect(paths).not.toMatch(/targets:\s*\["\.kilo"\],\s*start:\s*directory,\s*stop:\s*worktree/)
     expect(paths).not.toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
     expect(paths).not.toContain("void directory")
@@ -200,10 +210,22 @@ describe("P4.3 cutover — legacy readers absent (canonical-only effective confi
     expect(paths).toContain("fileInDirectory")
     expect(paths).not.toContain("canonicalRoot")
     const tui = read("cli/cmd/tui/config/tui.ts")
-    expect(tui).toContain('targets: [".kilocode", ".kilo"]')
-    expect(tui).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
-    expect(tui).toContain("Flag.KILO_CONFIG_DIR")
-    expect(tui).toContain("...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : [])")
+    expect(tui).not.toContain('targets: [".kilocode", ".kilo"]')
+    expect(tui).not.toContain('targets: [".kilo"')
+    expect(tui).not.toContain("yield* afs.up")
+    expect(tui).not.toContain(".kilocode")
+    expect(tui).not.toContain("Flag.KILO_CONFIG_DIR")
+    expect(tui).not.toContain("KILO_CONFIG_DIR")
+    expect(tui).not.toContain("Flag.KILO_TUI_CONFIG")
+    expect(tui).not.toContain("KILO_TUI_CONFIG")
+    expect(tui).not.toContain("migrateTuiConfig")
+    expect(tui).not.toContain("ConfigPaths.directories()")
+    expect(tui).toContain("ConfigPaths.fileInDirectory")
+    expect(tui).toContain('path.join(root, ".kilo")')
+    expect(tui).toContain("Canonical TUI config sources")
+    const kcfg = read("kilocode/tui/config.ts")
+    expect(kcfg).not.toContain(".kilocode")
+    expect(kcfg).not.toContain("Filesystem.findUp")
   })
 
   test("overlay operational surface is canonical-only", () => {

@@ -7,6 +7,7 @@ import { Global } from "@opencode-ai/core/global"
 import { ConfigParse } from "@/config/parse"
 import { CurrentWorkingDirectory } from "@/cli/cmd/tui/config/cwd"
 import { TuiConfig } from "@/cli/cmd/tui/config/tui"
+import { canonicalRoot } from "@/project/instance-context"
 import { TuiInfo } from "@/cli/cmd/tui/config/tui-schema"
 import { KilocodeKeybinds } from "./keybinds"
 import { Filesystem } from "@/util/filesystem"
@@ -23,13 +24,14 @@ export namespace KilocodeTuiConfig {
   export type Editable = Omit<Patch, "keybinds"> & { keybinds?: Record<string, string> }
 
   const files = ["tui.jsonc", "tui.json"] as const
-  const dirs = [".kilo", ".kilocode"] as const
+  const dirs = [".kilo"] as const
 
-  export async function get(input: { directory: string }) {
+  export async function get(input: { directory: string; worktree?: string }) {
+    const root = canonicalRoot(input.directory, input.worktree)
     const cfg = await Effect.runPromise(
       TuiConfig.Service.use((svc) => svc.info()).pipe(
         Effect.provide(
-          TuiConfig.defaultLayer.pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, input.directory))),
+          TuiConfig.defaultLayer.pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, root))),
         ),
       ),
     )
@@ -51,7 +53,7 @@ export namespace KilocodeTuiConfig {
       directory: "global",
       payload: { type: Event.ConfigUpdated.type, properties: {} },
     })
-    return get({ directory: input.directory })
+    return get({ directory: input.directory, worktree: input.worktree })
   }
 
   async function target(input: { directory: string; worktree?: string; scope: Scope }) {
@@ -68,17 +70,20 @@ export namespace KilocodeTuiConfig {
   }
 
   async function projectTarget(input: { directory: string; worktree?: string }) {
-    const found = await Filesystem.findUp([...dirs], input.directory, input.worktree)
-    for (const dir of found) {
-      for (const name of files) {
-        const file = path.join(dir, name)
-        if (await Bun.file(file).exists()) return file
-      }
+    // Canonical TUI project target: only workspace root and <workspaceRoot>/.kilo (LOCK-SOURCE).
+    // No ancestor walk, no legacy dirs, no legacy env overrides. Worktree determines canonical root.
+    const root = input.worktree && input.worktree !== "/" ? input.worktree : input.directory
+    const candidates = [
+      path.join(root, ".kilo", "tui.jsonc"),
+      path.join(root, ".kilo", "tui.json"),
+      path.join(root, "tui.jsonc"),
+      path.join(root, "tui.json"),
+    ]
+    // Prefer existing file by canonical precedence: .kilo first (highest), then direct root.
+    for (const file of candidates) {
+      if (await Bun.file(file).exists()) return file
     }
-
-    const roots = await Filesystem.findUp([...files], input.directory, input.worktree)
-    if (roots[0]) return roots[0]
-    return path.join(input.directory, ".kilo", "tui.json")
+    return path.join(root, ".kilo", "tui.json")
   }
 
   async function read(file: string) {

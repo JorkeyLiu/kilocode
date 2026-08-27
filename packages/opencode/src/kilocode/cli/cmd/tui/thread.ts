@@ -7,6 +7,8 @@ import { errorMessage } from "@/util/error"
 import { TuiConfig } from "@/cli/cmd/tui/config/tui"
 import { validateSession } from "@/cli/cmd/tui/validate-session"
 import { DaemonClient } from "@/kilocode/daemon/client"
+import { Effect, Layer } from "effect"
+import { CurrentWorkingDirectory } from "@/cli/cmd/tui/config/cwd"
 
 type TuiInput = Parameters<typeof import("@/cli/cmd/tui/app").tui>[0]
 export type StartInput = Omit<TuiInput, "renderer">
@@ -45,7 +47,12 @@ export namespace KiloTuiThreadDaemon {
     if (!daemon) return false
 
     const prompt = await input.input()
-    const config = await TuiConfig.get()
+    // Thread canonical root already resolved by caller (LOCK-SOURCE): do not use raw process cwd.
+    const config = await Effect.runPromise(
+      TuiConfig.Service.use((svc) => svc.get()).pipe(
+        Effect.provide(TuiConfig.defaultLayer.pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, input.cwd)))),
+      ),
+    )
 
     try {
       await validateSession({

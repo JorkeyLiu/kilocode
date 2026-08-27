@@ -22,6 +22,9 @@ import {
   sanitizedProcessEnv,
 } from "@opencode-ai/core/util/opencode-process"
 import { validateSession } from "./validate-session"
+import { canonicalRoot, resolveWorktree } from "@/project/instance-context" // kilocode_change - canonical TUI root
+import { Effect, Layer } from "effect" // kilocode_change - canonical TUI root
+import { CurrentWorkingDirectory } from "./config/cwd" // kilocode_change - canonical TUI root
 
 declare global {
   const KILO_WORKER_PATH: string
@@ -161,8 +164,12 @@ export const TuiThreadCommand = cmd({
         return
       }
       const cwd = Filesystem.resolve(process.cwd())
+      // kilocode_change start - resolve trusted canonical Git worktree root for TUI config (LOCK-SOURCE)
+      const worktree = await resolveWorktree(cwd)
+      const canonicalCwd = canonicalRoot(cwd, worktree)
+      // kilocode_change end
       // kilocode_change start - default TUI sessions attach to the daemon unless explicitly disabled
-      if (await KiloTuiThreadDaemon.attach({ args, cwd, input: () => input(args.prompt), start })) return
+      if (await KiloTuiThreadDaemon.attach({ args, cwd: canonicalCwd, input: () => input(args.prompt), start })) return
       // kilocode_change end
       const auth = KiloTuiThreadDaemon.workerAuth() // kilocode_change - protect TUI-owned HTTP routes from unauthenticated local callers
       const env = sanitizedProcessEnv({
@@ -280,7 +287,13 @@ export const TuiThreadCommand = cmd({
       // kilocode_change end
 
       const prompt = await input(args.prompt)
-      const config = await TuiConfig.get()
+      // kilocode_change start - load TUI config from canonical root so nested invocation cannot use nested tui.json/.kilo
+      const config = await Effect.runPromise(
+        TuiConfig.Service.use((svc) => svc.get()).pipe(
+          Effect.provide(TuiConfig.defaultLayer.pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, canonicalCwd)))),
+        ),
+      )
+      // kilocode_change end
 
       const network = resolveNetworkOptionsNoConfig(args)
       const external =
@@ -306,7 +319,7 @@ export const TuiThreadCommand = cmd({
           }
 
       setTimeout(() => {
-        client.call("checkUpgrade", { directory: cwd }).catch(() => {})
+        client.call("checkUpgrade", { directory: canonicalCwd }).catch(() => {})
       }, 1000).unref?.()
 
       try {
@@ -314,7 +327,7 @@ export const TuiThreadCommand = cmd({
           await validateSession({
             url: transport.url, // kilocode_change
             sessionID: args.session,
-            directory: cwd,
+            directory: canonicalCwd,
             fetch: transport.fetch,
             headers: transport.headers, // kilocode_change
           })
@@ -334,7 +347,7 @@ export const TuiThreadCommand = cmd({
             return [tui, server]
           },
           config,
-          directory: cwd,
+          directory: canonicalCwd,
           fetch: transport.fetch,
           headers: transport.headers, // kilocode_change
           events: transport.events,

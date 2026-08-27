@@ -4,6 +4,17 @@ import { win32DisableProcessedInput, win32InstallCtrlCGuard } from "./win32"
 import { errorMessage } from "@/util/error"
 import { validateSession } from "./validate-session"
 import { ServerAuth } from "@/server/auth"
+import { canonicalRoot, resolveWorktree } from "@/project/instance-context"
+import { Filesystem } from "@/util/filesystem"
+import { Effect, Layer } from "effect"
+import { CurrentWorkingDirectory } from "./config/cwd"
+
+// Pure config-root selection: canonical Git worktree root for TUI config.
+// Local canonical isolation: caller must pass local base captured before any remote chdir.
+export async function resolveAttachConfigRoot(localBase: string): Promise<string> {
+  const worktree = await resolveWorktree(localBase)
+  return canonicalRoot(localBase, worktree)
+}
 
 export const AttachCommand = cmd({
   command: "attach <url>",
@@ -55,18 +66,32 @@ export const AttachCommand = cmd({
         return
       }
 
+      const localBase = Filesystem.resolve(process.cwd())
+      let selectedLocalDir: string | undefined
       const directory = (() => {
         if (!args.dir) return undefined
         try {
           process.chdir(args.dir)
-          return process.cwd()
+          const resolved = Filesystem.resolve(process.cwd())
+          selectedLocalDir = resolved
+          return resolved
         } catch {
           // If the directory doesn't exist locally (remote attach), pass it through.
+          // Keep localBase for config so remote --dir never displaces local canonical root.
           return args.dir
         }
       })()
+      // Resolve canonical Git worktree root for TUI config (LOCK-SOURCE):
+      // use successfully selected local directory when --dir exists locally,
+      // otherwise retain caller local root for unavailable remote --dir.
+      const configBase = selectedLocalDir ?? localBase
+      const canonicalForConfig = await resolveAttachConfigRoot(configBase)
       const headers = ServerAuth.headers({ password: args.password, username: args.username })
-      const config = await TuiConfig.get()
+      const config = await Effect.runPromise(
+        TuiConfig.Service.use((svc) => svc.get()).pipe(
+          Effect.provide(TuiConfig.defaultLayer.pipe(Layer.provide(Layer.succeed(CurrentWorkingDirectory, canonicalForConfig)))),
+        ),
+      )
 
       try {
         await validateSession({
