@@ -25,7 +25,7 @@ import type { ProviderAuthMethod } from "@kilocode/sdk/v2"
 //   Kilo Gateway recommended api description branch — atomic-chat local guidance
 //   retained; LOCAL_OPTIONAL_API_KEY/isLocalOptionalApiKey/LOCAL_API_KEY_PLACEHOLDER,
 //   renderGutter/failedDescription, renderAutoMethod/apiKeyPlaceholder/selectProvider
-//   retained per CANONICAL-LOCK-006 (generic provider lifecycle/catalog/auth preserved).
+//   retained per LOCK-006 (generic provider lifecycle/catalog/auth preserved).
 // - `packages/opencode/src/cli/cmd/tui/component/dialog-provider.tsx` consumer
 //   removed PROVIDER_PRIORITY import/usage, Popular category branching,
 //   PROVIDER_DESCRIPTIONS/PROVIDER_TITLES special cases — providerOptions now
@@ -35,7 +35,7 @@ import type { ProviderAuthMethod } from "@kilocode/sdk/v2"
 //   custom-provider support, consoleManaged, onboarded gutter, selectProvider/
 //   renderAutoMethod, local optional api-key placeholder, ModelCache/clear/fence
 //   and KiloViewers/AppLayer untouched per T25-SCOPE (display-only, no catalog/transport/storage change).
-// Spec anchors: runtime §8.1 row 9 (CANONICAL-LOCK-006); tracker §7; matrix row 9; T8/T20.
+// Spec anchors: runtime §8.1 row 9 (LOCK-006); tracker §7; matrix row 9; T8/T20.
 // This file asserts absence of preset display residue and executable generic ordering;
 // it does not claim P4.4/P5 completion.
 

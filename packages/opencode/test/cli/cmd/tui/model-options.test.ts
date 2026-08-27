@@ -27,4 +27,24 @@ describe("sortModelOptions", () => {
 
     expect(sorted.map((model) => model.title)).toEqual(["Alpha", "Gamma", "Beta"])
   })
+
+  test("has rank-independent two-argument signature — only newestFirst controls ordering", () => {
+    expect(sortModelOptions.length).toBe(2)
+    const byNewest = sortModelOptions(
+      [
+        { title: "A", releaseDate: "2025-01-01" },
+        { title: "B", releaseDate: "2026-01-01" },
+      ],
+      true,
+    )
+    expect(byNewest.map((m) => m.title)).toEqual(["B", "A"])
+    const byAlpha = sortModelOptions(
+      [
+        { title: "B", releaseDate: "2026-01-01" },
+        { title: "A", releaseDate: "2025-01-01" },
+      ],
+      false,
+    )
+    expect(byAlpha.map((m) => m.title)).toEqual(["A", "B"])
+  })
 })
