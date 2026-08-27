@@ -155,7 +155,10 @@ export namespace Daemon {
           authorization: `Basic ${input.token}`,
         },
       })
-      if (!res.ok) return undefined
+      if (!res.ok) {
+        await res.body?.cancel().catch(() => {})
+        return undefined
+      }
       await res.json().catch(() => undefined)
       return { healthy: true as const, version: input.version }
     } catch {
@@ -174,7 +177,7 @@ export namespace Daemon {
     if (!alive(state.pid)) return { running: false, stale: true, state, file: file(), reason: "process is not running" }
     if (state.version !== InstallationVersion) {
       const probe = await health(state).catch(() => undefined)
-      return { running: false, stale: true, state, health: probe ?? { healthy: true, version: state.version }, file: file(), reason: "version mismatch" }
+      return { running: false, stale: true, state, health: probe, file: file(), reason: "version mismatch" }
     }
     const probe = await health(state)
     if (!probe) return { running: false, stale: true, state, file: file(), reason: "health check failed" }

@@ -172,4 +172,31 @@ describe("P4.4 global health removal — server transport surface deleted", () =
     expect(existsSync(join(sdk, "js/src/v2/gen/types.gen.ts"))).toBe(true)
     expect(existsSync(join(repo, "packages/sdk/openapi.json"))).toBe(true)
   })
+
+  test("debug workspace plugin releases SSE response body on successful probe", () => {
+    const plugin = read("control-plane/dev/debug-workspace-plugin.ts")
+    expect(plugin).toContain("response.body?.cancel")
+    expect(plugin).toContain("global/event")
+    expect(plugin).not.toContain("/global/health")
+  })
+
+  test("daemon version-mismatch does not synthesize healthy:true on failed probe", () => {
+    const daemon = read("kilocode/daemon/daemon.ts")
+    expect(daemon).not.toContain("probe ?? { healthy: true")
+    expect(daemon).toContain("health: probe")
+    expect(daemon).toContain("await res.body?.cancel")
+  })
+
+  test("production routes explicitly deny removed /global/health with 404 (UI fallback guard)", () => {
+    const server = read("server/routes/instance/httpapi/server.ts")
+    expect(server).toContain('"/global/health"')
+    expect(server).toContain("legacyGlobalHealthRoute")
+    expect(server).toContain("status: 404")
+    // wired into both createRoutes and createListenerRoutes (definition + two merges)
+    const routesCount = (server.match(/legacyGlobalHealthRoute/g) ?? []).length
+    expect(routesCount).toBeGreaterThanOrEqual(3)
+    // must not reintroduce OpenAPI/SDK health exposure
+    const openapi = readRepo("packages/sdk/openapi.json")
+    expect(openapi).not.toContain("/global/health")
+  })
 })

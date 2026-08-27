@@ -13,7 +13,9 @@ async function waitForHealth(port: number) {
   while (Date.now() - started < 30_000) {
     try {
       const response = await fetch(url)
-      if (response.ok || response.status === 401) {
+      const ok = response.ok || response.status === 401
+      await response.body?.cancel().catch(() => {})
+      if (ok) {
         return
       }
     } catch {}

@@ -187,6 +187,15 @@ const docRoute = HttpRouter.use((router) => router.add("GET", "/doc", () => Effe
   Layer.provide(authOnlyRouterLayer),
 )
 
+// Explicit narrow denial for removed legacy health transport: makes GET /global/health
+// unambiguously 404 on production listener paths instead of falling through to the
+// UI catch-all (which could serve HTML when embedded UI is present).
+const legacyGlobalHealthRoute = HttpRouter.use((router) =>
+  router.add("GET", "/global/health", () =>
+    Effect.succeed(HttpServerResponse.jsonUnsafe({ error: "Not Found" }, { status: 404 })),
+  ),
+).pipe(Layer.provide(authOnlyRouterLayer))
+
 const uiRoute = HttpRouter.use((router) =>
   Effect.gen(function* () {
     const fs = yield* FSUtil.Service
@@ -238,6 +247,7 @@ export function createRoutes(
     instanceRoutes,
     v2Routes,
     docRoute,
+    legacyGlobalHealthRoute,
     uiRoute,
   ).pipe(
     Layer.provide([
@@ -256,7 +266,15 @@ export function createRoutes(
 
 // kilocode_change start - keep listener routes local while application services come from AppRuntime
 export function createListenerRoutes(corsOptions?: CorsOptions, app: AppLayer = AppLayer) {
-  return Layer.mergeAll(rootApiRoutes, eventApiRoutes, ptyConnectApiRoutes, instanceRoutes, docRoute, uiRoute).pipe(
+  return Layer.mergeAll(
+    rootApiRoutes,
+    eventApiRoutes,
+    ptyConnectApiRoutes,
+    instanceRoutes,
+    docRoute,
+    legacyGlobalHealthRoute,
+    uiRoute,
+  ).pipe(
     provideKiloListenerRoutes(corsOptions),
     Layer.provide(app), // kilocode_change
   )
