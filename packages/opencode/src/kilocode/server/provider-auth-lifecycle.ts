@@ -11,8 +11,8 @@
  *
  * Local contract (auth-specific only):
  * 1. Snapshot first (LOCK-004): capture the exact auth-file artifact (bytes +
- *    mode) BEFORE the mutation, so any post-capture failure — mutation, cleanup
- *    commit, OR cache-clear — can restore it.
+ *    mode) BEFORE the mutation, so any post-capture failure — mutation or
+ *    cleanup commit — can restore it.
  * 2. Read-then-write (LOCK-002): callers that derive a new credential from the
  *    CURRENT auth record (e.g. the organization switch) must perform the read
  *    inside `mutate`, immediately before the write, so a concurrent newer
@@ -24,8 +24,7 @@
  *    deferred ConfigUpdated event (cleanup only) is returned and published only
  *    after the obligation commit registered the rebuild. Auth remove/Anaconda/
  *    org callers do not request cleanup.
- * 4. Clear the model cache immediately, still under the fence.
- * 5. Failure semantics (LOCK-004): a snapshot failure aborts the fence and
+ * 4. Failure semantics (LOCK-004): a snapshot failure aborts the fence and
  *    propagates — no mutation, no success claim. ANY failure after the snapshot
  *    was captured (including one that persisted part of the mutation) restores
  *    the exact auth artifact AND every committed config target, then
@@ -42,7 +41,6 @@ import { FSUtil } from "@opencode-ai/core/fs-util"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { KilocodeConfig } from "@/kilocode/config/config"
-import { ModelCache } from "@/provider/model-cache"
 import { Cause, Effect, Option } from "effect"
 import { ConfigRollbackFailed } from "./config-transaction"
 import { restoreTarget } from "./config-rollback"
@@ -101,7 +99,7 @@ const cleanupDisabled = (
  * callback only), the coordinator additionally removes `providerID` from the
  * global `disabled_providers` list under the same fence and the canonical
  * global discovery lock — one backend mutation with exactly one rebuild. The
- * config is prepared/committed with emit:false; any commit/auth/cache failure
+ * config is prepared/committed with emit:false; any commit/auth failure
  * compensates the exact auth artifact and every committed config target before
  * the fence aborts. A single deferred ConfigUpdated event is returned and
  * published only after the obligation commit registered the rebuild. Auth
@@ -114,7 +112,7 @@ export const invalidateAfterProviderAuthChange = <E, R>(
   providerID: string,
   mutate: Effect.Effect<unknown, E, R>,
   options?: { cleanupDisabled?: boolean },
-): Effect.Effect<true, E, R | FSUtil.Service | ModelCache.Service> =>
+): Effect.Effect<true, E, R | FSUtil.Service> =>
   Effect.fn("KiloServer.invalidateAfterProviderAuthChange")(function* (
     providerID: string,
     mutate: Effect.Effect<unknown, E, R>,
@@ -124,7 +122,6 @@ export const invalidateAfterProviderAuthChange = <E, R>(
     // requests disabled_providers cleanup; Anaconda/org/auth-remove callers
     // stay free of the dependency (serviceOption adds no env requirement).
     const config = Option.getOrElse(yield* Effect.serviceOption(Config.Service), () => undefined)
-    const cache = yield* ModelCache.Service
     const fs = yield* FSUtil.Service
 
     return yield* withColdMutation({
@@ -138,7 +135,7 @@ export const invalidateAfterProviderAuthChange = <E, R>(
           let cleanupEvent: Effect.Effect<void, never, never> | undefined
 
           // LOCK-002/003: ANY failure after the snapshot was captured
-          // (mutation, cleanup commit, or cache clear) restores the exact auth
+          // (mutation or cleanup commit) restores the exact auth
           // artifact and every committed config target before the fence
           // aborts. A failed compensation surfaces as ConfigRollbackFailed
           // carrying both the primary and the rollback detail.
@@ -201,21 +198,10 @@ export const invalidateAfterProviderAuthChange = <E, R>(
               yield* compensate(cleanupExit.cause)
               return yield* Effect.failCause(cleanupExit.cause)
             }
-            // LOCK-003: record the committed config artifact immediately after
-            // commit so a later cache-clear failure compensates it exactly —
-            // reverse-restore the target, invalidate config caches, and let the
-            // fence abort with zero events (the deferred ConfigUpdated is only
-            // published by withColdMutation after a successful commit).
             if (cleanupExit.value.artifact) committed.push(cleanupExit.value.artifact)
             cleanupEvent = cleanupExit.value.event
           }
 
-          // LOCK-001: clear the model cache immediately, still under the fence.
-          const clearExit = yield* Effect.exit(cache.clear(providerID))
-          if (clearExit._tag === "Failure") {
-            yield* compensate(clearExit.cause)
-            return yield* Effect.failCause(clearExit.cause)
-          }
           // LOCK-001/002/003: the obligation commit registers exactly one
           // ControlLease-aware global convergence pass; the response returns
           // before active generations drain. Without a store the coordinator

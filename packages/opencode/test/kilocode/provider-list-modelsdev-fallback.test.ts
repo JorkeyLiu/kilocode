@@ -18,7 +18,6 @@ import { Config } from "../../src/config/config"
 import { Auth } from "../../src/auth"
 import { Plugin } from "../../src/plugin"
 import { Env } from "../../src/env"
-import { ModelCache } from "../../src/provider/model-cache"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { RuntimeFlags } from "../../src/effect/runtime-flags"
 import * as Core from "@opencode-ai/core/models-dev"
@@ -75,16 +74,7 @@ const makeFailingCore = () =>
 
 // Build a ModelsDev.layer wired through a failing core so the Kilo wrapper's
 // catchDefect catches the orDie defect and returns an empty catalog.
-const wrappedModelsDev = (core: Layer.Layer<Core.Service, never, never>) => ModelsDev.layer.pipe(
-  Layer.provide(core),
-  Layer.provide(Config.defaultLayer),
-  Layer.provide(Auth.defaultLayer),
-  Layer.provide(
-    Layer.mock(ModelCache.Service)({
-      clear: () => Effect.void,
-    }),
-  ),
-)
+const wrappedModelsDev = (core: Layer.Layer<Core.Service, never, never>) => ModelsDev.layer.pipe(Layer.provide(core))
 
 const wrappedFailingModelsDev = wrappedModelsDev(makeFailingCore())
 const wrappedCatalogModelsDev = wrappedModelsDev(
@@ -321,12 +311,7 @@ it.instance(
     })
     const probeLayer = Layer.merge(
       Layer.succeed(Core.Service, seededCore),
-      ModelsDev.layer.pipe(
-        Layer.provide(Layer.succeed(Core.Service, seededCore)),
-        Layer.provide(Config.defaultLayer),
-        Layer.provide(Auth.defaultLayer),
-        Layer.provide(ModelCache.defaultLayer),
-      ),
+      ModelsDev.layer.pipe(Layer.provide(Layer.succeed(Core.Service, seededCore))),
     )
 
     return Effect.gen(function* () {
@@ -465,13 +450,6 @@ it.instance(
             refresh: () => Effect.void,
           }),
         ),
-      ),
-      Layer.provide(Config.defaultLayer),
-      Layer.provide(Auth.defaultLayer),
-      Layer.provide(
-        Layer.mock(ModelCache.Service)({
-          clear: () => Effect.void,
-        }),
       ),
     )
 

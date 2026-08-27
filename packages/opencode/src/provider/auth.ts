@@ -112,8 +112,8 @@ export const use = serviceUse(Service)
 
 // kilocode_change start
 // LOCK-001: consume Auth/Plugin from the canonical AppLayer graph; the
-// coordinator (provider-auth-lifecycle) owns ModelCache invalidation, so this
-// layer never self-provides Auth.defaultLayer/ModelCache.defaultLayer.
+// coordinator (provider-auth-lifecycle) owns the fence, so this
+// layer never self-provides Auth.defaultLayer.
 export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -243,8 +243,8 @@ export const layer: Layer.Layer<Service, never, Auth.Service | Plugin.Service> =
         }
       }
       Telemetry.trackAuthSuccess(input.providerID)
-      // no callback-internal cache clear: the coordinator
-      // is the sole ModelCache invalidation owner (LOCK-001).
+      // no callback-internal invalidation: the coordinator
+      // is the sole fence owner (LOCK-001).
       // kilocode_change end
     })
 

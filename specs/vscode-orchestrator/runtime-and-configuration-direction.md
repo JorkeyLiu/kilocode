@@ -168,16 +168,18 @@ organization sources with many preset loaders. Bundled provider identities carry
 metadata and option patches; models.dev catalog data is loaded with a fallback to
 an empty catalog when unavailable; a large checked-in catalog file exists; auth
 records use `api`/`oauth`/`wellknown` variants plus a separate v2 multi-account
-store; organization IDs participate in model fetch; a five-minute model cache and
-custom-endpoint overrides exist (cli-runtime.md, "Outbound provider
-authentication" and "Provider routing").
+store; organization IDs participate in model fetch; custom-endpoint overrides
+exist (cli-runtime.md, "Outbound provider authentication" and "Provider routing").
+ModelCache (historical five-minute TTL at `packages/opencode/src/provider/model-cache.ts`)
+was deleted 2026-08-27 (LOCK-MODELCACHE-001) — no model cache remains; the prior
+five-minute TTL description is historical only and not current behavior.
 
 Evidence:
 
 - `packages/opencode/src/kilocode/provider/provider.ts` - bundled providers,
   `patchModelsDevModel`, provider option patches.
-- `packages/opencode/src/kilocode/provider/metadata.ts` - preset provider
-  metadata keys.
+- `packages/opencode/src/kilocode/provider/metadata.ts` - deleted 2026-08-27
+  (P4.4-T5) — historical preset provider metadata keys, no current reader.
 - `packages/opencode/src/kilocode/provider/models-api.json` - checked-in provider
   catalog.
 - `packages/opencode/src/provider/models.ts` - "models.dev catalog unavailable,

@@ -25,7 +25,6 @@ type Validator = any
 type Resolver = any
 type Errors = any
 type Auth = any
-type ModelCache = { clear: (providerID: string) => void | Promise<void> }
 type Z = any
 
 interface KiloRoutesDeps {
@@ -35,7 +34,6 @@ interface KiloRoutesDeps {
   resolver: Resolver
   errors: Errors
   Auth: Auth
-  ModelCache: ModelCache
   z: Z
   Instances: { disposeAllInstances(): Promise<void> }
 }
@@ -72,7 +70,6 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
     errors,
     Auth,
     z,
-    ModelCache,
     Instances,
   } = deps
 
@@ -183,7 +180,6 @@ export function createKiloRoutes(deps: KiloRoutesDeps) {
             await setOrganization(
               {
                 auth: Auth,
-                clear: () => ModelCache.clear("kilo"),
                 dispose: () => Instances.disposeAllInstances(),
               },
               organizationId,

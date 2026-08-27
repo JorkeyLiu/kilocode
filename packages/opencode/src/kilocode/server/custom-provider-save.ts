@@ -13,7 +13,7 @@
  * 1. Validation first (LOCK-002): the config body must satisfy the backend
  *    schema (npm exactly one of the accepted AI SDK packages, nonempty name,
  *    nonempty models, http(s) baseURL), and an existing same-ID entry must not
- *    be a non-custom provider. Runs before any fence/lock/auth/cache/config
+ *    be a non-custom provider. Runs before any fence/lock/auth/config
  *    mutation.
  * 2. GLOBAL-only (LOCK-002): never touches a project config scope and never
  *    requires an instance context for the write itself; directory/worktree
@@ -26,12 +26,12 @@
  *    removes the target ID only. The artifact is prepared in memory before any
  *    write/event.
  * 4. No-op semantics (LOCK-006): when the prepared artifact is unchanged AND
- *    the auth mode is preserve, return success without auth/cache/rebuild/
+ *    the auth mode is preserve, return success without auth/rebuild/
  *    event — the existing UI expects save success when nothing changed. An
  *    auth set/clear counts as a change even when the config is a no-op.
  * 5. Mutation order (LOCK-003): capture the exact persisted auth-file artifact
  *    (bytes + mode) before the auth mutation, commit the config with
- *    emit:false, apply the auth set/clear, clear the model cache LAST. The
+ *    emit:false, apply the auth set/clear. The
  *    ConfigUpdated event is DEFERRED into the result: the HTTP handler emits
  *    it at the response acknowledgement boundary via
  *    HttpEffect.appendPreResponseHandler, so it is never observable before
@@ -43,18 +43,17 @@
  *    chmod/telemetry partial mutation), then every committed config artifact
  *    exactly, then invalidates global/project caches. A failed compensating
  *    rollback surfaces as ConfigRollbackFailed (a defect, not a validation
- *    error). Auth read/set/remove, commit, cache clear, and rollback errors
+ *    error). Auth read/set/remove, commit and rollback errors
  *    are never swallowed; auth state is never inferred from method success.
  */
 
 import { randomUUID } from "crypto"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Cause, Effect, Schema } from "effect"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Log from "@opencode-ai/core/util/log"
 import { InstanceRef } from "@/effect/instance-ref"
-import { ModelCache } from "@/provider/model-cache"
 import { KilocodeConfig } from "@/kilocode/config/config"
 import { CUSTOM_PROVIDER_PACKAGES, isCustomProviderPackage, isProviderID } from "@/kilocode/custom-provider"
 import { withColdMutation } from "./config-convergence"
@@ -248,7 +247,6 @@ export const execute = Effect.fn("CustomProviderSave.execute")(function* (input:
   const configSvc = yield* Config.Service
   const fs = yield* FSUtil.Service
   const auth = yield* Auth.Service
-  const modelCache = Option.getOrElse(yield* Effect.serviceOption(ModelCache.Service), () => undefined)
   const ref = yield* InstanceRef
 
   // LOCK-002: the trusted directory/worktree must match the canonical instance
@@ -271,7 +269,7 @@ export const execute = Effect.fn("CustomProviderSave.execute")(function* (input:
     return { globalConfig, existing }
   })
 
-  // LOCK-003: fast-path rejection before fence/locks/auth/cache/config mutation.
+  // LOCK-003: fast-path rejection before fence/locks/auth/config mutation.
   yield* validate()
 
   const transactionID = randomUUID()
@@ -306,7 +304,7 @@ export const execute = Effect.fn("CustomProviderSave.execute")(function* (input:
     const configChanged = artifact.changed
 
     // LOCK-006: no-op semantics — identical config AND auth preserve
-    // returns success with no auth/cache/rebuild/event (the existing UI
+    // returns success with no auth/rebuild/event (the existing UI
     // expects save success). Auth set/clear counts as a change even when
     // the config is a no-op.
     if (!configChanged && !authChanged) {
@@ -343,7 +341,7 @@ export const execute = Effect.fn("CustomProviderSave.execute")(function* (input:
       }
     })
 
-    // LOCK-005/006: commit config (emit:false), apply auth, clear cache last.
+    // LOCK-005/006: commit config (emit:false), apply auth.
     const mutate = Effect.gen(function* () {
       // LOCK-003: the exact persisted auth-file artifact captured BEFORE
       // any mutation that can touch auth; compensation restores it
@@ -369,11 +367,6 @@ export const execute = Effect.fn("CustomProviderSave.execute")(function* (input:
           yield* compensate
           return yield* Effect.failCause(authExit.cause)
         }
-      }
-      const clearExit = yield* Effect.exit(modelCache ? modelCache.clear(providerID) : Effect.void)
-      if (clearExit._tag === "Failure") {
-        yield* compensate
-        return yield* Effect.failCause(clearExit.cause)
       }
       // LOCK-003: the final ConfigUpdated event is DEFERRED — tagged with
       // the logical transaction id — and returned to the caller (HTTP

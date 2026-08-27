@@ -4,7 +4,6 @@ import { invalidateAfterProviderAuthChange } from "@/kilocode/server/provider-au
 import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { ConfigConvergence } from "@/kilocode/server/config-convergence"
 import { InstanceStore } from "@/project/instance-store"
-import { ModelCache } from "@/provider/model-cache"
 import { Context, Effect, Layer, Redacted } from "effect"
 import * as Discovery from "./discovery"
 import * as DesktopPlatform from "./platform"
@@ -40,7 +39,6 @@ export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
     const auth = yield* Auth.Service
-    const cache = yield* ModelCache.Service
     const discovery = yield* Discovery.Service
     const instances = yield* InstanceStore.Service
     const platform = yield* DesktopPlatform.Service
@@ -85,8 +83,7 @@ export const layer = Layer.effect(
           .pipe(Effect.mapError(() => new SyncError({ operation: "store" }))),
       ).pipe(
         // LOCK-005: route through the canonical AppLayer services, never a
-        // second gate/cache/store/fs instance.
-        Effect.provideService(ModelCache.Service, cache),
+        // second gate/store/fs instance.
         Effect.provideService(InstanceStore.Service, instances),
         Effect.provideService(GenerationGate.Service, gate),
         Effect.provideService(ConfigConvergence.Service, convergence),

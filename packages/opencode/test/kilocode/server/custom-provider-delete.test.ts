@@ -11,9 +11,9 @@
  * 1. Scope matrix (LOCK-003): global-only, project-only, global+project,
  *    project-custom + same-ID global non-custom (global preserved),
  *    global-custom + project non-custom (project preserved), nonexistent and
- *    built-in/non-custom rejection before any auth/config/cache/event mutation.
+ *    built-in/non-custom rejection before any auth/config/event mutation.
  * 2. Held stream (LOCK-004/005): deletion returns HTTP 200 and persists global/
- *    project files + Auth removal + ModelCache invalidation while a held
+ *    project files + Auth removal while a held
  *    generation on the deleted provider stays active; no `session.error`,
  *    `server.instance.disposed`, or `global.disposed` before release; backend
  *    PID/listener identity unchanged; exactly one post-release disposal/rebuild;
@@ -22,14 +22,11 @@
  *    latches — never arbitrary sleep.
  * 3. Failure matrix (LOCK-006): second-scope commit failure restores every
  *    committed target with zero events and a released fence; auth-removal
- *    failure compensates config and never touches cache/events; interruption
+ *    failure compensates config; interruption
  *    cleans the fence and lock artifacts; the structured `not-custom` 400
- *    preserves code/message/detail. Cache-clear failure is impossible to
- *    trigger without weakening production (ModelCache.clear is pure in-memory
- *    `Effect.all` over sync detach ops), so its coverage is static: the
- *    compensation it would run is byte-identical to the tested auth-removal
- *    compensation, and the clear runs last in the mutate sequence, after the
- *    commits the cache-clear failure would have to restore.
+ *    preserves code/message/detail. No ModelCache/cache-clear step remains
+ *    (LOCK-MODELCACHE-001 — boundary deleted); compensation is covered via
+ *    the tested auth-removal path.
  * 4. Transaction identity (LOCK-007): exactly one logical transaction id across
  *    the final ConfigUpdated events and exactly one disposal for all changed
  *    scopes.
@@ -51,7 +48,6 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Server } from "../../../src/server/server"
 import { Event } from "../../../src/server/event"
 import { GlobalBus } from "../../../src/bus/global"
-import { ModelCache } from "../../../src/provider/model-cache"
 import { Provider } from "../../../src/provider/provider"
 import { AppRuntime, makeAppLayer } from "../../../src/effect/app-runtime"
 import { Config } from "../../../src/config/config"
@@ -691,7 +687,7 @@ describe("customProviderDelete - held stream + real listener (LOCK-004/005)", ()
           expect(deletedBody.success).toBe(true)
 
           // Persistence is immediate: files and auth are gone while the stream is
-          // still in flight. (ModelCache invalidation is asserted through the
+          // still in flight.
           // shared memoized app path in the scope matrix; the listener app layer
           // is freshly rebuilt, so its cache is not observable from AppRuntime.)
           expect(providerEntry(readGlobalConfig(f.global), "test")).toBeUndefined()
@@ -801,7 +797,7 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
         }
         yield* Effect.promise(() => fs.promises.chmod(kiloDir, 0o700))
 
-        // Every committed target restored exactly; auth/cache/events untouched.
+        // Every committed target restored exactly; auth/events untouched (no cache step).
         expect(fs.readFileSync(globalFile(f.global), "utf-8")).toBe(globalOriginal)
         expect(fs.readFileSync(path.join(kiloDir, "kilo.jsonc"), "utf-8")).toBe(projectOriginal)
         expect(Buffer.compare(fs.readFileSync(authFile()), authOriginal)).toBe(0)
@@ -833,7 +829,7 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
         try {
           // The auth file is owned by this process, so making the FILE read-only
           // fails auth.remove (writeFileString gets EACCES) while config commits
-          // (config dirs) and cache clears (memory) remain functional.
+          // (config dirs) remain functional (no ModelCache step — boundary deleted).
           yield* Effect.promise(() => fs.promises.chmod(authPath, 0o400))
           const result = yield* deleteVia(f.project, "test")
           expect(result.status).toBe(500)
@@ -859,85 +855,6 @@ describe("customProviderDelete - failure matrix (LOCK-006)", () => {
         yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle")
       }),
     30_000,
-  )
-
-  it.live(
-    "cache-clear failure restores config AND the exact auth file bytes/mode, emits nothing, releases the fence",
-    () =>
-      Effect.gen(function* () {
-        const f = yield* makeFixture({ global: custom, project: custom })
-        yield* Effect.sync(() => seedAuth("test"))
-        const authPath = authFile()
-        const globalOriginal = fs.readFileSync(globalFile(f.global), "utf-8")
-        const projectOriginal = fs.readFileSync(projectFile(f.project), "utf-8")
-        const authOriginal = fs.readFileSync(authPath)
-        const authMode = fs.statSync(authPath).mode & 0o777
-        const events = captureEvents()
-
-        // LOCK-005: executable cache-clear failure via Effect layer injection
-        // of a failing ModelCache.Service at the canonical AppLayer boundary.
-        // The real deletion executor, config, auth, gate, and instance-store
-        // graph is untouched — this is a test service substitution, not a mock
-        // of deletion logic. `clear` fails once (forcing the compensation to
-        // run after a DURABLE auth removal), then succeeds for the follow-up.
-        let fail = true
-        const failingCache = Layer.succeed(
-          ModelCache.Service,
-          ModelCache.Service.of({
-            clear: () => (fail ? Effect.die(new Error("simulated cache-clear failure")) : Effect.void),
-          }),
-        )
-        const listener = yield* Effect.acquireRelease(
-          Effect.promise(() =>
-            Server.listen({
-              hostname: "127.0.0.1",
-              port: 0,
-              appLayer: makeAppLayer(Provider.defaultModels, Provider.defaultLayer, failingCache),
-            }),
-          ),
-          (value) => Effect.promise(() => value.stop(true)).pipe(Effect.ignore),
-        )
-        const base = listener.url.toString().replace(/\/$/, "")
-        const send = (input: string, init?: RequestInit) =>
-          Effect.promise(async () => {
-            const response = await fetch(`${base}${input}`, {
-              ...init,
-              headers: { "x-kilo-directory": f.project, ...init?.headers },
-            })
-            return response
-          })
-
-        try {
-          const first = yield* send("/custom-provider/test/delete", { method: "POST" })
-          // A cache-clear failure surfaces as a defect (500), never a false 200.
-          expect(first.status).toBe(500)
-
-          // Compensation restored every committed config target AND the exact
-          // auth file bytes/mode (the removal was durable before clear failed);
-          // no ConfigUpdated/disposed events were emitted.
-          expect(fs.readFileSync(globalFile(f.global), "utf-8")).toBe(globalOriginal)
-          expect(fs.readFileSync(projectFile(f.project), "utf-8")).toBe(projectOriginal)
-          expect(Buffer.compare(fs.readFileSync(authPath), authOriginal)).toBe(0)
-          expect(fs.statSync(authPath).mode & 0o777).toBe(authMode)
-          expect(configEvents(events.received).length).toBe(0)
-          expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
-
-          // Fence released: with the cache healthy, the follow-up deletion
-          // completes end to end (same listener, same backend).
-          fail = false
-          const followup = yield* send("/custom-provider/test/delete", { method: "POST" })
-          expect(followup.status).toBe(200)
-          const followupBody = (yield* Effect.promise(() => followup.json())) as { success?: boolean }
-          expect(followupBody.success).toBe(true)
-          yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle")
-          expect(providerEntry(readGlobalConfig(f.global), "test")).toBeUndefined()
-          expect(providerEntry(readProjectConfig(f.project), "test")).toBeUndefined()
-          expect(readAuth().test).toBeUndefined()
-        } finally {
-          events.dispose()
-        }
-      }),
-    60_000,
   )
 
   it.live(

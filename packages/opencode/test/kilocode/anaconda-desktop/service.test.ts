@@ -3,7 +3,6 @@ import { Auth } from "@/auth"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { InstanceStore } from "@/project/instance-store"
-import { ModelCache } from "@/provider/model-cache"
 import { ControlLease } from "../../../src/kilocode/server/control-lease"
 import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
 import { ConfigConvergence } from "../../../src/kilocode/server/config-convergence"
@@ -109,41 +108,31 @@ it.live("sync atomically replaces the standard auth record and invalidates via t
           Ref.update(records, (items) => Object.fromEntries(Object.entries(items).filter(([key]) => key !== id))),
       }),
     )
-    const cache = Layer.mock(ModelCache.Service)({
-      clear: (id) => Ref.update(events, (items) => [...items, `clear:${id}`]),
-    })
     const layer = Desktop.layer.pipe(
       Layer.provide(discovery),
       Layer.provide(platform),
       Layer.provide(auth),
-      Layer.provide(cache),
       Layer.provide(storeLayer(events)),
     )
 
     const first = yield* Desktop.Service.use((service) => service.sync()).pipe(Effect.provide(layer))
     expect(first.serverID).toBe("first")
-    // Auth persisted and cache cleared immediately, under the fence.
-    expect(yield* Ref.get(events)).toContain(`clear:${PROVIDER_ID}`)
+    // Auth persisted under the fence.
     // The rebuild disposes the captured instance exactly once — never disposeAll.
     yield* awaitRebuilds()
-    expect(yield* Ref.get(events)).toEqual([`clear:${PROVIDER_ID}`, "dispose"])
+    expect(yield* Ref.get(events)).toEqual(["dispose"])
 
     // A no-op resync (same key + metadata) persists nothing and rebuilds nothing.
     const unchanged = yield* Desktop.Service.use((service) => service.sync()).pipe(Effect.provide(layer))
     expect(unchanged.serverID).toBe("first")
     yield* awaitRebuilds()
-    expect(yield* Ref.get(events)).toEqual([`clear:${PROVIDER_ID}`, "dispose"])
+    expect(yield* Ref.get(events)).toEqual(["dispose"])
 
     yield* Ref.set(index, 1)
     const second = yield* Desktop.Service.use((service) => service.sync()).pipe(Effect.provide(layer))
     expect(second.serverID).toBe("second")
     yield* awaitRebuilds()
-    expect(yield* Ref.get(events)).toEqual([
-      `clear:${PROVIDER_ID}`,
-      "dispose",
-      `clear:${PROVIDER_ID}`,
-      "dispose",
-    ])
+    expect(yield* Ref.get(events)).toEqual(["dispose", "dispose"])
 
     const stored = (yield* Ref.get(records))[PROVIDER_ID]
     expect(stored?.type).toBe("api")
@@ -172,12 +161,10 @@ it.live("sync requires acknowledgement for limited tool support", () =>
       get: () => Effect.succeed(undefined),
       set: () => Ref.update(writes, (count) => count + 1),
     })
-    const cache = Layer.mock(ModelCache.Service)({ clear: () => Effect.void })
     const layer = Desktop.layer.pipe(
       Layer.provide(discovery),
       Layer.provide(platform),
       Layer.provide(auth),
-      Layer.provide(cache),
       Layer.provide(storeLayer(events)),
     )
 

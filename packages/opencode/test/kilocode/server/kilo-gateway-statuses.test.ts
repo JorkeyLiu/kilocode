@@ -7,7 +7,6 @@ import { Auth } from "../../../src/auth"
 import { KiloGatewayApi, KiloGatewayPaths } from "../../../src/kilocode/server/httpapi/groups/kilo-gateway"
 import { kiloGatewayHandlers } from "../../../src/kilocode/server/httpapi/handlers/kilo-gateway"
 import { InstanceStore } from "../../../src/project/instance-store"
-import { ModelCache } from "../../../src/provider/model-cache"
 import { Session } from "../../../src/session/session"
 import { Authorization } from "../../../src/server/routes/instance/httpapi/middleware/authorization"
 import { InstanceContextMiddleware } from "../../../src/server/routes/instance/httpapi/middleware/instance-context"
@@ -24,7 +23,6 @@ const auth = Layer.mock(Auth.Service)({
   get: () => Effect.succeed(new Auth.Api({ type: "api", key: "test-token" })),
 })
 const store = Layer.mock(InstanceStore.Service)({})
-const cache = Layer.mock(ModelCache.Service)({ clear: () => Effect.void })
 const session = Layer.mock(Session.Service)({})
 const passthroughAuthorization = Layer.succeed(
   Authorization,
@@ -50,7 +48,6 @@ const layer = HttpRouter.serve(
       testWorkspaceRouting,
       auth,
       store,
-      cache,
       session,
       EventV2Bridge.defaultLayer,
     ]),
@@ -59,7 +56,7 @@ const layer = HttpRouter.serve(
 ).pipe(
   Layer.provideMerge(NodeHttpServer.layerTest),
   // The organization route persists provider auth through the canonical
-  // coordinator (LOCK-002), which requires FSUtil/ModelCache at the handler
+  // coordinator (LOCK-002), which requires FSUtil at the handler
   // boundary. These statuses tests never hit that route, so an opaque handler
   // context satisfies the requirements — same pattern as
   // httpapi-global-sse.test.ts for controlHandlers.

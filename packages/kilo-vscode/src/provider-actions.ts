@@ -422,7 +422,7 @@ export async function deleteCustomProvider(
 
     // Atomic backend-coordinated deletion (LOCK-001/002/003/005).
     // The backend endpoint handles ALL config deletion atomically: auth removal,
-    // ModelCache clear, global config patch, project config patch, and instance
+    // global config patch, project config patch, and instance
     // rebuild through a single convergence pass.
     // The extension must NOT issue a second project PATCH (LOCK-001).
     const response = await ctx.client.customProvider.delete(
@@ -479,10 +479,10 @@ export async function saveCustomProvider(
   try {
     // LOCK-001/005: exactly ONE generated backend mutation. The backend
     // persists the config (computing null deletions from the old global entry
-    // itself) and the auth union atomically, clears the model cache, registers
-    // exactly one rebuild, and emits the transaction ConfigUpdated event at
-    // the response acknowledgement boundary — the extension must NOT issue
-    // separate global.config/auth calls and must NOT dispose.
+    // itself) and the auth union atomically, registers exactly one rebuild,
+    // and emits the transaction ConfigUpdated event at the response
+    // acknowledgement boundary — the extension must NOT issue separate
+    // global.config/auth calls and must NOT dispose.
     const response = await ctx.client.customProvider.save(
       { providerID: id, config: sanitized.value, auth, directory: ctx.workspaceDir },
       { throwOnError: true },

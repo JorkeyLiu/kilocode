@@ -216,7 +216,7 @@ export const KilocodeApi = HttpApi.make("kilocode")
             identifier: "customProvider.delete",
             summary: "Delete custom provider",
             description:
-              "Atomically remove a custom provider's auth credentials, config, and model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
+              "Atomically remove a custom provider's auth credentials and config, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
           }),
         ),
         HttpApiEndpoint.post("customProviderSave", KilocodePaths.customProviderSave, {
@@ -230,7 +230,7 @@ export const KilocodeApi = HttpApi.make("kilocode")
             identifier: "customProvider.save",
             summary: "Save custom provider",
             description:
-              "Atomically persist a custom provider's config and auth credentials in one mutation that cannot leave partial state, clear the model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
+              "Atomically persist a custom provider's config and auth credentials in one mutation that cannot leave partial state, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
           }),
         ),
       )

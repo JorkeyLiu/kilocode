@@ -33,8 +33,8 @@ import type { ProviderAuthMethod } from "@kilocode/sdk/v2"
 //   constant "Providers" category; createDialogProviderOptions now generic
 //   title/description (failedDesc fallback only); failed/disabled-state handling,
 //   custom-provider support, consoleManaged, onboarded gutter, selectProvider/
-//   renderAutoMethod, local optional api-key placeholder, ModelCache/clear/fence
-//   and KiloViewers/AppLayer untouched per T25-SCOPE (display-only, no catalog/transport/storage change).
+//   renderAutoMethod, local optional api-key placeholder, and KiloViewers/AppLayer
+//   untouched per T25-SCOPE (display-only, no catalog/transport/storage change; no ModelCache step).
 // Spec anchors: runtime §8.1 row 9 (LOCK-006); tracker §7; matrix row 9; T8/T20.
 // This file asserts absence of preset display residue and executable generic ordering;
 // it does not claim P4.4/P5 completion.

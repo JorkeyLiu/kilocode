@@ -12,12 +12,11 @@
  *    preserve (auth untouched), update with auth set/clear, null deletions for
  *    removed models/variants/reasoning, disabled_providers cleanup preserving
  *    unrelated IDs, env-based providers preserve auth. Exactly one
- *    ConfigUpdated event with one logical transaction id; model cache cleared;
+ *    ConfigUpdated event with one logical transaction id;
  *    rebuild settles.
  * 2. No-op semantics (LOCK-006): identical config + auth preserve returns
  *    success with zero events and zero rebuild registrations; an auth set on
- *    an identical config counts as a change — one rebuild, one event, cache
- *    cleared, auth updated.
+ *    an identical config counts as a change — one rebuild, one event, auth updated.
  * 3. Rejection matrix (LOCK-002): non-custom same-ID provider cannot be
  *    overwritten (structured 400 not-custom before any mutation); invalid
  *    schema (missing models / bad npm / non-http baseURL) and invalid provider
@@ -32,9 +31,7 @@
  * 5. Failure matrix (LOCK-004/006): config commit failure restores every
  *    committed artifact with zero events and a released fence; auth-set
  *    failure compensates config AND the exact auth file bytes/mode and never
- *    touches cache/events; cache-clear failure (executable via the existing
- *    injected ModelCache seam) compensates config AND the exact auth file
- *    bytes/mode with zero events and a released fence; interruption cleans
+ *    emits events; interruption cleans
  *    the fence and lock artifacts.
  * 6. Deferred events (LOCK-003): direct `execute` returns the deferred
  *    ConfigUpdated event; nothing is emitted until the caller runs it; a
@@ -57,7 +54,6 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Server } from "../../../src/server/server"
 import { Event } from "../../../src/server/event"
 import { GlobalBus } from "../../../src/bus/global"
-import { ModelCache } from "../../../src/provider/model-cache"
 import { Provider } from "../../../src/provider/provider"
 import { AppRuntime, makeAppLayer } from "../../../src/effect/app-runtime"
 import { Config } from "../../../src/config/config"
@@ -489,51 +485,6 @@ describe("customProviderSave - success matrix (LOCK-002/005)", () => {
         expect(Buffer.compare(fs.readFileSync(authFile()), authOriginal)).toBe(0)
         const entry = providerEntry(readGlobalConfig(f.global), "test") as Record<string, unknown>
         expect(entry.env).toEqual(["MY_PROVIDER_KEY"])
-      }),
-    30_000,
-  )
-
-  it.live(
-    "model cache is cleared by a changed save (clear recorder)",
-    () =>
-      Effect.gen(function* () {
-        const f = yield* makeFixture({ global: (url) => saveConfig(url) })
-        yield* Effect.sync(() => seedAuth("test"))
-        const clears: string[] = []
-        const trackedCache = Layer.succeed(
-          ModelCache.Service,
-          ModelCache.Service.of({
-            clear: (id) => Effect.sync(() => clears.push(id)),
-          }),
-        )
-        const listener = yield* Effect.acquireRelease(
-          Effect.promise(() =>
-            Server.listen({
-              hostname: "127.0.0.1",
-              port: 0,
-              appLayer: makeAppLayer(Provider.defaultModels, Provider.defaultLayer, trackedCache),
-            }),
-          ),
-          (value) => Effect.promise(() => value.stop(true)).pipe(Effect.ignore),
-        )
-        const base = listener.url.toString().replace(/\/$/, "")
-        const send = (input: string, init?: RequestInit) =>
-          Effect.promise(async () => {
-            const response = await fetch(`${base}${input}`, {
-              ...init,
-              headers: { "x-kilo-directory": f.project, ...init?.headers },
-            })
-            return response
-          })
-
-        const response = yield* send(`/custom-provider/test/save`, {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({ config: saveConfig(f.llm.url, { name: "Changed" }), auth: authPreserve }),
-        })
-        expect(response.status).toBe(200)
-        yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle")
-        expect(clears).toContain("test")
       }),
     30_000,
   )
@@ -1045,96 +996,6 @@ describe("customProviderSave - failure matrix (LOCK-004/006)", () => {
         yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle")
       }),
     30_000,
-  )
-
-  it.live(
-    "cache-clear failure restores config AND the exact auth file bytes/mode, emits nothing, releases the fence",
-    () =>
-      Effect.gen(function* () {
-        const f = yield* makeFixture({ global: (url) => saveConfig(url) })
-        yield* Effect.sync(() => seedAuth("test"))
-        const authPath = authFile()
-        const globalOriginal = fs.readFileSync(globalFile(f.global), "utf-8")
-        const authOriginal = fs.readFileSync(authPath)
-        const authMode = fs.statSync(authPath).mode & 0o777
-        const events = captureEvents()
-
-        // LOCK-005: executable cache-clear failure via Effect layer injection
-        // of a failing ModelCache.Service at the canonical AppLayer boundary.
-        // The real save executor, config, auth, gate, and instance-store graph
-        // is untouched — this is a test service substitution, not a mock of
-        // save logic. `clear` fails once (forcing the compensation to run after
-        // a DURABLE auth set), then succeeds for the follow-up.
-        let fail = true
-        const failingCache = Layer.succeed(
-          ModelCache.Service,
-          ModelCache.Service.of({
-            clear: () => (fail ? Effect.die(new Error("simulated cache-clear failure")) : Effect.void),
-          }),
-        )
-        const listener = yield* Effect.acquireRelease(
-          Effect.promise(() =>
-            Server.listen({
-              hostname: "127.0.0.1",
-              port: 0,
-              appLayer: makeAppLayer(Provider.defaultModels, Provider.defaultLayer, failingCache),
-            }),
-          ),
-          (value) => Effect.promise(() => value.stop(true)).pipe(Effect.ignore),
-        )
-        const base = listener.url.toString().replace(/\/$/, "")
-        const send = (input: string, init?: RequestInit) =>
-          Effect.promise(async () => {
-            const response = await fetch(`${base}${input}`, {
-              ...init,
-              headers: { "x-kilo-directory": f.project, ...init?.headers },
-            })
-            return response
-          })
-
-        try {
-          const first = yield* send("/custom-provider/test/save", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              config: saveConfig("https://new.example/v1", { name: "Changed" }),
-              auth: authSet,
-            }),
-          })
-          // A cache-clear failure surfaces as a defect (500), never a false 200.
-          expect(first.status).toBe(500)
-
-          // Compensation restored the config target AND the exact auth file
-          // bytes/mode (the set was durable before clear failed); no
-          // ConfigUpdated/disposed events were emitted.
-          expect(fs.readFileSync(globalFile(f.global), "utf-8")).toBe(globalOriginal)
-          expect(Buffer.compare(fs.readFileSync(authPath), authOriginal)).toBe(0)
-          expect(fs.statSync(authPath).mode & 0o777).toBe(authMode)
-          expect(configEvents(events.received).length).toBe(0)
-          expect(events.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
-
-          // Fence released: with the cache healthy, the follow-up save
-          // completes end to end (same listener, same backend).
-          fail = false
-          const followup = yield* send("/custom-provider/test/save", {
-            method: "POST",
-            headers: { "content-type": "application/json" },
-            body: JSON.stringify({
-              config: saveConfig("https://new.example/v1", { name: "Changed" }),
-              auth: authSet,
-            }),
-          })
-          expect(followup.status).toBe(200)
-          const followupBody = (yield* Effect.promise(() => followup.json())) as { success?: boolean }
-          expect(followupBody.success).toBe(true)
-          yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle")
-          expect(providerEntry(readGlobalConfig(f.global), "test")).toBeDefined()
-          expect(readAuth().test).toEqual({ type: "api", key: "test-key" })
-        } finally {
-          events.dispose()
-        }
-      }),
-    60_000,
   )
 
   it.live(

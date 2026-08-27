@@ -15,7 +15,7 @@ import { join, resolve } from "node:path"
 //   removed `invalidatePresence` import and the single guarded
 //   `providerID === "kilo"` call (callback).
 // - Generic lifecycle preserved: `invalidateAfterProviderAuthChange`,
-//   `ModelCache.clear`, rollback/fence and disabled-provider semantics,
+//   rollback/fence and disabled-provider semantics,
 //   `ConfigRollbackFailed`, `withColdMutation`, `cleanupDisabled`,
 //   `disabled_providers`; `KiloViewers` service/layer and all other KILO
 //   identifier logic untouched; `presence/service.ts`, `effect/app-runtime.ts`,
@@ -94,9 +94,8 @@ describe("P4.4-T23 presence invalidation removal — preset helper absent, gener
     const lifecycle = read("kilocode/server/provider-auth-lifecycle.ts")
     expect(lifecycle).toContain("export const invalidateAfterProviderAuthChange")
     expect(lifecycle).toContain('Effect.fn("KiloServer.invalidateAfterProviderAuthChange")')
-    expect(lifecycle).toContain("ModelCache")
-    expect(lifecycle).toContain("cache.clear(providerID)")
-    expect(lifecycle).toContain("clear(providerID)")
+    expect(lifecycle).not.toContain("ModelCache")
+    expect(lifecycle).not.toContain("cache.clear")
     expect(lifecycle).toContain("ConfigRollbackFailed")
     expect(lifecycle).toContain("withColdMutation")
     expect(lifecycle).toContain("cleanupDisabled")
@@ -104,7 +103,7 @@ describe("P4.4-T23 presence invalidation removal — preset helper absent, gener
     expect(lifecycle).toContain("Auth.snapshotFile")
     expect(lifecycle).toContain("Auth.restoreFile")
     expect(lifecycle).toContain("restoreTarget")
-    expect(lifecycle).toContain("ModelCache.Service")
+    expect(lifecycle).not.toContain("ModelCache.Service")
     expect(lifecycle).toContain("FSUtil.Service")
     expect(lifecycle).toContain("Config.Service")
     expect(lifecycle).toContain("KilocodeConfig")
@@ -157,11 +156,9 @@ describe("P4.4-T23 presence invalidation removal — preset helper absent, gener
     expect(kiloProvider).toContain("KILO_MODEL_SCHEMA_EXTENSIONS")
     // models-api snapshot retained
     expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
-    // custom-provider and model-cache still via generic lifecycle
+    // custom-provider still via generic lifecycle, model-cache deleted
     expect(existsSync(join(opencode, "kilocode/server/provider-auth-lifecycle.ts"))).toBe(true)
-    expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(true)
-    const modelCache = read("provider/model-cache.ts")
-    expect(modelCache).toContain("clear")
+    expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(false)
   })
 
   test("presence service file untouched per scope (no endpoint/contract change)", () => {

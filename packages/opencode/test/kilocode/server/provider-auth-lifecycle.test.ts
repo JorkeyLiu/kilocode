@@ -5,12 +5,12 @@
  *
  * Coverage:
  * 1. Coordinator (LOCK-001/002/004): the mutation persists under one global
- *    convergence fence, the ModelCache clears immediately, exactly one
+ *    convergence fence, exactly one
  *    ControlLease-aware convergence pass is registered, the captured instance
  *    is disposed exactly once after drain, and InstanceStore.disposeAll is
  *    never called. Mutation failures (typed and defect) abort the fence with no
- *    cache clear / rebuild / disposal, and release it for the next mutation.
- *    A cache-clear failure after a durable mutation restores the exact auth
+ *    rebuild / disposal, and release it for the next mutation.
+ *    A mutation that persists auth and then fails restores the exact auth
  *    artifact bytes/mode before the fence aborts (LOCK-004). A mutation that
  *    persists auth and THEN fails restores the exact artifact too (LOCK-002).
  * 2. Anaconda caller coverage lives in anaconda-desktop/service.test.ts
@@ -40,7 +40,6 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Server } from "../../../src/server/server"
 import { Event } from "../../../src/server/event"
 import { GlobalBus } from "../../../src/bus/global"
-import { ModelCache } from "../../../src/provider/model-cache"
 import { ProviderAuth } from "../../../src/provider/auth"
 import { Plugin } from "../../../src/plugin"
 import { InstanceStore } from "../../../src/project/instance-store"
@@ -122,23 +121,17 @@ const fakeCtx: InstanceContext = {
 
 /**
  * Canonical coordinator graph: real gate + control leases + FSUtil + Auth
- * (real file), with a ModelCache/InstanceStore that record events. The
+ * (real file), with an InstanceStore that records events. The
  * InstanceStore tracks disposeAll so a direct disposal call is observable and
  * forbidden.
  */
-function coordinatorLayer(events: Ref.Ref<string[]>, failClear = false) {
+function coordinatorLayer(events: Ref.Ref<string[]>) {
   return Layer.mergeAll(
     GenerationGate.defaultLayer,
     ConfigConvergence.defaultLayer, // kilocode_change - canonical cold-mutation coordinator
     ControlLease.defaultLayer,
     FSUtil.defaultLayer,
     Auth.defaultLayer,
-    Layer.mock(ModelCache.Service)({
-      clear: (providerID) =>
-        failClear
-          ? Effect.die(new Error("simulated cache-clear failure"))
-          : Ref.update(events, (items) => [...items, `clear:${providerID}`]),
-    }),
     Layer.mock(InstanceStore.Service)({
       directories: () => Effect.succeed([fakeCtx.directory]),
       snapshot: () => Effect.succeed(Option.some(fakeCtx)),
@@ -151,13 +144,11 @@ function coordinatorLayer(events: Ref.Ref<string[]>, failClear = false) {
 
 /**
  * LOCK-003 cleanup graph: the coordinator with a REAL global config target
- * (the Config service reads the file under Global.Path.config) plus an
- * event-recording ModelCache whose clear can be injected to fail — the
- * deterministic "cleanup commits then cache.clear fails" graph. The
+ * (the Config service reads the file under Global.Path.config). The
  * InstanceStore records disposal so a direct disposeAll is observable and
  * forbidden.
  */
-function cleanupLayer(events: Ref.Ref<string[]>, failClear = false) {
+function cleanupLayer(events: Ref.Ref<string[]>) {
   return Layer.mergeAll(
     GenerationGate.defaultLayer,
     ConfigConvergence.defaultLayer, // kilocode_change - canonical cold-mutation coordinator
@@ -165,12 +156,6 @@ function cleanupLayer(events: Ref.Ref<string[]>, failClear = false) {
     FSUtil.defaultLayer,
     Auth.defaultLayer,
     Config.defaultLayer,
-    Layer.mock(ModelCache.Service)({
-      clear: (providerID) =>
-        failClear
-          ? Effect.die(new Error("simulated cache-clear failure"))
-          : Ref.update(events, (items) => [...items, `clear:${providerID}`]),
-    }),
     Layer.mock(InstanceStore.Service)({
       directories: () => Effect.succeed([fakeCtx.directory]),
       snapshot: () => Effect.succeed(Option.some(fakeCtx)),
@@ -202,16 +187,15 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
         }).pipe(Effect.provide(coordinatorLayer(events)), Effect.exit)
         if (exit._tag !== "Success") throw new Error("auth set through the coordinator failed")
         const stored = exit.value
-        // The mutation persisted and the cache cleared immediately.
+        // The mutation persisted.
         expect(fs.readFileSync(authFile(), "utf-8")).not.toBe(beforeRaw)
         expect(stored?.type === "api" && stored.key === "new").toBe(true)
-        expect(yield* Ref.get(events)).toContain("clear:test")
         expect(yield* Ref.get(events)).not.toContain("dispose-all")
 
         // Exactly one rebuild: the captured instance is disposed once after
         // drain; no direct disposeAll.
         yield* awaitRebuilds()
-        expect(yield* Ref.get(events)).toEqual(["clear:test", "dispose"])
+        expect(yield* Ref.get(events)).toEqual(["dispose"])
       }),
   )
 
@@ -242,7 +226,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
         }).pipe(Effect.provide(coordinatorLayer(events)), Effect.exit)
         if (followup._tag !== "Success") throw new Error("follow-up auth set through the coordinator failed")
         yield* awaitRebuilds()
-        expect(yield* Ref.get(events)).toEqual(["clear:test", "dispose"])
+        expect(yield* Ref.get(events)).toEqual(["dispose"])
       }),
   )
 
@@ -262,49 +246,6 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
         expect(yield* Ref.get(events)).toEqual([])
         expect(fs.readFileSync(authFile(), "utf-8")).toBe(beforeRaw)
         yield* awaitRebuilds()
-      }),
-  )
-
-  it.live(
-    "a cache-clear failure restores the exact auth artifact bytes/mode and releases the fence",
-    () =>
-      Effect.gen(function* () {
-        const events = yield* Ref.make<string[]>([])
-        yield* Effect.sync(() => seedAuth("test", { type: "api", key: "old" }))
-        const authPath = authFile()
-        const beforeRaw = fs.readFileSync(authPath, "utf-8")
-        const beforeMode = fs.statSync(authPath).mode & 0o777
-
-        const failed = yield* Effect.gen(function* () {
-          const svc = yield* Auth.Service
-          yield* invalidateAfterProviderAuthChange(
-            "test",
-            svc.set("test", new Auth.Api({ type: "api", key: "new" })).pipe(Effect.orDie),
-          ).pipe(Effect.provide(coordinatorLayer(events, true)))
-        }).pipe(Effect.provide(coordinatorLayer(events, true)), Effect.exit)
-        expect(failed._tag).toBe("Failure")
-
-        // The durable mutation was compensated with the exact artifact; no
-        // disposal or rebuild was registered.
-        expect(fs.readFileSync(authPath, "utf-8")).toBe(beforeRaw)
-        expect(fs.statSync(authPath).mode & 0o777).toBe(beforeMode)
-        expect(yield* Ref.get(events)).toEqual([])
-        yield* awaitRebuilds()
-
-        // Fence released: with a healthy cache the next mutation completes.
-        const followup = yield* Effect.gen(function* () {
-          const svc = yield* Auth.Service
-          yield* invalidateAfterProviderAuthChange(
-            "test",
-            svc.set("test", new Auth.Api({ type: "api", key: "new" })).pipe(Effect.orDie),
-          ).pipe(Effect.provide(coordinatorLayer(events)))
-          return yield* svc.get("test")
-        }).pipe(Effect.provide(coordinatorLayer(events)), Effect.exit)
-        if (followup._tag !== "Success") throw new Error("follow-up auth set through the coordinator failed")
-        yield* awaitRebuilds()
-        expect(yield* Ref.get(events)).toEqual(["clear:test", "dispose"])
-        const stored = followup.value
-        expect(stored?.type === "api" && stored.key === "new").toBe(true)
       }),
   )
 
@@ -352,7 +293,7 @@ describe("providerAuth - coordinator lifecycle (LOCK-001/002/004)", () => {
         }).pipe(Effect.provide(coordinatorLayer(events)), Effect.exit)
         if (followup._tag !== "Success") throw new Error("follow-up auth set through the coordinator failed")
         yield* awaitRebuilds()
-        expect(yield* Ref.get(events)).toEqual(["clear:test", "dispose"])
+        expect(yield* Ref.get(events)).toEqual(["dispose"])
         const stored = followup.value
         expect(stored?.type === "api" && stored.key === "new").toBe(true)
       }),
@@ -385,24 +326,17 @@ const oauthHook: NonNullable<Hooks["auth"]> = {
 
 /**
  * Canonical OAuth graph (LOCK-001): the real ProviderAuth consumes the
- * coordinator's Auth/Plugin/ModelCache instances — no self-provided
- * Auth.defaultLayer/ModelCache.defaultLayer — with a plugin OAuth hook and an
- * event-recording ModelCache. The InstanceStore records disposal so a direct
+ * coordinator's Auth/Plugin instances — no self-provided
+ * Auth.defaultLayer — with a plugin OAuth hook. The InstanceStore records disposal so a direct
  * disposeAll is observable and forbidden.
  */
-function oauthLayer(events: Ref.Ref<string[]>, failClear = false) {
+function oauthLayer(events: Ref.Ref<string[]>) {
   const coordinator = Layer.mergeAll(
     GenerationGate.defaultLayer,
     ConfigConvergence.defaultLayer, // kilocode_change - canonical cold-mutation coordinator
     ControlLease.defaultLayer,
     FSUtil.defaultLayer,
     Auth.defaultLayer,
-    Layer.mock(ModelCache.Service)({
-      clear: (providerID) =>
-        failClear
-          ? Effect.die(new Error("simulated cache-clear failure"))
-          : Ref.update(events, (items) => [...items, `clear:${providerID}`]),
-    }),
     Layer.mock(InstanceStore.Service)({
       directories: () => Effect.succeed([fakeCtx.directory]),
       snapshot: () => Effect.succeed(Option.some(fakeCtx)),
@@ -419,7 +353,7 @@ function oauthLayer(events: Ref.Ref<string[]>, failClear = false) {
 
 describe("providerAuth - OAuth callback via the coordinator (LOCK-001/004)", () => {
   it.instance(
-    "the callback persists auth and the injected canonical ModelCache clears/rebuilds exactly once",
+    "the callback persists auth and rebuilds exactly once",
     () =>
       Effect.gen(function* () {
         const events = yield* Ref.make<string[]>([])
@@ -435,14 +369,11 @@ describe("providerAuth - OAuth callback via the coordinator (LOCK-001/004)", () 
         expect(stored?.type === "oauth" && stored.refresh === "refresh-token" && stored.access === "access-token").toBe(
           true,
         )
-        // The callback itself never clears (LOCK-001); the coordinator clears
-        // exactly once (the forked rebuild may already have disposed the
-        // captured instance — the drain is immediate with no live readers).
+        // The coordinator rebuild disposes the captured instance — the drain is immediate with no live readers.
         // No direct disposeAll anywhere.
-        expect(yield* Ref.get(events)).toContain("clear:oauth-test")
         expect(yield* Ref.get(events)).not.toContain("dispose-all")
         yield* awaitRebuilds()
-        expect(yield* Ref.get(events)).toEqual(["clear:oauth-test", "dispose"])
+        expect(yield* Ref.get(events)).toEqual(["dispose"])
         expect(yield* Ref.get(events)).not.toContain("dispose-all")
       }),
   )
@@ -485,7 +416,7 @@ describe("providerAuth - OAuth callback via the coordinator (LOCK-001/004)", () 
         }).pipe(Effect.provide(oauthLayer(events)), Effect.exit)
         if (followup._tag !== "Success") throw new Error("follow-up callback through the coordinator failed")
         yield* awaitRebuilds()
-        expect(yield* Ref.get(events)).toEqual(["clear:oauth-test", "dispose"])
+        expect(yield* Ref.get(events)).toEqual(["dispose"])
       }),
   )
 })
@@ -1373,79 +1304,4 @@ describe("providerAuth - disabled_providers cleanup (LOCK-003)", () => {
     30_000,
   )
 
-  it.live(
-    "a cache-clear failure after a committed disabled_providers cleanup restores auth and the committed config exactly, with zero events/rebuild/disposal, and releases the fence",
-    () =>
-      Effect.gen(function* () {
-        // A real global config file with the target disabled; the coordinator
-        // cleanup commits removal of the ID before the injected cache.clear
-        // fails — the LOCK-003 post-commit failure the compensation must
-        // reverse-restore (auth AND the committed config artifact).
-        const tmp = yield* Effect.acquireRelease(
-          Effect.promise(async () => {
-            const global = await tmpdir({ retain: true })
-            await seedGlobalConfig(global.path, { disabled_providers: ["test", "openai"] })
-            return global
-          }),
-          (global) => Effect.promise(() => global[Symbol.asyncDispose]().catch(() => undefined)),
-        )
-        ;(Global.Path as { config: string }).config = tmp.path
-        const events = yield* Ref.make<string[]>([])
-        yield* Effect.sync(() => seedAuth("test", { type: "api", key: "old-key" }))
-        const authPath = authFile()
-        const authOriginal = fs.readFileSync(authPath)
-        const authMode = fs.statSync(authPath).mode & 0o777
-        const globalOriginal = fs.readFileSync(globalFile(tmp.path), "utf-8")
-        const busEvents = captureEvents()
-        probeRebuildRegistration.install()
-
-        try {
-          const failed = yield* Effect.gen(function* () {
-            const svc = yield* Auth.Service
-            yield* invalidateAfterProviderAuthChange(
-              "test",
-              svc.set("test", new Auth.Api({ type: "api", key: "new-key" })).pipe(Effect.orDie),
-              { cleanupDisabled: true },
-            ).pipe(Effect.provide(cleanupLayer(events, true)))
-          }).pipe(Effect.provide(cleanupLayer(events, true)), Effect.exit)
-          expect(failed._tag).toBe("Failure")
-        } finally {
-          busEvents.dispose()
-          probeRebuildRegistration.uninstall()
-        }
-
-        // The durable mutation AND the committed disabled_providers cleanup were
-        // compensated exactly: auth bytes/mode and the global config file are
-        // byte-identical to the originals.
-        expect(Buffer.compare(fs.readFileSync(authPath), authOriginal)).toBe(0)
-        expect(fs.statSync(authPath).mode & 0o777).toBe(authMode)
-        expect(fs.readFileSync(globalFile(tmp.path), "utf-8")).toBe(globalOriginal)
-        expect((readGlobalConfig(tmp.path).disabled_providers as string[]).sort()).toEqual(["openai", "test"])
-        // Zero events, zero rebuild registrations, zero cache clears/disposals.
-        expect(configEvents(busEvents.received).length).toBe(0)
-        expect(busEvents.received.some((event) => event.type === Event.Disposed.type)).toBe(false)
-        expect(probeRebuildRegistration.entries().length).toBe(0)
-        expect(yield* Ref.get(events)).toEqual([])
-        yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle", "20 seconds")
-
-        // Fence released: with a healthy cache the next mutation completes and
-        // re-commits the cleanup.
-        const followup = yield* Effect.gen(function* () {
-          const svc = yield* Auth.Service
-          yield* invalidateAfterProviderAuthChange(
-            "test",
-            svc.set("test", new Auth.Api({ type: "api", key: "new-key" })).pipe(Effect.orDie),
-            { cleanupDisabled: true },
-          ).pipe(Effect.provide(cleanupLayer(events)))
-          return yield* svc.get("test")
-        }).pipe(Effect.provide(cleanupLayer(events)), Effect.exit)
-        if (followup._tag !== "Success") throw new Error("follow-up auth set through the coordinator failed")
-        yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle", "20 seconds")
-        expect(yield* Ref.get(events)).toEqual(["clear:test", "dispose"])
-        const stored = followup.value
-        expect(stored?.type === "api" && stored.key === "new-key").toBe(true)
-        expect((readGlobalConfig(tmp.path).disabled_providers as string[]).sort()).toEqual(["openai"])
-      }),
-    30_000,
-  )
 })

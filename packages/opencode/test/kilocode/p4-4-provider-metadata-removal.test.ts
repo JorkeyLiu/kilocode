@@ -141,12 +141,13 @@ describe("P4.4 provider metadata removal — preset display metadata absent", ()
 
   test("generic provider adapters and custom-provider paths remain (LOCK-006)", () => {
     // Bundled/provider catalog artifacts are intentionally retained in this unit
+    // provider/model-cache.ts is deleted (LOCK-MODELCACHE-001) — no ModelCache boundary remains
     expect(existsSync(join(opencode, "kilocode/provider/provider.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
     expect(existsSync(join(opencode, "provider/provider.ts"))).toBe(true)
     expect(existsSync(join(opencode, "provider/models.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/provider/model-filter.ts"))).toBe(true)
-    expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(true)
+    expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(false)
     // Custom provider save/delete/validation remain
     expect(existsSync(join(opencode, "kilocode/custom-provider.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/server/custom-provider-save.ts"))).toBe(true)

@@ -81,12 +81,12 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason: "production AppRuntime integration test for the drain-control snapshot admission lane",
   },
   "kilocode/server/custom-provider-delete.test.ts": {
-    count: 16,
-    reason: "production AppRuntime integration test (shared memoized ModelCache seeding/assertion, ticket interruption, cache-failure layer injection, deferred final events boundary)",
+    count: 10,
+    reason: "production AppRuntime integration test (shared memoized seeding/assertion, ticket interruption, deferred final events boundary)",
   },
   "kilocode/server/custom-provider-save.test.ts": {
-    count: 19,
-    reason: "production AppRuntime integration test (shared memoized ModelCache seeding/assertion, deferred final events boundary, gate ticket interruption)",
+    count: 11,
+    reason: "production AppRuntime integration test (shared memoized seeding/assertion, deferred final events boundary, gate ticket interruption)",
   },
   "preload.ts": {
     count: 4,

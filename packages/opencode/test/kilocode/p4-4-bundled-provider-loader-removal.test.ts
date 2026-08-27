@@ -11,11 +11,11 @@ import { join, resolve } from "node:path"
 // - `packages/opencode/src/provider/provider.ts` import and
 //   `...KILO_BUNDLED_PROVIDERS` spread removed from `BUNDLED_PROVIDERS`.
 // - Generic SDK loader map (`@ai-sdk/*`, openrouter, xai, etc.), custom
-//   provider lifecycle, `models-api.json`, `ModelsDev` / `ModelCache` catalog
-//   services, `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchModelsDevModel`, and
+//   provider lifecycle, `models-api.json`, `ModelsDev` catalog
+//   service, `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchModelsDevModel`, and
 //   provider HTTP group contract remain per LOCK-006/009 — static
 //   source-presence preservation only; dynamic Kilo model resolution through
-//   fallback (models.dev/ModelCache/custom lifecycle) is intentionally not
+//   fallback (models.dev/custom lifecycle) is intentionally not
 //   runtime-proven in this static unit (no network/package installation).
 // Spec anchors: runtime §8.1 row 9 (LOCK-006); tracker §7; matrix row 9.
 // This file asserts static absence of the preset loader identity and static
@@ -103,7 +103,7 @@ describe("P4.4 bundled provider loader removal — preset identity absent", () =
     expect(existsSync(join(opencode, "provider/provider.ts"))).toBe(true)
     expect(existsSync(join(opencode, "provider/models.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/provider/model-filter.ts"))).toBe(true)
-    expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(true)
+    expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(false)
     // Provider handler now depends on catalog only (ModelCache removed from handler in P4.4-T7)
     const handler = read("server/routes/instance/httpapi/handlers/provider.ts")
     expect(handler).toContain("ModelsDev.Service")
@@ -123,7 +123,7 @@ describe("P4.4 bundled provider loader removal — preset identity absent", () =
     expect(existsSync(join(opencode, "provider/auth.ts"))).toBe(true)
   })
 
-  test("ModelsDev and ModelCache provider sources remain — static source presence, not runtime fallback proof", () => {
+  test("ModelsDev provider source remains — static source presence, not runtime fallback proof", () => {
     const models = read("provider/models.ts")
     expect(models).not.toContain("ModelCache")
     expect(models).toContain("overlay")
@@ -131,10 +131,7 @@ describe("P4.4 bundled provider loader removal — preset identity absent", () =
     const providerSrc = read("provider/provider.ts")
     expect(providerSrc).toContain("fromModelsDevProvider")
     expect(providerSrc).toContain("ModelsDev.Service")
-    const cache = read("provider/model-cache.ts")
-    expect(cache).toContain("ModelCache")
-    expect(cache).not.toContain("fetchKiloModels")
-    expect(cache).not.toContain("KiloModelsService")
+    expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(false)
     // KILO constants for models snapshot remain
     expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
     const kProvider = read("kilocode/provider/provider.ts")

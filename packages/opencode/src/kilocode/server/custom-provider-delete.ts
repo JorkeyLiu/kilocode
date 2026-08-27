@@ -1,8 +1,8 @@
 /**
  * Canonical custom provider deletion (LOCK-003/005/006).
  *
- * One backend mutation that removes the provider entry, its auth, and its model
- * cache entry from global and/or project scope atomically with exactly one
+ * One backend mutation that removes the provider entry and its auth
+ * from global and/or project scope atomically with exactly one
  * rebuild.
  *
  * Lifecycle model: packages/kilo-docs/pages/contributing/architecture/cli-runtime.md#config-update-lifecycle;
@@ -26,7 +26,7 @@
  *    provider — reject cleanly.
  * 4. Mutation order (LOCK-003): capture the exact persisted auth-file artifact
  *    (bytes + mode) before the auth mutation, commit changed artifacts with
- *    emit:false (global then project), remove auth, clear the model cache LAST.
+ *    emit:false (global then project), remove auth.
  *    The ConfigUpdated events are DEFERRED into the result: the HTTP handler
  *    emits them at the response acknowledgement boundary via
  *    HttpEffect.appendPreResponseHandler, so they are never observable before
@@ -39,18 +39,17 @@
  *    (write original back, or delete a newly created target), then invalidates
  *    global/project caches. A failed compensating rollback surfaces as
  *    ConfigRollbackFailed (a defect, not a validation error). Auth
- *    read/remove/set, commit, cache clear, and rollback errors are never
+ *    read/remove/set, commit and rollback errors are never
  *    swallowed; auth removal state is never inferred from method success.
  */
 
 import { randomUUID } from "crypto"
-import { Cause, Effect, Option, Schema } from "effect"
+import { Cause, Effect, Schema } from "effect"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Log from "@opencode-ai/core/util/log"
 import { InstanceRef } from "@/effect/instance-ref"
-import { ModelCache } from "@/provider/model-cache"
 import { KilocodeConfig } from "@/kilocode/config/config"
 import { KilocodeConfigOverlay } from "@/kilocode/config/overlay"
 import { isCustomProviderPackage, isProviderID } from "@/kilocode/custom-provider"
@@ -113,7 +112,7 @@ export const execute = Effect.fn("CustomProviderDelete.execute")(function* (inpu
 
   // LOCK-002: the provider ID must satisfy the shared product predicate
   // (lowercase alphanumeric start, then `[a-z0-9-_]`) before ANY
-  // fence/lock/auth/cache/config work. A route-matching but invalid ID gets a
+  // fence/lock/auth/config work. A route-matching but invalid ID gets a
   // structured validation 400; slashed IDs never route and stay 404.
   if (!isProviderID(providerID)) {
     return yield* Effect.fail(
@@ -128,7 +127,6 @@ export const execute = Effect.fn("CustomProviderDelete.execute")(function* (inpu
   const config = yield* Config.Service
   const fs = yield* FSUtil.Service
   const auth = yield* Auth.Service
-  const modelCache = Option.getOrElse(yield* Effect.serviceOption(ModelCache.Service), () => undefined)
   const ref = yield* InstanceRef
 
   // LOCK-002: the trusted directory/worktree must match the canonical instance
@@ -164,7 +162,7 @@ export const execute = Effect.fn("CustomProviderDelete.execute")(function* (inpu
       code: "not-custom",
     })
 
-  // LOCK-003: fast-path rejection before fence/locks/auth/cache/config mutation.
+  // LOCK-003: fast-path rejection before fence/locks/auth/config mutation.
   const fast = yield* validate()
   if (!fast.global && !fast.project) {
     return yield* Effect.fail(notCustom("is not a custom provider in any config scope"))
@@ -262,7 +260,7 @@ export const execute = Effect.fn("CustomProviderDelete.execute")(function* (inpu
       }
     })
 
-    // LOCK-005/006: commit config (emit:false), remove auth, clear cache last.
+    // LOCK-005/006: commit config (emit:false), remove auth.
     const mutate = Effect.gen(function* () {
       authSnap = yield* Auth.snapshotFile(fs)
       for (const target of targets) {
@@ -280,11 +278,6 @@ export const execute = Effect.fn("CustomProviderDelete.execute")(function* (inpu
       if (removeExit._tag === "Failure") {
         yield* compensate
         return yield* Effect.failCause(removeExit.cause)
-      }
-      const clearExit = yield* Effect.exit(modelCache ? modelCache.clear(providerID) : Effect.void)
-      if (clearExit._tag === "Failure") {
-        yield* compensate
-        return yield* Effect.failCause(clearExit.cause)
       }
       // LOCK-003: the final ConfigUpdated events are DEFERRED — one per
       // committed scope, all tagged with the logical transaction id —

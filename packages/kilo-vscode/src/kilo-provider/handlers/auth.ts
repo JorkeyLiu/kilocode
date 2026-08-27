@@ -121,8 +121,8 @@ export async function handleSetOrganization(ctx: AuthContext, organizationId: st
 
   console.log("[Kilo New] KiloProvider: Switching organization:", organizationId ?? "personal")
   try {
-    // LOCK-001: the backend organization set coordinates provider auth, cache,
-    // and the instance rebuild; its response IS the mutation acknowledgement.
+    // LOCK-001: the backend organization set coordinates provider auth and
+    // the instance rebuild; its response IS the mutation acknowledgement.
     // The extension must NOT call global.dispose — a double disposal would race
     // the backend's own rebuild.
     await ctx.client.kilo.organization.set({ organizationId }, { throwOnError: true })

@@ -14,7 +14,6 @@ import { Snapshot } from "@/snapshot"
 import { Plugin } from "@/plugin"
 import { ModelsDev as CoreModelsDev } from "@opencode-ai/core/models-dev" // kilocode_change - provide core ModelsDev for direct CLI consumers
 import * as KiloModelsDev from "@/provider/models" // kilocode_change - use Kilo wrapper for defect protection
-import { ModelCache } from "@/provider/model-cache" // kilocode_change
 import { Provider } from "@/provider/provider"
 import { ProviderAuth } from "@/provider/auth"
 import { Agent } from "@/agent/agent"
@@ -72,12 +71,10 @@ import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 ins
 // kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers
 type ModelsLayer = Layer.Layer<CoreModelsDev.Service | KiloModelsDev.Service, never, never>
 type ProviderLayer = Layer.Layer<Provider.Service, never, never>
-type ModelCacheLayer = typeof ModelCache.defaultLayer // kilocode_change - LOCK-005: injectable for cache-failure coverage
 
 const buildCoreLayer = (
   models: ModelsLayer = Provider.defaultModels,
   provider: ProviderLayer = Provider.defaultLayer,
-  modelCache: ModelCacheLayer = ModelCache.defaultLayer, // kilocode_change - LOCK-005: test substitution boundary
 ) =>
   // kilocode_change end
   Layer.mergeAll(
@@ -96,7 +93,6 @@ const buildCoreLayer = (
     Storage.defaultLayer, // kilocode_change - canonical AppLayer service
     Snapshot.defaultLayer, // kilocode_change - canonical AppLayer service
     Plugin.defaultLayer,
-    modelCache, // kilocode_change - canonical ModelCache layer (LOCK-005 injectable)
     models, // kilocode_change - canonical combined models layer (Provider.defaultModels)
     provider, // kilocode_change - canonical Provider.defaultLayer identity shared with feature layers
     ProviderAuth.layer, // kilocode_change - canonical AppLayer service; consumes the same Auth/Plugin graph (LOCK-001)
@@ -118,16 +114,10 @@ const buildCoreLayer = (
 export function makeCoreLayer(): ReturnType<typeof buildCoreLayer>
 export function makeCoreLayer(models: ModelsLayer, provider: ProviderLayer): ReturnType<typeof buildCoreLayer>
 export function makeCoreLayer(
-  models: ModelsLayer,
-  provider: ProviderLayer,
-  modelCache: ModelCacheLayer,
-): ReturnType<typeof buildCoreLayer>
-export function makeCoreLayer(
   models: ModelsLayer = Provider.defaultModels,
   provider: ProviderLayer = Provider.defaultLayer,
-  modelCache: ModelCacheLayer = ModelCache.defaultLayer,
 ) {
-  return buildCoreLayer(models, provider, modelCache)
+  return buildCoreLayer(models, provider)
 }
 // kilocode_change end
 
@@ -179,10 +169,9 @@ const FeatureLayer = Layer.mergeAll(
 const buildAppLayer = (
   models: ModelsLayer = Provider.defaultModels,
   provider: ProviderLayer = Provider.defaultLayer,
-  modelCache: ModelCacheLayer = ModelCache.defaultLayer,
 ) => {
   const base = Layer.mergeAll(
-    buildCoreLayer(models, provider, modelCache),
+    buildCoreLayer(models, provider),
     SessionLayer,
     FeatureLayer,
     RetentionOwnership.layer,
@@ -200,16 +189,10 @@ const buildAppLayer = (
 export function makeAppLayer(): ReturnType<typeof buildAppLayer>
 export function makeAppLayer(models: ModelsLayer, provider: ProviderLayer): ReturnType<typeof buildAppLayer>
 export function makeAppLayer(
-  models: ModelsLayer,
-  provider: ProviderLayer,
-  modelCache: ModelCacheLayer,
-): ReturnType<typeof buildAppLayer>
-export function makeAppLayer(
   models: ModelsLayer = Provider.defaultModels,
   provider: ProviderLayer = Provider.defaultLayer,
-  modelCache: ModelCacheLayer = ModelCache.defaultLayer,
 ) {
-  return buildAppLayer(models, provider, modelCache)
+  return buildAppLayer(models, provider)
 }
 
 /**

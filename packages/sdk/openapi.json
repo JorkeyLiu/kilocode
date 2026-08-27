@@ -13732,7 +13732,7 @@
             }
           }
         },
-        "description": "Atomically remove a custom provider's auth credentials, config, and model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
+        "description": "Atomically remove a custom provider's auth credentials and config, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
         "summary": "Delete custom provider",
         "x-codeSamples": [
           {
@@ -13801,7 +13801,7 @@
             }
           }
         },
-        "description": "Atomically persist a custom provider's config and auth credentials in one mutation that cannot leave partial state, clear the model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
+        "description": "Atomically persist a custom provider's config and auth credentials in one mutation that cannot leave partial state, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.",
         "summary": "Save custom provider",
         "requestBody": {
           "content": {

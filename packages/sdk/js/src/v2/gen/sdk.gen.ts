@@ -7204,7 +7204,7 @@ export class CustomProvider extends HeyApiClient {
   /**
    * Delete custom provider
    *
-   * Atomically remove a custom provider's auth credentials, config, and model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.
+   * Atomically remove a custom provider's auth credentials and config, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.
    */
   public delete<ThrowOnError extends boolean = false>(
     parameters: {
@@ -7240,7 +7240,7 @@ export class CustomProvider extends HeyApiClient {
   /**
    * Save custom provider
    *
-   * Atomically persist a custom provider's config and auth credentials in one mutation that cannot leave partial state, clear the model cache, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.
+   * Atomically persist a custom provider's config and auth credentials in one mutation that cannot leave partial state, then rebuild instances after active generations drain. The request directory is resolved from the canonical instance routing context.
    */
   public save<ThrowOnError extends boolean = false>(
     parameters: {
