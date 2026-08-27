@@ -2,13 +2,12 @@ import { describe, expect, test } from "bun:test"
 import { existsSync, readdirSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 
-// P4.4-T13 source-removal evidence — legacy `KILO_CONFIG` effective-config input
-// residue in `packages/opencode/src/cli/cmd/tui/config/tui-migrate.ts` physically
-// removed. P4.4-T24 bounded removal — obsolete legacy source-file rewrite/backup
-// behavior (`backupAndStripLegacy`, `*.tui-migration.bak`, `applyEdits`/`modify`,
-// `access`/`constants.W_OK`) removed while legacy-to-`tui.json` materialization
-// (`migrateTuiConfig`, `normalizeTui`, `TUI_SCHEMA_URL`, theme/keybinds/tui
-// extraction, `tui.json` payload, target-exists guard) remains.
+// P4.4 residual-removal package (one cohesive unit): dead TUI migration helper
+// `packages/opencode/src/cli/cmd/tui/config/tui-migrate.ts` physically removed
+// and unused `Flag.KILO_TUI_CONFIG` getter removed. Canonical TUI loader
+// `cli/cmd/tui/config/tui.ts` (global -> direct root -> <workspaceRoot>/.kilo via
+// T27/T30) preserved; KILO_CONFIG_DIR bridge, sandbox, ConfigPaths.files,
+// theme.tsx, and global transport untouched per LOCK-002/003/004.
 
 const opencode = join(import.meta.dir, "../../src")
 const repo = resolve(join(import.meta.dir, "../../../../"))
@@ -20,74 +19,20 @@ function readRepo(rel: string): string {
   return readFileSync(join(repo, rel), "utf8")
 }
 
-describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", () => {
-  test("tui-migrate.ts has no KILO_CONFIG effective-config input", () => {
-    const src = read("cli/cmd/tui/config/tui-migrate.ts")
-    expect(src).not.toContain("if (Flag.KILO_CONFIG)")
-    expect(src).not.toContain("Flag.KILO_CONFIG)")
-    expect(src).not.toContain("Flag.KILO_CONFIG,")
-    expect(src).not.toContain("Flag.KILO_CONFIG ")
-    expect(src).not.toContain("files.push(Flag.KILO_CONFIG")
-    expect(src).not.toContain('"KILO_CONFIG"')
-    expect(src).not.toContain("'KILO_CONFIG'")
-    expect(src).not.toContain("KILO_CONFIG_DIR")
-    expect(src).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
-    expect(src).toContain('from "@opencode-ai/core/flag/flag"')
-    expect(src).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
+describe("P4.4 TUI migration helper removal — file and Flag.KILO_TUI_CONFIG absent, canonical preserved", () => {
+  test("tui-migrate.ts file is absent (dead helper physically removed)", () => {
+    const migratePath = join(opencode, "cli/cmd/tui/config/tui-migrate.ts")
+    expect(existsSync(migratePath)).toBe(false)
   })
 
-  test("tui-migrate has no backup or source rewrite helpers (T24 bounded removal)", () => {
-    const src = read("cli/cmd/tui/config/tui-migrate.ts")
-    expect(src).not.toContain("backupAndStripLegacy")
-    expect(src).not.toContain(".tui-migration.bak")
-    expect(src).not.toContain("tui-migration.bak")
-    expect(src).not.toContain("applyEdits")
-    expect(src).not.toContain("modify")
-    // still uses jsonc-parser parse, but not applyEdits/modify
-    expect(src).toContain("parse as parseJsonc")
-    expect(src).toContain('from "jsonc-parser"')
-    expect(src).not.toContain("access(")
-    expect(src).not.toContain("constants.W_OK")
-    expect(src).not.toContain('from "fs/promises"')
-    expect(src).not.toContain("stripped")
-    expect(src).not.toContain("backup")
-    expect(src).not.toContain("stripped tui keys")
-    expect(src).not.toContain("tui config migrated but source file was not stripped")
-  })
+  test("no Flag.KILO_TUI_CONFIG definition or reader remains in Flag/core/opencode src", () => {
+    const flag = readRepo("packages/core/src/flag/flag.ts")
+    expect(flag).not.toContain("KILO_TUI_CONFIG")
+    expect(flag).not.toContain('process.env["KILO_TUI_CONFIG"]')
+    expect(flag).toContain("get KILO_CONFIG_DIR()")
+    expect(flag).toContain('process.env["KILO_CONFIG_DIR"]')
 
-  test("tui-migrate retains TUI theme/keybind migration and opencodeFiles discovery", () => {
-    const src = read("cli/cmd/tui/config/tui-migrate.ts")
-    expect(src).toContain("export async function migrateTuiConfig")
-    expect(src).toContain("async function opencodeFiles")
-    expect(src).toContain("function normalizeTui")
-    expect(src).not.toContain("async function backupAndStripLegacy")
-    expect(src).toContain('decodeTheme("theme"')
-    expect(src).toContain('decodeRecord("keybinds"')
-    expect(src).toContain('decodeRecord("tui"')
-    expect(src).toContain("TUI_SCHEMA_URL")
-    expect(src).toContain('"https://app.kilo.ai/tui.json"')
-    expect(src).toContain("payload.theme")
-    expect(src).toContain("payload.keybinds")
-    expect(src).toContain('path.join(path.dirname(file), "tui.json")')
-    expect(src).toContain("targetExists")
-    expect(src).toContain("Filesystem.exists(target)")
-    expect(src).toContain("if (targetExists) continue")
-    expect(src).toContain("Filesystem.write(target")
-    expect(src).toContain('migrated tui config')
-    expect(src).toContain("Filesystem.findUp")
-    expect(src).toContain('["kilo.json", "kilo.jsonc"]')
-    expect(src).toContain("ConfigPaths.fileInDirectory")
-    expect(src).toContain("Global.Path.config")
-    expect(src).toContain('fileInDirectory(Global.Path.config, "kilo")')
-    expect(src).toContain('fileInDirectory(dir, "kilo")')
-    expect(src).toContain("unique(input.directories)")
-    expect(src).toContain("unique(files)")
-    expect(src).toContain("Filesystem.exists")
-    expect(src).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
-    expect(src).toContain("? []")
-  })
-
-  test("opencode src snapshot — no Flag.KILO_CONFIG remains (bounded T13 complement) — KILO_TUI_CONFIG also not effective", () => {
+    // Production opencode src has no Flag.KILO_TUI_CONFIG reader
     let combined = ""
     const walk = (dir: string) => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -101,18 +46,35 @@ describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", ()
       }
     }
     walk(opencode)
+    walk(join(repo, "packages/core/src"))
+    // Strip allowed KILO_CONFIG_DIR variants before checking stray KILO_TUI_CONFIG
     const stripped = combined
       .replaceAll("Flag.KILO_CONFIG_DIR", "__KILO_CONFIG_DIR__")
       .replaceAll("Flag.KILO_DISABLE_PROJECT_CONFIG", "__KILO_DISABLE_PROJECT_CONFIG__")
       .replaceAll("Flag.KILO_DISABLE_DEFAULT_PLUGINS", "__KILO_DISABLE_DEFAULT_PLUGINS__")
-      .replaceAll("Flag.KILO_TUI_CONFIG", "__KILO_TUI_CONFIG__")
-    // After T27-correction, no effective reader for Flag.KILO_CONFIG or Flag.KILO_TUI_CONFIG remains in TUI/opencode src
-    // Only Flag definitions and Global/sandbox literals remain
+    expect(stripped).not.toContain("KILO_TUI_CONFIG")
+    expect(stripped).not.toContain("migrateTuiConfig")
+    expect(stripped).not.toContain("tui-migrate")
+  })
+
+  test("tui.ts has no migrate import/call and no KILO_TUI_CONFIG/KILO_CONFIG_DIR legacy readers — canonical only", () => {
     const tui = read("cli/cmd/tui/config/tui.ts")
-    expect(tui).not.toContain("Flag.KILO_TUI_CONFIG")
     expect(tui).not.toContain("migrateTuiConfig")
-    expect(stripped).not.toContain("Flag.KILO_CONFIG")
-    expect(stripped.split("KILO_CONFIG").length).toBeGreaterThan(1)
+    expect(tui).not.toContain("tui-migrate")
+    expect(tui).not.toContain("Flag.KILO_TUI_CONFIG")
+    expect(tui).not.toContain("KILO_TUI_CONFIG")
+    expect(tui).not.toContain("Flag.KILO_CONFIG_DIR")
+    expect(tui).not.toContain("KILO_CONFIG_DIR")
+    expect(tui).not.toContain('targets: [".kilocode", ".kilo"]')
+    expect(tui).not.toContain('targets: [".kilo"')
+    expect(tui).not.toContain("yield* afs.up")
+    expect(tui).not.toContain("ConfigPaths.directories()")
+    expect(tui).toContain("ConfigPaths.fileInDirectory")
+    expect(tui).toContain('path.join(root, ".kilo")')
+    expect(tui).toContain("workspaceKiloDir")
+    expect(tui).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
+    expect(tui).toContain("Global.Path.config")
+    expect(tui).toContain("Canonical TUI config sources")
   })
 
   test("canonical Config.Service remains authority and ignores KILO_CONFIG", () => {
@@ -131,12 +93,12 @@ describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", ()
     expect(kilo).toContain('KILO_DIR_SUFFIXES = [".kilo"]')
   })
 
-  test("ConfigPaths and TUI canonical — no KILO_CONFIG_DIR/KILO_TUI_CONFIG/migrate, no ancestor walk; instruction absent", () => {
+  test("ConfigPaths and instruction remain without KILO_CONFIG_DIR/KILO_TUI_CONFIG/migrate, no ancestor walk", () => {
     const paths = read("config/paths.ts")
     expect(paths).not.toContain("Flag.KILO_CONFIG_DIR")
     expect(paths).not.toContain("KILO_CONFIG_DIR")
     expect(paths).toContain("Global.Path.config")
-    expect(paths).toContain('return unique([Global.Path.config])')
+    expect(paths).toContain("return unique([Global.Path.config])")
     expect(paths).not.toContain('targets: [".kilo"]')
     expect(paths.split('targets: [".kilo"]').length - 1).toBe(0)
     expect(paths).not.toContain("Global.Path.home")
@@ -150,22 +112,6 @@ describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", ()
     expect(instr).not.toContain("Flag.KILO_CONFIG_DIR")
     expect(instr).not.toContain("KILO_CONFIG_DIR")
 
-    const tui = read("cli/cmd/tui/config/tui.ts")
-    expect(tui).not.toContain("Flag.KILO_CONFIG_DIR")
-    expect(tui).not.toContain("KILO_CONFIG_DIR")
-    expect(tui).not.toContain("Flag.KILO_TUI_CONFIG")
-    expect(tui).not.toContain("KILO_TUI_CONFIG")
-    expect(tui).not.toContain("migrateTuiConfig")
-    expect(tui).toContain("Flag.KILO_DISABLE_PROJECT_CONFIG")
-    expect(tui).not.toContain('targets: [".kilocode", ".kilo"]')
-    expect(tui).not.toContain('targets: [".kilo"')
-    expect(tui).not.toContain("yield* afs.up")
-    expect(tui).not.toContain("ConfigPaths.directories()")
-    expect(tui).toContain("ConfigPaths.fileInDirectory")
-    expect(tui).not.toContain("...(Flag.KILO_CONFIG_DIR ? [Flag.KILO_CONFIG_DIR] : [])")
-    expect(tui).toContain('path.join(root, ".kilo")')
-    expect(tui).toContain("workspaceKiloDir")
-    // kilocode tui config-console also canonical
     const kcfg = read("kilocode/tui/config.ts")
     expect(kcfg).not.toContain(".kilocode")
     expect(kcfg).not.toContain("Filesystem.findUp")
@@ -203,7 +149,7 @@ describe("P4.4 TUI migration KILO_CONFIG removal — bounded residue absent", ()
     expect(provider).toContain("const BUNDLED_PROVIDERS")
   })
 
-  test("test-profile lists the new TUI migration removal regression in sorted order", () => {
+  test("test-profile lists the TUI migration removal regression in sorted order", () => {
     const profile = readRepo("packages/opencode/script/kilocode/test-profile.ts")
     expect(profile).toContain("p4-4-tui-migrate-kilo-config-removal")
     expect(profile).toContain("p4-4-bundled-provider-loader-removal")

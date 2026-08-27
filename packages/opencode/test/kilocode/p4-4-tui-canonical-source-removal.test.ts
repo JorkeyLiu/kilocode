@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { readFileSync } from "node:fs"
+import { existsSync, readFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import path from "path"
 import os from "os"
@@ -357,18 +357,21 @@ describe("P4.4 TUI canonical runtime — workspace .kilo only", () => {
     ),
   )
 
-  it.instance("no active TUI startup reads forbidden sources — migrate and env absence proven via source", () =>
+  it.instance("no active TUI startup reads forbidden sources — migrate file absent and env absence proven via source", () =>
     withCleanState(
       Effect.gen(function* () {
         const tuiSrc = read("cli/cmd/tui/config/tui.ts")
-        const migrateSrc = read("cli/cmd/tui/config/tui-migrate.ts")
+        // tui-migrate.ts file is physically removed (residual package)
+        const migrateExists = existsSync(join(repo, "packages/opencode/src/cli/cmd/tui/config/tui-migrate.ts"))
+        expect(migrateExists).toBe(false)
         // tui.ts must not contain migrate import or KILO_TUI_CONFIG reader
         expect(tuiSrc).not.toContain("migrateTuiConfig")
+        expect(tuiSrc).not.toContain("tui-migrate")
         expect(tuiSrc).not.toContain("KILO_TUI_CONFIG")
-        // helper still exists but is dead — prove not imported/used in tui.ts
-        expect(migrateSrc).toContain("export async function migrateTuiConfig")
-        // but tui.ts does not call it
         expect(tuiSrc).not.toContain("migrate")
+        // Flag.KILO_TUI_CONFIG getter is physically removed
+        const flag = readRepo("packages/core/src/flag/flag.ts")
+        expect(flag).not.toContain("KILO_TUI_CONFIG")
         // global sandbox still retains deny, but not effective source
         const policy = read("kilocode/sandbox/policy.ts")
         expect(policy).toContain('"KILO_CONFIG_DIR"')

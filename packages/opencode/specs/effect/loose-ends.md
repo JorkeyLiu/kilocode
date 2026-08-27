@@ -22,7 +22,7 @@ Small follow-ups that do not fit neatly into the main facade, route, tool, or sc
   - `parseText(...)`
 - [ ] `config/config.ts` - switch internal config loading from `Effect.promise(() => ConfigPaths.*(...))` to `yield* paths.*(...)` once the service exists.
 - [ ] `cli/cmd/tui/config/tui.ts` - switch TUI config loading from async `ConfigPaths.*` wrappers to the `ConfigPaths.Service` once that service exists.
-- [ ] `cli/cmd/tui/config/tui-migrate.ts` - decide whether to leave this as a plain async module using wrapper functions or effectify it fully after `ConfigPaths.Service` lands.
+- [x] `cli/cmd/tui/config/tui-migrate.ts` - deleted 2026-08-27 (P4.4 residual package: `migrateTuiConfig`/`normalizeTui`/`TUI_SCHEMA_URL` with zero active callers since T27; canonical TUI loader `resolveWorktree`/`canonicalRoot` + `ConfigPaths.fileInDirectory(root, "tui")` + `path.join(root, ".kilo")` global→direct→`.kilo` preserved). No effectification needed — historical decision point preserved where appropriate.
 
 ## Notes
 

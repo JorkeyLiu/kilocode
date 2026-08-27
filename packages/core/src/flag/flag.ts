@@ -95,9 +95,6 @@ export const Flag = {
   get KILO_EXPERIMENTAL_REFERENCES() {
     return enabledByExperimental("KILO_EXPERIMENTAL_REFERENCES")
   },
-  get KILO_TUI_CONFIG() {
-    return process.env["KILO_TUI_CONFIG"]
-  },
   get KILO_CONFIG_DIR() {
     return process.env["KILO_CONFIG_DIR"]
   },

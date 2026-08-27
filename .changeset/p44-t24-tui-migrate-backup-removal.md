@@ -2,4 +2,4 @@
 "@kilocode/cli": patch
 ---
 
-Stop creating backup files and stripping legacy fields during TUI migration. `tui-migrate` now only materializes a missing `tui.json` from legacy `theme`, `keybinds`, and `tui` fields in `kilo.json`/`kilo.jsonc` without modifying the source file or creating `*.tui-migration.bak` files. Existing `tui.json` is still preserved and legacy TUI directory discovery is unchanged.
+Clean up historical P4.4-T24 TUI migration backup behavior: the final artifact does not create legacy TUI migration backup files (`*.tui-migration.bak`) and does not strip or materialize legacy `theme`/`keybinds`/`tui` fields into `tui.json` (no `tui.json` materialization side effect on load).
