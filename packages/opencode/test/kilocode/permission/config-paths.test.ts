@@ -31,15 +31,26 @@ describe("ConfigProtection.isRequest", () => {
     expect(result).toBe(true)
   })
 
-  test("returns true for bash external_directory targeting legacy global dir", () => {
-    for (const dir of legacy) {
-      const result = ConfigProtection.isRequest({
+  test("returns false for bash external_directory targeting legacy .kilocode global dir (canonical .kilo only)", () => {
+    // .kilocode is no longer a protected global dir; only .kilo is canonical.
+    expect(legacy.some((d) => d.endsWith(".kilocode"))).toBe(false)
+    // Direct synthetic .kilocode path must not be treated as protected.
+    const synthetic = path.join(path.dirname(config), ".kilocode")
+    expect(
+      ConfigProtection.isRequest({
         permission: "external_directory",
-        patterns: [dir + "/*"],
+        patterns: [synthetic + "/*"],
         metadata: {},
-      })
-      expect(result).toBe(true)
-    }
+      }),
+    ).toBe(false)
+    // Canonical .kilo remains protected via isAbsolute check
+    expect(
+      ConfigProtection.isRequest({
+        permission: "external_directory",
+        patterns: [config + "/*"],
+        metadata: {},
+      }),
+    ).toBe(true)
   })
 
   // --- external_directory: file-tool-originated (has metadata.filepath) ---
@@ -114,12 +125,23 @@ describe("ConfigProtection.isRequest", () => {
     expect(result).toBe(true)
   })
 
-  test("returns true for edit targeting legacy global dir via metadata.filepath", () => {
-    for (const dir of legacy) {
+  test("ignores legacy .kilocode global dir via metadata.filepath (canonical .kilo only)", () => {
+    expect(legacy.some((d) => d.endsWith(".kilocode"))).toBe(false)
+    const synthetic = path.join(path.dirname(config), ".kilocode")
+    expect(
+      ConfigProtection.isRequest({
+        permission: "edit",
+        patterns: [],
+        metadata: { filepath: path.join(synthetic, "config.json") },
+      }),
+    ).toBe(false)
+    // Canonical .kilo remains protected
+    const canonical = legacy.find((d) => d.endsWith(".kilo"))
+    if (canonical) {
       const result = ConfigProtection.isRequest({
         permission: "edit",
         patterns: [],
-        metadata: { filepath: path.join(dir, "config.json") },
+        metadata: { filepath: path.join(canonical, "config.json") },
       })
       expect(result).toBe(true)
     }
@@ -175,13 +197,12 @@ describe("ConfigProtection.isRequest", () => {
     expect(result).toBe(false)
   })
 
-  test("protects package lock files in project config directories", () => {
-    for (const file of [".kilo/package-lock.json", ".kilocode/package-lock.json"]) {
-      expect(ConfigProtection.isRequest({ permission: "edit", patterns: [file] })).toBe(true)
-    }
+  test("protects package lock files in canonical .kilo only (ignores .kilocode)", () => {
+    expect(ConfigProtection.isRequest({ permission: "edit", patterns: [".kilo/package-lock.json"] })).toBe(true)
+    expect(ConfigProtection.isRequest({ permission: "edit", patterns: [".kilocode/package-lock.json"] })).toBe(false)
   })
 
-  test("protects a combined source and config lockfile edit", () => {
+  test("protects a combined source and canonical config lockfile edit (ignores .kilocode)", () => {
     expect(
       ConfigProtection.isRequest({
         permission: "edit",
@@ -191,6 +212,14 @@ describe("ConfigProtection.isRequest", () => {
         },
       }),
     ).toBe(true)
+    // .kilocode alone is not protected
+    expect(
+      ConfigProtection.isRequest({
+        permission: "edit",
+        patterns: [".kilocode/package-lock.json"],
+        metadata: { filepath: ".kilocode/package-lock.json" },
+      }),
+    ).toBe(false)
   })
 })
 

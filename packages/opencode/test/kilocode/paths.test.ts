@@ -149,7 +149,7 @@ description: Symlinked skill
       expect(result[0]).toEndWith(".kilo")
     })
 
-    test("discovers skills from legacy .kilocode/skills/", async () => {
+    test("ignores legacy .kilocode/skills/ (canonical .kilo only)", async () => {
       await using tmp = await tmpdir({
         init: async (dir) => {
           const skillDir = path.join(dir, ".kilocode", "skills", "legacy-skill")
@@ -171,11 +171,10 @@ description: A legacy skill
         skipGlobalPaths: true,
       })
 
-      expect(result).toHaveLength(1)
-      expect(result[0]).toEndWith(".kilocode")
+      expect(result).toHaveLength(0)
     })
 
-    test("returns legacy skill dirs before .kilo so .kilo skills win", async () => {
+    test("ignores .kilocode even when .kilo also present (canonical only)", async () => {
       await using tmp = await tmpdir({
         init: async (dir) => {
           // .kilo skill
@@ -183,7 +182,7 @@ description: A legacy skill
           await fs.mkdir(kiloSkillDir, { recursive: true })
           await Bun.write(path.join(kiloSkillDir, "SKILL.md"), "# New skill")
 
-          // .kilocode skill
+          // .kilocode skill (legacy, should be ignored)
           const legacySkillDir = path.join(dir, ".kilocode", "skills", "old-skill")
           await fs.mkdir(legacySkillDir, { recursive: true })
           await Bun.write(path.join(legacySkillDir, "SKILL.md"), "# Old skill")
@@ -196,9 +195,8 @@ description: A legacy skill
         skipGlobalPaths: true,
       })
 
-      expect(result).toHaveLength(2)
-      expect(result[0]).toEndWith(".kilocode")
-      expect(result[1]).toEndWith(".kilo")
+      expect(result).toHaveLength(1)
+      expect(result[0]).toEndWith(".kilo")
     })
 
     test("discovers global skills from ~/.kilo/skills/", async () => {

@@ -29,17 +29,17 @@ export namespace KilocodePaths {
     }
   }
 
-  /** Global Kilo directories in user home: ~/.kilocode and ~/.kilo (legacy first, .kilo wins later) */
+  /** Global Kilo directory in user home: ~/.kilo (canonical only) */
   export function globalDirs(): string[] {
-    return [path.join(home(), ".kilocode"), path.join(home(), ".kilo")]
+    return [path.join(home(), ".kilo")]
   }
 
   /**
    * Discover Kilo directories containing skills.
-   * Returns parent directories (.kilocode/ and .kilo/) for glob pattern "skills/[*]/SKILL.md".
+   * Returns parent directories (.kilo/) for glob pattern "skills/[*]/SKILL.md".
    *
-   * - Walks up from projectDir to worktreeRoot for .kilocode/ and .kilo/
-   * - Includes global ~/.kilocode/ and ~/.kilo/
+   * - Walks up from projectDir to worktreeRoot for .kilo/
+   * - Includes global ~/.kilo/
    * - Includes VSCode extension global storage
    *
    * Does NOT copy/migrate skills - just provides paths for discovery.
@@ -54,7 +54,7 @@ export namespace KilocodePaths {
     const directories: string[] = []
 
     if (!opts.skipGlobalPaths) {
-      // 1. Global ~/.kilocode/ and ~/.kilo/ (loaded first so project-level overrides)
+      // 1. Global ~/.kilo/ (loaded first so project-level overrides)
       for (const global of globalDirs()) {
         const globalSkills = path.join(global, "skills")
         if (!(await Filesystem.isDir(globalSkills))) continue
@@ -69,11 +69,11 @@ export namespace KilocodePaths {
       }
     }
 
-    // 3. Walk up from project dir to worktree root for .kilocode/ and .kilo/
+    // 3. Walk up from project dir to worktree root for .kilo/
     // Returns parent directories (not skills/) because
     // the glob pattern "skills/[*]/SKILL.md" is applied from the parent
     // Loaded last so project-level skills take precedence over global
-    for (const target of [".kilocode", ".kilo"] as const) {
+    for (const target of [".kilo"] as const) {
       const projectDirs = await Array.fromAsync(
         Filesystem.up({
           targets: [target],

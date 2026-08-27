@@ -120,7 +120,7 @@ describe("project-id", () => {
       expect(id).toBe("my-custom-project")
     })
 
-    test("falls back to .kilocode/config.json when .kilo/config.json is absent", async () => {
+    test("ignores .kilocode/config.json (canonical .kilo only)", async () => {
       await using tmp = await tmpdir({
         git: true,
         init: async (dir) => {
@@ -141,10 +141,10 @@ describe("project-id", () => {
         fn: () => getKiloProjectId(),
       })
 
-      expect(id).toBe("legacy-project")
+      expect(id).toBeUndefined()
     })
 
-    test("prefers .kilo/config.json over .kilocode/config.json", async () => {
+    test("ignores .kilocode/config.json even when .kilo/config.json present (canonical only)", async () => {
       await using tmp = await tmpdir({
         git: true,
         init: async (dir) => {

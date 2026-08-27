@@ -36,6 +36,7 @@ export namespace TestProfile {
           "kilocode/p4-4-bundled-provider-loader-removal.test.ts",
           "kilocode/p4-4-flag-legacy-getter-removal.test.ts",
           "kilocode/p4-4-global-health-removal.test.ts",
+          "kilocode/p4-4-legacy-filesystem-discovery-removal.test.ts",
           "kilocode/p4-4-managed-removal.test.ts",
           "kilocode/p4-4-model-cache-removal.test.ts",
           "kilocode/p4-4-presence-invalidation-removal.test.ts",
