@@ -5,7 +5,7 @@ import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Log } from "@opencode-ai/core/util/log"
 import { Context, Effect, Layer } from "effect"
 import * as Stream from "effect/Stream"
-import { streamText, wrapLanguageModel, type ModelMessage, type Tool } from "ai"
+import { streamText, wrapLanguageModel, type LanguageModelMiddleware, type ModelMessage, type Tool } from "ai"
 import type { LLMEvent } from "@opencode-ai/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
 import type { LLMClientService } from "@opencode-ai/llm/route"
@@ -194,8 +194,8 @@ const live: Layer.Layer<
               metadata: typeof result === "object" ? result?.metadata : undefined,
               title: typeof result === "object" ? result?.title : undefined,
             }
-          } catch (e: any) {
-            return { result: "", error: e.message ?? String(e) }
+          } catch (e: unknown) {
+            return { result: "", error: e instanceof Error ? e.message : String(e) }
           }
         }
 
@@ -348,6 +348,25 @@ const live: Layer.Layer<
           "llm.model": input.model.id,
         }),
       )
+      const aiMiddleware: LanguageModelMiddleware = {
+        specificationVersion: "v3" as const,
+        async transformParams({ type, params }) {
+          if (type === "stream") {
+            Object.assign(params, {
+              prompt: ProviderTransform.message(
+                params.prompt as Parameters<typeof ProviderTransform.message>[0],
+                input.model,
+                prepared.messageTransformOptions,
+              ),
+            })
+          }
+          return params
+        },
+      }
+      const modelForStream = wrapLanguageModel({
+        model: language,
+        middleware: [aiMiddleware],
+      })
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
       const result = streamText({
@@ -393,25 +412,7 @@ const live: Layer.Layer<
         headers: prepared.headers,
         maxRetries: input.retries ?? 0,
         messages: prepared.messages,
-        model: wrapLanguageModel({
-          model: language,
-          middleware: [
-            {
-              specificationVersion: "v3" as const,
-              async transformParams(args) {
-                if (args.type === "stream") {
-                  // @ts-expect-error
-                  args.params.prompt = ProviderTransform.message(
-                    args.params.prompt,
-                    input.model,
-                    prepared.messageTransformOptions,
-                  )
-                }
-                return args.params
-              },
-            },
-          ],
-        }),
+        model: modelForStream,
         // kilocode_change start - disable AI SDK span recording (ai.* / gen_ai.*)
         experimental_telemetry: { isEnabled: false },
       })

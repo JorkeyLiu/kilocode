@@ -105,12 +105,11 @@ export function stream(input: StreamInput): StreamResult {
       Effect.gen(function* () {
         const settlements = yield* FiberSet.make<void>()
         const results = yield* Queue.unbounded<LLMEvent, Cause.Done>()
-        const provider = input.llmClient
-          .stream(
-            LLMRequest.update(request, {
-              tools: [...request.tools, ...toDefinitions(tools)],
-            }),
-          )
+        const provider = input.llmClient.stream(
+          LLMRequest.update(request, {
+            tools: [...request.tools, ...toDefinitions(tools)],
+          }),
+        )
           .pipe(
             Stream.flatMap((event) =>
               event.type !== "tool-call" || event.providerExecuted

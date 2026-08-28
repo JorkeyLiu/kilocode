@@ -28,6 +28,11 @@ describe("public exports", () => {
     expect(Protocol.make).toBeFunction()
   })
 
+  test("admission carrier has no public subpath", async () => {
+    const subpath = "@opencode-ai/llm/route/admission"
+    await expect(import(subpath)).rejects.toThrow()
+  })
+
   test("provider barrels expose user-facing facades", () => {
     expect(OpenAI.model).toBeFunction()
     expect(OpenAI.provider.model).toBe(OpenAI.model)

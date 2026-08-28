@@ -3,6 +3,7 @@ import { Headers } from "effect/unstable/http"
 import { LLMError, TransportReason } from "../../schema"
 import * as HttpTransport from "./http"
 import type { Transport } from "./index"
+import { Admission } from "../admission"
 
 export interface WebSocketRequest {
   readonly url: string
@@ -250,6 +251,7 @@ export const json = <Body, Message>(input: JsonInput<Body, Message>): JsonTransp
     const decoder = new TextDecoder()
     return Stream.unwrap(
       Effect.gen(function* () {
+        yield* Admission.consume()
         const connection = yield* Effect.acquireRelease(
           webSocket.open({ url: prepared.url, headers: prepared.headers }),
           (connection) => connection.close,

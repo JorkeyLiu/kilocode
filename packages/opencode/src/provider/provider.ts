@@ -46,6 +46,7 @@ import * as ModelsRefresh from "@/kilocode/provider/models-refresh"
 // kilocode_change end
 import { ProviderError } from "./error"
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
+import { Admission } from "../../../llm/src/route/admission"
 
 const log = Log.create({ service: "provider" })
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
@@ -1857,6 +1858,7 @@ export const layer = Layer.effect(
 
           // kilocode_change start - clear connection-phase timeout once headers arrive
           try {
+            await Admission.consumeSync()
             const res = await fetchFn(input, {
               ...opts,
               // @ts-ignore see here: https://github.com/oven-sh/bun/issues/16682

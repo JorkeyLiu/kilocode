@@ -39,6 +39,9 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { toolFileSourceFromUri, Usage, type LLMEvent } from "@opencode-ai/llm"
 import { ToolOutput } from "@opencode-ai/core/tool-output"
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
+import { SessionOperation } from "@opencode-ai/core/session/operation"
+import { SessionSchema } from "@opencode-ai/core/session/schema"
+import { Admission } from "../../../llm/src/route/admission"
 
 const DOOM_LOOP_THRESHOLD = 3
 const log = Log.create({ service: "session.processor" })
@@ -110,6 +113,7 @@ interface ProcessorContext extends Input {
   step: { reasoning: boolean; text: boolean; tool: boolean }
   // kilocode_change end
   v2AssistantMessageID: SessionMessage.ID | undefined
+  providerStarted: boolean // P4-G7: tracks whether any provider attempt was admitted in this processor run
 }
 
 type StreamEvent = LLMEvent
@@ -178,6 +182,7 @@ export const layer = Layer.effect(
         step: { reasoning: false, text: false, tool: false },
         // kilocode_change end
         v2AssistantMessageID: undefined,
+        providerStarted: false,
       }
       const mirrorAssistant = flags.experimentalEventSystem && !input.assistantMessage.summary
       let aborted = false
@@ -1069,37 +1074,42 @@ export const layer = Layer.effect(
       })
 
       const cleanup = Effect.fn("SessionProcessor.cleanup")(function* () {
-        if (ctx.snapshot) {
-          const patch = yield* snapshot.patch(ctx.snapshot)
-          if (patch.files.length) {
+        // A pre-admission request has no session state to settle. In particular,
+        // snapshot.patch() stages the workspace and can otherwise create a patch
+        // part for a provider request that never reached transport admission.
+        if (ctx.providerStarted) {
+          if (ctx.snapshot) {
+            const patch = yield* snapshot.patch(ctx.snapshot)
+            if (patch.files.length) {
+              yield* session.updatePart({
+                id: PartID.ascending(),
+                messageID: ctx.assistantMessage.id,
+                sessionID: ctx.sessionID,
+                type: "patch",
+                hash: patch.hash,
+                files: patch.files,
+              })
+            }
+            ctx.snapshot = undefined
+          }
+
+          if (ctx.currentText) {
+            const end = Date.now()
+            ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
+            yield* session.updatePart(ctx.currentText)
+            ctx.currentText = undefined
+            ctx.currentTextID = undefined
+          }
+
+          for (const part of Object.values(ctx.reasoningMap)) {
+            const end = Date.now()
             yield* session.updatePart({
-              id: PartID.ascending(),
-              messageID: ctx.assistantMessage.id,
-              sessionID: ctx.sessionID,
-              type: "patch",
-              hash: patch.hash,
-              files: patch.files,
+              ...part,
+              time: { start: part.time.start ?? end, end },
             })
           }
-          ctx.snapshot = undefined
+          ctx.reasoningMap = {}
         }
-
-        if (ctx.currentText) {
-          const end = Date.now()
-          ctx.currentText.time = { start: ctx.currentText.time?.start ?? end, end }
-          yield* session.updatePart(ctx.currentText)
-          ctx.currentText = undefined
-          ctx.currentTextID = undefined
-        }
-
-        for (const part of Object.values(ctx.reasoningMap)) {
-          const end = Date.now()
-          yield* session.updatePart({
-            ...part,
-            time: { start: part.time.start ?? end, end },
-          })
-        }
-        ctx.reasoningMap = {}
 
         yield* Effect.forEach(
           Object.values(ctx.toolcalls),
@@ -1107,56 +1117,58 @@ export const layer = Layer.effect(
           { concurrency: "unbounded" },
         )
 
-        for (const toolCallID of Object.keys(ctx.toolcalls)) {
-          const match = yield* readToolCall(toolCallID)
-          if (!match) continue
-          const part = match.part
-          if (mirrorAssistant && match.call.assistantMessageID) {
-            yield* events.publish(SessionEvent.Tool.Failed, {
-              sessionID: ctx.sessionID,
-              assistantMessageID: match.call.assistantMessageID,
-              callID: toolCallID,
-              error: { type: "unknown", message: "Tool execution aborted" },
-              provider: { executed: part.metadata?.providerExecuted === true },
-              timestamp: DateTime.makeUnsafe(Date.now()),
+        if (ctx.providerStarted) {
+          for (const toolCallID of Object.keys(ctx.toolcalls)) {
+            const match = yield* readToolCall(toolCallID)
+            if (!match) continue
+            const part = match.part
+            if (mirrorAssistant && match.call.assistantMessageID) {
+              yield* events.publish(SessionEvent.Tool.Failed, {
+                sessionID: ctx.sessionID,
+                assistantMessageID: match.call.assistantMessageID,
+                callID: toolCallID,
+                error: { type: "unknown", message: "Tool execution aborted" },
+                provider: { executed: part.metadata?.providerExecuted === true },
+                timestamp: DateTime.makeUnsafe(Date.now()),
+              })
+            }
+            const end = Date.now()
+            const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
+            // kilocode_change start - write task_id into output on interrupt so the parent LLM can resume
+            const interruptedMetadata: Record<string, any> = { ...metadata, interrupted: true }
+            if (part.tool === "task" && typeof metadata.sessionId === "string") {
+              interruptedMetadata.output = [
+                `<task id="${metadata.sessionId}" state="interrupted">`,
+                `<task_error>Task interrupted. Resume with task_id="${metadata.sessionId}" and a prompt describing how to continue.</task_error>`,
+                `</task>`,
+              ].join("\n")
+            }
+            // kilocode_change end
+            yield* session.updatePart({
+              ...part,
+              state: {
+                ...part.state,
+                status: "error",
+                error: "Tool execution aborted",
+                metadata: interruptedMetadata, // kilocode_change
+                time: { start: "time" in part.state ? part.state.time.start : end, end },
+              },
             })
           }
-          const end = Date.now()
-          const metadata = "metadata" in part.state && isRecord(part.state.metadata) ? part.state.metadata : {}
-          // kilocode_change start - write task_id into output on interrupt so the parent LLM can resume
-          const interruptedMetadata: Record<string, any> = { ...metadata, interrupted: true }
-          if (part.tool === "task" && typeof metadata.sessionId === "string") {
-            interruptedMetadata.output = [
-              `<task id="${metadata.sessionId}" state="interrupted">`,
-              `<task_error>Task interrupted. Resume with task_id="${metadata.sessionId}" and a prompt describing how to continue.</task_error>`,
-              `</task>`,
-            ].join("\n")
-          }
+          // kilocode_change start - read parts through the upstream Effect database
+          KiloSessionProcessor.guardEmptyToolCalls(
+            ctx.assistantMessage,
+            yield* MessageV2.parts(ctx.assistantMessage.id).pipe(Effect.provideService(Database.Service, database)),
+          )
           // kilocode_change end
-          yield* session.updatePart({
-            ...part,
-            state: {
-              ...part.state,
-              status: "error",
-              error: "Tool execution aborted",
-              metadata: interruptedMetadata, // kilocode_change
-              time: { start: "time" in part.state ? part.state.time.start : end, end },
-            },
-          })
+          ctx.assistantMessage.time.completed = Date.now()
+          // kilocode_change start - reconcile cost with any subagent propagation written during tool calls (#6321)
+          yield* reconcile()
+          // kilocode_change end
+          yield* session.updateMessage(ctx.assistantMessage)
         }
         ctx.toolcalls = {}
         ctx.toolmeta = {} // kilocode_change
-        // kilocode_change start - read parts through the upstream Effect database
-        KiloSessionProcessor.guardEmptyToolCalls(
-          ctx.assistantMessage,
-          yield* MessageV2.parts(ctx.assistantMessage.id).pipe(Effect.provideService(Database.Service, database)),
-        )
-        // kilocode_change end
-        ctx.assistantMessage.time.completed = Date.now()
-        // kilocode_change start - reconcile cost with any subagent propagation written during tool calls (#6321)
-        yield* reconcile()
-        // kilocode_change end
-        yield* session.updateMessage(ctx.assistantMessage)
       })
 
       const halt = Effect.fn("SessionProcessor.halt")(function* (e: unknown) {
@@ -1260,30 +1272,144 @@ export const layer = Layer.effect(
               ctx.reasoningMap = {}
               yield* status.set(ctx.sessionID, { type: "busy" })
               ctx.step = { reasoning: false, text: false, tool: false }
-              const stream = llm.stream({
-                ...streamInput,
-                preflight: !ctx.assistantMessage.summary,
-              })
-
-              yield* stream.pipe(
-                Stream.tap((event) => handleEvent(event)),
-                Stream.takeUntil(() => ctx.needsCompaction),
-                Stream.runDrain,
-              )
-            }).pipe(
-              Effect.onInterrupt(() =>
+              const attemptIdx = retries.provider
+              const opId = SessionOperation.providerId(ctx.assistantMessage.id, attemptIdx)
+              const dbInner = database.db
+              const sid = SessionSchema.ID.make(ctx.sessionID)
+              let admitted = false
+              let finalized = false
+              const finalize = (
+                outcome: SessionOperation.Outcome,
+                code: string,
+                message: string,
+                cancel?: SessionOperation.CancelSource,
+              ) =>
                 Effect.gen(function* () {
-                  aborted = true
-                  ac.abort() // kilocode_change — also abort offline handler
-                  if (!ctx.assistantMessage.error) {
-                    yield* halt(new DOMException("Aborted", "AbortError"))
-                  }
-                }),
-              ),
-              Effect.catchCauseIf(
-                (cause) => !Cause.hasInterruptsOnly(cause),
-                (cause) => Effect.fail(Cause.squash(cause)),
-              ),
+                  if (finalized) return
+                  finalized = true
+                  if (!admitted) return
+                  yield* SessionOperation.put(dbInner, sid, {
+                    opId,
+                    opKind: "provider",
+                    outcome,
+                    code,
+                    message,
+                    time: Date.now(),
+                    ...(cancel ? { cancel: { source: cancel } } : {}),
+                  })
+                }).pipe(Effect.orDie)
+              const isPreflightError = (value: unknown): boolean => value instanceof KiloSessionOverflow.PreflightError
+              const isAbortLike = (value: unknown): boolean => {
+                if (value instanceof DOMException && value.name === "AbortError") return true
+                if (value !== null && typeof value === "object" && "name" in value) {
+                  const name = (value as { name?: unknown }).name
+                  return typeof name === "string" && (name === "MessageAbortedError" || name === "AbortedError")
+                }
+                return false
+              }
+              const admissionWork = Effect.gen(function* () {
+                yield* SessionOperation.put(dbInner, sid, {
+                  opId,
+                  opKind: "provider",
+                  outcome: "in-flight",
+                  code: "provider.inflight",
+                  message: "provider request started",
+                  time: Date.now(),
+                })
+                admitted = true
+                ctx.providerStarted = true
+              })
+              const inner = Effect.gen(function* () {
+                const streamEffect = Effect.gen(function* () {
+                  const stream = llm.stream({
+                    ...streamInput,
+                    preflight: !ctx.assistantMessage.summary,
+                  })
+                  yield* stream.pipe(
+                    Stream.tap((event) => handleEvent(event)),
+                    Stream.takeUntil(() => ctx.needsCompaction),
+                    Stream.runDrain,
+                  )
+                }).pipe(
+                  Effect.onExit((exit) =>
+                    Effect.gen(function* () {
+                      if (Exit.isSuccess(exit)) {
+                        yield* finalize("succeeded", "provider.succeeded", "provider request succeeded")
+                      } else {
+                        const cause = exit.cause
+                        let isInterrupt = false
+                        try {
+                          isInterrupt = Cause.hasInterruptsOnly(cause)
+                        } catch {
+                          isInterrupt = false
+                        }
+                        if (isInterrupt || aborted) {
+                          let msg = "provider request abandoned"
+                          try {
+                            const squashedForMsg = Cause.squash(cause)
+                            msg = errorMessage(squashedForMsg) || msg
+                          } catch {
+                            // keep default abandoned message when squash fails
+                          }
+                          yield* finalize("abandoned", "provider.abandoned", msg, "user_stop")
+                        } else {
+                          let squashed: unknown = cause
+                          try {
+                            squashed = Cause.squash(cause)
+                          } catch {
+                            squashed = cause
+                          }
+                          if (isPreflightError(squashed)) {
+                            return
+                          }
+                          const raw = errorMessage(squashed) || "provider request failed"
+                          if (isAbortLike(squashed)) {
+                            yield* finalize("abandoned", "provider.abandoned", raw, "user_stop")
+                          } else {
+                            yield* finalize("failed", "provider.failed", raw)
+                          }
+                        }
+                      }
+                    }).pipe(Effect.orDie),
+                  ),
+                )
+                yield* streamEffect
+              }).pipe(
+                Effect.onInterrupt(() =>
+                  Effect.gen(function* () {
+                    aborted = true
+                    ac.abort()
+                    if (!ctx.assistantMessage.error) {
+                      yield* halt(new DOMException("Aborted", "AbortError"))
+                    }
+                  }),
+                ),
+                Effect.catchCauseIf(
+                  (cause) => {
+                    try {
+                      return !Cause.hasInterruptsOnly(cause)
+                    } catch {
+                      return true
+                    }
+                  },
+                  (cause) => {
+                    let squashed: unknown = cause
+                    try {
+                      squashed = Cause.squash(cause)
+                    } catch {
+                      squashed = cause
+                    }
+                    if (squashed instanceof KiloSessionOverflow.PreflightError) return Effect.fail(squashed)
+                    try {
+                      return Effect.fail(Cause.squash(cause))
+                    } catch {
+                      return Effect.fail(cause)
+                    }
+                  },
+                ),
+              )
+              yield* Admission.run(admissionWork, inner)
+            }).pipe(
               Effect.retry(
                 SessionRetry.policy({
                   provider: input.model.providerID,
@@ -1347,7 +1473,11 @@ export const layer = Layer.effect(
                   usage: attempt.usage,
                 }),
               discard: () => discard(baseline),
-              set: setRetry,
+              set: (info) => {
+                // Each incomplete-response recovery retry is an actual provider attempt with distinct identity
+                retries.provider += 1
+                return setRetry(info)
+              },
             })
           }
 
