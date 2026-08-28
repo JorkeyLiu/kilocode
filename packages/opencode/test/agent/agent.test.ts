@@ -1,8 +1,10 @@
-import { afterEach, expect } from "bun:test"
+import { afterEach, describe, expect, test } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
 import path from "path"
+import { readFileSync } from "node:fs"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { InstanceRef } from "../../src/effect/instance-ref"
 import { Agent } from "../../src/agent/agent"
 import { Auth } from "../../src/auth"
 import { Config } from "../../src/config/config"
@@ -80,15 +82,31 @@ it.instance("build agent has correct default properties", () =>
   }),
 )
 
-it.instance("plan agent denies edits except .opencode/plans/*", () =>
+it.instance("plan agent denies edits except canonical plan paths (P4.4 legacy .opencode removed)", () =>
   Effect.gen(function* () {
     const plan = yield* load((svc) => svc.get("plan"))
     expect(plan).toBeDefined()
     // Wildcard is denied
     expect(evalPerm(plan, "edit")).toBe("deny")
     expect(evalPerm(plan, "interactive_terminal")).toBe("deny") // kilocode_change
-    // But specific path is allowed
-    expect(legacyEvaluate("edit", ".opencode/plans/foo.md", plan!.permission).action).toBe("allow")
+    // Legacy path is denied (P4.4)
+    expect(legacyEvaluate("edit", ".opencode/plans/foo.md", plan!.permission).action).toBe("deny")
+    // Canonical plan paths remain allowed
+    expect(legacyEvaluate("edit", ".kilo/plans/foo.md", plan!.permission).action).toBe("allow")
+    expect(legacyEvaluate("edit", "plans/foo.md", plan!.permission).action).toBe("allow")
+    expect(legacyEvaluate("edit", ".plans/foo.md", plan!.permission).action).toBe("allow")
+    // Global data plan path remains allowed (worktree-relative; evaluated through real V1 merged permission rules)
+    const instance = yield* InstanceRef
+    const worktree = instance?.worktree ?? (yield* TestInstance).directory
+    expect(
+      legacyEvaluate(
+        "edit",
+        path.relative(worktree, path.join(Global.Path.data, "plans", "foo.md")),
+        plan!.permission,
+      ).action,
+    ).toBe("allow")
+    // Wildcard deny preserved for unrelated edits
+    expect(legacyEvaluate("edit", "src/foo.ts", plan!.permission).action).toBe("deny")
   }),
 )
 
@@ -741,3 +759,29 @@ it.instance(
     },
   },
 )
+
+describe("P4.4 plan legacy allow removal — static regression", () => {
+  test("no production .opencode/plans allow rule remains in targeted files", () => {
+    const targets = [
+      "src/kilocode/agent/index.ts",
+      "src/agent/agent.ts",
+    ]
+    for (const rel of targets) {
+      const abs = path.join(import.meta.dir, "../../", rel)
+      const txt = readFileSync(abs, "utf8")
+      // Legacy allow entry must be absent
+      expect(txt).not.toContain(path.join(".opencode", "plans", "*.md"))
+      expect(txt).not.toContain(".opencode/plans")
+      expect(txt).not.toContain('path.join(".opencode"')
+    }
+    // Canonical preservation in kilocode agent file (path.join form)
+    const kilo = readFileSync(path.join(import.meta.dir, "../../src/kilocode/agent/index.ts"), "utf8")
+    expect(kilo).toContain('path.join(".kilo", "plans", "*.md")')
+    expect(kilo).toContain('path.join("plans", "*.md")')
+    expect(kilo).toContain('path.join(".plans", "*.md")')
+    // Global data plan path preserved in both files
+    expect(kilo).toContain('path.join(Global.Path.data')
+    const base = readFileSync(path.join(import.meta.dir, "../../src/agent/agent.ts"), "utf8")
+    expect(base).toContain('path.join(Global.Path.data')
+  })
+})
