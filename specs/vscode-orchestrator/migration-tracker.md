@@ -301,6 +301,17 @@ These rules govern all future writes to this tracker. Violations are scope viola
 12. Link convention (compact): in tables use `[test: <package-qualified path>](../../packages/<...>)` and `[doc: <path>](<relative path>)` with repository-relative package-qualified paths for tests and valid relative Markdown links for local docs/tests; keep one link per evidence item and reference the canonical §8 table or matrix where repetition would bloat the index. Unresolvable local pointers must be marked explicit unresolved pointer, not guessed.
 13. Do not change technical implementation or evidence contents in this tracker change; this tracker changes governance and references only (LOCK-005).
 
+### 9.1 Migration-scoped commit batching (P4.4/P4.5/P5 only — not repository-wide)
+
+This subsection applies only to this VS Code orchestrator migration (future P4.4/P4.5/P5 work) and is not repository-wide Git policy.
+
+- Group implementation, callers, tests, generated artifacts, and tracker evidence by one substantive cohesive behavior or residual boundary.
+- Do not give isolated mechanical cleanup (unused import, single constant, comment) a standalone migration commit; include it with its owning substantive batch.
+- Do not batch unrelated phases or rows.
+- Tracker entries and Git commits are independent: one entry may span implementation, audit-fix, and validation commits, and related work may share a commit when it remains one cohesive boundary.
+- Create a migration commit when the batch produces a recognizable behavior change, materially advances a row/gate, or completes a cohesive residual package.
+- Existing tracker write rules, evidence requirements, and architecture/quality gates remain authoritative.
+
 ## 10. Archive Map
 
 What moved to [archive/migration-tracker-history-2026-08-28.md](archive/migration-tracker-history-2026-08-28.md) (verbatim, 1,879 lines):
