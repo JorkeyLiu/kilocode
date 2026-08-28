@@ -270,6 +270,45 @@ describe("P4.4 legacy filesystem discovery removal — .kilocode/.opencode absen
     expect(kiloOverlap.ceilingId).toBe("(b)")
   })
 
+  test("behavioral: global ~/.kilo/plans protected outside workspace, workspace .kilo/plans exempt", async () => {
+    const home = os.homedir()
+    await using tmp = await tmpdir()
+    const ws = tmp.path
+    expect(ws).not.toBe(home)
+    // global ~/.kilo/plans remains protected when workspace is elsewhere
+    expect(Evaluator.isProtectedForCeiling(path.join(home, ".kilo", "plans", "foo.md"), ws, "edit")).toBe(true)
+    expect(Evaluator.isProtectedForCeiling(path.join(home, ".kilo", "plans", "nested", "bar.md"), ws, "edit")).toBe(true)
+    // workspace-local .kilo/plans is exempt
+    expect(Evaluator.isProtectedForCeiling(path.join(ws, ".kilo", "plans", "foo.md"), ws, "edit")).toBe(false)
+    expect(Evaluator.isProtectedForCeiling(".kilo/plans/foo.md", ws, "edit")).toBe(false)
+    // non-plans global remains protected for completeness
+    expect(Evaluator.isProtectedForCeiling(path.join(home, ".kilo", "foo.md"), ws, "edit")).toBe(true)
+    expect(Evaluator.isProtectedForCeiling(path.join(Global.Path.config, "kilo.jsonc"), ws, "edit")).toBe(true)
+    // legacy plans never protected
+    expect(Evaluator.isProtectedForCeiling(path.join(home, ".kilocode", "plans", "foo.md"), ws, "edit")).toBe(false)
+    // evaluator ceiling: global plans triggers class-b, workspace plans does not
+    const baseReq = (pattern: string) => ({
+      permission: "edit" as const,
+      patterns: [pattern],
+      targets: [Evaluator.canonicalForPermission(pattern, "edit", ws)],
+      permissionRequestId: "per_global_plans",
+      operationId: "permission:per_global_plans",
+      sessionID: "ses_test",
+      agent: "test",
+      workspaceRoot: ws,
+    })
+    const layers: Evaluator.LayerInput[] = [{ kind: "runtime-ceiling", sourceKind: "runtime-safety", canonicalPath: "runtime:ceiling", ruleset: [] }]
+    const globalPlans = Evaluator.evaluate({ request: baseReq(path.join(home, ".kilo", "plans", "foo.md")) as any, layers, approvals: [], allowEverything: false })
+    expect(globalPlans.result).toBe("ask-ceiling")
+    expect(globalPlans.ceilingId).toBe("(b)")
+    const wsPlans = Evaluator.evaluate({ request: baseReq(path.join(ws, ".kilo", "plans", "foo.md")) as any, layers, approvals: [], allowEverything: false })
+    expect(wsPlans.result).toBe("ask")
+    expect(wsPlans.ceilingId).toBeNull()
+    const wsRelative = Evaluator.evaluate({ request: baseReq(".kilo/plans/foo.md") as any, layers, approvals: [], allowEverything: false })
+    expect(wsRelative.result).toBe("ask")
+    expect(wsRelative.ceilingId).toBeNull()
+  })
+
   test("behavioral: MCP resolver chooses canonical .kilo and never legacy even if legacy exists", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
