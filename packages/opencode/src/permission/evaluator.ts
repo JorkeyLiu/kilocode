@@ -208,6 +208,11 @@ export function isProtectedForCeiling(pattern: string, workspaceRoot?: string, p
 function isGlobalProtectedPath(absCanonical: string): boolean {
   const physChild = physicalPath(absCanonical) ?? absCanonical
   const normChild = canonicalPosix(physChild)
+  // Exclude .kilo/plans from global protection (exempt even when workspace overlaps global root)
+  const segs = normChild.split("/")
+  for (let i = 0; i < segs.length - 1; i++) {
+    if (segs[i] === ".kilo" && segs[i + 1] === "plans") return false
+  }
   const candidates = [
     Global.Path.config,
     path.join(os.homedir(), ".kilo"),
@@ -230,6 +235,17 @@ function isProtectedPath(p: string, workspaceRoot?: string) {
   const norm = canonicalPosix(p)
   const abs = canonicalAbsolutePhysical(p, workspaceRoot)
   const rootFiles = new Set(["kilo.json", "kilo.jsonc", "AGENTS.md"])
+
+  // workspace .kilo/plans exemption before global (overlap: workspace == $HOME)
+  if (workspaceRoot) {
+    const ws = canonicalPosix(workspaceRoot)
+    const physWs = canonicalPosix(physicalPath(workspaceRoot) ?? workspaceRoot)
+    for (const cand of [ws, physWs]) {
+      const kiloRoot = path.posix.join(cand, ".kilo")
+      const absNorm = canonicalPosix(abs)
+      if (absNorm === kiloRoot + "/plans" || absNorm.startsWith(kiloRoot + "/plans/")) return false
+    }
+  }
 
   // global config path - precise check (not substring)
   if (isGlobalProtectedPath(abs) || isGlobalProtectedPath(norm)) return true

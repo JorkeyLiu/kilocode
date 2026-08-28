@@ -236,6 +236,40 @@ describe("P4.4 legacy filesystem discovery removal — .kilocode/.opencode absen
     expect(opencodeRoot.result).toBe("ask")
   })
 
+  test("behavioral: evaluator workspace .kilo/plans exempt even when workspace overlaps global config root", () => {
+    const home = os.homedir()
+    const ws = home
+    // absolute workspace .kilo/plans must be exempt even though ~/.kilo is global protected root
+    expect(Evaluator.isProtectedForCeiling(path.join(home, ".kilo", "plans", "foo.md"), ws, "edit")).toBe(false)
+    expect(Evaluator.isProtectedForCeiling(path.join(home, ".kilo", "plans", "nested", "bar.md"), ws, "edit")).toBe(false)
+    // relative .kilo/plans with overlapping workspace also exempt
+    expect(Evaluator.isProtectedForCeiling(".kilo/plans/foo.md", ws, "edit")).toBe(false)
+    // canonical .kilo file still protected under overlap
+    expect(Evaluator.isProtectedForCeiling(path.join(home, ".kilo", "foo.md"), ws, "edit")).toBe(true)
+    expect(Evaluator.isProtectedForCeiling(".kilo/foo.md", ws, "edit")).toBe(true)
+    expect(Evaluator.isProtectedForCeiling(path.join(home, ".kilo", "kilo.jsonc"), ws, "edit")).toBe(true)
+    // Global.Path.config file remains protected (non-plans)
+    expect(Evaluator.isProtectedForCeiling(path.join(Global.Path.config, "kilo.jsonc"), ws, "edit")).toBe(true)
+    // evaluator evaluate: plans should not trigger ceiling even under overlap
+    const baseReq = (pattern: string) => ({
+      permission: "edit" as const,
+      patterns: [pattern],
+      targets: [Evaluator.canonicalForPermission(pattern, "edit", ws)],
+      permissionRequestId: "per_overlap",
+      operationId: "permission:per_overlap",
+      sessionID: "ses_test",
+      agent: "test",
+      workspaceRoot: ws,
+    })
+    const layers: Evaluator.LayerInput[] = [{ kind: "runtime-ceiling", sourceKind: "runtime-safety", canonicalPath: "runtime:ceiling", ruleset: [] }]
+    const plansOverlap = Evaluator.evaluate({ request: baseReq(path.join(home, ".kilo", "plans", "foo.md")) as any, layers, approvals: [], allowEverything: false })
+    expect(plansOverlap.result).toBe("ask")
+    expect(plansOverlap.ceilingId).toBeNull()
+    const kiloOverlap = Evaluator.evaluate({ request: baseReq(path.join(home, ".kilo", "foo.md")) as any, layers, approvals: [], allowEverything: false })
+    expect(kiloOverlap.result).toBe("ask-ceiling")
+    expect(kiloOverlap.ceilingId).toBe("(b)")
+  })
+
   test("behavioral: MCP resolver chooses canonical .kilo and never legacy even if legacy exists", async () => {
     await using tmp = await tmpdir({
       init: async (dir) => {
@@ -259,7 +293,18 @@ describe("P4.4 legacy filesystem discovery removal — .kilocode/.opencode absen
     await Bun.write(path.join(tmp.path, ".kilo", "kilo.jsonc"), JSON.stringify({ mcp: { s: { type: "local", command: ["echo"] } } }))
     const canonical = await resolveConfigPath(tmp.path, false)
     expect(canonical).toBe(path.join(tmp.path, ".kilo", "kilo.jsonc"))
-    // Global resolver: ignore opencode, pick kilo.jsonc
+    // Local fallback: when only .kilo/kilo.json exists, resolver picks .kilo/kilo.json (canonical .json fallback)
+    await using ltmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.$`mkdir -p ${path.join(dir, ".kilo")}`.quiet()
+        await Bun.write(path.join(dir, ".kilo", "kilo.json"), JSON.stringify({ mcp: {} }))
+      },
+    })
+    const lFallback = await resolveConfigPath(ltmp.path, false)
+    expect(lFallback).toBe(path.join(ltmp.path, ".kilo", "kilo.json"))
+    expect(path.basename(lFallback)).not.toContain("opencode")
+    expect(path.basename(lFallback)).toBe("kilo.json")
+    // Global resolver: ignore opencode, pick kilo.json when jsonc absent
     await using gtmp = await tmpdir({
       init: async (dir) => {
         await Bun.write(path.join(dir, "opencode.json"), JSON.stringify({ mcp: {} }))
@@ -267,8 +312,10 @@ describe("P4.4 legacy filesystem discovery removal — .kilocode/.opencode absen
       },
     })
     const gFallback = await resolveConfigPath(gtmp.path, true)
-    // prefers kilo.jsonc if exists? we only have kilo.json, so picks kilo.json (canonical)
-    // create kilo.jsonc and test priority
+    expect(gFallback).toBe(path.join(gtmp.path, "kilo.json"))
+    expect(path.basename(gFallback)).not.toContain("opencode")
+    expect(path.basename(gFallback)).toBe("kilo.json")
+    // create kilo.jsonc and test priority prefers jsonc
     await Bun.write(path.join(gtmp.path, "kilo.jsonc"), JSON.stringify({ mcp: {} }))
     const gCanonical = await resolveConfigPath(gtmp.path, true)
     expect(gCanonical).toBe(path.join(gtmp.path, "kilo.jsonc"))
