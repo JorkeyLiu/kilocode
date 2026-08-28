@@ -347,7 +347,7 @@ non-preservation clause of LOCK-005 for the existing compaction implementation;
 LOCK-005's minimal internal overflow safeguard remains in the final-required set
 through H-13); none are deferred. Evidence
 categories for each removal (source/tests/docs/generated SDK/config/i18n/build/
-package) are tracked in `migration-tracker.md` section 7. Removals are also
+package) are tracked in `migration-tracker.md` §6 Removal And Reconstruction Index. Removals are also
 structural performance gates: a removed feature must not contribute to worker
 startup/readiness (LOCK-PERF-3), and each removal subphase proves
 removed-feature initialization/readers/listeners/resources are absent and

@@ -24,7 +24,7 @@ This artifact is the evidence required by the locked decisions for R18. No value
 |---|---|---|
 | `specs/vscode-orchestrator/runtime-and-configuration-direction.md` | §5.3 Permission composition | Restrictive policy stack, monotonic deny/ask/allow, child inheritance, approval records |
 | `specs/vscode-orchestrator/runtime-and-configuration-direction.md` | §9 R18 | Bounded specification-only resolution of the eight unresolved permission-evaluator areas |
-| `specs/vscode-orchestrator/migration-tracker.md` | §5 P4 checklist permission-evaluator gate (line 971 in original) and §9 R18 | Implementation/test gate remains open and unchecked; mirrored R18 row (Owner Hub, Required by P4) |
+| `specs/vscode-orchestrator/migration-tracker.md` | §4 Active Gates (P4 permission-evaluator gate) and §7 Decisions (R18) | Implementation/test gate remains open and unchecked; mirrored R18 row (Owner Hub, Required by P4) |
 | `specs/vscode-orchestrator/evidence/p4.3-pre-cutover-reconciliation-checklist.md` | Entire file | Must remain byte-identical; reconciliation NOT performed; cutover NOT occurred |
 | `specs/vscode-orchestrator/p0-current-state-inventory.md` | §6.1 config sources; §5.2 agent manifests | Canonical file/asset provenance |
 | `packages/core/src/v1/config/permission.ts` | InputObject | Built-in permission identifier contract (mirrored in R18) |
@@ -47,7 +47,7 @@ This artifact is the evidence required by the locked decisions for R18. No value
 
 ## R18 Bounded Decision Summary
 
-R18 is recorded in `specs/vscode-orchestrator/runtime-and-configuration-direction.md` §9 (after R17) and mirrored in `specs/vscode-orchestrator/migration-tracker.md` §9 (Owner Hub, Required by P4, dated 2026-08-24). Both entries state explicitly that the evaluator implementation/test gate remains open and that the evidence artifact is specification-only. R18 resolves exactly the eight areas below and nothing else. Additions to the ceiling catalog require a new bounded decision.
+R18 is recorded in `specs/vscode-orchestrator/runtime-and-configuration-direction.md` §9 (after R17) and mirrored in `specs/vscode-orchestrator/migration-tracker.md` §7 Decisions (R18) (Owner Hub, Required by P4, dated 2026-08-24). Both entries state explicitly that the evaluator implementation/test gate remains open and that the evidence artifact is specification-only. R18 resolves exactly the eight areas below and nothing else. Additions to the ceiling catalog require a new bounded decision.
 
 ## 1. Hard-Safety Ceiling Catalog and Override Behavior (complete v1)
 
