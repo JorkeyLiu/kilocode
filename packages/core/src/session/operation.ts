@@ -41,6 +41,94 @@ export function isTerminal(outcome: Outcome): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// R12 tiers + redaction/cap boundary (core-owned, persists only redacted)
+// ---------------------------------------------------------------------------
+export const TIERS = ["durable", "diagnostic", "panel-visible"] as const
+export type Tier = (typeof TIERS)[number]
+export type Consumer = "persist" | "diagnose" | "project"
+
+export const FIELD_TIERS: Readonly<Record<keyof FailureRecord, Tier>> = {
+  opId: "panel-visible",
+  opKind: "durable",
+  outcome: "panel-visible",
+  code: "panel-visible",
+  message: "panel-visible",
+  time: "durable",
+  cancel: "panel-visible",
+  detail: "diagnostic",
+  stack: "diagnostic",
+}
+
+const quotedScrub =
+  /(api[_-]?key|apikey|token|authorization|password|secret|credential)\s*[:=]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/gi
+const bearerScrub =
+  /(authorization)\s*[:=]\s*Bearer\s+(?:\[redacted\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;"')\]}]+)/gi
+const valueScrub =
+  /(api[_-]?key|apikey|token|authorization|password|secret|credential)\s*[:=]\s*(?:\[redacted\]|[^\s,;"')\]}]+)/gi
+
+function cap(s: string, max: number): string {
+  if (s.length > max) return s.slice(0, max) + "…"
+  return s
+}
+
+function scrubString(s: string): string {
+  s = s.replace(quotedScrub, (_m: string, k: string) => `${k}=[redacted]`)
+  s = s.replace(bearerScrub, (_m: string, k: string) => `${k}=[redacted]`)
+  return s.replace(valueScrub, (_m: string, k: string) => `${k}=[redacted]`)
+}
+
+export function normalizeRecord(record: FailureRecord): FailureRecord {
+  // preserve 9-field shape, scrub + cap string fields
+  const out: FailureRecord = {
+    opId: record.opId,
+    opKind: record.opKind,
+    outcome: record.outcome,
+    code: record.code,
+    message: cap(scrubString(record.message), 500),
+    time: record.time,
+  }
+  if (record.cancel !== undefined) out.cancel = { source: record.cancel.source }
+  if (record.detail !== undefined) out.detail = cap(scrubString(record.detail), 1000)
+  if (record.stack !== undefined) out.stack = cap(scrubString(record.stack), 2000)
+  return out
+}
+
+export function select(record: FailureRecord, consumer: Consumer): Partial<FailureRecord> {
+  const allowed = new Set<Tier>()
+  if (consumer === "persist") {
+    allowed.add("durable")
+    allowed.add("diagnostic")
+    allowed.add("panel-visible")
+  } else if (consumer === "diagnose") {
+    allowed.add("diagnostic")
+    allowed.add("panel-visible")
+  } else {
+    allowed.add("panel-visible")
+  }
+  const out: Partial<FailureRecord> = {}
+  for (const k of Object.keys(FIELD_TIERS) as (keyof FailureRecord)[]) {
+    const tier = FIELD_TIERS[k]
+    if (!allowed.has(tier)) continue
+    const v = record[k]
+    if (v === undefined) continue
+    ;(out as Record<string, unknown>)[k] = v
+  }
+  return out
+}
+
+export function toPersistedRecord(record: FailureRecord): FailureRecord {
+  return normalizeRecord(record)
+}
+
+export function toPanelRecord(record: FailureRecord): Partial<FailureRecord> {
+  return select(normalizeRecord(record), "project")
+}
+
+export function toDiagnosticRecord(record: FailureRecord): Partial<FailureRecord> {
+  return select(normalizeRecord(record), "diagnose")
+}
+
+// ---------------------------------------------------------------------------
 // Identity constructors — stable, deterministic, no colon in embedded IDs
 // ---------------------------------------------------------------------------
 function assertNoColon(value: string, label: string) {
@@ -55,14 +143,16 @@ export function promptId(messageId: string): string {
 }
 
 export function providerId(assistantMessageId: string, attempt: number): string {
-  if (typeof assistantMessageId !== "string" || assistantMessageId.length === 0) throw new TypeError("assistantMessageId must be non-empty string")
+  if (typeof assistantMessageId !== "string" || assistantMessageId.length === 0)
+    throw new TypeError("assistantMessageId must be non-empty string")
   assertNoColon(assistantMessageId, "assistantMessageId")
   if (!Number.isInteger(attempt) || attempt < 0) throw new TypeError("attempt must be nonnegative integer")
   return `provider:${assistantMessageId}:${attempt}`
 }
 
 export function toolId(assistantMessageId: string, callId: string): string {
-  if (typeof assistantMessageId !== "string" || assistantMessageId.length === 0) throw new TypeError("assistantMessageId must be non-empty string")
+  if (typeof assistantMessageId !== "string" || assistantMessageId.length === 0)
+    throw new TypeError("assistantMessageId must be non-empty string")
   assertNoColon(assistantMessageId, "assistantMessageId")
   if (typeof callId !== "string" || callId.length === 0) throw new TypeError("callId must be non-empty string")
   assertNoColon(callId, "callId")
@@ -76,10 +166,12 @@ export function permissionId(requestId: string): string {
 }
 
 export function taskId(childSessionId: string, parentCallId?: string): string {
-  if (typeof childSessionId !== "string" || childSessionId.length === 0) throw new TypeError("childSessionId must be non-empty string")
+  if (typeof childSessionId !== "string" || childSessionId.length === 0)
+    throw new TypeError("childSessionId must be non-empty string")
   assertNoColon(childSessionId, "childSessionId")
   if (parentCallId !== undefined) {
-    if (typeof parentCallId !== "string" || parentCallId.length === 0) throw new TypeError("parentCallId must be non-empty string")
+    if (typeof parentCallId !== "string" || parentCallId.length === 0)
+      throw new TypeError("parentCallId must be non-empty string")
     assertNoColon(parentCallId, "parentCallId")
     return `task:${childSessionId}:${parentCallId}`
   }
@@ -99,7 +191,8 @@ export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   } else if (kind === "provider") {
     if (rest.length !== 2) throw new TypeError(`provider opId must have 2 segments: ${opId}`)
     const attemptStr = rest[1]!
-    if (!/^(0|[1-9][0-9]*)$/.test(attemptStr)) throw new TypeError(`provider attempt must be nonnegative integer: ${opId}`)
+    if (!/^(0|[1-9][0-9]*)$/.test(attemptStr))
+      throw new TypeError(`provider attempt must be nonnegative integer: ${opId}`)
   } else if (kind === "tool") {
     if (rest.length !== 2) throw new TypeError(`tool opId must have 2 segments: ${opId}`)
   } else if (kind === "permission") {
@@ -125,10 +218,12 @@ export function validateRecord(record: unknown): FailureRecord {
   if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
   parseOpId(opId)
   const opKind = r["opKind"]
-  if (typeof opKind !== "string" || !opKindSet.has(opKind)) throw new TypeError(`opKind must be one of ${OP_KINDS.join(", ")}`)
+  if (typeof opKind !== "string" || !opKindSet.has(opKind))
+    throw new TypeError(`opKind must be one of ${OP_KINDS.join(", ")}`)
   assertOpIdMatchesKind(opId, opKind as OpKind)
   const outcome = r["outcome"]
-  if (typeof outcome !== "string" || !outcomeSet.has(outcome)) throw new TypeError(`outcome must be one of ${OUTCOMES.join(", ")}`)
+  if (typeof outcome !== "string" || !outcomeSet.has(outcome))
+    throw new TypeError(`outcome must be one of ${OUTCOMES.join(", ")}`)
   const code = r["code"]
   if (typeof code !== "string" || code.length === 0) throw new TypeError("code must be non-empty string")
   const message = r["message"]
@@ -137,10 +232,12 @@ export function validateRecord(record: unknown): FailureRecord {
   if (typeof time !== "number" || !Number.isFinite(time)) throw new TypeError("time must be finite number")
   const cancel = r["cancel"]
   if (cancel !== undefined) {
-    if (cancel === null || typeof cancel !== "object" || Array.isArray(cancel)) throw new TypeError("cancel must be object")
+    if (cancel === null || typeof cancel !== "object" || Array.isArray(cancel))
+      throw new TypeError("cancel must be object")
     const c = cancel as Record<string, unknown>
     const source = c["source"]
-    if (typeof source !== "string" || !cancelSet.has(source)) throw new TypeError(`cancel.source must be one of ${CANCEL_SOURCES.join(", ")}`)
+    if (typeof source !== "string" || !cancelSet.has(source))
+      throw new TypeError(`cancel.source must be one of ${CANCEL_SOURCES.join(", ")}`)
     const extraKeys = Object.keys(c).filter((k) => k !== "source")
     if (extraKeys.length > 0) throw new TypeError(`cancel has extra keys: ${extraKeys.join(",")}`)
   }
@@ -192,89 +289,135 @@ type DbOrTx = Database.Interface["db"] | Parameters<Parameters<Database.Interfac
 
 function putTx(tx: DbOrTx, sessionID: SessionSchema.ID, record: FailureRecord): Effect.Effect<FailureRecord> {
   return Effect.gen(function* () {
-    // validate shape and opId kind correspondence already done by caller, but re-check for tx path
+    // validate shape then enforce redacted/capped boundary before any persistence
     validateRecord(record)
+    const normalized = normalizeRecord(record)
     // ensure session exists
     const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
     if (!session) yield* Effect.die(new Error(`session not found ${sessionID}`))
     // need to fetch existing operation if any
-    const existingRow = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
+    const existingRow = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, normalized.opId))
+      .get()
+      .pipe(Effect.orDie)
     if (existingRow) {
       // cross-session identity check
-      if (existingRow.session_id !== sessionID) yield* Effect.die(new Error(`cross-identity opId ${record.opId} already owned by session ${existingRow.session_id}`))
-      if (existingRow.op_kind !== record.opKind) yield* Effect.die(new Error(`cross-kind conflict for ${record.opId}: existing ${existingRow.op_kind} vs new ${record.opKind}`))
+      if (existingRow.session_id !== sessionID)
+        yield* Effect.die(
+          new Error(`cross-identity opId ${normalized.opId} already owned by session ${existingRow.session_id}`),
+        )
+      if (existingRow.op_kind !== normalized.opKind)
+        yield* Effect.die(
+          new Error(
+            `cross-kind conflict for ${normalized.opId}: existing ${existingRow.op_kind} vs new ${normalized.opKind}`,
+          ),
+        )
       const existingRecord = rowToRecord(existingRow)
-      if (recordsEqual(existingRecord, record)) {
+      if (recordsEqual(existingRecord, normalized)) {
         // idempotent — no revision, no feed
         return existingRecord
       }
       // not equal: enforce terminal regression and narrowest transition
-      if (isTerminal(existingRecord.outcome) && record.outcome === "in-flight") {
-        yield* Effect.die(new Error(`terminal outcome ${existingRecord.outcome} cannot regress to in-flight for ${record.opId}`))
+      if (isTerminal(existingRecord.outcome) && normalized.outcome === "in-flight") {
+        yield* Effect.die(
+          new Error(`terminal outcome ${existingRecord.outcome} cannot regress to in-flight for ${normalized.opId}`),
+        )
       }
-      if (isTerminal(existingRecord.outcome) && isTerminal(record.outcome)) {
-        yield* Effect.die(new Error(`terminal outcome already recorded for ${record.opId}: ${existingRecord.outcome} vs ${record.outcome}`))
+      if (isTerminal(existingRecord.outcome) && isTerminal(normalized.outcome)) {
+        yield* Effect.die(
+          new Error(
+            `terminal outcome already recorded for ${normalized.opId}: ${existingRecord.outcome} vs ${normalized.outcome}`,
+          ),
+        )
       }
-      if (existingRecord.outcome === "in-flight" && isTerminal(record.outcome)) {
+      if (existingRecord.outcome === "in-flight" && isTerminal(normalized.outcome)) {
         // allowed transition — fall through to update
       } else {
         // any other non-identical transition (e.g., in-flight -> in-flight with different message) is conflict
-        yield* Effect.die(new Error(`conflicting update for ${record.opId}: ${existingRecord.outcome} -> ${record.outcome}`))
+        yield* Effect.die(
+          new Error(`conflicting update for ${normalized.opId}: ${existingRecord.outcome} -> ${normalized.outcome}`),
+        )
       }
       // allowed update: advance revision then update row
       yield* SessionRevision.advanceTx(sessionID, tx)
-      const after = yield* tx.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+      const after = yield* tx
+        .select({ rev: SessionTable.revision })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       const nextRev = after!.rev
       yield* tx
         .update(SessionOperationTable)
         .set({
-          op_kind: record.opKind,
-          outcome: record.outcome,
-          code: record.code,
-          message: record.message,
-          time: record.time,
-          cancel: record.cancel?.source ?? null,
-          detail: record.detail ?? null,
-          stack: record.stack ?? null,
+          op_kind: normalized.opKind,
+          outcome: normalized.outcome,
+          code: normalized.code,
+          message: normalized.message,
+          time: normalized.time,
+          cancel: normalized.cancel?.source ?? null,
+          detail: normalized.detail ?? null,
+          stack: normalized.stack ?? null,
           revision: nextRev,
           session_id: sessionID,
         })
-        .where(eq(SessionOperationTable.op_id, record.opId))
+        .where(eq(SessionOperationTable.op_id, normalized.opId))
         .run()
         .pipe(Effect.orDie)
-      const updated = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
-      if (!updated) yield* Effect.die(new Error(`operation row missing after update ${record.opId}`))
+      const updated = yield* tx
+        .select()
+        .from(SessionOperationTable)
+        .where(eq(SessionOperationTable.op_id, normalized.opId))
+        .get()
+        .pipe(Effect.orDie)
+      if (!updated) yield* Effect.die(new Error(`operation row missing after update ${normalized.opId}`))
       return rowToRecord(updated as typeof SessionOperationTable.$inferSelect)
     } else {
       // new operation: advance revision then insert
       yield* SessionRevision.advanceTx(sessionID, tx)
-      const after = yield* tx.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+      const after = yield* tx
+        .select({ rev: SessionTable.revision })
+        .from(SessionTable)
+        .where(eq(SessionTable.id, sessionID))
+        .get()
+        .pipe(Effect.orDie)
       const nextRev = after!.rev
       yield* tx
         .insert(SessionOperationTable)
         .values({
-          op_id: record.opId,
+          op_id: normalized.opId,
           session_id: sessionID,
-          op_kind: record.opKind,
-          outcome: record.outcome,
-          code: record.code,
-          message: record.message,
-          time: record.time,
-          cancel: record.cancel?.source ?? null,
-          detail: record.detail ?? null,
-          stack: record.stack ?? null,
+          op_kind: normalized.opKind,
+          outcome: normalized.outcome,
+          code: normalized.code,
+          message: normalized.message,
+          time: normalized.time,
+          cancel: normalized.cancel?.source ?? null,
+          detail: normalized.detail ?? null,
+          stack: normalized.stack ?? null,
           revision: nextRev,
         })
         .run()
         .pipe(Effect.orDie)
-      const inserted = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, record.opId)).get().pipe(Effect.orDie)
-      if (!inserted) yield* Effect.die(new Error(`operation row missing after insert ${record.opId}`))
+      const inserted = yield* tx
+        .select()
+        .from(SessionOperationTable)
+        .where(eq(SessionOperationTable.op_id, normalized.opId))
+        .get()
+        .pipe(Effect.orDie)
+      if (!inserted) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
       return rowToRecord(inserted as typeof SessionOperationTable.$inferSelect)
     }
   })
 }
 
-export function put(db: Database.Interface["db"], sessionID: SessionSchema.ID, record: FailureRecord): Effect.Effect<FailureRecord> {
+export function put(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+): Effect.Effect<FailureRecord> {
   return Effect.gen(function* () {
     validateRecord(record)
     return yield* db.transaction((tx) => putTx(tx as DbOrTx, sessionID, record), { behavior: "immediate" })
@@ -284,7 +427,12 @@ export function put(db: Database.Interface["db"], sessionID: SessionSchema.ID, r
 export function get(db: Database.Interface["db"], opId: string): Effect.Effect<FailureRecord | undefined> {
   return Effect.gen(function* () {
     if (typeof opId !== "string" || opId.length === 0) yield* Effect.die(new TypeError("opId must be non-empty string"))
-    const row = yield* db.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, opId)).get().pipe(Effect.orDie)
+    const row = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, opId))
+      .get()
+      .pipe(Effect.orDie)
     if (!row) return undefined
     return rowToRecord(row)
   }).pipe(Effect.orDie) as Effect.Effect<FailureRecord | undefined>
@@ -305,7 +453,12 @@ export function list(db: Database.Interface["db"], sessionID: SessionSchema.ID):
 
 export function getTx(tx: DbOrTx, opId: string): Effect.Effect<FailureRecord | undefined> {
   return Effect.gen(function* () {
-    const row = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, opId)).get().pipe(Effect.orDie)
+    const row = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, opId))
+      .get()
+      .pipe(Effect.orDie)
     if (!row) return undefined
     return rowToRecord(row)
   }).pipe(Effect.orDie) as Effect.Effect<FailureRecord | undefined>
