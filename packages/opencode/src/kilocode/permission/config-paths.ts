@@ -20,7 +20,7 @@ export namespace ConfigProtection {
    * Root-level config files that must be protected.
    * Matched only when the relative path has no directory component.
    */
-  const CONFIG_ROOT_FILES = new Set(["kilo.json", "kilo.jsonc", "opencode.json", "opencode.jsonc", "AGENTS.md"])
+  const CONFIG_ROOT_FILES = new Set(["kilo.json", "kilo.jsonc", "AGENTS.md"])
 
   /** Metadata key used to signal the UI to hide the "Allow always" option. */
   export const DISABLE_ALWAYS_KEY = "disableAlways" as const

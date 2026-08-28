@@ -189,6 +189,29 @@ describe("ConfigProtection.isRequest", () => {
     }
   })
 
+  test("returns false for legacy opencode root files (canonical kilo.json/kilo.jsonc/AGENTS.md only)", () => {
+    for (const file of ["opencode.json", "opencode.jsonc"]) {
+      expect(
+        ConfigProtection.isRequest({
+          permission: "edit",
+          patterns: [file],
+        }),
+      ).toBe(false)
+      expect(ConfigProtection.isRelative(file)).toBe(false)
+      expect(ConfigProtection.isProtectedPath(file)).toBe(false)
+    }
+    // canonical remains protected (positive control)
+    for (const file of ["kilo.json", "kilo.jsonc", "AGENTS.md"]) {
+      expect(ConfigProtection.isRelative(file)).toBe(true)
+      expect(ConfigProtection.isProtectedPath(file)).toBe(true)
+    }
+    // .kilo directory behaviour remains protected (positive control)
+    expect(ConfigProtection.isRelative(".kilo/foo.md")).toBe(true)
+    expect(ConfigProtection.isRelative(".kilo/plans/foo.md")).toBe(false)
+    expect(ConfigProtection.isRequest({ permission: "edit", patterns: [".kilo/foo.md"] })).toBe(true)
+    expect(ConfigProtection.isProtectedPath(".kilo/foo.md")).toBe(true)
+  })
+
   test("returns false for edit targeting non-config files", () => {
     const result = ConfigProtection.isRequest({
       permission: "edit",
