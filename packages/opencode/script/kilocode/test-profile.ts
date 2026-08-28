@@ -57,6 +57,7 @@ export namespace TestProfile {
           "kilocode/p4-4-wellknown-provider-auth-removal.test.ts",
           "kilocode/sandbox/*.test.ts",
           "kilocode/server/{config-overlay,listener-runtime,tui-config,worktree-list}.test.ts",
+          "kilocode/server/kilo-gateway-notifications.test.ts",
           "kilocode/session-export/{e2e,sequence,worker,workspace-provider}.test.ts",
           "kilocode/session-export/worker/{storage,zstd}.test.ts",
           "kilocode/tool/repo_clone.test.ts",

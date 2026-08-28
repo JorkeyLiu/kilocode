@@ -593,74 +593,39 @@ describe("linked worktree config", () => {
   })
 })
 
-describe("opencode config migration notice", () => {
-  const withGlobalConfig = async <T>(dir: string, fn: () => Promise<T> | T): Promise<T> => {
-    const prev = Global.Path.config
-    ;(Global.Path as { config: string }).config = dir
-    try {
-      return await fn()
-    } finally {
-      ;(Global.Path as { config: string }).config = prev
-    }
-  }
-
-  test("detects a project .opencode directory", async () => {
-    await using globalTmp = await tmpdir()
-    await using tmp = await tmpdir()
-    await Filesystem.write(path.join(tmp.path, ".opencode", "opencode.json"), JSON.stringify({ model: "test/legacy" }))
-
-    // Isolate the global config dir so a real ~/.config/opencode on the host cannot interfere.
-    await withGlobalConfig(path.join(globalTmp.path, "kilo"), () => {
-      const found = KilocodeConfig.detectOpencodeConfig({ directory: tmp.path, scanProject: true })
-      expect(found).toEqual([path.join(tmp.path, ".opencode")])
-    })
+describe("opencode config migration notice — removed (P4.4 bounded, no scanner)", () => {
+  test("legacy opencode scanner/notification symbols are absent and canonical isConfigDir remains", async () => {
+    const src = await Bun.file(path.join(import.meta.dir, "../../../src/kilocode/config/config.ts")).text()
+    expect(src).not.toContain("detectOpencodeConfig")
+    expect(src).not.toContain("opencodeConfigNotification")
+    expect(src).not.toContain("OPENCODE_NOTIFICATION_ID")
+    expect(src).not.toContain("CONFIG_DOCS_URL")
+    expect(src).not.toContain(".opencode")
+    expect(src).not.toContain("Kilo no longer falls back to opencode")
+    expect(src).not.toContain("flagDir")
+    expect((KilocodeConfig as unknown as Record<string, unknown>).detectOpencodeConfig).toBeUndefined()
+    expect((KilocodeConfig as unknown as Record<string, unknown>).opencodeConfigNotification).toBeUndefined()
+    expect((KilocodeConfig as unknown as Record<string, unknown>).OPENCODE_NOTIFICATION_ID).toBeUndefined()
+    expect((KilocodeConfig as unknown as Record<string, unknown>).CONFIG_DOCS_URL).toBeUndefined()
+    // canonical behavior preserved
+    expect(KilocodeConfig.isConfigDir(".kilo")).toBe(true)
+    expect(KilocodeConfig.isConfigDir(".kilo/foo")).toBe(false)
+    expect(KilocodeConfig.isConfigDir(".kilocode")).toBe(false)
+    expect(KilocodeConfig.isConfigDir(".opencode")).toBe(false)
+    expect(KilocodeConfig.KILO_DIR_SUFFIXES).toEqual([".kilo"])
+    expect(KilocodeConfig.AGENT_PATTERNS.every((p: string) => p.includes(".kilo"))).toBe(true)
   })
 
-  test("detects a global opencode config directory", async () => {
-    await using globalTmp = await tmpdir()
-    await using tmp = await tmpdir()
-    const opencodeDir = path.join(globalTmp.path, "opencode")
-    await Filesystem.write(path.join(opencodeDir, "opencode.json"), JSON.stringify({ model: "test/legacy" }))
-
-    await withGlobalConfig(path.join(globalTmp.path, "kilo"), () => {
-      const found = KilocodeConfig.detectOpencodeConfig({ directory: tmp.path, scanProject: true })
-      expect(found).toEqual([opencodeDir])
-    })
-  })
-
-  test("skips the project scan when disabled", async () => {
-    await using globalTmp = await tmpdir()
-    await using tmp = await tmpdir()
-    await Filesystem.write(path.join(tmp.path, ".opencode", "opencode.json"), JSON.stringify({ model: "test/legacy" }))
-
-    await withGlobalConfig(path.join(globalTmp.path, "kilo"), () => {
-      const found = KilocodeConfig.detectOpencodeConfig({ directory: tmp.path, scanProject: false })
-      expect(found).toEqual([])
-    })
-  })
-
-  test("builds a dismissible notification when opencode config exists", async () => {
-    await using globalTmp = await tmpdir()
-    await using tmp = await tmpdir()
-    await Filesystem.write(path.join(tmp.path, ".opencode", "opencode.json"), JSON.stringify({ model: "test/legacy" }))
-
-    await withGlobalConfig(path.join(globalTmp.path, "kilo"), () => {
-      const notice = KilocodeConfig.opencodeConfigNotification({ directory: tmp.path, scanProject: true })
-      expect(notice?.id).toBe(KilocodeConfig.OPENCODE_NOTIFICATION_ID)
-      expect(notice?.message).toContain(path.join(tmp.path, ".opencode"))
-      expect(notice?.action?.actionURL).toBe(KilocodeConfig.CONFIG_DOCS_URL)
-      expect(notice?.showIn).toEqual(["cli", "extension"])
-    })
-  })
-
-  test("returns no notification when nothing needs migrating", async () => {
-    await using globalTmp = await tmpdir()
-    await using tmp = await tmpdir()
-
-    await withGlobalConfig(path.join(globalTmp.path, "kilo"), () => {
-      const notice = KilocodeConfig.opencodeConfigNotification({ directory: tmp.path, scanProject: true })
-      expect(notice).toBeUndefined()
-    })
+  test("gateway notifications handler no longer synthesizes opencode notice (cloud only)", async () => {
+    const gw = await Bun.file(
+      path.join(import.meta.dir, "../../../src/kilocode/server/httpapi/handlers/kilo-gateway.ts"),
+    ).text()
+    expect(gw).not.toContain("detectOpencodeConfig")
+    expect(gw).not.toContain("opencodeConfigNotification")
+    expect(gw).not.toContain("OPENCODE_NOTIFICATION_ID")
+    expect(gw).not.toContain("KilocodeConfig")
+    expect(gw).not.toContain("Instance.directory")
+    expect(gw).toContain("fetchKilocodeNotifications")
   })
 })
 

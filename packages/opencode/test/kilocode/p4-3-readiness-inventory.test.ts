@@ -194,9 +194,11 @@ const REMOVAL_ANCHORS: Array<{ cls: string; file: string; substr: string }> = [
 ]
 
 // Removal classes that have no distinct effective-config reader anchor.
-// - Legacy opencode.* / .opencode / .kilocode: detectOpencodeConfig explicitly
-//   states "Kilo no longer reads .opencode" and only emits a synthetic
-//   notification (see kilocode/config/config.ts:565-595). Not an effective-config reader.
+// - Legacy opencode.* / .opencode / .kilocode: historically detectOpencodeConfig
+//   emitted a synthetic notification (reference-only, never effective config);
+//   the scanner/notification was deleted in the bounded P4.4 removal
+//   (packages/opencode/src/kilocode/config/config.ts no longer contains
+//   detectOpencodeConfig / opencodeConfigNotification). Not an effective-config reader.
 // - Arbitrary CLI/env override layers: generic catch-all with no source-specific
 //   file reader; the previous anchor result.permission is a derived permission
 //   conversion, not a source reader. Both remain explicit removal boundaries
@@ -385,11 +387,14 @@ describe("P4.3 readiness inventory — closed taxonomy", () => {
     for (const src of removal) {
       expect(REMOVAL_CLASSES).toContain(src.classification.name)
     }
-    // Explicitly verify that the .opencode notification helper is NOT treated as a live reader
+    // Bounded P4.4 removal: synthetic .opencode notification helper deleted — no .opencode directory is scanned
     const notifyFile = join(opencode, "kilocode/config/config.ts")
     const notifyTxt = read(notifyFile)
-    expect(notifyTxt).toContain("detectOpencodeConfig")
-    expect(notifyTxt).toContain("Kilo no longer falls back to opencode configuration")
+    expect(notifyTxt).not.toContain("detectOpencodeConfig")
+    expect(notifyTxt).not.toContain("opencodeConfigNotification")
+    expect(notifyTxt).not.toContain("OPENCODE_NOTIFICATION_ID")
+    expect(notifyTxt).not.toContain("CONFIG_DOCS_URL")
+    expect(notifyTxt).not.toContain(".opencode")
     const canonical = join(opencode, "kilocode/config/config.ts")
     expect(existsSync(canonical)).toBe(true)
     expect(read(canonical)).toContain("ALL_CONFIG_FILES")

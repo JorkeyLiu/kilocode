@@ -54,14 +54,20 @@ describe("P4.4 legacy filesystem discovery removal — .kilocode/.opencode absen
     expect(perm).not.toContain("legacy global dirs")
   })
 
-  test("static: kilocode/config/config.ts effective isConfigDir is canonical .kilo only", () => {
+  test("static: kilocode/config/config.ts effective isConfigDir is canonical .kilo only (P4.4 bounded — opencode scanner removed)", () => {
     const cfg = read("kilocode/config/config.ts")
     expect(cfg).toContain('dir.endsWith(".kilo")')
     expect(cfg).toContain("KILO_DIR_SUFFIXES = [\".kilo\"]")
     expect(cfg).toContain("AGENT_PATTERNS")
-    // notification helper remains but is explicitly non-effective (reference-only)
-    expect(cfg).toContain("detectOpencodeConfig")
-    expect(cfg).toContain("Kilo no longer falls back to opencode configuration")
+    expect(cfg).toContain("function isConfigDir")
+    expect(cfg).not.toContain("flagDir")
+    // Bounded P4.4 removal: reference-only .opencode scanner/notification deleted (not effective config)
+    expect(cfg).not.toContain("detectOpencodeConfig")
+    expect(cfg).not.toContain("opencodeConfigNotification")
+    expect(cfg).not.toContain("OPENCODE_NOTIFICATION_ID")
+    expect(cfg).not.toContain("CONFIG_DOCS_URL")
+    expect(cfg).not.toContain(".opencode")
+    expect(cfg).not.toContain("Kilo no longer falls back to opencode")
   })
 
   test("static: theme.tsx .kilocode retained per LOCK-004 (separate product surface)", () => {

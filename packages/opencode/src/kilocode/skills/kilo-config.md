@@ -326,7 +326,7 @@ The following were active before the P4.3 atomic legacy-reader cutover and are n
 - Legacy filenames: `kilo.json`, `opencode.json`/`opencode.jsonc`, `config.json` (including global legacy TOML `config` auto-migration)
 - Managed config dir (`/etc/kilo/`, `/Library/Application Support/kilo/`, `%ProgramData%\kilo\`) and macOS managed preferences (`ai.opencode.managed.plist` under `/Library/Managed Preferences/`)
 
-Residual `.opencode` directories are detected only for the reference-only `kilo.local.opencode-config-detected` notification via `KilocodeConfig.detectOpencodeConfig` and are never read as config. The legacy source-inventory/Console reporting reader that listed the retired sources above was physically removed (P4.4); no diagnostic source-listing reader or reporting endpoint remains.
+The residual `.opencode` synthetic notification (`kilo.local.opencode-config-detected` via `KilocodeConfig.detectOpencodeConfig`, never effective config) was itself deleted in a bounded P4.4 removal (2026-08-28 — `packages/opencode/src/kilocode/config/config.ts` no longer contains `detectOpencodeConfig`/`opencodeConfigNotification`/`OPENCODE_NOTIFICATION_ID`/`CONFIG_DOCS_URL`, `packages/opencode/src/kilocode/server/httpapi/handlers/kilo-gateway.ts` no longer synthesizes it; cloud `fetchKilocodeNotifications` remains). The legacy source-inventory/Console reporting reader that listed the retired sources above was physically removed (P4.4); no diagnostic source-listing reader or reporting endpoint remains. This bounded removal does not close P4.4, P4.5, P5, or unrelated source/storage rows.
 
 ## Rules contract gap (P4.3 deferred — LOCK-006)
 
