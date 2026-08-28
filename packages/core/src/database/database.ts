@@ -11,6 +11,7 @@ import { DatabaseMigration } from "./migration"
 import { InstallationChannel } from "../installation/version"
 import { acquireLease } from "../cutover/lease"
 import { deriveArchive } from "../cutover/archive-path"
+import * as Log from "../util/log"
 
 const makeDatabase = EffectDrizzleSqlite.makeWithDefaults()
 type DatabaseShape = Effect.Success<typeof makeDatabase>
@@ -118,6 +119,8 @@ export function layerNoLease(filename: string) {
   return Layer.effect(Service, createDbEffect).pipe(Layer.provide(sqliteLayer({ filename })))
 }
 
+const log = Log.create({ service: "database" })
+
 export function path() {
   if (Flag.KILO_DB) {
     if (Flag.KILO_DB === ":memory:" || isAbsolute(Flag.KILO_DB)) return Flag.KILO_DB
@@ -132,7 +135,10 @@ export function path() {
   const safe = InstallationChannel.replace(/[^a-zA-Z0-9._-]/g, "-")
   const next = join(Global.Path.data, `kilo-${safe}.db`)
   const prev = join(Global.Path.data, `opencode-${safe}.db`)
-  if (!existsSync(next) && existsSync(prev)) return prev
+  if (!existsSync(next) && existsSync(prev)) {
+    log.warn("using legacy opencode channel database fallback", { channel: InstallationChannel, safe, canonical: next, legacy: prev })
+    return prev
+  }
   return next
 }
 
