@@ -1,12 +1,16 @@
 import { describe, expect, test } from "bun:test"
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { join, resolve } from "node:path"
+import os from "node:os"
 import path from "path"
 import { Global } from "@opencode-ai/core/global"
+import { Flag } from "@opencode-ai/core/flag/flag"
 import { KilocodePaths } from "../../src/kilocode/paths"
 import { ConfigProtection } from "../../src/kilocode/permission/config-paths"
+import * as Evaluator from "../../src/permission/evaluator"
 import { provideTestInstance, tmpdir } from "../fixture/fixture"
 import { getKiloProjectId } from "../../src/kilocode/project-id"
+import { resolveConfigPath } from "../../src/cli/cmd/mcp"
 
 const opencode = join(import.meta.dir, "../../src")
 const repo = resolve(join(import.meta.dir, "../../../../"))
@@ -144,6 +148,131 @@ describe("P4.4 legacy filesystem discovery removal — .kilocode/.opencode absen
     expect(policy).toContain('"KILO_CONFIG_DIR"')
     expect(policy).toContain('"KILO_CONFIG"')
     expect(Global.Path.config.length).toBeGreaterThan(0)
+  })
+
+  test("behavioral: KILO_CONFIG_DIR -> Global.Path.config override resolves at runtime", async () => {
+    const origEnv = process.env.KILO_CONFIG_DIR
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "kilo-config-dir-test-"))
+    try {
+      process.env.KILO_CONFIG_DIR = tmp
+      // Flag getter reads env live
+      expect(Flag.KILO_CONFIG_DIR).toBe(tmp)
+      // Global.make uses Flag.KILO_CONFIG_DIR ?? Path.config
+      const made = Global.make()
+      expect(made.config).toBe(tmp)
+      // Path.config itself remains XDG, but make() override is the effective authority
+      expect(made.config).not.toBe(Global.Path.config)
+    } finally {
+      if (origEnv === undefined) delete process.env.KILO_CONFIG_DIR
+      else process.env.KILO_CONFIG_DIR = origEnv
+      rmSync(tmp, { recursive: true, force: true })
+      // restore check: after cleanup Flag returns to original
+      expect(Flag.KILO_CONFIG_DIR).toBe(origEnv ?? undefined)
+    }
+  })
+
+  test("behavioral: sandbox deny protects Global.Path.config and KILO envs at runtime", async () => {
+    const { profile } = await import("../../src/kilocode/sandbox/policy")
+    const ctx = { directory: "/tmp/proj", worktree: "/tmp/proj", project: { id: "test" } as any }
+    const p = profile(ctx as any)
+    // filesystem denyWrite must include Global.Path.config sandbox root
+    const denyPaths = p.filesystem.denyWrite.map((r: any) => r.path)
+    expect(denyPaths).toContain(Global.Path.config)
+    // environment deny must include KILO_CONFIG_DIR and related
+    expect(p.environment.deny).toContain("KILO_CONFIG_DIR")
+    expect(p.environment.deny).toContain("KILO_CONFIG")
+    expect(p.environment.deny).toContain("KILO_CONFIG_CONTENT")
+    // allowWrite must include Global.Path.config as writable (sandbox allows with denyWrite overlay)
+    const allowPaths = p.filesystem.allowWrite.map((r: any) => r.path)
+    expect(allowPaths).toContain(Global.Path.config)
+  })
+
+  test("behavioral: evaluator protects canonical .kilo but not legacy .kilocode/.opencode", async () => {
+    const ws = "/tmp/ws-proj"
+    // mutating permissions: edit/write/bash/external_directory are protected
+    expect(Evaluator.isProtectedForCeiling(".kilo/foo.md", ws, "edit")).toBe(true)
+    expect(Evaluator.isProtectedForCeiling(".kilocode/foo.md", ws, "edit")).toBe(false)
+    expect(Evaluator.isProtectedForCeiling(".kilo/package-lock.json", ws, "edit")).toBe(true)
+    expect(Evaluator.isProtectedForCeiling(".kilocode/package-lock.json", ws, "edit")).toBe(false)
+    // opencode.json at root should no longer be protected (canonical only kilo.json[kilo.jsonc])
+    expect(Evaluator.isProtectedForCeiling("kilo.json", ws, "edit")).toBe(true)
+    expect(Evaluator.isProtectedForCeiling("opencode.json", ws, "edit")).toBe(false)
+    expect(Evaluator.isProtectedForCeiling("opencode.jsonc", ws, "edit")).toBe(false)
+    // non-mutating read is never protected
+    expect(Evaluator.isProtectedForCeiling(".kilo/foo.md", ws, "read")).toBe(false)
+    // global protected: ~/.kilo is protected, ~/.kilocode is not
+    const home = os.homedir()
+    const globalKilo = path.join(home, ".kilo", "kilo.jsonc")
+    const globalKilocode = path.join(home, ".kilocode", "kilo.jsonc")
+    expect(Evaluator.isProtectedForCeiling(globalKilo, ws, "edit")).toBe(true)
+    expect(Evaluator.isProtectedForCeiling(globalKilocode, ws, "edit")).toBe(false)
+    // Global.Path.config is protected
+    const globalConfigFile = path.join(Global.Path.config, "kilo.jsonc")
+    expect(Evaluator.isProtectedForCeiling(globalConfigFile, ws, "edit")).toBe(true)
+    // Plans under .kilo are exempt
+    expect(Evaluator.isProtectedForCeiling(".kilo/plans/foo.md", ws, "edit")).toBe(false)
+  })
+
+  test("behavioral: evaluator evaluate asks on canonical .kilo, allows legacy .kilocode", () => {
+    const ws = "/tmp/ws-proj"
+    const baseReq = (pattern: string) => ({
+      permission: "edit" as const,
+      patterns: [pattern],
+      targets: [Evaluator.canonicalForPermission(pattern, "edit", ws)],
+      permissionRequestId: "per_test",
+      operationId: "permission:per_test",
+      sessionID: "ses_test",
+      agent: "test",
+      workspaceRoot: ws,
+    })
+    const layers: Evaluator.LayerInput[] = [{ kind: "runtime-ceiling", sourceKind: "runtime-safety", canonicalPath: "runtime:ceiling", ruleset: [] }]
+    const canon = Evaluator.evaluate({ request: baseReq(".kilo/foo.md") as any, layers, approvals: [], allowEverything: false })
+    expect(canon.result).toBe("ask-ceiling")
+    expect(canon.ceilingId).toBe("(b)")
+    const legacy = Evaluator.evaluate({ request: baseReq(".kilocode/foo.md") as any, layers, approvals: [], allowEverything: false })
+    expect(legacy.result).toBe("ask")
+    expect(legacy.ceilingId).toBeNull()
+    const opencodeRoot = Evaluator.evaluate({ request: baseReq("opencode.json") as any, layers, approvals: [], allowEverything: false })
+    expect(opencodeRoot.result).toBe("ask")
+  })
+
+  test("behavioral: MCP resolver chooses canonical .kilo and never legacy even if legacy exists", async () => {
+    await using tmp = await tmpdir({
+      init: async (dir) => {
+        // create legacy files that should be ignored
+        await Bun.$`mkdir -p ${path.join(dir, ".kilocode")}`.quiet()
+        await Bun.write(path.join(dir, ".kilocode", "kilo.jsonc"), JSON.stringify({ mcp: {} }))
+        await Bun.write(path.join(dir, ".kilocode", "opencode.json"), JSON.stringify({ mcp: {} }))
+        await Bun.$`mkdir -p ${path.join(dir, ".kilo")}`.quiet()
+        await Bun.write(path.join(dir, ".kilo", "opencode.jsonc"), JSON.stringify({ mcp: {} }))
+        // also create root opencode that should be ignored
+        await Bun.write(path.join(dir, "opencode.json"), JSON.stringify({ mcp: {} }))
+        await Bun.write(path.join(dir, "kilo.json"), JSON.stringify({ mcp: {} }))
+      },
+    })
+    // No canonical .kilo/kilo.jsonc exists yet -> resolver should default to canonical, not legacy
+    const fallback = await resolveConfigPath(tmp.path, false)
+    expect(fallback).toBe(path.join(tmp.path, ".kilo", "kilo.jsonc"))
+    expect(fallback).not.toContain("/.kilocode/")
+    expect(path.basename(fallback)).not.toContain("opencode")
+    // Create canonical file -> resolver must pick it
+    await Bun.write(path.join(tmp.path, ".kilo", "kilo.jsonc"), JSON.stringify({ mcp: { s: { type: "local", command: ["echo"] } } }))
+    const canonical = await resolveConfigPath(tmp.path, false)
+    expect(canonical).toBe(path.join(tmp.path, ".kilo", "kilo.jsonc"))
+    // Global resolver: ignore opencode, pick kilo.jsonc
+    await using gtmp = await tmpdir({
+      init: async (dir) => {
+        await Bun.write(path.join(dir, "opencode.json"), JSON.stringify({ mcp: {} }))
+        await Bun.write(path.join(dir, "kilo.json"), JSON.stringify({ mcp: {} }))
+      },
+    })
+    const gFallback = await resolveConfigPath(gtmp.path, true)
+    // prefers kilo.jsonc if exists? we only have kilo.json, so picks kilo.json (canonical)
+    // create kilo.jsonc and test priority
+    await Bun.write(path.join(gtmp.path, "kilo.jsonc"), JSON.stringify({ mcp: {} }))
+    const gCanonical = await resolveConfigPath(gtmp.path, true)
+    expect(gCanonical).toBe(path.join(gtmp.path, "kilo.jsonc"))
+    expect(path.basename(gCanonical)).not.toContain("opencode")
   })
 
   test("test-profile lists new regression in sorted order", () => {

@@ -211,7 +211,6 @@ function isGlobalProtectedPath(absCanonical: string): boolean {
   const candidates = [
     Global.Path.config,
     path.join(os.homedir(), ".kilo"),
-    path.join(os.homedir(), ".kilocode"),
     path.join(os.homedir(), ".config", "kilo"),
   ]
   for (const cand of candidates) {
@@ -219,21 +218,18 @@ function isGlobalProtectedPath(absCanonical: string): boolean {
     const normCand = canonicalPosix(physCand)
     if (isPathWithin(normChild, normCand)) return true
   }
-  // Fallback lexical component check for when physical not available (test env)
+  // Fallback lexical for XDG global config (test env where physical unavailable)
   const parts = normChild.split("/")
   for (let i = 0; i < parts.length - 1; i++) {
     if (parts[i] === ".config" && parts[i + 1] === "kilo") return true
-    if (parts[i] === ".kilo" || parts[i] === ".kilocode") return true
   }
-  // Also check for any segment that is .kilo or .kilocode
-  if (parts.includes(".kilo") || parts.includes(".kilocode")) return true
   return false
 }
 
 function isProtectedPath(p: string, workspaceRoot?: string) {
   const norm = canonicalPosix(p)
   const abs = canonicalAbsolutePhysical(p, workspaceRoot)
-  const rootFiles = new Set(["kilo.json", "kilo.jsonc", "opencode.json", "opencode.jsonc", "AGENTS.md"])
+  const rootFiles = new Set(["kilo.json", "kilo.jsonc", "AGENTS.md"])
 
   // global config path - precise check (not substring)
   if (isGlobalProtectedPath(abs) || isGlobalProtectedPath(norm)) return true
