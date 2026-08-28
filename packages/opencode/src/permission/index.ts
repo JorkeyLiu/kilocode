@@ -151,6 +151,12 @@ function isTrustedExternalRead(input: unknown): boolean {
   log.warn("isTrustedExternalRead: ignoring invalid trustedReadCapability without brand", { supplied: cap })
   return false
 }
+function isCeilingCEnvFile(pattern: string): boolean {
+  if (Wildcard.match(pattern, "*.env.example")) return false
+  if (Wildcard.match(pattern, "*.env")) return true
+  if (Wildcard.match(pattern, "*.env.*")) return true
+  return false
+}
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -957,7 +963,9 @@ export const layer = Layer.effect(
       // For R18 ceiling, require exact canonical targets, same session, same agent, same permission; no wildcard session "*"
       const ws2 = ctx.worktree === "/" ? ctx.directory : ctx.worktree
       const canonicalTargetsAlways = (existing as any).canonicalTargets ?? Evaluator.buildCanonicalTargets({ patterns: [...existing.info.patterns], metadata: existing.info.metadata as any, permission: existing.info.permission }, ws2)
-      const isProtForR18 = canonicalTargetsAlways.some((p: string) => Evaluator.isProtectedForCeiling(p, ws2, existing.info.permission))
+      const isProtForR18 = canonicalTargetsAlways.some(
+        (p: string) => Evaluator.isProtectedForCeiling(p, ws2, existing.info.permission) || (existing.info.permission === "read" && isCeilingCEnvFile(p)),
+      )
       const isExact = canonicalTargetsAlways.every((p: string) => !ConfigProtection.hasGlobSyntax(p)) && existing.info.permission !== "*" && !ConfigProtection.hasGlobSyntax(existing.info.permission)
       const effectiveIsExact = isExact
       if (!existing.saved && effectiveIsExact) {
@@ -1065,19 +1073,21 @@ export const layer = Layer.effect(
       let approvedRaw = input.approvedAlways ?? []
       let deniedRaw = input.deniedAlways ?? []
       const canonicalTargetsSave = Evaluator.buildCanonicalTargets({ patterns: [...existing.info.patterns], metadata: existing.info.metadata as any, permission: existing.info.permission }, ws2)
-      const isProt = canonicalTargetsSave.some((p: string) => Evaluator.isProtectedForCeiling(p, ws2, existing.info.permission))
+      const isProt = canonicalTargetsSave.some(
+        (p: string) => Evaluator.isProtectedForCeiling(p, ws2, existing.info.permission) || (existing.info.permission === "read" && isCeilingCEnvFile(p)),
+      )
       if (isProt) {
         // Protected (ceiling b): exact same-session/same-agent/exact canonical pattern set, no wildcard, no prefix, no "*"
         const canonicalReq = canonicalTargetsSave
         const agentForProt = existing.trustedAgent ?? resolveTrustedAgent(existing.info as any) ?? "unknown"
         const hasStar = approvedRaw.includes("*")
         let didApprove = false
+        const isProtExact = !ConfigProtection.hasGlobSyntax(existing.info.permission) && canonicalReq.every((cp) => !ConfigProtection.hasGlobSyntax(cp))
         if (hasStar) {
-          // "*" means approve exactly the pending request's exact canonical set as a single session approval
-          const exactReq = canonicalReq.filter((cp) => !ConfigProtection.hasGlobSyntax(cp))
-          const toStore = exactReq.length > 0 ? exactReq : canonicalReq
-          if (toStore.length > 0) {
-            const sorted = [...toStore].sort()
+          if (!isProtExact || canonicalReq.length === 0) {
+            // reject - never store fallback canonical containing glob; complete approval set must be exact
+          } else {
+            const sorted = [...canonicalReq].sort()
             const exists = s.r18.approvals.some((a) => a.kind === "session" && a.sessionID === String(existing.info.sessionID) && a.agent === agentForProt && a.permission === existing.info.permission && a.patterns.length === sorted.length && a.patterns.slice().sort().every((v, i) => v === sorted[i]))
             if (!exists) s.r18.approvals.push({ kind: "session", patterns: sorted, sessionID: String(existing.info.sessionID), agent: agentForProt, permission: existing.info.permission })
             didApprove = true
@@ -1100,12 +1110,13 @@ export const layer = Layer.effect(
         const hasDeniedStar = deniedRaw.includes("*")
         const deniedFiltered: string[] = []
         if (hasDeniedStar) {
-          const exactReqDeny = canonicalReq.filter((cp) => !ConfigProtection.hasGlobSyntax(cp))
-          const toStoreDeny = exactReqDeny.length > 0 ? exactReqDeny : canonicalReq
-          for (const cp of toStoreDeny) {
-            // Map canonical back to original pattern form for deny storage
-            const orig = existing.info.patterns.find((p) => Evaluator.canonicalForPermission(p, existing.info.permission, ws2) === cp) ?? cp
-            deniedFiltered.push(orig)
+          if (!isProtExact || canonicalReq.length === 0) {
+            // reject - never store fallback deny containing glob
+          } else {
+            for (const cp of canonicalReq) {
+              const orig = existing.info.patterns.find((p) => Evaluator.canonicalForPermission(p, existing.info.permission, ws2) === cp) ?? cp
+              deniedFiltered.push(orig)
+            }
           }
         } else {
           for (const p of deniedRaw) {
