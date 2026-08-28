@@ -95,13 +95,13 @@ function hasGlobSyntax(p: string): boolean {
 }
 
 /** Config dir prefixes (relative, posix-normalized) — matches the backend. */
-const CONFIG_DIRS = [".kilo/", ".kilocode/"]
+const CONFIG_DIRS = [".kilo/"]
 
 /** Subdirectories under CONFIG_DIRS that are not config files — matches the backend. */
 const EXCLUDED_SUBDIRS = ["plans/"]
 
 /** Root-level config files — matches the backend. */
-const CONFIG_ROOT_FILES = new Set(["kilo.json", "kilo.jsonc", "opencode.json", "opencode.jsonc", "AGENTS.md"])
+const CONFIG_ROOT_FILES = new Set(["kilo.json", "kilo.jsonc", "AGENTS.md"])
 
 /** Browser-safe mirror of path.posix.normalize for the relative check. */
 function normalizePosix(p: string): string {
@@ -115,8 +115,8 @@ function normalizePosix(p: string): string {
 }
 
 /**
- * True for a relative protected config path (.kilo/ or .kilocode/ at any depth
- * minus plans/, or a root config file), mirroring the backend's isRelative.
+ * True for a relative protected config path (.kilo/ at any depth minus plans/,
+ * or a root config file), mirroring the backend's isRelative.
  * Absolute-looking paths are routed to the backend-computed metadata list only:
  * the webview cannot verify them against the machine's config directories.
  */

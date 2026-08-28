@@ -167,7 +167,7 @@ describe("protectedRequestPaths", () => {
 
   it("skips paths under the excluded plans directory", () => {
     const result = protectedRequestPaths({
-      patterns: [".kilo/plans/plan.md", ".kilocode/plans/plan.md"],
+      patterns: [".kilo/plans/plan.md", ".kilo/plans/nested/plan.md"],
       args: {},
     })
     expect(result).toEqual([])
@@ -175,10 +175,43 @@ describe("protectedRequestPaths", () => {
 
   it("recognizes nested and bare config dir forms", () => {
     const result = protectedRequestPaths({
-      patterns: ["packages/sub/.kilo/kilo.json", ".kilocode", "src/lib/.kilo"],
+      patterns: ["packages/sub/.kilo/kilo.json", ".kilo", "src/lib/.kilo"],
       args: {},
     })
-    expect(result).toEqual(["packages/sub/.kilo/kilo.json", ".kilocode", "src/lib/.kilo"])
+    expect(result).toEqual(["packages/sub/.kilo/kilo.json", ".kilo", "src/lib/.kilo"])
+  })
+
+  it("treats legacy .kilocode paths as unprotected (canonical .kilo only)", () => {
+    expect(protectedRequestPaths({ patterns: [".kilocode/kilo.json"], args: {} })).toEqual([])
+    expect(protectedRequestPaths({ patterns: [".kilocode"], args: {} })).toEqual([])
+    expect(protectedRequestPaths({ patterns: ["packages/sub/.kilocode/kilo.json"], args: {} })).toEqual([])
+    expect(protectedRequestPaths({ patterns: [".kilocode/plans/plan.md"], args: {} })).toEqual([])
+    expect(protectedRequestPaths({ patterns: ["a/.kilocode/b"], args: {} })).toEqual([])
+  })
+
+  it("treats legacy opencode.json root files as unprotected (canonical kilo.json/kilo.jsonc/AGENTS.md only)", () => {
+    expect(protectedRequestPaths({ patterns: ["opencode.json"], args: {} })).toEqual([])
+    expect(protectedRequestPaths({ patterns: ["opencode.jsonc"], args: {} })).toEqual([])
+    // legacy values via metadata are also unprotected
+    expect(protectedRequestPaths({ patterns: [], args: { filepath: "opencode.json" } })).toEqual([])
+    expect(protectedRequestPaths({ patterns: [], args: { filepath: "opencode.jsonc" } })).toEqual([])
+    expect(
+      protectedRequestPaths({
+        patterns: [],
+        args: { files: [{ filePath: "opencode.json" }, { filePath: "opencode.jsonc" }] },
+      }),
+    ).toEqual([])
+  })
+
+  it("keeps canonical root files protected (kilo.json, kilo.jsonc, AGENTS.md) and .kilo dir", () => {
+    expect(protectedRequestPaths({ patterns: ["kilo.json"], args: {} })).toEqual(["kilo.json"])
+    expect(protectedRequestPaths({ patterns: ["kilo.jsonc"], args: {} })).toEqual(["kilo.jsonc"])
+    expect(protectedRequestPaths({ patterns: ["AGENTS.md"], args: {} })).toEqual(["AGENTS.md"])
+    expect(protectedRequestPaths({ patterns: [".kilo/kilo.jsonc"], args: {} })).toEqual([".kilo/kilo.jsonc"])
+    expect(protectedRequestPaths({ patterns: [".kilo/agents/a.md"], args: {} })).toEqual([".kilo/agents/a.md"])
+    // bare and nested .kilo remain protected
+    expect(protectedRequestPaths({ patterns: [".kilo"], args: {} })).toEqual([".kilo"])
+    expect(protectedRequestPaths({ patterns: ["src/lib/.kilo/foo"], args: {} })).toEqual(["src/lib/.kilo/foo"])
   })
 
   it("never shows unverifiable absolute paths without backend metadata", () => {
