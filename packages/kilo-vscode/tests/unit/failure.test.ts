@@ -13,6 +13,7 @@ import {
   redact,
   select,
   buildPanelEnvelope,
+  normalizeRecord,
   type FailureRecord,
 } from "../../src/private-worker/failure"
 
@@ -448,6 +449,363 @@ describe("R12 envelope", () => {
     const rec = normalize({ opId: "id", opKind: "prompt", domain: "provider", time: 1, cancel: "user_stop" })
     const env = buildPanelEnvelope(rec)
     expect(env.payload["cancel"]).toEqual({ source: "user_stop" })
+  })
+
+  it("direct raw caller-supplied record is normalized before projection — secrets scrubbed, caps, tier (P4-G7 regression)", () => {
+    const raw: FailureRecord = {
+      opId: "prompt:raw1",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `leak apiKey=sk-123456 token=abc123 password=secret123 credential=mycred ${"x".repeat(600)}`,
+      time: 42,
+      detail: `detail password=superSecret ${"y".repeat(1500)}`,
+      stack: `stack token=stackSecret ${"z".repeat(3000)}`,
+      cancel: { source: "timeout" },
+    }
+    const env = buildPanelEnvelope(raw)
+    expect(env.version).toBe(FAILURE_ENVELOPE_VERSION)
+    const msg = env.payload["message"] as string
+    expect(msg).not.toContain("sk-123456")
+    expect(msg).not.toContain("abc123")
+    expect(msg).not.toContain("secret123")
+    expect(msg).not.toContain("mycred")
+    expect(msg).toContain("apiKey=[redacted]")
+    expect(msg).toContain("token=[redacted]")
+    expect(msg).toContain("password=[redacted]")
+    expect(msg).toContain("credential=[redacted]")
+    expect(msg.length).toBeLessThanOrEqual(501)
+    expect(msg.endsWith("…")).toBe(true)
+    expect(env.payload["detail"]).toBeUndefined()
+    expect(env.payload["stack"]).toBeUndefined()
+    expect(env.payload["opKind"]).toBeUndefined()
+    expect(env.payload["time"]).toBeUndefined()
+    expect(env.payload["opId"]).toBe(raw.opId)
+    expect(env.payload["code"]).toBe(raw.code)
+    expect(env.payload["outcome"]).toBe(raw.outcome)
+    expect(env.payload["cancel"]).toEqual({ source: "timeout" })
+    const normalized = normalizeRecord(raw)
+    expect(normalized.message).toBe(msg)
+    expect(normalized.detail).not.toContain("superSecret")
+    expect(normalized.stack).not.toContain("stackSecret")
+    expect(normalized.detail!.length).toBeLessThanOrEqual(1001)
+    expect(normalized.stack!.length).toBeLessThanOrEqual(2001)
+    expect(normalized.opId).toBe(raw.opId)
+    expect(normalized.opKind).toBe(raw.opKind)
+    expect(normalized.code).toBe(raw.code)
+    expect(normalized.outcome).toBe(raw.outcome)
+    expect(normalized.time).toBe(raw.time)
+    const twice = normalizeRecord(normalized)
+    expect(twice).toEqual(normalized)
+    const env2 = buildPanelEnvelope(normalized)
+    expect(env2.payload["message"]).toBe(msg)
+  })
+
+  it("direct raw quoted and bearer forms are scrubbed before projection — quoted/bearer regression", () => {
+    const raw: FailureRecord = {
+      opId: "prompt:raw-quoted-bearer",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `quoted apiKey="sk-live" secret: 'raw-secret' password="double-quoted" credential='single-quoted' bearer authorization: Bearer sk-bearer-secret and authorization=BearerXYZ tail`,
+      time: 99,
+      detail: `detail token="quoted-token" authorization: Bearer quoted-bearer-detail`,
+      stack: `stack authorization: Bearer "tok-secret" secret='stack-quoted'`,
+    }
+    const env = buildPanelEnvelope(raw)
+    expect(env.version).toBe(FAILURE_ENVELOPE_VERSION)
+    const msg = env.payload["message"] as string
+    expect(msg).not.toContain("sk-live")
+    expect(msg).not.toContain("raw-secret")
+    expect(msg).not.toContain("double-quoted")
+    expect(msg).not.toContain("single-quoted")
+    expect(msg).not.toContain("sk-bearer-secret")
+    expect(msg).not.toContain("BearerXYZ")
+    expect(msg).not.toContain("Bearer")
+    expect(msg).toContain("apiKey=[redacted]")
+    expect(msg).toContain("secret=[redacted]")
+    expect(msg).toContain("password=[redacted]")
+    expect(msg).toContain("credential=[redacted]")
+    expect(msg).toContain("authorization=[redacted]")
+    expect(env.payload["detail"]).toBeUndefined()
+    expect(env.payload["stack"]).toBeUndefined()
+    const normalized = normalizeRecord(raw)
+    expect(normalized.message).toBe(msg)
+    expect(normalized.detail).not.toContain("quoted-token")
+    expect(normalized.detail).not.toContain("quoted-bearer-detail")
+    expect(normalized.detail).toContain("[redacted]")
+    expect(normalized.stack).not.toContain("tok-secret")
+    expect(normalized.stack).not.toContain("stack-quoted")
+    expect(normalized.stack).toContain("[redacted]")
+    expect(normalized.stack).not.toContain("Bearer")
+    const twice = normalizeRecord(normalized)
+    expect(twice).toEqual(normalized)
+    expect(buildPanelEnvelope(normalized).payload["message"]).toBe(msg)
+    const redacted: FailureRecord = {
+      opId: raw.opId,
+      opKind: raw.opKind,
+      outcome: raw.outcome,
+      code: raw.code,
+      message: `quoted apiKey=[redacted] secret=[redacted] password=[redacted] credential=[redacted] bearer authorization=[redacted] and authorization=[redacted] tail`,
+      time: raw.time,
+    }
+    const envRedacted = buildPanelEnvelope(redacted)
+    expect(envRedacted.payload["message"]).toBe(`quoted apiKey=[redacted] secret=[redacted] password=[redacted] credential=[redacted] bearer authorization=[redacted] and authorization=[redacted] tail`)
+    expect(normalizeRecord(redacted).message).toBe(redacted.message)
+  })
+
+  it("escaped quoted and bearer values are fully redacted without suffix leak via envelope", () => {
+    const raw: FailureRecord = {
+      opId: "prompt:raw-escaped",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix secret="foo\\"bar-secret" tail`,
+      time: 100,
+      detail: `detail secret='a\\'b-secret' tail2`,
+      stack: `stack authorization: Bearer "tok\\"en-secret" tail3`,
+    }
+    const env = buildPanelEnvelope(raw)
+    const msg = env.payload["message"] as string
+    expect(msg).toBe(`prefix secret=[redacted] tail`)
+    expect(msg).not.toContain("bar-secret")
+    expect(msg).not.toContain("foo")
+    const normalized = normalizeRecord(raw)
+    expect(normalized.detail).toBe(`detail secret=[redacted] tail2`)
+    expect(normalized.detail).not.toContain("b-secret")
+    expect(normalized.stack).toBe(`stack authorization=[redacted] tail3`)
+    expect(normalized.stack).not.toContain("tok")
+    expect(normalized.stack).not.toContain("en-secret")
+    expect(normalized.stack).not.toContain("Bearer")
+    const raw2: FailureRecord = {
+      opId: "prompt:raw-escaped-bearer-single",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "c",
+      message: `msg authorization: Bearer 'tok\\'en-secret' tail`,
+      time: 101,
+    }
+    const env2 = buildPanelEnvelope(raw2)
+    expect(env2.payload["message"]).toBe(`msg authorization=[redacted] tail`)
+    expect((env2.payload["message"] as string)).not.toContain("tok")
+  })
+
+  it("JSON-encoded quoted secret keys/values are scrubbed via envelope — direct raw JSON regression", () => {
+    const raw: FailureRecord = {
+      opId: "prompt:raw-json",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"apiKey":"sk-json"} tail`,
+      time: 102,
+      detail: `detail {"token":"tok-json"} and {"password":"pass-json"}`,
+      stack: `stack {"credential":"cred-json"} tail`,
+    }
+    const env = buildPanelEnvelope(raw)
+    const msg = env.payload["message"] as string
+    expect(msg).not.toContain("sk-json")
+    expect(msg).not.toContain(`{"apiKey"`)
+    expect(msg).toContain("apiKey=[redacted]")
+    expect(msg).toContain("prefix")
+    expect(msg).toContain("tail")
+    const normalized = normalizeRecord(raw)
+    expect(normalized.message).toBe(msg)
+    expect(normalized.detail).not.toContain("tok-json")
+    expect(normalized.detail).not.toContain("pass-json")
+    expect(normalized.detail).toContain("token=[redacted]")
+    expect(normalized.detail).toContain("password=[redacted]")
+    expect(normalized.stack).not.toContain("cred-json")
+    expect(normalized.stack).toContain("credential=[redacted]")
+    const twice = normalizeRecord(normalized)
+    expect(twice).toEqual(normalized)
+    expect(buildPanelEnvelope(normalized).payload["message"]).toBe(msg)
+    const rawEsc: FailureRecord = {
+      opId: "prompt:raw-json-escaped",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"secret":"foo\\"bar-secret"} tail`,
+      time: 103,
+      detail: `detail {"apiKey":"a\\"b-secret"} tail2`,
+      stack: `stack {"token":"tok\\"en-secret"} tail3`,
+    }
+    const envEsc = buildPanelEnvelope(rawEsc)
+    expect((envEsc.payload["message"] as string)).not.toContain("bar-secret")
+    expect((envEsc.payload["message"] as string)).not.toContain("foo")
+    expect((envEsc.payload["message"] as string)).toBe(`prefix {secret=[redacted]} tail`)
+    const normEsc = normalizeRecord(rawEsc)
+    expect(normEsc.detail).toBe(`detail {apiKey=[redacted]} tail2`)
+    expect(normEsc.detail).not.toContain("b-secret")
+    expect(normEsc.stack).toBe(`stack {token=[redacted]} tail3`)
+    expect(normEsc.stack).not.toContain("en-secret")
+  })
+
+  it("Unicode-escaped JSON secret keys are scrubbed via envelope — direct raw unicode regression", () => {
+    const raw: FailureRecord = {
+      opId: "prompt:raw-unicode",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"api\\u004bey":"sk-unicode-key"} tail`,
+      time: 104,
+      detail: `detail {"sec\\u0072et":"detail-unicode-secret"} tail2`,
+      stack: `stack {"token":"stack-unicode-token"} tail3`,
+    }
+    const env = buildPanelEnvelope(raw)
+    const msg = env.payload["message"] as string
+    expect(msg).not.toContain("sk-unicode-key")
+    expect(msg).not.toContain("\\u004b")
+    expect(msg).not.toContain("api\\u004b")
+    expect(msg).toContain("apiKey=[redacted]")
+    expect(msg).toContain("prefix")
+    expect(msg).toContain("tail")
+    const normalized = normalizeRecord(raw)
+    expect(normalized.message).toBe(msg)
+    expect(normalized.detail).not.toContain("detail-unicode-secret")
+    expect(normalized.detail).toContain("secret=[redacted]")
+    expect(normalized.detail).toContain("tail2")
+    expect(normalized.stack).not.toContain("stack-unicode-token")
+    expect(normalized.stack).toContain("token=[redacted]")
+    const twice = normalizeRecord(normalized)
+    expect(twice).toEqual(normalized)
+    expect(buildPanelEnvelope(normalized).payload["message"]).toBe(msg)
+    const rawNonSecret: FailureRecord = {
+      opId: "prompt:raw-unicode-nonsecret",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"not\\u0053ecret":"keep-me"} tail`,
+      time: 105,
+    }
+    const envNon = buildPanelEnvelope(rawNonSecret)
+    expect((envNon.payload["message"] as string)).toContain("keep-me")
+    expect((envNon.payload["message"] as string)).toContain("not\\u0053ecret")
+    expect((envNon.payload["message"] as string)).not.toContain("[redacted]")
+  })
+
+  it("Unicode-escaped JSON secret key with escaped quoted value is scrubbed via envelope — unicode escaped value regression", () => {
+    const raw: FailureRecord = {
+      opId: "prompt:raw-unicode-escaped",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"api\\u004bey":"foo\\"bar-escaped"} tail`,
+      time: 106,
+      detail: `detail {"api\\u004bey":"a\\"b-escaped-detail"} tail2`,
+      stack: `stack {"sec\\u0072et":"tok\\"en-escaped"} tail3`,
+    }
+    const env = buildPanelEnvelope(raw)
+    const msg = env.payload["message"] as string
+    expect(msg).toBe(`prefix {apiKey=[redacted]} tail`)
+    expect(msg).not.toContain("foo")
+    expect(msg).not.toContain("bar-escaped")
+    expect(msg).not.toContain("\\u004b")
+    const normalized = normalizeRecord(raw)
+    expect(normalized.message).toBe(msg)
+    expect(normalized.detail).toBe(`detail {apiKey=[redacted]} tail2`)
+    expect(normalized.detail).not.toContain("b-escaped-detail")
+    expect(normalized.stack).toBe(`stack {secret=[redacted]} tail3`)
+    expect(normalized.stack).not.toContain("en-escaped")
+    const twice = normalizeRecord(normalized)
+    expect(twice).toEqual(normalized)
+    expect(buildPanelEnvelope(normalized).payload["message"]).toBe(msg)
+  })
+
+  it("malformed escaped JSON keys preserve backslash and do not spuriously redact via envelope — narrow P4-G7 correction", () => {
+    const rawApi: FailureRecord = {
+      opId: "prompt:raw-malformed-api",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"api\\key":"keep-me"} tail`,
+      time: 200,
+    }
+    expect(() => buildPanelEnvelope(rawApi)).not.toThrow()
+    const envApi = buildPanelEnvelope(rawApi)
+    expect(envApi.payload["message"]).toBe(`prefix {"api\\key":"keep-me"} tail`)
+    expect((envApi.payload["message"] as string)).not.toContain("[redacted]")
+    expect(normalizeRecord(rawApi).message).toBe(`prefix {"api\\key":"keep-me"} tail`)
+
+    const rawSecret: FailureRecord = {
+      opId: "prompt:raw-malformed-secret",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"se\\cret":"keep-me"} tail`,
+      time: 201,
+    }
+    expect(() => buildPanelEnvelope(rawSecret)).not.toThrow()
+    const envSecret = buildPanelEnvelope(rawSecret)
+    expect(envSecret.payload["message"]).toBe(`prefix {"se\\cret":"keep-me"} tail`)
+    expect((envSecret.payload["message"] as string)).not.toContain("[redacted]")
+    expect(normalizeRecord(rawSecret).message).toBe(`prefix {"se\\cret":"keep-me"} tail`)
+
+    const rawTrailing: FailureRecord = {
+      opId: "prompt:raw-trailing-bs",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"hello":"keep-me"} tail\\`,
+      time: 202,
+    }
+    expect(() => buildPanelEnvelope(rawTrailing)).not.toThrow()
+    expect(buildPanelEnvelope(rawTrailing).payload["message"]).toBe(`prefix {"hello":"keep-me"} tail\\`)
+    expect(normalizeRecord(rawTrailing).message).toBe(`prefix {"hello":"keep-me"} tail\\`)
+
+    const rawValid: FailureRecord = {
+      opId: "prompt:raw-valid-unicode",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"api\\u004bey":"secret"} tail`,
+      time: 203,
+    }
+    const envValid = buildPanelEnvelope(rawValid)
+    expect((envValid.payload["message"] as string)).toContain("apiKey=[redacted]")
+    expect((envValid.payload["message"] as string)).not.toContain("secret")
+    expect((envValid.payload["message"] as string)).not.toContain("\\u004b")
+    expect(normalizeRecord(rawValid).message).toContain("apiKey=[redacted]")
+  })
+
+  it("adjacent malformed escapes preserve verbatim and do not redact even when decoded looks secret — P4-G7 final blocker", () => {
+    const cases: Array<{ msg: string; time: number }> = [
+      { msg: `prefix {"secret\\q":"keep-secret-q"} tail`, time: 210 },
+      { msg: `prefix {"x\\secret":"keep-x-secret"} tail`, time: 211 },
+      { msg: `prefix {"secret\\u00":"keep-trunc-u"} tail`, time: 212 },
+      { msg: `prefix {"x\\password":"keep-x-password"} tail`, time: 213 },
+      { msg: `prefix {"secret\\u00zz":"keep-bad-u"} tail`, time: 214 },
+      { msg: `prefix {"api\\u004":"keep-trunc-api"} tail`, time: 215 },
+    ]
+    for (const c of cases) {
+      const raw: FailureRecord = {
+        opId: `prompt:raw-adjacent-${c.time}`,
+        opKind: "prompt",
+        outcome: "failed",
+        code: "provider.unknown",
+        message: c.msg,
+        time: c.time,
+      }
+      expect(() => buildPanelEnvelope(raw)).not.toThrow()
+      const env = buildPanelEnvelope(raw)
+      expect(env.payload["message"]).toBe(c.msg)
+      expect((env.payload["message"] as string)).not.toContain("[redacted]")
+      expect(normalizeRecord(raw).message).toBe(c.msg)
+      expect(() => redact(c.msg)).not.toThrow()
+      expect(redact(c.msg) as string).toBe(c.msg)
+    }
+    const valid: FailureRecord = {
+      opId: "prompt:valid-adjacent-unicode",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"api\\u004bey":"should-redact"} tail`,
+      time: 216,
+    }
+    const envValid = buildPanelEnvelope(valid)
+    expect((envValid.payload["message"] as string)).toContain("apiKey=[redacted]")
+    expect((envValid.payload["message"] as string)).not.toContain("should-redact")
+    expect((envValid.payload["message"] as string)).not.toContain("\\u004b")
+    expect(normalizeRecord(valid).message).toContain("apiKey=[redacted]")
   })
 })
 

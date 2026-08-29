@@ -5,10 +5,11 @@
  * tool/permission/worker/transport errors into Failure records; classification never
  * schedules recovery (no retry fields, no timers); redaction (scrub + caps
  * 500/1000/2000) happens inside normalize before any normalize-derived record is
- * emitted, so no unredacted normalize-derived field can reach persistence or
- * projection; direct caller-supplied buildPanelEnvelope inputs remain outside that
- * guarantee (P4-G7 Active); field tiers are exposure ceilings (durable <
- * diagnostic < panel-visible, monotonic); closed sets; no taxonomy freeze;
+ * emitted and inside buildPanelEnvelope via normalizeRecord before projection, so no
+ * unredacted field can reach persistence (via SessionOperation.put) or panel
+ * projection (via buildPanelEnvelope) through those boundaries; P4-G7 remains Active
+ * for transport/retry/crash/five-boundary closure; field tiers are exposure ceilings
+ * (durable < diagnostic < panel-visible, monotonic); closed sets; no taxonomy freeze;
  * persistence integration lands with R11 and consumes records produced here;
  * envelope version ownership per R1/R9/R12.
  *
@@ -88,7 +89,158 @@ const cancelSet = new Set<string>(CANCEL_SOURCES as readonly string[])
 const domainSet = new Set<string>(DOMAINS as readonly string[])
 
 const secretKey = /\b(api[_-]?key|apikey|token|authorization|password|secret|credential)\b/i
-const valueScrub = /(api[_-]?key|apikey|token|authorization|password|secret|credential)\s*[:=]\s*([^\s,;"')\]}]+)/gi
+const jsonQuotedScrub =
+  /["'](api[_-]?key|apikey|token|authorization|password|secret|credential)["']\s*[:=]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/gi
+const quotedScrub =
+  /(api[_-]?key|apikey|token|authorization|password|secret|credential)\s*[:=]\s*(?:"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*')/gi
+const bearerScrub =
+  /(authorization)\s*[:=]\s*Bearer\s+(?:\[redacted\]|"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[^\s,;"')\]}]+)/gi
+const valueScrub = /(api[_-]?key|apikey|token|authorization|password|secret|credential)\s*[:=]\s*(?:\[redacted\]|[^\s,;"')\]}]+)/gi
+
+function decodeJsonEscapes(s: string): string {
+  let out = ""
+  for (let i = 0; i < s.length; ) {
+    if (s[i] !== "\\") {
+      out += s[i++]
+      continue
+    }
+    if (i + 1 >= s.length) {
+      out += s[i++]
+      continue
+    }
+    const nxt = s[i + 1]
+    switch (nxt) {
+      case '"':
+        out += '"'
+        i += 2
+        break
+      case "'":
+        out += "'"
+        i += 2
+        break
+      case "\\":
+        out += "\\"
+        i += 2
+        break
+      case "/":
+        out += "/"
+        i += 2
+        break
+      case "b":
+        out += "\b"
+        i += 2
+        break
+      case "f":
+        out += "\f"
+        i += 2
+        break
+      case "n":
+        out += "\n"
+        i += 2
+        break
+      case "r":
+        out += "\r"
+        i += 2
+        break
+      case "t":
+        out += "\t"
+        i += 2
+        break
+      case "u": {
+        if (i + 5 < s.length && /^[0-9a-fA-F]{4}$/.test(s.slice(i + 2, i + 6))) {
+          out += String.fromCharCode(parseInt(s.slice(i + 2, i + 6), 16))
+          i += 6
+        } else {
+          out += "\\"
+          out += nxt
+          i += 2
+        }
+        break
+      }
+      default:
+        out += "\\"
+        out += nxt
+        i += 2
+        break
+    }
+  }
+  return out
+}
+
+function isValidJsonEscapes(s: string): boolean {
+  for (let i = 0; i < s.length; ) {
+    if (s[i] !== "\\") {
+      i++
+      continue
+    }
+    if (i + 1 >= s.length) return false
+    const nxt = s[i + 1]
+    if (nxt === '"' || nxt === "\\" || nxt === "/" || nxt === "b" || nxt === "f" || nxt === "n" || nxt === "r" || nxt === "t") {
+      i += 2
+      continue
+    }
+    if (nxt === "u") {
+      if (i + 5 < s.length && /^[0-9a-fA-F]{4}$/.test(s.slice(i + 2, i + 6))) {
+        i += 6
+        continue
+      }
+      return false
+    }
+    return false
+  }
+  return true
+}
+
+function scrubString(s: string): string {
+  s = s.replace(/"((?:[^"\\]|\\.)*)"\s*:\s*"(?:[^"\\]|\\.)*"/g, (m: string, k: string) => {
+    if (!isValidJsonEscapes(k)) return m
+    let decoded = k
+    try {
+      decoded = decodeJsonEscapes(k)
+    } catch {
+      return m
+    }
+    if (!secretKey.test(decoded)) return m
+    return `${decoded}=[redacted]`
+  })
+  s = s.replace(/'((?:[^'\\]|\\.)*)'\s*[:=]\s*'(?:[^'\\]|\\.)*'/g, (m: string, k: string) => {
+    if (!isValidJsonEscapes(k)) return m
+    let decoded = k
+    try {
+      decoded = decodeJsonEscapes(k)
+    } catch {
+      return m
+    }
+    if (!secretKey.test(decoded)) return m
+    return `${decoded}=[redacted]`
+  })
+  s = s.replace(/"((?:[^"\\]|\\.)*)"\s*[:=]\s*'(?:[^'\\]|\\.)*'/g, (m: string, k: string) => {
+    if (!isValidJsonEscapes(k)) return m
+    let decoded = k
+    try {
+      decoded = decodeJsonEscapes(k)
+    } catch {
+      return m
+    }
+    if (!secretKey.test(decoded)) return m
+    return `${decoded}=[redacted]`
+  })
+  s = s.replace(/'((?:[^'\\]|\\.)*)'\s*[:=]\s*"(?:[^"\\]|\\.)*"/g, (m: string, k: string) => {
+    if (!isValidJsonEscapes(k)) return m
+    let decoded = k
+    try {
+      decoded = decodeJsonEscapes(k)
+    } catch {
+      return m
+    }
+    if (!secretKey.test(decoded)) return m
+    return `${decoded}=[redacted]`
+  })
+  s = s.replace(jsonQuotedScrub, (_m: string, k: string) => `${k}=[redacted]`)
+  s = s.replace(quotedScrub, (_m: string, k: string) => `${k}=[redacted]`)
+  s = s.replace(bearerScrub, (_m: string, k: string) => `${k}=[redacted]`)
+  return s.replace(valueScrub, (_m: string, k: string) => `${k}=[redacted]`)
+}
 
 function getStatus(err: unknown): number | undefined {
   if (err === null || typeof err !== "object") return undefined
@@ -166,8 +318,7 @@ export function redact(value: unknown): unknown {
     if (depth > 8) return "[truncated]"
     if (v === null) return null
     if (typeof v === "string") {
-      const scrubbed = v.replace(valueScrub, (_m: string, k: string) => `${k}=[redacted]`)
-      return scrubbed
+      return scrubString(v)
     }
     if (typeof v === "number" || typeof v === "boolean") return v
     if (typeof v !== "object") return v
@@ -289,6 +440,22 @@ export function select(record: FailureRecord, consumer: Consumer): Partial<Failu
   return out
 }
 
+export function normalizeRecord(record: FailureRecord): FailureRecord {
+  const out: FailureRecord = {
+    opId: record.opId,
+    opKind: record.opKind,
+    outcome: record.outcome,
+    code: record.code,
+    message: cap(String(redact(record.message) ?? ""), 500),
+    time: record.time,
+  }
+  if (record.cancel !== undefined) out.cancel = { source: record.cancel.source }
+  if (record.detail !== undefined) out.detail = cap(String(redact(record.detail) ?? ""), 1000)
+  if (record.stack !== undefined) out.stack = cap(String(redact(record.stack) ?? ""), 2000)
+  return out
+}
+
 export function buildPanelEnvelope(record: FailureRecord): PanelEnvelope {
-  return { version: FAILURE_ENVELOPE_VERSION, payload: select(record, "project") as Record<string, unknown> }
+  const normalized = normalizeRecord(record)
+  return { version: FAILURE_ENVELOPE_VERSION, payload: select(normalized, "project") as Record<string, unknown> }
 }
