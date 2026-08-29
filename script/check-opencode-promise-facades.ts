@@ -98,6 +98,10 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     count: 55,
     reason: "B0 durable cancelQueued integration test via AppRuntime and InstanceRef (LOCK-301..307 bounded corrections)",
   },
+  "kilocode/server/fd-carrier.test.ts": {
+    count: 2,
+    reason: "B1 fd-carrier integration test via AppRuntime for real B0 dispatch (carrier + HTTP fallback)",
+  },
 }
 
 const owned = (file: string) => file.startsWith("kilocode/") || file.startsWith("kilo-sessions/")

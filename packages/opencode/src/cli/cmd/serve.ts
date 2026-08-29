@@ -23,6 +23,17 @@ export const ServeCommand = effectCmd({
     const opts = yield* resolveNetworkOptions(args)
     const server = yield* Effect.promise(() => Server.listen(opts))
 
+    // kilocode_change start - fd3/fd4 private carrier (no stdout framing)
+    let fdCarrier: { dispose: () => void } | null = null
+    try {
+      const mod = yield* Effect.promise(() => import("../../kilocode/server/fd-carrier") as Promise<typeof import("../../kilocode/server/fd-carrier")>)
+      fdCarrier = mod.tryStartFdCarrier()
+    } catch (err) {
+      console.warn("[kilo serve] fd carrier start failed:", String(err))
+      fdCarrier = null
+    }
+    // kilocode_change end
+
     // kilocode_change start
     const urls = server.urls
 
@@ -47,6 +58,11 @@ export const ServeCommand = effectCmd({
           let stopSignals: () => void = () => {}
           const coordinator = createShutdownCoordinator({
             shutdown: async () => {
+              try {
+                fdCarrier?.dispose()
+              } catch (err) {
+                console.warn("[kilo serve] fd carrier dispose failed:", String(err))
+              }
               await InstanceRuntime.disposeAllInstances()
               await server.stop(true)
             },

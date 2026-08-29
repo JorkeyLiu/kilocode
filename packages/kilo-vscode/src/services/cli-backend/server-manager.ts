@@ -17,6 +17,10 @@ export interface ServerInstance {
   port: number
   password: string
   process: ChildProcess
+  privateReader: NodeJS.ReadableStream | null
+  privateWriter: NodeJS.WritableStream | null
+  pid: number | undefined
+  epoch: number
 }
 
 const STARTUP_TIMEOUT_SECONDS = 30
@@ -76,6 +80,7 @@ export function resolveCliPath(extensionPath: string, env?: NodeJS.ProcessEnv): 
 export class ServerManager {
   private instance: ServerInstance | null = null
   private startupPromise: Promise<ServerInstance> | null = null
+  private epochCounter = 0
 
   /**
    * E2E fixture generation-request collector (KILO_E2E_FIXTURE only): sees
@@ -158,7 +163,7 @@ export class ServerManager {
       const spawnCwd = resolveServerCwd(folders, this.context.globalStorageUri.fsPath)
       fs.mkdirSync(spawnCwd, { recursive: true })
       const localCli =
-        this.context.extensionMode === vscode.ExtensionMode.Development ||
+        this.context.extensionMode === (vscode as unknown as { ExtensionMode?: { Development: number } }).ExtensionMode?.Development ||
         fs.existsSync(path.join(this.context.extensionPath, "bin", ".cli-version"))
       const bwrapEnv = process.env.KILO_BWRAP_PATH ? {} : resolveLocalBwrapEnv(this.context.extensionPath, localCli)
       // TLS / corporate-proxy support:
@@ -222,10 +227,15 @@ export class ServerManager {
           ...resolveTreeSitterEnv(this.context.extensionPath),
           ...bwrapEnv,
         },
-        stdio: ["ignore", "pipe", "pipe"],
+        stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
         detached: true,
       })
       console.log("[Kilo New] ServerManager: 📦 Process spawned with PID:", serverProcess.pid)
+      this.epochCounter += 1
+      const epoch = this.epochCounter
+      const pid = serverProcess.pid
+      const privateWriter = (serverProcess.stdio[3] as unknown as NodeJS.WritableStream) ?? null
+      const privateReader = (serverProcess.stdio[4] as unknown as NodeJS.ReadableStream) ?? null
       p0Stage("spawn.done", { pid: serverProcess.pid })
 
       let resolved = false
@@ -256,7 +266,7 @@ export class ServerManager {
           resolved = true
           console.log("[Kilo New] ServerManager: 🎯 Port detected:", port)
           p0Stage("port.detected", { port })
-          resolve({ port, password, process: serverProcess })
+          resolve({ port, password, process: serverProcess, privateReader, privateWriter, pid, epoch })
         }
       })
 
@@ -275,8 +285,12 @@ export class ServerManager {
       serverProcess.on("exit", (code) => {
         console.log("[Kilo New] ServerManager: 🛑 Process exited with code:", code)
         if (this.instance?.process === serverProcess) {
+          const dying = this.instance
           this.instance = null
+          ServerManager.releasePrivateStreams(dying)
           this.onExit?.(code)
+        } else {
+          ServerManager.releasePrivateStreams({ privateReader, privateWriter } as unknown as ServerInstance)
         }
         if (!resolved) {
           stderrTail.flush()
@@ -400,8 +414,24 @@ export class ServerManager {
       } else {
         proc.kill(signal)
       }
-    } catch {
-      // Process already gone — ignore
+    } catch (err) {
+      console.warn("[Kilo ServerManager] killProcess failed (already gone?):", String(err))
+    }
+  }
+
+  private static releasePrivateStreams(inst: Pick<ServerInstance, "privateReader" | "privateWriter"> | null): void {
+    if (!inst) return
+    for (const s of [inst.privateReader, inst.privateWriter]) {
+      if (!s) continue
+      try {
+        const c = s as unknown as { destroy?: () => void; close?: () => void; end?: () => void; destroyed?: boolean }
+        if (c.destroyed) continue
+        if (typeof c.destroy === "function") c.destroy()
+        else if (typeof c.close === "function") c.close()
+        else if (typeof c.end === "function") c.end()
+      } catch (err) {
+        console.warn("[Kilo ServerManager] releasePrivateStreams cleanup failed:", String(err))
+      }
     }
   }
 
@@ -409,8 +439,10 @@ export class ServerManager {
     if (!this.instance) {
       return
     }
-    const proc = this.instance.process
+    const inst = this.instance
+    const proc = inst.process
     this.instance = null
+    ServerManager.releasePrivateStreams(inst)
 
     console.log("[Kilo New] ServerManager: 🔴 Disposing — sending SIGTERM to process group, PID:", proc.pid)
     ServerManager.killProcess(proc, "SIGTERM")

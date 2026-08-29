@@ -6,6 +6,7 @@ import type { ServerConfig } from "./types"
 import { resolveEventSessionId as resolveEventSessionIdPure } from "./connection-utils"
 import { SandboxPreference } from "../sandbox-preference"
 import { isP0PerfEnabled, p0Span, p0Stage } from "../../perf/perf-instrument"
+import { ServePrivatePeer, type ServePrivateCancelQueuedRequest, type ServePrivateCancelQueuedResult } from "./serve-private-peer"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
 type SSEEventListener = (event: SSEPayload, directory?: string, transaction?: string) => void
@@ -102,6 +103,10 @@ export class KiloConnectionService {
   private viewedSending = false
   private viewedDirty = false
   private unsubRemote: (() => void) | null = null
+  private privatePeer: ServePrivatePeer | null = null
+  private privateAvailable = false
+  private privateEpoch: number | null = null
+  private privatePid: number | undefined
 
   constructor(context: vscode.ExtensionContext) {
     const state =
@@ -601,6 +606,7 @@ export class KiloConnectionService {
    */
   dispose(): void {
     this.sseClient?.dispose()
+    this.disposePrivatePeer()
     this.serverManager.dispose()
     this.eventListeners.clear()
     this.stateListeners.clear()
@@ -654,6 +660,7 @@ export class KiloConnectionService {
 
   private resetConnection(): void {
     this.stopCheckin()
+    this.disposePrivatePeer()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -671,6 +678,7 @@ export class KiloConnectionService {
 
   private handleServerExit(code: number | null): void {
     console.warn("[Kilo New] ConnectionService: CLI background process exited:", code)
+    this.disposePrivatePeer()
     this.resetConnection()
     this.setState(
       "error",
@@ -759,6 +767,8 @@ export class KiloConnectionService {
 
     await connectedPromise
 
+    void this.initPrivatePeer(server).catch((err) => console.warn("[Kilo] PrivatePeer init failed:", String(err)))
+
     this.startCheckin()
   }
 
@@ -773,6 +783,126 @@ export class KiloConnectionService {
       clearInterval(this.checkinTimer)
       this.checkinTimer = null
     }
+  }
+
+  private disposePrivatePeer(): void {
+    if (!this.privatePeer) {
+      this.privateAvailable = false
+      this.privateEpoch = null
+      this.privatePid = undefined
+      return
+    }
+    try {
+      this.privatePeer.dispose()
+    } catch (err) {
+      console.warn("[Kilo] PrivatePeer dispose failed:", String(err))
+    }
+    this.privatePeer = null
+    this.privateAvailable = false
+    this.privateEpoch = null
+    this.privatePid = undefined
+  }
+
+  private async initPrivatePeer(server: import("./server-manager").ServerInstance): Promise<void> {
+    if (this.privateEpoch !== null && this.privateEpoch === server.epoch) return
+    if (this.privatePeer) {
+      try {
+        this.privatePeer.dispose()
+      } catch (err) {
+        console.warn("[Kilo] PrivatePeer prior dispose failed:", String(err))
+      }
+      this.privatePeer = null
+    }
+    this.privateAvailable = false
+    this.privateEpoch = server.epoch
+    this.privatePid = server.pid
+    if (!server.privateReader || !server.privateWriter) {
+      console.warn("[Kilo] PrivatePeer unavailable: fd3/fd4 not exposed for pid", server.pid, "epoch", server.epoch)
+      return
+    }
+    const epochAtStart = server.epoch
+    const pidAtStart = server.pid
+    const peer = new ServePrivatePeer({
+      reader: server.privateReader,
+      writer: server.privateWriter,
+      pid: server.pid,
+      epoch: server.epoch,
+      process: server.process,
+      initializeTimeoutMs: 5000,
+    })
+    this.privatePeer = peer
+    const ok = await peer.initialize()
+    if (this.privatePeer !== peer || this.privateEpoch !== epochAtStart) {
+      try {
+        peer.dispose()
+      } catch (err) {
+        console.warn("[Kilo] PrivatePeer stale dispose failed:", String(err))
+      }
+      return
+    }
+    if (!peer.isAvailable() && ok) {
+      this.privateAvailable = false
+      console.warn("[Kilo] PrivatePeer negotiation failed (fail-closed) pid", pidAtStart, "epoch", epochAtStart)
+      return
+    }
+    this.privateAvailable = ok && peer.isAvailable()
+    if (!this.privateAvailable) {
+      console.warn("[Kilo] PrivatePeer negotiation failed (fail-closed) pid", pidAtStart, "epoch", epochAtStart)
+      return
+    }
+    console.log("[Kilo] PrivatePeer negotiated pid", pidAtStart, "epoch", epochAtStart)
+  }
+
+  isPrivateAvailable(): boolean {
+    return this.privateAvailable && !!this.privatePeer && this.privatePeer.isAvailable()
+  }
+
+  getPrivatePeer(): ServePrivatePeer | null {
+    return this.privatePeer
+  }
+
+  getPrivateEpoch(): number | null {
+    return this.privateEpoch
+  }
+
+  getPrivatePid(): number | undefined {
+    return this.privatePid
+  }
+
+  async privateCancelQueued(req: ServePrivateCancelQueuedRequest): Promise<ServePrivateCancelQueuedResult> {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const result = await peerAtCall.privateCancelQueued(req)
+    if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+      return {
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "session/cancelQueued",
+        idempotencyKey: req.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      } as unknown as ServePrivateCancelQueuedResult
+    }
+    if (this.privatePeer !== peerAtCall) {
+      return {
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "session/cancelQueued",
+        idempotencyKey: req.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      } as unknown as ServePrivateCancelQueuedResult
+    }
+    return result
   }
 
   /**

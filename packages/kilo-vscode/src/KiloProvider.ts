@@ -4844,10 +4844,100 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private async handleCancelQueued(sessionID: string, messageID: string): Promise<void> {
     if (!this.client) return
     const dir = this.getWorkspaceDirectory(sessionID)
-    const { error } = await this.client.session.cancelQueued({ sessionID, messageID, directory: dir })
-    if (error) {
-      console.error("[Kilo New] KiloProvider: Failed to cancel queued message:", error)
-      void vscode.window.showErrorMessage(getErrorMessage(error) || "Failed to cancel queued message")
+    const opId = `cancelQueued:${sessionID}:${messageID}`
+    const idempotencyKey = `legacy:${sessionID}:${messageID}`
+    const sdkRes = await this.client.session.cancelQueued({ sessionID, messageID, directory: dir })
+    if (sdkRes.error) {
+      console.error("[Kilo New] KiloProvider: Failed to cancel queued message:", sdkRes.error)
+      void vscode.window.showErrorMessage(getErrorMessage(sdkRes.error) || "Failed to cancel queued message")
+    }
+    const isPrivateAvailable = (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
+    if (!isPrivateAvailable) return
+    const sdkHasTerminal = (() => {
+      // Authoritative: SDK tuple response.status is primary signal (LOCK-002)
+      const resp = (sdkRes as unknown as { response?: { status?: unknown } })?.response
+      const respStatus = resp && typeof resp.status === "number" && Number.isInteger(resp.status) ? (resp.status as number) : resp && typeof resp.status === "string" ? Number(resp.status) : null
+      if (respStatus !== null && Number.isInteger(respStatus) && respStatus >= 100 && respStatus < 600) {
+        if ([400, 404, 409, 500].includes(respStatus)) return true
+        // SDK error with non-terminal HTTP status (e.g. 502) is not terminal
+        if (sdkRes.error) return false
+        return true
+      }
+      if (!sdkRes.error) return true
+      const err = sdkRes.error as Record<string, unknown>
+      const candidates: unknown[] = [err.status, err.statusCode, err.code, err.httpStatus]
+      for (const c of candidates) {
+        if (typeof c === "number" && [400, 404, 409, 500].includes(c)) return true
+        if (typeof c === "string" && ["400", "404", "409", "500"].includes(c)) return true
+        const n = typeof c === "string" ? Number(c) : null
+        if (n !== null && [400, 404, 409, 500].includes(n)) return true
+      }
+      if (typeof err.message === "string" && /\b(400|404|409|500)\b/.test(err.message)) return true
+      const tag = typeof err._tag === "string" ? String(err._tag).toLowerCase() : ""
+      if (tag.includes("badrequest") || tag.includes("notfound") || tag.includes("conflict") || tag.includes("internal")) return true
+      if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined") return false
+      return false
+    })()
+    if (!sdkHasTerminal) return
+    const privateReq = {
+      v: 1 as const,
+      requestId: crypto.randomUUID(),
+      opId,
+      op: "session/cancelQueued" as const,
+      idempotencyKey,
+      context: { directory: dir, sessionId: sessionID, parentSessionId: null },
+      payload: { messageId: messageID },
+    }
+    const svc = this.connectionService as unknown as { privateCancelQueued: (req: typeof privateReq) => Promise<unknown> }
+    let priv: unknown
+    try {
+      const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`private parity timeout after ${ms}ms`)), ms)
+          ;(timer as unknown as { unref?: () => void })?.unref?.()
+        })
+        return Promise.race([p, timeout]).finally(() => {
+          if (timer) clearTimeout(timer)
+        }) as Promise<T>
+      }
+      priv = await withTimeout(svc.privateCancelQueued(privateReq), 3000).catch((e: unknown) => {
+        return {
+          v: 1,
+          requestId: privateReq.requestId,
+          opId: privateReq.opId,
+          op: "session/cancelQueued",
+          idempotencyKey: privateReq.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+          _error: String(e),
+        }
+      })
+    } catch (e) {
+      console.warn("[Kilo PrivateParity] parity observation failed", { opId, error: String(e) })
+      return
+    }
+    try {
+      const { compareParity } = await import("./services/cli-backend/serve-private-peer")
+      const res = compareParity(priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateCancelQueuedResult, sdkRes as unknown as { data?: unknown; error?: unknown; response?: unknown })
+      if (res.divergence) {
+        const p = priv as Record<string, unknown>
+        console.warn("[Kilo PrivateParity] divergence", {
+          opId,
+          sessionID,
+          messageID,
+          divergence: res.divergence,
+          details: res.details,
+          privStatus: (p.status as string) ?? "unknown",
+          transportUnknown: !!(p.transportUnknown as boolean),
+        })
+      } else {
+        console.log("[Kilo PrivateParity] parity match", { opId, status: sdkRes.error ? "failed" : "succeeded" })
+      }
+    } catch (e) {
+      console.warn("[Kilo PrivateParity] parity observation failed", { opId, error: String(e) })
     }
   }
 
