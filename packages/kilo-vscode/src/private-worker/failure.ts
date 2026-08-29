@@ -3,11 +3,14 @@
  *
  * This is the sole runtime-owned normalization boundary converting provider/session/
  * tool/permission/worker/transport errors into Failure records; classification never
- * schedules recovery (no retry fields, no timers); redaction happens inside normalize
- * before any record is emitted, so no unredacted field can reach persistence or
- * projection; field tiers are exposure ceilings (durable < diagnostic < panel-visible,
- * monotonic); closed sets; no taxonomy freeze; persistence integration lands with R11
- * and consumes records produced here; envelope version ownership per R1/R9/R12.
+ * schedules recovery (no retry fields, no timers); redaction (scrub + caps
+ * 500/1000/2000) happens inside normalize before any normalize-derived record is
+ * emitted, so no unredacted normalize-derived field can reach persistence or
+ * projection; direct caller-supplied buildPanelEnvelope inputs remain outside that
+ * guarantee (P4-G7 Active); field tiers are exposure ceilings (durable <
+ * diagnostic < panel-visible, monotonic); closed sets; no taxonomy freeze;
+ * persistence integration lands with R11 and consumes records produced here;
+ * envelope version ownership per R1/R9/R12.
  *
  * Minimal closed code set (no taxonomy freeze; unknown shapes yield a stable code,
  * never invent codes):
