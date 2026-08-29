@@ -92,7 +92,7 @@ Completed phases: one-line pointer only (detail in archive/evidence). Active gat
 | P4-G4 | P4 | WYSIWYG acceptance evidenced (runtime §5.4) | Active | `CanonicalConfigService` P4.1; full R11-R14 observation pending |
 | P4-G5 | P4 | P4.4 source removal proves removed-feature initialization absent and records deltas (LOCK-PERF-3, runtime §10) | Active | §6 rows; [doc: evidence/p4.4-source-removal-evidence-matrix.md](evidence/p4.4-source-removal-evidence-matrix.md) |
 | P4-G6 | P4 | Each legacy effective-config source proven inactive; active set is closed taxonomy only (runtime §3.1/§8.1) | Active | §6; P4.3 cutover complete, P4.4 rows residual |
-| P4-G7 | P4 | Failure/Outcome/Recovery contract evidence recorded (runtime §7.2, R11-R14) | Active | [doc: evidence/p4.2-r11-r14-contract-evidence.md](evidence/p4.2-r11-r14-contract-evidence.md) pure modules only — no production wiring |
+| P4-G7 | P4 | Failure/Outcome/Recovery contract evidence recorded (runtime §7.2, R11-R14) | Active | [doc: evidence/p4.2-r11-r14-contract-evidence.md](evidence/p4.2-r11-r14-contract-evidence.md) pure modules + bounded provider lifecycle wiring `processor.ts:1275-1321,1411` and persisted redaction `operation.ts:290-295` — no private-worker transport/retry/crash/five-boundary closure |
 | P4-G8 | P4 | Storage foundation and cutover landed (ADR-0005, storage §5-8, R15-R17) — S0-S5 offline only, offline archive, zero-state gate | Active | [doc: evidence/p4-g8-storage-offline-evidence.md](evidence/p4-g8-storage-offline-evidence.md) — offline S0-S5/R15-R17 foundation evidenced; live production cutover and retention wiring deferred |
 | P4-G9 | P4 | CLI/TUI/Console products and public interfaces deleted (LOCK-009) | Active | P4.5 Not started |
 
