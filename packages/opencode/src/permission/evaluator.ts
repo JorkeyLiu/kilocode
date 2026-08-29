@@ -417,7 +417,7 @@ export function evaluate(input: Input): { result: DecisiveResult; provenance: Pr
     layersByKind.set(l.kind, list)
   }
 
-  let hardDenyMatches: { rule: Rule; order: number; pattern: string }[] = []
+  const hardDenyMatches: { rule: Rule; order: number }[] = []
   if (input.hardDenyRuleset) {
     // LOCK-002: hard deny absolute — never filter mode rules from veto evaluation
     for (const pat of targets) {
@@ -427,7 +427,7 @@ export function evaluate(input: Input): { result: DecisiveResult; provenance: Pr
         if (!Wildcard.match(req.permission, rule.permission)) continue
         const canonRulePat = canonicalForPermission(rule.pattern, req.permission, req.workspaceRoot)
         if (!Wildcard.match(pat, canonRulePat)) continue
-        hardDenyMatches.push({ rule, order: i, pattern: pat })
+        hardDenyMatches.push({ rule, order: i })
       }
     }
   }
@@ -455,7 +455,7 @@ export function evaluate(input: Input): { result: DecisiveResult; provenance: Pr
     runtimeDecision = "deny"
     ceilingId = "(a)"
     runtimeReason = "ceiling-a"
-    runtimeRuleRefs = hardDenyMatches.map((m, idx) => ({ pattern: m.pattern, action: m.rule.action, order: m.order ?? idx }))
+    runtimeRuleRefs = hardDenyMatches.map((m, idx) => ({ pattern: m.rule.pattern, action: m.rule.action, order: m.order ?? idx }))
   } else if (ceilingB || ceilingC) {
     runtimeDecision = "ask-ceiling"
     if (ceilingB) {

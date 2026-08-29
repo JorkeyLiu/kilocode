@@ -14,8 +14,13 @@ import { TestInstance } from "../fixture/fixture"
 import { Global } from "@opencode-ai/core/global"
 import os from "os"
 import { createTestTrustedAgentContext as createTrusted } from "../helpers/trusted-helpers"
+import { deriveSubagentSessionPermission } from "../../src/agent/subagent-permissions"
+import type { Agent } from "../../src/agent/agent"
+import type * as Evaluator from "../../src/permission/evaluator"
 import path from "path"
 import fs from "fs/promises"
+
+type AskWithTrusted = Permission.AskInput & { trustedContext: ReturnType<typeof createTrusted> }
 
 const events = EventV2Bridge.defaultLayer
 const noopBootstrap = Layer.succeed(InstanceBootstrap.Service, InstanceBootstrap.Service.of({ run: Effect.void }))
@@ -58,6 +63,263 @@ const isolatedGlobal = Effect.gen(function* () {
     }),
   )
   return dir
+})
+
+describe("R18 production-path - full evaluator matrix", () => {
+  it.instance("hard deny remains absolute and provenance identifies the decisive runtime rule", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const global = yield* isolatedGlobal
+      yield* Effect.promise(() => fs.writeFile(path.join(global, "kilo.jsonc"), JSON.stringify({ permission: { bash: { "*": "allow" } } }, null, 2)))
+
+      const exit = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_matrix_hard_deny"),
+          sessionID: SessionID.make("sess_matrix_hard_deny"),
+          permission: "bash",
+          patterns: ["rm -rf /tmp/work"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+          hardRuleset: [{ permission: "bash", pattern: "rm *", action: "deny" }],
+        })
+        .pipe(Effect.exit)
+
+      expect(Exit.isFailure(exit)).toBe(true)
+      const prov = yield* perm.provenance("per_matrix_hard_deny")
+      expect(prov?.decisive.result).toBe("deny")
+      expect(prov?.decisive.reason).toBe("ceiling-a")
+      expect(prov?.decisive.ceilingId).toBe("(a)")
+      expect(prov?.contributingLayers.find((l) => l.sourceKind === "global-file")?.decision).toBe("allow")
+      expect(prov?.contributingLayers.find((l) => l.sourceKind === "runtime-safety")?.rules).toContainEqual({ pattern: "rm *", action: "deny", order: 0 })
+    }),
+    { git: true },
+  )
+
+  it.instance("exact approval resolves an ordinary ask and a protected ceiling in one operation", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const t = yield* TestInstance
+      const global = yield* isolatedGlobal
+      yield* Effect.promise(() => fs.writeFile(path.join(global, "kilo.jsonc"), JSON.stringify({ permission: { edit: { "*": "allow" } } }, null, 2)))
+      yield* Effect.promise(() => fs.mkdir(path.join(t.directory, ".kilo"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(projFile(t.directory), JSON.stringify({ permission: {} }, null, 2)))
+
+      const id = PermissionV1.ID.make("per_matrix_mixed_exact")
+      const fiber = yield* perm
+        .ask({
+          id,
+          sessionID: SessionID.make("sess_matrix_mixed_exact"),
+          permission: "edit",
+          patterns: ["kilo.json"],
+          metadata: {},
+          trustedContext: createTrusted("code"),
+          always: [],
+          ruleset: [],
+        } as unknown as AskWithTrusted)
+        .pipe(Effect.forkScoped)
+
+      yield* waitForPending(1)
+      const before = yield* perm.provenance("per_matrix_mixed_exact")
+      expect(before?.decisive.result).toBe("ask-ceiling")
+      expect(before?.decisive.ceilingId).toBe("(b)")
+      expect(before?.contributingLayers.find((l) => l.sourceKind === "project-file")?.decision).toBe("ask")
+
+      yield* perm.reply({ requestID: id, reply: "always" })
+      yield* Fiber.join(fiber)
+      const after = yield* perm.provenance("per_matrix_mixed_exact")
+      expect(after?.decisive.result).toBe("allow")
+      expect(after?.decisive.reason).toBe("approval-exact")
+      expect(after?.approval?.patterns).toEqual([path.join(t.directory, "kilo.json")])
+    }),
+    { git: true },
+  )
+
+  it.instance("allow-everything resolves ordinary ask but never protected ask-ceiling", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const t = yield* TestInstance
+      const global = yield* isolatedGlobal
+      yield* Effect.promise(() => fs.writeFile(path.join(global, "kilo.jsonc"), JSON.stringify({ permission: {} }, null, 2)))
+      yield* Effect.promise(() => fs.mkdir(path.join(t.directory, ".kilo"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(projFile(t.directory), JSON.stringify({ permission: { edit: { "*": "allow" } } }, null, 2)))
+
+      const sess = SessionID.make("sess_matrix_allow_everything")
+      yield* perm.allowEverything({ enable: true, sessionID: sess })
+      const ordinary = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_matrix_ordinary_ask"),
+          sessionID: sess,
+          permission: "bash",
+          patterns: ["printf ordinary"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isSuccess(ordinary)).toBe(true)
+      expect((yield* perm.provenance("per_matrix_ordinary_ask"))?.decisive.reason).toBe("allow-everything")
+
+      const id = PermissionV1.ID.make("per_matrix_ceiling_ae")
+      const fiber = yield* perm
+        .ask({
+          id,
+          sessionID: sess,
+          permission: "edit",
+          patterns: ["kilo.json"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      const prov = yield* perm.provenance("per_matrix_ceiling_ae")
+      expect(prov?.decisive.result).toBe("ask-ceiling")
+      expect(prov?.decisive.ceilingId).toBe("(b)")
+      yield* perm.reply({ requestID: id, reply: "reject" })
+      yield* Fiber.await(fiber).pipe(Effect.catchCause(() => Effect.void))
+      yield* perm.allowEverything({ enable: false, sessionID: sess })
+    }),
+    { git: true },
+  )
+
+  it.instance("child inherited deny reaches Permission.ask while parent approval stays session-scoped", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const t = yield* TestInstance
+      const global = yield* isolatedGlobal
+      yield* Effect.promise(() => fs.writeFile(path.join(global, "kilo.jsonc"), JSON.stringify({ permission: { edit: { "*": "allow" } } }, null, 2)))
+
+      const inherited = deriveSubagentSessionPermission({
+        parentSessionPermission: [],
+        parentAgent: { permission: [{ permission: "edit", pattern: "*", action: "deny" }] } as unknown as Agent.Info,
+        subagent: { permission: [{ permission: "edit", pattern: "*", action: "allow" }] } as unknown as Agent.Info,
+      })
+      expect(inherited).toContainEqual({ permission: "edit", pattern: "*", action: "deny" })
+      expect(inherited.filter((r) => r.action === "deny").map((r) => r.permission)).toEqual(["edit", "todowrite", "task"])
+
+      const childExit = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_matrix_child_deny"),
+          sessionID: SessionID.make("sess_matrix_child"),
+          permission: "edit",
+          patterns: ["worker.ts"],
+          metadata: {},
+          always: [],
+          ruleset: inherited,
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(childExit)).toBe(true)
+      expect((yield* perm.provenance("per_matrix_child_deny"))?.decisive.reason).toBe("session-restriction-deny")
+
+      const parentID = PermissionV1.ID.make("per_matrix_parent_approval")
+      const parent = yield* perm
+        .ask({
+          id: parentID,
+          sessionID: SessionID.make("sess_matrix_parent"),
+          permission: "edit",
+          patterns: ["kilo.json"],
+          metadata: {},
+          trustedContext: createTrusted("code"),
+          always: [],
+          ruleset: [],
+        } as unknown as AskWithTrusted)
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.reply({ requestID: parentID, reply: "always" })
+      yield* Fiber.join(parent)
+
+      const childID = PermissionV1.ID.make("per_matrix_child_approval")
+      const child = yield* perm
+        .ask({
+          id: childID,
+          sessionID: SessionID.make("sess_matrix_child_approval"),
+          permission: "edit",
+          patterns: ["kilo.json"],
+          metadata: {},
+          trustedContext: createTrusted("code"),
+          always: [],
+          ruleset: [],
+        } as unknown as AskWithTrusted)
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      expect((yield* perm.provenance("per_matrix_child_approval"))?.decisive.result).toBe("ask-ceiling")
+      yield* perm.reply({ requestID: childID, reply: "reject" })
+      yield* Fiber.await(child).pipe(Effect.catchCause(() => Effect.void))
+    }),
+    { git: true },
+  )
+
+  it.instance("same-document exact rule wins and provenance identifies that rule", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const t = yield* TestInstance
+      yield* Effect.promise(() => fs.mkdir(path.join(t.directory, ".kilo"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(projFile(t.directory), JSON.stringify({ permission: { bash: { "*": "allow", "git status": "deny" } } }, null, 2)))
+
+      const exit = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_matrix_decisive_rule"),
+          sessionID: SessionID.make("sess_matrix_decisive_rule"),
+          permission: "bash",
+          patterns: ["git status"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      const prov = yield* perm.provenance("per_matrix_decisive_rule")
+      const project = prov?.contributingLayers.find((l) => l.sourceKind === "project-file")
+      expect(project?.decision).toBe("deny")
+      expect(project?.rules).toEqual([{ pattern: "git status", action: "deny", order: 1 }])
+      expect(prov?.decisive.reason).toBe("project-deny")
+    }),
+    { git: true },
+  )
+
+  it.instance("question and question_tool remain separate through Permission.ask", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const global = yield* isolatedGlobal
+      yield* Effect.promise(() =>
+        fs.writeFile(
+          path.join(global, "kilo.jsonc"),
+          JSON.stringify({ permission: { question: "deny", question_tool: "allow" } }, null, 2),
+        ),
+      )
+
+      const question = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_matrix_question"),
+          sessionID: SessionID.make("sess_matrix_question"),
+          permission: "question",
+          patterns: ["free-form"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(question)).toBe(true)
+
+      const questionTool = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_matrix_question_tool"),
+          sessionID: SessionID.make("sess_matrix_question_tool"),
+          permission: "question_tool",
+          patterns: ["ask-user"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.exit)
+      if (Exit.isFailure(questionTool)) throw Cause.squash(questionTool.cause)
+      expect(Exit.isSuccess(questionTool)).toBe(true)
+      expect((yield* perm.provenance("per_matrix_question"))?.request.permission).toBe("question")
+      expect((yield* perm.provenance("per_matrix_question_tool"))?.request.permission).toBe("question_tool")
+    }),
+    { git: true },
+  )
 })
 
 describe("R18 production-path - disk-authored global/project permission files flow to Permission.ask", () => {
@@ -337,7 +599,6 @@ describe("R18 production-path - ceiling b and c exact approval positive and nega
 describe("R18 production-path - saveAlwaysRules ceiling c exact vs wildcard/broad", () => {
   // LOCK-004 exactness: approvedAlways selector "*" or "*.env" is never stored as wildcard identity.
   // For an exact pending protected request (e.g. single "secret.env"), selector "*" may normalize to that exact canonical approval if retained; otherwise no glob stored.
-  // @ts-ignore - Effect R inference for this complex saveAlwaysRules test requires wide service union, runtime verified via bun test
   it.instance("saveAlwaysRules exact approval for read secret.env resolves only that target and wildcard/broad selector never stored as wildcard", () =>
     Effect.gen(function* () {
       const perm = yield* Permission.Service
@@ -364,8 +625,8 @@ describe("R18 production-path - saveAlwaysRules ceiling c exact vs wildcard/broa
       yield* perm.saveAlwaysRules({ requestID: PermissionV1.ID.make("per_save_c_exact"), approvedAlways: ["secret.env"] })
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_exact"), reply: "always" })
       yield* Fiber.await(fiber)
-      const debugAfterExact = (yield* (perm as any).debugState()) as { approvals: any[]; approved: any[]; session: any }
-      expect(debugAfterExact.approvals.some((a: any) => a.permission === "read" && a.patterns.includes(path.join(t.directory, "secret.env")) || a.patterns.includes("secret.env") || a.patterns.some((p: string) => p.includes("secret.env")))).toBe(true)
+      const debugAfterExact = yield* perm.debugState()
+      expect(debugAfterExact.approvals.some((a: Evaluator.Approval) => a.permission === "read" && a.patterns.includes(path.join(t.directory, "secret.env")) || a.patterns.includes("secret.env") || a.patterns.some((p: string) => p.includes("secret.env")))).toBe(true)
       const okSame = yield* perm
         .ask({
           id: PermissionV1.ID.make("per_save_c_same"),
@@ -411,14 +672,14 @@ describe("R18 production-path - saveAlwaysRules ceiling c exact vs wildcard/broa
         })
         .pipe(Effect.forkScoped)
       yield* waitForPending(1)
-      const debugBeforeWild = (yield* (perm as any).debugState()) as { approvals: any[] }
+      const debugBeforeWild = yield* perm.debugState()
       const countBefore = debugBeforeWild.approvals.length
       yield* perm.saveAlwaysRules({ requestID: PermissionV1.ID.make("per_save_c_wild"), approvedAlways: ["*.env"] })
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_wild"), reply: "reject" })
       yield* Fiber.await(fiberWild).pipe(Effect.catchCause(() => Effect.void))
-      const debugAfterWild = (yield* (perm as any).debugState()) as { approvals: any[]; approved: any[]; session: any }
+      const debugAfterWild = yield* perm.debugState()
       expect(debugAfterWild.approvals.length).toBe(countBefore)
-      expect(debugAfterWild.approvals.some((a: any) => a.patterns.some((p: string) => p.includes("*.env")))).toBe(false)
+      expect(debugAfterWild.approvals.some((a: Evaluator.Approval) => a.patterns.some((p: string) => p.includes("*.env")))).toBe(false)
       const fiberCheckWild = yield* perm
         .ask({
           id: PermissionV1.ID.make("per_save_c_check_wild"),
@@ -448,14 +709,14 @@ describe("R18 production-path - saveAlwaysRules ceiling c exact vs wildcard/broa
         })
         .pipe(Effect.forkScoped)
       yield* waitForPending(1)
-      const countBeforeBroad = ((yield* (perm as any).debugState()) as { approvals: any[] }).approvals.length
+      const countBeforeBroad = (yield* perm.debugState()).approvals.length
       yield* perm.saveAlwaysRules({ requestID: PermissionV1.ID.make("per_save_c_broad"), approvedAlways: ["*"] })
-      const debugAfterBroad = (yield* (perm as any).debugState()) as { approvals: any[]; approved: any[]; session: any }
-      expect(debugAfterBroad.approvals.every((a: any) => a.patterns.every((p: string) => !p.includes("*")))).toBe(true)
-      const hasGlobBroad = debugAfterBroad.approvals.some((a: any) => a.patterns.some((p: string) => p === "*" || p.includes("*")))
+      const debugAfterBroad = yield* perm.debugState()
+      expect(debugAfterBroad.approvals.every((a: Evaluator.Approval) => a.patterns.every((p: string) => !p.includes("*")))).toBe(true)
+      const hasGlobBroad = debugAfterBroad.approvals.some((a: Evaluator.Approval) => a.patterns.some((p: string) => p === "*" || p.includes("*")))
       expect(hasGlobBroad).toBe(false)
       if (debugAfterBroad.approvals.length > countBeforeBroad) {
-        const hasExactBroad = debugAfterBroad.approvals.some((a: any) => a.sessionID === "sess_save_c_broad" && a.patterns.some((p: string) => p.includes("secret.env")))
+        const hasExactBroad = debugAfterBroad.approvals.some((a: Evaluator.Approval) => a.sessionID === "sess_save_c_broad" && a.patterns.some((p: string) => p.includes("secret.env")))
         expect(hasExactBroad).toBe(true)
       }
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_broad"), reply: "reject" })

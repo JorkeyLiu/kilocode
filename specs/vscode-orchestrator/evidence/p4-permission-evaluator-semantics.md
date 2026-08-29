@@ -1,45 +1,45 @@
-# P4 Permission Evaluator Semantics — Specification-Only Evidence
+# P4 Permission Evaluator Semantics — Implementation and Matrix Evidence
 
-> **Status: SPECIFICATION-ONLY — No runtime implementation and no gate closure claimed.**
-> This artifact locks the unresolved permission-evaluator product semantics in the durable runtime specification (R18) and provides a specification-only evidence artifact. It does not implement evaluator code, does not close the permission-evaluator implementation/test gate, and does not change P4.3/P4.4/P4.5 phase status. The P4.3 pre-cutover checklist remains byte-identical and pending.
+> **Status: R18 EVALUATOR MATRIX COMPLETE — No transport or phase closure claimed.**
+> This artifact records the bounded R18 semantics and points to the direct and production-path evidence that proves them. It does not claim transport narrowing, P4.4, P4.5, or P5 completion. The P4.3 pre-cutover checklist remains byte-identical and pending.
 
 ## Artifact Metadata
 
 | Field | Value |
 |---|---|
-| Title | P4 Permission Evaluator Semantics — Specification-Only Evidence |
+| Title | P4 Permission Evaluator Semantics — Implementation and Matrix Evidence |
 | Date prepared | 2026-08-24 |
 | Baseline commit (HEAD at preparation) | `1ea09d215c106ed845a5f582293ff36bbf331111` |
 | Reference baseline (pre-amendment) | `d112c37780c8d1d844ecd94e40d3fe6e83ec3e02` |
 | Baseline tag | R18 bounded decision |
-| Status | SPECIFICATION-ONLY |
-| Phase gate | P4 remains Active; P4.3, P4.4, and P4.5 remain pending; permission-evaluator gate remains open (unchecked) |
-| Evidence kind | Specification-only — no runtime execution |
+| Status | R18 bounded evaluator implementation/test matrix complete |
+| Phase gate | P4 remains Active; P4.4 remains Active/residual; P4.5 and P5 remain outside this closure |
+| Evidence kind | Direct evaluator tests plus production-path integration |
 
-This artifact is the evidence required by the locked decisions for R18. No values have been implemented in runtime, no test suite has been executed beyond the static specification, and no dual-read, import, or compatibility reader is created.
+This artifact is the evidence record required by the locked decisions for R18. The evaluator and focused tests are implemented in `packages/opencode`; no dual-read, import, compatibility reader, transport bridge, or phase-gate change is created.
 
 ## Authoritative Sources Cited
 
 | Document | Section | What it authorizes |
 |---|---|---|
 | `specs/vscode-orchestrator/runtime-and-configuration-direction.md` | §5.3 Permission composition | Restrictive policy stack, monotonic deny/ask/allow, child inheritance, approval records |
-| `specs/vscode-orchestrator/runtime-and-configuration-direction.md` | §9 R18 | Bounded specification-only resolution of the eight unresolved permission-evaluator areas |
-| `specs/vscode-orchestrator/migration-tracker.md` | §4 Active Gates (P4 permission-evaluator gate) and §7 Decisions (R18) | Implementation/test gate remains open and unchecked; mirrored R18 row (Owner Hub, Required by P4) |
+| `specs/vscode-orchestrator/runtime-and-configuration-direction.md` | §9 R18 | Bounded resolution of the eight permission-evaluator areas |
+| `specs/vscode-orchestrator/migration-tracker.md` | §4 Active Gates (P4 permission-evaluator gate) and §7 Decisions (R18) | R18 implementation/test closure status and evidence pointers; transport and phase gates remain active |
 | `specs/vscode-orchestrator/evidence/p4.3-pre-cutover-reconciliation-checklist.md` | Entire file | Must remain byte-identical; reconciliation NOT performed; cutover NOT occurred |
 | `specs/vscode-orchestrator/p0-current-state-inventory.md` | §6.1 config sources; §5.2 agent manifests | Canonical file/asset provenance |
 | `packages/core/src/v1/config/permission.ts` | InputObject | Built-in permission identifier contract (mirrored in R18) |
-| `packages/opencode/src/permission/index.ts` | `evaluate`/`resolve` | Current implementation is non-normative flat last-match and is not claimed satisfied |
+| `packages/opencode/src/permission/index.ts` | `Permission.ask` and shared evaluator input builder | Production path delegates decisive evaluation to `packages/opencode/src/permission/evaluator.ts` |
 
 ## Bound — What This Artifact Is and Is Not
 
-- **Is:** A durable specification of the bounded permission-evaluator semantics (R18) and a future acceptance-test plan.
-- **Is not:** Runtime code, test evidence, or a gate closure. The permission-evaluator implementation/test gate remains open and unchecked. P4 remains Active; P4.3, P4.4, and P4.5 remain pending.
+- **Is:** A durable specification of the bounded permission-evaluator semantics (R18) and evidence of its focused implementation/test matrix.
+- **Is not:** Transport evidence or a P4/P4.4/P4.5/P5 phase closure. P4 remains Active; P4.4 remains Active/residual.
 - **P4.3:** The pre-cutover checklist at `specs/vscode-orchestrator/evidence/p4.3-pre-cutover-reconciliation-checklist.md` is byte-for-byte preserved; no manual value, operator, date, or signature has been filled.
 
 ## Locked Decisions Preserved
 
 - **LOCK-001:** P4.3 remains untouched and manual; no reader cutover, dual-read, import, or checklist completion claim.
-- **LOCK-002:** This phase changes only normative permission-evaluator specification and evidence; it does not implement runtime behavior or close the P4 evaluator gate.
+- **LOCK-002:** This bounded unit implements and tests only the specified evaluator behavior; it does not change transport, storage, config rebuild/convergence, or phase-gate ownership.
 - **LOCK-003:** Permission enforcement is runtime-owned in the private CLI/runtime (`packages/opencode`); the extension owns authoring/projection only. Shared permission IDs/types may live in the core package.
 - **LOCK-004:** Canonical identifiers are `question` for the free-form question flow and `question_tool` for the question tool; no `mcp` alias.
 - **LOCK-005:** Approval state is ephemeral runtime memory scoped to a session and exact request patterns; no second persistent store, no parent-allow inheritance, no durable approval side effect.
@@ -47,7 +47,7 @@ This artifact is the evidence required by the locked decisions for R18. No value
 
 ## R18 Bounded Decision Summary
 
-R18 is recorded in `specs/vscode-orchestrator/runtime-and-configuration-direction.md` §9 (after R17) and mirrored in `specs/vscode-orchestrator/migration-tracker.md` §7 Decisions (R18) (Owner Hub, Required by P4, dated 2026-08-24). Both entries state explicitly that the evaluator implementation/test gate remains open and that the evidence artifact is specification-only. R18 resolves exactly the eight areas below and nothing else. Additions to the ceiling catalog require a new bounded decision.
+R18 is recorded in `specs/vscode-orchestrator/runtime-and-configuration-direction.md` §9 (after R17) and mirrored in `specs/vscode-orchestrator/migration-tracker.md` §7 Decisions (R18) (Owner Hub, Required by P4, dated 2026-08-24). The implementation and focused evidence close the bounded evaluator matrix without closing transport or any unrelated phase gate. R18 resolves exactly the eight areas below and nothing else. Additions to the ceiling catalog require a new bounded decision.
 
 ## 1. Hard-Safety Ceiling Catalog and Override Behavior (complete v1)
 
@@ -231,9 +231,9 @@ function decide(request):
 | D-18 | Child request with parent exact approval present | ask (or ceiling) | no parent approval inheritance |
 | D-19 | Later exact rule beats earlier wildcard in same document | allow/deny per later exact | intra-document ordering rank 1 |
 
-## Acceptance-Test Matrix (future implementation — test plan, not executed)
+## Acceptance-Test Matrix (implemented and evidenced)
 
-All tests are specification-only plans. Each must be implemented in the private runtime (`packages/opencode`) and verified against real policy documents.
+The direct matrix is implemented in `packages/opencode/test/permission/r18-evaluator.test.ts`; the production-path subset is implemented in `packages/opencode/test/permission/r18-production-path.test.ts` and exercises real disk-authored canonical global/project policy through `Permission.ask`.
 
 | ID | Category | Test description | Preconditions | Input | Expected | Negative check |
 |---|---|---|---|---|---|---|
@@ -271,9 +271,9 @@ All tests are specification-only plans. Each must be implemented in the private 
 
 Total coverage: ceilings (A-01..A-09), identifiers (A-10..A-11), approvals (A-12..A-13), leakage (A-14..A-16), protected exact vs broad (A-17..A-18), provenances (A-19..A-20), crash/disposal/no-store (A-21..A-23), ordering (A-24..A-26), composition (A-27..A-31: applicable no-rule vs standalone neutral `no-ceiling` allow vs mixed every-ask resolution including single exact approval covering both ordinary and (b)/(c) ceiling asks as `allow` per A-31/D-22). 31-case matrix.
 
-## Current Implementation Disclaimer
+## Implementation and Evidence
 
-The current implementation at `packages/opencode/src/permission/index.ts:106` uses flat last-match (`findLast`) behavior and does not implement the restrictive composition, ceiling catalog, single-document ordering, or per-session ephemeral approval semantics normed here. This implementation is non-normative and is not claimed to satisfy R18. Achieving conformance requires a new evaluator implementation tracked by the permission-evaluator implementation/test gate.
+The authoritative evaluator is `packages/opencode/src/permission/evaluator.ts:410`, called by `packages/opencode/src/permission/index.ts:711` from `Permission.ask`. The shared input builder preserves the production path from `Global.Path.config` and `<workspaceRoot>/.kilo/kilo.jsonc` through canonical layers, evaluator, and provenance. Direct matrix coverage is in `packages/opencode/test/permission/r18-evaluator.test.ts`; production-path coverage is in `packages/opencode/test/permission/r18-production-path.test.ts`.
 
 ## P4.3 Checklist Is Untouched and Still Pending
 
@@ -287,19 +287,22 @@ The current implementation at `packages/opencode/src/permission/index.ts:106` us
 | Command | Result |
 |---|---|
 | `git diff --check` | PASS — no whitespace errors |
+| `bun test --isolate ./test/permission/r18-evaluator.test.ts` | PASS — 64 tests, 166 expect assertions |
+| `bun test --isolate ./test/permission/r18-production-path.test.ts` | PASS — 18 tests, 106 expect assertions |
+| `bun run typecheck` from `packages/opencode` | PASS |
+| `bun run typecheck` from `packages/core` | PASS |
 | `bun run script/check-md-table-padding.ts specs/vscode-orchestrator/evidence/p4-permission-evaluator-semantics.md specs/vscode-orchestrator/migration-tracker.md specs/vscode-orchestrator/runtime-and-configuration-direction.md` | PASS — no padded tables in these three markdown files |
 | `bun run script/check-architecture-impact.ts --worktree` | Report-only — see below; no runtime boundary claimed |
 
-Architecture impact: this change touches specification-only markdown under `specs/` — no runtime, package, or architecture-doc boundary is introduced. It is not a new ADR and does not change `packages/**` code or tests.
+Architecture impact: this unit updates the R18 evidence record alongside bounded permission evaluator/schema/tests. The architecture checker reported no signal requiring a canonical architecture-doc update; transport, storage, config-rebuild, and lifecycle boundaries are unchanged.
 
-## Remaining Risks — Implementation/Test Work Still Required
+## Remaining Risks — Outside R18 bounded closure
 
 | Risk | Impact | Next evidence required |
 |---|---|---|
-| No evaluator implementation | R18 semantics not enforced | Implement private evaluator in `packages/opencode` per R18; unit tests covering the 31-case acceptance matrix above plus provenance serialization (including applicable vs non-applicable, standalone allow, and `no-ceiling` layer decision) |
-| No integration gate | Permission flows may still use last-match | Wire evaluator into session/tool/permission/child flows; prove denies/asks/ceilings end-to-end with real file policy |
-| Provenance not produced | Diagnostics incomplete | Emit v1 provenance shape for every decision; verify `ask-ceiling` vs `ask` distinction |
-| Ceiling bypass regression | Exact-approval exception misimplemented as wildcard | Negative tests for broad/wildcard and allow-everything bypass attempts |
+| Transport and P4.4 residual work | R18 evidence does not narrow or delete the SDK/HTTP/SSE bridge | Complete the separately tracked P4.4/P4.5 transport and removal gates |
+| Child process isolation | The production-path child proof uses session plumbing and inherited rules, not OS process isolation | Retain child process/lifecycle evidence in its owning phase; no R18 claim follows |
+| Config/lifecycle convergence | This evaluator unit does not change configuration rebuild ownership or convergence | Preserve the existing lifecycle evidence and gates |
 | P4.3 not executed | Desired config lost at cutover | Sole user must manually fill pre-cutover checklist before reader deletion |
 
 ## Change Log
@@ -308,3 +311,4 @@ Architecture impact: this change touches specification-only markdown under `spec
 |---|---|---|
 | 2026-08-24 | Initial creation: specification-only evidence for R18 bounded permission-evaluator semantics — complete v1 ceiling catalog (a absolute deny, b protected control/config paths with exact-approval exception, c `*.env`/`*.env.*` with `*.env.example` exempt), ownership (`packages/opencode` sole enforcement), canonical IDs `question`/`question_tool` separate vs `mcp` not alias, per-session ephemeral approvals (`once`/`session` exact, no wildcard for ceilings, no parent inheritance, crash/disposal drops, no file side effect), v1 provenance in-memory shape (schema version, request ID/patterns, all layers, source kind/path/asset ID, rule identity/order, decisive result/reason, approval metadata, diagnostic not second store), child propagation (inherits denies/restrictions, never allows/approvals), single-document ordering (exact→specificity→declaration order, never cross-layer), layered composition (deny→ask→allow, any deny => deny, any ask => ask unless exact approval, allow only when every layer permits, toggles never grant, no-rule => ask); decision matrix and 28-case future acceptance matrix including negative cases for deny override, parent allow/approval leakage, wildcard broad grants, `.env.example`, protected exact vs broad approval, question ID separation, provenance, crash/session disposal, no second store; explicitly states P4.3 checklist untouched and still pending; cites R18 and §5.3/gate; no implementation/test gate closure. Baseline `d112c37780c8d1d844ecd94e40d3fe6e83ec3e02`. | Manifestor execution of p4-permission-evaluator semantics amendment |
 | 2026-08-24 | Amendment to resolve re-audit blockers (documentation-only): (1) coherent missing-layer rule — authored/selected layer is applicable, layer with no authored document/selected manifest/session restriction is non-applicable and contributes no decision, applicable document with no matching rule contributes `ask`, runtime ceilings/defaults remain applicable; global allow + existing project document with no rule => `ask` (A-27), standalone `question_tool` with other layers absent => `allow` if all applicable allow (D-20/A-29); pseudocode and D/A matrices aligned; (2) allow-everything correction — resolves only ordinary `ask`, never `deny` or any `ask-ceiling` (b/c); only exact agent/path or exact env-file approval resolves ceiling asks; (3) R18 mirrors corrected so `.kilo/` is canonical project tree and `.kilocode/` is only legacy pre-cutover safety boundary not surviving P4.3; (4) identity normalization — `permissionRequestId` = raw request ID (`per_abc123`), `operationId = permission:<permissionRequestId>` (`permission:per_abc123`), distinct from `request.permission` (`edit`, `question_tool`), `once` correlation via `operationId`; (5) evidence baseline updated to `1ea09d215c106ed845a5f582293ff36bbf331111` (HEAD at preparation), `d112c37780c8d1d844ecd94e40d3fe6e83ec3e02` retained as pre-amendment/reference baseline; P4.3 checklist byte-identical. | Manifestor execution of re-audit correction amendment |
+| 2026-08-29 | R18 bounded evaluator implementation/test closure: direct 64-test matrix plus 18 production-path tests prove ceilings, exact approvals, ordinary-only allow-everything, no-rule/default behavior, decisive rule provenance, child deny/approval boundaries, same-document ordering, and separate `question`/`question_tool` identities. P4.4/P4.5/P5 remain outside scope. | Manifestor execution of bounded R18 evaluator closure |

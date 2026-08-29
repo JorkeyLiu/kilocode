@@ -1371,7 +1371,7 @@ export const defaultLayer = layer.pipe(
 // kilocode_change end
 
 // kilocode_change start — inverse of fromConfig: convert rules back to config format
-const SCALAR_ONLY_PERMISSIONS = new Set(["todowrite", "todoread", "question", "webfetch", "websearch", "doom_loop"])
+const SCALAR_ONLY_PERMISSIONS = new Set(["todowrite", "todoread", "question", "question_tool", "webfetch", "websearch", "doom_loop"])
 
 export function toConfig(rules: Ruleset): ConfigPermissionV1.Info {
   const result: ConfigPermissionV1.Info = {}
