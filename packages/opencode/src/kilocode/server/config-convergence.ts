@@ -47,7 +47,13 @@ import { Context, Deferred, Effect, Fiber, FiberSet, Layer, Option, Queue } from
 import { GenerationGate } from "./generation-gate"
 import { InstanceStore } from "@/project/instance-store"
 import { ControlLease } from "./control-lease"
-import { trackRebuildCompleted, trackRebuildStarted, logRebuildFailure, recordRebuildFailure } from "./config-rebuild"
+import {
+  runTracked,
+  trackRebuildCompleted,
+  logRebuildFailure,
+  recordRebuildFailure,
+  type TrackerOwner,
+} from "./config-rebuild"
 import { emitGlobalDisposed } from "@/server/global-lifecycle"
 import type { InstanceContext } from "@/project/instance-context"
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
@@ -58,7 +64,8 @@ export type ColdScope = "global" | { readonly directory: string }
  * P0 correlation fields: directory scopes key on the canonical `dir` field
  * (same as `config_load` / `instance_bootstrap`); global scope keeps an `id`.
  */
-const scopeFields = (scope: ColdScope): P0Perf.P0Fields => (scope === "global" ? { id: "global" } : { dir: scope.directory })
+const scopeFields = (scope: ColdScope): P0Perf.P0Fields =>
+  scope === "global" ? { id: "global" } : { dir: scope.directory }
 
 /** A raised convergence fence ref plus the run outcome, owned by one save. */
 export type ColdObligation = {
@@ -159,6 +166,9 @@ export const layer = Layer.effect(
       // finalization) and are never tied to a caller's request scope. The set
       // lives in the layer scope, so no convergence fiber outlives shutdown.
       const workers = yield* FiberSet.make<void, never>()
+      const workerGate = yield* Queue.unbounded<void>()
+      yield* Queue.offer(workerGate, void 0)
+      const workerOwner: TrackerOwner = { fibers: workers, gate: workerGate, closed: false }
       const state: State = {
         committed: 0,
         dirs: new Map(),
@@ -244,9 +254,16 @@ export const layer = Layer.effect(
                 return
               }
               const token: ReleaseFence = { scope: obligation.scope, fence: obligation.fence }
-              yield* trackRebuildStarted()
-              yield* Effect.sync(() => state.deferred.add(token))
-              yield* FiberSet.run(workers, runReleasePass(token))
+              const accepted = yield* runTracked(
+                workerOwner,
+                runReleasePass(token),
+                Effect.sync(() => state.deferred.add(token)),
+                Effect.void,
+              )
+              if (!accepted) {
+                yield* Effect.sync(() => state.deferred.delete(token))
+                yield* obligation.fence.release
+              }
             }),
           )
         }
@@ -276,9 +293,16 @@ export const layer = Layer.effect(
             P0Perf.mark("config_commit", { ...scopeFields(obligation.scope), meta: { seq } })
             // LOCK-003: synchronous rebuild registration before any ConfigUpdated
             // event can be observed; the fence ref stays held by the pass.
-            yield* trackRebuildStarted()
-            yield* Effect.sync(() => state.held.add(obligation))
-            yield* FiberSet.run(workers, runSerialized(obligation.scope))
+            const accepted = yield* runTracked(
+              workerOwner,
+              runSerialized(obligation.scope),
+              Effect.sync(() => state.held.add(obligation)),
+              Effect.void,
+            )
+            if (!accepted) {
+              yield* Effect.sync(() => state.held.delete(obligation))
+              yield* obligation.fence.release
+            }
           }),
         )
       })
@@ -609,6 +633,9 @@ export const layer = Layer.effect(
         yield* Effect.sync(() => {
           state.shuttingDown = true
         })
+        yield* Queue.take(workerGate)
+        workerOwner.closed = true
+        yield* Queue.offer(workerGate, void 0)
         // 2. Interrupt + join every owned worker. `Fiber.interrupt` awaits the
         //    fiber's exit; passes are interruptible at their awaits (reader
         //    drain, fence-load signal, mutex), and an in-flight dispose/boot
@@ -650,6 +677,9 @@ export const layer = Layer.effect(
   ),
 )
 
+// The explicit-dispose rebuild owner shares the coordinator's application
+// lifetime. AppLayer already installs this default layer, so request-triggered
+// rebuilds are interrupted and joined before dependent runtime services close.
 export const defaultLayer = layer
 
 /** Run outcome a cold mutation path returns to `withColdMutation`. */

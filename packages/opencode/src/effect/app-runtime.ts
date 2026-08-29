@@ -66,6 +66,7 @@ import { PtyTicket } from "@opencode-ai/core/pty/ticket" // kilocode_change - li
 import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_change
 import { ControlLease } from "@/kilocode/server/control-lease" // kilocode_change
 import { ConfigConvergence } from "@/kilocode/server/config-convergence" // kilocode_change - canonical cold-mutation coordinator
+import { ConfigRebuild } from "@/kilocode/server/config-rebuild" // kilocode_change - explicit-dispose rebuild owner
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 // kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers
@@ -81,7 +82,6 @@ const buildCoreLayer = (
     // kilocode_change
     Npm.defaultLayer,
     GenerationGate.defaultLayer, // kilocode_change - one process-wide writer gate
-    ConfigConvergence.defaultLayer, // kilocode_change - one process-wide cold-mutation convergence coordinator
     ControlLease.defaultLayer, // kilocode_change - one process-wide control lifetime lease coordinator
     FSUtil.defaultLayer,
     Database.defaultLayer,
@@ -146,7 +146,7 @@ const SessionLayer = Layer.mergeAll(
   McpAuth.defaultLayer,
   Command.defaultLayer,
   Truncate.defaultLayer,
- ) // kilocode_change
+) // kilocode_change
 
 const FeatureLayer = Layer.mergeAll(
   ToolRegistry.defaultLayer,
@@ -163,7 +163,7 @@ const FeatureLayer = Layer.mergeAll(
   ShareNext.defaultLayer, // kilocode_change - canonical AppLayer service
   SessionShare.defaultLayer, // kilocode_change - canonical AppLayer service
   // kilocode_change - canonical feature service layer
- ) // kilocode_change - canonical feature service layer
+) // kilocode_change - canonical feature service layer
 
 // kilocode_change start - LOCK-003: makeAppLayer shares canonical defaults
 const buildAppLayer = (
@@ -180,8 +180,14 @@ const buildAppLayer = (
     InstanceLayer.layer,
     Observability.layer,
   )
+  // Config lifecycle services depend on the complete application base. This
+  // makes their scope a dependent of InstanceLayer, so their finalizers
+  // interrupt/join owned rebuild work before InstanceStore is torn down.
+  const lifecycle = Layer.mergeAll(ConfigConvergence.defaultLayer, ConfigRebuild.defaultLayer).pipe(
+    Layer.provideMerge(base),
+  )
   const maintenance = RetentionMaintenance.layer.pipe(Layer.provide(base))
-  return Layer.mergeAll(base, maintenance)
+  return Layer.mergeAll(lifecycle, maintenance)
 }
 // kilocode_change end
 

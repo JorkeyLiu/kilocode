@@ -28,7 +28,7 @@
  * shared by that coordinator so `awaitRebuilds` quiescence covers both paths.
  */
 
-import { Cause, Deferred, Effect, Option } from "effect"
+import { Cause, Context, Deferred, Effect, FiberSet, Layer, Option, Queue } from "effect"
 import { InstanceStore } from "@/project/instance-store"
 import type { InstanceContext } from "@/project/instance-context"
 import type { GenerationGate } from "./generation-gate"
@@ -40,6 +40,40 @@ export const logRebuildFailure = Effect.fnUntraced(function* (message: string, c
   yield* Effect.logError(message).pipe(Effect.annotateLogs({ cause }))
 })
 
+/**
+ * Owner for explicit-dispose rebuild fibers. The owner is provided by the
+ * application layer and its FiberSet is closed before the dependent runtime
+ * services are finalized.
+ */
+export interface Owner {
+  readonly fork: <R>(effect: Effect.Effect<void, never, R>) => Effect.Effect<boolean, never, R>
+}
+
+export class Service extends Context.Service<Service, Owner>()("@kilocode/ConfigRebuild") {}
+
+export interface TrackerOwner {
+  readonly fibers: FiberSet.FiberSet<void, never>
+  readonly gate: Queue.Queue<void>
+  closed: boolean
+}
+
+const makeOwned = Effect.gen(function* () {
+  const fibers = yield* FiberSet.make<void, never>()
+  const gate = yield* Queue.unbounded<void>()
+  yield* Queue.offer(gate, void 0)
+  return { fibers, gate, closed: false } satisfies TrackerOwner
+})
+
+const closeOwned = (owner: TrackerOwner) =>
+  Effect.uninterruptible(
+    Effect.gen(function* () {
+      yield* Queue.take(owner.gate)
+      owner.closed = true
+      yield* FiberSet.clear(owner.fibers)
+      yield* Queue.offer(owner.gate, void 0)
+    }),
+  )
+
 // kilocode_change start - shared tracker hooks used by both forkRebuild and the
 // ConfigConvergence coordinator (commit registers a rebuild, the pass completion
 // removes it). Exported for the coordinator module.
@@ -50,6 +84,37 @@ export const trackRebuildStarted = Effect.fnUntraced(function* () {
 export const trackRebuildCompleted = Effect.fnUntraced(function* () {
   yield* Effect.sync(() => rebuildCompleted())
 })
+
+/**
+ * Hand an owned rebuild to a FiberSet and return whether the handoff was
+ * accepted. The owner gate serializes closing with the handoff, and the
+ * FiberSet is checked before tracker registration. A rejected handoff therefore
+ * never creates tracker work for an effect that cannot run.
+ */
+export const runTracked = <R>(
+  owner: TrackerOwner,
+  effect: Effect.Effect<void, never, R>,
+  beforeStart: Effect.Effect<void, never> = Effect.void,
+  complete: Effect.Effect<void, never> = trackRebuildCompleted(),
+): Effect.Effect<boolean, never, R> =>
+  Effect.uninterruptibleMask(() =>
+    Effect.gen(function* () {
+      yield* Queue.take(owner.gate)
+      if (owner.closed) {
+        yield* Queue.offer(owner.gate, void 0)
+        return false
+      }
+      if (owner.fibers.state._tag === "Closed") {
+        yield* Queue.offer(owner.gate, void 0)
+        return false
+      }
+      yield* beforeStart
+      yield* trackRebuildStarted()
+      yield* FiberSet.run(owner.fibers, effect.pipe(Effect.ensuring(complete)), { startImmediately: true })
+      yield* Queue.offer(owner.gate, void 0)
+      return true
+    }),
+  )
 // kilocode_change end
 
 // kilocode_change start - rebuild completion tracking for test isolation
@@ -151,10 +216,10 @@ export const awaitRebuilds = Effect.fn("ConfigRebuild.awaitRebuilds")(function* 
     }
     if (setup.failures.length > 0) {
       yield* Effect.die(
-        new Error(
-          setup.failures.map((failure) => failure.message).join("; "),
-          { cause: setup.failures.length === 1 ? setup.failures[0]!.cause : setup.failures.map((failure) => failure.cause) },
-        ),
+        new Error(setup.failures.map((failure) => failure.message).join("; "), {
+          cause:
+            setup.failures.length === 1 ? setup.failures[0]!.cause : setup.failures.map((failure) => failure.cause),
+        }),
       )
     }
     return
@@ -173,29 +238,16 @@ export const awaitRebuilds = Effect.fn("ConfigRebuild.awaitRebuilds")(function* 
  * release.
  *
  * Used by the explicit-dispose path via `withWriteTicket` (the global dispose
- * handler). Cold saves register rebuilds through the ConfigConvergence
- * coordinator using the shared tracker instead.
+ * handler). The fiber is owned by the ConfigRebuild service's FiberSet, rather
+ * than the request scope or the global detached scope. Cold saves register
+ * rebuilds through the ConfigConvergence coordinator using the shared tracker
+ * instead.
  */
-export function forkRebuild<R>(effect: Effect.Effect<void, never, R>): Effect.Effect<void, never, R> {
-  return Effect.uninterruptibleMask(() =>
-    Effect.gen(function* () {
-      // Registration and detach are one masked handoff. A caller cannot
-      // observe zero between these operations, even when it is interrupted.
-      yield* Effect.sync(() => rebuildStarted())
-      yield* effect.pipe(
-        Effect.catchCause((cause) =>
-          Effect.gen(function* () {
-            if (!Cause.hasInterruptsOnly(cause)) {
-              recordRebuildFailure("config rebuild failed", cause)
-              yield* logRebuildFailure("config rebuild failed", cause)
-            }
-          }),
-        ),
-        Effect.ensuring(Effect.sync(() => rebuildCompleted())),
-        Effect.forkDetach,
-      )
-    }),
-  ).pipe(Effect.asVoid)
+export function forkRebuild<R>(effect: Effect.Effect<void, never, R>): Effect.Effect<boolean, never, R> {
+  return Effect.gen(function* () {
+    const owner = yield* Service
+    return yield* owner.fork(effect)
+  }) as Effect.Effect<boolean, never, R>
 }
 // kilocode_change end
 
@@ -216,36 +268,45 @@ export const rebuildInstance = Effect.fn("ConfigRebuild.rebuildInstance")(functi
 ) {
   const store = yield* InstanceStore.Service
   const leases = Option.getOrElse(yield* Effect.serviceOption(ControlLease.Service), () => ControlLease.noop)
-  yield* Effect.uninterruptible(
-    Effect.gen(function* () {
-      yield* Deferred.await(ticket.drained)
-      // kilocode_change - BLOCKER 4: catch and log disposal/boot failures,
-      // record them for awaitRebuilds observability. catchCause preserves the
-      // Effect<void, never, R> type required by forkRebuild. The rebuild fiber
-      // always completes successfully; ticket.release runs via ensuring.
-      if (old._tag === "Some") {
-        // LOCK-002/003: close control admission for the exact
-        // old identity and await outstanding control leases before disposal, so
-        // a snapshot-served control can never race the disposer.
-        yield* leases.sealAndDrain(old.value)
-        yield* store.dispose(old.value).pipe(
-          Effect.catchCause((cause) =>
-            Effect.gen(function* () {
-              yield* logRebuildFailure("config rebuild disposal failed", cause)
-              recordRebuildFailure("config rebuild disposal failed", cause)
-            }),
-          ),
-        )
-      }
-      yield* store.load({ directory: ticket.directory }).pipe(
-        Effect.catchCause((cause) =>
+  // The drain wait is interruptible so the ConfigRebuild owner can stop work
+  // during application shutdown. The release remains outside that restored
+  // region, so an interrupted rebuild cannot strand its writer ticket.
+  yield* Effect.uninterruptibleMask((restore) =>
+    restore(Deferred.await(ticket.drained)).pipe(
+      Effect.andThen(
+        Effect.uninterruptible(
           Effect.gen(function* () {
-            yield* logRebuildFailure("config rebuild instance boot failed", cause)
-            recordRebuildFailure("config rebuild instance boot failed", cause)
+            // kilocode_change - BLOCKER 4: catch and log disposal/boot failures,
+            // record them for awaitRebuilds observability. catchCause preserves the
+            // Effect<void, never, R> type required by forkRebuild. The rebuild fiber
+            // always completes successfully.
+            if (old._tag === "Some") {
+              // LOCK-002/003: close control admission for the exact
+              // old identity and await outstanding control leases before disposal, so
+              // a snapshot-served control can never race the disposer.
+              yield* leases.sealAndDrain(old.value)
+              yield* store.dispose(old.value).pipe(
+                Effect.catchCause((cause) =>
+                  Effect.gen(function* () {
+                    yield* logRebuildFailure("config rebuild disposal failed", cause)
+                    recordRebuildFailure("config rebuild disposal failed", cause)
+                  }),
+                ),
+              )
+            }
+            yield* store.load({ directory: ticket.directory }).pipe(
+              Effect.catchCause((cause) =>
+                Effect.gen(function* () {
+                  yield* logRebuildFailure("config rebuild instance boot failed", cause)
+                  recordRebuildFailure("config rebuild instance boot failed", cause)
+                }),
+              ),
+            )
           }),
         ),
-      )
-    }).pipe(Effect.ensuring(ticket.release)),
+      ),
+      Effect.ensuring(ticket.release),
+    ),
   )
 })
 
@@ -263,38 +324,47 @@ export const rebuildGlobal = Effect.fn("ConfigRebuild.rebuildGlobal")(function* 
 ) {
   const store = yield* InstanceStore.Service
   const leases = Option.getOrElse(yield* Effect.serviceOption(ControlLease.Service), () => ControlLease.noop)
-  yield* Effect.uninterruptible(
+  yield* Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
       // kilocode_change - BLOCKER 4: per-directory disposal/boot errors are
       // caught, logged, and recorded; one directory's failure does not prevent
       // others from completing. catchCause preserves the never error type.
-      yield* Effect.forEach(
-        olds,
-        Effect.fnUntraced(function* ({ directory, old }) {
-          if (old._tag === "None") return
-          yield* Deferred.await(ticket.drainFor(directory))
-          // LOCK-002/003: close control admission for the
-          // exact old identity and await outstanding control leases before
-          // disposal, so a snapshot-served control can never race the disposer.
-          yield* leases.sealAndDrain(old.value)
-          yield* store.dispose(old.value).pipe(
-            Effect.catchCause((cause) =>
+      yield* restore(
+        Effect.forEach(
+          olds,
+          Effect.fnUntraced(function* ({ directory, old }) {
+            if (old._tag === "None") return
+            // Keep the reader drain interruptible so owner shutdown can join a
+            // rebuild parked behind an active generation. The identity swap is
+            // still atomic from the caller's perspective.
+            yield* Deferred.await(ticket.drainFor(directory))
+            yield* Effect.uninterruptible(
               Effect.gen(function* () {
-                yield* logRebuildFailure("global rebuild disposal failed", cause)
-                recordRebuildFailure("global rebuild disposal failed", cause)
+                // LOCK-002/003: close control admission for the
+                // exact old identity and await outstanding control leases before
+                // disposal, so a snapshot-served control can never race the disposer.
+                yield* leases.sealAndDrain(old.value)
+                yield* store.dispose(old.value).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.gen(function* () {
+                      yield* logRebuildFailure("global rebuild disposal failed", cause)
+                      recordRebuildFailure("global rebuild disposal failed", cause)
+                    }),
+                  ),
+                )
+                yield* store.load({ directory }).pipe(
+                  Effect.catchCause((cause) =>
+                    Effect.gen(function* () {
+                      yield* logRebuildFailure("global rebuild instance boot failed", cause)
+                      recordRebuildFailure("global rebuild instance boot failed", cause)
+                    }),
+                  ),
+                )
               }),
-            ),
-          )
-          yield* store.load({ directory }).pipe(
-            Effect.catchCause((cause) =>
-              Effect.gen(function* () {
-                yield* logRebuildFailure("global rebuild instance boot failed", cause)
-                recordRebuildFailure("global rebuild instance boot failed", cause)
-              }),
-            ),
-          )
-        }),
-        { concurrency: "unbounded", discard: true },
+            )
+          }),
+          { concurrency: "unbounded", discard: true },
+        ),
       )
       // kilocode_change - catch publication failures while always releasing the ticket
       yield* emitGlobalDisposed.pipe(
@@ -310,3 +380,31 @@ export const rebuildGlobal = Effect.fn("ConfigRebuild.rebuildGlobal")(function* 
 })
 
 export * as ConfigRebuild from "./config-rebuild"
+
+export const layer = Layer.effect(
+  Service,
+  Effect.gen(function* () {
+    const owner = yield* makeOwned
+    const fork = <R>(effect: Effect.Effect<void, never, R>) =>
+      Effect.uninterruptibleMask(() =>
+        Effect.gen(function* () {
+          return yield* runTracked(
+            owner,
+            effect.pipe(
+              Effect.catchCause((cause) =>
+                Effect.gen(function* () {
+                  if (!Cause.hasInterruptsOnly(cause)) {
+                    recordRebuildFailure("config rebuild failed", cause)
+                    yield* logRebuildFailure("config rebuild failed", cause)
+                  }
+                }),
+              ),
+            ),
+          )
+        }),
+      )
+    return yield* Effect.acquireRelease(Effect.succeed(Service.of({ fork })), () => closeOwned(owner))
+  }),
+)
+
+export const defaultLayer = layer

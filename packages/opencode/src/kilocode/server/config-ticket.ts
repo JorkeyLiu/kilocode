@@ -29,9 +29,7 @@ type Result<A, R> = {
  */
 export const withWriteTicket = <A, E, R, T extends GenerationGate.WriteTicket>(input: {
   readonly acquire: Effect.Effect<T, E, R>
-  readonly run: (
-    ticket: T,
-  ) => Effect.Effect<Result<A, R>, E, R>
+  readonly run: (ticket: T) => Effect.Effect<Result<A, R>, E, R>
 }): Effect.Effect<A, E, R> =>
   Effect.uninterruptibleMask((restore) =>
     Effect.gen(function* () {
@@ -47,8 +45,12 @@ export const withWriteTicket = <A, E, R, T extends GenerationGate.WriteTicket>(i
         }
         const rebuild = exit.value.rebuild
         if (rebuild) {
-          yield* forkRebuild(rebuild)
-          transferred = true
+          const accepted = yield* forkRebuild(rebuild)
+          if (accepted) transferred = true
+          if (!accepted) {
+            yield* ticket.abort
+            transferred = true
+          }
         }
         if (exit.value.event) yield* exit.value.event
         return exit.value.value
