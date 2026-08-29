@@ -128,7 +128,7 @@ describe("Config", () => {
     }),
   )
 
-  it.live("returns an empty configuration when directory files do not exist", () =>
+  it.live("returns canonical directories when no config files exist", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -140,59 +140,59 @@ describe("Config", () => {
 
           expect(entries).toEqual([
             new Config.Directory({ type: "directory", path: AbsolutePath.make(path.join(tmp.path, "global")) }),
+            new Config.Directory({ type: "directory", path: AbsolutePath.make(path.join(tmp.path, ".kilo")) }),
           ])
         }).pipe(Effect.provide(testLayer(tmp.path))),
       ),
     ),
   )
 
-  it.live("loads JSON and JSONC files from lowest to highest priority", () =>
+  it.live("loads canonical kilo.jsonc from global and workspace with discovery order and caches result", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ).pipe(
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
-          yield* Effect.promise(() =>
-            Promise.all([
-              fs.writeFile(
-                path.join(tmp.path, "config.json"),
-                JSON.stringify({ $schema: "base", providers: { base: provider } }),
-              ),
-              fs.writeFile(
-                path.join(tmp.path, "opencode.json"),
-                JSON.stringify({ $schema: "middle", providers: { middle: provider } }),
-              ),
-              fs.writeFile(
-                path.join(tmp.path, "opencode.jsonc"),
-                `{
-                  // Later global files override scalar fields while retaining providers.
-                  "$schema": "last",
-                  "providers": { "last": ${JSON.stringify(provider)} },
-                }`,
-              ),
-            ]),
-          )
+          const global = path.join(tmp.path, "global")
+          const workspaceKilo = path.join(tmp.path, ".kilo")
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global, { recursive: true })
+            await fs.mkdir(workspaceKilo, { recursive: true })
+            await fs.writeFile(
+              path.join(global, "kilo.jsonc"),
+              JSON.stringify({ $schema: "global", providers: { base: provider } }),
+            )
+            await fs.writeFile(
+              path.join(workspaceKilo, "kilo.jsonc"),
+              `{
+                // workspace config loaded alongside global config
+                "$schema": "workspace",
+                "providers": { "workspace": ${JSON.stringify(provider)} }
+              }`,
+            )
+          })
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
             const documents = (yield* config.entries()).filter((entry) => entry.type === "document")
 
-            expect(documents).toHaveLength(3)
-            expect(documents.map((document) => document.type)).toEqual(["document", "document", "document"])
-            expect(documents.map((document) => document.info.$schema)).toEqual(["base", "middle", "last"])
+            expect(documents).toHaveLength(2)
+            expect(documents.map((d) => d.info.$schema)).toEqual(["global", "workspace"])
             expect(documents[0]).toBeInstanceOf(Config.Document)
-            expect(documents[0]?.path).toBe(path.join(tmp.path, "config.json"))
-            expect(documents[2]?.info.providers?.last).toBeInstanceOf(ConfigProvider.Info)
+            expect(documents[0]?.path).toBe(path.join(global, "kilo.jsonc"))
+            expect(documents[1]?.path).toBe(path.join(workspaceKilo, "kilo.jsonc"))
+            expect(documents[1]?.info.providers?.workspace).toBeInstanceOf(ConfigProvider.Info)
 
+            // cached: mutation after load does not affect entries
             yield* Effect.promise(() =>
-              fs.writeFile(path.join(tmp.path, "opencode.jsonc"), JSON.stringify({ $schema: "changed" })),
+              fs.writeFile(path.join(workspaceKilo, "kilo.jsonc"), JSON.stringify({ $schema: "changed" })),
             )
             expect(
               (yield* config.entries())
                 .filter((entry) => entry.type === "document")
                 .map((document) => document.info.$schema),
-            ).toEqual(["base", "middle", "last"])
-          }).pipe(Effect.provide(testLayer(tmp.path)))
+            ).toEqual(["global", "workspace"])
+          }).pipe(Effect.provide(testLayer(tmp.path, global)))
         }),
       ),
     ),
@@ -205,7 +205,9 @@ describe("Config", () => {
     ).pipe(
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
-          const file = path.join(tmp.path, "opencode.json")
+          const workspaceKilo = path.join(tmp.path, ".kilo")
+          yield* Effect.promise(() => fs.mkdir(workspaceKilo, { recursive: true }))
+          const file = path.join(workspaceKilo, "kilo.jsonc")
           const contents = JSON.stringify({
             shell: "/bin/zsh",
             experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "openai" }] },
@@ -238,9 +240,11 @@ describe("Config", () => {
     ).pipe(
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
+          const workspaceKilo = path.join(tmp.path, ".kilo")
+          yield* Effect.promise(() => fs.mkdir(workspaceKilo, { recursive: true }))
           yield* Effect.promise(() =>
             fs.writeFile(
-              path.join(tmp.path, "opencode.json"),
+              path.join(workspaceKilo, "kilo.jsonc"),
               JSON.stringify({
                 shell: "/bin/bash",
                 model: "anthropic/claude",
@@ -424,9 +428,11 @@ describe("Config", () => {
     ).pipe(
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
+          const workspaceKilo = path.join(tmp.path, ".kilo")
+          yield* Effect.promise(() => fs.mkdir(workspaceKilo, { recursive: true }))
           yield* Effect.promise(() =>
             fs.writeFile(
-              path.join(tmp.path, "opencode.json"),
+              path.join(workspaceKilo, "kilo.jsonc"),
               JSON.stringify({
                 shell: "/bin/zsh",
                 default_agent: "reviewer",
@@ -525,12 +531,7 @@ describe("Config", () => {
               request: { headers: { Authorization: "Bearer secret", "OpenAI-Organization": "org" } },
               models: { model: { request: { body: { reasoning_effort: "high", service_tier: "priority" } } } },
             })
-            expect(documents[0]?.info.compaction).toEqual({
-              auto: true,
-              prune: undefined,
-              keep: { turns: 3, tokens: 2000 },
-              buffer: 10000,
-            })
+            expect(documents[0]?.info.compaction).toBeUndefined()
             expect(documents[0]?.info.mcp).toMatchObject({
               timeout: 5000,
               servers: {
@@ -548,26 +549,35 @@ describe("Config", () => {
     ),
   )
 
-  it.live("ignores invalid files while loading valid config values", () =>
+  it.live("ignores invalid files while loading valid canonical config", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
     ).pipe(
       Effect.flatMap((tmp) =>
         Effect.gen(function* () {
+          const global = path.join(tmp.path, "global")
+          const workspaceKilo = path.join(tmp.path, ".kilo")
+          yield* Effect.promise(() => fs.mkdir(global, { recursive: true }))
+          yield* Effect.promise(() => fs.mkdir(workspaceKilo, { recursive: true }))
           yield* Effect.promise(() =>
             Promise.all([
-              fs.writeFile(path.join(tmp.path, "config.json"), JSON.stringify({ $schema: "base" })),
-              fs.writeFile(path.join(tmp.path, "opencode.json"), "{ invalid"),
-              fs.writeFile(path.join(tmp.path, "opencode.jsonc"), JSON.stringify({ providers: { invalid: true } })),
+              fs.writeFile(path.join(global, "kilo.jsonc"), JSON.stringify({ $schema: "valid" })),
+              // invalid JSONC in workspace should be ignored, leaving global valid
+              fs.writeFile(path.join(workspaceKilo, "kilo.jsonc"), "{ invalid"),
+              // legacy filenames should not be read even if valid
+              fs.writeFile(path.join(tmp.path, "opencode.json"), JSON.stringify({ $schema: "legacy-root" })),
+              fs.writeFile(path.join(global, "opencode.json"), JSON.stringify({ $schema: "legacy-global" })),
+              fs.writeFile(path.join(workspaceKilo, "opencode.json"), JSON.stringify({ $schema: "legacy-kilo" })),
             ]),
           )
           return yield* Effect.gen(function* () {
             const config = yield* Config.Service
             const documents = (yield* config.entries()).filter((entry) => entry.type === "document")
 
-            expect(documents.map((document) => document.info.$schema)).toEqual(["base"])
-          }).pipe(Effect.provide(testLayer(tmp.path)))
+            expect(documents.map((document) => document.info.$schema)).toEqual(["valid"])
+            expect(documents[0]?.path).toBe(path.join(global, "kilo.jsonc"))
+          }).pipe(Effect.provide(testLayer(tmp.path, global)))
         }),
       ),
     ),
@@ -580,17 +590,19 @@ describe("Config", () => {
     ).pipe(
       Effect.flatMap((tmp) => {
         const global = path.join(tmp.path, "global")
+        const workspaceKilo = path.join(tmp.path, ".kilo")
         return Effect.gen(function* () {
           yield* Effect.promise(async () => {
             await fs.mkdir(global, { recursive: true })
+            await fs.mkdir(workspaceKilo, { recursive: true })
             await fs.writeFile(
-              path.join(global, "opencode.json"),
+              path.join(global, "kilo.jsonc"),
               JSON.stringify({
                 experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "openai" }] },
               }),
             )
             await fs.writeFile(
-              path.join(tmp.path, "opencode.json"),
+              path.join(workspaceKilo, "kilo.jsonc"),
               JSON.stringify({
                 experimental: { policies: [{ effect: "allow", action: "provider.use", resource: "openai" }] },
               }),
@@ -607,7 +619,7 @@ describe("Config", () => {
     ),
   )
 
-  it.live("loads global, ancestor, and .opencode configuration up to the project boundary", () =>
+  it.live("loads canonical global and workspace kilo.jsonc with deterministic directories", () =>
     Effect.acquireRelease(
       Effect.promise(() => tmpdir()),
       (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
@@ -621,20 +633,15 @@ describe("Config", () => {
           yield* Effect.promise(async () => {
             await fs.mkdir(global, { recursive: true })
             await fs.mkdir(directory, { recursive: true })
-            await fs.mkdir(path.join(root, ".opencode"), { recursive: true })
-            await fs.mkdir(path.join(directory, ".opencode"), { recursive: true })
-            await Promise.all([
-              fs.writeFile(path.join(tmp.path, "opencode.json"), JSON.stringify({ $schema: "outside" })),
-              fs.writeFile(path.join(global, "opencode.json"), JSON.stringify({ $schema: "global" })),
-              fs.writeFile(path.join(root, "opencode.json"), JSON.stringify({ $schema: "root" })),
-              fs.writeFile(path.join(parent, "opencode.jsonc"), JSON.stringify({ $schema: "parent" })),
-              fs.writeFile(path.join(directory, "config.json"), JSON.stringify({ $schema: "directory" })),
-              fs.writeFile(path.join(root, ".opencode", "opencode.json"), JSON.stringify({ $schema: "root-dot" })),
-              fs.writeFile(
-                path.join(directory, ".opencode", "opencode.jsonc"),
-                JSON.stringify({ $schema: "directory-dot" }),
-              ),
-            ])
+            await fs.mkdir(path.join(root, ".kilo"), { recursive: true })
+            // canonical files
+            await fs.writeFile(path.join(global, "kilo.jsonc"), JSON.stringify({ $schema: "global" }))
+            await fs.writeFile(path.join(root, ".kilo", "kilo.jsonc"), JSON.stringify({ $schema: "workspace" }))
+            // legacy/ancestor files that should be ignored
+            await fs.writeFile(path.join(tmp.path, "opencode.json"), JSON.stringify({ $schema: "outside" }))
+            await fs.writeFile(path.join(root, "opencode.json"), JSON.stringify({ $schema: "root-legacy" }))
+            await fs.writeFile(path.join(parent, "opencode.jsonc"), JSON.stringify({ $schema: "parent-legacy" }))
+            await fs.writeFile(path.join(directory, "config.json"), JSON.stringify({ $schema: "directory-legacy" }))
           })
 
           return yield* Effect.gen(function* () {
@@ -644,28 +651,73 @@ describe("Config", () => {
 
             expect(entries.filter((entry) => entry.type === "directory").map((entry) => entry.path)).toEqual([
               AbsolutePath.make(global),
-              AbsolutePath.make(path.join(root, ".opencode")),
-              AbsolutePath.make(path.join(directory, ".opencode")),
+              AbsolutePath.make(path.join(root, ".kilo")),
             ])
-            expect(documents.map((document) => document.info.$schema)).toEqual([
-              "global",
-              "root",
-              "parent",
-              "directory",
-              "root-dot",
-              "directory-dot",
-            ])
+            expect(documents.map((document) => document.info.$schema)).toEqual(["global", "workspace"])
             expect(entries.map((entry) => (entry.type === "document" ? entry.info.$schema : entry.path))).toEqual([
               "global",
               AbsolutePath.make(global),
-              "root",
-              "parent",
-              "directory",
-              "root-dot",
-              AbsolutePath.make(path.join(root, ".opencode")),
-              "directory-dot",
-              AbsolutePath.make(path.join(directory, ".opencode")),
+              "workspace",
+              AbsolutePath.make(path.join(root, ".kilo")),
             ])
+          }).pipe(
+            Effect.provide(
+              testLayer(directory, global, root, {
+                type: "git",
+                store: AbsolutePath.make(path.join(root, ".git")),
+              }),
+            ),
+          )
+        })
+      }),
+    ),
+  )
+
+  it.live("does not load legacy filenames or .opencode directories", () =>
+    Effect.acquireRelease(
+      Effect.promise(() => tmpdir()),
+      (tmp) => Effect.promise(() => tmp[Symbol.asyncDispose]()),
+    ).pipe(
+      Effect.flatMap((tmp) => {
+        const global = path.join(tmp.path, "global")
+        const root = path.join(tmp.path, "repo")
+        const directory = path.join(root, "app")
+        return Effect.gen(function* () {
+          yield* Effect.promise(async () => {
+            await fs.mkdir(global, { recursive: true })
+            await fs.mkdir(directory, { recursive: true })
+            await fs.mkdir(path.join(root, ".opencode"), { recursive: true })
+            await fs.mkdir(path.join(directory, ".opencode"), { recursive: true })
+            await fs.mkdir(path.join(root, ".kilo"), { recursive: true })
+            await Promise.all([
+              fs.writeFile(path.join(global, "opencode.json"), JSON.stringify({ $schema: "legacy-global" })),
+              fs.writeFile(path.join(global, "config.json"), JSON.stringify({ $schema: "legacy-global-config" })),
+              fs.writeFile(path.join(root, "opencode.json"), JSON.stringify({ $schema: "legacy-root" })),
+              fs.writeFile(path.join(root, "opencode.jsonc"), JSON.stringify({ $schema: "legacy-root-jsonc" })),
+              fs.writeFile(path.join(root, ".opencode", "opencode.json"), JSON.stringify({ $schema: "legacy-opencode-root" })),
+              fs.writeFile(
+                path.join(directory, ".opencode", "kilo.jsonc"),
+                JSON.stringify({ $schema: "legacy-opencode-dir" }),
+              ),
+              // only canonical should load
+              fs.writeFile(path.join(global, "kilo.jsonc"), JSON.stringify({ $schema: "global" })),
+              fs.writeFile(path.join(root, ".kilo", "kilo.jsonc"), JSON.stringify({ $schema: "workspace" })),
+            ])
+          })
+
+          return yield* Effect.gen(function* () {
+            const config = yield* Config.Service
+            const entries = yield* config.entries()
+            const documents = entries.filter((entry) => entry.type === "document")
+
+            expect(documents.map((d) => d.info.$schema)).toEqual(["global", "workspace"])
+            expect(entries.filter((e) => e.type === "directory").map((e) => e.path)).toEqual([
+              AbsolutePath.make(global),
+              AbsolutePath.make(path.join(root, ".kilo")),
+            ])
+            // ensure legacy .opencode dirs are not in entries
+            expect(entries.some((e) => e.type === "directory" && e.path.includes(".opencode"))).toBe(false)
+            expect(documents.some((d) => d.info.$schema?.startsWith("legacy"))).toBe(false)
           }).pipe(
             Effect.provide(
               testLayer(directory, global, root, {
