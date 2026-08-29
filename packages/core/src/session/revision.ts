@@ -39,3 +39,33 @@ export function advanceTx(sessionID: SessionSchema.ID, tx: DbOrTx): Effect.Effec
 export function advance(sessionID: SessionSchema.ID, db: Database.Interface["db"]): Effect.Effect<void> {
   return db.transaction((tx) => advanceTx(sessionID, tx), { behavior: "immediate" }).pipe(Effect.orDie)
 }
+
+export class RevisionNotFoundError extends Error {
+  constructor(public readonly sessionID: SessionSchema.ID) {
+    super(`Session not found: ${sessionID}`)
+    this.name = "RevisionNotFoundError"
+  }
+}
+
+export function getTx(tx: DbOrTx, sessionID: SessionSchema.ID): Effect.Effect<number, RevisionNotFoundError> {
+  return Effect.gen(function* () {
+    const row = yield* tx
+      .select({ revision: SessionTable.revision })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return yield* Effect.fail(new RevisionNotFoundError(sessionID))
+    return (row as { revision: number }).revision
+  }) as Effect.Effect<number, RevisionNotFoundError>
+}
+
+export function get(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+): Effect.Effect<number, RevisionNotFoundError> {
+  return db.transaction((tx) => getTx(tx as DbOrTx, sessionID), { behavior: "immediate" }) as Effect.Effect<
+    number,
+    RevisionNotFoundError
+  >
+}

@@ -67,6 +67,7 @@ import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_c
 import { ControlLease } from "@/kilocode/server/control-lease" // kilocode_change
 import { ConfigConvergence } from "@/kilocode/server/config-convergence" // kilocode_change - canonical cold-mutation coordinator
 import { ConfigRebuild } from "@/kilocode/server/config-rebuild" // kilocode_change - explicit-dispose rebuild owner
+import * as CancelQueuedDispatch from "@/kilocode/session/cancel-queued-dispatch" // kilocode_change - P4.4-G3-B0 backend dispatch
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 // kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers
@@ -186,8 +187,9 @@ const buildAppLayer = (
   const lifecycle = Layer.mergeAll(ConfigConvergence.defaultLayer, ConfigRebuild.defaultLayer).pipe(
     Layer.provideMerge(base),
   )
+  const cancelQueued = CancelQueuedDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
   const maintenance = RetentionMaintenance.layer.pipe(Layer.provide(base))
-  return Layer.mergeAll(lifecycle, maintenance)
+  return Layer.mergeAll(lifecycle, cancelQueued, maintenance)
 }
 // kilocode_change end
 

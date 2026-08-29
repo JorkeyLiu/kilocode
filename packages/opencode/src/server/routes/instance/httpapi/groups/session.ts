@@ -438,12 +438,12 @@ export const SessionApi = HttpApi.make("session")
             description: "Update a part in a message.",
           }),
         ),
-        // kilocode_change start
+        // kilocode_change start - P4.4-G3-B0 backend-owned cancelQueued (boolean legacy)
         HttpApiEndpoint.delete("cancelQueued", SessionPaths.cancelQueued, {
           params: { sessionID: SessionID, messageID: MessageID },
           query: WorkspaceRoutingQuery,
           success: described(Schema.Boolean, "Whether a queued message was cancelled"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, HttpApiError.Conflict, HttpApiError.InternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.cancelQueued",

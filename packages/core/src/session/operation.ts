@@ -1,7 +1,8 @@
 export * as SessionOperation from "./operation"
 
-import { eq, asc } from "drizzle-orm"
+import { asc, eq, and } from "drizzle-orm"
 import { Effect } from "effect"
+import { createHash } from "node:crypto"
 import { Database } from "../database/database"
 import { SessionTable, SessionOperationTable } from "./sql"
 import type { SessionSchema } from "./schema"
@@ -11,7 +12,7 @@ import { SessionRevision } from "./revision"
 // ---------------------------------------------------------------------------
 // R12-compatible record shape (persist tier = full redacted record)
 // ---------------------------------------------------------------------------
-export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task"] as const
+export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task", "cancelQueued"] as const
 export type OpKind = (typeof OP_KINDS)[number]
 
 export const OUTCOMES = ["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"] as const
@@ -178,6 +179,14 @@ export function taskId(childSessionId: string, parentCallId?: string): string {
   return `task:${childSessionId}`
 }
 
+export function cancelQueuedId(sessionID: string, messageID: string): string {
+  if (typeof sessionID !== "string" || sessionID.length === 0) throw new TypeError("sessionID must be non-empty string")
+  assertNoColon(sessionID, "sessionID")
+  if (typeof messageID !== "string" || messageID.length === 0) throw new TypeError("messageID must be non-empty string")
+  assertNoColon(messageID, "messageID")
+  return `cancelQueued:${sessionID}:${messageID}`
+}
+
 export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
   const segments = opId.split(":")
@@ -199,6 +208,8 @@ export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
     if (rest.length !== 1) throw new TypeError(`permission opId must have 1 segment: ${opId}`)
   } else if (kind === "task") {
     if (rest.length !== 1 && rest.length !== 2) throw new TypeError(`task opId must have 1 or 2 segments: ${opId}`)
+  } else if (kind === "cancelQueued") {
+    if (rest.length !== 2) throw new TypeError(`cancelQueued opId must have 2 segments: ${opId}`)
   }
   return { kind: kind as OpKind, parts: rest }
 }
@@ -280,6 +291,97 @@ function rowToRecord(row: typeof SessionOperationTable.$inferSelect): FailureRec
   if (row.detail !== null && row.detail !== undefined) rec.detail = row.detail
   if (row.stack !== null && row.stack !== undefined) rec.stack = row.stack
   return rec
+}
+
+export interface CancelQueuedMeta {
+  idempotencyHash: string
+  requestId: string
+  directory: string
+  messageId: string
+  parentSessionId?: string | null
+  configVersion?: number | null
+  sessionRevision?: number | null
+  cancelled?: boolean | null
+}
+
+export interface CancelQueuedRecord extends FailureRecord {
+  meta: CancelQueuedMeta
+}
+
+function rowToCancelQueuedRecord(row: typeof SessionOperationTable.$inferSelect): CancelQueuedRecord {
+  const base = rowToRecord(row)
+  return {
+    ...base,
+    meta: {
+      idempotencyHash: row.idempotency_hash ?? "",
+      requestId: row.request_id ?? "",
+      directory: row.directory ?? "",
+      messageId: row.message_id ?? "",
+      parentSessionId: row.parent_session_id ?? null,
+      configVersion: row.config_version ?? null,
+      sessionRevision: row.session_revision ?? null,
+      cancelled: row.cancelled ?? null,
+    },
+  }
+}
+
+export function hashIdempotencyKey(key: string): string {
+  return createHash("sha256").update(key).digest("hex")
+}
+
+export function getByIdempotencyHash(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+  hash: string,
+): Effect.Effect<CancelQueuedRecord | undefined> {
+  return Effect.gen(function* () {
+    if (typeof hash !== "string" || hash.length === 0) yield* Effect.die(new TypeError("hash must be non-empty string"))
+    const row = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.session_id, sessionID), eq(SessionOperationTable.idempotency_hash, hash)))
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return undefined
+    return rowToCancelQueuedRecord(row)
+  }).pipe(Effect.orDie) as Effect.Effect<CancelQueuedRecord | undefined>
+}
+
+export function getByIdempotencyHashTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  hash: string,
+): Effect.Effect<CancelQueuedRecord | undefined> {
+  return Effect.gen(function* () {
+    const row = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.session_id, sessionID), eq(SessionOperationTable.idempotency_hash, hash)))
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return undefined
+    return rowToCancelQueuedRecord(row)
+  }).pipe(Effect.orDie) as Effect.Effect<CancelQueuedRecord | undefined>
+}
+
+export function isCancelQueuedConflict(
+  prev: CancelQueuedRecord,
+  next: {
+    opId: string
+    directory: string
+    parentSessionId?: string | null
+    configVersion?: number | null
+    sessionRevision?: number | null
+    messageId: string
+  },
+): boolean {
+  if (prev.opId !== next.opId) return true
+  if (prev.meta.directory !== next.directory) return true
+  if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
+  if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
+  if ((prev.meta.sessionRevision ?? null) !== (next.sessionRevision ?? null)) return true
+  if (prev.meta.messageId !== next.messageId) return true
+  return false
 }
 
 // ---------------------------------------------------------------------------
@@ -475,4 +577,124 @@ export function listTx(tx: DbOrTx, sessionID: SessionSchema.ID): Effect.Effect<F
       .pipe(Effect.orDie)
     return rows.map(rowToRecord)
   }).pipe(Effect.orDie) as Effect.Effect<FailureRecord[]>
+}
+
+// ---------------------------------------------------------------------------
+// CancelQueued durable helpers (P4.4-G3-B0)
+// ---------------------------------------------------------------------------
+export function insertCancelQueuedInFlightTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+  meta: CancelQueuedMeta,
+): Effect.Effect<CancelQueuedRecord> {
+  return Effect.gen(function* () {
+    validateRecord(record)
+    if (record.outcome !== "in-flight") yield* Effect.die(new Error("insertCancelQueuedInFlightTx requires in-flight outcome"))
+    const normalized = normalizeRecord(record)
+    const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+    if (!session) yield* Effect.die(new Error(`session not found ${sessionID}`))
+    yield* SessionRevision.advanceTx(sessionID, tx)
+    const after = yield* tx
+      .select({ rev: SessionTable.revision })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    const nextRev = after!.rev
+    yield* tx
+      .insert(SessionOperationTable)
+      .values({
+        op_id: normalized.opId,
+        session_id: sessionID,
+        op_kind: normalized.opKind,
+        outcome: normalized.outcome,
+        code: normalized.code,
+        message: normalized.message,
+        time: normalized.time,
+        cancel: normalized.cancel?.source ?? null,
+        detail: normalized.detail ?? null,
+        stack: normalized.stack ?? null,
+        revision: nextRev,
+        idempotency_hash: meta.idempotencyHash,
+        request_id: meta.requestId,
+        directory: meta.directory,
+        message_id: meta.messageId,
+        parent_session_id: meta.parentSessionId ?? null,
+        config_version: meta.configVersion ?? null,
+        session_revision: meta.sessionRevision ?? null,
+        cancelled: meta.cancelled ?? null,
+      })
+      .run()
+      .pipe(Effect.orDie)
+    const rowRaw = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, normalized.opId))
+      .get()
+      .pipe(Effect.orDie)
+    if (!rowRaw) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
+    return rowToCancelQueuedRecord(rowRaw as typeof SessionOperationTable.$inferSelect)
+  })
+}
+
+export function updateCancelQueuedTerminalTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  opId: string,
+  cancelled: boolean,
+  time: number,
+): Effect.Effect<CancelQueuedRecord> {
+  return Effect.gen(function* () {
+    const existingRowRaw = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, opId))
+      .get()
+      .pipe(Effect.orDie)
+    if (!existingRowRaw) yield* Effect.die(new Error(`operation not found ${opId}`))
+    const existingRow = existingRowRaw as typeof SessionOperationTable.$inferSelect
+    if (existingRow.session_id !== sessionID)
+      yield* Effect.die(new Error(`cross-identity opId ${opId} already owned by session ${existingRow.session_id}`))
+    const existing = rowToRecord(existingRow)
+    if (existing.outcome !== "in-flight")
+      yield* Effect.die(new Error(`terminal update requires in-flight, got ${existing.outcome}`))
+    const normalized = normalizeRecord({
+      opId,
+      opKind: existing.opKind,
+      outcome: "succeeded",
+      code: "cancelQueued.succeeded",
+      message: cancelled ? "cancelQueued cancelled" : "cancelQueued not cancelled",
+      time,
+    })
+    yield* SessionRevision.advanceTx(sessionID, tx)
+    const after = yield* tx
+      .select({ rev: SessionTable.revision })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    const nextRev = after!.rev
+    yield* tx
+      .update(SessionOperationTable)
+      .set({
+        outcome: normalized.outcome,
+        code: normalized.code,
+        message: normalized.message,
+        time: normalized.time,
+        revision: nextRev,
+        cancelled,
+      })
+      .where(eq(SessionOperationTable.op_id, opId))
+      .run()
+      .pipe(Effect.orDie)
+    const updatedRaw = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, opId))
+      .get()
+      .pipe(Effect.orDie)
+    if (!updatedRaw) yield* Effect.die(new Error(`operation row missing after update ${opId}`))
+    return rowToCancelQueuedRecord(updatedRaw as typeof SessionOperationTable.$inferSelect)
+  })
 }

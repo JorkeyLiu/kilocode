@@ -41,5 +41,6 @@ export const migrations = (
     import("./migration/20260822000000_add_changefeed_kind_check"),
     import("./migration/20260823000000_add_storage_identity"),
     import("./migration/20260824000000_add_operation_record"),
+    import("./migration/20260825000000_add_cancel_queued_metadata"),
   ])
 ).map((module) => module.default) satisfies DatabaseMigration.Migration[]

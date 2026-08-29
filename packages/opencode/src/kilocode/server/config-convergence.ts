@@ -129,6 +129,13 @@ export interface ConfigConvergence {
    * Runs on layer finalization before dependent services dispose.
    */
   readonly shutdown: Effect.Effect<void>
+  /**
+   * Read accessor for the directory's currently booted/converged config version.
+   * Uses existing closure `booted` state (no new counter). While convergence is
+   * active, returns pre-fence version; for never-booted or pre-version runtime
+   * returns 0. Used for directory-scoped request guards/results.
+   */
+  readonly getBootedVersion: (directory: string) => Effect.Effect<number>
 }
 
 export class Service extends Context.Service<Service, ConfigConvergence>()("@kilocode/ConfigConvergence") {}
@@ -154,6 +161,7 @@ export const noop: ConfigConvergence = {
   commit: () => Effect.void,
   abort: () => Effect.void,
   shutdown: Effect.void,
+  getBootedVersion: () => Effect.succeed(0),
 }
 
 export const layer = Layer.effect(
@@ -628,6 +636,9 @@ export const layer = Layer.effect(
        * call explicitly and again from layer finalization. Runs before dependent
        * services (InstanceStore, gate, leases) dispose.
        */
+      const getBootedVersion: ConfigConvergence["getBootedVersion"] = (directory) =>
+        Effect.sync(() => booted.get(directory) ?? 0)
+
       const shutdown: Effect.Effect<void> = Effect.fn("ConfigConvergence.shutdown")(function* () {
         // 1. Reject new work first — begin/commit/abort check this flag.
         yield* Effect.sync(() => {
@@ -671,7 +682,7 @@ export const layer = Layer.effect(
         })
       })()
 
-      return Service.of({ begin, commit, abort, shutdown })
+      return Service.of({ begin, commit, abort, shutdown, getBootedVersion })
     }),
     (svc) => svc.shutdown,
   ),

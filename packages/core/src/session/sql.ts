@@ -187,7 +187,7 @@ export const SessionOperationTable = sqliteTable(
       .$type<SessionSchema.ID>()
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
-    op_kind: text().$type<"prompt" | "provider" | "tool" | "permission" | "task">().notNull(),
+    op_kind: text().$type<"prompt" | "provider" | "tool" | "permission" | "task" | "cancelQueued">().notNull(),
     outcome: text().$type<"succeeded" | "failed" | "ambiguous" | "in-flight" | "superseded" | "abandoned">().notNull(),
     code: text().notNull(),
     message: text().notNull(),
@@ -196,12 +196,24 @@ export const SessionOperationTable = sqliteTable(
     detail: text(),
     stack: text(),
     revision: integer().notNull(),
+    idempotency_hash: text(),
+    request_id: text(),
+    directory: text(),
+    message_id: text(),
+    parent_session_id: text(),
+    config_version: integer(),
+    session_revision: integer(),
+    cancelled: integer({ mode: "boolean" }),
   },
   (table) => [
     index("session_operation_session_idx").on(table.session_id),
     index("session_operation_session_kind_idx").on(table.session_id, table.op_kind),
     index("session_operation_session_time_idx").on(table.session_id, table.time),
-    check("session_operation_op_kind_check", sql`${table.op_kind} IN ('prompt','provider','tool','permission','task')`),
+    uniqueIndex("session_operation_session_idempotency_idx")
+      .on(table.session_id, table.idempotency_hash)
+      .where(sql`${table.idempotency_hash} IS NOT NULL`),
+    index("session_operation_message_id_idx").on(table.message_id).where(sql`${table.message_id} IS NOT NULL`),
+    check("session_operation_op_kind_check", sql`${table.op_kind} IN ('prompt','provider','tool','permission','task','cancelQueued')`),
     check(
       "session_operation_outcome_check",
       sql`${table.outcome} IN ('succeeded','failed','ambiguous','in-flight','superseded','abandoned')`,

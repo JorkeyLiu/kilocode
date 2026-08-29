@@ -2681,6 +2681,10 @@ export type Session9 = {
   }
 }
 
+export type EffectHttpApiErrorConflict = {
+  _tag: "Conflict"
+}
+
 export type EventTuiPromptAppend2 = {
   type: "tui.prompt.append"
   properties: {
@@ -9140,6 +9144,14 @@ export type SessionCancelQueuedErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type SessionCancelQueuedError = SessionCancelQueuedErrors[keyof SessionCancelQueuedErrors]

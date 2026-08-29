@@ -3,7 +3,8 @@ import { KiloSessionHttpApi } from "@/kilocode/server/httpapi/session-fork" // k
 import { BlockedError as AgentRequirementError } from "@/kilocode/agent-requirements" // kilocode_change
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
-import { KiloSessionPromptQueue } from "@/kilocode/session/prompt-queue" // kilocode_change
+import { CancelQueuedDispatchService, type CancelQueuedResult } from "@/kilocode/session/cancel-queued-dispatch" // kilocode_change - P4.4-G3-B0
+import { SessionOperation } from "@opencode-ai/core/session/operation" // kilocode_change - LOCK-201 canonical opId
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Command } from "@/command"
@@ -38,7 +39,7 @@ import {
   UpdatePayload,
   ViewedPayload, // kilocode_change
 } from "../groups/session"
-import { PermissionNotFoundError } from "../errors"
+import { ApiNotFoundError, PermissionNotFoundError } from "../errors"
 import * as SessionError from "./session-errors"
 
 const tryParseJson = (text: string) =>
@@ -394,17 +395,55 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* session.updatePart(payload)
     })
 
-    // kilocode_change start
+    // kilocode_change start - P4.4-G3-B0: delegate to backend-owned CancelQueuedDispatch (boolean legacy)
+    const cancelQueuedDispatch = yield* CancelQueuedDispatchService
     const cancelQueued = Effect.fn("SessionHttpApi.cancelQueued")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
-      yield* requireSession(ctx.params.sessionID)
-      // Only not-yet-started queued slots are cancellable; the running slot is
-      // never interrupted. Delete the persisted message only when we actually
-      // cancelled its queued slot.
-      const removed = yield* KiloSessionPromptQueue.cancelOne(ctx.params.sessionID, ctx.params.messageID)
-      if (removed) yield* session.removeMessage(ctx.params)
-      return removed
+      const info = yield* requireSession(ctx.params.sessionID)
+      const directory = (info as unknown as { directory: string }).directory
+      const requestId = `legacy:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`
+      const opId = SessionOperation.cancelQueuedId(ctx.params.sessionID, ctx.params.messageID)
+      const idempotencyKey = `legacy:${ctx.params.sessionID}:${ctx.params.messageID}`
+      const req = {
+        v: 1 as const,
+        requestId,
+        opId,
+        op: "session/cancelQueued" as const,
+        idempotencyKey,
+        context: { directory, sessionId: ctx.params.sessionID, parentSessionId: null as string | null },
+        payload: { messageId: ctx.params.messageID },
+      }
+      const result = yield* (cancelQueuedDispatch.dispatch(req).pipe(
+        Effect.catchDefect((_) => Effect.fail(new HttpApiError.InternalServerError({}))),
+        Effect.catch((_) => Effect.fail(new HttpApiError.InternalServerError({}))),
+      ) as Effect.Effect<CancelQueuedResult, HttpApiError.InternalServerError>)
+      if (result.status === "succeeded") return result.data.cancelled
+      if (result.status === "ambiguous") {
+        return yield* Effect.fail(new HttpApiError.Conflict({}))
+      }
+      if (result.status === "failed") {
+        if (result.failure.code === "session.not_found") {
+          return yield* Effect.fail(new ApiNotFoundError({ name: "NotFoundError", data: { message: result.failure.message } }))
+        }
+        if (result.failure.code === "validation.failed") {
+          return yield* Effect.fail(new HttpApiError.BadRequest({}))
+        }
+        if (result.failure.code === "scope_mismatch") {
+          return yield* Effect.fail(new HttpApiError.BadRequest({}))
+        }
+        if (result.failure.code === "stale" || result.failure.code === "conflict") {
+          return yield* Effect.fail(new HttpApiError.Conflict({}))
+        }
+        if (result.failure.code === "InstanceUnavailableDuringConfigRebuild") {
+          return yield* Effect.fail(new HttpApiError.Conflict({}))
+        }
+        if (result.failure.code === "internal") {
+          return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+        }
+        return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+      }
+      return yield* Effect.fail(new HttpApiError.InternalServerError({}))
     })
 
     const viewed = Effect.fn("SessionHttpApi.viewed")(function* (ctx: { payload: typeof ViewedPayload.Type }) {
@@ -440,7 +479,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("deleteMessage", deleteMessage)
       .handle("deletePart", deletePart)
       .handle("updatePart", updatePart)
-      .handle("cancelQueued", cancelQueued) // kilocode_change
+      .handle("cancelQueued", cancelQueued) // kilocode_change - P4.4-G3-B0 backend-owned boolean via dispatch
       .handle("viewed", viewed) // kilocode_change
   }),
 )

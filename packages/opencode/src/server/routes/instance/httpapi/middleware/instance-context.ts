@@ -151,12 +151,27 @@ function provideInstanceContext<E>(
       if (gate.isBarrierActive(dir)) return unavailable(control)
     }
     // End of drain-control lane; fall through to the standard gate path below.
+    // Normal-load fallback must hold an identity ControlLease through the handler (LOCK-402).
+    // The gate ticket covers only the load; the lease covers the handler.
+    // Snapshot lane already returned above, so no double lease.
     const release = yield* gate.acquire(dir)
     const ctx = yield* store.load({ directory: dir }).pipe(Effect.ensuring(release))
+    const lease = yield* Effect.sync(() => leases.acquire(ctx))
+    if (lease._tag === "None") {
+      if (control) return unavailable(control)
+      return HttpServerResponse.jsonUnsafe(
+        {
+          _tag: "InstanceUnavailableDuringConfigRebuild",
+          message: "Instance is unavailable during config rebuild; no active runtime for this request",
+        },
+        { status: 409 },
+      )
+    }
     return yield* effect.pipe(
       Effect.provideService(InstanceRef, ctx),
       Effect.provideService(WorkspaceRef, route.workspaceID),
       Effect.provideService(HttpServerRequest.HttpServerRequest, request),
+      Effect.ensuring(lease.value),
     )
   })
 }

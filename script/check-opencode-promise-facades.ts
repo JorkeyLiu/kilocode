@@ -94,6 +94,10 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   },
   "kilocode/config/config-snapshot.test.ts": { count: 3, reason: "production AppRuntime config snapshot integration test" },
   "tool/recall.test.ts": { count: 11, reason: "existing runtime integration test" },
+  "kilocode/session/cancel-queued-b0.test.ts": {
+    count: 55,
+    reason: "B0 durable cancelQueued integration test via AppRuntime and InstanceRef (LOCK-301..307 bounded corrections)",
+  },
 }
 
 const owned = (file: string) => file.startsWith("kilocode/") || file.startsWith("kilo-sessions/")

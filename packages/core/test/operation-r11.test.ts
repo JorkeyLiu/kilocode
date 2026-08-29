@@ -149,7 +149,7 @@ describe("R11 operation record foundation", () => {
       const reconstruct = (c: any) =>
         (c.value.queryChunks as any[]).map((ch: any) => (ch.name ? `"${ch.name}"` : (ch.value?.[0] ?? ""))).join("")
       expect(reconstruct(byName["session_operation_op_kind_check"])).toBe(
-        `"op_kind" IN ('prompt','provider','tool','permission','task')`,
+        `"op_kind" IN ('prompt','provider','tool','permission','task','cancelQueued')`,
       )
       expect(reconstruct(byName["session_operation_outcome_check"])).toBe(
         `"outcome" IN ('succeeded','failed','ambiguous','in-flight','superseded','abandoned')`,
@@ -176,9 +176,17 @@ describe("R11 operation record foundation", () => {
       expect(() => SessionOperation.toolId("msg_a", "bad:colon")).toThrow()
       expect(() => SessionOperation.permissionId("bad:colon")).toThrow()
       expect(() => SessionOperation.taskId("ses_abc", "bad:colon")).toThrow()
+      expect(() => SessionOperation.cancelQueuedId("ses_abc", "bad:colon")).toThrow()
+      expect(() => SessionOperation.cancelQueuedId("bad:colon", "msg_1")).toThrow()
       // empty rejection
       expect(() => SessionOperation.promptId("")).toThrow()
       expect(() => SessionOperation.providerId("", 0)).toThrow()
+      expect(() => SessionOperation.cancelQueuedId("", "msg_1")).toThrow()
+      expect(() => SessionOperation.cancelQueuedId("ses_1", "")).toThrow()
+      expect(SessionOperation.cancelQueuedId("ses_123", "msg_456")).toBe("cancelQueued:ses_123:msg_456")
+      expect(() => SessionOperation.parseOpId("cancelQueued:ses_123")).toThrow()
+      expect(() => SessionOperation.parseOpId("cancelQueued:ses_123:msg_1:extra")).toThrow()
+      expect(() => SessionOperation.parseOpId("cancelQueued:msg_1")).toThrow()
       // parse validation: cross-kind mismatch
       const { db } = yield* Database.Service
       yield* setup
@@ -211,9 +219,9 @@ describe("R11 operation record foundation", () => {
     }),
   )
 
-  it.effect("validates five kinds exactly and rejects config kind", () =>
+  it.effect("validates six kinds exactly and rejects config kind", () =>
     Effect.gen(function* () {
-      expect([...SessionOperation.OP_KINDS]).toEqual(["prompt", "provider", "tool", "permission", "task"])
+      expect([...SessionOperation.OP_KINDS]).toEqual(["prompt", "provider", "tool", "permission", "task", "cancelQueued"])
       const { db } = yield* Database.Service
       yield* setup
       const svc = yield* SessionV2.Service
@@ -224,7 +232,8 @@ describe("R11 operation record foundation", () => {
         else if (kind === "provider") opId = SessionOperation.providerId(`msg_${kind}`, 0)
         else if (kind === "tool") opId = SessionOperation.toolId(`msg_${kind}`, `call_${kind}`)
         else if (kind === "permission") opId = SessionOperation.permissionId(`req_${kind}`)
-        else opId = SessionOperation.taskId(`ses_${kind}`)
+        else if (kind === "task") opId = SessionOperation.taskId(`ses_${kind}`)
+        else opId = SessionOperation.cancelQueuedId(`ses_${kind}`, `msg_${kind}`)
         const rec: SessionOperation.FailureRecord = {
           opId,
           opKind: kind,

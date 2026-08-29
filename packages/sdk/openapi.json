@@ -8179,6 +8179,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/effect_HttpApiError_Conflict"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalServerError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/effect_HttpApiError_InternalServerError"
+                }
+              }
+            }
           }
         },
         "description": "Cancel a queued message that has not started processing and remove it from the session. Does not interrupt the message currently being processed.",
@@ -21625,6 +21645,9 @@
               "question": {
                 "$ref": "#/components/schemas/PermissionActionConfig"
               },
+              "question_tool": {
+                "$ref": "#/components/schemas/PermissionActionConfig"
+              },
               "webfetch": {
                 "$ref": "#/components/schemas/PermissionActionConfig"
               },
@@ -26127,6 +26150,17 @@
           }
         },
         "required": ["id", "slug", "projectID", "directory", "title", "version", "time"],
+        "additionalProperties": false
+      },
+      "effect_HttpApiError_Conflict": {
+        "type": "object",
+        "properties": {
+          "_tag": {
+            "type": "string",
+            "enum": ["Conflict"]
+          }
+        },
+        "required": ["_tag"],
         "additionalProperties": false
       },
       "EventTuiPromptAppend": {
