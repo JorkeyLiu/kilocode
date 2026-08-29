@@ -1,7 +1,10 @@
+import path from "path"
 import { describe, expect } from "bun:test"
 import { Effect, Exit, Scope } from "effect"
 import { AgentV2 } from "@opencode-ai/core/agent"
+import { Global } from "@opencode-ai/core/global"
 import { Location } from "@opencode-ai/core/location"
+import { PermissionV2 } from "@opencode-ai/core/permission"
 import { AgentPlugin } from "@opencode-ai/core/plugin/agent"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { location } from "./fixture/location"
@@ -126,6 +129,51 @@ describe("AgentV2", () => {
       for (const item of agents) {
         expect(item.permissions.some((rule) => rule.action === "bash" && rule.effect !== "deny")).toBe(false)
       }
+    }),
+  )
+
+  it.effect("plan agent denies legacy .opencode/plans edits while retaining canonical plan allowances", () =>
+    Effect.gen(function* () {
+      const agent = yield* AgentV2.Service
+      const worktree = "/project"
+      yield* AgentPlugin.Plugin.effect.pipe(
+        Effect.provideService(
+          Location.Service,
+          Location.Service.of(location({ directory: AbsolutePath.make(worktree) })),
+        ),
+      )
+
+      const plan = yield* agent.get(AgentV2.ID.make("plan"))
+      expect(plan).toBeDefined()
+      const permissions = plan!.permissions
+
+      // No legacy .opencode/plans allow rule remains in core V2.
+      expect(permissions.some((rule) => rule.resource.includes(".opencode/plans"))).toBe(false)
+      expect(permissions.some((rule) => rule.resource === path.join(".opencode", "plans", "*.md"))).toBe(false)
+
+      // Canonical Global.Path.data/plans/* external_directory remains allowed.
+      expect(PermissionV2.evaluate("external_directory", path.join(Global.Path.data, "plans", "foo.md"), permissions).effect).toBe(
+        "allow",
+      )
+      // Worktree-relative Global data plan edit remains allowed.
+      const canonicalEdit = path.relative(worktree, path.join(Global.Path.data, "plans", "foo.md"))
+      expect(PermissionV2.evaluate("edit", canonicalEdit, permissions).effect).toBe("allow")
+      expect(PermissionV2.evaluate("edit", path.relative(worktree, path.join(Global.Path.data, "plans", "*.md")), permissions).effect).toBe(
+        "allow",
+      )
+
+      // Legacy .opencode/plans edit is denied (falls through to wildcard deny).
+      expect(PermissionV2.evaluate("edit", ".opencode/plans/foo.md", permissions).effect).toBe("deny")
+      expect(PermissionV2.evaluate("edit", path.join(".opencode", "plans", "foo.md"), permissions).effect).toBe("deny")
+
+      // Unrelated edit remains denied via wildcard deny.
+      expect(PermissionV2.evaluate("edit", "src/foo.ts", permissions).effect).toBe("deny")
+      expect(PermissionV2.evaluate("edit", "*", permissions).effect).toBe("deny")
+
+      // Explicit file-level static check: source no longer contains legacy allow string.
+      const src = yield* Effect.promise(() => Bun.file(path.join(import.meta.dir, "../src/plugin/agent.ts")).text())
+      expect(src).not.toContain(path.join(".opencode", "plans", "*.md"))
+      expect(src).not.toContain(".opencode/plans")
     }),
   )
 })
