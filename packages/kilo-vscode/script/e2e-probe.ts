@@ -1345,7 +1345,9 @@ async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scrat
       }
       const count = (before as { archiveCount?: unknown }).archiveCount
       if (typeof count !== "number" || count < 1) {
-        throw new Error(`probe: canonical archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session (archiveCount=${String(count)})`)
+        throw new Error(
+          `probe: canonical archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session (archiveCount=${String(count)})`,
+        )
       }
     }
     console.log("[probe] PASS fresh canonical identity/zero-state gate before first session")
@@ -1356,7 +1358,8 @@ async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scrat
     await waitForFile(credFile, timeout, "rs-credential.json (credential provisioning evidence)")
     const cred = JSON.parse(readFileSync(credFile, "utf8")) as Record<string, unknown>
     console.log(`[probe] credential provisioning (pre-real-ready): ${JSON.stringify(cred)}`)
-    if (cred.ok !== true) throw new Error(`probe: credential provisioning failed before real-ready: ${JSON.stringify(cred)}`)
+    if (cred.ok !== true)
+      throw new Error(`probe: credential provisioning failed before real-ready: ${JSON.stringify(cred)}`)
     const connected = (cred as { connected?: unknown }).connected
     if (!Array.isArray(connected) || !connected.includes(plan.customProvider)) {
       throw new Error(`probe: credential evidence missing connected ${plan.customProvider}: ${JSON.stringify(cred)}`)
@@ -1381,15 +1384,24 @@ async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scrat
   const cstate = await requestRsCanonicalState(scratch, timeout)
   console.log(`[probe] canonical state: ${JSON.stringify(cstate)}`)
   {
-    const prov = (cstate as { providerIndex?: { connected?: unknown; entries?: Array<{ id: string; hasCredential: boolean }> } | null }).providerIndex
+    const prov = (
+      cstate as {
+        providerIndex?: { connected?: unknown; entries?: Array<{ id: string; hasCredential: boolean }> } | null
+      }
+    ).providerIndex
     if (!prov || !Array.isArray(prov.connected) || !prov.connected.includes(plan.customProvider)) {
       throw new Error(`probe: canonical state missing connected ${plan.customProvider}: ${JSON.stringify(cstate)}`)
     }
     const entry = prov.entries?.find((e) => e.id === plan.customProvider)
-    if (!entry?.hasCredential) throw new Error(`probe: canonical state hasCredential false for ${plan.customProvider}: ${JSON.stringify(cstate)}`)
+    if (!entry?.hasCredential)
+      throw new Error(
+        `probe: canonical state hasCredential false for ${plan.customProvider}: ${JSON.stringify(cstate)}`,
+      )
     const expectedModel = `${plan.customProvider}/${plan.customModel}`
     if ((cstate as { defaultModel?: unknown }).defaultModel !== expectedModel) {
-      throw new Error(`probe: canonical state wrong defaultModel: expected ${expectedModel}, got ${JSON.stringify(cstate)}`)
+      throw new Error(
+        `probe: canonical state wrong defaultModel: expected ${expectedModel}, got ${JSON.stringify(cstate)}`,
+      )
     }
     if ((cstate as { materializationReady?: unknown }).materializationReady !== true) {
       throw new Error(`probe: canonical state not ready: ${JSON.stringify(cstate)}`)
@@ -2411,7 +2423,9 @@ async function prepareRealSession(
       packages: { "": { dependencies: { "@kilocode/plugin": "0.0.0" } } },
     }),
   )
-  console.log(`[probe] real-session config seed: ${configFile} + canonical ${canonicalFile} (hang server port ${hang.port})`)
+  console.log(
+    `[probe] real-session config seed: ${configFile} + canonical ${canonicalFile} (hang server port ${hang.port})`,
+  )
   return hang
 }
 
@@ -2468,8 +2482,15 @@ async function prepareRealRestart(workspace: string, real: boolean): Promise<Scr
   if (!real) return undefined
   const handle = await createScriptedModel(workspace)
   const pluginToolUrl = pathToFileURL(join(root, "..", "plugin", "src", "tool.ts")).href
-  const seed = writeRealRestartSeed(workspace, handle.port, pluginToolUrl)
-  console.log(`[probe] real-restart seed: ${seed.configFile} (scripted model port ${handle.port})`)
+  // scratch is the run-owned isolated XDG root; it is created in main before this
+  // call, so we forward it to writeRealRestartSeed for the global kilo.jsonc.
+  // main() invokes prepareRealRestart after scratch creation, so we can locate
+  // scratch via the workspace's sibling (workspace = <scratch>/workspace).
+  const scratch = join(workspace, "..")
+  const seed = writeRealRestartSeed(workspace, handle.port, pluginToolUrl, scratch)
+  console.log(
+    `[probe] real-restart seed: ${seed.configFile} + ${seed.canonicalFile} (scripted model port ${handle.port})`,
+  )
   return handle
 }
 
@@ -2638,8 +2659,20 @@ function launchVSCode(opts: {
   extensions: string
   workspace: string
   port: number
+  providerBaseURL?: string
 }): Promise<number> {
-  const { executable, runnerOut, scratch, fixtureId, scenario, userData, extensions, workspace, port } = opts
+  const {
+    executable,
+    runnerOut,
+    scratch,
+    fixtureId,
+    scenario,
+    userData,
+    extensions,
+    workspace,
+    port,
+    providerBaseURL,
+  } = opts
   // For the canonical post-cutover runs (real-restart + real-session), the
   // Extension Host must use the same run-owned fresh canonical data root
   // (single DB for the whole run). The isolated root lives at
@@ -2648,6 +2681,10 @@ function launchVSCode(opts: {
   // Non-canonical runs inherit the existing XDG isolation without an explicit
   // KILO_DB. Predicate needsCanonicalStorage covers both gates.
   const canonicalEnv = needsCanonicalStorage(scenario) ? { KILO_DB: canonicalDbPath(scratch) } : {}
+  const e2eProviderEnv =
+    providerBaseURL && /^https?:\/\/(127\.0\.0\.1|localhost):\d+\/v1$/.test(providerBaseURL)
+      ? { KILO_E2E_PROVIDER_BASE_URL: providerBaseURL }
+      : {}
   return runTests({
     ...(executable ? { vscodeExecutablePath: executable } : {}),
     extensionDevelopmentPath: root,
@@ -2662,6 +2699,7 @@ function launchVSCode(opts: {
       XDG_CACHE_HOME: join(scratch, "xdg-cache"),
       XDG_STATE_HOME: join(scratch, "xdg-state"),
       ...canonicalEnv,
+      ...e2eProviderEnv,
     },
     launchArgs: [
       workspace,
@@ -2704,6 +2742,7 @@ async function runRealRestartLifecycle(opts: {
   const planFile = join(scratch, "plan.json")
   let failed = false
 
+  const providerBaseURL = `http://127.0.0.1:${restartModel.port}/v1`
   const launch = async (port: number) => {
     vscodeRun = launchVSCode({
       executable,
@@ -2715,6 +2754,7 @@ async function runRealRestartLifecycle(opts: {
       extensions,
       workspace,
       port,
+      providerBaseURL,
     })
     await waitForCdp(port, 90_000)
     console.log("[probe] CDP endpoint reachable, connecting Playwright")
@@ -2845,6 +2885,13 @@ async function main() {
   const extensions = join(scratch, "extensions")
   const workspace = join(scratch, "workspace")
   mkdirSync(workspace, { recursive: true })
+  // Run-owned marker bound to scratch + fixtureId: proves CLI seam scratch
+  // belongs to current harness run (not any absolute path). Created before
+  // VS Code launch so both ServerManager and CLI provider seams validate it;
+  // survives child restarts/window reload (scratch owner cleans it).
+  writeFileSync(join(scratch, "e2e-marker.json"), JSON.stringify({ v: 1, fixtureId }))
+  process.env.KILO_E2E_FIXTURE_ID = fixtureId
+  process.env.KILO_E2E_SCRATCH = scratch
 
   console.log(`[probe] fixture id: ${fixtureId}`)
   console.log(`[probe] cdp port:   ${cdpPort}`)
@@ -2990,7 +3037,9 @@ async function main() {
             assertArchiveStable(scratch, canonicalDataRoot(scratch))
           } catch (err) {
             failed = true
-            console.error(`[probe] FAIL canonical archive stability: ${err instanceof Error ? err.message : String(err)}`)
+            console.error(
+              `[probe] FAIL canonical archive stability: ${err instanceof Error ? err.message : String(err)}`,
+            )
           }
         }
       } finally {

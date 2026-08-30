@@ -403,6 +403,16 @@ How a config change applies at runtime is a separate concern from merge order: e
 
 Runtime loading is separate from editor-facing JSON Schema publication. A cloud-served schema currently improves validation and completion for `kilo.jsonc`; it does not load, apply, or override effective runtime config, and it is a non-authoritative external surface. When adding or changing a config key, follow [CLI Config Schema](/docs/contributing/architecture/config-schema); the key completes within this repository regardless of the overlay.
 
+### Internal E2E provider seam (exact-run test only)
+
+| Aspect | Behavior |
+|---|---|
+| What it is | Lowest-priority synthetic global fragment (`e2e-local/e2e-model`, `@ai-sdk/openai-compatible`, `http://127.0.0.1:*/v1`, fixed `e2e-fixture-key`) injected inside `Config.loadInstanceState` before `Global.Path.config` merge, so project canonical metadata merges over it — not a config scope, not a file, not a flag, not a schema field, not an endpoint mapping, not a public API |
+| Gate | `KILO_E2E_FIXTURE === "1"` exact (two package-local equivalent `isE2EFixtureEnabled()` predicates — CLI `packages/opencode/src/kilocode/config/e2e-provider.ts` and extension `packages/kilo-vscode/src/util/e2e-fixture.ts` — behaviorally identical, not a cross-package import), `KILO_E2E_SCRATCH` absolute normalized `kilo-e2e-*` basename never `/tmp` alone, no `..` segments, run-owned marker `scratch/e2e-marker.json` (`{v:1, fixtureId}`) created by harness before VS Code launch, survives restarts, `lstatSync` rejects symlinks, `realpath` relative check stays inside scratch, bounded `fs.readFileSync` <2 KiB, `fixtureId` equals `KILO_E2E_FIXTURE_ID`, `KILO_E2E_PROVIDER_BASE_URL` loopback `http(s)://127.0.0.1|localhost:*/v1` exact — any missing gate is fail-closed null; residual TOCTOU between `lstat` and `read` is documented acceptable risk (no portable `O_NOFOLLOW` in Bun) |
+| Why marker | Proves `scratch` belongs to the current harness run, not any absolute path; arbitrary `/tmp` or `opencode-test-*` dirs are rejected |
+| Lifecycle | Created by `script/e2e-probe.ts` before first `kilo serve` spawn, read by `ServerManager.validatedE2EProviderEnv()` and `getE2EProviderFragment()`, cleaned by scratch owner only, no global `rm` |
+| Evidence | Darwin Extension Host real-restart `rr-gc-proof.json` (`kilo-gc-proof/1`) redacted and required; `rr-title-request` transient excluded |
+
 ## Config update lifecycle
 
 Every config save is classified hot or cold. Schema shape lives in `Config.Info` in `packages/opencode/src/config/config.ts`; runtime hot classification lives in `packages/opencode/src/kilocode/config/hot-keys.ts`, and a field absent from the hot-key set is cold. Hot saves converge without a runtime rebuild; cold saves converge through a background pass that swaps the runtime for affected directories. Merge order for the sources is in [Config precedence](#config-precedence). The editor-facing schema surface is separate and non-authoritative — see [CLI Config Schema](/docs/contributing/architecture/config-schema).

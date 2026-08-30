@@ -6,7 +6,17 @@ import type { ServerConfig } from "./types"
 import { resolveEventSessionId as resolveEventSessionIdPure } from "./connection-utils"
 import { SandboxPreference } from "../sandbox-preference"
 import { isP0PerfEnabled, p0Span, p0Stage } from "../../perf/perf-instrument"
-import { ServePrivatePeer, type ServePrivateCancelQueuedRequest, type ServePrivateCancelQueuedResult, type ServePrivateSessionUpdateRequest, type ServePrivateSessionUpdateResult } from "./serve-private-peer"
+import {
+  ServePrivatePeer,
+  type ServePrivateCancelQueuedRequest,
+  type ServePrivateCancelQueuedResult,
+  type ServePrivateSessionUpdateRequest,
+  type ServePrivateSessionUpdateResult,
+  compareUpdateParity,
+} from "./serve-private-peer"
+import * as crypto from "crypto"
+import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-provider/rename-session"
+import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
 type SSEEventListener = (event: SSEPayload, directory?: string, transaction?: string) => void
@@ -107,6 +117,22 @@ export class KiloConnectionService {
   private privateAvailable = false
   private privateEpoch: number | null = null
   private privatePid: number | undefined
+  // Lazy fixture-only replay state: single active operation, recorded only
+  // after successful SDK result, cleared on dispose/prune, retained across
+  // child restart within same Extension Host, no production allocation.
+  private lastSessionUpdateIdentities: Map<
+    string,
+    { opId: string; idempotencyKey: string; requestId: string; sessionId: string; title: string; directory: string }
+  > | null = null
+
+  private getReplayState(): Map<
+    string,
+    { opId: string; idempotencyKey: string; requestId: string; sessionId: string; title: string; directory: string }
+  > | null {
+    if (!isE2EFixtureEnabled()) return null
+    if (!this.lastSessionUpdateIdentities) this.lastSessionUpdateIdentities = new Map()
+    return this.lastSessionUpdateIdentities
+  }
 
   constructor(context: vscode.ExtensionContext) {
     const state =
@@ -300,6 +326,7 @@ export class KiloConnectionService {
       ids.delete(sessionId)
       if (ids.size === 0) this.visible.delete(key)
     }
+    this.lastSessionUpdateIdentities?.delete(sessionId)
     this.flushViewed()
   }
 
@@ -622,6 +649,7 @@ export class KiloConnectionService {
     this.questionRevision += 1
     this.seenConfigTransactions.clear()
     this.configRevisionListeners.clear()
+    this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
         .viewed({ viewer: { id: this.viewerId, active: false }, attached: [], visible: [] })
@@ -1042,9 +1070,14 @@ export class KiloConnectionService {
   // remains in use by the reconnect/kill outputs below.
   // -------------------------------------------------------------------------
 
-  public fixtureKillServer(): { pid: number; port: number } | null {
-    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture killServer requires KILO_E2E_FIXTURE")
-    return this.serverManager.killServerForFixture()
+  public fixtureKillServer(): { pid: number; port: number; epoch: number | null } | null {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture killServer requires KILO_E2E_FIXTURE")
+    const info = this.serverManager.getServerInfoForFixture()
+    if (!info) return null
+    const res = this.serverManager.killServerForFixture()
+    if (!res) return null
+    // authoritative epoch is the ServerManager epoch before kill (proves identity)
+    return { pid: res.pid, port: res.port, epoch: info.epoch }
   }
 
   /**
@@ -1054,13 +1087,13 @@ export class KiloConnectionService {
    * run-owned e2e-local/e2e-model. Returns null when no server ever spawned.
    */
   public fixtureLlmRequests() {
-    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture llmRequests requires KILO_E2E_FIXTURE")
+    if (!isE2EFixtureEnabled()) throw new Error("fixture llmRequests requires KILO_E2E_FIXTURE")
     return this.serverManager.getLlmRequestsForFixture()
   }
 
   /** Fixture reset of the generation-request store (run start only). */
   public fixtureLlmRequestsReset(): boolean {
-    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture llmRequestsReset requires KILO_E2E_FIXTURE")
+    if (!isE2EFixtureEnabled()) throw new Error("fixture llmRequestsReset requires KILO_E2E_FIXTURE")
     return this.serverManager.resetLlmRequestsForFixture()
   }
 
@@ -1068,7 +1101,7 @@ export class KiloConnectionService {
    * Fixture observation of one explicit SSE reconnect with the backend left
    * ALIVE (production SdkSSEAdapter.reconnect() → per-attempt abort → outer
    * consumeLoop reconnects → connection-service state listeners). Records the
-   * state sequence, the (unchanged) server port/pid, and the number of
+   * state sequence, the (unchanged) server port/pid/epoch, and the number of
    * `server.connected` events delivered across the reconnect window as
    * evidence the stream re-established. `/global/event` emits exactly one
    * `server.connected` per new stream subscription (then heartbeats + bus
@@ -1079,18 +1112,21 @@ export class KiloConnectionService {
     before: ConnectionState
     portBefore: number | null
     pidBefore: number | null
+    epochBefore: number | null
     after: ConnectionState
     portAfter: number | null
     pidAfter: number | null
+    epochAfter: number | null
     states: Array<{ state: ConnectionState; at: string }>
     connectedEvents: number
   }> {
-    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture sseReconnect requires KILO_E2E_FIXTURE")
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sseReconnect requires KILO_E2E_FIXTURE")
     const states: Array<{ state: ConnectionState; at: string }> = []
     const unsub = this.onStateChange((state) => states.push({ state, at: new Date().toISOString() }))
     const before = this.state
     const portBefore = this.info?.port ?? null
     const pidBefore = this.serverManager.getServerPidForFixture()?.pid ?? null
+    const epochBefore = this.serverManager.getServerEpochForFixture()
     let connectedEvents = 0
     const unsubEvents = this.onEvent((event) => {
       if (event.type === "server.connected") connectedEvents += 1
@@ -1116,9 +1152,11 @@ export class KiloConnectionService {
         before,
         portBefore,
         pidBefore,
+        epochBefore,
         after: this.state,
         portAfter: this.info?.port ?? null,
         pidAfter: this.serverManager.getServerPidForFixture()?.pid ?? null,
+        epochAfter: this.serverManager.getServerEpochForFixture(),
         states,
         connectedEvents,
       }
@@ -1150,9 +1188,10 @@ export class KiloConnectionService {
     state: ConnectionState
     port: number | null
     pid: number | null
+    epoch: number | null
     states: Array<{ state: ConnectionState; at: string }>
   }> {
-    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture reconnectServer requires KILO_E2E_FIXTURE")
+    if (!isE2EFixtureEnabled()) throw new Error("fixture reconnectServer requires KILO_E2E_FIXTURE")
     const states: Array<{ state: ConnectionState; at: string }> = []
     const unsub = this.onStateChange((state) => states.push({ state, at: new Date().toISOString() }))
     try {
@@ -1169,16 +1208,439 @@ export class KiloConnectionService {
       if (!root) throw new Error("fixture reconnectServer: no workspace folder")
       await this.getClientAsync(root)
       if (this.state !== "connected") {
-        throw new Error(`fixture reconnectServer: state=${this.state} expected connected. states=${JSON.stringify(states)}`)
+        throw new Error(
+          `fixture reconnectServer: state=${this.state} expected connected. states=${JSON.stringify(states)}`,
+        )
       }
       return {
         state: this.state,
         port: this.info?.port ?? null,
         pid: this.serverManager.getServerPidForFixture()?.pid ?? null,
+        epoch: this.serverManager.getServerEpochForFixture(),
         states,
       }
     } finally {
       unsub()
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Gate C preparation fixtures: private peer status snapshot and durable
+  // title-only session/update observation (SDK authoritative, private replay-only).
+  // All env-gated, read-only or test-triggered, zero production behavior when
+  // KILO_E2E_FIXTURE absent. No secrets exposed: pid/port/epoch are non-secret,
+  // protocol and capabilities are public negotiation, titles/payloads are hashed.
+  // -------------------------------------------------------------------------
+
+  public fixturePrivatePeerStatus(): {
+    backend: { pid: number | null; port: number | null; epoch: number | null }
+    private: {
+      pid: number | null | undefined
+      epoch: number | null
+      available: boolean
+      state: string
+      protocol: { name: string; major: number; minor?: number } | null
+      capabilities: string[]
+      hasSessionUpdate: boolean
+    }
+  } {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture privatePeerStatus requires KILO_E2E_FIXTURE")
+    const info = this.serverManager.getServerInfoForFixture()
+    const pid = info?.pid ?? null
+    const port = info?.port ?? null
+    const epoch = info?.epoch ?? this.serverManager.getServerEpochForFixture()
+    const peer = this.privatePeer
+    const available = this.isPrivateAvailable()
+    let protocol: { name: string; major: number; minor?: number } | null = null
+    let capabilities: string[] = []
+    let state = "unavailable"
+    if (peer) {
+      try {
+        protocol = peer.getProtocolForFixture()
+      } catch (err) {
+        console.warn("[Fixture] getProtocolForFixture failed:", String(err).slice(0, 200))
+      }
+      try {
+        capabilities = peer.getCapabilitiesListForFixture()
+      } catch (err) {
+        console.warn("[Fixture] getCapabilitiesForFixture failed:", String(err).slice(0, 200))
+      }
+      try {
+        state = peer.getPeerStateForFixture()
+      } catch (err) {
+        console.warn("[Fixture] getPeerStateForFixture failed:", String(err).slice(0, 200))
+        state = "unknown"
+      }
+    } else {
+      state = this.privateAvailable ? "available-no-peer" : "unavailable"
+    }
+    if (!peer && available) state = "available"
+    if (peer && !available) {
+      // peer exists but not available — keep its state
+    }
+    const hasSessionUpdate = capabilities.includes("session/update")
+    return {
+      backend: { pid, port, epoch },
+      private: {
+        pid: this.privatePid ?? null,
+        epoch: this.privateEpoch,
+        available,
+        state,
+        protocol,
+        capabilities,
+        hasSessionUpdate,
+      },
+    }
+  }
+
+  private hashForFixture(value: string): string {
+    return crypto.createHash("sha256").update(value).digest("hex").slice(0, 16)
+  }
+
+  /**
+   * Fixture-only durable title operation: SDK PATCH is the sole mutation
+   * authority via the same production `renameSessionWithResult` path that
+   * KiloProvider uses (shared `buildSessionUpdateIdentity` token), then a
+   * private same-key replay observation with `compareUpdateParity` (redacted).
+   * Order is always SDK then private; private is read-only replay and never
+   * replaces the SDK result. Hashes redact identities/titles; no raw secret
+   * data leaves the fixture. Stores the identity for later same-key replay.
+   */
+  // eslint-disable-next-line complexity
+  public async fixtureSessionUpdate(input: { sessionId: string; title: string; directory?: string }): Promise<{
+    order: string[]
+    sdk: { status: string; httpStatus: number | null; hasData: boolean; errorCode?: string }
+    private: { status: string; hasData: boolean; transportUnknown?: boolean; failureCode?: string } | null
+    parity: { divergence: string | null; details: Record<string, unknown> }
+    redacted: {
+      opIdHash: string
+      idempotencyKeyHash: string
+      requestIdHash: string
+      titleHash: string
+      sessionIdHash: string
+    }
+    revision: { session?: number; config?: number } | null
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture sessionUpdate requires KILO_E2E_FIXTURE")
+    if (!input.sessionId || typeof input.sessionId !== "string") throw new Error("sessionId required")
+    if (!input.title || typeof input.title !== "string") throw new Error("title required")
+    const rawDir =
+      input.directory ??
+      vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ??
+      this.currentDirectory ??
+      this.rootDirectory
+    if (!rawDir) throw new Error("fixture sessionUpdate: no directory")
+    // Canonicalize via realpath to match server's canonicalRoot (/private/var vs /var)
+    let dir = rawDir
+    try {
+      const fsSync = require("node:fs") as typeof import("node:fs")
+      dir = fsSync.realpathSync(rawDir)
+    } catch (err) {
+      console.warn("[Fixture] realpath failed (redacted):", String(err).slice(0, 100))
+    }
+    const { opId, idempotencyKey, requestId } = buildSessionUpdateIdentity(input.sessionId)
+    const durableContext: { directory: string; sessionId: string; parentSessionId: null } = {
+      directory: dir,
+      sessionId: input.sessionId,
+      parentSessionId: null,
+    }
+    const client = this.client
+    if (!client) throw new Error("fixture sessionUpdate: not connected")
+    const sdkRes = (await renameSessionWithResult({
+      client: client as unknown as import("@kilocode/sdk/v2/client").KiloClient,
+      sessionID: input.sessionId,
+      title: input.title,
+      directory: dir,
+      opId,
+      idempotencyKey,
+      requestId,
+      context: durableContext,
+    } as unknown as Parameters<typeof renameSessionWithResult>[0])) as unknown as {
+      data?: unknown
+      error?: unknown
+      response?: unknown
+    }
+    const sdkHasData = !!sdkRes.data && !sdkRes.error
+    const sdkStatus = sdkRes.error ? "failed" : "succeeded"
+    // Fixture-only bounded state: single active operation, lazy, recorded
+    // only after authoritative SDK success, retained across child restart,
+    // cleared on dispose/prune, no production allocation. Failed SDK does
+    // not call private or create state.
+    if (sdkHasData) {
+      const state = this.getReplayState()
+      if (state) {
+        state.set(input.sessionId, {
+          opId,
+          idempotencyKey,
+          requestId,
+          sessionId: input.sessionId,
+          title: input.title,
+          directory: dir,
+        })
+        // single active operation: keep at most 1 entry
+        if (state.size > 1) {
+          const first = state.keys().next().value as string | undefined
+          if (first && first !== input.sessionId) state.delete(first)
+        }
+      }
+    }
+    let httpStatus: number | null = null
+    try {
+      const resp = (sdkRes as { response?: { status?: unknown } }).response
+      if (resp && typeof resp.status === "number" && Number.isInteger(resp.status)) httpStatus = resp.status as number
+      else if (resp && typeof resp.status === "string") {
+        const n = Number(resp.status)
+        if (Number.isInteger(n)) httpStatus = n
+      }
+      if (httpStatus === null && sdkRes.error) {
+        const err = sdkRes.error as Record<string, unknown>
+        for (const c of [err.status, err.statusCode, err.code]) {
+          if (typeof c === "number" && c >= 100 && c < 600) {
+            httpStatus = c
+            break
+          }
+          if (typeof c === "string") {
+            const n = Number(c)
+            if (Number.isInteger(n) && n >= 100 && n < 600) {
+              httpStatus = n
+              break
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.warn("[Fixture] httpStatus extraction failed:", String(err).slice(0, 200))
+    }
+    const order: string[] = ["sdk"]
+    let privRes: { status: string; hasData: boolean; transportUnknown?: boolean; failureCode?: string } | null = null
+    let rawPriv: unknown = null
+    let parity: { divergence: string | null; details: Record<string, unknown> } = { divergence: null, details: {} }
+    if (!sdkHasData) {
+      const errObj = sdkRes.error as Record<string, unknown>
+      const errCode = String(errObj?.code ?? errObj?._tag ?? "").slice(0, 100)
+      console.warn(
+        "[Fixture] SDK failed, skipping private (redacted):",
+        String(sdkStatus).slice(0, 20),
+        `http=${String(httpStatus)}`,
+        `code=${errCode}`,
+      )
+    } else if (!this.isPrivateAvailable()) {
+      console.warn(
+        "[Fixture] private unavailable at title update (redacted):",
+        String(this.privateAvailable).slice(0, 20),
+        String(this.privatePeer?.getPeerStateForFixture?.()).slice(0, 20),
+      )
+    }
+    // SDK-then-private: only when SDK succeeded (failed does not call private)
+    if (sdkHasData && this.isPrivateAvailable()) {
+      order.push("private")
+      const privateReq = {
+        v: 1 as const,
+        requestId,
+        opId,
+        op: "session/update" as const,
+        idempotencyKey,
+        context: durableContext,
+        payload: { title: input.title },
+      }
+      try {
+        const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
+          let timer: ReturnType<typeof setTimeout> | undefined
+          const timeout = new Promise<never>((_, rej) => {
+            timer = setTimeout(() => rej(new Error(`timeout ${ms}`)), ms)
+            ;(timer as unknown as { unref?: () => void })?.unref?.()
+          })
+          return Promise.race([p, timeout]).finally(() => {
+            if (timer) clearTimeout(timer)
+          }) as Promise<T>
+        }
+        rawPriv = await withTimeout(
+          this.privateSessionUpdate(privateReq as unknown as ServePrivateSessionUpdateRequest),
+          3000,
+        ).catch((e: unknown) => ({
+          v: 1,
+          requestId,
+          opId,
+          op: "session/update",
+          idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+          _error: String(e),
+        }))
+        const r = rawPriv as Record<string, unknown>
+        const status = String(r.status ?? "unknown")
+        const hasData = !!r.data
+        const transportUnknown = !!(r.transportUnknown as boolean)
+        const failureCode = (r.failure as Record<string, unknown> | undefined)?.code as string | undefined
+        privRes = {
+          status,
+          hasData,
+          ...(transportUnknown ? { transportUnknown: true } : {}),
+          ...(failureCode ? { failureCode } : {}),
+        }
+        try {
+          parity = compareUpdateParity(
+            rawPriv as unknown as ServePrivateSessionUpdateResult,
+            sdkRes as unknown as { data?: unknown; error?: unknown; response?: unknown },
+          )
+        } catch (e) {
+          console.warn("[Fixture] compareUpdateParity failed:", String(e).slice(0, 200))
+          parity = { divergence: `compare-error:${String(e).slice(0, 100)}`, details: {} }
+        }
+      } catch (e) {
+        console.warn("[Fixture] privateSessionUpdate failed:", String(e).slice(0, 200))
+        privRes = { status: "ambiguous", hasData: false, transportUnknown: true }
+        parity = { divergence: "transport-unknown", details: {} }
+      }
+    } else if (sdkHasData && !this.isPrivateAvailable()) {
+      parity = { divergence: "private-unavailable", details: {} }
+    } else if (!sdkHasData) {
+      parity = { divergence: "sdk-failed", details: {} }
+    }
+    // revision: extract from private or sdk data if available
+    let revision: { session?: number; config?: number } | null = null
+    try {
+      const src = (rawPriv as Record<string, unknown> | null)?.revision as Record<string, unknown> | undefined
+      if (src && typeof src.session === "number")
+        revision = {
+          session: src.session as number,
+          ...(typeof src.config === "number" ? { config: src.config as number } : {}),
+        }
+      else if (sdkHasData) {
+        // SDK data doesn't carry revision; leave null
+      }
+    } catch (err) {
+      console.warn("[Fixture] revision extraction failed:", String(err).slice(0, 200))
+    }
+    return {
+      order,
+      sdk: {
+        status: sdkStatus,
+        httpStatus,
+        hasData: sdkHasData,
+        ...(sdkRes.error
+          ? {
+              errorCode: String(
+                (sdkRes.error as Record<string, unknown>).code ?? (sdkRes.error as Record<string, unknown>)._tag ?? "",
+              ),
+            }
+          : {}),
+      },
+      private: privRes,
+      parity,
+      redacted: {
+        opIdHash: this.hashForFixture(opId),
+        idempotencyKeyHash: this.hashForFixture(idempotencyKey),
+        requestIdHash: this.hashForFixture(requestId),
+        titleHash: this.hashForFixture(input.title),
+        sessionIdHash: this.hashForFixture(input.sessionId),
+      },
+      revision,
+    }
+  }
+
+  /**
+   * Fixture same-key private replay: replays the last stored durable identity
+   * for the given sessionId without a second SDK mutation. Proves the persisted
+   * snapshot/revision is returned without a second mutation and that private
+   * remains replay-only after restart. Returns redacted hashes; no raw secrets.
+   */
+  public async fixturePrivateReplay(sessionId: string): Promise<{
+    found: boolean
+    private: { status: string; hasData: boolean; transportUnknown?: boolean; failureCode?: string } | null
+    parity?: { divergence: string | null; details: Record<string, unknown> }
+    redacted?: {
+      opIdHash: string
+      idempotencyKeyHash: string
+      requestIdHash: string
+      titleHash: string
+      sessionIdHash: string
+    }
+    revision: { session?: number; config?: number } | null
+  }> {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture privateReplay requires KILO_E2E_FIXTURE")
+    const state = this.lastSessionUpdateIdentities
+    if (!state) return { found: false, private: null, revision: null }
+    const stored = state.get(sessionId)
+    if (!stored) return { found: false, private: null, revision: null }
+    if (!this.isPrivateAvailable())
+      return { found: true, private: { status: "unavailable", hasData: false }, revision: null }
+    const privateReq = {
+      v: 1 as const,
+      requestId: stored.requestId,
+      opId: stored.opId,
+      op: "session/update" as const,
+      idempotencyKey: stored.idempotencyKey,
+      context: { directory: stored.directory, sessionId: stored.sessionId, parentSessionId: null },
+      payload: { title: stored.title },
+    }
+    let rawPriv: unknown = null
+    try {
+      const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const timeout = new Promise<never>((_, rej) => {
+          timer = setTimeout(() => rej(new Error(`timeout ${ms}`)), ms)
+          ;(timer as unknown as { unref?: () => void })?.unref?.()
+        })
+        return Promise.race([p, timeout]).finally(() => {
+          if (timer) clearTimeout(timer)
+        }) as Promise<T>
+      }
+      rawPriv = await withTimeout(
+        this.privateSessionUpdate(privateReq as unknown as ServePrivateSessionUpdateRequest),
+        3000,
+      ).catch((e: unknown) => ({
+        v: 1,
+        requestId: stored.requestId,
+        opId: stored.opId,
+        op: "session/update",
+        idempotencyKey: stored.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+        _error: String(e),
+      }))
+    } catch (err) {
+      console.warn("[Fixture] privateReplay failed:", String(err).slice(0, 200))
+      return { found: true, private: { status: "ambiguous", hasData: false, transportUnknown: true }, revision: null }
+    }
+    const r = rawPriv as Record<string, unknown>
+    const status = String(r.status ?? "unknown")
+    const hasData = !!r.data
+    const transportUnknown = !!(r.transportUnknown as boolean)
+    const failureCode = (r.failure as Record<string, unknown> | undefined)?.code as string | undefined
+    let revision: { session?: number; config?: number } | null = null
+    try {
+      const src = r.revision as Record<string, unknown> | undefined
+      if (src && typeof src.session === "number")
+        revision = {
+          session: src.session as number,
+          ...(typeof src.config === "number" ? { config: src.config as number } : {}),
+        }
+    } catch (err) {
+      console.warn("[Fixture] replay revision extraction failed:", String(err).slice(0, 200))
+    }
+    // For parity, we need sdk success shape to compare; we know SDK succeeded for this stored op, so construct succeeded
+    // But for generic replay we just return private result; harness will assert status succeeded and revision same
+    return {
+      found: true,
+      private: {
+        status,
+        hasData,
+        ...(transportUnknown ? { transportUnknown: true } : {}),
+        ...(failureCode ? { failureCode } : {}),
+      },
+      redacted: {
+        opIdHash: this.hashForFixture(stored.opId),
+        idempotencyKeyHash: this.hashForFixture(stored.idempotencyKey),
+        requestIdHash: this.hashForFixture(stored.requestId),
+        titleHash: this.hashForFixture(stored.title),
+        sessionIdHash: this.hashForFixture(stored.sessionId),
+      },
+      revision,
     }
   }
 }

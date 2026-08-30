@@ -14,6 +14,7 @@ import {
   parseFailure,
   sha256Of,
   validateEvidenceDestination,
+  validateGcProof,
 } from "../../script/e2e-evidence"
 
 function tempRoot(): string {
@@ -21,7 +22,10 @@ function tempRoot(): string {
 }
 
 /** A realistic run-owned scratch + workspace with every real-completed artifact. */
-function seededRun(root: string, over: { drop?: string[]; corrupt?: string[] } = {}): {
+function seededRun(
+  root: string,
+  over: { drop?: string[]; corrupt?: string[] } = {},
+): {
   scratch: string
   workspace: string
   staging: string
@@ -34,13 +38,40 @@ function seededRun(root: string, over: { drop?: string[]; corrupt?: string[] } =
   const plan = { sourceId: "s-A", customAgent: "e2e-agent", customProvider: "e2e-local", customModel: "e2e-model" }
   writeFileSync(join(scratch, "plan.json"), JSON.stringify(plan))
   writeFileSync(join(scratch, "runner-pid"), "4242")
-  writeFileSync(join(scratch, "real-completed-dom-evidence"), JSON.stringify({ url: "vscode-webview://x", pins: [], rollback: {} }))
+  writeFileSync(
+    join(scratch, "real-completed-dom-evidence"),
+    JSON.stringify({ url: "vscode-webview://x", pins: [], rollback: {} }),
+  )
   writeFileSync(join(scratch, "real-completed-ready"), "e2e-probe-1234")
-  writeFileSync(join(scratch, "llm-requests.jsonl"), JSON.stringify({ providerID: "e2e-local", modelID: "e2e-model", agent: "e2e-agent", small: false, sessionID: "s", pid: 1, instance: 1, ts: 0 }) + "\n")
-  writeFileSync(join(scratch, "llm-requests-real-completed.json"), JSON.stringify({ scenario: "real-completed", records: [] }))
-  writeFileSync(join(scratch, "llm-matrix-real-completed-final.json"), JSON.stringify({ phase: "real-completed-final", total: 1, violations: [] }))
-  writeFileSync(join(scratch, "rc-snap-1.json"), JSON.stringify({ requestedAt: "t", sessions: [], messages: {}, statuses: {} }))
-  writeFileSync(join(scratch, "rc-snap-2.json"), JSON.stringify({ requestedAt: "t2", sessions: [], messages: {}, statuses: {} }))
+  writeFileSync(
+    join(scratch, "llm-requests.jsonl"),
+    JSON.stringify({
+      providerID: "e2e-local",
+      modelID: "e2e-model",
+      agent: "e2e-agent",
+      small: false,
+      sessionID: "s",
+      pid: 1,
+      instance: 1,
+      ts: 0,
+    }) + "\n",
+  )
+  writeFileSync(
+    join(scratch, "llm-requests-real-completed.json"),
+    JSON.stringify({ scenario: "real-completed", records: [] }),
+  )
+  writeFileSync(
+    join(scratch, "llm-matrix-real-completed-final.json"),
+    JSON.stringify({ phase: "real-completed-final", total: 1, violations: [] }),
+  )
+  writeFileSync(
+    join(scratch, "rc-snap-1.json"),
+    JSON.stringify({ requestedAt: "t", sessions: [], messages: {}, statuses: {} }),
+  )
+  writeFileSync(
+    join(scratch, "rc-snap-2.json"),
+    JSON.stringify({ requestedAt: "t2", sessions: [], messages: {}, statuses: {} }),
+  )
   const kilo = join(workspace, ".kilo")
   mkdirSync(kilo, { recursive: true })
   writeFileSync(join(kilo, "kilo.json"), JSON.stringify({ provider: {}, agent: {} }))
@@ -93,7 +124,9 @@ describe("validateEvidenceDestination (path validation)", () => {
     try {
       const scratch = join(root, "scratch")
       mkdirSync(scratch, { recursive: true })
-      expect(() => validateEvidenceDestination(join(scratch, "evidence"), scratch)).toThrow(/inside the run-owned scratch/)
+      expect(() => validateEvidenceDestination(join(scratch, "evidence"), scratch)).toThrow(
+        /inside the run-owned scratch/,
+      )
       expect(() => validateEvidenceDestination(scratch, scratch)).toThrow(/inside the run-owned scratch/)
     } finally {
       rmSync(root, { recursive: true, force: true })
@@ -103,7 +136,9 @@ describe("validateEvidenceDestination (path validation)", () => {
   it("rejects a missing parent directory", () => {
     const root = tempRoot()
     try {
-      expect(() => validateEvidenceDestination(join(root, "no-parent", "evidence"), undefined)).toThrow(/parent does not exist/)
+      expect(() => validateEvidenceDestination(join(root, "no-parent", "evidence"), undefined)).toThrow(
+        /parent does not exist/,
+      )
     } finally {
       rmSync(root, { recursive: true, force: true })
     }
@@ -242,6 +277,362 @@ describe("parseFailure (required-artifact malformation)", () => {
     expect(parseFailure("llm-requests.jsonl", Buffer.from('{"a":1}\nbroken\n'))).toContain("corrupt JSONL line")
     expect(parseFailure("llm-requests.jsonl", Buffer.from(""))).toContain("empty JSONL store")
     expect(parseFailure("ask.txt", Buffer.from("plain text"))).toBeNull()
+  })
+})
+
+function makeValidProof(): Record<string, unknown> {
+  const h = "aaaaaaaaaaaaaaaa"
+  const pid = 1234,
+    port = 4321,
+    epoch = 1
+  const backend = { pid, port, epoch }
+  const prePrivate = {
+    pid,
+    epoch,
+    available: true,
+    state: "open",
+    protocol: { name: "kilo-private", major: 1 },
+    capabilities: ["session/cancelQueued", "session/update"],
+    hasSessionUpdate: true,
+  }
+  const openPriv = {
+    pid,
+    epoch,
+    available: true,
+    hasSessionUpdate: true,
+    state: "open",
+    protocol: { name: "kilo-private", major: 1 },
+    capabilities: ["session/cancelQueued", "session/update"],
+  }
+  const ssePriv = { pid, epoch, available: true, hasSessionUpdate: true, protocol: { name: "kilo-private", major: 1 } }
+  const revision = { session: 5, config: 2 }
+  const sdk = { status: "succeeded", httpStatus: 200, hasData: true }
+  const priv = { status: "succeeded", hasData: true }
+  const at = new Date().toISOString()
+  const cloneB = () => ({ pid, port, epoch })
+  return {
+    schema: "kilo-gc-proof/1",
+    version: 1,
+    scope: "real-restart Gate C: shared-backend + SDK-authoritative title + SSE same-epoch + worker-restart new-epoch",
+    fixtureIdHash: h,
+    sessionIdHash: h,
+    titleHash: h,
+    pre: {
+      backend: cloneB(),
+      private: { ...prePrivate, protocol: { ...prePrivate.protocol }, capabilities: [...prePrivate.capabilities] },
+    },
+    openTab: {
+      before: {
+        backend: cloneB(),
+        private: { ...openPriv, protocol: { ...openPriv.protocol }, capabilities: [...openPriv.capabilities] },
+      },
+      after: {
+        backend: cloneB(),
+        private: { ...openPriv, protocol: { ...openPriv.protocol }, capabilities: [...openPriv.capabilities] },
+      },
+      count: 1,
+      ready: true,
+    },
+    sse: {
+      pre: { backend: cloneB(), private: { ...ssePriv, protocol: { ...ssePriv.protocol } } },
+      conn: { before: cloneB(), after: cloneB(), states: [{ state: "connected", at }], connectedEvents: 1 },
+      post: { backend: cloneB(), private: { ...ssePriv, protocol: { ...ssePriv.protocol } } },
+    },
+    titleOp: {
+      opIdHash: h,
+      idempotencyKeyHash: h,
+      requestIdHash: h,
+      sessionIdHash: h,
+      titleHash: h,
+      order: ["sdk", "private"],
+      sdk: { ...sdk },
+      private: { ...priv },
+      parity: { divergence: null, details: {} },
+      revision: { ...revision },
+    },
+    replay: { found: true, private: { ...priv }, revision: { ...revision }, titleHash: h },
+    killed: { pid, port, epoch },
+    postRestart: {
+      backend: { pid: 5678, port: 5432, epoch: 2 },
+      private: {
+        pid: 5678,
+        epoch: 2,
+        available: true,
+        hasSessionUpdate: true,
+        protocol: { name: "kilo-private", major: 1 },
+        state: "open",
+        capabilities: ["session/cancelQueued", "session/update"],
+      },
+    },
+    replayAfterRestart: { found: true, private: { ...priv }, revision: { ...revision }, titleHash: h },
+    parity: { divergence: null, details: {} },
+    collectedAt: new Date().toISOString(),
+  }
+}
+
+describe("validateGcProof hardened", () => {
+  it("accepts a valid proof", () => {
+    expect(validateGcProof(makeValidProof())).toBeNull()
+  })
+  it("rejects missing nested field", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    delete (p.pre as Record<string, unknown>).backend
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects unknown top-level field", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    p.extra = 1
+    expect(validateGcProof(p)).toContain("keys mismatch")
+  })
+  it("rejects unknown nested field", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(p.pre as Record<string, unknown>).extra = 1
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects nested raw title key", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(p.titleOp as Record<string, unknown>).title = "leak"
+    expect(validateGcProof(p)).toContain("forbidden")
+  })
+  it("rejects malformed hash", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    p.fixtureIdHash = "nothex"
+    expect(validateGcProof(p)).toContain("16-hex")
+  })
+  it("rejects revision mismatch", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(p.replay as Record<string, unknown>).revision = { session: 99, config: 2 }
+    expect(validateGcProof(p)).toContain("replay.revision")
+  })
+  it("rejects killed epoch not equal pre", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(p.killed as Record<string, unknown>).epoch = 999
+    expect(validateGcProof(p)).toContain("killed must equal")
+  })
+  it("rejects postRestart epoch not greater", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.postRestart as Record<string, unknown>).backend as Record<string, unknown>).epoch = 1
+    expect(validateGcProof(p)).toContain("must be >")
+  })
+  it("rejects SSE identity changed", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(((p.sse as Record<string, unknown>).post as Record<string, unknown>).backend as Record<string, unknown>).pid =
+      9999
+    ;(((p.sse as Record<string, unknown>).post as Record<string, unknown>).private as Record<string, unknown>).pid =
+      9999
+    expect(validateGcProof(p)).toContain("sse pre/post backend")
+  })
+  it("rejects forbidden payload key", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(p as Record<string, unknown>).payload = "x"
+    const err = validateGcProof(p) as string
+    expect(err.includes("forbidden") || err.includes("keys mismatch")).toBeTrue()
+  })
+  it("rejects order mismatch", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.titleOp as Record<string, unknown>).order as string[])[0] = "private"
+    expect(validateGcProof(p)).toContain("order")
+  })
+})
+
+describe("validateGcProof auditor probes closed", () => {
+  it("rejects extra evil in openTab protocol", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const ot = (p.openTab as Record<string, unknown>).before as Record<string, unknown>
+    const priv = ot.private as Record<string, unknown>
+    ;(priv.protocol as Record<string, unknown>).evil = 1
+    expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("protocol")
+  })
+  it("rejects extra evil in SSE protocol", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const sse = (p.sse as Record<string, unknown>).pre as Record<string, unknown>
+    const pr = (sse.private as Record<string, unknown>).protocol as Record<string, unknown>
+    pr.evil = 1
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects extra evil in postRestart protocol", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const pr = ((p.postRestart as Record<string, unknown>).private as Record<string, unknown>).protocol as Record<
+      string,
+      unknown
+    >
+    pr.evil = 1
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects extra evil in SSE state entry", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const conn = (p.sse as Record<string, unknown>).conn as Record<string, unknown>
+    const states = conn.states as Record<string, unknown>[]
+    ;(states[0] as Record<string, unknown>).evil = 1
+    expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("keys mismatch")
+  })
+  it("rejects non-string capability element", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [123 as unknown as string]
+    expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("must be string")
+  })
+  it("rejects unknown capability value", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = ["unknown-cap"]
+    expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("unknown capability")
+  })
+  it("rejects openTab unknown capability in private", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const ot = ((p.openTab as Record<string, unknown>).before as Record<string, unknown>).private as Record<
+      string,
+      unknown
+    >
+    ot.capabilities = ["evil-cap"]
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("valid proof passes", () => {
+    expect(validateGcProof(makeValidProof())).toBeNull()
+  })
+})
+
+describe("assertFixtureIdMatch (proof construction env gate)", () => {
+  it("requires non-empty env fixture ID and exact match", async () => {
+    const { assertFixtureIdMatch } = await import("../../script/e2e-probe-restart")
+    expect(() => assertFixtureIdMatch("fid", undefined)).toThrow(/KILO_E2E_FIXTURE_ID missing/)
+    expect(() => assertFixtureIdMatch("fid", "")).toThrow(/missing/)
+    expect(() => assertFixtureIdMatch("", "fid")).toThrow(/fixtureId missing/)
+    expect(() => assertFixtureIdMatch("a", "b")).toThrow(/!= env/)
+    expect(assertFixtureIdMatch("same", "same")).toBe("same")
+  })
+  it("rejects missing marker version and wrong version via marker validator", async () => {
+    const { mkdtempSync, writeFileSync, rmSync, existsSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const { tmpdir } = await import("node:os")
+    const { isValidE2EScratch } = await import("../../src/util/e2e-fixture")
+    const dir = mkdtempSync(join(tmpdir(), "kilo-e2e-"))
+    const saved = process.env.KILO_E2E_FIXTURE_ID
+    try {
+      process.env.KILO_E2E_FIXTURE_ID = "fid"
+      writeFileSync(join(dir, "e2e-marker.json"), JSON.stringify({ fixtureId: "fid" }))
+      expect(isValidE2EScratch(dir)).toBeFalse()
+      writeFileSync(join(dir, "e2e-marker.json"), JSON.stringify({ v: 2, fixtureId: "fid" }))
+      expect(isValidE2EScratch(dir)).toBeFalse()
+      writeFileSync(join(dir, "e2e-marker.json"), JSON.stringify({ v: 1, fixtureId: "" }))
+      process.env.KILO_E2E_FIXTURE_ID = ""
+      expect(isValidE2EScratch(dir)).toBeFalse()
+      process.env.KILO_E2E_FIXTURE_ID = "fid"
+      writeFileSync(join(dir, "e2e-marker.json"), JSON.stringify({ v: 1, fixtureId: "fid" }))
+      process.env.KILO_E2E_FIXTURE_ID = "wrong"
+      expect(isValidE2EScratch(dir)).toBeFalse()
+      process.env.KILO_E2E_FIXTURE_ID = "fid"
+      expect(isValidE2EScratch(dir)).toBeTrue()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      if (saved === undefined) delete process.env.KILO_E2E_FIXTURE_ID
+      else process.env.KILO_E2E_FIXTURE_ID = saved
+    }
+  })
+  it("rejects extra marker key createdAt via exact marker validator", async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const { tmpdir } = await import("node:os")
+    const { isValidE2EScratch } = await import("../../src/util/e2e-fixture")
+    const dir = mkdtempSync(join(tmpdir(), "kilo-e2e-"))
+    const saved = process.env.KILO_E2E_FIXTURE_ID
+    try {
+      process.env.KILO_E2E_FIXTURE_ID = "fid"
+      writeFileSync(join(dir, "e2e-marker.json"), JSON.stringify({ v: 1, fixtureId: "fid", createdAt: "2026-08-30" }))
+      expect(isValidE2EScratch(dir)).toBeFalse()
+      writeFileSync(join(dir, "e2e-marker.json"), JSON.stringify({ v: 1, fixtureId: "fid" }))
+      expect(isValidE2EScratch(dir)).toBeTrue()
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+      if (saved === undefined) delete process.env.KILO_E2E_FIXTURE_ID
+      else process.env.KILO_E2E_FIXTURE_ID = saved
+    }
+  })
+})
+
+describe("validateGcProof exact required keys (auditor probes)", () => {
+  it("rejects omission of openTab.count", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    delete (p.openTab as Record<string, unknown>).count
+    expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("openTab")
+  })
+  it("rejects omission of openTab.ready", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    delete (p.openTab as Record<string, unknown>).ready
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects omission of openTab.before.private.state", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const pr = ((p.openTab as Record<string, unknown>).before as Record<string, unknown>).private as Record<
+      string,
+      unknown
+    >
+    delete pr.state
+    expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("state")
+  })
+  it("rejects omission of openTab.before.private.protocol", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const pr = ((p.openTab as Record<string, unknown>).before as Record<string, unknown>).private as Record<
+      string,
+      unknown
+    >
+    delete pr.protocol
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects omission of openTab.before.private.capabilities", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const pr = ((p.openTab as Record<string, unknown>).before as Record<string, unknown>).private as Record<
+      string,
+      unknown
+    >
+    delete pr.capabilities
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects errorCode on successful titleOp.sdk", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.titleOp as Record<string, unknown>).sdk as Record<string, unknown>).errorCode = "x"
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects failureCode on successful titleOp.private", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.titleOp as Record<string, unknown>).private as Record<string, unknown>).failureCode = "x"
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects transportUnknown on successful titleOp.private", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.titleOp as Record<string, unknown>).private as Record<string, unknown>).transportUnknown = false
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects failureCode on successful replay.private", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.replay as Record<string, unknown>).private as Record<string, unknown>).failureCode = "x"
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects transportUnknown on successful replay.private", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.replay as Record<string, unknown>).private as Record<string, unknown>).transportUnknown = true
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects errorCode on successful replayAfterRestart.private via failureCode", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.replayAfterRestart as Record<string, unknown>).private as Record<string, unknown>).failureCode = "x"
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("rejects transportUnknown on successful replayAfterRestart.private", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.replayAfterRestart as Record<string, unknown>).private as Record<string, unknown>).transportUnknown = false
+    expect(validateGcProof(p)).not.toBeNull()
+  })
+  it("auditor mutation: adding errorCode to successful titleOp.sdk is rejected", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const mutated = JSON.parse(JSON.stringify(p)) as Record<string, unknown>
+    ;((mutated.titleOp as Record<string, unknown>).sdk as Record<string, unknown>).errorCode = "ERR"
+    expect(validateGcProof(mutated)).not.toBeNull()
+    expect(validateGcProof(mutated)).toContain("titleOp.sdk")
   })
 })
 

@@ -40,7 +40,11 @@ export type ServePrivateCancelQueuedResult =
       op: "session/cancelQueued"
       idempotencyKey: string
       status: "failed"
-      outcome: { type: "failed"; time: number; failure: { code: string; message: string; retryable: boolean; detail?: string } }
+      outcome: {
+        type: "failed"
+        time: number
+        failure: { code: string; message: string; retryable: boolean; detail?: string }
+      }
       accepted: boolean
       failure: { code: string; message: string; retryable: boolean; detail?: string }
       revision?: { session: number; config: number }
@@ -92,7 +96,8 @@ function parseSessionUpdateOpId(opId: string): { kind: string; parts: string[] }
   if (kind !== "sessionUpdate") throw new TypeError(`opId kind must be sessionUpdate: ${opId}`)
   const rest = segs.slice(1)
   for (const p of rest) if (p.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
-  if (rest.length !== 1 && rest.length !== 2) throw new TypeError(`sessionUpdate opId must have 1 or 2 segments: ${opId}`)
+  if (rest.length !== 1 && rest.length !== 2)
+    throw new TypeError(`sessionUpdate opId must have 1 or 2 segments: ${opId}`)
   return { kind, parts: rest }
 }
 
@@ -134,7 +139,11 @@ export type ServePrivateSessionUpdateResult =
       op: "session/update"
       idempotencyKey: string
       status: "failed"
-      outcome: { type: "failed"; time: number; failure: { code: string; message: string; retryable: boolean; detail?: string } }
+      outcome: {
+        type: "failed"
+        time: number
+        failure: { code: string; message: string; retryable: boolean; detail?: string }
+      }
       accepted: boolean
       failure: { code: string; message: string; retryable: boolean; detail?: string }
       revision?: { session: number; config: number }
@@ -167,7 +176,11 @@ function makeAmbiguous(req: ServePrivateCancelQueuedRequest, transportUnknown = 
   return out
 }
 
-function makeFailedInternal(req: ServePrivateCancelQueuedRequest, message: string, code = "internal"): ServePrivateCancelQueuedResult {
+function makeFailedInternal(
+  req: ServePrivateCancelQueuedRequest,
+  message: string,
+  code = "internal",
+): ServePrivateCancelQueuedResult {
   return {
     v: 1,
     requestId: req.requestId,
@@ -181,7 +194,10 @@ function makeFailedInternal(req: ServePrivateCancelQueuedRequest, message: strin
   }
 }
 
-function makeUpdateAmbiguous(req: ServePrivateSessionUpdateRequest, transportUnknown = true): ServePrivateSessionUpdateResult {
+function makeUpdateAmbiguous(
+  req: ServePrivateSessionUpdateRequest,
+  transportUnknown = true,
+): ServePrivateSessionUpdateResult {
   const out: ServePrivateSessionUpdateResult = {
     v: 1,
     requestId: req.requestId,
@@ -196,7 +212,11 @@ function makeUpdateAmbiguous(req: ServePrivateSessionUpdateRequest, transportUnk
   return out
 }
 
-function makeUpdateFailedInternal(req: ServePrivateSessionUpdateRequest, message: string, code = "internal"): ServePrivateSessionUpdateResult {
+function makeUpdateFailedInternal(
+  req: ServePrivateSessionUpdateRequest,
+  message: string,
+  code = "internal",
+): ServePrivateSessionUpdateResult {
   return {
     v: 1,
     requestId: req.requestId,
@@ -244,21 +264,35 @@ export function validateCancelQueuedRequest(raw: unknown): ServePrivateCancelQue
   if (!isNonEmptyString(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
   const ctx = raw.context
   if (!isRecord(ctx)) throw new Error("context must be object")
-  if (typeof ctx.directory !== "string" || ctx.directory.length === 0) throw new Error("context.directory must be non-empty string")
-  if (typeof ctx.sessionId !== "string" || ctx.sessionId.length === 0) throw new Error("context.sessionId must be non-empty string")
-  if ("parentSessionId" in ctx && ctx.parentSessionId !== null && ctx.parentSessionId !== undefined && typeof ctx.parentSessionId !== "string") throw new Error("context.parentSessionId must be string or null")
-  if ("configVersion" in ctx && ctx.configVersion !== undefined && !isSafeInt(ctx.configVersion)) throw new Error("context.configVersion must be integer >=0")
-  if ("sessionRevision" in ctx && ctx.sessionRevision !== undefined && !isSafeInt(ctx.sessionRevision)) throw new Error("context.sessionRevision must be integer >=0")
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  if (typeof ctx.sessionId !== "string" || ctx.sessionId.length === 0)
+    throw new Error("context.sessionId must be non-empty string")
+  if (
+    "parentSessionId" in ctx &&
+    ctx.parentSessionId !== null &&
+    ctx.parentSessionId !== undefined &&
+    typeof ctx.parentSessionId !== "string"
+  )
+    throw new Error("context.parentSessionId must be string or null")
+  if ("configVersion" in ctx && ctx.configVersion !== undefined && !isSafeInt(ctx.configVersion))
+    throw new Error("context.configVersion must be integer >=0")
+  if ("sessionRevision" in ctx && ctx.sessionRevision !== undefined && !isSafeInt(ctx.sessionRevision))
+    throw new Error("context.sessionRevision must be integer >=0")
   const payload = raw.payload
   if (!isRecord(payload)) throw new Error("payload must be object")
-  if (typeof payload.messageId !== "string" || payload.messageId.length === 0) throw new Error("payload.messageId must be non-empty string")
+  if (typeof payload.messageId !== "string" || payload.messageId.length === 0)
+    throw new Error("payload.messageId must be non-empty string")
   const expected = canonicalCancelQueuedOpId(ctx.sessionId as string, payload.messageId as string)
   if (raw.opId !== expected) throw new Error(`opId must be canonical ${expected}`)
   return raw as unknown as ServePrivateCancelQueuedRequest
 }
 
 // eslint-disable-next-line complexity
-export function validateCancelQueuedResult(raw: unknown, req: ServePrivateCancelQueuedRequest): ServePrivateCancelQueuedResult {
+export function validateCancelQueuedResult(
+  raw: unknown,
+  req: ServePrivateCancelQueuedRequest,
+): ServePrivateCancelQueuedResult {
   if (!isRecord(raw)) throw new Error("result must be object")
   if (raw.v !== 1) throw new Error("result v must be 1")
   if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
@@ -266,37 +300,64 @@ export function validateCancelQueuedResult(raw: unknown, req: ServePrivateCancel
   if (raw.op !== "session/cancelQueued") throw new Error("op mismatch")
   if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
   const status = raw.status
-  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous") throw new Error("status must be succeeded/failed/ambiguous")
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous")
+    throw new Error("status must be succeeded/failed/ambiguous")
   if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
   const outcome = raw.outcome
-  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number") throw new Error("outcome invalid")
+  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number")
+    throw new Error("outcome invalid")
   if (outcome.type !== status) throw new Error("outcome.type must match status")
   if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
   if ("revision" in raw && raw.revision !== undefined) {
     const rev = raw.revision as unknown
-    if (!isRecord(rev) || typeof rev.session !== "number" || typeof rev.config !== "number" || !isSafeInt(rev.session) || !isSafeInt(rev.config)) throw new Error("revision must be {session,config} integers")
+    if (
+      !isRecord(rev) ||
+      typeof rev.session !== "number" ||
+      typeof rev.config !== "number" ||
+      !isSafeInt(rev.session) ||
+      !isSafeInt(rev.config)
+    )
+      throw new Error("revision must be {session,config} integers")
   }
-  if ("transportUnknown" in raw && raw.transportUnknown !== undefined && typeof raw.transportUnknown !== "boolean") throw new Error("transportUnknown must be boolean")
+  if ("transportUnknown" in raw && raw.transportUnknown !== undefined && typeof raw.transportUnknown !== "boolean")
+    throw new Error("transportUnknown must be boolean")
   if (status === "succeeded") {
     if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
     const data = (raw as Record<string, unknown>).data
-    if (!isRecord(data) || typeof data.cancelled !== "boolean") throw new Error("succeeded data.cancelled must be boolean")
+    if (!isRecord(data) || typeof data.cancelled !== "boolean")
+      throw new Error("succeeded data.cancelled must be boolean")
     if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
-    if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("succeeded outcome must not have failure")
+    if ((outcome as Record<string, unknown>).failure !== undefined)
+      throw new Error("succeeded outcome must not have failure")
     return raw as unknown as ServePrivateCancelQueuedResult
   }
   if (status === "failed") {
     const failure = (raw as Record<string, unknown>).failure
     const outFailure = (outcome as Record<string, unknown>).failure
-    if (!isRecord(failure) || typeof failure.code !== "string" || typeof failure.message !== "string" || typeof failure.retryable !== "boolean") throw new Error("failed failure invalid")
-    if (!isRecord(outFailure) || typeof outFailure.code !== "string" || typeof outFailure.message !== "string" || typeof outFailure.retryable !== "boolean") throw new Error("failed outcome.failure invalid")
+    if (
+      !isRecord(failure) ||
+      typeof failure.code !== "string" ||
+      typeof failure.message !== "string" ||
+      typeof failure.retryable !== "boolean"
+    )
+      throw new Error("failed failure invalid")
+    if (
+      !isRecord(outFailure) ||
+      typeof outFailure.code !== "string" ||
+      typeof outFailure.message !== "string" ||
+      typeof outFailure.retryable !== "boolean"
+    )
+      throw new Error("failed outcome.failure invalid")
     if (failure.code !== (outFailure as Record<string, unknown>).code) throw new Error("failure code mismatch")
     if (failure.message !== (outFailure as Record<string, unknown>).message) throw new Error("failure message mismatch")
-    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable) throw new Error("failure retryable mismatch")
+    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable)
+      throw new Error("failure retryable mismatch")
     const failureDetail = (failure as Record<string, unknown>).detail
     const outDetail = (outFailure as Record<string, unknown>).detail
-    if (failureDetail !== undefined && typeof failureDetail !== "string") throw new Error("failed failure.detail must be string if present")
-    if (outDetail !== undefined && typeof outDetail !== "string") throw new Error("failed outcome.failure.detail must be string if present")
+    if (failureDetail !== undefined && typeof failureDetail !== "string")
+      throw new Error("failed failure.detail must be string if present")
+    if (outDetail !== undefined && typeof outDetail !== "string")
+      throw new Error("failed outcome.failure.detail must be string if present")
     if (String(failureDetail ?? "") !== String(outDetail ?? "")) throw new Error("failure detail mismatch")
     if ((raw as Record<string, unknown>).data !== undefined) throw new Error("failed must not have data")
     return raw as unknown as ServePrivateCancelQueuedResult
@@ -305,7 +366,8 @@ export function validateCancelQueuedResult(raw: unknown, req: ServePrivateCancel
   if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
   if ((raw as Record<string, unknown>).data !== undefined) throw new Error("ambiguous must not have data")
   if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous must not have failure")
-  if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous outcome must not have failure")
+  if ((outcome as Record<string, unknown>).failure !== undefined)
+    throw new Error("ambiguous outcome must not have failure")
   if ((outcome as Record<string, unknown>).data !== undefined) throw new Error("ambiguous outcome must not have data")
   return raw as unknown as ServePrivateCancelQueuedResult
 }
@@ -320,31 +382,47 @@ export function validateSessionUpdateRequest(raw: unknown): ServePrivateSessionU
   if (!isNonEmptyString(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
   const ctx = raw.context
   if (!isRecord(ctx)) throw new Error("context must be object")
-  if (typeof ctx.directory !== "string" || !isAbsolute(ctx.directory as string) || (ctx.directory as string).includes("\0"))
+  if (
+    typeof ctx.directory !== "string" ||
+    !isAbsolute(ctx.directory as string) ||
+    (ctx.directory as string).includes("\0")
+  )
     throw new Error("context.directory must be absolute path")
   if (!isSessionId(ctx.sessionId)) throw new Error("context.sessionId must be SessionID")
   // Private requires explicit parentSessionId === null (must be present and null, not omitted or non-null)
-  if (!("parentSessionId" in ctx) || ctx.parentSessionId !== null) throw new Error("context.parentSessionId must be null")
-  if ("configVersion" in ctx && ctx.configVersion !== undefined && !isSafeInt(ctx.configVersion)) throw new Error("context.configVersion must be integer >=0")
-  if ("sessionRevision" in ctx && ctx.sessionRevision !== undefined && !isSafeInt(ctx.sessionRevision)) throw new Error("context.sessionRevision must be integer >=0")
+  if (!("parentSessionId" in ctx) || ctx.parentSessionId !== null)
+    throw new Error("context.parentSessionId must be null")
+  if ("configVersion" in ctx && ctx.configVersion !== undefined && !isSafeInt(ctx.configVersion))
+    throw new Error("context.configVersion must be integer >=0")
+  if ("sessionRevision" in ctx && ctx.sessionRevision !== undefined && !isSafeInt(ctx.sessionRevision))
+    throw new Error("context.sessionRevision must be integer >=0")
   const payload = raw.payload
   if (!isRecord(payload)) throw new Error("payload must be object")
-  if (typeof payload.title !== "string" || payload.title.length === 0) throw new Error("payload.title must be non-empty string")
+  if (typeof payload.title !== "string" || payload.title.length === 0)
+    throw new Error("payload.title must be non-empty string")
   validateTitleStrict(payload.title)
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
-  for (const k of Object.keys(raw as Record<string, unknown>)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  for (const k of Object.keys(raw as Record<string, unknown>))
+    if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
   const allowedCtx = new Set(["directory", "sessionId", "parentSessionId", "configVersion", "sessionRevision"])
-  for (const k of Object.keys(ctx as Record<string, unknown>)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  for (const k of Object.keys(ctx as Record<string, unknown>))
+    if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
   const allowedPayload = new Set(["title"])
-  for (const k of Object.keys(payload as Record<string, unknown>)) if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
-  if (ctx.parentSessionId !== null && ctx.parentSessionId !== undefined) throw new Error("parentSessionId must be null for sessionUpdate")
+  for (const k of Object.keys(payload as Record<string, unknown>))
+    if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
+  if (ctx.parentSessionId !== null && ctx.parentSessionId !== undefined)
+    throw new Error("parentSessionId must be null for sessionUpdate")
   const parsed = parseSessionUpdateOpId(raw.opId as string)
-  if (parsed.parts[0] !== ctx.sessionId) throw new Error(`opId session binding mismatch: ${raw.opId} vs ${ctx.sessionId}`)
+  if (parsed.parts[0] !== ctx.sessionId)
+    throw new Error(`opId session binding mismatch: ${raw.opId} vs ${ctx.sessionId}`)
   return raw as unknown as ServePrivateSessionUpdateRequest
 }
 
 // eslint-disable-next-line complexity
-export function validateSessionUpdateResult(raw: unknown, req: ServePrivateSessionUpdateRequest): ServePrivateSessionUpdateResult {
+export function validateSessionUpdateResult(
+  raw: unknown,
+  req: ServePrivateSessionUpdateRequest,
+): ServePrivateSessionUpdateResult {
   if (!isRecord(raw)) throw new Error("result must be object")
   if (raw.v !== 1) throw new Error("result v must be 1")
   if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
@@ -352,41 +430,72 @@ export function validateSessionUpdateResult(raw: unknown, req: ServePrivateSessi
   if (raw.op !== "session/update") throw new Error("op mismatch")
   if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
   const status = raw.status
-  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous") throw new Error("status must be succeeded/failed/ambiguous")
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous")
+    throw new Error("status must be succeeded/failed/ambiguous")
   if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
   const outcome = raw.outcome
-  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number") throw new Error("outcome invalid")
+  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number")
+    throw new Error("outcome invalid")
   if (outcome.type !== status) throw new Error("outcome.type must match status")
   if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
   if ("revision" in raw && raw.revision !== undefined) {
     const rev = raw.revision as unknown
-    if (!isRecord(rev) || typeof rev.session !== "number" || typeof rev.config !== "number" || !isSafeInt(rev.session) || !isSafeInt(rev.config)) throw new Error("revision must be {session,config} integers")
+    if (
+      !isRecord(rev) ||
+      typeof rev.session !== "number" ||
+      typeof rev.config !== "number" ||
+      !isSafeInt(rev.session) ||
+      !isSafeInt(rev.config)
+    )
+      throw new Error("revision must be {session,config} integers")
   }
-  if ("transportUnknown" in raw && raw.transportUnknown !== undefined && typeof raw.transportUnknown !== "boolean") throw new Error("transportUnknown must be boolean")
+  if ("transportUnknown" in raw && raw.transportUnknown !== undefined && typeof raw.transportUnknown !== "boolean")
+    throw new Error("transportUnknown must be boolean")
   if (status === "succeeded") {
     if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
     const data = (raw as Record<string, unknown>).data
     if (!isRecord(data)) throw new Error("succeeded data must be object")
-    const hasTitle = typeof (data as Record<string, unknown>).title === "string" && ((data as Record<string, unknown>).title as string).length > 0
+    const hasTitle =
+      typeof (data as Record<string, unknown>).title === "string" &&
+      ((data as Record<string, unknown>).title as string).length > 0
     const sess = (data as Record<string, unknown>).session
-    const hasSessionTitle = isRecord(sess) && typeof (sess as Record<string, unknown>).title === "string" && ((sess as Record<string, unknown>).title as string).length > 0
+    const hasSessionTitle =
+      isRecord(sess) &&
+      typeof (sess as Record<string, unknown>).title === "string" &&
+      ((sess as Record<string, unknown>).title as string).length > 0
     if (!hasTitle && !hasSessionTitle) throw new Error("succeeded data must contain title or session.title")
     if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
-    if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("succeeded outcome must not have failure")
+    if ((outcome as Record<string, unknown>).failure !== undefined)
+      throw new Error("succeeded outcome must not have failure")
     return raw as unknown as ServePrivateSessionUpdateResult
   }
   if (status === "failed") {
     const failure = (raw as Record<string, unknown>).failure
     const outFailure = (outcome as Record<string, unknown>).failure
-    if (!isRecord(failure) || typeof failure.code !== "string" || typeof failure.message !== "string" || typeof failure.retryable !== "boolean") throw new Error("failed failure invalid")
-    if (!isRecord(outFailure) || typeof outFailure.code !== "string" || typeof outFailure.message !== "string" || typeof outFailure.retryable !== "boolean") throw new Error("failed outcome.failure invalid")
+    if (
+      !isRecord(failure) ||
+      typeof failure.code !== "string" ||
+      typeof failure.message !== "string" ||
+      typeof failure.retryable !== "boolean"
+    )
+      throw new Error("failed failure invalid")
+    if (
+      !isRecord(outFailure) ||
+      typeof outFailure.code !== "string" ||
+      typeof outFailure.message !== "string" ||
+      typeof outFailure.retryable !== "boolean"
+    )
+      throw new Error("failed outcome.failure invalid")
     if (failure.code !== (outFailure as Record<string, unknown>).code) throw new Error("failure code mismatch")
     if (failure.message !== (outFailure as Record<string, unknown>).message) throw new Error("failure message mismatch")
-    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable) throw new Error("failure retryable mismatch")
+    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable)
+      throw new Error("failure retryable mismatch")
     const failureDetail = (failure as Record<string, unknown>).detail
     const outDetail = (outFailure as Record<string, unknown>).detail
-    if (failureDetail !== undefined && typeof failureDetail !== "string") throw new Error("failed failure.detail must be string if present")
-    if (outDetail !== undefined && typeof outDetail !== "string") throw new Error("failed outcome.failure.detail must be string if present")
+    if (failureDetail !== undefined && typeof failureDetail !== "string")
+      throw new Error("failed failure.detail must be string if present")
+    if (outDetail !== undefined && typeof outDetail !== "string")
+      throw new Error("failed outcome.failure.detail must be string if present")
     if (String(failureDetail ?? "") !== String(outDetail ?? "")) throw new Error("failure detail mismatch")
     if ((raw as Record<string, unknown>).data !== undefined) throw new Error("failed must not have data")
     return raw as unknown as ServePrivateSessionUpdateResult
@@ -394,7 +503,8 @@ export function validateSessionUpdateResult(raw: unknown, req: ServePrivateSessi
   if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
   if ((raw as Record<string, unknown>).data !== undefined) throw new Error("ambiguous must not have data")
   if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous must not have failure")
-  if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous outcome must not have failure")
+  if ((outcome as Record<string, unknown>).failure !== undefined)
+    throw new Error("ambiguous outcome must not have failure")
   if ((outcome as Record<string, unknown>).data !== undefined) throw new Error("ambiguous outcome must not have data")
   return raw as unknown as ServePrivateSessionUpdateResult
 }
@@ -525,14 +635,20 @@ export class ServePrivatePeer {
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
-        else if (Array.isArray((c as Record<string, unknown>).session) && ((c as Record<string, unknown>).session as unknown[]).includes("cancelQueued"))
+        else if (
+          Array.isArray((c as Record<string, unknown>).session) &&
+          ((c as Record<string, unknown>).session as unknown[]).includes("cancelQueued")
+        )
           hasCancelQueued = true
         else if ((c as Record<string, unknown>).session && typeof (c as Record<string, unknown>).session === "object") {
           const sess = (c as Record<string, unknown>).session as Record<string, unknown>
           if (sess.cancelQueued) hasCancelQueued = true
         } else if (c["session/cancelQueued"] === true) hasCancelQueued = true
         if ((c as Record<string, unknown>)["session/update"]) hasSessionUpdate = true
-        else if (Array.isArray((c as Record<string, unknown>).session) && ((c as Record<string, unknown>).session as unknown[]).includes("update"))
+        else if (
+          Array.isArray((c as Record<string, unknown>).session) &&
+          ((c as Record<string, unknown>).session as unknown[]).includes("update")
+        )
           hasSessionUpdate = true
         else if ((c as Record<string, unknown>).session && typeof (c as Record<string, unknown>).session === "object") {
           const sess = (c as Record<string, unknown>).session as Record<string, unknown>
@@ -587,7 +703,12 @@ export class ServePrivatePeer {
     const peerAtCall = this.peer
     try {
       const raw = (await peerAtCall.request("session/cancelQueued", req)) as unknown
-      if (this.opts.epoch !== currentEpoch || this.disposed || this.peer !== peerAtCall || peerAtCall.getState() === "closed") {
+      if (
+        this.opts.epoch !== currentEpoch ||
+        this.disposed ||
+        this.peer !== peerAtCall ||
+        peerAtCall.getState() === "closed"
+      ) {
         return makeAmbiguous(req, true)
       }
       try {
@@ -639,7 +760,8 @@ export class ServePrivatePeer {
       const c = caps as Record<string, unknown>
       if (c[cap]) return true
       if (cap === "session/update" && c["session/update"] === true) return true
-      if (cap === "session/update" && Array.isArray(c.session) && (c.session as unknown[]).includes("update")) return true
+      if (cap === "session/update" && Array.isArray(c.session) && (c.session as unknown[]).includes("update"))
+        return true
       if (cap === "session/update" && typeof c.session === "object" && c.session !== null) {
         const sess = c.session as Record<string, unknown>
         if (sess.update) return true
@@ -663,7 +785,12 @@ export class ServePrivatePeer {
     const peerAtCall = this.peer
     try {
       const raw = (await peerAtCall.request("session/update", req)) as unknown
-      if (this.opts.epoch !== currentEpoch || this.disposed || this.peer !== peerAtCall || peerAtCall.getState() === "closed") {
+      if (
+        this.opts.epoch !== currentEpoch ||
+        this.disposed ||
+        this.peer !== peerAtCall ||
+        peerAtCall.getState() === "closed"
+      ) {
         return makeUpdateAmbiguous(req, true)
       }
       try {
@@ -714,11 +841,76 @@ export class ServePrivatePeer {
     bestEffortDispose(this.peer, "dispose")
     this.peer = null
   }
+
+  getProtocolForFixture(): { name: string; major: number; minor?: number } | null {
+    const raw = this.initRaw as Record<string, unknown> | null
+    if (!raw) return null
+    const proto = raw.protocol as Record<string, unknown> | undefined
+    if (proto && typeof proto.name === "string" && typeof proto.major === "number") {
+      const out: { name: string; major: number; minor?: number } = {
+        name: proto.name as string,
+        major: proto.major as number,
+      }
+      if (typeof proto.minor === "number") out.minor = proto.minor as number
+      return out
+    }
+    // fallback shapes
+    if (typeof raw.protocolVersion === "string") {
+      const parts = (raw.protocolVersion as string).split(".")
+      const maj = Number(parts[0])
+      const min = parts[1] !== undefined ? Number(parts[1]) : undefined
+      if (!Number.isNaN(maj))
+        return { name: "kilo-private", major: maj, ...(min !== undefined && !Number.isNaN(min) ? { minor: min } : {}) }
+    }
+    return null
+  }
+
+  getPeerStateForFixture(): string {
+    if (this.disposed) return "disposed"
+    if (!this.peer) return "absent"
+    try {
+      return this.peer.getState()
+    } catch {
+      return "unknown"
+    }
+  }
+
+  getCapabilitiesListForFixture(): string[] {
+    const caps = this.capabilities
+    if (!caps) return []
+    if (Array.isArray(caps)) return [...(caps as string[])]
+    if (typeof caps === "object") {
+      const c = caps as Record<string, unknown>
+      const out: string[] = []
+      for (const k of Object.keys(c)) {
+        if ((k === "session/cancelQueued" || k === "session/update") && c[k]) out.push(k)
+      }
+      if (Array.isArray(c.session)) {
+        for (const v of c.session as unknown[])
+          if (v === "cancelQueued") out.push("session/cancelQueued")
+          else if (v === "update") out.push("session/update")
+      }
+      if (typeof c.session === "object" && c.session !== null) {
+        const sess = c.session as Record<string, unknown>
+        if (sess.cancelQueued) out.push("session/cancelQueued")
+        if (sess.update) out.push("session/update")
+      }
+      return [...new Set(out)]
+    }
+    return []
+  }
 }
 
 export function getSdkHttpStatus(sdk: { response?: unknown; error?: unknown; data?: unknown }): number | null {
   const resp = (sdk as { response?: unknown }).response as { status?: unknown } | undefined
-  if (resp && typeof resp.status === "number" && Number.isInteger(resp.status) && resp.status >= 100 && resp.status < 600) return resp.status
+  if (
+    resp &&
+    typeof resp.status === "number" &&
+    Number.isInteger(resp.status) &&
+    resp.status >= 100 &&
+    resp.status < 600
+  )
+    return resp.status
   if (resp && typeof resp.status === "string") {
     const n = Number(resp.status)
     if (Number.isInteger(n) && n >= 100 && n < 600) return n
@@ -731,7 +923,14 @@ function sdkHttpStatus(sdk: { data?: unknown; error?: unknown; response?: unknow
   if (fromResponse !== null) return fromResponse
   if (!sdk.error) return null
   const err = sdk.error as Record<string, unknown>
-  const candidates: unknown[] = [err.status, err.statusCode, err.code, err.httpStatus, (err as Record<string, unknown>).status_code, (err as Record<string, unknown>).httpStatusCode]
+  const candidates: unknown[] = [
+    err.status,
+    err.statusCode,
+    err.code,
+    err.httpStatus,
+    (err as Record<string, unknown>).status_code,
+    (err as Record<string, unknown>).httpStatusCode,
+  ]
   for (const c of candidates) {
     if (typeof c === "number" && Number.isInteger(c) && c >= 100 && c < 600) return c
     if (typeof c === "string") {
@@ -778,7 +977,10 @@ export function compareParity(
     if (http === 409) {
       return { divergence: null, details: { sdkStatus, privStatus, http } }
     }
-    return { divergence: `status-mismatch:sdk=failed(${String(http ?? "unknown")}) priv=ambiguous`, details: { sdkStatus, privStatus, http } }
+    return {
+      divergence: `status-mismatch:sdk=failed(${String(http ?? "unknown")}) priv=ambiguous`,
+      details: { sdkStatus, privStatus, http },
+    }
   }
   if (privStatus === "ambiguous" && sdkStatus === "succeeded") {
     return { divergence: `status-mismatch:sdk=succeeded priv=ambiguous`, details: { sdkStatus, privStatus } }
@@ -788,14 +990,19 @@ export function compareParity(
   }
   if (sdkStatus === "succeeded" && privStatus === "succeeded") {
     const sdkCancelled: unknown = sdk.data
-    const privCancelled: unknown = (priv as Extract<ServePrivateCancelQueuedResult, { status: "succeeded" }>).data?.cancelled
+    const privCancelled: unknown = (priv as Extract<ServePrivateCancelQueuedResult, { status: "succeeded" }>).data
+      ?.cancelled
     if (sdkCancelled !== privCancelled) {
-      return { divergence: `cancelled-mismatch:sdk=${String(sdkCancelled)} priv=${String(privCancelled)}`, details: { sdkCancelled, privCancelled } }
+      return {
+        divergence: `cancelled-mismatch:sdk=${String(sdkCancelled)} priv=${String(privCancelled)}`,
+        details: { sdkCancelled, privCancelled },
+      }
     }
     return { divergence: null, details: {} }
   }
   if (sdkStatus === "failed" && privStatus === "failed") {
-    const privCode: string = ((priv as Extract<ServePrivateCancelQueuedResult, { status: "failed" }>).failure?.code ?? "unknown") as string
+    const privCode: string = ((priv as Extract<ServePrivateCancelQueuedResult, { status: "failed" }>).failure?.code ??
+      "unknown") as string
     const http = sdkHttpStatus(sdk)
     const cls = sdkStatusClass(http)
     const allowed = (() => {
@@ -807,7 +1014,10 @@ export function compareParity(
     })()
     if (allowed) {
       if (!allowed.has(privCode)) {
-        return { divergence: `failure-class-mismatch:sdk=${String(cls)} priv=${privCode}`, details: { sdkClass: cls, privCode, http } }
+        return {
+          divergence: `failure-class-mismatch:sdk=${String(cls)} priv=${privCode}`,
+          details: { sdkClass: cls, privCode, http },
+        }
       }
       return { divergence: null, details: { sdkClass: cls, privCode } }
     }
@@ -819,7 +1029,10 @@ export function compareParity(
       return undefined
     })()
     if (sdkCodeRaw && privCode !== sdkCodeRaw) {
-      return { divergence: `failure-code-mismatch:sdk=${sdkCodeRaw} priv=${privCode}`, details: { sdkCode: sdkCodeRaw, privCode } }
+      return {
+        divergence: `failure-code-mismatch:sdk=${sdkCodeRaw} priv=${privCode}`,
+        details: { sdkCode: sdkCodeRaw, privCode },
+      }
     }
     return { divergence: null, details: {} }
   }
@@ -843,7 +1056,10 @@ export function compareUpdateParity(
     if (http === 409) {
       return { divergence: null, details: { sdkStatus, privStatus, http } }
     }
-    return { divergence: `status-mismatch:sdk=failed(${String(http ?? "unknown")}) priv=ambiguous`, details: { sdkStatus, privStatus, http } }
+    return {
+      divergence: `status-mismatch:sdk=failed(${String(http ?? "unknown")}) priv=ambiguous`,
+      details: { sdkStatus, privStatus, http },
+    }
   }
   if (privStatus === "ambiguous" && sdkStatus === "succeeded") {
     return { divergence: `status-mismatch:sdk=succeeded priv=ambiguous`, details: { sdkStatus, privStatus } }
@@ -853,11 +1069,18 @@ export function compareUpdateParity(
   }
   if (sdkStatus === "succeeded" && privStatus === "succeeded") {
     const sdkData = sdk.data as Record<string, unknown> | undefined
-    const sdkTitle: unknown = sdkData?.title ?? (sdkData?.session as Record<string, unknown> | undefined)?.title ?? sdk.data
-    const pdata = (priv as Extract<ServePrivateSessionUpdateResult, { status: "succeeded" }>).data as Record<string, unknown>
-    const privTitle: unknown = (pdata as Record<string, unknown>).title ?? ((pdata as Record<string, unknown>).session as Record<string, unknown> | undefined)?.title
+    const sdkTitle: unknown =
+      sdkData?.title ?? (sdkData?.session as Record<string, unknown> | undefined)?.title ?? sdk.data
+    const pdata = (priv as Extract<ServePrivateSessionUpdateResult, { status: "succeeded" }>).data as Record<
+      string,
+      unknown
+    >
+    const privTitle: unknown =
+      (pdata as Record<string, unknown>).title ??
+      ((pdata as Record<string, unknown>).session as Record<string, unknown> | undefined)?.title
     // If both are plain strings, compare directly; otherwise compare title fields
-    const sdkStr = typeof sdkTitle === "string" ? sdkTitle : typeof sdkData?.title === "string" ? sdkData?.title : sdkTitle
+    const sdkStr =
+      typeof sdkTitle === "string" ? sdkTitle : typeof sdkData?.title === "string" ? sdkData?.title : sdkTitle
     const privStr = typeof privTitle === "string" ? privTitle : undefined
     if (typeof sdkStr === "string" && typeof privStr === "string") {
       if (sdkStr !== privStr) {
@@ -872,7 +1095,8 @@ export function compareUpdateParity(
     return { divergence: null, details: {} }
   }
   if (sdkStatus === "failed" && privStatus === "failed") {
-    const privCode: string = ((priv as Extract<ServePrivateSessionUpdateResult, { status: "failed" }>).failure?.code ?? "unknown") as string
+    const privCode: string = ((priv as Extract<ServePrivateSessionUpdateResult, { status: "failed" }>).failure?.code ??
+      "unknown") as string
     const http = sdkHttpStatus(sdk)
     const cls = sdkStatusClass(http)
     const allowed = (() => {
@@ -884,7 +1108,10 @@ export function compareUpdateParity(
     })()
     if (allowed) {
       if (!allowed.has(privCode)) {
-        return { divergence: `failure-class-mismatch:sdk=${String(cls)} priv=${privCode}`, details: { sdkClass: cls, privCode, http } }
+        return {
+          divergence: `failure-class-mismatch:sdk=${String(cls)} priv=${privCode}`,
+          details: { sdkClass: cls, privCode, http },
+        }
       }
       return { divergence: null, details: { sdkClass: cls, privCode } }
     }
@@ -895,7 +1122,10 @@ export function compareUpdateParity(
       return undefined
     })()
     if (sdkCodeRaw && privCode !== sdkCodeRaw) {
-      return { divergence: `failure-code-mismatch:sdk=${sdkCodeRaw} priv=${privCode}`, details: { sdkCode: sdkCodeRaw, privCode } }
+      return {
+        divergence: `failure-code-mismatch:sdk=${sdkCodeRaw} priv=${privCode}`,
+        details: { sdkCode: sdkCodeRaw, privCode },
+      }
     }
     return { divergence: null, details: {} }
   }

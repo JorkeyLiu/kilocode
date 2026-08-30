@@ -20,6 +20,7 @@
 import * as path from "path"
 import * as fs from "fs"
 import type { Disposable } from "./types"
+import { isE2EFixtureEnabled } from "../util/e2e-fixture"
 import type {
   MaterializedConfig,
   ScopedContent,
@@ -56,10 +57,7 @@ import {
   secretKey,
   parseSecretKey,
 } from "./secret-adapter"
-import {
-  type ConfigSnapshot,
-  snapshot as makeSnapshot,
-} from "./snapshot"
+import { type ConfigSnapshot, snapshot as makeSnapshot } from "./snapshot"
 import {
   type ProviderIndex,
   type AgentIndex,
@@ -124,7 +122,11 @@ export interface CanonicalStateSnapshot {
   readonly providerIndex: {
     readonly size: number
     readonly ids: readonly string[]
-    readonly entries: readonly { readonly id: string; readonly hasCredential: boolean; readonly modelIds: readonly string[] }[]
+    readonly entries: readonly {
+      readonly id: string
+      readonly hasCredential: boolean
+      readonly modelIds: readonly string[]
+    }[]
     readonly connected: readonly string[]
   } | null
   readonly defaultModel: string | null
@@ -161,9 +163,9 @@ export type CompositeConfigWriteResult =
   | {
       readonly ok: true
       readonly snapshot: ConfigSnapshot
-       readonly hashes: { readonly global: string | null; readonly project: string | null }
-       readonly materializationVersion: number
-       readonly stamp: CanonicalStamp
+      readonly hashes: { readonly global: string | null; readonly project: string | null }
+      readonly materializationVersion: number
+      readonly stamp: CanonicalStamp
     }
   | {
       readonly ok: false
@@ -174,7 +176,10 @@ export type CompositeConfigWriteResult =
     }
 
 class ConvergenceError extends Error {
-  constructor(readonly kind: "disposed" | "io", message: string) {
+  constructor(
+    readonly kind: "disposed" | "io",
+    message: string,
+  ) {
     super(message)
     this.name = "ConvergenceError"
   }
@@ -348,7 +353,7 @@ export class CanonicalConfigService implements Disposable {
    * no mutation, no events, no watchers.
    */
   fixtureStateSnapshot(): CanonicalStateSnapshot {
-    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture canonicalState requires KILO_E2E_FIXTURE")
+    if (!isE2EFixtureEnabled()) throw new Error("fixture canonicalState requires KILO_E2E_FIXTURE")
     const scan = this.lastAssetScan
     const provider = this.providerIndex
     const agent = this.agentIndex
@@ -357,7 +362,12 @@ export class CanonicalConfigService implements Disposable {
     const defaultModel = typeof rawModel === "string" ? rawModel : null
     const selected = defaultModel ? defaultModel.split("/") : []
     const providerID = selected[0] && provider?.providers.some((p) => p.id === selected[0]) ? selected[0] : ""
-    const defaultSelection = defaultModel && providerID ? { providerID, modelID: selected.slice(1).join("/") || "auto" } : providerID ? { providerID, modelID: "" } : null
+    const defaultSelection =
+      defaultModel && providerID
+        ? { providerID, modelID: selected.slice(1).join("/") || "auto" }
+        : providerID
+          ? { providerID, modelID: "" }
+          : null
     return {
       globalRoot: this.paths.globalRoot,
       projectRoot: this.paths.projectRoot ?? null,
@@ -369,7 +379,11 @@ export class CanonicalConfigService implements Disposable {
         ? {
             size: provider.providers.length,
             ids: provider.providers.map((p) => p.id),
-            entries: provider.providers.map((p) => ({ id: p.id, hasCredential: p.hasCredential, modelIds: [...p.modelIds] })),
+            entries: provider.providers.map((p) => ({
+              id: p.id,
+              hasCredential: p.hasCredential,
+              modelIds: [...p.modelIds],
+            })),
             connected: provider.providers.filter((p) => p.hasCredential).map((p) => p.id),
           }
         : null,
@@ -393,8 +407,19 @@ export class CanonicalConfigService implements Disposable {
   async seedFixtureProviderCredential(
     id: string = "e2e-local",
     value: string = "e2e-fixture-key",
-  ): Promise<{ ok: true; providerId: string; hasCredential: true; connected: readonly string[]; defaultModel: string | null; defaultSelection: { providerID: string; modelID: string } | null; materializationVersion: number } | { ok: false; reason: string }> {
-    if (!process.env.KILO_E2E_FIXTURE) throw new Error("fixture seedFixtureProviderCredential requires KILO_E2E_FIXTURE")
+  ): Promise<
+    | {
+        ok: true
+        providerId: string
+        hasCredential: true
+        connected: readonly string[]
+        defaultModel: string | null
+        defaultSelection: { providerID: string; modelID: string } | null
+        materializationVersion: number
+      }
+    | { ok: false; reason: string }
+  > {
+    if (!isE2EFixtureEnabled()) throw new Error("fixture seedFixtureProviderCredential requires KILO_E2E_FIXTURE")
     // Production path: store the credential in run-owned SecretStorage.
     await this.storeSecret("project", "provider", id, value)
     // Bounded wait for project hash or initial materialization readiness before
@@ -426,7 +451,15 @@ export class CanonicalConfigService implements Disposable {
         const snap = this.fixtureStateSnapshot()
         const entry = snap.providerIndex?.entries.find((e) => e.id === id)
         if (snap.materializationReady && entry?.hasCredential && snap.defaultModel) {
-          return { ok: true, providerId: id, hasCredential: true as const, connected: snap.providerIndex!.connected, defaultModel: snap.defaultModel, defaultSelection: snap.defaultSelection, materializationVersion: snap.successfulMaterializationStamp?.materializationVersion ?? 0 }
+          return {
+            ok: true,
+            providerId: id,
+            hasCredential: true as const,
+            connected: snap.providerIndex!.connected,
+            defaultModel: snap.defaultModel,
+            defaultSelection: snap.defaultSelection,
+            materializationVersion: snap.successfulMaterializationStamp?.materializationVersion ?? 0,
+          }
         }
         return { ok: false, reason: "no project config hash for convergence write" }
       }
@@ -447,10 +480,21 @@ export class CanonicalConfigService implements Disposable {
       const entry = snap.providerIndex?.entries.find((e) => e.id === id)
       const converged = snap.materializationReady && entry?.hasCredential === true && snap.defaultModel !== null
       if (converged) {
-        return { ok: true, providerId: id, hasCredential: true as const, connected: snap.providerIndex!.connected, defaultModel: snap.defaultModel, defaultSelection: snap.defaultSelection, materializationVersion: snap.successfulMaterializationStamp?.materializationVersion ?? 0 }
+        return {
+          ok: true,
+          providerId: id,
+          hasCredential: true as const,
+          connected: snap.providerIndex!.connected,
+          defaultModel: snap.defaultModel,
+          defaultSelection: snap.defaultSelection,
+          materializationVersion: snap.successfulMaterializationStamp?.materializationVersion ?? 0,
+        }
       }
       if (Date.now() > deadline) {
-        return { ok: false, reason: `credential status did not converge: materializationReady=${snap.materializationReady} hasCredential=${entry?.hasCredential} defaultModel=${snap.defaultModel}` }
+        return {
+          ok: false,
+          reason: `credential status did not converge: materializationReady=${snap.materializationReady} hasCredential=${entry?.hasCredential} defaultModel=${snap.defaultModel}`,
+        }
       }
       await new Promise<void>((resolve) => setTimeout(resolve, 50))
     }
@@ -472,7 +516,11 @@ export class CanonicalConfigService implements Disposable {
   }
 
   /** Structured failure when project scope is requested but no workspace folder exists. */
-  private projectAbsent(kind: "invalid" | "stale" | "io" = "invalid"): { ok: false; kind: "invalid" | "stale" | "io" | "disposed"; message: string } {
+  private projectAbsent(kind: "invalid" | "stale" | "io" = "invalid"): {
+    ok: false
+    kind: "invalid" | "stale" | "io" | "disposed"
+    message: string
+  } {
     return { ok: false, kind, message: "No workspace folder available; project scope operations are not configured" }
   }
 
@@ -541,7 +589,12 @@ export class CanonicalConfigService implements Disposable {
     expectedHash: string,
   ): Promise<
     | { ok: true; snapshot: ConfigSnapshot; contentHash: string }
-    | { ok: false; kind: "stale" | "invalid" | "conflict" | "disposed" | "io"; message: string; errors?: readonly ValidationError[] }
+    | {
+        ok: false
+        kind: "stale" | "invalid" | "conflict" | "disposed" | "io"
+        message: string
+        errors?: readonly ValidationError[]
+      }
   > {
     if (this.disposed) return { ok: false, kind: "disposed", message: "Service disposed" }
     if (scope === "project" && !this.hasProject) return this.projectAbsent()
@@ -595,7 +648,9 @@ export class CanonicalConfigService implements Disposable {
         stamp: this.stamp,
       }
     }
-    const paths = entries.map((scope) => scope === "global" ? this.paths.globalConfigFile : this.paths.projectConfigFile!)
+    const paths = entries.map((scope) =>
+      scope === "global" ? this.paths.globalConfigFile : this.paths.projectConfigFile!,
+    )
     const run = async (): Promise<CompositeConfigWriteResult> => {
       const prior = new Map<string, FileReadResult>()
       for (const scope of entries) {
@@ -604,16 +659,33 @@ export class CanonicalConfigService implements Disposable {
       const candidates = await this.buildCompositeCandidates(scopes, entries, prior)
       if ("ok" in candidates && !candidates.ok) return candidates
 
-      const globalDoc = (candidates as Map<"global" | "project", Record<string, unknown>>).get("global") ?? this.scopeDoc("global", prior)
-      const projectDoc = (candidates as Map<"global" | "project", Record<string, unknown>>).get("project") ?? this.scopeDoc("project", prior)
-      const existingErr = this.validateExistingScopes(candidates as Map<"global" | "project", Record<string, unknown>>, prior)
+      const globalDoc =
+        (candidates as Map<"global" | "project", Record<string, unknown>>).get("global") ??
+        this.scopeDoc("global", prior)
+      const projectDoc =
+        (candidates as Map<"global" | "project", Record<string, unknown>>).get("project") ??
+        this.scopeDoc("project", prior)
+      const existingErr = this.validateExistingScopes(
+        candidates as Map<"global" | "project", Record<string, unknown>>,
+        prior,
+      )
       if (existingErr) return existingErr
       const cross = validateCrossScope(globalDoc, projectDoc)
       if (cross.length > 0) {
-        return { ok: false, kind: "conflict", message: `Cross-scope conflict: ${cross.map((e) => e.message).join("; ")}`, errors: cross }
+        return {
+          ok: false,
+          kind: "conflict",
+          message: `Cross-scope conflict: ${cross.map((e) => e.message).join("; ")}`,
+          errors: cross,
+        }
       }
 
-      return this.commitCompositeWrites(scopes, entries, candidates as Map<"global" | "project", Record<string, unknown>>, prior)
+      return this.commitCompositeWrites(
+        scopes,
+        entries,
+        candidates as Map<"global" | "project", Record<string, unknown>>,
+        prior,
+      )
     }
 
     return this.withConfigLocks(paths, run)
@@ -666,10 +738,12 @@ export class CanonicalConfigService implements Disposable {
       if (!filePath) continue
       const raw = prior.get(filePath)
       if (!raw) continue
-      if (raw.type === "failure") return { ok: false, kind: "invalid", scope, message: `Cannot read ${scope} config: ${raw.message}` }
+      if (raw.type === "failure")
+        return { ok: false, kind: "invalid", scope, message: `Cannot read ${scope} config: ${raw.message}` }
       if (raw.type === "present") {
         const validation = validateConfig(raw.bytes, scope, filePath)
-        if (!validation.valid) return { ok: false, kind: "invalid", scope, message: `Invalid ${scope} config`, errors: validation.errors }
+        if (!validation.valid)
+          return { ok: false, kind: "invalid", scope, message: `Invalid ${scope} config`, errors: validation.errors }
       }
     }
     return null
@@ -687,10 +761,21 @@ export class CanonicalConfigService implements Disposable {
       for (const scope of entries) {
         const input = scopes[scope]!
         const filePath = this.scopePath(scope)
-        const result = writeJsoncWithConflictDetection(filePath, candidates.get(scope)!, input.expectedHash, scope, this.beforeConfigFinalCas)
+        const result = writeJsoncWithConflictDetection(
+          filePath,
+          candidates.get(scope)!,
+          input.expectedHash,
+          scope,
+          this.beforeConfigFinalCas,
+        )
         if ("conflict" in result) {
           await this.restoreConfigBytes(written)
-          return { ok: false, kind: "stale", scope, message: "Canonical config changed externally; save was not applied" }
+          return {
+            ok: false,
+            kind: "stale",
+            scope,
+            message: "Canonical config changed externally; save was not applied",
+          }
         }
         const before = prior.get(filePath)!
         written.push({ scope, filePath, bytes: before, hash: result.written.contentHash })
@@ -729,7 +814,9 @@ export class CanonicalConfigService implements Disposable {
     }
   }
 
-  private async restoreConfigBytes(written: Array<{ scope: "global" | "project"; filePath: string; bytes: FileReadResult; hash: string }>): Promise<void> {
+  private async restoreConfigBytes(
+    written: Array<{ scope: "global" | "project"; filePath: string; bytes: FileReadResult; hash: string }>,
+  ): Promise<void> {
     for (const item of written.reverse()) {
       const current = readFile(item.filePath)
       if (current.type !== "present" || current.hash !== item.hash) continue
@@ -751,7 +838,12 @@ export class CanonicalConfigService implements Disposable {
     filePath: string,
   ): Promise<
     | { ok: true; snapshot: ConfigSnapshot; contentHash: string }
-    | { ok: false; kind: "stale" | "invalid" | "conflict" | "disposed" | "io"; message: string; errors?: readonly ValidationError[] }
+    | {
+        ok: false
+        kind: "stale" | "invalid" | "conflict" | "disposed" | "io"
+        message: string
+        errors?: readonly ValidationError[]
+      }
   > {
     if (this.disposed) return { ok: false, kind: "disposed", message: "Service disposed" }
     const existing = readFile(filePath)
@@ -814,7 +906,9 @@ export class CanonicalConfigService implements Disposable {
             fs.writeFileSync(tmp, existing.bytes, "utf-8")
             fs.renameSync(tmp, filePath)
           } catch (restoreErr) {
-            try { fs.unlinkSync(tmp) } catch (cleanupErr) {
+            try {
+              fs.unlinkSync(tmp)
+            } catch (cleanupErr) {
               console.error(`[Kilo Config] Restore temp cleanup failed for ${tmp}: ${String(cleanupErr)}`)
             }
             console.error(`[Kilo Config] Prior bytes restore failed for ${filePath}: ${String(restoreErr)}`)
@@ -823,7 +917,9 @@ export class CanonicalConfigService implements Disposable {
           else this.projectHash = existing.hash
         } else if (existing.type === "absent") {
           // File didn't exist before our write — delete to restore absence
-          try { fs.unlinkSync(filePath) } catch (err) {
+          try {
+            fs.unlinkSync(filePath)
+          } catch (err) {
             console.error(`[Kilo Config] File removal restore failed for ${filePath}: ${String(err)}`)
           }
           if (scope === "global") this.globalHash = null
@@ -954,13 +1050,17 @@ export class CanonicalConfigService implements Disposable {
             fs.writeFileSync(tmpRestore, existing.bytes, "utf-8")
             fs.renameSync(tmpRestore, filePath)
           } catch (restoreErr) {
-            try { fs.unlinkSync(tmpRestore) } catch (cleanupErr) {
+            try {
+              fs.unlinkSync(tmpRestore)
+            } catch (cleanupErr) {
               console.error(`[Kilo Config] Asset restore cleanup failed for ${tmpRestore}: ${String(cleanupErr)}`)
             }
             console.error(`[Kilo Config] Asset prior bytes restore failed for ${filePath}: ${String(restoreErr)}`)
           }
         } else if (existing.type === "absent") {
-          try { fs.unlinkSync(filePath) } catch (cleanupErr) {
+          try {
+            fs.unlinkSync(filePath)
+          } catch (cleanupErr) {
             console.error(`[Kilo Config] Asset removal cleanup failed for ${filePath}: ${String(cleanupErr)}`)
           }
         }
@@ -1047,12 +1147,7 @@ export class CanonicalConfigService implements Disposable {
   /**
    * Store a credential in SecretStorage and return the opaque ref.
    */
-  async storeSecret(
-    scope: "global" | "project",
-    kind: "provider" | "mcp",
-    id: string,
-    value: string,
-  ): Promise<string> {
+  async storeSecret(scope: "global" | "project", kind: "provider" | "mcp", id: string, value: string): Promise<string> {
     const ref = await storeCredential(this.secrets, scope, kind, id, value)
     return ref ?? `secret:${secretKey(scope, kind, id)}`
   }
@@ -1090,8 +1185,23 @@ export class CanonicalConfigService implements Disposable {
     id: string,
     priorRecord: Record<string, unknown> | undefined,
     postWriteStamp: CanonicalStamp,
-  ): Promise<{ ok: true } | { ok: false; restored: boolean; retry: boolean; mode?: "delete" | "restore"; message: string; stamp: CanonicalStamp; retryID: string; ref?: string; priorRecord?: Record<string, unknown>; priorValue?: string }> {
-    const priorRef = isRecord(priorRecord) && typeof priorRecord.credential === "string" ? priorRecord.credential : undefined
+  ): Promise<
+    | { ok: true }
+    | {
+        ok: false
+        restored: boolean
+        retry: boolean
+        mode?: "delete" | "restore"
+        message: string
+        stamp: CanonicalStamp
+        retryID: string
+        ref?: string
+        priorRecord?: Record<string, unknown>
+        priorValue?: string
+      }
+  > {
+    const priorRef =
+      isRecord(priorRecord) && typeof priorRecord.credential === "string" ? priorRecord.credential : undefined
     // Cleanup may touch only the exact validated stored ref. When the prior
     // record carries no credential ref there is nothing verifiably owned to
     // remove — never reconstruct `secret:kilo.credentials.<scope>.provider.<id>`.
@@ -1100,12 +1210,32 @@ export class CanonicalConfigService implements Disposable {
     }
     const owned = parseSecretKey(priorRef.slice("secret:".length))
     if (!owned || owned.kind !== "provider" || owned.id !== id || owned.scope !== scope) {
-      return { ok: false, restored: false, retry: false, mode: "delete", message: "Prior provider credential ref is invalid; provider deletion remains committed and no credential was removed", stamp: this.stamp, retryID: `${scope}:${id}`, priorRecord }
+      return {
+        ok: false,
+        restored: false,
+        retry: false,
+        mode: "delete",
+        message:
+          "Prior provider credential ref is invalid; provider deletion remains committed and no credential was removed",
+        stamp: this.stamp,
+        retryID: `${scope}:${id}`,
+        priorRecord,
+      }
     }
     const ref = priorRef
     const priorValue = await this.readPriorSecret(priorRef)
     if (priorValue === undefined) {
-      return { ok: false, restored: false, retry: true, mode: "delete", message: "Prior provider credential is unavailable; provider deletion remains committed", stamp: this.stamp, retryID: `${scope}:${id}`, ref, priorRecord }
+      return {
+        ok: false,
+        restored: false,
+        retry: true,
+        mode: "delete",
+        message: "Prior provider credential is unavailable; provider deletion remains committed",
+        stamp: this.stamp,
+        retryID: `${scope}:${id}`,
+        ref,
+        priorRecord,
+      }
     }
     try {
       await this.removeSecretRef(ref)
@@ -1114,15 +1244,51 @@ export class CanonicalConfigService implements Disposable {
       try {
         await this.restoreSecret(priorRef, priorValue)
       } catch (restoreErr) {
-        return { ok: false, restored: false, retry: true, mode: "delete", message: `Provider deletion committed; prior credential restoration failed: ${String(restoreErr)}`, stamp: this.stamp, retryID: `${scope}:${id}`, ref, priorRecord, priorValue }
+        return {
+          ok: false,
+          restored: false,
+          retry: true,
+          mode: "delete",
+          message: `Provider deletion committed; prior credential restoration failed: ${String(restoreErr)}`,
+          stamp: this.stamp,
+          retryID: `${scope}:${id}`,
+          ref,
+          priorRecord,
+          priorValue,
+        }
       }
-      if (!sameStamp(postWriteStamp, this.stamp)) return this.rollbackRestoredProviderSecret(scope, id, priorRecord, priorRef, priorValue, `Provider cleanup became stale: ${String(err)}`)
+      if (!sameStamp(postWriteStamp, this.stamp))
+        return this.rollbackRestoredProviderSecret(
+          scope,
+          id,
+          priorRecord,
+          priorRef,
+          priorValue,
+          `Provider cleanup became stale: ${String(err)}`,
+        )
       const current = this.getScopeConfig(scope)
       const providers = isRecord(current.provider) ? { ...current.provider } : {}
       const expected = postWriteStamp[scope === "global" ? "globalHash" : "projectHash"] ?? "absent"
       const restored = await this.writeConfig(scope, { provider: { ...providers, [id]: priorRecord } }, expected)
-      if (restored.ok) return { ok: false, restored: true, retry: false, mode: "restore", message: `Credential cleanup failed; prior provider record and secret were restored: ${String(err)}`, stamp: this.stamp, retryID: `${scope}:${id}`, ref }
-      return this.rollbackRestoredProviderSecret(scope, id, priorRecord, priorRef, priorValue, `Provider cleanup record restoration failed: ${restored.message}`)
+      if (restored.ok)
+        return {
+          ok: false,
+          restored: true,
+          retry: false,
+          mode: "restore",
+          message: `Credential cleanup failed; prior provider record and secret were restored: ${String(err)}`,
+          stamp: this.stamp,
+          retryID: `${scope}:${id}`,
+          ref,
+        }
+      return this.rollbackRestoredProviderSecret(
+        scope,
+        id,
+        priorRecord,
+        priorRef,
+        priorValue,
+        `Provider cleanup record restoration failed: ${restored.message}`,
+      )
     }
   }
 
@@ -1137,8 +1303,23 @@ export class CanonicalConfigService implements Disposable {
     name: string,
     priorRecord: Record<string, unknown> | undefined,
     postWriteStamp: CanonicalStamp,
-  ): Promise<{ ok: true } | { ok: false; restored: boolean; retry: boolean; mode?: "delete" | "restore"; message: string; stamp: CanonicalStamp; retryID: string; ref?: string; priorRecord?: Record<string, unknown>; priorValue?: string }> {
-    const priorRef = isRecord(priorRecord) && typeof priorRecord.credential === "string" ? priorRecord.credential : undefined
+  ): Promise<
+    | { ok: true }
+    | {
+        ok: false
+        restored: boolean
+        retry: boolean
+        mode?: "delete" | "restore"
+        message: string
+        stamp: CanonicalStamp
+        retryID: string
+        ref?: string
+        priorRecord?: Record<string, unknown>
+        priorValue?: string
+      }
+  > {
+    const priorRef =
+      isRecord(priorRecord) && typeof priorRecord.credential === "string" ? priorRecord.credential : undefined
     // Cleanup may touch only the exact validated stored ref. When the prior
     // record carries no credential ref there is nothing verifiably owned to
     // remove — never reconstruct `secret:kilo.credentials.<scope>.mcp.<name>`.
@@ -1147,12 +1328,31 @@ export class CanonicalConfigService implements Disposable {
     }
     const owned = parseSecretKey(priorRef.slice("secret:".length))
     if (!owned || owned.kind !== "mcp" || owned.id !== name || owned.scope !== scope) {
-      return { ok: false, restored: false, retry: false, mode: "delete", message: "Prior MCP credential ref is invalid; MCP deletion remains committed and no credential was removed", stamp: this.stamp, retryID: `${scope}:mcp:${name}`, priorRecord }
+      return {
+        ok: false,
+        restored: false,
+        retry: false,
+        mode: "delete",
+        message: "Prior MCP credential ref is invalid; MCP deletion remains committed and no credential was removed",
+        stamp: this.stamp,
+        retryID: `${scope}:mcp:${name}`,
+        priorRecord,
+      }
     }
     const ref = priorRef
     const priorValue = await this.readPriorSecret(priorRef)
     if (priorValue === undefined) {
-      return { ok: false, restored: false, retry: true, mode: "delete", message: "Prior MCP credential is unavailable; MCP deletion remains committed", stamp: this.stamp, retryID: `${scope}:mcp:${name}`, ref, priorRecord }
+      return {
+        ok: false,
+        restored: false,
+        retry: true,
+        mode: "delete",
+        message: "Prior MCP credential is unavailable; MCP deletion remains committed",
+        stamp: this.stamp,
+        retryID: `${scope}:mcp:${name}`,
+        ref,
+        priorRecord,
+      }
     }
     try {
       await this.removeSecretRef(ref)
@@ -1161,15 +1361,51 @@ export class CanonicalConfigService implements Disposable {
       try {
         await this.restoreSecret(priorRef, priorValue)
       } catch (restoreErr) {
-        return { ok: false, restored: false, retry: true, mode: "delete", message: `MCP deletion committed; prior credential restoration failed: ${String(restoreErr)}`, stamp: this.stamp, retryID: `${scope}:mcp:${name}`, ref, priorRecord, priorValue }
+        return {
+          ok: false,
+          restored: false,
+          retry: true,
+          mode: "delete",
+          message: `MCP deletion committed; prior credential restoration failed: ${String(restoreErr)}`,
+          stamp: this.stamp,
+          retryID: `${scope}:mcp:${name}`,
+          ref,
+          priorRecord,
+          priorValue,
+        }
       }
-      if (!sameStamp(postWriteStamp, this.stamp)) return this.rollbackRestoredMcpSecret(scope, name, priorRecord, priorRef, priorValue, `MCP cleanup became stale: ${String(err)}`)
+      if (!sameStamp(postWriteStamp, this.stamp))
+        return this.rollbackRestoredMcpSecret(
+          scope,
+          name,
+          priorRecord,
+          priorRef,
+          priorValue,
+          `MCP cleanup became stale: ${String(err)}`,
+        )
       const current = this.getScopeConfig(scope)
       const mcps = isRecord(current.mcp) ? { ...current.mcp } : {}
       const expected = postWriteStamp[scope === "global" ? "globalHash" : "projectHash"] ?? "absent"
       const restored = await this.writeConfig(scope, { mcp: { ...mcps, [name]: priorRecord } }, expected)
-      if (restored.ok) return { ok: false, restored: true, retry: false, mode: "restore", message: `Credential cleanup failed; prior MCP record and secret were restored: ${String(err)}`, stamp: this.stamp, retryID: `${scope}:mcp:${name}`, ref }
-      return this.rollbackRestoredMcpSecret(scope, name, priorRecord, priorRef, priorValue, `MCP cleanup record restoration failed: ${restored.message}`)
+      if (restored.ok)
+        return {
+          ok: false,
+          restored: true,
+          retry: false,
+          mode: "restore",
+          message: `Credential cleanup failed; prior MCP record and secret were restored: ${String(err)}`,
+          stamp: this.stamp,
+          retryID: `${scope}:mcp:${name}`,
+          ref,
+        }
+      return this.rollbackRestoredMcpSecret(
+        scope,
+        name,
+        priorRecord,
+        priorRef,
+        priorValue,
+        `MCP cleanup record restoration failed: ${restored.message}`,
+      )
     }
   }
 
@@ -1180,12 +1416,45 @@ export class CanonicalConfigService implements Disposable {
     ref: string,
     value: string,
     message: string,
-  ): Promise<{ ok: false; restored: boolean; retry: boolean; mode: "delete" | "restore"; message: string; stamp: CanonicalStamp; retryID: string; ref?: string; priorRecord?: Record<string, unknown>; priorValue?: string }> {
+  ): Promise<{
+    ok: false
+    restored: boolean
+    retry: boolean
+    mode: "delete" | "restore"
+    message: string
+    stamp: CanonicalStamp
+    retryID: string
+    ref?: string
+    priorRecord?: Record<string, unknown>
+    priorValue?: string
+  }> {
     try {
       await this.removeSecretRef(ref)
-      return { ok: false, restored: false, retry: true, mode: "delete", message, stamp: this.stamp, retryID: `${scope}:mcp:${name}`, ref, priorRecord, priorValue: value }
+      return {
+        ok: false,
+        restored: false,
+        retry: true,
+        mode: "delete",
+        message,
+        stamp: this.stamp,
+        retryID: `${scope}:mcp:${name}`,
+        ref,
+        priorRecord,
+        priorValue: value,
+      }
     } catch (error) {
-      return { ok: false, restored: true, retry: true, mode: "restore", message: `${message}; cleanup rollback failed: ${String(error)}`, stamp: this.stamp, retryID: `${scope}:mcp:${name}`, ref, priorRecord, priorValue: value }
+      return {
+        ok: false,
+        restored: true,
+        retry: true,
+        mode: "restore",
+        message: `${message}; cleanup rollback failed: ${String(error)}`,
+        stamp: this.stamp,
+        retryID: `${scope}:mcp:${name}`,
+        ref,
+        priorRecord,
+        priorValue: value,
+      }
     }
   }
 
@@ -1196,12 +1465,45 @@ export class CanonicalConfigService implements Disposable {
     ref: string,
     value: string,
     message: string,
-  ): Promise<{ ok: false; restored: boolean; retry: boolean; mode: "delete" | "restore"; message: string; stamp: CanonicalStamp; retryID: string; ref?: string; priorRecord?: Record<string, unknown>; priorValue?: string }> {
+  ): Promise<{
+    ok: false
+    restored: boolean
+    retry: boolean
+    mode: "delete" | "restore"
+    message: string
+    stamp: CanonicalStamp
+    retryID: string
+    ref?: string
+    priorRecord?: Record<string, unknown>
+    priorValue?: string
+  }> {
     try {
       await this.removeSecretRef(ref)
-      return { ok: false, restored: false, retry: true, mode: "delete", message, stamp: this.stamp, retryID: `${scope}:${id}`, ref, priorRecord, priorValue: value }
+      return {
+        ok: false,
+        restored: false,
+        retry: true,
+        mode: "delete",
+        message,
+        stamp: this.stamp,
+        retryID: `${scope}:${id}`,
+        ref,
+        priorRecord,
+        priorValue: value,
+      }
     } catch (error) {
-      return { ok: false, restored: true, retry: true, mode: "restore", message: `${message}; cleanup rollback failed: ${String(error)}`, stamp: this.stamp, retryID: `${scope}:${id}`, ref, priorRecord, priorValue: value }
+      return {
+        ok: false,
+        restored: true,
+        retry: true,
+        mode: "restore",
+        message: `${message}; cleanup rollback failed: ${String(error)}`,
+        stamp: this.stamp,
+        retryID: `${scope}:${id}`,
+        ref,
+        priorRecord,
+        priorValue: value,
+      }
     }
   }
 
@@ -1266,7 +1568,11 @@ export class CanonicalConfigService implements Disposable {
         priorValue = await retrieveCredential(this.secrets, validatedPriorRef)
       } catch (err) {
         console.error(`[Kilo Config] Credential retrieval failed for ${validatedPriorRef}: ${String(err)}`)
-        return { ok: false, kind: this.disposed ? "disposed" : "io", message: `Credential retrieval failed: ${String(err)}` }
+        return {
+          ok: false,
+          kind: this.disposed ? "disposed" : "io",
+          message: `Credential retrieval failed: ${String(err)}`,
+        }
       }
     }
 
@@ -1277,12 +1583,12 @@ export class CanonicalConfigService implements Disposable {
       await storeCredential(this.secrets, scope, kind, id, plaintext)
 
       // Try to commit config
-        if (stamp && (!sameStamp(stamp, this.stamp) || stamp.assetHash !== null)) {
-         const rollback = await this.rollbackCredential(newRef, priorValue)
-         if (rollback) return rollback
-         return { ok: false, kind: "stale", message: "Canonical config materialization is stale" }
-       }
-       const result = await this.writeConfig(scope, configPatch, expectedHash)
+      if (stamp && (!sameStamp(stamp, this.stamp) || stamp.assetHash !== null)) {
+        const rollback = await this.rollbackCredential(newRef, priorValue)
+        if (rollback) return rollback
+        return { ok: false, kind: "stale", message: "Canonical config materialization is stale" }
+      }
+      const result = await this.writeConfig(scope, configPatch, expectedHash)
 
       if (!result.ok) {
         // Roll back: restore prior value or delete if no prior (Blocker 8)
@@ -1307,11 +1613,7 @@ export class CanonicalConfigService implements Disposable {
    * Remove a credential after a successful config commit that removed the ref.
    * Only removes owned secrets.
    */
-  async removeCredentialAfterCommit(
-    scope: "global" | "project",
-    kind: "provider" | "mcp",
-    id: string,
-  ): Promise<void> {
+  async removeCredentialAfterCommit(scope: "global" | "project", kind: "provider" | "mcp", id: string): Promise<void> {
     await removeCredential(this.secrets, scope, kind, id)
   }
 
@@ -1340,7 +1642,15 @@ export class CanonicalConfigService implements Disposable {
    * Build an agent index from agent entries.
    */
   buildAgentIndex(
-    agentEntries: Array<{ id: string; displayName: string; description?: string; mode?: "primary" | "secondary" | "specialized"; hidden?: boolean; color?: string; source: "global" | "project" }>,
+    agentEntries: Array<{
+      id: string
+      displayName: string
+      description?: string
+      mode?: "primary" | "secondary" | "specialized"
+      hidden?: boolean
+      color?: string
+      source: "global" | "project"
+    }>,
     existingSelectedId: string | null = null,
   ): AgentIndex | null {
     if (!this.currentSnapshot) return null
@@ -1426,10 +1736,15 @@ export class CanonicalConfigService implements Disposable {
     return raw.type === "present" ? raw.hash : "absent"
   }
 
-  readAsset(assetType: AssetDirectory, id: string, scope: "global" | "project"):
+  readAsset(
+    assetType: AssetDirectory,
+    id: string,
+    scope: "global" | "project",
+  ):
     | { ok: true; frontmatter: Record<string, unknown>; body: string; contentHash: string }
     | { ok: false; message: string } {
-    if (scope === "project" && !this.hasProject) return { ok: false, message: "No workspace folder available; project scope is not configured" }
+    if (scope === "project" && !this.hasProject)
+      return { ok: false, message: "No workspace folder available; project scope is not configured" }
     const dir = scope === "global" ? this.paths.globalAssetDirs[assetType] : this.paths.projectAssetDirs![assetType]
     const raw = readFile(path.join(dir, `${id}.md`))
     if (raw.type !== "present") return { ok: false, message: raw.type === "failure" ? raw.message : "Asset not found" }
@@ -1443,7 +1758,9 @@ export class CanonicalConfigService implements Disposable {
     id: string,
     scope: "global" | "project",
     expectedHash: string,
-  ): Promise<{ ok: true; contentHash: "absent" } | { ok: false; kind: "invalid" | "stale" | "io" | "disposed"; message: string }> {
+  ): Promise<
+    { ok: true; contentHash: "absent" } | { ok: false; kind: "invalid" | "stale" | "io" | "disposed"; message: string }
+  > {
     if (this.disposed) return { ok: false, kind: "disposed", message: "Service disposed" }
     if (scope === "project" && !this.hasProject) return this.projectAbsent()
     if (!isValidAssetId(id)) return { ok: false, kind: "invalid", message: `Invalid asset ID "${id}"` }
@@ -1461,7 +1778,8 @@ export class CanonicalConfigService implements Disposable {
         this.markOwnWrite(filePath, "absent")
         this.revision++
         await this.enqueueAndRunMaterialization("gui")
-        if (this.disposed) return { ok: false as const, kind: "disposed" as const, message: "Service disposed during asset convergence" }
+        if (this.disposed)
+          return { ok: false as const, kind: "disposed" as const, message: "Service disposed during asset convergence" }
         return { ok: true as const, contentHash: "absent" as const }
       } catch (err) {
         try {
@@ -1473,7 +1791,11 @@ export class CanonicalConfigService implements Disposable {
         } catch (restoreErr) {
           console.error(`[Kilo Config] Asset delete rollback failed for ${filePath}: ${String(restoreErr)}`)
         }
-        return { ok: false as const, kind: this.disposed ? "disposed" as const : "io" as const, message: `Asset delete failed: ${String(err)}` }
+        return {
+          ok: false as const,
+          kind: this.disposed ? ("disposed" as const) : ("io" as const),
+          message: `Asset delete failed: ${String(err)}`,
+        }
       }
     })
     this.writeLocks.set(filePath, locked)
@@ -1614,18 +1936,25 @@ export class CanonicalConfigService implements Disposable {
     const entries: AssetScanEntry[] = []
     const errors: ValidationError[] = []
     this.assetErrors = errors
-    const duplicateIds: { type: AssetDirectory; id: string; scopeA: string; scopeB: string; fileA: string; fileB: string }[] = []
+    const duplicateIds: {
+      type: AssetDirectory
+      id: string
+      scopeA: string
+      scopeB: string
+      fileA: string
+      fileB: string
+    }[] = []
     const seenIds = new Map<string, AssetScanEntry>()
 
     for (const dirName of ASSET_DIRECTORIES) {
       for (const scope of ["global", "project"] as const) {
         if (scope === "project" && !this.hasProject) continue
-        const dir = scope === "global"
-          ? this.paths.globalAssetDirs[dirName]
-          : this.paths.projectAssetDirs![dirName]
+        const dir = scope === "global" ? this.paths.globalAssetDirs[dirName] : this.paths.projectAssetDirs![dirName]
 
         // Ensure directory exists
-        try { fs.mkdirSync(dir, { recursive: true }) } catch (err) {
+        try {
+          fs.mkdirSync(dir, { recursive: true })
+        } catch (err) {
           console.error(`[Kilo Config] Failed to create asset directory ${dir}: ${String(err)}`)
         }
 
@@ -1773,7 +2102,7 @@ export class CanonicalConfigService implements Disposable {
    * revision has been committed. Stale materializations return without publishing
    * (Finding 6 — latest-revision convergence scheduler).
    */
-   private async materializeFromDisk(source: "init" | "gui" | "external", expectedRevision?: number): Promise<void> {
+  private async materializeFromDisk(source: "init" | "gui" | "external", expectedRevision?: number): Promise<void> {
     if (this.disposed) return
 
     // P4.1: Clear readiness BEFORE any read/validation/error path can fire.
@@ -1784,7 +2113,7 @@ export class CanonicalConfigService implements Disposable {
     const globalResult = this.readScopeContent("global")
     const projectResult = this.readScopeContent("project")
 
-    const hasInvalid = (globalResult.type === "invalid" || projectResult.type === "invalid")
+    const hasInvalid = globalResult.type === "invalid" || projectResult.type === "invalid"
     if (hasInvalid) {
       try {
         await this.handleInvalidMaterialization(source, globalResult, projectResult)
@@ -1816,7 +2145,11 @@ export class CanonicalConfigService implements Disposable {
     } catch (persistErr) {
       this.restorePriorState(priorSnapshot)
       console.error(`[Kilo Config] Index persistence failed: ${String(persistErr)}`)
-      this.onErrorEmitter.fire({ kind: "invalid", message: `Index persistence failed: ${String(persistErr)}`, errors: [] })
+      this.onErrorEmitter.fire({
+        kind: "invalid",
+        message: `Index persistence failed: ${String(persistErr)}`,
+        errors: [],
+      })
       if (source !== "init") throw this.asConvergenceError(persistErr)
       return
     }
@@ -1836,9 +2169,19 @@ export class CanonicalConfigService implements Disposable {
       this.successfulMaterializationStamp = this.stamp
     }
 
-    this.onChangeEmitter.fire({ snapshot: this.currentSnapshot, source, hasErrors: result.errors.length > 0, errors: result.errors, stamp: this.stamp })
+    this.onChangeEmitter.fire({
+      snapshot: this.currentSnapshot,
+      source,
+      hasErrors: result.errors.length > 0,
+      errors: result.errors,
+      stamp: this.stamp,
+    })
     if (result.errors.length > 0) {
-      this.onErrorEmitter.fire({ kind: "invalid", message: `Materialization had ${result.errors.length} validation error(s)`, errors: result.errors })
+      this.onErrorEmitter.fire({
+        kind: "invalid",
+        message: `Materialization had ${result.errors.length} validation error(s)`,
+        errors: result.errors,
+      })
     }
   }
 
@@ -1861,12 +2204,22 @@ export class CanonicalConfigService implements Disposable {
       // Invalid with prior: preserve materialization, persist stale/invalid diagnostics
       await this.persistDiagnosticIndexes()
       if (this.disposed) return
-      this.onChangeEmitter.fire({ snapshot: this.currentSnapshot!, source, hasErrors: true, errors: allErrors, stamp: this.stamp })
+      this.onChangeEmitter.fire({
+        snapshot: this.currentSnapshot!,
+        source,
+        hasErrors: true,
+        errors: allErrors,
+        stamp: this.stamp,
+      })
       return
     }
 
     // Invalid without prior: emit diagnostics, persist stale/invalid indexes
-    this.onErrorEmitter.fire({ kind: "init-failure", message: `Initial load failed: ${allErrors.length} validation error(s)`, errors: allErrors })
+    this.onErrorEmitter.fire({
+      kind: "init-failure",
+      message: `Initial load failed: ${allErrors.length} validation error(s)`,
+      errors: allErrors,
+    })
     await this.persistDiagnosticIndexes()
   }
 
@@ -1877,7 +2230,12 @@ export class CanonicalConfigService implements Disposable {
    * Returns { type: "valid", content } for successfully parsed files.
    * Non-ENOENT failures preserve prior snapshot/index and emit diagnostics (Blocker 2).
    */
-  private readScopeContent(scope: "global" | "project"): { type: "valid"; content: ScopedContent; hash: string } | { type: "absent" } | { type: "invalid"; errors: readonly ValidationError[] } {
+  private readScopeContent(
+    scope: "global" | "project",
+  ):
+    | { type: "valid"; content: ScopedContent; hash: string }
+    | { type: "absent" }
+    | { type: "invalid"; errors: readonly ValidationError[] } {
     if (scope === "project" && !this.hasProject) return { type: "absent" }
     const filePath = scope === "global" ? this.paths.globalConfigFile : this.paths.projectConfigFile!
     const raw = readFile(filePath)
@@ -1971,7 +2329,11 @@ export class CanonicalConfigService implements Disposable {
     if (!idx || !this.globalState) return
     const final = markStale ? markIndexStale(idx) : idx
     // Capture prior state key BEFORE persist for correct rollback on failure
-    writtenKeys.push({ state: this.globalState, key: STATE_KEYS.providers, prior: this.globalState.get(STATE_KEYS.providers) })
+    writtenKeys.push({
+      state: this.globalState,
+      key: STATE_KEYS.providers,
+      prior: this.globalState.get(STATE_KEYS.providers),
+    })
     await persistProviderIndex(this.globalState, final)
     this.rehydratedProviderIndex = final
   }
@@ -1987,7 +2349,7 @@ export class CanonicalConfigService implements Disposable {
       const idx = this.buildModelIndexFromSnapshot(snapshot, scope)
       if (!idx) continue
       const final = markStale
-        ? markIndexStale(idx as ModelIndex & { readonly diagnostics: SelectorDiagnostics }) as ModelIndex
+        ? (markIndexStale(idx as ModelIndex & { readonly diagnostics: SelectorDiagnostics }) as ModelIndex)
         : idx
       const key = scope === "global" ? STATE_KEYS.globalModel : STATE_KEYS.projectModel
       // Capture prior state key BEFORE persist for correct rollback on failure
@@ -2013,14 +2375,28 @@ export class CanonicalConfigService implements Disposable {
       message: `Duplicate agent ID "${item.id}" across ${item.scopeA} and ${item.scopeB}`,
       id: item.id,
     }))
-    const diagnosed = conflicts.length > 0
-      ? { ...idx, diagnostics: { ...idx.diagnostics, invalid: true, stale: true, conflicts: [...idx.diagnostics.conflicts, ...conflicts] } }
-      : idx
-    const final = markStale || scanInvalid || conflicts.length > 0 ? markIndexStale(diagnosed) as AgentIndex : diagnosed
+    const diagnosed =
+      conflicts.length > 0
+        ? {
+            ...idx,
+            diagnostics: {
+              ...idx.diagnostics,
+              invalid: true,
+              stale: true,
+              conflicts: [...idx.diagnostics.conflicts, ...conflicts],
+            },
+          }
+        : idx
+    const final =
+      markStale || scanInvalid || conflicts.length > 0 ? (markIndexStale(diagnosed) as AgentIndex) : diagnosed
     this.persistedAgentIndex = final
     if (this.workspaceState) {
       // Capture prior state key BEFORE persist for correct rollback on failure
-      writtenKeys.push({ state: this.workspaceState, key: STATE_KEYS.agents, prior: this.workspaceState.get(STATE_KEYS.agents) })
+      writtenKeys.push({
+        state: this.workspaceState,
+        key: STATE_KEYS.agents,
+        prior: this.workspaceState.get(STATE_KEYS.agents),
+      })
       await persistAgentIndex(this.workspaceState, final)
     }
     this.rehydratedAgentIndex = final
@@ -2044,7 +2420,9 @@ export class CanonicalConfigService implements Disposable {
     this.persistedAgentIndex = prior.persistedAgentIndex
   }
 
-  private async rollbackPersistKeys(writtenKeys: Array<{ state: StateAdapter; key: string; prior: unknown }>): Promise<void> {
+  private async rollbackPersistKeys(
+    writtenKeys: Array<{ state: StateAdapter; key: string; prior: unknown }>,
+  ): Promise<void> {
     for (const { state, key, prior } of writtenKeys) {
       await state.update(key, prior !== undefined ? prior : undefined)
     }
@@ -2064,19 +2442,35 @@ export class CanonicalConfigService implements Disposable {
       // Mark every rehydrated index as stale/invalid with structured reason
       if (this.rehydratedProviderIndex && this.globalState) {
         const marked = markIndexStale(this.rehydratedProviderIndex)
-        writtenKeys.push({ state: this.globalState, key: STATE_KEYS.providers, prior: this.globalState.get(STATE_KEYS.providers) })
+        writtenKeys.push({
+          state: this.globalState,
+          key: STATE_KEYS.providers,
+          prior: this.globalState.get(STATE_KEYS.providers),
+        })
         await persistProviderIndex(this.globalState, marked)
         this.rehydratedProviderIndex = marked
       }
       if (this.rehydratedGlobalModelIndex && this.globalState) {
-        const marked = markIndexStale(this.rehydratedGlobalModelIndex as ModelIndex & { readonly diagnostics: SelectorDiagnostics })
-        writtenKeys.push({ state: this.globalState, key: STATE_KEYS.globalModel, prior: this.globalState.get(STATE_KEYS.globalModel) })
+        const marked = markIndexStale(
+          this.rehydratedGlobalModelIndex as ModelIndex & { readonly diagnostics: SelectorDiagnostics },
+        )
+        writtenKeys.push({
+          state: this.globalState,
+          key: STATE_KEYS.globalModel,
+          prior: this.globalState.get(STATE_KEYS.globalModel),
+        })
         await persistModelIndex(this.globalState, marked as ModelIndex, "global")
         this.rehydratedGlobalModelIndex = marked as ModelIndex
       }
       if (this.rehydratedProjectModelIndex && this.workspaceState) {
-        const marked = markIndexStale(this.rehydratedProjectModelIndex as ModelIndex & { readonly diagnostics: SelectorDiagnostics })
-        writtenKeys.push({ state: this.workspaceState, key: STATE_KEYS.projectModel, prior: this.workspaceState.get(STATE_KEYS.projectModel) })
+        const marked = markIndexStale(
+          this.rehydratedProjectModelIndex as ModelIndex & { readonly diagnostics: SelectorDiagnostics },
+        )
+        writtenKeys.push({
+          state: this.workspaceState,
+          key: STATE_KEYS.projectModel,
+          prior: this.workspaceState.get(STATE_KEYS.projectModel),
+        })
         await persistModelIndex(this.workspaceState, marked as ModelIndex, "project")
         this.rehydratedProjectModelIndex = marked as ModelIndex
       }
@@ -2092,7 +2486,11 @@ export class CanonicalConfigService implements Disposable {
         timestamp: Date.now(),
       }
       if (!this.rehydratedProviderIndex && this.globalState) {
-        writtenKeys.push({ state: this.globalState, key: STATE_KEYS.providers, prior: this.globalState.get(STATE_KEYS.providers) })
+        writtenKeys.push({
+          state: this.globalState,
+          key: STATE_KEYS.providers,
+          prior: this.globalState.get(STATE_KEYS.providers),
+        })
         this.rehydratedProviderIndex = emptyProvider
         await persistProviderIndex(this.globalState, emptyProvider)
       }
@@ -2107,7 +2505,11 @@ export class CanonicalConfigService implements Disposable {
         timestamp: Date.now(),
       }
       if (!this.rehydratedAgentIndex && this.workspaceState) {
-        writtenKeys.push({ state: this.workspaceState, key: STATE_KEYS.agents, prior: this.workspaceState.get(STATE_KEYS.agents) })
+        writtenKeys.push({
+          state: this.workspaceState,
+          key: STATE_KEYS.agents,
+          prior: this.workspaceState.get(STATE_KEYS.agents),
+        })
         this.rehydratedAgentIndex = emptyAgent
         await persistAgentIndex(this.workspaceState, emptyAgent)
       }
@@ -2122,16 +2524,21 @@ export class CanonicalConfigService implements Disposable {
     writtenKeys: Array<{ state: StateAdapter; key: string; prior: unknown }>,
   ): Promise<void> {
     if (!this.workspaceState) return
-    const idx = this.currentSnapshot && this.lastAssetScan
-      ? buildAgentIndex(
-        this.currentSnapshot,
-        this.buildAgentEntriesFromScan(this.lastAssetScan),
-        this.rehydratedAgentIndex?.selectedId ?? this.persistedAgentIndex?.selectedId ?? null,
-      )
-      : this.rehydratedAgentIndex
+    const idx =
+      this.currentSnapshot && this.lastAssetScan
+        ? buildAgentIndex(
+            this.currentSnapshot,
+            this.buildAgentEntriesFromScan(this.lastAssetScan),
+            this.rehydratedAgentIndex?.selectedId ?? this.persistedAgentIndex?.selectedId ?? null,
+          )
+        : this.rehydratedAgentIndex
     if (!idx) return
     const marked = markIndexStale(idx)
-    writtenKeys.push({ state: this.workspaceState, key: STATE_KEYS.agents, prior: this.workspaceState.get(STATE_KEYS.agents) })
+    writtenKeys.push({
+      state: this.workspaceState,
+      key: STATE_KEYS.agents,
+      prior: this.workspaceState.get(STATE_KEYS.agents),
+    })
     await persistAgentIndex(this.workspaceState, marked)
     this.rehydratedAgentIndex = marked
   }
@@ -2192,7 +2599,9 @@ export class CanonicalConfigService implements Disposable {
     for (const dir of ASSET_DIRECTORIES) {
       this.watchDir(this.paths.globalAssetDirs[dir], (changedPath) => this.onAssetChanged("global", dir, changedPath))
       if (this.paths.projectAssetDirs) {
-        this.watchDir(this.paths.projectAssetDirs[dir], (changedPath) => this.onAssetChanged("project", dir, changedPath))
+        this.watchDir(this.paths.projectAssetDirs[dir], (changedPath) =>
+          this.onAssetChanged("project", dir, changedPath),
+        )
       }
     }
   }
@@ -2205,7 +2614,9 @@ export class CanonicalConfigService implements Disposable {
     const fileName = path.basename(filePath)
 
     // Ensure parent directory exists for watcher
-    try { fs.mkdirSync(dir, { recursive: true }) } catch (err) {
+    try {
+      fs.mkdirSync(dir, { recursive: true })
+    } catch (err) {
       console.error(`[Kilo Config] Failed to create watcher directory ${dir}: ${String(err)}`)
     }
 
@@ -2222,7 +2633,9 @@ export class CanonicalConfigService implements Disposable {
    * Correction 10: passes the changed path to the callback for exact coalescing.
    */
   private watchDir(dirPath: string, onChange: (changedPath?: string) => void): void {
-    try { fs.mkdirSync(dirPath, { recursive: true }) } catch (err) {
+    try {
+      fs.mkdirSync(dirPath, { recursive: true })
+    } catch (err) {
       console.error(`[Kilo Config] Failed to create asset watcher directory ${dirPath}: ${String(err)}`)
     }
 
@@ -2238,10 +2651,13 @@ export class CanonicalConfigService implements Disposable {
   private debounce(key: string, fn: () => void): void {
     const existing = this.debounceTimers.get(key)
     if (existing) clearTimeout(existing)
-    this.debounceTimers.set(key, setTimeout(() => {
-      this.debounceTimers.delete(key)
-      fn()
-    }, 50))
+    this.debounceTimers.set(
+      key,
+      setTimeout(() => {
+        this.debounceTimers.delete(key)
+        fn()
+      }, 50),
+    )
   }
 
   /**
@@ -2365,7 +2781,10 @@ export class CanonicalConfigService implements Disposable {
 
     void this.enqueueAndRunMaterialization("external").catch((err) => {
       if (!this.disposed) {
-        this.onErrorEmitter.fire({ kind: "watcher-error", message: `Config watcher convergence failed: ${String(err)}` })
+        this.onErrorEmitter.fire({
+          kind: "watcher-error",
+          message: `Config watcher convergence failed: ${String(err)}`,
+        })
       }
     })
   }
@@ -2392,9 +2811,7 @@ export class CanonicalConfigService implements Disposable {
         }
       } else {
         // Fallback: no path provided, scan full directory (backward compat)
-        const dir = _scope === "global"
-          ? this.paths.globalAssetDirs[_dir]
-          : this.paths.projectAssetDirs![_dir]
+        const dir = _scope === "global" ? this.paths.globalAssetDirs[_dir] : this.paths.projectAssetDirs![_dir]
         try {
           const files = fs.readdirSync(dir).filter((f) => f.endsWith(".md"))
           if (files.length === 0) {
@@ -2433,10 +2850,7 @@ export class CanonicalConfigService implements Disposable {
    * Restore a credential to its prior value, or delete if no prior (Blocker 8).
    * Uses the exact validated ref — never reconstructs from scope/kind/id.
    */
-  private async restoreCredentialState(
-    ref: string,
-    priorValue: string | undefined,
-  ): Promise<void> {
+  private async restoreCredentialState(ref: string, priorValue: string | undefined): Promise<void> {
     if (priorValue !== undefined) {
       await restoreCredentialRef(this.secrets, ref, priorValue)
     } else {
@@ -2453,13 +2867,22 @@ export class CanonicalConfigService implements Disposable {
       return null
     } catch (err) {
       console.error(`[Kilo Config] Credential rollback failed for ${ref}: ${String(err)}`)
-      return { ok: false, kind: this.disposed ? "disposed" : "io", message: `Credential rollback failed: ${String(err)}` }
+      return {
+        ok: false,
+        kind: this.disposed ? "disposed" : "io",
+        message: `Credential rollback failed: ${String(err)}`,
+      }
     }
   }
 
   private normalizeCredentialFailure(
     result: Extract<Awaited<ReturnType<CanonicalConfigService["writeConfig"]>>, { ok: false }>,
-  ): { ok: false; kind: "stale" | "invalid" | "disposed" | "io"; message: string; errors?: readonly ValidationError[] } {
+  ): {
+    ok: false
+    kind: "stale" | "invalid" | "disposed" | "io"
+    message: string
+    errors?: readonly ValidationError[]
+  } {
     if (result.kind === "conflict") {
       return { ...result, kind: "invalid" }
     }
@@ -2537,20 +2960,19 @@ export class CanonicalConfigService implements Disposable {
         ok: false,
         kind: "invalid",
         message: `Cannot read ${otherScope} config at ${otherFilePath}: ${otherExisting.message}`,
-        errors: [{
-          path: [],
-          message: `Cannot read ${otherScope} config: ${otherExisting.code} — ${otherExisting.message}`,
-          scope: otherScope,
-          file: otherFilePath,
-        }],
+        errors: [
+          {
+            path: [],
+            message: `Cannot read ${otherScope} config: ${otherExisting.code} — ${otherExisting.message}`,
+            scope: otherScope,
+            file: otherFilePath,
+          },
+        ],
       }
     }
     if (otherExisting.type === "absent") {
       // Legal absence — treat as empty
-      const crossErrors = validateCrossScope(
-        scope === "global" ? fullDoc : {},
-        scope === "project" ? fullDoc : {},
-      )
+      const crossErrors = validateCrossScope(scope === "global" ? fullDoc : {}, scope === "project" ? fullDoc : {})
       if (crossErrors.length > 0) {
         return {
           ok: false,
@@ -2572,12 +2994,14 @@ export class CanonicalConfigService implements Disposable {
         ok: false,
         kind: "invalid",
         message: `${otherScope} config at ${otherFilePath} is not valid JSONC`,
-        errors: [{
-          path: [],
-          message: `${otherScope} config is not valid JSONC: ${otherParsed.error}`,
-          scope: otherScope,
-          file: otherFilePath,
-        }],
+        errors: [
+          {
+            path: [],
+            message: `${otherScope} config is not valid JSONC: ${otherParsed.error}`,
+            scope: otherScope,
+            file: otherFilePath,
+          },
+        ],
       }
     }
     // Correction 4: opposite bytes must also pass validateConfig for the opposite scope
@@ -2622,26 +3046,43 @@ export class CanonicalConfigService implements Disposable {
    * On malformed/unreadable replacement, the prior entry's frontmatter is used.
    */
   private buildAgentEntriesFromScan(scan: AssetScanResult): Array<{
-     id: string; displayName: string; description?: string;
-     mode?: "primary" | "secondary" | "specialized";
-      hidden?: boolean; color?: string; source: "global" | "project"; filePath?: string; frontmatter?: Record<string, unknown>; body?: string; assetHash?: string
+    id: string
+    displayName: string
+    description?: string
+    mode?: "primary" | "secondary" | "specialized"
+    hidden?: boolean
+    color?: string
+    source: "global" | "project"
+    filePath?: string
+    frontmatter?: Record<string, unknown>
+    body?: string
+    assetHash?: string
   }> {
     return scan.entries
-      .filter((e) => sameCanonicalPath(path.dirname(e.filePath), e.scope === "global" ? this.paths.globalAssetDirs.agent : this.paths.projectAssetDirs!.agent))
+      .filter((e) =>
+        sameCanonicalPath(
+          path.dirname(e.filePath),
+          e.scope === "global" ? this.paths.globalAssetDirs.agent : this.paths.projectAssetDirs!.agent,
+        ),
+      )
       .map((e) => {
         // Use retained frontmatter from the scan entry (Correction 5).
         // For malformed/unreadable replacements, prior entry carries valid frontmatter.
         const fm = e.frontmatter ?? {}
         return {
           id: e.id,
-          displayName: (typeof fm.displayName === "string" ? fm.displayName : undefined)
-            ?? (typeof fm.name === "string" ? fm.name : e.id),
+          displayName:
+            (typeof fm.displayName === "string" ? fm.displayName : undefined) ??
+            (typeof fm.name === "string" ? fm.name : e.id),
           description: typeof fm.description === "string" ? fm.description : undefined,
-          mode: (fm.mode === "primary" || fm.mode === "secondary" || fm.mode === "specialized") ? fm.mode as "primary" | "secondary" | "specialized" : undefined,
+          mode:
+            fm.mode === "primary" || fm.mode === "secondary" || fm.mode === "specialized"
+              ? (fm.mode as "primary" | "secondary" | "specialized")
+              : undefined,
           hidden: typeof fm.hidden === "boolean" ? fm.hidden : undefined,
-           color: typeof fm.color === "string" ? fm.color : undefined,
-           source: e.scope,
-           filePath: e.filePath,
+          color: typeof fm.color === "string" ? fm.color : undefined,
+          source: e.scope,
+          filePath: e.filePath,
           frontmatter: e.frontmatter,
           body: e.body,
           assetHash: e.contentHash,
@@ -2667,8 +3108,14 @@ function summarizeAssetScan(scan: AssetScanResult | null, paths: CanonicalPaths)
       out.push({
         dir,
         scope,
-        entries: scan.entries.filter((e) => e.scope === scope && sameCanonicalPath(path.dirname(e.filePath), root)).length,
-        errors: scan.errors.filter((e) => e.scope === scope && e.file !== undefined && (sameCanonicalPath(path.dirname(e.file), root) || sameCanonicalPath(e.file, root))).length,
+        entries: scan.entries.filter((e) => e.scope === scope && sameCanonicalPath(path.dirname(e.filePath), root))
+          .length,
+        errors: scan.errors.filter(
+          (e) =>
+            e.scope === scope &&
+            e.file !== undefined &&
+            (sameCanonicalPath(path.dirname(e.file), root) || sameCanonicalPath(e.file, root)),
+        ).length,
       })
     }
   }

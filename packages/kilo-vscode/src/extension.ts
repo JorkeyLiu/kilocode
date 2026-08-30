@@ -31,6 +31,7 @@ import { PrivateObservationService } from "./private-worker/private-observation-
 import { createMementoCursorStore } from "./private-worker/observation-cursor-store"
 import { PrivateObservationLifecycleTriggers } from "./private-worker/private-observation-lifecycle-triggers"
 import { resolveCanonicalDbPath } from "./private-worker/canonical-db-path"
+import { isE2EFixtureEnabled } from "./util/e2e-fixture"
 
 let agentManager: AgentManagerProvider | undefined
 let shuttingDown = false
@@ -181,7 +182,7 @@ export function activate(context: vscode.ExtensionContext) {
   let privateObservation: PrivateObservationService
   try {
     const dbPath = resolveCanonicalDbPath()
-    const isFixture = !!process.env.KILO_E2E_FIXTURE
+    const isFixture = isE2EFixtureEnabled()
     privateObservation = new PrivateObservationService({
       enabled: true,
       dbPath,
@@ -350,7 +351,9 @@ export function activate(context: vscode.ExtensionContext) {
     canonicalConfig,
   )
   const agentManagerProvider = new AgentManagerProvider(agentManagerHost, connectionService)
-  context.subscriptions.push(agentManagerProvider.onPanelVisibilityChange((visible) => remember({ agentManager: visible })))
+  context.subscriptions.push(
+    agentManagerProvider.onPanelVisibilityChange((visible) => remember({ agentManager: visible })),
+  )
   // R9-C3: wire panel visibility trigger without altering existing remember wiring
   context.subscriptions.push(
     agentManagerProvider.onPanelVisibilityChange((visible) => {
@@ -674,7 +677,7 @@ export function activate(context: vscode.ExtensionContext) {
   // transcripts, statuses, agent catalog, connected providers) for the
   // real-session scenario. No production effect when the env var is absent —
   // no commands are registered and no webview code runs.
-  if (process.env.KILO_E2E_FIXTURE) {
+  if (isE2EFixtureEnabled()) {
     context.subscriptions.push(
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerReady", async () => {
         await agentManagerProvider.waitForReady()
@@ -726,6 +729,24 @@ export function activate(context: vscode.ExtensionContext) {
       }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.reconnectServer", async () => {
         return connectionService.fixtureReconnectServer()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privatePeerStatus", async () => {
+        return connectionService.fixturePrivatePeerStatus()
+      }),
+      vscode.commands.registerCommand(
+        "kilo-code.new.e2eFixture.sessionUpdate",
+        async (opts?: { sessionId?: string; title?: string; directory?: string }) => {
+          if (!opts?.sessionId || !opts?.title) throw new Error("sessionId and title required")
+          return connectionService.fixtureSessionUpdate({
+            sessionId: opts.sessionId,
+            title: opts.title,
+            directory: opts.directory,
+          })
+        },
+      ),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateReplay", async (sessionId?: string) => {
+        if (!sessionId || typeof sessionId !== "string") throw new Error("sessionId required")
+        return connectionService.fixturePrivateReplay(sessionId)
       }),
       vscode.commands.registerCommand(
         "kilo-code.new.e2eFixture.provisionVariantModel",
@@ -780,42 +801,39 @@ export function activate(context: vscode.ExtensionContext) {
           isStarted: privateObservation.isStarted(),
           persistedCursor: privateObservation.getPersistedCursor(),
           dbPath,
-          testBridge: !!process.env.KILO_E2E_FIXTURE,
+          testBridge: isE2EFixtureEnabled(),
           envDb: process.env.KILO_DB ?? null,
         }
       }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationSnapshot", async () => {
         return privateObservation.snapshot({})
       }),
-      vscode.commands.registerCommand(
-        "kilo-code.new.e2eFixture.privateObservationRead",
-        async (cursor: number) => {
-          return privateObservation.read(cursor)
-        },
-      ),
-      vscode.commands.registerCommand(
-        "kilo-code.new.e2eFixture.privateObservationAck",
-        async (cursor: number) => {
-          return privateObservation.ack(cursor)
-        },
-      ),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationRead", async (cursor: number) => {
+        return privateObservation.read(cursor)
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationAck", async (cursor: number) => {
+        return privateObservation.ack(cursor)
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationSubscribe", async () => {
         return privateObservation.subscribe({})
       }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationReconnect", async () => {
         return privateObservation.reconnect()
       }),
-      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationWaitReady", async (timeoutMs?: number) => {
-        const t = typeof timeoutMs === "number" ? timeoutMs : 10_000
-        await privateObservation.waitReady(t)
-        const host = privateObservation.getHost()
-        return {
-          hostState: privateObservation.getHostState(),
-          isStarted: privateObservation.isStarted(),
-          pid: host?.getPid(),
-          persistedCursor: privateObservation.getPersistedCursor(),
-        }
-      }),
+      vscode.commands.registerCommand(
+        "kilo-code.new.e2eFixture.privateObservationWaitReady",
+        async (timeoutMs?: number) => {
+          const t = typeof timeoutMs === "number" ? timeoutMs : 10_000
+          await privateObservation.waitReady(t)
+          const host = privateObservation.getHost()
+          return {
+            hostState: privateObservation.getHostState(),
+            isStarted: privateObservation.isStarted(),
+            pid: host?.getPid(),
+            persistedCursor: privateObservation.getPersistedCursor(),
+          }
+        },
+      ),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationOnPeerClosed", async () => {
         const before = {
           hostState: privateObservation.getHostState(),
@@ -914,12 +932,9 @@ export function activate(context: vscode.ExtensionContext) {
         }
         return { beforePid, afterKillPid, after, reconnectResult }
       }),
-      vscode.commands.registerCommand(
-        "kilo-code.new.e2eFixture.privateObservationMutate",
-        async (params: unknown) => {
-          return privateObservation.request("test/mutateChangefeed", params)
-        },
-      ),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.privateObservationMutate", async (params: unknown) => {
+        return privateObservation.request("test/mutateChangefeed", params)
+      }),
       // R9 fixture-only bounded notification recorder: read/clear the JSON-safe
       // onNotification envelope sequence (max 50, in-memory, no persistence).
       // Ordinal watermark is monotonic independent of bounded retention to avoid length-watermark loss.

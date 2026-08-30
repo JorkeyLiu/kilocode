@@ -4,15 +4,13 @@
  * Written into the scratch workspace BEFORE VS Code launches so the
  * lazily-spawned CLI backend loads every fixture at instance init:
  *
- *   - .kilo/kilo.json        — custom provider e2e-local/e2e-model pointing at
- *                              the run-owned scripted model server, one custom
- *                              primary agent (e2e-agent), and the default
- *                              model. Deliberately MINIMAL: no MCP, no skills,
- *                              no permission rules — but every implicit
- *                              generation (title via small_model, subagent via
- *                              subagent_model) is pinned to the run-owned
- *                              provider so no restart boundary can fall
- *                              through to the kilo gateway (LOCK-006).
+ *   - .kilo/kilo.jsonc     — closed canonical project seed (endpoint/protocol/
+ *                            credential/models/model) — strict, no plaintext
+ *                            apiKey/options/npm. Backend provider baseURL and
+ *                            small_model/subagent_model pins are injected via
+ *                            the narrowly validated CLI-side E2E seam
+ *                            (KILO_E2E_PROVIDER_BASE_URL) rather than a
+ *                            global config file.
  *   - .kilo/tool/e2e_marker.ts — the H-3 user-defined tool (writes a
  *                              run-owned artifact file via ctx.directory).
  *   - .kilo/node_modules + .kilo/package-lock.json — the no-op dependency
@@ -26,7 +24,7 @@
  */
 
 import { mkdirSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, join, isAbsolute } from "node:path"
 import { CONFIG_FILENAME } from "../src/config/paths"
 
 /** The agent asset ids/labels the real-* scenarios pick through ModeSwitcher. */
@@ -57,11 +55,11 @@ export const RESTART_ARTIFACT_CONTENT = `echo:${"restart"}`
  * extension's CanonicalConfigService validator accepts (types.ts
  * APPROVED_PROVIDER_KEYS: name/endpoint/protocol/models/credential only;
  * protocol from CANONICAL_PROTOCOLS; no plaintext apiKey needed for a local
- * openai-compatible endpoint). The kilo.json backend seed above feeds ONLY the
- * CLI backend — the extension reads exclusively <workspace>/.kilo/kilo.jsonc
- * (paths.ts projectConfigFile), so without this seed the canonical provider
- * index can never serve e2e-local and waitForModelSelected(e2e-local/e2e-model)
- * cannot pass even after agents appear.
+ * openai-compatible endpoint). The kilo.jsonc project seed is the sole
+ * canonical config; the backend's e2e-local npm/options/baseURL and
+ * small_model/subagent_model pins are injected via the CLI-side E2E seam
+ * (KILO_E2E_PROVIDER_BASE_URL) — no global kilo.jsonc or legacy kilo.json
+ * provider file is written.
  */
 export function realProjectSeed(port: number): Record<string, unknown> {
   return {
@@ -83,54 +81,20 @@ export function realProjectSeed(port: number): Record<string, unknown> {
   }
 }
 
-export function writeRealRestartSeed(workspace: string, port: number, pluginToolUrl: string): RestartSeedPaths {
-  const configFile = join(workspace, ".kilo", "kilo.json")
-  mkdirSync(dirname(configFile), { recursive: true })
-  writeFileSync(
-    configFile,
-    JSON.stringify(
-      {
-        $schema: "https://app.kilo.ai/config.json",
-        provider: {
-          "e2e-local": {
-            npm: "@ai-sdk/openai-compatible",
-            name: "E2E Local",
-            options: {
-              baseURL: `http://127.0.0.1:${port}/v1`,
-              apiKey: "e2e-fixture-key",
-              timeout: false,
-              headerTimeout: false,
-              firstChunkTimeout: false,
-            },
-            models: {
-              "e2e-model": {
-                name: "E2E Model",
-                variants: { low: {}, medium: {}, high: {} },
-              },
-            },
-          },
-        },
-        agent: {
-          "e2e-agent": {
-            displayName: "E2E Agent",
-            description: "E2E restart custom agent",
-            mode: "primary",
-            model: "e2e-local/e2e-model",
-          },
-        },
-        model: "e2e-local/e2e-model",
-        small_model: "e2e-local/e2e-model",
-        subagent_model: "e2e-local/e2e-model",
-      },
-      null,
-      2,
-    ),
-  )
-
-  // Project-scope canonical seed (extension-only; see realProjectSeed). The
-  // backend kilo.json seed stays untouched — this is an additional file.
+export function writeRealRestartSeed(
+  workspace: string,
+  port: number,
+  pluginToolUrl: string,
+  scratch: string,
+): RestartSeedPaths {
+  if (!scratch || !isAbsolute(scratch)) throw new Error("writeRealRestartSeed requires absolute scratch path")
+  // Project-scope canonical seed (extension's CanonicalConfigService reads this).
+  // Backend also reads it; the narrowly validated CLI seam supplies the
+  // backend-only npm/options/baseURL without plaintext entering project file.
   const canonicalFile = join(workspace, ".kilo", CONFIG_FILENAME)
+  mkdirSync(dirname(canonicalFile), { recursive: true })
   writeFileSync(canonicalFile, JSON.stringify(realProjectSeed(port), null, 2))
+  const configFile = canonicalFile
 
   // The user-defined tool through the real ToolRegistry (plugin bridge): its
   // execute writes the run-owned artifact file under ctx.directory, so the
@@ -199,7 +163,8 @@ function writeDependencyGuard(dir: string, name: string): void {
  *     extension's CanonicalConfigService asset index, which scans these .md
  *     files under the XDG-honoring global root; kilo.json agent records never
  *     enter that index. Frontmatter satisfies validate.ts's strict agent
- *     schema; the model/variant pin comes from the workspace kilo.json seed.
+ *     schema; the model/variant pin comes from the workspace kilo.jsonc seed
+ *     plus the CLI E2E provider seam (no global provider config file).
  *
  * Hermetic by construction: everything lives inside <scratch>/xdg-config, and
  * the extension resolves the same root via XDG_CONFIG_HOME (paths.ts).

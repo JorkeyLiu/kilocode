@@ -137,6 +137,9 @@ const CMD_SEED_CREDENTIAL = "kilo-code.new.e2eFixture.seedCredential"
 const CMD_LLM_REQUESTS = "kilo-code.new.e2eFixture.llmRequests"
 const CMD_LLM_RESET = "kilo-code.new.e2eFixture.llmRequestsReset"
 const CMD_OPEN_TAB_READY = "kilo-code.new.e2eFixture.openInTabReady"
+const CMD_PRIVATE_PEER_STATUS = "kilo-code.new.e2eFixture.privatePeerStatus"
+const CMD_SESSION_UPDATE = "kilo-code.new.e2eFixture.sessionUpdate"
+const CMD_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.privateReplay"
 const AM_VIEW_TYPE = "kilo-code.new.AgentManagerPanel"
 
 // --- Fixture session IDs (deterministic per run; shared with the harness via plan.json) ---
@@ -2399,6 +2402,7 @@ const REAL_RESTART_SERVICE_BUDGET = 2_100_000
  *      until the harness writes `done`.
  * Stops when the harness writes the `done` marker (success or abort).
  */
+// eslint-disable-next-line complexity
 async function serviceRealRestartBoundary(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
   const reloadRequested = existsSync(join(scratch, "rr-reload-request"))
   if (reloadRequested) {
@@ -2468,6 +2472,103 @@ async function serviceRealRestartBoundary(vscodeApi: typeof vscode, scratch: str
       rmSync(rc)
       const obs = await vscodeApi.commands.executeCommand(CMD_RECONNECT_SERVER)
       writeFileSync(join(scratch, "rr-reconnect.json"), JSON.stringify(obs, null, 2))
+    }
+
+    // Gate C: private peer status snapshot (non-secret backend pid/port/epoch + private negotiation)
+    const privStatusReq = join(scratch, "rr-private-status-request")
+    if (existsSync(privStatusReq)) {
+      const raw = readFileSync(privStatusReq, "utf8")
+      try {
+        rmSync(privStatusReq)
+      } catch (err) {
+        console.warn("[Runner] cleanup rr-private-status-request failed:", String(err).slice(0, 200))
+      }
+      let nonce = ""
+      try {
+        nonce = (JSON.parse(raw) as { nonce?: string }).nonce ?? ""
+      } catch (err) {
+        console.warn("[Runner] malformed rr-private-status-request (redacted):", String(err).slice(0, 200))
+      }
+      const status = await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)
+      writeFileSync(join(scratch, "rr-private-status.json"), JSON.stringify({ ...(status as object), nonce }, null, 2))
+    }
+
+    // Gate C: open editor tab via production openInTab path and capture shared-backend identity
+    const openTabReq = join(scratch, "rr-open-tab-request")
+    if (existsSync(openTabReq)) {
+      const raw = readFileSync(openTabReq, "utf8")
+      try {
+        rmSync(openTabReq)
+      } catch (err) {
+        console.warn("[Runner] cleanup rr-open-tab-request failed:", String(err).slice(0, 200))
+      }
+      let nonce = ""
+      try {
+        nonce = (JSON.parse(raw) as { nonce?: string }).nonce ?? ""
+      } catch (err) {
+        console.warn("[Runner] malformed rr-open-tab-request (redacted):", String(err).slice(0, 200))
+      }
+      const before = await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)
+      const openRes = await vscodeApi.commands.executeCommand<{ count: number; ready: boolean }>(CMD_OPEN_TAB_READY)
+      const after = await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)
+      writeFileSync(join(scratch, "rr-open-tab.json"), JSON.stringify({ nonce, before, after, openRes }, null, 2))
+    }
+
+    // Gate C: durable title mutation via SDK authoritative path + private same-key replay observation
+    const titleReq = join(scratch, "rr-title-request")
+    if (existsSync(titleReq)) {
+      const raw = readFileSync(titleReq, "utf8")
+      try {
+        rmSync(titleReq)
+      } catch (err) {
+        console.warn("[Runner] cleanup rr-title-request failed:", String(err).slice(0, 200))
+      }
+      let payload: { sessionId: string; title: string; directory?: string; nonce?: string }
+      try {
+        payload = JSON.parse(raw)
+      } catch (err) {
+        console.warn("[Runner] malformed rr-title-request (redacted):", String(err).slice(0, 200))
+        payload = { sessionId: "", title: "" }
+      }
+      const nonce = payload.nonce ?? ""
+      // raw title exists only transiently in request payload; runner deletes promptly
+      const { nonce: _n, ...cmdPayload } = payload
+      const result = await vscodeApi.commands.executeCommand(CMD_SESSION_UPDATE, cmdPayload)
+      const out = { ...(result as object), nonce }
+      // ensure no raw title leaks into result file
+      const serialized = JSON.stringify(out)
+      if (payload.title && serialized.includes(payload.title)) {
+        throw new Error("runner: title result leaked raw title")
+      }
+      writeFileSync(join(scratch, "rr-title-result.json"), JSON.stringify(out, null, 2))
+    }
+
+    // Gate C: same-key private replay without second SDK mutation (proves replay-only and revision convergence)
+    const replayReq = join(scratch, "rr-replay-request")
+    if (existsSync(replayReq)) {
+      const raw = readFileSync(replayReq, "utf8")
+      try {
+        rmSync(replayReq)
+      } catch (err) {
+        console.warn("[Runner] cleanup rr-replay-request failed:", String(err).slice(0, 200))
+      }
+      let sid = raw.trim()
+      let nonce = ""
+      try {
+        const parsed = JSON.parse(raw)
+        if (typeof parsed === "string") sid = parsed
+        else if (parsed && typeof parsed.sessionId === "string") {
+          sid = parsed.sessionId
+          nonce = parsed.nonce ?? ""
+        } else if (parsed && typeof parsed.nonce === "string") {
+          nonce = parsed.nonce
+          sid = parsed.sessionId ?? sid
+        }
+      } catch (err) {
+        console.warn("[Runner] malformed rr-replay-request (redacted):", String(err).slice(0, 200))
+      }
+      const result = await vscodeApi.commands.executeCommand(CMD_PRIVATE_REPLAY, sid)
+      writeFileSync(join(scratch, "rr-replay-result.json"), JSON.stringify({ ...(result as object), nonce }, null, 2))
     }
 
     const req = join(scratch, `rr-snap-${snap}-request`)
@@ -2604,7 +2705,7 @@ async function serviceR9ObservationBoundary(
 
   // Fixture-side readiness: explicit bounded wait before first snapshot (preserves fire-and-forget activation)
   await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 10_000)
-  const status0 = await vscodeApi.commands.executeCommand(CMD_R9_STATUS) as Record<string, unknown>
+  const status0 = (await vscodeApi.commands.executeCommand(CMD_R9_STATUS)) as Record<string, unknown>
   writeFileSync(join(scratch, "r9-status.json"), JSON.stringify(status0, null, 2))
   try {
     const cstate = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
@@ -2614,7 +2715,12 @@ async function serviceR9ObservationBoundary(
   }
   // Subscribe evidence (required): invoke subscribe and include JSON-safe result — validated as v 1.0, integer cursor, subscribed:true
   const sub0Raw = (await vscodeApi.commands.executeCommand(CMD_R9_SUBSCRIBE)) as Record<string, unknown>
-  if (sub0Raw.v !== "1.0" || typeof sub0Raw.cursor !== "number" || !Number.isInteger(sub0Raw.cursor) || sub0Raw.subscribed !== true) {
+  if (
+    sub0Raw.v !== "1.0" ||
+    typeof sub0Raw.cursor !== "number" ||
+    !Number.isInteger(sub0Raw.cursor) ||
+    sub0Raw.subscribed !== true
+  ) {
     throw new Error(`initial subscribe invalid: ${JSON.stringify(sub0Raw)}`)
   }
   const sub0 = sub0Raw
@@ -2641,17 +2747,9 @@ async function serviceR9ObservationBoundary(
         const tab = vscodeApi.window.tabGroups.all.flatMap((g) => g.tabs).find(isAgentManagerTab)
         if (!tab) throw new Error("r9 panel: Agent Manager tab not found")
         await vscodeApi.window.tabGroups.close(tab, true)
-        await waitFor(
-          async () => (agentManagerTabOpen() ? undefined : "closed"),
-          30_000,
-          "r9 panel disposed",
-        )
+        await waitFor(async () => (agentManagerTabOpen() ? undefined : "closed"), 30_000, "r9 panel disposed")
         await vscodeApi.commands.executeCommand(CMD_OPEN)
-        await waitFor(
-          async () => (agentManagerTabOpen() ? true : undefined),
-          30_000,
-          "r9 panel reopened",
-        )
+        await waitFor(async () => (agentManagerTabOpen() ? true : undefined), 30_000, "r9 panel reopened")
         await waitFor(
           async () => {
             try {
@@ -2761,7 +2859,8 @@ async function serviceR9ObservationBoundary(
               if (clicked && typeof clicked.clickedTabId === "string") break
             } catch {}
           }
-          if (existsSync(join(scratch, "done"))) throw new Error("r9 switch aborted: harness done before click confirmation")
+          if (existsSync(join(scratch, "done")))
+            throw new Error("r9 switch aborted: harness done before click confirmation")
           await sleep(200)
         }
         if (!clicked || typeof clicked.clickedTabId !== "string") {
@@ -2769,17 +2868,28 @@ async function serviceR9ObservationBoundary(
         }
         const clickedTabId = clicked.clickedTabId as string
         if (clickedTabId !== plan.siblingId) {
-          throw new Error(`r9 switch clickedTabId mismatch expected ${plan.siblingId} got ${clickedTabId} payload=${JSON.stringify(clicked)}`)
+          throw new Error(
+            `r9 switch clickedTabId mismatch expected ${plan.siblingId} got ${clickedTabId} payload=${JSON.stringify(clicked)}`,
+          )
         }
         const activeTabId = (clicked as Record<string, unknown>).activeTabId as string | undefined
-        console.log(`[probe runner] r9 switch click confirmed clicked=${clickedTabId} active=${activeTabId} payload=${JSON.stringify(clicked)}`)
+        console.log(
+          `[probe runner] r9 switch click confirmed clicked=${clickedTabId} active=${activeTabId} payload=${JSON.stringify(clicked)}`,
+        )
         // Give webview->extension message time to propagate, then ensure private observation ready
         await sleep(800)
         await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
         // Write durable confirmation marker BEFORE after-state capture — observable ordering in artifacts/run.log
-        const confirmation = { clickedTabId, activeTabId: activeTabId ?? clickedTabId, at: new Date().toISOString(), selected: true }
+        const confirmation = {
+          clickedTabId,
+          activeTabId: activeTabId ?? clickedTabId,
+          at: new Date().toISOString(),
+          selected: true,
+        }
         writeFileSync(join(scratch, "r9-switch-confirmed"), JSON.stringify(confirmation, null, 2))
-        console.log(`[probe runner] r9 switch confirmed marker written before finalizing r9-switch.json: ${JSON.stringify(confirmation)}`)
+        console.log(
+          `[probe runner] r9 switch confirmed marker written before finalizing r9-switch.json: ${JSON.stringify(confirmation)}`,
+        )
         return { kind: "switch", switchConfirmation: confirmation }
       },
     },
@@ -2790,25 +2900,48 @@ async function serviceR9ObservationBoundary(
         // Materially distinct transport reconnect: close peer transport without killing worker, observed via onClosed -> lifecycle onPeerClosed
         const closeRes = (await vscodeApi.commands.executeCommand(CMD_R9_CLOSE_PEER)) as {
           before: { pid?: number; hostState: string }
-          afterClose: { closeAlive: boolean; closeAliveAfter?: boolean; closed: boolean; beforeAlive: boolean; beforePid?: number; afterPid?: number }
+          afterClose: {
+            closeAlive: boolean
+            closeAliveAfter?: boolean
+            closed: boolean
+            beforeAlive: boolean
+            beforePid?: number
+            afterPid?: number
+          }
           after: { pid?: number; hostState: string }
           close: { aliveBefore: boolean; aliveAfter?: boolean; closed: boolean; beforePid?: number; afterPid?: number }
           trigger: { reason?: string; rehydrate?: boolean } | unknown
         }
         // Prove worker PID remained alive post-close before service replacement (distinct from exact-PID kill)
         // Require both aliveBefore and aliveAfter true plus same numeric PID immediately after peer disposal.
-        const c = closeRes.close as { aliveBefore?: boolean; aliveAfter?: boolean; beforePid?: number; afterPid?: number; closed?: boolean }
-        const ac = closeRes.afterClose as { closeAlive?: boolean; closeAliveAfter?: boolean; closed?: boolean; beforePid?: number; afterPid?: number }
+        const c = closeRes.close as {
+          aliveBefore?: boolean
+          aliveAfter?: boolean
+          beforePid?: number
+          afterPid?: number
+          closed?: boolean
+        }
+        const ac = closeRes.afterClose as {
+          closeAlive?: boolean
+          closeAliveAfter?: boolean
+          closed?: boolean
+          beforePid?: number
+          afterPid?: number
+        }
         const aliveBefore = c.aliveBefore ?? ac.closeAlive
         const aliveAfter = c.aliveAfter ?? ac.closeAliveAfter
         const beforePid = c.beforePid ?? ac.beforePid
         const afterPid = c.afterPid ?? ac.afterPid
         const closed = c.closed ?? ac.closed
         if (!aliveBefore || !aliveAfter) {
-          throw new Error(`reconnect peer close did not keep worker alive post-close before replacement: ${JSON.stringify(closeRes)}`)
+          throw new Error(
+            `reconnect peer close did not keep worker alive post-close before replacement: ${JSON.stringify(closeRes)}`,
+          )
         }
         if (typeof beforePid !== "number" || typeof afterPid !== "number" || beforePid !== afterPid) {
-          throw new Error(`reconnect peer close PID mismatch before ${beforePid} after ${afterPid}: ${JSON.stringify(closeRes)}`)
+          throw new Error(
+            `reconnect peer close PID mismatch before ${beforePid} after ${afterPid}: ${JSON.stringify(closeRes)}`,
+          )
         }
         if (!closed) {
           throw new Error(`reconnect peer close not observed as closed: ${JSON.stringify(closeRes)}`)
@@ -2858,11 +2991,15 @@ async function serviceR9ObservationBoundary(
           beforePid?: number
           after: { pid?: number; pendingPid: number | null; pendingAlive: boolean; hostState: string }
         }
-        if (killRes.beforePid === killRes.after.pid) throw new Error(`restart pid did not change before ${killRes.beforePid} after ${killRes.after.pid}`)
+        if (killRes.beforePid === killRes.after.pid)
+          throw new Error(`restart pid did not change before ${killRes.beforePid} after ${killRes.after.pid}`)
         if (killRes.after.pendingAlive) throw new Error(`restart pending child still alive ${killRes.after.pendingPid}`)
         if (killRes.after.hostState !== "open") throw new Error(`restart hostState not open ${killRes.after.hostState}`)
-        const statusAfter = await vscodeApi.commands.executeCommand(CMD_R9_STATUS) as Record<string, unknown>
-        writeFileSync(join(scratch, "r9-evict.json"), JSON.stringify({ mut2, evict1, evict2, killRes, statusAfter }, null, 2))
+        const statusAfter = (await vscodeApi.commands.executeCommand(CMD_R9_STATUS)) as Record<string, unknown>
+        writeFileSync(
+          join(scratch, "r9-evict.json"),
+          JSON.stringify({ mut2, evict1, evict2, killRes, statusAfter }, null, 2),
+        )
         return { mut2, evict1, evict2, killRes }
       },
     },
@@ -2872,13 +3009,19 @@ async function serviceR9ObservationBoundary(
   const deadline = Date.now() + R9_SERVICE_BUDGET
   let idx = 0
   // eslint-disable-next-line complexity
-  async function runBoundary(b: typeof boundaries[number]): Promise<void> {
+  async function runBoundary(b: (typeof boundaries)[number]): Promise<void> {
     await vscodeApi.commands.executeCommand(CMD_R9_WAIT_READY, 5000)
     // Preserve bounded recorder across boundary: monotonic ordinal watermark independent of bounded 50 retention
     // Do NOT use array length as watermark; use nextOrdinal. Truncated windows are explicitly unproven.
     const beforeRaw = (await vscodeApi.commands.executeCommand(CMD_R9_NOTIFICATIONS)) as unknown
     const beforeNotifSnap = (() => {
-      if (beforeRaw && typeof beforeRaw === "object" && !Array.isArray(beforeRaw) && "entries" in (beforeRaw as Record<string, unknown>) && "nextOrdinal" in (beforeRaw as Record<string, unknown>)) {
+      if (
+        beforeRaw &&
+        typeof beforeRaw === "object" &&
+        !Array.isArray(beforeRaw) &&
+        "entries" in (beforeRaw as Record<string, unknown>) &&
+        "nextOrdinal" in (beforeRaw as Record<string, unknown>)
+      ) {
         return beforeRaw as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
       }
       const arr = (Array.isArray(beforeRaw) ? beforeRaw : []) as unknown[]
@@ -2894,11 +3037,24 @@ async function serviceR9ObservationBoundary(
       enabled: boolean
       dbPath: string
     }
-    const beforeObsSnap = (await vscodeApi.commands.executeCommand(CMD_R9_SNAPSHOT)) as { cursor: number; snapshot?: unknown }
-    const beforeReadRaw = beforeStatus.persistedCursor !== undefined
-      ? ((await vscodeApi.commands.executeCommand(CMD_R9_READ, beforeStatus.persistedCursor)) as { rehydrate: boolean; cursor: number; entries?: unknown[] })
-      : { rehydrate: false, cursor: beforeObsSnap.cursor, entries: [] as unknown[] }
-    const before = { pid: beforeStatus.pid, hostState: beforeStatus.hostState, cursor: beforeObsSnap.cursor, rehydrate: beforeReadRaw.rehydrate }
+    const beforeObsSnap = (await vscodeApi.commands.executeCommand(CMD_R9_SNAPSHOT)) as {
+      cursor: number
+      snapshot?: unknown
+    }
+    const beforeReadRaw =
+      beforeStatus.persistedCursor !== undefined
+        ? ((await vscodeApi.commands.executeCommand(CMD_R9_READ, beforeStatus.persistedCursor)) as {
+            rehydrate: boolean
+            cursor: number
+            entries?: unknown[]
+          })
+        : { rehydrate: false, cursor: beforeObsSnap.cursor, entries: [] as unknown[] }
+    const before = {
+      pid: beforeStatus.pid,
+      hostState: beforeStatus.hostState,
+      cursor: beforeObsSnap.cursor,
+      rehydrate: beforeReadRaw.rehydrate,
+    }
     const beforeEntries = (beforeReadRaw as { entries?: unknown[] }).entries ?? []
     const actionRes = await b.action()
     // debounce + bounded reconnect window: poll for hostState open up to 5s after action
@@ -2926,16 +3082,32 @@ async function serviceR9ObservationBoundary(
       }
     }
     const afterSnap = (await vscodeApi.commands.executeCommand(CMD_R9_SNAPSHOT)) as { cursor: number }
-    const afterReadRaw = afterStatus.persistedCursor !== undefined
-      ? ((await vscodeApi.commands.executeCommand(CMD_R9_READ, afterStatus.persistedCursor)) as { rehydrate: boolean; cursor: number; entries?: unknown[] })
-      : { rehydrate: false, cursor: afterSnap.cursor, entries: [] as unknown[] }
-    const after = { pid: afterStatus.pid, hostState: afterStatus.hostState, cursor: afterSnap.cursor, rehydrate: afterReadRaw.rehydrate }
+    const afterReadRaw =
+      afterStatus.persistedCursor !== undefined
+        ? ((await vscodeApi.commands.executeCommand(CMD_R9_READ, afterStatus.persistedCursor)) as {
+            rehydrate: boolean
+            cursor: number
+            entries?: unknown[]
+          })
+        : { rehydrate: false, cursor: afterSnap.cursor, entries: [] as unknown[] }
+    const after = {
+      pid: afterStatus.pid,
+      hostState: afterStatus.hostState,
+      cursor: afterSnap.cursor,
+      rehydrate: afterReadRaw.rehydrate,
+    }
     const afterEntries = (afterReadRaw as { entries?: unknown[] }).entries ?? []
     // Capture bounded notification sequence after the boundary and derive duplicate/continuity from observed sequence IDs
     // Ordinal watermark: only deliveries with ordinal >= watermarkOrdinal belong to this boundary; truncated = watermark < startOrdinal => unproven
     const afterRaw = (await vscodeApi.commands.executeCommand(CMD_R9_NOTIFICATIONS)) as unknown
     const afterSnap2 = (() => {
-      if (afterRaw && typeof afterRaw === "object" && !Array.isArray(afterRaw) && "entries" in (afterRaw as Record<string, unknown>) && "nextOrdinal" in (afterRaw as Record<string, unknown>)) {
+      if (
+        afterRaw &&
+        typeof afterRaw === "object" &&
+        !Array.isArray(afterRaw) &&
+        "entries" in (afterRaw as Record<string, unknown>) &&
+        "nextOrdinal" in (afterRaw as Record<string, unknown>)
+      ) {
         return afterRaw as { startOrdinal: number; nextOrdinal: number; entries: unknown[] }
       }
       const arr = (Array.isArray(afterRaw) ? afterRaw : []) as unknown[]
@@ -2943,9 +3115,14 @@ async function serviceR9ObservationBoundary(
     })()
     const truncated = watermarkOrdinal < afterSnap2.startOrdinal
     const notifAfter = (() => {
-      const hasOrdinal = afterSnap2.entries.length > 0 && afterSnap2.entries[0] !== null && typeof (afterSnap2.entries[0] as Record<string, unknown>).ordinal === "number"
+      const hasOrdinal =
+        afterSnap2.entries.length > 0 &&
+        afterSnap2.entries[0] !== null &&
+        typeof (afterSnap2.entries[0] as Record<string, unknown>).ordinal === "number"
       if (hasOrdinal) {
-        return (afterSnap2.entries as Array<Record<string, unknown>>).filter((e) => (e.ordinal as number) >= watermarkOrdinal) as unknown[]
+        return (afterSnap2.entries as Array<Record<string, unknown>>).filter(
+          (e) => (e.ordinal as number) >= watermarkOrdinal,
+        ) as unknown[]
       }
       // Legacy fallback: slice by watermark length approximation; if truncated, return empty to force unproven
       if (truncated) return [] as unknown[]
@@ -2962,15 +3139,24 @@ async function serviceR9ObservationBoundary(
       const params = r.params as Record<string, unknown> | undefined
       if (!params || typeof params !== "object" || Array.isArray(params)) return "params must be object"
       if (params.v !== "1.0") return `v must be 1.0 got ${String(params.v)}`
-      if (typeof params.cursor !== "number" || !Number.isInteger(params.cursor) || params.cursor < 0 || !Number.isSafeInteger(params.cursor)) return `cursor must be integer >=0 got ${String(params.cursor)}`
+      if (
+        typeof params.cursor !== "number" ||
+        !Number.isInteger(params.cursor) ||
+        params.cursor < 0 ||
+        !Number.isSafeInteger(params.cursor)
+      )
+        return `cursor must be integer >=0 got ${String(params.cursor)}`
       const entries = params.entries as unknown
       if (!Array.isArray(entries) || entries.length === 0) return "entries must be non-empty array"
       for (const e of entries) {
         if (!e || typeof e !== "object" || Array.isArray(e)) return "entry must be object"
         const en = e as Record<string, unknown>
-        if (typeof en.seq !== "number" || !Number.isInteger(en.seq) || en.seq < 0 || !Number.isSafeInteger(en.seq)) return `seq must be integer >=0 got ${String(en.seq)}`
-        if (typeof en.session_id !== "string" || en.session_id.length === 0) return `session_id must be non-empty string got ${String(en.session_id)}`
-        if (typeof en.revision !== "number" || !Number.isInteger(en.revision)) return `revision must be integer got ${String(en.revision)}`
+        if (typeof en.seq !== "number" || !Number.isInteger(en.seq) || en.seq < 0 || !Number.isSafeInteger(en.seq))
+          return `seq must be integer >=0 got ${String(en.seq)}`
+        if (typeof en.session_id !== "string" || en.session_id.length === 0)
+          return `session_id must be non-empty string got ${String(en.session_id)}`
+        if (typeof en.revision !== "number" || !Number.isInteger(en.revision))
+          return `revision must be integer got ${String(en.revision)}`
         if (en.kind !== "changed" && en.kind !== "deleted") return `kind must be changed/deleted got ${String(en.kind)}`
         if (typeof en.time !== "number") return `time must be number got ${String(en.time)}`
       }
@@ -3002,7 +3188,9 @@ async function serviceR9ObservationBoundary(
           const params = r.params as Record<string, unknown> | undefined
           const entries = params?.entries as unknown[] | undefined
           if (Array.isArray(entries)) {
-            for (const e of entries) if (e && typeof e === "object" && typeof (e as Record<string, unknown>).seq === "number") out.push((e as Record<string, unknown>).seq as number)
+            for (const e of entries)
+              if (e && typeof e === "object" && typeof (e as Record<string, unknown>).seq === "number")
+                out.push((e as Record<string, unknown>).seq as number)
           }
           if (typeof r.seq === "number") out.push(r.seq)
         }
@@ -3057,11 +3245,14 @@ async function serviceR9ObservationBoundary(
     const cursorMonotonic = after.cursor >= before.cursor
     const continuity = seqContinuity && cursorMonotonic && !truncated
     if ((b.name === "reconnect" || b.name === "restart") && notifAfter.length === 0) {
-      throw new Error(`${b.name} after notifications empty — valid changed delivery required (before ${before.cursor} after ${after.cursor} notifs ${notifAfter.length})`)
+      throw new Error(
+        `${b.name} after notifications empty — valid changed delivery required (before ${before.cursor} after ${after.cursor} notifs ${notifAfter.length})`,
+      )
     }
     // Restart must have rehydrate true due to genuine gap; verify via read
     let rehydrate = afterReadRaw.rehydrate
-    if (b.name === "restart" && !rehydrate) throw new Error("restart boundary expected rehydrate:true but got false (gap not proven)")
+    if (b.name === "restart" && !rehydrate)
+      throw new Error("restart boundary expected rehydrate:true but got false (gap not proven)")
     const ev: Record<string, unknown> = {
       boundary: b.name,
       before,
@@ -3075,7 +3266,11 @@ async function serviceR9ObservationBoundary(
       notificationsBefore: notifBefore,
       notificationsAfter: notifAfter,
       actionResult: actionRes,
-      notes: [`before pid ${before.pid} after ${after.pid}`, `beforeEntries ${beforeEntries.length} afterEntries ${afterEntries.length}`, `notifs before ${notifBefore.length} after ${notifAfter.length}`],
+      notes: [
+        `before pid ${before.pid} after ${after.pid}`,
+        `beforeEntries ${beforeEntries.length} afterEntries ${afterEntries.length}`,
+        `notifs before ${notifBefore.length} after ${notifAfter.length}`,
+      ],
     }
     // Include validated subscribe result in required runtime output (do not swallow errors)
     if (b.name === "reconnect" || b.name === "restart") {
@@ -3085,7 +3280,8 @@ async function serviceR9ObservationBoundary(
           if (!sub || typeof sub !== "object") return "subscribe not object"
           const o = sub as Record<string, unknown>
           if (o.v !== "1.0") return `subscribe v must be 1.0 got ${String(o.v)}`
-          if (typeof o.cursor !== "number" || !Number.isInteger(o.cursor)) return `subscribe cursor must be integer got ${String(o.cursor)}`
+          if (typeof o.cursor !== "number" || !Number.isInteger(o.cursor))
+            return `subscribe cursor must be integer got ${String(o.cursor)}`
           if (o.subscribed !== true) return `subscribe subscribed must be true got ${String(o.subscribed)}`
           return undefined
         })()
@@ -3099,13 +3295,28 @@ async function serviceR9ObservationBoundary(
       }
     }
     // Surface trigger reason for transport reconnect
-    if (b.name === "reconnect" && actionRes && typeof actionRes === "object" && "trigger" in (actionRes as Record<string, unknown>)) {
+    if (
+      b.name === "reconnect" &&
+      actionRes &&
+      typeof actionRes === "object" &&
+      "trigger" in (actionRes as Record<string, unknown>)
+    ) {
       ev.trigger = (actionRes as Record<string, unknown>).trigger
     }
-    if (b.name === "restart" && actionRes && typeof actionRes === "object" && "killRes" in (actionRes as Record<string, unknown>)) {
+    if (
+      b.name === "restart" &&
+      actionRes &&
+      typeof actionRes === "object" &&
+      "killRes" in (actionRes as Record<string, unknown>)
+    ) {
       ev.kill = (actionRes as Record<string, unknown>).killRes
     }
-    if (b.name === "switch" && actionRes && typeof actionRes === "object" && "switchConfirmation" in (actionRes as Record<string, unknown>)) {
+    if (
+      b.name === "switch" &&
+      actionRes &&
+      typeof actionRes === "object" &&
+      "switchConfirmation" in (actionRes as Record<string, unknown>)
+    ) {
       ev.switchConfirmation = (actionRes as Record<string, unknown>).switchConfirmation
       ev.switch = (actionRes as Record<string, unknown>).switchConfirmation
     }

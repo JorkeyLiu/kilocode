@@ -10,7 +10,12 @@ import { describe, expect, it } from "bun:test"
 import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { basename, join } from "node:path"
-import { REAL_AGENT_ASSETS, realProjectSeed, writeRealGlobalSeed, writeRealRestartSeed } from "../../script/e2e-restart-seed"
+import {
+  REAL_AGENT_ASSETS,
+  realProjectSeed,
+  writeRealGlobalSeed,
+  writeRealRestartSeed,
+} from "../../script/e2e-restart-seed"
 import { validateMarkdownAsset, validateConfig } from "../../src/config/validate"
 import { materialize, MaterializeVersionCounter } from "../../src/config/materialize"
 import { snapshot as makeSnapshot } from "../../src/config/snapshot"
@@ -68,28 +73,28 @@ describe("writeRealGlobalSeed", () => {
 describe("realProjectSeed (project-scope canonical kilo.jsonc)", () => {
   const PORT = 45659
 
-  function writeAndRead(): { workspace: string; canonicalFile: string; text: string } {
-    const workspace = mkdtempSync(join(tmpdir(), "kilo-e2e-workspace-"))
-    const seed = writeRealRestartSeed(workspace, PORT, "file:///tmp/kilo-e2e-fake-plugin")
+  function writeAndRead(): { scratch: string; workspace: string; canonicalFile: string; text: string } {
+    const scratch = mkdtempSync(join(tmpdir(), "kilo-e2e-seed-"))
+    const workspace = join(scratch, "workspace")
+    const seed = writeRealRestartSeed(workspace, PORT, "file:///tmp/kilo-e2e-fake-plugin", scratch)
     const text = readFileSync(seed.canonicalFile, "utf8")
-    return { workspace, canonicalFile: seed.canonicalFile, text }
+    return { scratch, workspace, canonicalFile: seed.canonicalFile, text }
   }
 
-  it("writes <workspace>/.kilo/kilo.jsonc next to the untouched backend kilo.json", () => {
-    const { workspace, canonicalFile } = writeAndRead()
+  it("writes <workspace>/.kilo/kilo.jsonc with no legacy kilo.json or global provider file", () => {
+    const { scratch, workspace, canonicalFile } = writeAndRead()
     try {
       expect(canonicalFile).toBe(join(workspace, ".kilo", "kilo.jsonc"))
       expect(existsSync(canonicalFile)).toBe(true)
-      // The CLI-backend seed is a different file and keeps its legacy shape.
-      const backend = JSON.parse(readFileSync(join(workspace, ".kilo", "kilo.json"), "utf8")) as Record<string, unknown>
-      expect(Object.keys(backend)).toContain("agent")
+      expect(existsSync(join(workspace, ".kilo", "kilo.json"))).toBeFalse()
+      expect(existsSync(join(scratch, "xdg-config", "kilo", "kilo.jsonc"))).toBeFalse()
     } finally {
-      rmSync(workspace, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
     }
   })
 
   it("parses and validates cleanly through the repo's closed project-scope validator", () => {
-    const { workspace, canonicalFile, text } = writeAndRead()
+    const { scratch, canonicalFile, text } = writeAndRead()
     try {
       const result = validateConfig(text, "project", canonicalFile)
       expect(result.errors).toEqual([])
@@ -108,12 +113,12 @@ describe("realProjectSeed (project-scope canonical kilo.jsonc)", () => {
       expect(text).not.toContain("e2e-fixture-key")
       expect(text).toContain("secret:kilo.credentials.project.provider.e2e-local")
     } finally {
-      rmSync(workspace, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
     }
   })
 
   it("smoke: the seeded provider/model are visible in the derived selector indexes", () => {
-    const { workspace, canonicalFile, text } = writeAndRead()
+    const { scratch, workspace, canonicalFile, text } = writeAndRead()
     try {
       const validation = validateConfig(text, "project", canonicalFile)
       expect(validation.valid).toBe(true)
@@ -138,7 +143,7 @@ describe("realProjectSeed (project-scope canonical kilo.jsonc)", () => {
       expect(entry!.displayName).toBe("E2E Local")
       expect(entry!.modelLabels["e2e-model"]).toBe("E2E Model")
     } finally {
-      rmSync(workspace, { recursive: true, force: true })
+      rmSync(scratch, { recursive: true, force: true })
     }
   })
 
@@ -148,5 +153,15 @@ describe("realProjectSeed (project-scope canonical kilo.jsonc)", () => {
     const result = validateConfig(JSON.stringify(legacy), "project", "/tmp/fake/kilo.jsonc")
     expect(result.valid).toBe(false)
     expect(result.errors.length).toBeGreaterThan(0)
+  })
+
+  it("requires absolute scratch", () => {
+    const workspace = join(tmpdir(), "ws-req")
+    expect(() => writeRealRestartSeed(workspace, PORT, "file:///tmp/x", "" as unknown as string)).toThrow(
+      /absolute scratch/,
+    )
+    expect(() => writeRealRestartSeed(workspace, PORT, "file:///tmp/x", "relative" as unknown as string)).toThrow(
+      /absolute scratch/,
+    )
   })
 })

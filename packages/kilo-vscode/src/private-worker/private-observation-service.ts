@@ -2,6 +2,7 @@ import { isAbsolute } from "path"
 import { PrivateWorkerHost, type HostOptions } from "./host"
 import { OBSERVATION_METHODS } from "./observation"
 import type { ObservationCursorStore } from "./observation-cursor-store"
+import { isE2EFixtureEnabled } from "../util/e2e-fixture"
 
 /**
  * R9 production private-worker observation wiring — enabled no-lease observer.
@@ -132,7 +133,7 @@ export class PrivateObservationService implements Disposable {
     }
     this.consumer = this.opts.onNotification
     this.cursorStore = this.opts.cursorStore
-    this.isFixtureRecorderEnabled = !!process.env.KILO_E2E_FIXTURE
+    this.isFixtureRecorderEnabled = isE2EFixtureEnabled()
   }
 
   /** Whether the internal gate is enabled (explicit, fail-closed). */
@@ -175,7 +176,10 @@ export class PrivateObservationService implements Disposable {
         }
       }
       if (this.isStarted() && this.getHostState() === "open") return true
-      if (Date.now() >= deadline) throw new Error(`privateObservationWaitReady timed out: hostState=${this.getHostState()} isStarted=${this.isStarted()}`)
+      if (Date.now() >= deadline)
+        throw new Error(
+          `privateObservationWaitReady timed out: hostState=${this.getHostState()} isStarted=${this.isStarted()}`,
+        )
       await new Promise<void>((r) => setTimeout(r, 100))
     }
   }
@@ -503,20 +507,30 @@ export class PrivateObservationService implements Disposable {
   /** Fixture-only bounded notification log — JSON-safe envelopes, no persistence. */
   getNotificationLog(): Array<{ ordinal: number; method: string; params: unknown; at: string }> {
     try {
-      return JSON.parse(JSON.stringify(this.notificationLog)) as Array<{ ordinal: number; method: string; params: unknown; at: string }>
+      return JSON.parse(JSON.stringify(this.notificationLog)) as Array<{
+        ordinal: number
+        method: string
+        params: unknown
+        at: string
+      }>
     } catch {
       return [...this.notificationLog]
     }
   }
 
   /** Fixture-only snapshot with monotonic watermark — {startOrdinal, nextOrdinal, entries}. Independent of bounded retention. */
-  getNotificationSnapshot(): { startOrdinal: number; nextOrdinal: number; entries: Array<{ ordinal: number; method: string; params: unknown; at: string }> } {
+  getNotificationSnapshot(): {
+    startOrdinal: number
+    nextOrdinal: number
+    entries: Array<{ ordinal: number; method: string; params: unknown; at: string }>
+  } {
     const next = this.notificationNextOrdinal
     const entries = this.getNotificationLog()
     const start = entries.length === 0 ? next : (entries[0]!.ordinal ?? next - entries.length)
     // Cross-check: start should equal next - length when ordinals contiguous; recompute if needed
     const computedStart = next - entries.length
-    const startOrdinal = entries.length > 0 && typeof entries[0]!.ordinal === "number" ? entries[0]!.ordinal : computedStart
+    const startOrdinal =
+      entries.length > 0 && typeof entries[0]!.ordinal === "number" ? entries[0]!.ordinal : computedStart
     // Ensure monotonic start <= next
     return { startOrdinal, nextOrdinal: next, entries }
   }
@@ -544,7 +558,9 @@ export class PrivateObservationService implements Disposable {
     const beforePid = this.host?.getPid()
     const beforeHostState = this.getHostState()
     const aliveBefore = this.host ? this.host.isAlive() : false
-    const raw = this.host ? this.host.closePeerTransport() : { closed: false, aliveBefore, aliveAfter: false, beforePid, afterPid: beforePid }
+    const raw = this.host
+      ? this.host.closePeerTransport()
+      : { closed: false, aliveBefore, aliveAfter: false, beforePid, afterPid: beforePid }
     const closed = typeof raw === "boolean" ? raw : raw.closed
     const aliveAfterRaw = typeof raw === "boolean" ? (this.host ? this.host.isAlive() : false) : raw.aliveAfter
     const afterPidRaw = typeof raw === "boolean" ? this.host?.getPid() : raw.afterPid

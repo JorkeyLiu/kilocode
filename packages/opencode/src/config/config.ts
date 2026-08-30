@@ -39,6 +39,7 @@ import { KilocodeDefaultPlugins } from "@/kilocode/config/default-plugins"
 import { KilocodeGlobalConfigStamp } from "@/kilocode/config/global-stamp"
 import { SandboxConfig } from "@/kilocode/sandbox/config"
 import type { KilocodeMarkdown } from "@/kilocode/config/markdown"
+import { getE2EProviderFragment } from "@/kilocode/config/e2e-provider"
 // kilocode_change end
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
@@ -361,6 +362,13 @@ export const layer = Layer.effect(
         const projectRoot = canonicalRoot(ctx.directory, ctx.worktree)
 
         let result: Info = {}
+        // kilocode_change start — narrowly validated E2E seam: synthetic
+        // lowest-priority global fragment (fixed provider/model, loopback /v1,
+        // fixture apiKey) gated on KILO_E2E_FIXTURE=1 + absolute
+        // KILO_E2E_SCRATCH + KILO_E2E_PROVIDER_BASE_URL. Project canonical
+        // metadata merges over it so small_model/provider baseURL are pinned
+        // without plaintext in project file. Fail-closed when gates absent.
+        const e2eFragment = getE2EProviderFragment()
         const consoleManagedProviders = new Set<string>()
         let activeOrgName: string | undefined
 
@@ -425,6 +433,10 @@ export const layer = Layer.effect(
         })
         // kilocode_change end
 
+        if (e2eFragment) {
+          yield* merge("e2e-fixture", e2eFragment, "global")
+        }
+
         const global = yield* getGlobal().pipe(
           Effect.catchDefect((err: unknown) => {
             caughtWarning(warnings, "global config", err)
@@ -435,7 +447,10 @@ export const layer = Layer.effect(
         yield* merge(Global.Path.config, global, "global")
 
         const projectFile = path.join(projectRoot, ".kilo", "kilo.jsonc")
-        const projectConfig = yield* loadFile(projectFile, undefined, false, { root: projectRoot, source: projectFile }).pipe(
+        const projectConfig = yield* loadFile(projectFile, undefined, false, {
+          root: projectRoot,
+          source: projectFile,
+        }).pipe(
           Effect.catchDefect((err: unknown) => {
             caughtWarning(warnings, projectFile, err)
             return Effect.succeed({} as Info)
@@ -655,46 +670,48 @@ export const layer = Layer.effect(
      * global and instance caches. Event emission is deferred to emitUpdated
      * (LOCK-004). No lock is taken here — the caller holds the shared lock.
      */
-    const commitGlobal = Effect.fn("Config.commitGlobal")(
-      function* (prepared: PreparedConfig, options?: { dispose?: boolean; emit?: boolean }) {
-        const next = prepared.info
-        const changed = prepared.changed
-        if (changed) yield* KilocodeAtomicWrite.write(fs, prepared.path, prepared.next)
-        if (!changed) return { info: next, changed }
-        yield* invalidateGlobal
-        yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
-        if (options?.emit !== false) yield* emitConfigUpdated("global")
-        return { info: next, changed }
-      },
-    )
+    const commitGlobal = Effect.fn("Config.commitGlobal")(function* (
+      prepared: PreparedConfig,
+      options?: { dispose?: boolean; emit?: boolean },
+    ) {
+      const next = prepared.info
+      const changed = prepared.changed
+      if (changed) yield* KilocodeAtomicWrite.write(fs, prepared.path, prepared.next)
+      if (!changed) return { info: next, changed }
+      yield* invalidateGlobal
+      yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
+      if (options?.emit !== false) yield* emitConfigUpdated("global")
+      return { info: next, changed }
+    })
 
-    const updateGlobal = Effect.fn("Config.updateGlobal")(
-      function* (config: Info, options?: { dispose?: boolean; emit?: boolean }) {
-        // The dispose flag is preserved for API compatibility; instance disposal
-        // is owned by the caller's rebuild registration (LOCK-003), and both
-        // flag values invalidate + emit identically after a successful commit.
-        void options?.dispose
-        // kilocode_change - LOCK-001: the global-domain discovery lock is
-        // acquired BEFORE target resolution so discovery and the write are one
-        // stable cross-process decision.
-        return yield* withConfigLock(
-          KilocodeConfig.configDiscoveryGlobalKey(),
-          Effect.gen(function* () {
-            const file = globalConfigFile()
-            // kilocode_change - LOCK-001: prepareGlobal uses the exact resolved
-            // target resolved under the discovery lock — never rediscovered, so
-            // the locked key is always the written path.
-            const prepared = yield* prepareGlobal(config, { file })
-            if (!prepared.changed) return { info: prepared.info, changed: false }
-            // kilocode_change - emit:false defers the ConfigUpdated publish to
-            // the caller's deferred final event (LOCK-002); the default emits
-            // immediately (hot semantics).
-            yield* commitGlobal(prepared, options)
-            return { info: prepared.info, changed: true }
-          }),
-        )
-      },
-    )
+    const updateGlobal = Effect.fn("Config.updateGlobal")(function* (
+      config: Info,
+      options?: { dispose?: boolean; emit?: boolean },
+    ) {
+      // The dispose flag is preserved for API compatibility; instance disposal
+      // is owned by the caller's rebuild registration (LOCK-003), and both
+      // flag values invalidate + emit identically after a successful commit.
+      void options?.dispose
+      // kilocode_change - LOCK-001: the global-domain discovery lock is
+      // acquired BEFORE target resolution so discovery and the write are one
+      // stable cross-process decision.
+      return yield* withConfigLock(
+        KilocodeConfig.configDiscoveryGlobalKey(),
+        Effect.gen(function* () {
+          const file = globalConfigFile()
+          // kilocode_change - LOCK-001: prepareGlobal uses the exact resolved
+          // target resolved under the discovery lock — never rediscovered, so
+          // the locked key is always the written path.
+          const prepared = yield* prepareGlobal(config, { file })
+          if (!prepared.changed) return { info: prepared.info, changed: false }
+          // kilocode_change - emit:false defers the ConfigUpdated publish to
+          // the caller's deferred final event (LOCK-002); the default emits
+          // immediately (hot semantics).
+          yield* commitGlobal(prepared, options)
+          return { info: prepared.info, changed: true }
+        }),
+      )
+    })
 
     const warnings = Effect.fn("Config.warnings")(function* () {
       return yield* InstanceState.use(state, (s) => s.warnings)

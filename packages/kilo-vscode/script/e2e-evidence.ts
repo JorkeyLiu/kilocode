@@ -242,7 +242,7 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
         { rel: "llm-requests.jsonl", base: "scratch" },
         { rel: `llm-requests-${scenario}.json`, base: "scratch" },
         { rel: `llm-matrix-${scenario}-final.json`, base: "scratch" },
-        { rel: ".kilo/kilo.json", base: "workspace" },
+        { rel: scenario === "real-restart" ? ".kilo/kilo.jsonc" : ".kilo/kilo.json", base: "workspace" },
       )
       for (const prefix of SNAP_PREFIXES[scenario] ?? []) {
         required.push({ rel: `${prefix}*.json`, base: "scratch", glob: true })
@@ -279,6 +279,11 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
       { rel: "rr-reloaded", base: "scratch" },
       { rel: "rr-pin.json", base: "scratch" },
       { rel: "rr-model-requests.json", base: "scratch" },
+      { rel: "rr-private-status.json", base: "scratch" },
+      { rel: "rr-open-tab.json", base: "scratch" },
+      { rel: "rr-title-result.json", base: "scratch" },
+      { rel: "rr-replay-result.json", base: "scratch" },
+      { rel: "rr-gc-*.json", base: "scratch", glob: true },
     )
   }
 
@@ -344,6 +349,11 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
       // converged to connected + defaultModel before the first session.
       // Never contains the secret value.
       { rel: "rr-credential.json", base: "scratch" },
+      // Gate C structured redacted proof — required for real-restart
+      // validation (schema/version, fixtureId hash, backend/private pid/port/epoch,
+      // protocol/capability, SDK/private statuses, title hash, op hashes,
+      // revisions, parity, killed identity, scope). No raw title/key/path/error.
+      { rel: "rr-gc-proof.json", base: "scratch" },
     )
     optional.push({ rel: "e2e-custom-called.txt", base: "workspace" })
   }
@@ -437,12 +447,520 @@ export function parseFailure(dest: string, bytes: Buffer): string | null {
   if (dest.endsWith(".json")) {
     const text = bytes.toString("utf8")
     if (text.trim() === "") return "empty file (expected JSON)"
+    let parsed: unknown
     try {
-      JSON.parse(text)
+      parsed = JSON.parse(text)
     } catch {
       return `invalid JSON: ${JSON.stringify(text.slice(0, 120))}`
     }
+    if (dest === "rr-gc-proof.json") {
+      const err = validateGcProof(parsed)
+      if (err) return `rr-gc-proof malformed: ${err}`
+      // redaction checks: no raw title leakage via obvious keys
+      const raw = text
+      if (raw.includes("e2e-fixture-key") || raw.includes("KILO_SERVER_PASSWORD")) return "rr-gc-proof leaked secret"
+      // ensure no filesystem path leaked (heuristic: absolute path not allowed except scratch not stored)
+      // proof must not contain raw title — titleHash is hex, not raw; check proof doesn't contain plain GateC Title string
+      if (/GateC Title/.test(raw)) return "rr-gc-proof leaked raw title"
+    }
   }
+  return null
+}
+
+// eslint-disable-next-line complexity
+export function validateGcProof(parsed: unknown): string | null {
+  const hex16 = /^[0-9a-f]{16}$/
+  const isHex16 = (v: unknown): boolean => typeof v === "string" && hex16.test(v)
+  const isPid = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v > 0 && v < 1_000_0000
+  const isPort = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 65535
+  const isEpoch = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 1
+  const isRevision = (v: unknown): v is { session: number; config?: number } => {
+    if (!v || typeof v !== "object" || Array.isArray(v)) return false
+    const r = v as Record<string, unknown>
+    if (typeof r.session !== "number" || !Number.isInteger(r.session) || r.session < 0) return false
+    if (r.config !== undefined && (typeof r.config !== "number" || !Number.isInteger(r.config) || r.config < 0))
+      return false
+    const allowed = new Set(["session", "config"])
+    for (const k of Object.keys(r)) if (!allowed.has(k)) return false
+    return true
+  }
+  const ALLOWED_CAPS = new Set(["session/cancelQueued", "session/update"])
+  const ALLOWED_STATE = new Set(["connecting", "connected", "disconnected", "error"])
+  const forbidKeys = new Set([
+    "title",
+    "payload",
+    "path",
+    "secret",
+    "password",
+    "apiKey",
+    "sessionId",
+    "opId",
+    "requestId",
+    "idempotencyKey",
+    "rawTitle",
+    "sessionID",
+    "requestID",
+  ])
+  // eslint-disable-next-line complexity
+  const checkForbidden = (obj: unknown, at: string): string | null => {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null
+    const rec = obj as Record<string, unknown>
+    for (const k of Object.keys(rec)) {
+      if (forbidKeys.has(k)) return `${at}.${k} forbidden key`
+      if (/secret|password|apiKey/i.test(k) && !k.endsWith("Hash")) return `${at}.${k} forbidden pattern`
+      const child = rec[k]
+      if (child && typeof child === "object") {
+        const nested = Array.isArray(child) ? null : checkForbidden(child, `${at}.${k}`)
+        if (nested) return nested
+        if (Array.isArray(child)) {
+          for (let i = 0; i < child.length; i++) {
+            const el = child[i]
+            if (el && typeof el === "object" && !Array.isArray(el)) {
+              const e = checkForbidden(el, `${at}.${k}[${i}]`)
+              if (e) return e
+            }
+          }
+        }
+      }
+      if (typeof child === "string" && (child.includes("e2e-fixture-key") || child.includes("KILO_SERVER_PASSWORD"))) {
+        return `${at}.${k} leaked secret string`
+      }
+    }
+    return null
+  }
+  const exactKeys = (obj: Record<string, unknown>, allowed: string[], at: string): string | null => {
+    const keys = Object.keys(obj).sort()
+    const want = [...allowed].sort()
+    if (keys.length !== want.length || !keys.every((k, i) => k === want[i])) {
+      return `${at} keys mismatch: got [${keys.join(",")}] want [${want.join(",")}]`
+    }
+    return null
+  }
+  const onlyAllowed = (obj: Record<string, unknown>, allowed: string[], at: string): string | null => {
+    for (const k of Object.keys(obj)) if (!allowed.includes(k)) return `${at} unknown key ${k}`
+    return null
+  }
+  const requireHex = (obj: Record<string, unknown>, key: string, at: string): string | null => {
+    if (!isHex16(obj[key])) return `${at}.${key} must be 16-hex`
+    return null
+  }
+  const validateProto = (proto: unknown, at: string): string | null => {
+    if (!proto || typeof proto !== "object" || Array.isArray(proto)) return `${at} must be object`
+    const p = proto as Record<string, unknown>
+    const e = onlyAllowed(p, ["name", "major", "minor"], at)
+    if (e) return e
+    if (!("name" in p) || !("major" in p)) return `${at} missing name/major`
+    if (p.name !== "kilo-private") return `${at}.name must be kilo-private`
+    if (p.major !== 1) return `${at}.major must be 1`
+    if (
+      "minor" in p &&
+      (typeof p.minor !== "number" || !Number.isInteger(p.minor as number) || (p.minor as number) < 0)
+    )
+      return `${at}.minor invalid`
+    return null
+  }
+  const validateCaps = (caps: unknown, at: string): string | null => {
+    if (!Array.isArray(caps)) return `${at} must be array`
+    for (let i = 0; i < caps.length; i++) {
+      const c = caps[i]
+      if (typeof c !== "string") return `${at}[${i}] must be string`
+      if (!ALLOWED_CAPS.has(c)) return `${at}[${i}] unknown capability ${c}`
+    }
+    if (!caps.includes("session/update")) return `${at} missing session/update`
+    return null
+  }
+  const validateBackend = (b: unknown, at: string): string | null => {
+    if (!b || typeof b !== "object" || Array.isArray(b)) return `${at} missing`
+    const rec = b as Record<string, unknown>
+    const e = exactKeys(rec, ["pid", "port", "epoch"], at)
+    if (e) return e
+    if (!isPid(rec.pid)) return `${at}.pid invalid`
+    if (!isPort(rec.port)) return `${at}.port invalid`
+    if (!isEpoch(rec.epoch)) return `${at}.epoch invalid`
+    return null
+  }
+  const validateStates = (arr: unknown, at: string): string | null => {
+    if (!Array.isArray(arr) || arr.length === 0) return `${at} must be non-empty array`
+    for (let i = 0; i < arr.length; i++) {
+      const el = arr[i]
+      if (!el || typeof el !== "object" || Array.isArray(el)) return `${at}[${i}] must be object`
+      const r = el as Record<string, unknown>
+      const e = exactKeys(r, ["state", "at"], `${at}[${i}]`)
+      if (e) return e
+      if (typeof r.state !== "string" || !ALLOWED_STATE.has(r.state as string))
+        return `${at}[${i}].state must be one of ${[...ALLOWED_STATE].join(",")}`
+      if (typeof r.at !== "string" || Number.isNaN(Date.parse(r.at as string))) return `${at}[${i}].at must be ISO date`
+    }
+    return null
+  }
+  const validatePrivateShort = (pr: unknown, at: string): string | null => {
+    if (!pr || typeof pr !== "object" || Array.isArray(pr)) return `${at} missing`
+    const r = pr as Record<string, unknown>
+    const e = exactKeys(r, ["pid", "epoch", "available", "hasSessionUpdate", "protocol"], at)
+    if (e) return e
+    if (r.pid !== null && !isPid(r.pid)) return `${at}.pid invalid`
+    if (!isEpoch(r.epoch)) return `${at}.epoch invalid`
+    if (typeof r.available !== "boolean" || r.available !== true) return `${at}.available must be true`
+    if (typeof r.hasSessionUpdate !== "boolean" || r.hasSessionUpdate !== true)
+      return `${at}.hasSessionUpdate must be true`
+    const pe = validateProto(r.protocol, `${at}.protocol`)
+    if (pe) return pe
+    return null
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "not an object"
+  const p = parsed as Record<string, unknown>
+  const topAllowed = [
+    "schema",
+    "version",
+    "scope",
+    "fixtureIdHash",
+    "sessionIdHash",
+    "titleHash",
+    "pre",
+    "openTab",
+    "sse",
+    "titleOp",
+    "replay",
+    "killed",
+    "postRestart",
+    "replayAfterRestart",
+    "parity",
+    "collectedAt",
+  ]
+  {
+    const e = exactKeys(p, topAllowed, "proof")
+    if (e) return e
+  }
+  if (p.schema !== "kilo-gc-proof/1") return "schema must be kilo-gc-proof/1"
+  if (p.version !== 1) return "version must be 1"
+  const FIXED_SCOPE =
+    "real-restart Gate C: shared-backend + SDK-authoritative title + SSE same-epoch + worker-restart new-epoch"
+  if (p.scope !== FIXED_SCOPE) return `scope must be "${FIXED_SCOPE}"`
+  for (const k of ["fixtureIdHash", "sessionIdHash", "titleHash"]) {
+    const e = requireHex(p, k, "proof")
+    if (e) return e
+  }
+  if (typeof p.collectedAt !== "string" || Number.isNaN(Date.parse(p.collectedAt as string)))
+    return "collectedAt must be ISO date"
+  const forb = checkForbidden(p, "proof")
+  if (forb) return forb
+
+  // pre
+  if (!p.pre || typeof p.pre !== "object" || Array.isArray(p.pre)) return "pre missing"
+  const pre = p.pre as Record<string, unknown>
+  {
+    const e = exactKeys(pre, ["backend", "private"], "pre")
+    if (e) return e
+  }
+  {
+    const be = validateBackend(pre.backend, "pre.backend")
+    if (be) return be
+  }
+  if (!pre.private || typeof pre.private !== "object" || Array.isArray(pre.private)) return "pre.private missing"
+  {
+    const pr = pre.private as Record<string, unknown>
+    const e = exactKeys(
+      pr,
+      ["pid", "epoch", "available", "state", "protocol", "capabilities", "hasSessionUpdate"],
+      "pre.private",
+    )
+    if (e) return e
+    if (pr.pid !== null && !isPid(pr.pid)) return "pre.private.pid invalid"
+    if (!isEpoch(pr.epoch)) return "pre.private.epoch invalid"
+    if (typeof pr.available !== "boolean") return "pre.private.available must be boolean"
+    if (typeof pr.state !== "string" || pr.state.length === 0) return "pre.private.state missing"
+    if (typeof pr.hasSessionUpdate !== "boolean") return "pre.private.hasSessionUpdate must be boolean"
+    const pe = validateProto(pr.protocol, "pre.private.protocol")
+    if (pe) return pe
+    const ce = validateCaps(pr.capabilities, "pre.private.capabilities")
+    if (ce) return ce
+    if (pr.hasSessionUpdate !== true) return "pre.private.hasSessionUpdate must be true"
+    if (pr.pid !== (pre.backend as Record<string, unknown>).pid) return "pre.private.pid must equal backend pid"
+    if (pr.epoch !== (pre.backend as Record<string, unknown>).epoch) return "pre.private.epoch must equal backend epoch"
+  }
+
+  // openTab
+  if (!p.openTab || typeof p.openTab !== "object" || Array.isArray(p.openTab)) return "openTab missing"
+  {
+    const ot = p.openTab as Record<string, unknown>
+    const e = exactKeys(ot as Record<string, unknown>, ["before", "after", "count", "ready"], "openTab")
+    if (e) return e
+    if (!ot.before || !ot.after) return "openTab before/after missing"
+    for (const side of ["before", "after"] as const) {
+      const node = ot[side] as Record<string, unknown>
+      if (!node || typeof node !== "object" || Array.isArray(node)) return `openTab.${side} missing`
+      const ee = exactKeys(node, ["backend", "private"], `openTab.${side}`)
+      if (ee) return ee
+      const be = validateBackend(node.backend, `openTab.${side}.backend`)
+      if (be) return be
+      const pr = node.private as Record<string, unknown>
+      if (!pr || typeof pr !== "object" || Array.isArray(pr)) return `openTab.${side}.private missing`
+      const ae = exactKeys(
+        pr,
+        ["pid", "epoch", "available", "hasSessionUpdate", "state", "protocol", "capabilities"],
+        `openTab.${side}.private`,
+      )
+      if (ae) return ae
+      if (pr.pid !== null && !isPid(pr.pid)) return `openTab.${side}.private.pid invalid`
+      if (!isEpoch(pr.epoch)) return `openTab.${side}.private.epoch invalid`
+      if (typeof pr.available !== "boolean") return `openTab.${side}.private.available must be boolean`
+      if (typeof pr.hasSessionUpdate !== "boolean") return `openTab.${side}.private.hasSessionUpdate must be boolean`
+      if (typeof pr.state !== "string" || (pr.state as string).length === 0)
+        return `openTab.${side}.private.state invalid`
+      {
+        const pe = validateProto(pr.protocol, `openTab.${side}.private.protocol`)
+        if (pe) return pe
+      }
+      {
+        const ce = validateCaps(pr.capabilities, `openTab.${side}.private.capabilities`)
+        if (ce) return ce
+      }
+    }
+    if (typeof ot.count !== "number" || !Number.isInteger(ot.count as number) || (ot.count as number) < 0)
+      return "openTab.count invalid"
+    if (typeof ot.ready !== "boolean") return "openTab.ready invalid"
+    const beforeB = (ot.before as Record<string, unknown>).backend as Record<string, unknown>
+    const afterB = (ot.after as Record<string, unknown>).backend as Record<string, unknown>
+    if (beforeB.pid !== afterB.pid || beforeB.port !== afterB.port || beforeB.epoch !== afterB.epoch)
+      return "openTab before/after backend mismatch"
+    if (beforeB.pid !== (pre.backend as Record<string, unknown>).pid)
+      return "openTab backend pid must equal pre.backend.pid"
+    if (beforeB.port !== (pre.backend as Record<string, unknown>).port)
+      return "openTab backend port must equal pre.backend.port"
+    if (beforeB.epoch !== (pre.backend as Record<string, unknown>).epoch)
+      return "openTab backend epoch must equal pre.backend.epoch"
+  }
+
+  // sse
+  if (!p.sse || typeof p.sse !== "object" || Array.isArray(p.sse)) return "sse missing"
+  {
+    const sse = p.sse as Record<string, unknown>
+    const e = exactKeys(sse, ["pre", "conn", "post"], "sse")
+    if (e) return e
+    for (const side of ["pre", "post"] as const) {
+      const node = sse[side] as Record<string, unknown>
+      if (!node || typeof node !== "object" || Array.isArray(node)) return `sse.${side} missing`
+      const ee = exactKeys(node, ["backend", "private"], `sse.${side}`)
+      if (ee) return ee
+      const be = validateBackend(node.backend, `sse.${side}.backend`)
+      if (be) return be
+      const pe = validatePrivateShort(node.private, `sse.${side}.private`)
+      if (pe) return pe
+    }
+    const preB = (sse.pre as Record<string, unknown>).backend as Record<string, unknown>
+    const postB = (sse.post as Record<string, unknown>).backend as Record<string, unknown>
+    if (preB.pid !== postB.pid || preB.port !== postB.port || preB.epoch !== postB.epoch)
+      return "sse pre/post backend must be identical (SSE reconnect retains epoch)"
+    if (preB.pid !== (pre.backend as Record<string, unknown>).pid)
+      return "sse pre backend pid must equal pre.backend.pid"
+    const conn = sse.conn as Record<string, unknown>
+    if (!conn || typeof conn !== "object" || Array.isArray(conn)) return "sse.conn missing"
+    {
+      const ce = exactKeys(conn, ["before", "after", "states", "connectedEvents"], "sse.conn")
+      if (ce) return ce
+      for (const k of ["before", "after"] as const) {
+        const be = validateBackend(conn[k], `sse.conn.${k}`)
+        if (be) return be
+      }
+      const before = conn.before as Record<string, unknown>
+      const after = conn.after as Record<string, unknown>
+      if (before.pid !== after.pid || before.port !== after.port || before.epoch !== after.epoch)
+        return "sse.conn before/after must be identical"
+      if (before.pid !== preB.pid) return "sse.conn before pid must equal pre pid"
+      if (before.port !== preB.port || before.epoch !== preB.epoch) return "sse.conn before must equal pre backend"
+      const se = validateStates(conn.states, "sse.conn.states")
+      if (se) return se
+      if (
+        typeof conn.connectedEvents !== "number" ||
+        !Number.isInteger(conn.connectedEvents) ||
+        conn.connectedEvents < 1
+      )
+        return "sse.conn.connectedEvents must be >=1"
+    }
+  }
+
+  // titleOp
+  if (!p.titleOp || typeof p.titleOp !== "object" || Array.isArray(p.titleOp)) return "titleOp missing"
+  {
+    const to = p.titleOp as Record<string, unknown>
+    const e = exactKeys(
+      to,
+      [
+        "opIdHash",
+        "idempotencyKeyHash",
+        "requestIdHash",
+        "sessionIdHash",
+        "titleHash",
+        "order",
+        "sdk",
+        "private",
+        "parity",
+        "revision",
+      ],
+      "titleOp",
+    )
+    if (e) return e
+    for (const k of ["opIdHash", "idempotencyKeyHash", "requestIdHash", "sessionIdHash", "titleHash"]) {
+      const ee = requireHex(to, k, "titleOp")
+      if (ee) return ee
+    }
+    if (to.sessionIdHash !== p.sessionIdHash) return "titleOp.sessionIdHash must equal proof sessionIdHash"
+    if (to.titleHash !== p.titleHash) return "titleOp.titleHash must equal proof titleHash"
+    if (!Array.isArray(to.order) || to.order.length !== 2 || to.order[0] !== "sdk" || to.order[1] !== "private")
+      return "titleOp.order must be [sdk,private]"
+    {
+      const sdk = to.sdk as Record<string, unknown>
+      if (!sdk || typeof sdk !== "object" || Array.isArray(sdk)) return "titleOp.sdk missing"
+      const se = exactKeys(sdk as Record<string, unknown>, ["status", "httpStatus", "hasData"], "titleOp.sdk")
+      if (se) return se
+      if (sdk.status !== "succeeded") return "titleOp.sdk.status must be succeeded"
+      if (sdk.httpStatus !== 200) return "titleOp.sdk.httpStatus must be 200"
+      if (sdk.hasData !== true) return "titleOp.sdk.hasData must be true"
+    }
+    {
+      const priv = to.private as Record<string, unknown>
+      if (!priv || typeof priv !== "object" || Array.isArray(priv)) return "titleOp.private missing"
+      const ae = exactKeys(priv as Record<string, unknown>, ["status", "hasData"], "titleOp.private")
+      if (ae) return ae
+      if (priv.status !== "succeeded") return "titleOp.private.status must be succeeded"
+      if (priv.hasData !== true) return "titleOp.private.hasData must be true"
+    }
+    {
+      const par = to.parity as Record<string, unknown>
+      if (!par || typeof par !== "object" || Array.isArray(par)) return "titleOp.parity missing"
+      const pe = exactKeys(par, ["divergence", "details"], "titleOp.parity")
+      if (pe) return pe
+      if (par.divergence !== null) return "titleOp.parity.divergence must be null"
+      if (
+        !par.details ||
+        typeof par.details !== "object" ||
+        Array.isArray(par.details) ||
+        Object.keys(par.details as object).length !== 0
+      )
+        return "titleOp.parity.details must be empty object"
+    }
+    if (!isRevision(to.revision)) return "titleOp.revision invalid"
+  }
+
+  // replay
+  if (!p.replay || typeof p.replay !== "object" || Array.isArray(p.replay)) return "replay missing"
+  {
+    const r = p.replay as Record<string, unknown>
+    const e = exactKeys(r, ["found", "private", "revision", "titleHash"], "replay")
+    if (e) return e
+    if (r.found !== true) return "replay.found must be true"
+    if (r.titleHash !== p.titleHash) return "replay.titleHash must equal proof titleHash"
+    if (!isHex16(r.titleHash)) return "replay.titleHash must be 16-hex"
+    const priv = r.private as Record<string, unknown>
+    if (!priv || typeof priv !== "object" || Array.isArray(priv)) return "replay.private missing"
+    {
+      const ae = exactKeys(priv as Record<string, unknown>, ["status", "hasData"], "replay.private")
+      if (ae) return ae
+      if (priv.status !== "succeeded") return "replay.private.status must be succeeded"
+      if (priv.hasData !== true) return "replay.private.hasData must be true"
+    }
+    if (!isRevision(r.revision)) return "replay.revision invalid"
+    const toRev = (p.titleOp as Record<string, unknown>).revision
+    if (JSON.stringify(r.revision) !== JSON.stringify(toRev)) return "replay.revision must equal titleOp.revision"
+  }
+
+  // killed
+  if (!p.killed || typeof p.killed !== "object" || Array.isArray(p.killed)) return "killed missing"
+  {
+    const k = p.killed as Record<string, unknown>
+    const e = exactKeys(k, ["pid", "port", "epoch"], "killed")
+    if (e) return e
+    if (!isPid(k.pid)) return "killed.pid invalid"
+    if (!isPort(k.port)) return "killed.port invalid"
+    if (!isEpoch(k.epoch)) return "killed.epoch invalid"
+    const preB = pre.backend as Record<string, unknown>
+    if (k.pid !== preB.pid || k.port !== preB.port || k.epoch !== preB.epoch)
+      return "killed must equal pre.backend (pre-restart identity)"
+  }
+
+  // postRestart
+  if (!p.postRestart || typeof p.postRestart !== "object" || Array.isArray(p.postRestart)) return "postRestart missing"
+  {
+    const pr = p.postRestart as Record<string, unknown>
+    const e = exactKeys(pr, ["backend", "private"], "postRestart")
+    if (e) return e
+    const b = pr.backend as Record<string, unknown>
+    if (!b || typeof b !== "object" || Array.isArray(b)) return "postRestart.backend missing"
+    {
+      const be = exactKeys(b, ["pid", "port", "epoch"], "postRestart.backend")
+      if (be) return be
+      if (!isPid(b.pid)) return "postRestart.backend.pid invalid"
+      if (!isPort(b.port)) return "postRestart.backend.port invalid"
+      if (!isEpoch(b.epoch)) return "postRestart.backend.epoch invalid"
+    }
+    const killed = p.killed as Record<string, unknown>
+    if (b.pid === killed.pid) return "postRestart.backend.pid must differ from killed.pid"
+    if (b.port === killed.port) return "postRestart.backend.port must differ from killed.port"
+    if (!((b.epoch as number) > (killed.epoch as number))) return "postRestart.backend.epoch must be > killed.epoch"
+    const priv = pr.private as Record<string, unknown>
+    if (!priv || typeof priv !== "object" || Array.isArray(priv)) return "postRestart.private missing"
+    {
+      const pe = exactKeys(
+        priv,
+        ["pid", "epoch", "available", "hasSessionUpdate", "protocol", "state", "capabilities"],
+        "postRestart.private",
+      )
+      if (pe) return pe
+      if (priv.pid !== b.pid) return "postRestart.private.pid must equal backend pid"
+      if (priv.epoch !== b.epoch) return "postRestart.private.epoch must equal backend epoch"
+      if (priv.available !== true) return "postRestart.private.available must be true"
+      if (priv.hasSessionUpdate !== true) return "postRestart.private.hasSessionUpdate must be true"
+      if (typeof priv.state !== "string" || priv.state.length === 0) return "postRestart.private.state missing"
+      const pe2 = validateProto(priv.protocol, "postRestart.private.protocol")
+      if (pe2) return pe2
+      const ce = validateCaps(priv.capabilities, "postRestart.private.capabilities")
+      if (ce) return ce
+    }
+  }
+
+  // replayAfterRestart
+  if (!p.replayAfterRestart || typeof p.replayAfterRestart !== "object" || Array.isArray(p.replayAfterRestart))
+    return "replayAfterRestart missing"
+  {
+    const r = p.replayAfterRestart as Record<string, unknown>
+    const e = exactKeys(r, ["found", "private", "revision", "titleHash"], "replayAfterRestart")
+    if (e) return e
+    if (r.found !== true) return "replayAfterRestart.found must be true"
+    if (r.titleHash !== p.titleHash) return "replayAfterRestart.titleHash must equal proof titleHash"
+    if (!isHex16(r.titleHash)) return "replayAfterRestart.titleHash must be 16-hex"
+    const priv = r.private as Record<string, unknown>
+    if (!priv || typeof priv !== "object" || Array.isArray(priv)) return "replayAfterRestart.private missing"
+    {
+      const ae = exactKeys(priv as Record<string, unknown>, ["status", "hasData"], "replayAfterRestart.private")
+      if (ae) return ae
+      if (priv.status !== "succeeded") return "replayAfterRestart.private.status must be succeeded"
+      if (priv.hasData !== true) return "replayAfterRestart.private.hasData must be true"
+    }
+    if (!isRevision(r.revision)) return "replayAfterRestart.revision invalid"
+    const toRev = (p.titleOp as Record<string, unknown>).revision
+    if (JSON.stringify(r.revision) !== JSON.stringify(toRev))
+      return "replayAfterRestart.revision must equal titleOp.revision"
+  }
+
+  // parity top-level must equal titleOp parity
+  {
+    const par = p.parity as Record<string, unknown>
+    if (!par || typeof par !== "object" || Array.isArray(par)) return "parity missing"
+    const pe = exactKeys(par, ["divergence", "details"], "parity")
+    if (pe) return pe
+    if (par.divergence !== null) return "parity.divergence must be null"
+    if (
+      !par.details ||
+      typeof par.details !== "object" ||
+      Array.isArray(par.details) ||
+      Object.keys(par.details as object).length !== 0
+    )
+      return "parity.details must be empty object"
+    const toPar = (p.titleOp as Record<string, unknown>).parity as Record<string, unknown>
+    if (JSON.stringify(par) !== JSON.stringify(toPar)) return "parity must equal titleOp.parity"
+  }
+
   return null
 }
 

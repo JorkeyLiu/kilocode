@@ -12,6 +12,7 @@ import { StderrTail } from "./stderr-tail"
 import { LlmRequestCollector, type LlmRequestRecord } from "./llm-request-collector"
 import { p0Stage, isP0PerfEnabled } from "../../perf/perf-instrument"
 import { resolveCanonicalDbPath } from "../../private-worker/canonical-db-path"
+import { isE2EFixtureEnabled, isValidE2EScratch, isValidE2EProviderEnv } from "../../util/e2e-fixture"
 
 export interface ServerInstance {
   port: number
@@ -27,6 +28,36 @@ const STARTUP_TIMEOUT_SECONDS = 30
 
 type WorkspaceFolderLike = { uri: { fsPath: string } }
 type ServerExitListener = (code: number | null) => void
+
+export function isValidE2EBaseURLForServerManager(value: string | undefined): boolean {
+  if (!value) return false
+  try {
+    const url = new URL(value)
+    if (url.protocol !== "http:" && url.protocol !== "https:") return false
+    if (url.hostname !== "127.0.0.1" && url.hostname !== "localhost") return false
+    if (url.username || url.password) return false
+    if (url.search || url.hash) return false
+    if (url.pathname !== "/v1") return false
+    return true
+  } catch {
+    return false
+  }
+}
+
+export function validatedE2EProviderEnv(): Record<string, string | undefined> {
+  // Exact run-bound gate: fixture=="1" plus scratch shape + marker + loopback /v1
+  // Marker proves scratch belongs to current harness run (not any absolute path).
+  // Uses static import; loader failure is fail-closed (no env forwarded).
+  const baseURL = process.env.KILO_E2E_PROVIDER_BASE_URL
+  if (!isE2EFixtureEnabled()) return { KILO_E2E_PROVIDER_BASE_URL: undefined }
+  try {
+    if (!isValidE2EProviderEnv(process.env)) return { KILO_E2E_PROVIDER_BASE_URL: undefined }
+  } catch {
+    return { KILO_E2E_PROVIDER_BASE_URL: undefined }
+  }
+  if (!isValidE2EBaseURLForServerManager(baseURL)) return { KILO_E2E_PROVIDER_BASE_URL: undefined }
+  return { KILO_E2E_PROVIDER_BASE_URL: baseURL }
+}
 
 export function resolveServerCwd(folders: readonly WorkspaceFolderLike[] | undefined, storage: string): string {
   return folders?.[0]?.uri.fsPath ?? storage
@@ -135,8 +166,14 @@ export class ServerManager {
     // append-only file. `instance` counts each spawn so records are
     // attributable across worker restarts/launches (real-restart Phase B/C).
     this.llmInstance += 1
-    if (!this.llmStore && process.env.KILO_E2E_FIXTURE && process.env.KILO_E2E_SCRATCH) {
-      this.llmStore = new LlmRequestCollector(path.join(process.env.KILO_E2E_SCRATCH, "llm-requests.jsonl"))
+    if (!this.llmStore && isE2EFixtureEnabled() && process.env.KILO_E2E_SCRATCH) {
+      try {
+        if (isValidE2EScratch(process.env.KILO_E2E_SCRATCH)) {
+          this.llmStore = new LlmRequestCollector(path.join(process.env.KILO_E2E_SCRATCH, "llm-requests.jsonl"))
+        }
+      } catch {
+        // fail-closed: do not create collector on validation error
+      }
     }
     const llmInstance = this.llmInstance
     const llmStore = this.llmStore
@@ -163,7 +200,8 @@ export class ServerManager {
       const spawnCwd = resolveServerCwd(folders, this.context.globalStorageUri.fsPath)
       fs.mkdirSync(spawnCwd, { recursive: true })
       const localCli =
-        this.context.extensionMode === (vscode as unknown as { ExtensionMode?: { Development: number } }).ExtensionMode?.Development ||
+        this.context.extensionMode ===
+          (vscode as unknown as { ExtensionMode?: { Development: number } }).ExtensionMode?.Development ||
         fs.existsSync(path.join(this.context.extensionPath, "bin", ".cli-version"))
       const bwrapEnv = process.env.KILO_BWRAP_PATH ? {} : resolveLocalBwrapEnv(this.context.extensionPath, localCli)
       // TLS / corporate-proxy support:
@@ -186,7 +224,7 @@ export class ServerManager {
       // The E2E fixture flag (KILO_E2E_FIXTURE, also test-only) enables the
       // same print path so the fixture-gated generation-request collector
       // below sees every `service=llm` line through the stderr relay.
-      const p0LogArgs = isP0PerfEnabled() || !!process.env.KILO_E2E_FIXTURE ? ["--print-logs"] : []
+      const p0LogArgs = isP0PerfEnabled() || isE2EFixtureEnabled() ? ["--print-logs"] : []
       const serverProcess = spawn(cliPath, ["serve", "--port", "0", ...p0LogArgs], {
         cwd: spawnCwd,
         env: {
@@ -226,6 +264,10 @@ export class ServerManager {
           ...(!claudeCompat && { KILO_DISABLE_CLAUDE_CODE: "true" }),
           ...resolveTreeSitterEnv(this.context.extensionPath),
           ...bwrapEnv,
+          // Narrowly validated E2E seam: only forward the run-owned loopback
+          // baseURL when all gates pass (fixture, absolute scratch, loopback
+          // /v1). Invalid or arbitrary payload is not forwarded.
+          ...validatedE2EProviderEnv(),
         },
         stdio: ["ignore", "pipe", "pipe", "pipe", "pipe"],
         detached: true,
@@ -327,10 +369,34 @@ export class ServerManager {
    * env-gated.
    */
   public getServerPidForFixture(): { pid: number; port: number } | null {
-    if (!process.env.KILO_E2E_FIXTURE) return null
+    if (!isE2EFixtureEnabled()) return null
     const instance = this.instance
     if (!instance?.process.pid) return null
     return { pid: instance.process.pid, port: instance.port }
+  }
+
+  /**
+   * E2E fixture bridge (KILO_E2E_FIXTURE only): exact epoch of the CURRENT
+   * server instance. Read-only; returns null when no server is running or the
+   * fixture env is absent. No production effect.
+   */
+  public getServerEpochForFixture(): number | null {
+    if (!isE2EFixtureEnabled()) return null
+    const instance = this.instance
+    if (!instance) return null
+    return instance.epoch
+  }
+
+  /**
+   * E2E fixture bridge (KILO_E2E_FIXTURE only): full server identity.
+   * Read-only; returns null when no server is running or the fixture env is
+   * absent. No production effect.
+   */
+  public getServerInfoForFixture(): { pid: number; port: number; epoch: number } | null {
+    if (!isE2EFixtureEnabled()) return null
+    const instance = this.instance
+    if (!instance?.process.pid) return null
+    return { pid: instance.process.pid, port: instance.port, epoch: instance.epoch }
   }
 
   /**
@@ -344,7 +410,7 @@ export class ServerManager {
    * when the fixture env is absent.
    */
   public killServerForFixture(): { pid: number; port: number } | null {
-    if (!process.env.KILO_E2E_FIXTURE) return null
+    if (!isE2EFixtureEnabled()) return null
     const instance = this.instance
     if (!instance?.process.pid) return null
     console.log(
@@ -364,7 +430,7 @@ export class ServerManager {
    * spawned. No production effect.
    */
   public getLlmRequestsForFixture(): { records: LlmRequestRecord[]; file: string } | null {
-    if (!process.env.KILO_E2E_FIXTURE) return null
+    if (!isE2EFixtureEnabled()) return null
     if (!this.llmStore) return null
     return { records: this.llmStore.read(), file: this.llmStoreFile() }
   }
@@ -373,13 +439,16 @@ export class ServerManager {
    * E2E fixture bridge (KILO_E2E_FIXTURE only): clear the generation-request
    * store. Called once at the start of a real-* scenario run (never between
    * real-restart launches — the persisted evidence must aggregate across
-   * them). No production effect.
+   * them). Validates the complete scratch marker contract before constructing
+   * LlmRequestCollector or mutating files; invalid gate/scratch/marker fails
+   * closed without filesystem mutation. No production effect.
    */
   public resetLlmRequestsForFixture(): boolean {
-    if (!process.env.KILO_E2E_FIXTURE) return false
+    if (!isE2EFixtureEnabled()) return false
+    const scratch = process.env.KILO_E2E_SCRATCH
+    if (!scratch || !isValidE2EScratch(scratch)) return false
     if (!this.llmStore) {
-      if (!process.env.KILO_E2E_SCRATCH) return false
-      this.llmStore = new LlmRequestCollector(this.llmStoreFile())
+      this.llmStore = new LlmRequestCollector(path.join(scratch, "llm-requests.jsonl"))
     }
     this.llmStore.reset()
     return true
