@@ -104,7 +104,7 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   },
   "kilocode/session/session-update-b2.test.ts": {
     count: 131,
-    reason: "B2 durable sessionUpdate integration test via AppRuntime and InstanceRef (title-only, replay, stale, scope, validation, rollback, legacy, HTTP, successive distinct, replay after mutation, private read-only, context mismatch, malformed, not-found, fd-carrier, HTTP unknown fields, partial identity, private explicit null, private opId collision, reader-failure replay, barrier, migration snapshot, concurrency, malformed object snapshot, single lease, rollback, omitted-context durable HTTP 400)",
+    reason: "B2 durable sessionUpdate integration test via AppRuntime and InstanceRef (title-only, replay, stale, scope, validation, rollback, legacy, HTTP, successive distinct, replay after mutation, private read-only, context mismatch, malformed, not-found, fd-carrier, HTTP unknown fields, partial identity, private explicit null, private opId collision, reader-failure replay, barrier, migration snapshot, concurrency, malformed object snapshot, single lease, rollback, omitted-context durable HTTP 400, HTTP concurrent distinct via Server.listen)",
   },
 }
 

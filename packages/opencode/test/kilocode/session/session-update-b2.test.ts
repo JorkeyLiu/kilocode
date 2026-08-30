@@ -13,10 +13,15 @@ import { testEffect, pollWithTimeout } from "../../lib/effect"
 import { resetDatabase } from "../../fixture/db"
 import { disposeAllInstances, provideInstance, tmpdir } from "../../fixture/fixture"
 import { AppRuntime } from "../../../src/effect/app-runtime"
+import { makeAppLayer } from "../../../src/effect/app-runtime"
 import * as Log from "@opencode-ai/core/util/log"
 import { Server } from "../../../src/server/server"
 import { ConfigConvergence } from "../../../src/kilocode/server/config-convergence"
 import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
+import { Flag } from "@opencode-ai/core/flag/flag"
+import path from "path"
+import os from "os"
+import fs from "fs/promises"
 
 void Log.init({ print: false })
 
@@ -820,6 +825,117 @@ describe("sessionUpdate B2", () => {
       const ups = (opRows as any[]).filter((r) => r.op_kind === "sessionUpdate")
       expect(ups.length).toBe(1)
       expect(ups[0].title).toBe("bumped")
+    }),
+  )
+
+  it.live("concurrent distinct durable PATCH via HTTP serializes with distinct ops and correct accounting", () =>
+    Effect.gen(function* () {
+      let tmp: any
+      let dir: string | undefined
+      let dbDir: string | undefined
+      let dbfile: string | undefined
+      let prevFlag: string | undefined
+      let prevFlagSet = false
+      let listener: any
+      let freshApp: any
+      const cleanup = Effect.gen(function* () {
+        if (listener) {
+          yield* Effect.promise(() => listener.stop()).pipe(Effect.orDie)
+        }
+        if (prevFlagSet) {
+          yield* Effect.sync(() => {
+            Flag.KILO_DB = prevFlag as string | undefined
+          }).pipe(Effect.orDie)
+        }
+        if (dbfile) {
+          for (const p of [dbfile, `${dbfile}-wal`, `${dbfile}-shm`]) {
+            yield* Effect.promise(() => fs.rm(p, { force: true })).pipe(Effect.orDie)
+            const still = yield* Effect.promise(() => fs.stat(p).then(() => true).catch(() => false))
+            if (still) yield* Effect.die(new Error(`cleanup: ${p} still exists`))
+          }
+        }
+        if (dbDir) {
+          yield* Effect.promise(() => fs.rm(dbDir, { recursive: true, force: true })).pipe(Effect.orDie)
+          const still = yield* Effect.promise(() => fs.stat(dbDir).then(() => true).catch(() => false))
+          if (still) yield* Effect.die(new Error(`cleanup: ${dbDir} still exists`))
+        }
+      })
+      yield* Effect.gen(function* () {
+        tmp = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
+        dir = tmp.path
+        dbDir = path.join(os.tmpdir(), `kilo-b2-http-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`)
+        yield* Effect.promise(() => fs.mkdir(dbDir!, { recursive: true })).pipe(Effect.orDie) as unknown as Effect.Effect<any, any, any>
+        dbfile = path.join(dbDir!, "kilo.db")
+        prevFlag = Flag.KILO_DB
+        prevFlagSet = true
+        yield* Effect.promise(() => fs.rm(dbfile!, { force: true })).pipe(Effect.orDie) as unknown as Effect.Effect<any, any, any>
+        yield* Effect.promise(() => fs.rm(`${dbfile!}-wal`, { force: true })).pipe(Effect.orDie) as unknown as Effect.Effect<any, any, any>
+        yield* Effect.promise(() => fs.rm(`${dbfile!}-shm`, { force: true })).pipe(Effect.orDie) as unknown as Effect.Effect<any, any, any>
+        Flag.KILO_DB = dbfile!
+        freshApp = makeAppLayer()
+        listener = yield* Effect.promise(() => Server.listen({ hostname: "127.0.0.1", port: 0, appLayer: freshApp as any })).pipe(Effect.orDie) as unknown as Effect.Effect<any, any, any>
+        const withDb = <A>(eff: Effect.Effect<A, any, any>) => eff.pipe(Effect.provide(Database.layerNoLease(dbfile!)), Effect.scoped) as unknown as Effect.Effect<A, any, any>
+        const body = Effect.gen(function* () {
+        const createUrl = new URL(`/session?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+        const createRes = yield* Effect.promise(() => fetch(createUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "orig-conc-http" }) }))
+        expect(createRes.status).toBe(200)
+        const session = yield* Effect.promise(() => createRes.json() as Promise<{ id: string }>)
+        const tokenA = "http-distinct-a-fixed"
+        const tokenB = "http-distinct-b-fixed"
+        const opIdA = SessionOperation.sessionUpdateId(session.id, tokenA)
+        const opIdB = SessionOperation.sessionUpdateId(session.id, tokenB)
+        expect(opIdA).not.toBe(opIdB)
+        const bodyA = { title: "http-title-a", idempotencyKey: `sessionUpdate:${session.id}:${tokenA}`, requestId: "req-http-conc-a", opId: opIdA, context: { directory: dir, sessionId: session.id, parentSessionId: null } }
+        const bodyB = { title: "http-title-b", idempotencyKey: `sessionUpdate:${session.id}:${tokenB}`, requestId: "req-http-conc-b", opId: opIdB, context: { directory: dir, sessionId: session.id, parentSessionId: null } }
+        const patchUrl = new URL(`/session/${session.id}?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+        const beforeRev = yield* withDb(Effect.gen(function* () { const db = (yield* Database.Service).db; const row = yield* db.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie); return (row as any)?.rev as number }))
+        const beforeFeed = yield* withDb(Effect.gen(function* () { const db = (yield* Database.Service).db; const rows = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, session.id)).all().pipe(Effect.orDie); return (rows as any[]).length }))
+        const beforeOps = yield* withDb(Effect.gen(function* () { const { SessionOperationTable } = yield* Effect.promise(() => import("@opencode-ai/core/session/sql")); const db = (yield* Database.Service).db; const rows = yield* db.select().from(SessionOperationTable).where(eq(SessionOperationTable.session_id, session.id)).all().pipe(Effect.orDie); return (rows as any[]).filter((r) => r.op_kind === "sessionUpdate").length }))
+        const [resA, resB] = yield* Effect.promise(() => Promise.all([
+          fetch(patchUrl, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyA) }),
+          fetch(patchUrl, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyB) }),
+        ])) as unknown as Effect.Effect<any, any, any>
+        expect(resA.status).toBe(200)
+        expect(resB.status).toBe(200)
+        const dataA = yield* Effect.promise(() => resA.json() as Promise<{ title: string }>)
+        const dataB = yield* Effect.promise(() => resB.json() as Promise<{ title: string }>)
+        expect(dataA.title).toBe("http-title-a")
+        expect(dataB.title).toBe("http-title-b")
+        const afterRev = yield* withDb(Effect.gen(function* () { const db = (yield* Database.Service).db; const row = yield* db.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie); return (row as any)?.rev as number }))
+        expect(afterRev - beforeRev).toBe(2)
+        const afterFeed = yield* withDb(Effect.gen(function* () { const db = (yield* Database.Service).db; const rows = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, session.id)).all().pipe(Effect.orDie); return (rows as any[]).length }))
+        expect(afterFeed - beforeFeed).toBe(2)
+        const opRowsAfter = yield* withDb(Effect.gen(function* () { const { SessionOperationTable } = yield* Effect.promise(() => import("@opencode-ai/core/session/sql")); const db = (yield* Database.Service).db; const rows = yield* db.select().from(SessionOperationTable).where(eq(SessionOperationTable.session_id, session.id)).all().pipe(Effect.orDie); return rows }))
+        const upsAfter = (opRowsAfter as any[]).filter((r) => r.op_kind === "sessionUpdate")
+        expect(upsAfter.length - beforeOps).toBe(2)
+        const opIdsAfter = upsAfter.map((r: any) => r.op_id).sort()
+        expect(opIdsAfter.includes(opIdA)).toBeTrue()
+        expect(opIdsAfter.includes(opIdB)).toBeTrue()
+        expect(new Set(opIdsAfter).size).toBe(upsAfter.length)
+        const revs = upsAfter.map((r: any) => r.revision).sort((a: number, b: number) => a - b)
+        expect(revs[revs.length - 1] - revs[revs.length - 2]).toBe(1)
+        const getRes = yield* Effect.promise(() => fetch(new URL(`/session/${session.id}?directory=${encodeURIComponent(dir)}`, listener.url).toString()))
+        expect(getRes.status).toBe(200)
+        const finalInfo = yield* Effect.promise(() => getRes.json() as Promise<{ title: string }>)
+        expect(["http-title-a", "http-title-b"].includes(finalInfo.title)).toBeTrue()
+        const replayRes = yield* Effect.promise(() => fetch(patchUrl, { method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(bodyA) }))
+        expect(replayRes.status).toBe(200)
+        const replayData = yield* Effect.promise(() => replayRes.json() as Promise<{ title: string }>)
+        expect(replayData.title).toBe("http-title-a")
+        const afterReplayRev = yield* withDb(Effect.gen(function* () { const db = (yield* Database.Service).db; const row = yield* db.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, session.id)).get().pipe(Effect.orDie); return (row as any)?.rev as number }))
+        expect(afterReplayRev).toBe(afterRev)
+        const afterReplayFeed = yield* withDb(Effect.gen(function* () { const db = (yield* Database.Service).db; const rows = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, session.id)).all().pipe(Effect.orDie); return (rows as any[]).length }))
+        expect(afterReplayFeed).toBe(afterFeed)
+        const opRowsReplay = yield* withDb(Effect.gen(function* () { const { SessionOperationTable } = yield* Effect.promise(() => import("@opencode-ai/core/session/sql")); const db = (yield* Database.Service).db; const rows = yield* db.select().from(SessionOperationTable).where(eq(SessionOperationTable.session_id, session.id)).all().pipe(Effect.orDie); return rows }))
+        const upsReplay = (opRowsReplay as any[]).filter((r) => r.op_kind === "sessionUpdate")
+        expect(upsReplay.length).toBe(upsAfter.length)
+        const finalInfoAfterReplay = yield* Effect.promise(() => fetch(new URL(`/session/${session.id}?directory=${encodeURIComponent(dir!)}`, listener.url).toString()).then((r) => r.json() as Promise<{ title: string }>))
+        expect(["http-title-a", "http-title-b"].includes(finalInfoAfterReplay.title)).toBeTrue()
+        expect(typeof finalInfoAfterReplay.title).toBe("string")
+        expect(finalInfoAfterReplay.title.length).toBeGreaterThan(0)
+      })
+      yield* body
+      }).pipe(Effect.ensuring(cleanup))
     }),
   )
 })

@@ -4,7 +4,7 @@ import { sql, eq } from "drizzle-orm"
 import { getTableConfig } from "drizzle-orm/sqlite-core"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable, SessionOperationTable } from "@opencode-ai/core/session/sql"
-import { SessionChangefeedTable } from "@opencode-ai/core/retention/sql"
+import { RetentionObligationTable, SessionChangefeedTable } from "@opencode-ai/core/retention/sql"
 import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 import * as Retention from "@opencode-ai/core/retention/retention"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -758,6 +758,145 @@ describe("R11 operation record foundation", () => {
       expect(dels.length).toBe(2)
       for (const d of dels) expect(d.revision).toBeGreaterThan(0)
     }),
+  )
+
+  it.effect(
+    "B2 sessionUpdate retention cascade deletes payload-bearing title/snapshot rows via actual retention path but retains deleted tombstone and obligation (not live high-watermark trimming)",
+    () =>
+      Effect.gen(function* () {
+        yield* setup
+        const svc = yield* SessionV2.Service
+        const { db } = yield* Database.Service
+        const s = yield* svc.create({ location })
+        // actual sessionUpdate durable insertion: title-only, payload-bearing snapshot (B2 evidence preparation)
+        const token = "b2tok"
+        const opIdSU = SessionOperation.sessionUpdateId(s.id, token)
+        const hash = SessionOperation.hashIdempotencyKey(`sessionUpdate:${s.id}:${token}`)
+        const nowInsert = 1_000_000
+        const rec: SessionOperation.FailureRecord = {
+          opId: opIdSU,
+          opKind: "sessionUpdate",
+          outcome: "succeeded",
+          code: "sessionUpdate.succeeded",
+          message: "ok",
+          time: nowInsert,
+        }
+        const meta: SessionOperation.SessionUpdateMeta = {
+          idempotencyHash: hash,
+          requestId: "req_b2",
+          directory: "/project",
+          parentSessionId: null,
+          configVersion: 1,
+          sessionRevision: 0,
+          title: "b2-title",
+        }
+        const inserted = yield* db.transaction((tx) =>
+          SessionOperation.insertSessionUpdateSucceededTx(tx as unknown as typeof db, s.id, rec, meta),
+        )
+        expect(inserted.meta.title).toBe("b2-title")
+        expect(inserted.resultSnapshot).toBeDefined()
+        // verify payload-bearing row exists before retention (title + result_snapshot)
+        const beforeRow = yield* db
+          .select()
+          .from(SessionOperationTable)
+          .where(eq(SessionOperationTable.op_id, opIdSU))
+          .get()
+          .pipe(Effect.orDie)
+        expect(beforeRow).toBeDefined()
+        expect(beforeRow!.op_kind).toBe("sessionUpdate")
+        expect(beforeRow!.title).toBe("b2-title")
+        expect(beforeRow!.result_snapshot).not.toBeNull()
+        expect(typeof beforeRow!.result_snapshot).toBe("string")
+        const parsed = JSON.parse(beforeRow!.result_snapshot as unknown as string)
+        expect(parsed.title).toBe("b2-title")
+        expect(parsed.id).toBe(s.id)
+        const fetched = yield* SessionOperation.getSessionUpdateByIdempotencyHash(db, s.id, hash)
+        expect(fetched).toBeDefined()
+        expect(fetched!.meta.title).toBe("b2-title")
+        const opsBefore = yield* SessionOperation.list(db, s.id)
+        expect(opsBefore.length).toBe(1)
+        expect(opsBefore[0]!.opId).toBe(opIdSU)
+        const revBefore = yield* db
+          .select({ rev: SessionTable.revision })
+          .from(SessionTable)
+          .where(eq(SessionTable.id, s.id))
+          .get()
+          .pipe(Effect.orDie)
+        expect(revBefore!.rev).toBeGreaterThan(0)
+        const feedBefore = yield* db
+          .select()
+          .from(SessionChangefeedTable)
+          .where(eq(SessionChangefeedTable.session_id, s.id))
+          .all()
+          .pipe(Effect.orDie)
+        expect(feedBefore.length).toBe(1)
+        expect(feedBefore[0]!.kind).toBe("changed")
+
+        // make eligible for actual retention path (7-day cutoff, not live disk/high-watermark)
+        yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, s.id)).run().pipe(Effect.orDie)
+        const fam = { rootID: s.id, sessionIDs: [s.id], activity: 0 }
+        const nowDelete = Date.now()
+        yield* Retention.deleteFamilyTransaction(db, fam, nowDelete, () => false, () => false)
+
+        // operation rows cascade away — payload-bearing title/snapshot do not survive (B2-specific)
+        const afterOps = yield* db
+          .select()
+          .from(SessionOperationTable)
+          .where(eq(SessionOperationTable.session_id, s.id))
+          .all()
+          .pipe(Effect.orDie)
+        expect(afterOps.length).toBe(0)
+        const gone = yield* SessionOperation.get(db, opIdSU)
+        expect(gone).toBeUndefined()
+        const goneByHash = yield* SessionOperation.getSessionUpdateByIdempotencyHash(db, s.id, hash)
+        expect(goneByHash).toBeUndefined()
+        const listedAfter = yield* SessionOperation.list(db, s.id)
+        expect(listedAfter.length).toBe(0)
+        const rawAfter = yield* db
+          .select()
+          .from(SessionOperationTable)
+          .where(eq(SessionOperationTable.op_id, opIdSU))
+          .get()
+          .pipe(Effect.orDie)
+        expect(rawAfter).toBeUndefined()
+
+        // session row gone
+        const sess = yield* db.select().from(SessionTable).where(eq(SessionTable.id, s.id)).get().pipe(Effect.orDie)
+        expect(sess).toBeUndefined()
+
+        // deleted tombstone remains, payload-free (kind/revision/seq/session_id/time only) plus earlier changed
+        const feed = yield* db
+          .select()
+          .from(SessionChangefeedTable)
+          .where(eq(SessionChangefeedTable.session_id, s.id))
+          .all()
+          .pipe(Effect.orDie)
+        const dels = feed.filter((r) => r.kind === "deleted")
+        expect(dels.length).toBe(1)
+        expect(dels[0]!.revision).toBe(revBefore!.rev + 1)
+        expect(dels[0]!.session_id).toBe(s.id)
+        expect(Object.keys(dels[0]!).sort()).toEqual(["kind", "revision", "seq", "session_id", "time"].sort())
+        expect(feed.length).toBe(2)
+        expect(feed.filter((r) => r.kind === "changed").length).toBe(1)
+
+        // retention_obligation remains as specified
+        const obs = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)
+        expect(obs.length).toBe(1)
+        expect(obs[0]!.family_root_id).toBe(s.id)
+        const ids = obs[0]!.session_ids as unknown as string[]
+        expect(ids).toEqual([s.id])
+
+        // obligation replay/cleanup via existing API is practical (idempotent deleter, not live trimming)
+        let keys: string[][] = []
+        const deleter = (k: string[][]) => Effect.sync(() => { keys.push(...k) })
+        yield* Retention.replayObligations(db, deleter)
+        expect(keys.length).toBe(3)
+        const afterObs = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)
+        expect(afterObs.length).toBe(0)
+        keys = []
+        yield* Retention.replayObligations(db, deleter)
+        expect(keys.length).toBe(0)
+      }),
   )
 
   it.effect("transaction rollback leaves revision and feed unchanged on conflict", () =>
