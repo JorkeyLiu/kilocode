@@ -99,8 +99,12 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason: "B0 durable cancelQueued integration test via AppRuntime and InstanceRef (LOCK-301..307 bounded corrections)",
   },
   "kilocode/server/fd-carrier.test.ts": {
-    count: 2,
-    reason: "B1 fd-carrier integration test via AppRuntime for real B0 dispatch (carrier + HTTP fallback)",
+    count: 8,
+    reason: "B1 fd-carrier integration test via AppRuntime for real B0 dispatch and B2 sessionUpdate replay via carrier (carrier + HTTP fallback, positive persisted replay via createFdCarrier)",
+  },
+  "kilocode/session/session-update-b2.test.ts": {
+    count: 131,
+    reason: "B2 durable sessionUpdate integration test via AppRuntime and InstanceRef (title-only, replay, stale, scope, validation, rollback, legacy, HTTP, successive distinct, replay after mutation, private read-only, context mismatch, malformed, not-found, fd-carrier, HTTP unknown fields, partial identity, private explicit null, private opId collision, reader-failure replay, barrier, migration snapshot, concurrency, malformed object snapshot, single lease, rollback, omitted-context durable HTTP 400)",
   },
 }
 

@@ -55,6 +55,19 @@ export const UpdatePayload = Schema.Struct({
       archived: Schema.optional(Session.ArchivedTimestamp),
     }),
   ),
+  // kilocode_change - P4.4-G3-B2 durable title-only lane (optional) — finite safe integers; HTTP handler enforces strict unknown-field rejection for OpenAPI `additionalProperties: false` parity
+  idempotencyKey: Schema.optional(Schema.String),
+  requestId: Schema.optional(Schema.String),
+  opId: Schema.optional(Schema.String),
+  context: Schema.optional(
+    Schema.Struct({
+      directory: Schema.String,
+      sessionId: SessionID,
+      parentSessionId: Schema.optional(Schema.NullOr(SessionID)),
+      configVersion: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }))),
+      sessionRevision: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }))),
+    }),
+  ),
 })
 export const ForkPayload = Schema.Struct(Struct.omit(Session.ForkInput.fields, ["sessionID"]))
 export const InitPayload = Schema.Struct({
@@ -238,7 +251,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: UpdatePayload,
           success: described(Session.Info, "Successfully updated session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, HttpApiError.Conflict, HttpApiError.InternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.update",

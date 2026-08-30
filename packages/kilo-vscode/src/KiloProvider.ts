@@ -57,7 +57,8 @@ import { normalize, type SSEPayload, type SyncPayload, type WirePayload } from "
 import { isP0PerfEnabled, p0Stage, p0Webview } from "./perf/perf-instrument"
 import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
-import { renameSession } from "./kilo-provider/rename-session"
+import { renameSessionWithResult, buildSessionUpdateIdentity } from "./kilo-provider/rename-session"
+import { parseSessionTitle } from "./shared/session-title"
 import { handleFileSearch } from "./kilo-provider/file-search"
 import { handleFilePicker } from "./kilo-provider/file-picker"
 import { watchFontSizeConfig } from "./kilo-provider/font-size"
@@ -1385,7 +1386,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private get client(): KiloClient | null {
     try {
       return this.connectionService.getClient()
-    } catch {
+    } catch (err) {
+      console.warn("[KiloProvider] getClient failed:", err instanceof Error ? err.message : String(err))
       return null
     }
   }
@@ -2870,21 +2872,140 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Handle renaming a session.
+   * Handle renaming a session — SDK authoritative, private parity observation-only (B2).
+   * SDK PATCH executes first and is the only user-visible authority; private session/update
+   * replays the same identity (sessionUpdate:<sessionID> + per-attempt idempotencyKey) with
+   * log-only compare, fail-closed on unavailable/timeout/epoch drift.
    */
   private async handleRenameSession(sessionID: string, title: string): Promise<void> {
+    if (!this.client) {
+      this.postMessage({ type: "error", message: "Not connected to CLI backend" })
+      return
+    }
+    const dir = this.getWorkspaceDirectory(sessionID)
+    const parsed = parseSessionTitle(title)
+    if ("error" in parsed) {
+      this.postMessage({ type: "error", message: getErrorMessage(new Error("Invalid session title")) || "Invalid session title" })
+      return
+    }
+    const { opId, idempotencyKey, requestId } = buildSessionUpdateIdentity(sessionID)
+    const durableContext: { directory: string; sessionId: string; parentSessionId: null } = { directory: dir, sessionId: sessionID, parentSessionId: null }
+    let sdkRes: { data?: Session; error?: unknown; response?: unknown }
+    let sdkThrew = false
     try {
-      const updated = await renameSession({
+      sdkRes = await renameSessionWithResult({
         client: this.client,
         sessionID,
-        title,
-        directory: this.getWorkspaceDirectory(sessionID),
+        title: parsed.value,
+        directory: dir,
+        opId,
+        idempotencyKey,
+        requestId,
+        context: durableContext,
       })
-      if (this.currentSession?.id === sessionID) this.setCurrentSession(updated)
-      this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(updated) })
     } catch (error) {
+      sdkThrew = true
       console.error("[Kilo New] KiloProvider: Failed to rename session:", error)
       this.postMessage({ type: "error", message: getErrorMessage(error) || "Failed to rename session" })
+      sdkRes = { error, response: undefined, data: undefined }
+    }
+    // Preserve Session.Info success and SDK terminal status (authoritative)
+    if (!sdkThrew) {
+      if (sdkRes!.data && !sdkRes!.error) {
+        const updated = sdkRes!.data as Session
+        if (this.currentSession?.id === sessionID) this.setCurrentSession(updated)
+        this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(updated) })
+      } else if (sdkRes!.error) {
+        console.error("[Kilo New] KiloProvider: Failed to rename session:", sdkRes!.error)
+        this.postMessage({ type: "error", message: getErrorMessage(sdkRes!.error) || "Failed to rename session" })
+      }
+    }
+
+    const isPrivateAvailable = (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
+    if (!isPrivateAvailable) return
+    const sdkHasTerminal = (() => {
+      const resp = (sdkRes as unknown as { response?: { status?: unknown } })?.response
+      const respStatus = resp && typeof resp.status === "number" && Number.isInteger(resp.status) ? (resp.status as number) : resp && typeof resp.status === "string" ? Number(resp.status) : null
+      if (respStatus !== null && Number.isInteger(respStatus) && respStatus >= 100 && respStatus < 600) {
+        if ([400, 404, 409, 500].includes(respStatus)) return true
+        if (sdkRes.error) return false
+        return true
+      }
+      if (!sdkRes.error) return true
+      const err = sdkRes.error as Record<string, unknown>
+      const candidates: unknown[] = [err.status, err.statusCode, err.code, err.httpStatus]
+      for (const c of candidates) {
+        if (typeof c === "number" && [400, 404, 409, 500].includes(c)) return true
+        if (typeof c === "string" && ["400", "404", "409", "500"].includes(c)) return true
+        const n = typeof c === "string" ? Number(c) : null
+        if (n !== null && [400, 404, 409, 500].includes(n)) return true
+      }
+      if (typeof err.message === "string" && /\b(400|404|409|500)\b/.test(err.message)) return true
+      const tag = typeof err._tag === "string" ? String(err._tag).toLowerCase() : ""
+      if (tag.includes("badrequest") || tag.includes("notfound") || tag.includes("conflict") || tag.includes("internal")) return true
+      if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined") return false
+      return false
+    })()
+    if (!sdkHasTerminal) return
+    const privateReq = {
+      v: 1 as const,
+      requestId,
+      opId,
+      op: "session/update" as const,
+      idempotencyKey,
+      context: durableContext,
+      payload: { title: parsed.value },
+    }
+    const svc = this.connectionService as unknown as { privateSessionUpdate: (req: typeof privateReq) => Promise<unknown> }
+    if (typeof svc.privateSessionUpdate !== "function") return
+    let priv: unknown
+    try {
+      const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
+        let timer: ReturnType<typeof setTimeout> | undefined
+        const timeout = new Promise<never>((_, reject) => {
+          timer = setTimeout(() => reject(new Error(`private parity timeout after ${ms}ms`)), ms)
+          ;(timer as unknown as { unref?: () => void })?.unref?.()
+        })
+        return Promise.race([p, timeout]).finally(() => {
+          if (timer) clearTimeout(timer)
+        }) as Promise<T>
+      }
+      priv = await withTimeout(svc.privateSessionUpdate(privateReq), 3000).catch((e: unknown) => {
+        return {
+          v: 1,
+          requestId: privateReq.requestId,
+          opId: privateReq.opId,
+          op: "session/update",
+          idempotencyKey: privateReq.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+          _error: String(e),
+        }
+      })
+    } catch (e) {
+      console.warn("[Kilo PrivateParity] session/update parity observation failed", { opId, error: String(e) })
+      return
+    }
+    try {
+      const { compareUpdateParity } = await import("./services/cli-backend/serve-private-peer")
+      const res = compareUpdateParity(priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateSessionUpdateResult, sdkRes as unknown as { data?: unknown; error?: unknown; response?: unknown })
+      if (res.divergence) {
+        const p = priv as Record<string, unknown>
+        console.warn("[Kilo PrivateParity] divergence", {
+          opId,
+          sessionID,
+          divergence: res.divergence,
+          details: res.details,
+          privStatus: (p.status as string) ?? "unknown",
+          transportUnknown: !!(p.transportUnknown as boolean),
+        })
+      } else {
+        console.log("[Kilo PrivateParity] parity match", { opId, status: sdkRes.error ? "failed" : "succeeded" })
+      }
+    } catch (e) {
+      console.warn("[Kilo PrivateParity] session/update parity observation failed", { opId, error: String(e) })
     }
   }
 
@@ -3105,7 +3226,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         apiKey: auth.key,
         hasCredential: true,
       })
-    } catch {
+    } catch (err) {
+      console.warn("[KiloProvider] load api key failed:", err instanceof Error ? err.message : String(err))
       return errReply("Unable to load API key")
     }
   }

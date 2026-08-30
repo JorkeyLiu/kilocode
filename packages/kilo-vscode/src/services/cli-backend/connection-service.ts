@@ -6,7 +6,7 @@ import type { ServerConfig } from "./types"
 import { resolveEventSessionId as resolveEventSessionIdPure } from "./connection-utils"
 import { SandboxPreference } from "../sandbox-preference"
 import { isP0PerfEnabled, p0Span, p0Stage } from "../../perf/perf-instrument"
-import { ServePrivatePeer, type ServePrivateCancelQueuedRequest, type ServePrivateCancelQueuedResult } from "./serve-private-peer"
+import { ServePrivatePeer, type ServePrivateCancelQueuedRequest, type ServePrivateCancelQueuedResult, type ServePrivateSessionUpdateRequest, type ServePrivateSessionUpdateResult } from "./serve-private-peer"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
 type SSEEventListener = (event: SSEPayload, directory?: string, transaction?: string) => void
@@ -901,6 +901,45 @@ export class KiloConnectionService {
         accepted: false,
         transportUnknown: true,
       } as unknown as ServePrivateCancelQueuedResult
+    }
+    return result
+  }
+
+  async privateSessionUpdate(req: ServePrivateSessionUpdateRequest): Promise<ServePrivateSessionUpdateResult> {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("session/update")) {
+      throw new Error("Private peer missing session/update capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const result = await peerAtCall.privateSessionUpdate(req)
+    if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+      return {
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "session/update",
+        idempotencyKey: req.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      } as unknown as ServePrivateSessionUpdateResult
+    }
+    if (this.privatePeer !== peerAtCall) {
+      return {
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "session/update",
+        idempotencyKey: req.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      } as unknown as ServePrivateSessionUpdateResult
     }
     return result
   }

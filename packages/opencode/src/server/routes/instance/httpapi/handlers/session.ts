@@ -4,6 +4,7 @@ import { BlockedError as AgentRequirementError } from "@/kilocode/agent-requirem
 import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
 import { CancelQueuedDispatchService, type CancelQueuedResult } from "@/kilocode/session/cancel-queued-dispatch" // kilocode_change - P4.4-G3-B0
+import { SessionUpdateDispatchService, type SessionUpdateResult } from "@/kilocode/session/session-update-dispatch" // kilocode_change - P4.4-G3-B2 durable title
 import { SessionOperation } from "@opencode-ai/core/session/operation" // kilocode_change - LOCK-201 canonical opId
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -181,27 +182,129 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return true
     })
 
+    const sessionUpdateDispatch = yield* SessionUpdateDispatchService // kilocode_change - P4.4-G3-B2
+    const updateCore = (sessionID: SessionID, payload: typeof UpdatePayload.Type) =>
+      Effect.gen(function* () {
+        const current = yield* requireSession(sessionID)
+        const isDurable =
+          payload.idempotencyKey !== undefined ||
+          payload.requestId !== undefined ||
+          payload.opId !== undefined ||
+          payload.context !== undefined
+        if (isDurable) {
+          if (payload.title === undefined) return yield* new HttpApiError.BadRequest({})
+          if (payload.idempotencyKey === undefined || payload.requestId === undefined || payload.opId === undefined)
+            return yield* new HttpApiError.BadRequest({})
+          if (payload.context === undefined) return yield* new HttpApiError.BadRequest({})
+          if (payload.context.sessionId !== sessionID) return yield* new HttpApiError.BadRequest({})
+          const dir = payload.context.directory
+          const requestId = payload.requestId
+          const opId = payload.opId
+          const idempotencyKey = payload.idempotencyKey
+          const req = {
+            v: 1 as const,
+            requestId,
+            opId,
+            op: "session/update" as const,
+            idempotencyKey,
+            context: {
+              directory: dir,
+              sessionId: sessionID,
+              parentSessionId: (payload.context.parentSessionId ?? null) as string | null,
+              configVersion: payload.context.configVersion,
+              sessionRevision: payload.context.sessionRevision,
+            },
+            payload: { title: payload.title as string },
+          }
+          const result = yield* (sessionUpdateDispatch.dispatch(req).pipe(
+            Effect.catchDefect(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+            Effect.catch(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+          ) as Effect.Effect<SessionUpdateResult, HttpApiError.InternalServerError>)
+          if (result.status === "succeeded") return result.data
+          if (result.status === "failed") {
+            if (result.failure.code === "session.not_found") {
+              return yield* Effect.fail(new ApiNotFoundError({ name: "NotFoundError", data: { message: result.failure.message } }))
+            }
+            if (result.failure.code === "validation.failed") {
+              return yield* Effect.fail(new HttpApiError.BadRequest({}))
+            }
+            if (result.failure.code === "scope_mismatch") {
+              return yield* Effect.fail(new HttpApiError.BadRequest({}))
+            }
+            if (result.failure.code === "stale" || result.failure.code === "conflict") {
+              return yield* Effect.fail(new HttpApiError.Conflict({}))
+            }
+            if (result.failure.code === "InstanceUnavailableDuringConfigRebuild") {
+              return yield* Effect.fail(new HttpApiError.Conflict({}))
+            }
+            if (result.failure.code === "internal") {
+              return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+            }
+            return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+          }
+          return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+        }
+        if (payload.title !== undefined) {
+          yield* session.setTitle({ sessionID: sessionID, title: payload.title })
+        }
+        if (payload.metadata !== undefined) {
+          yield* session.setMetadata({ sessionID: sessionID, metadata: payload.metadata })
+        }
+        if (payload.permission !== undefined) {
+          yield* session.setPermission({
+            sessionID: sessionID,
+            permission: Permission.merge(current.permission ?? [], payload.permission),
+          })
+        }
+        if (payload.time?.archived !== undefined) {
+          yield* session.setArchived({ sessionID: sessionID, time: payload.time.archived })
+        }
+        return yield* requireSession(sessionID)
+      })
+
     const update = Effect.fn("SessionHttpApi.update")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof UpdatePayload.Type
     }) {
-      const current = yield* requireSession(ctx.params.sessionID)
-      if (ctx.payload.title !== undefined) {
-        yield* session.setTitle({ sessionID: ctx.params.sessionID, title: ctx.payload.title })
+      return yield* updateCore(ctx.params.sessionID, ctx.payload)
+    })
+
+    const updateRaw = Effect.fn("SessionHttpApi.updateRaw")(function* (ctx: {
+      params: { sessionID: SessionID }
+      request: HttpServerRequest.HttpServerRequest
+    }) {
+      const body = yield* Effect.orDie(ctx.request.text)
+      if (body.trim().length === 0) return yield* new HttpApiError.BadRequest({})
+      const json = yield* tryParseJson(body)
+      // strict unknown-field rejection for OpenAPI additionalProperties:false parity (finite integers already via Schema)
+      if (json !== null && typeof json === "object" && !Array.isArray(json)) {
+        const j = json as Record<string, unknown>
+        const allowedRoot = new Set(["title", "metadata", "permission", "time", "idempotencyKey", "requestId", "opId", "context"])
+        for (const k of Object.keys(j)) if (!allowedRoot.has(k)) return yield* new HttpApiError.BadRequest({})
+        const c = j.context as unknown
+        if (c !== null && typeof c === "object" && !Array.isArray(c)) {
+          const allowedCtx = new Set(["directory", "sessionId", "parentSessionId", "configVersion", "sessionRevision"])
+          for (const k of Object.keys(c as Record<string, unknown>)) if (!allowedCtx.has(k)) return yield* new HttpApiError.BadRequest({})
+        }
+        const timeRaw = j.time as unknown
+        if (timeRaw !== null && typeof timeRaw === "object" && !Array.isArray(timeRaw)) {
+          const allowedTime = new Set(["archived"])
+          for (const k of Object.keys(timeRaw as Record<string, unknown>)) if (!allowedTime.has(k)) return yield* new HttpApiError.BadRequest({})
+        }
+        const permRaw = j.permission as unknown
+        if (permRaw !== undefined && permRaw !== null) {
+          if (!Array.isArray(permRaw)) return yield* new HttpApiError.BadRequest({})
+          const allowedRule = new Set(["permission", "pattern", "action"])
+          for (const el of permRaw as unknown[]) {
+            if (el === null || typeof el !== "object" || Array.isArray(el)) return yield* new HttpApiError.BadRequest({})
+            for (const k of Object.keys(el as Record<string, unknown>)) if (!allowedRule.has(k)) return yield* new HttpApiError.BadRequest({})
+          }
+        }
       }
-      if (ctx.payload.metadata !== undefined) {
-        yield* session.setMetadata({ sessionID: ctx.params.sessionID, metadata: ctx.payload.metadata })
-      }
-      if (ctx.payload.permission !== undefined) {
-        yield* session.setPermission({
-          sessionID: ctx.params.sessionID,
-          permission: Permission.merge(current.permission ?? [], ctx.payload.permission),
-        })
-      }
-      if (ctx.payload.time?.archived !== undefined) {
-        yield* session.setArchived({ sessionID: ctx.params.sessionID, time: ctx.payload.time.archived })
-      }
-      return yield* requireSession(ctx.params.sessionID)
+      const decoded = yield* Schema.decodeUnknownEffect(UpdatePayload)(json).pipe(
+        Effect.mapError(() => new HttpApiError.BadRequest({})),
+      )
+      return yield* updateCore(ctx.params.sessionID, decoded)
     })
 
     const fork = Effect.fn("SessionHttpApi.fork")(function* (ctx: {
@@ -463,7 +566,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("message", message)
       .handleRaw("create", createRaw)
       .handle("remove", remove)
-      .handle("update", update)
+      .handleRaw("update", updateRaw)
       .handleRaw("fork", forkRaw) // kilocode_change - carry upstream bodyless full-session fork support
       .handle("abort", abort)
       .handle("init", init)

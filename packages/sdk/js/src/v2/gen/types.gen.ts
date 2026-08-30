@@ -2362,6 +2362,10 @@ export type Session4 = {
   }
 }
 
+export type EffectHttpApiErrorConflict = {
+  _tag: "Conflict"
+}
+
 export type Session5 = {
   id: string
   slug: string
@@ -2679,10 +2683,6 @@ export type Session9 = {
     snapshot?: string
     diff?: string
   }
-}
-
-export type EffectHttpApiErrorConflict = {
-  _tag: "Conflict"
 }
 
 export type EventTuiPromptAppend2 = {
@@ -8289,6 +8289,16 @@ export type SessionUpdateData = {
     time?: {
       archived?: number
     }
+    idempotencyKey?: string
+    requestId?: string
+    opId?: string
+    context?: {
+      directory: string
+      sessionId: string
+      parentSessionId?: string | null
+      configVersion?: number
+      sessionRevision?: number
+    }
   }
   path: {
     sessionID: string
@@ -8309,6 +8319,14 @@ export type SessionUpdateErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type SessionUpdateError = SessionUpdateErrors[keyof SessionUpdateErrors]

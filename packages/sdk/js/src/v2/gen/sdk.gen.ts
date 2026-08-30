@@ -3983,6 +3983,16 @@ export class Session2 extends HeyApiClient {
       time?: {
         archived?: number
       }
+      idempotencyKey?: string
+      requestId?: string
+      opId?: string
+      context?: {
+        directory: string
+        sessionId: string
+        parentSessionId?: string | null
+        configVersion?: number
+        sessionRevision?: number
+      }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3998,6 +4008,10 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "metadata" },
             { in: "body", key: "permission" },
             { in: "body", key: "time" },
+            { in: "body", key: "idempotencyKey" },
+            { in: "body", key: "requestId" },
+            { in: "body", key: "opId" },
+            { in: "body", key: "context" },
           ],
         },
       ],

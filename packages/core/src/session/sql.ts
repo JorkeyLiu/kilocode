@@ -187,7 +187,7 @@ export const SessionOperationTable = sqliteTable(
       .$type<SessionSchema.ID>()
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
-    op_kind: text().$type<"prompt" | "provider" | "tool" | "permission" | "task" | "cancelQueued">().notNull(),
+    op_kind: text().$type<"prompt" | "provider" | "tool" | "permission" | "task" | "cancelQueued" | "sessionUpdate">().notNull(),
     outcome: text().$type<"succeeded" | "failed" | "ambiguous" | "in-flight" | "superseded" | "abandoned">().notNull(),
     code: text().notNull(),
     message: text().notNull(),
@@ -204,6 +204,8 @@ export const SessionOperationTable = sqliteTable(
     config_version: integer(),
     session_revision: integer(),
     cancelled: integer({ mode: "boolean" }),
+    title: text(),
+    result_snapshot: text(),
   },
   (table) => [
     index("session_operation_session_idx").on(table.session_id),
@@ -213,7 +215,7 @@ export const SessionOperationTable = sqliteTable(
       .on(table.session_id, table.idempotency_hash)
       .where(sql`${table.idempotency_hash} IS NOT NULL`),
     index("session_operation_message_id_idx").on(table.message_id).where(sql`${table.message_id} IS NOT NULL`),
-    check("session_operation_op_kind_check", sql`${table.op_kind} IN ('prompt','provider','tool','permission','task','cancelQueued')`),
+    check("session_operation_op_kind_check", sql`${table.op_kind} IN ('prompt','provider','tool','permission','task','cancelQueued','sessionUpdate')`),
     check(
       "session_operation_outcome_check",
       sql`${table.outcome} IN ('succeeded','failed','ambiguous','in-flight','superseded','abandoned')`,
