@@ -13,10 +13,9 @@
  * - No production source registers a webview view under the forbidden sidebar
  *   ids or resolves the sidebar, and no stale `kilo-code.SidebarProvider.focus`
  *   / `sidebarTitle.*` references remain.
- * - Preserved surfaces survive: Agent Manager and "Open in Tab" panel
- *   serializers are still registered, editor/title toolbar commands are
- *   unchanged, and commands that used the sidebar fallback now route through
- *   `resolveChatTarget` / `ensureChatTab` (active tab or Agent Manager).
+ * - Preserved surfaces survive: the Agent Manager panel serializer is still
+ *   registered and commands that used the sidebar fallback now route through
+ *   `resolveChatTarget` (Agent Manager is the sole chat surface).
  * - The cycle-agent-mode keybindings exist and are scoped to the editor
  *   surfaces only (asserted non-vacuously: the bindings must be present).
  * - The demonstrably sidebar-exclusive i18n keys are absent from every app
@@ -116,8 +115,6 @@ describe("P3.1 manifest — Activity Bar sidebar contributions removed", () => {
 
   it("scopes cycle-agent-mode keybindings to the editor surfaces only", () => {
     const bindings = pkg.contributes?.keybindings ?? []
-    // Non-vacuous: the keybindings must actually exist before their `when`
-    // clauses are asserted.
     for (const cmd of ["kilo-code.new.cycleAgentMode", "kilo-code.new.cyclePreviousAgentMode"]) {
       const found = bindings.filter((b: { command: string }) => b.command === cmd)
       expect(found.length, `expected a keybinding for ${cmd}`).toBeGreaterThan(0)
@@ -125,7 +122,7 @@ describe("P3.1 manifest — Activity Bar sidebar contributions removed", () => {
         expect(binding.when).not.toContain(SIDEBAR_CONTEXT_KEY)
         expect(binding.when).not.toContain("sideBarFocus")
         expect(binding.when).toContain("activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel'")
-        expect(binding.when).toContain("activeWebviewPanelId == 'kilo-code.new.TabPanel'")
+        expect(binding.when).not.toContain("kilo-code.new.TabPanel")
       }
     }
   })
@@ -240,9 +237,10 @@ describe("P3.1 residue — no sidebar-exclusive i18n keys or telemetry names", (
 })
 
 describe("P3.1 routing — preserved surfaces and command re-routing", () => {
-  it("still registers the Agent Manager and Open-in-Tab serializers", () => {
+  it("still registers the Agent Manager serializer and removes the TabPanel serializer", () => {
     expect(ext).toContain("vscode.window.registerWebviewPanelSerializer(AgentManagerProvider.viewType")
-    expect(ext).toContain('vscode.window.registerWebviewPanelSerializer("kilo-code.new.TabPanel"')
+    expect(ext).not.toContain('vscode.window.registerWebviewPanelSerializer("kilo-code.new.TabPanel"')
+    expect(ext).not.toContain("kilo-code.new.TabPanel")
   })
 
   it("still registers the standalone panel serializers", () => {
@@ -254,15 +252,16 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
     expect(ext).not.toContain("DiffVirtualProvider")
   })
 
-  it("keeps the editor/title toolbar contributions intact", () => {
+  it("removes the TabPanel editor/title toolbar contributions", () => {
     const menus = pkg.contributes?.menus ?? {}
     const editorTitle = menus["editor/title"] ?? []
-    expect(editorTitle.some((m: { command: string }) => m.command === "kilo-code.new.openInTab")).toBe(true)
-    expect(editorTitle.some((m: { command: string }) => m.command === "kilo-code.new.plusButtonClicked")).toBe(true)
-    expect(editorTitle.some((m: { command: string }) => m.command === "kilo-code.new.settingsButtonClicked")).toBe(true)
+    expect(editorTitle.some((m: { command: string }) => m.command === "kilo-code.new.openInTab")).toBe(false)
+    expect(editorTitle.length).toBe(0)
+    expect(JSON.stringify(pkg)).not.toContain("kilo-code.new.TabPanel")
+    expect(JSON.stringify(pkg)).not.toContain("openInTab")
   })
 
-  it("keeps editor/terminal context submenus and the preserved commands", () => {
+  it("keeps editor/terminal context submenus and the preserved commands without TabPanel", () => {
     const declared = pkg.contributes?.commands?.map((c: { command: string }) => c.command) ?? []
     for (const cmd of [
       "kilo-code.new.explainCode",
@@ -273,21 +272,22 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
       "kilo-code.new.focusChatInput",
       "kilo-code.new.toggleChatSearch",
       "kilo-code.new.cycleAgentMode",
-      "kilo-code.new.openInTab",
       "kilo-code.new.agentManagerOpen",
       "kilo-code.new.agentManager.newTab",
     ]) {
       expect(declared, `declared command ${cmd}`).toContain(cmd)
     }
+    expect(declared).not.toContain("kilo-code.new.openInTab")
   })
 
-  it("routes chat commands through resolveChatTarget / ensureChatTab, not a sidebar provider", () => {
+  it("routes chat commands through Agent Manager-only resolveChatTarget", () => {
     expect(ext).toContain("registerCodeActions(context, resolveChatTarget)")
     expect(ext).toContain("registerTerminalActions(context, resolveChatTarget)")
     expect(ext).toContain("const resolveChatTarget = ")
-    expect(ext).toContain("resolveChatTargetImpl(agentManagerProvider, activeTabProvider)")
-    expect(ext).toContain("const ensureChatTab = async ()")
-    // No surrogate hidden sidebar provider is created.
+    expect(ext).not.toContain("activeTabProvider")
+    expect(ext).not.toContain("ensureChatTab")
+    expect(ext).not.toContain("openKiloInNewTab")
+    expect(ext).not.toContain("kilo-code.new.openInTab")
     expect(ext).not.toContain("registerWebviewViewProvider")
   })
 
@@ -308,31 +308,25 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
   })
 
   it("keeps the readiness-aware chat target resolver and drops the dead review-comments push chain", () => {
-    // P3.1 readiness resolver remains the chat targeting primitive.
-    expect(ext).toContain("const resolveChatTarget = (): Promise<ChatTarget | undefined> =>")
-    expect(ext).toContain("resolveChatTargetImpl(agentManagerProvider, activeTabProvider)")
-    // P3.2: the DiffViewer-owned comment handler is gone and the producer/buffer
-    // chain became unreferenced (no callers of KiloProvider.appendReviewComments,
-    // no other producers of the extension→webview message). The dead chain was
-    // removed; the retained webview review payload flows (pull-back message.review,
-    // ReviewComments rendering, formatReviewCommentsMarkdown on send) are untouched.
+    expect(ext).toContain("const resolveChatTarget = ")
+    expect(ext).not.toContain("activeTabProvider")
     expect(provider).not.toContain("appendReviewComments")
     const promptInput = fs.readFileSync(path.join(ROOT, "webview-ui/src/components/chat/PromptInput.tsx"), "utf-8")
     expect(promptInput).not.toContain('message.type === "appendReviewComments"')
     const terminalTab = fs.readFileSync(path.join(ROOT, "webview-ui/agent-manager/terminal/TerminalTab.tsx"), "utf-8")
     expect(terminalTab).not.toContain("appendReviewCommentsToTerminal")
-    // The webview-internal review payload behavior that survives: pull-back restores
-    // the composer's review set and sends format the review markdown.
     expect(promptInput).toContain("if (message.review) replaceReviewComments(message.review)")
   })
 
-  it("aggregates auto-approve sources from tabs/Agent Manager", () => {
+  it("aggregates auto-approve sources from Agent Manager only", () => {
     expect(am).toContain("public getActiveSessionId(): string | undefined")
-    // Auto-approve aggregates tab panels + Agent Manager instead of a sidebar provider.
-    expect(ext).toContain("for (const [, p] of tabPanels) for (const dir of p.getSessionDirectories().values())")
+    expect(ext).not.toContain("tabPanels")
+    expect(ext).toContain("agentManagerProvider.getSessionDirectories()")
   })
 
-  it("keeps the env-gated E2E fixture bridge for tab-panel survival probing", () => {
-    expect(ext).toContain('vscode.commands.registerCommand("kilo-code.new.e2eFixture.openInTabReady"')
+  it("removes the TabPanel E2E fixture bridge while keeping Agent Manager fixtures", () => {
+    expect(ext).not.toContain('vscode.commands.registerCommand("kilo-code.new.e2eFixture.openInTabReady"')
+    expect(ext).not.toContain("kilo-code.new.TabPanel")
+    expect(ext).toContain('vscode.commands.registerCommand("kilo-code.new.e2eFixture.agentManagerReady"')
   })
 })

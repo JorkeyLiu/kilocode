@@ -168,19 +168,13 @@ describe("captureLcFrames per-frame isolation", () => {
     const browser = makeBrowser([a, b]) as never
     const frames = (await captureLcFrames(browser as never)) as unknown[]
     expect(frames.length).toBe(0)
-    // build timeline where every phase has frames=[]
+    // build timeline where every phase has frames=[] — pure Agent Manager /2 phases (LOCK-001)
     const base = Date.now()
     const phases = [
-      "pre-first-target-open",
-      "post-first-target-open",
       "pre-panel-close",
       "post-panel-reopen",
       "pre-webview-reload",
       "post-webview-reload",
-      "pre-editor-tab-close",
-      "post-editor-tab-close",
-      "immediately-after-lc-tab-reopen-done-before-frame-selection",
-      "after-chosen-frame",
       "pre-session-switch",
       "switched-session",
       "post-session-switch",

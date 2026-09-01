@@ -113,49 +113,19 @@ function makeValidLcProof(): Record<string, unknown> {
   const cloneB = () => ({ pid, port, epoch })
   const prPriv = () => ({ ...priv, protocol: { ...priv.protocol }, capabilities: [...priv.capabilities] })
   const siblingTitle = "bbbbbbbbbbbbbbbb"
+  const sibHash = "bbbbbbbbbbbbbbbb"
   return {
-    schema: "kilo-gc-lifecycle-proof/1",
-    version: 1,
-    scope: "real-lifecycle Gate C: UI-only lifecycle convergence with stable identity and same-key replay",
+    schema: "kilo-gc-lifecycle-proof/2",
+    version: 2,
+    scope: "real-lifecycle Gate C: Agent Manager lifecycle with stable identity and same-key replay",
     fixtureIdHash: h,
     sessionIdHash: h,
-    siblingIdHash: h,
+    siblingIdHash: sibHash,
     titleHash: h,
     siblingTitleHash: siblingTitle,
     orderHash: h,
     pre: { backend: cloneB(), private: prPriv() },
-    openTab: {
-      before: {
-        backend: cloneB(),
-        private: {
-          pid,
-          epoch,
-          available: true,
-          hasSessionUpdate: true,
-          state: "open",
-          protocol: { name: "kilo-private", major: 1 },
-          capabilities: ["session/cancelQueued", "session/update"],
-        },
-      },
-      after: {
-        backend: cloneB(),
-        private: {
-          pid,
-          epoch,
-          available: true,
-          hasSessionUpdate: true,
-          state: "open",
-          protocol: { name: "kilo-private", major: 1 },
-          capabilities: ["session/cancelQueued", "session/update"],
-        },
-      },
-      editorCount: 1,
-      ready: true,
-      loadOk: true,
-      targetSessionIdHash: h,
-      currentSessionIdHash: h,
-      attached: true,
-    },
+
     titleOp: {
       opIdHash: h,
       idempotencyKeyHash: h,
@@ -184,37 +154,21 @@ function makeValidLcProof(): Record<string, unknown> {
         post: { backend: cloneB(), private: prPriv() },
         orderHash: h,
         orderCount: 2,
-        agentTitleHash: h,
-        tabTitleHash: h,
+        titleHash: h,
       },
       webviewReload: {
         pre: { backend: cloneB(), private: prPriv() },
         post: { backend: cloneB(), private: prPriv() },
         orderHash: h,
         orderCount: 2,
-        agentTitleHash: h,
-        tabTitleHash: h,
-      },
-      tabCloseReopen: {
-        pre: { backend: cloneB(), private: prPriv() },
-        post: { backend: cloneB(), private: prPriv() },
-        orderHash: h,
-        orderCount: 2,
-        agentTitleHash: h,
-        tabTitleHash: h,
+        titleHash: h,
       },
       sessionSwitch: {
-        pre: { backend: cloneB(), private: prPriv(), activeIdHash: h },
-        post: { backend: cloneB(), private: prPriv(), activeIdHash: h },
-        switched: { backend: cloneB(), private: prPriv(), activeIdHash: h },
+        pre: { backend: cloneB(), private: prPriv(), activeIdHash: h, titleHash: h },
+        switched: { backend: cloneB(), private: prPriv(), activeIdHash: sibHash, titleHash: siblingTitle },
+        post: { backend: cloneB(), private: prPriv(), activeIdHash: h, titleHash: h },
         orderHash: h,
         orderCount: 2,
-        agentTitleHash: h,
-        tabTitleHash: h,
-        switchedAgentTitleHash: siblingTitle,
-        switchedTabTitleHash: h,
-        preAgentTitleHash: h,
-        preTabTitleHash: h,
       },
     },
     finalReplay: {
@@ -261,16 +215,10 @@ function makeValidTimelineEntry(ts: number, phase: string) {
 function buildValidLifecycleTimeline(): unknown[] {
   const base = Date.now()
   const phases = [
-    "pre-first-target-open",
-    "post-first-target-open",
     "pre-panel-close",
     "post-panel-reopen",
     "pre-webview-reload",
     "post-webview-reload",
-    "pre-editor-tab-close",
-    "post-editor-tab-close",
-    "immediately-after-lc-tab-reopen-done-before-frame-selection",
-    "after-chosen-frame",
     "pre-session-switch",
     "switched-session",
     "post-session-switch",
@@ -646,15 +594,6 @@ function makeValidProof(): Record<string, unknown> {
     capabilities: ["session/cancelQueued", "session/update"],
     hasSessionUpdate: true,
   }
-  const openPriv = {
-    pid,
-    epoch,
-    available: true,
-    hasSessionUpdate: true,
-    state: "open",
-    protocol: { name: "kilo-private", major: 1 },
-    capabilities: ["session/cancelQueued", "session/update"],
-  }
   const ssePriv = { pid, epoch, available: true, hasSessionUpdate: true, protocol: { name: "kilo-private", major: 1 } }
   const revision = { session: 5, config: 2 }
   const sdk = { status: "succeeded", httpStatus: 200, hasData: true }
@@ -662,27 +601,15 @@ function makeValidProof(): Record<string, unknown> {
   const at = new Date().toISOString()
   const cloneB = () => ({ pid, port, epoch })
   return {
-    schema: "kilo-gc-proof/1",
-    version: 1,
-    scope: "real-restart Gate C: shared-backend + SDK-authoritative title + SSE same-epoch + worker-restart new-epoch",
+    schema: "kilo-gc-proof/2",
+    version: 2,
+    scope: "real-restart Gate C: SDK-authoritative title + SSE same-epoch + worker-restart new-epoch",
     fixtureIdHash: h,
     sessionIdHash: h,
     titleHash: h,
     pre: {
       backend: cloneB(),
       private: { ...prePrivate, protocol: { ...prePrivate.protocol }, capabilities: [...prePrivate.capabilities] },
-    },
-    openTab: {
-      before: {
-        backend: cloneB(),
-        private: { ...openPriv, protocol: { ...openPriv.protocol }, capabilities: [...openPriv.capabilities] },
-      },
-      after: {
-        backend: cloneB(),
-        private: { ...openPriv, protocol: { ...openPriv.protocol }, capabilities: [...openPriv.capabilities] },
-      },
-      count: 1,
-      ready: true,
     },
     sse: {
       pre: { backend: cloneB(), private: { ...ssePriv, protocol: { ...ssePriv.protocol } } },
@@ -786,14 +713,55 @@ describe("validateGcProof hardened", () => {
   })
 })
 
-describe("validateGcProof auditor probes closed", () => {
-  it("rejects extra evil in openTab protocol", () => {
+describe("validateGcProof SSE private pid/epoch same-side equality", () => {
+  it("rejects sse.pre private pid not equal backend pid (same-side identity)", () => {
     const p = makeValidProof() as Record<string, unknown>
-    const ot = (p.openTab as Record<string, unknown>).before as Record<string, unknown>
-    const priv = ot.private as Record<string, unknown>
-    ;(priv.protocol as Record<string, unknown>).evil = 1
-    expect(validateGcProof(p)).not.toBeNull()
-    expect(validateGcProof(p)).toContain("protocol")
+    ;(((p.sse as Record<string, unknown>).pre as Record<string, unknown>).private as Record<string, unknown>).pid = 9999
+    const err = validateGcProof(p) as string
+    expect(err).not.toBeNull()
+    expect(err).toContain("sse.pre.private.pid must equal backend pid")
+  })
+  it("rejects sse.pre private epoch not equal backend epoch (same-side identity)", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(((p.sse as Record<string, unknown>).pre as Record<string, unknown>).private as Record<string, unknown>).epoch = 999
+    const err = validateGcProof(p) as string
+    expect(err).not.toBeNull()
+    expect(err).toContain("sse.pre.private.epoch must equal backend epoch")
+  })
+  it("rejects sse.post private pid not equal backend pid (same-side identity)", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(((p.sse as Record<string, unknown>).post as Record<string, unknown>).private as Record<string, unknown>).pid = 9999
+    const err = validateGcProof(p) as string
+    expect(err).not.toBeNull()
+    expect(err).toContain("sse.post.private.pid must equal backend pid")
+  })
+  it("rejects sse.post private epoch not equal backend epoch (same-side identity)", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(((p.sse as Record<string, unknown>).post as Record<string, unknown>).private as Record<string, unknown>).epoch = 999
+    const err = validateGcProof(p) as string
+    expect(err).not.toBeNull()
+    expect(err).toContain("sse.post.private.epoch must equal backend epoch")
+  })
+  it("accepts when all SSE private pid/epoch equal same-side backend", () => {
+    expect(validateGcProof(makeValidProof())).toBeNull()
+  })
+  it("rejects via parseFailure wrapper when sse.pre private pid diverges (no leak)", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(((p.sse as Record<string, unknown>).pre as Record<string, unknown>).private as Record<string, unknown>).pid = 7777
+    const raw = Buffer.from(JSON.stringify(p))
+    const err = parseFailure("rr-gc-proof.json", raw) as string
+    expect(err).not.toBeNull()
+    expect(err).toContain("sse.pre.private.pid")
+  })
+})
+
+describe("validateGcProof auditor probes closed", () => {
+  it("rejects proof with unexpected openTab field (Agent Manager-only /2)", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    ;(p as Record<string, unknown>).openTab = { before: {}, after: {}, count: 1, ready: true }
+    const err = validateGcProof(p) as string
+    expect(err).not.toBeNull()
+    expect(err).toContain("keys mismatch")
   })
   it("rejects extra evil in SSE protocol", () => {
     const p = makeValidProof() as Record<string, unknown>
@@ -831,14 +799,11 @@ describe("validateGcProof auditor probes closed", () => {
     expect(validateGcProof(p)).not.toBeNull()
     expect(validateGcProof(p)).toContain("unknown capability")
   })
-  it("rejects openTab unknown capability in private", () => {
+  it("rejects missing killed (retained restart evidence)", () => {
     const p = makeValidProof() as Record<string, unknown>
-    const ot = ((p.openTab as Record<string, unknown>).before as Record<string, unknown>).private as Record<
-      string,
-      unknown
-    >
-    ot.capabilities = ["evil-cap"]
+    delete p.killed
     expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("killed")
   })
   it("valid proof passes", () => {
     expect(validateGcProof(makeValidProof())).toBeNull()
@@ -904,44 +869,38 @@ describe("assertFixtureIdMatch (proof construction env gate)", () => {
 })
 
 describe("validateGcProof exact required keys (auditor probes)", () => {
-  it("rejects omission of openTab.count", () => {
+  it("rejects proof with unexpected openTab field (Agent Manager-only /2)", () => {
     const p = makeValidProof() as Record<string, unknown>
-    delete (p.openTab as Record<string, unknown>).count
-    expect(validateGcProof(p)).not.toBeNull()
-    expect(validateGcProof(p)).toContain("openTab")
+    ;(p as Record<string, unknown>).openTab = { before: {}, after: {}, count: 1, ready: true }
+    const err = validateGcProof(p) as string
+    expect(err).not.toBeNull()
+    expect(err).toContain("keys mismatch")
   })
-  it("rejects omission of openTab.ready", () => {
+  it("rejects omission of pre.private.state (retained)", () => {
     const p = makeValidProof() as Record<string, unknown>
-    delete (p.openTab as Record<string, unknown>).ready
-    expect(validateGcProof(p)).not.toBeNull()
-  })
-  it("rejects omission of openTab.before.private.state", () => {
-    const p = makeValidProof() as Record<string, unknown>
-    const pr = ((p.openTab as Record<string, unknown>).before as Record<string, unknown>).private as Record<
-      string,
-      unknown
-    >
+    const pr = (p.pre as Record<string, unknown>).private as Record<string, unknown>
     delete pr.state
     expect(validateGcProof(p)).not.toBeNull()
-    expect(validateGcProof(p)).toContain("state")
+    expect(validateGcProof(p)).toContain("pre.private")
   })
-  it("rejects omission of openTab.before.private.protocol", () => {
+  it("rejects omission of sse.conn (retained)", () => {
     const p = makeValidProof() as Record<string, unknown>
-    const pr = ((p.openTab as Record<string, unknown>).before as Record<string, unknown>).private as Record<
-      string,
-      unknown
-    >
+    delete (p.sse as Record<string, unknown>).conn
+    expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("sse")
+  })
+  it("rejects omission of killed.pid (retained)", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    delete (p.killed as Record<string, unknown>).pid
+    expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("killed")
+  })
+  it("rejects omission of postRestart.private.protocol (retained)", () => {
+    const p = makeValidProof() as Record<string, unknown>
+    const pr = (p.postRestart as Record<string, unknown>).private as Record<string, unknown>
     delete pr.protocol
     expect(validateGcProof(p)).not.toBeNull()
-  })
-  it("rejects omission of openTab.before.private.capabilities", () => {
-    const p = makeValidProof() as Record<string, unknown>
-    const pr = ((p.openTab as Record<string, unknown>).before as Record<string, unknown>).private as Record<
-      string,
-      unknown
-    >
-    delete pr.capabilities
-    expect(validateGcProof(p)).not.toBeNull()
+    expect(validateGcProof(p)).toContain("protocol")
   })
   it("rejects errorCode on successful titleOp.sdk", () => {
     const p = makeValidProof() as Record<string, unknown>
@@ -1642,7 +1601,6 @@ describe("collectEvidence real-lifecycle (full inventory matrix)", () => {
       "rr-gc-*.json",
       "rr-kill.json",
       "rr-model-requests.json",
-      "rr-open-tab.json",
       "rr-pin.json",
       "rr-private-status.json",
       "rr-ready",
@@ -1763,5 +1721,58 @@ describe("hostile capability/phase values do not leak into notes", () => {
     } finally {
       rmSync(root2, { recursive: true, force: true })
     }
+  })
+})
+
+describe("validateLcProof distinct identity and exact 16 orderHash", () => {
+  it("rejects identical sessionIdHash and siblingIdHash", () => {
+    const p = makeValidLcProof() as Record<string, unknown>
+    p.siblingIdHash = p.sessionIdHash
+    const sw = (p.boundaries as Record<string, unknown>).sessionSwitch as Record<string, unknown>
+    ;(sw.switched as Record<string, unknown>).activeIdHash = p.siblingIdHash
+    expect(validateLcProof(p)).toContain("must differ")
+  })
+  it("rejects 64-hex orderHash at top level", () => {
+    const p = makeValidLcProof() as Record<string, unknown>
+    const long = "a".repeat(64)
+    p.orderHash = long
+    const b = (p.boundaries as Record<string, unknown>).panelCloseReopen as Record<string, unknown>
+    b.orderHash = long
+    const w = (p.boundaries as Record<string, unknown>).webviewReload as Record<string, unknown>
+    w.orderHash = long
+    const sw = (p.boundaries as Record<string, unknown>).sessionSwitch as Record<string, unknown>
+    sw.orderHash = long
+    expect(validateLcProof(p)).toContain("16-hex")
+  })
+  it("rejects 64-hex boundary orderHash even when top is 16", () => {
+    const p = makeValidLcProof() as Record<string, unknown>
+    const long = "b".repeat(64)
+    const b = (p.boundaries as Record<string, unknown>).panelCloseReopen as Record<string, unknown>
+    b.orderHash = long
+    expect(validateLcProof(p)).toContain("16-hex")
+  })
+})
+
+describe("validateLcTimeline exactly once and order", () => {
+  it("rejects duplicate required phase after final (exactly once)", async () => {
+    const { validateLcTimeline } = await import("../../script/e2e-evidence")
+    const base = buildValidLifecycleTimeline() as Record<string, unknown>[]
+    const dup = JSON.parse(JSON.stringify(base)) as Record<string, unknown>[]
+    const extra = JSON.parse(JSON.stringify(base[0])) as Record<string, unknown>
+    extra.ts = (base[base.length - 1] as Record<string, unknown>).ts as number + 1000
+    extra.iso = new Date(extra.ts as number).toISOString()
+    extra.phase = "pre-panel-close"
+    dup.push(extra)
+    expect(validateLcTimeline(dup)).toContain("exactly once")
+  })
+  it("rejects duplicate final-done", async () => {
+    const { validateLcTimeline } = await import("../../script/e2e-evidence")
+    const base = buildValidLifecycleTimeline() as Record<string, unknown>[]
+    const dup = JSON.parse(JSON.stringify(base)) as Record<string, unknown>[]
+    const extra = JSON.parse(JSON.stringify(base[base.length - 1])) as Record<string, unknown>
+    extra.ts = (extra.ts as number) + 1000
+    extra.iso = new Date(extra.ts as number).toISOString()
+    dup.push(extra)
+    expect(validateLcTimeline(dup)).toContain("exactly once")
   })
 })

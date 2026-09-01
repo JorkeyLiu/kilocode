@@ -717,9 +717,9 @@ describe("Agent Manager — provider chain parity with sidebar", () => {
 // ---------------------------------------------------------------------------
 
 describe("Agent Manager — viewChildSession event contract", () => {
-  it("sidebar App.tsx handles viewChildSession (baseline)", () => {
+  it("sidebar App.tsx no longer handles viewChildSession (LOCK-001: ordinary bundle has no chat)", () => {
     const source = fs.readFileSync(APP_FILE, "utf-8")
-    expect(source).toContain("viewChildSession")
+    expect(source).not.toContain("viewChildSession")
   })
 
   it("AgentManagerApp.tsx handles viewChildSession messages", () => {
@@ -810,10 +810,10 @@ describe("Agent Manager — explicit tool renderer registration (LOCK-001)", () 
     expect(bridge).not.toContain("registerVscodeToolOverrides()")
   })
 
-  it("sidebar App.tsx still registers the task renderer exactly once at module scope", () => {
+  it("sidebar App.tsx no longer registers the task renderer (LOCK-001: ordinary bundle has no ChatView)", () => {
     const sidebar = fs.readFileSync(APP_FILE, "utf-8")
-    expect(sidebar).toContain("registerExpandedTaskTool()")
-    expect(sidebar).toContain("registerVscodeToolOverrides()")
+    expect(sidebar).not.toContain("registerExpandedTaskTool()")
+    expect(sidebar).not.toContain("registerVscodeToolOverrides()")
   })
 
   it("App.tsx re-exports the bridges so the sidebar public API is unchanged", () => {

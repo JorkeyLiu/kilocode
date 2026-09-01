@@ -389,7 +389,6 @@ describe("KiloProvider fixture reload ownership", () => {
     provider.visibleTaskStreams = { clear: () => {} } as any
     provider.aborts = { clear: () => {} } as any
     provider.trackedSessionIds = new Set()
-    provider.openSessionIds = new Set()
     provider.syncedChildSessions = new Set()
     provider.draftSessions = new Map()
     provider.sessionDirectories = new Map()
@@ -471,7 +470,6 @@ describe("KiloProvider fixture reload ownership", () => {
     provider.visibleTaskStreams = { clear: () => {} } as any
     provider.aborts = { clear: () => {} } as any
     provider.trackedSessionIds = new Set()
-    provider.openSessionIds = new Set()
     provider.syncedChildSessions = new Set()
     provider.draftSessions = new Map()
     provider.sessionDirectories = new Map()

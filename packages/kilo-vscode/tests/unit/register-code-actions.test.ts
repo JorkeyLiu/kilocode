@@ -22,7 +22,7 @@ const original = {
   diagnostics: api.languages.getDiagnostics,
 }
 
-type Resolution = "agent" | "tab" | "none"
+type Resolution = "agent" | "none"
 
 function setup(target: Resolution, agentReady = true) {
   const commands = new Map<string, Command>()
@@ -33,14 +33,8 @@ function setup(target: Resolution, agentReady = true) {
       posts.push(msg)
     },
   }
-  const tab: ChatTarget = {
-    postMessage: (msg: unknown) => {
-      posts.push(msg)
-    },
-  }
   const resolveTarget = async (): Promise<ChatTarget | undefined> => {
     if (target === "agent" && agentReady) return agent
-    if (target === "tab") return tab
     return undefined
   }
 
@@ -87,7 +81,7 @@ describe("registerCodeActions", () => {
   })
 
   it("routes explain/fix/improve prompts to the resolved target", async () => {
-    const state = setup("tab")
+    const state = setup("agent")
 
     await state.commands.get("kilo-code.new.explainCode")?.()
     await state.commands.get("kilo-code.new.fixCode")?.()
@@ -113,7 +107,7 @@ describe("registerCodeActions", () => {
   })
 
   it("toggles chat search on the resolved target", async () => {
-    const state = setup("tab")
+    const state = setup("agent")
 
     await state.commands.get("kilo-code.new.toggleChatSearch")?.()
 

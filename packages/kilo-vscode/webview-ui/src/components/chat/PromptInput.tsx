@@ -11,12 +11,12 @@ import { FileIcon } from "@kilocode/kilo-ui/file-icon"
 import { Icon } from "@kilocode/kilo-ui/icon"
 import { showToast } from "@kilocode/kilo-ui/toast"
 import { useSession } from "../../context/session"
-import { useLocalTabs } from "../../context/local-tabs"
 import { useServer } from "../../context/server"
 import { useLanguage } from "../../context/language"
 import { useVSCode } from "../../context/vscode"
 import { useConfig } from "../../context/config"
 import { useProvider } from "../../context/provider"
+import { useAgentManager } from "../../context/agent-manager"
 import { ModelSelector } from "../shared/ModelSelector"
 import { ModeSwitcher } from "../shared/ModeSwitcher"
 import { SandboxButtonBase, SandboxTooltipContent } from "../shared/SandboxButton"
@@ -97,12 +97,12 @@ interface PromptInputProps {
 
 export const PromptInput: Component<PromptInputProps> = (props) => {
   const session = useSession()
-  const tabs = useLocalTabs()
   const server = useServer()
   const { config, globalConfig, settings, features } = useConfig()
   const provider = useProvider()
   const language = useLanguage()
   const vscode = useVSCode()
+  const inAgentManager = useAgentManager()
   const sid = () => session.currentSessionID() ?? props.pendingSessionID ?? session.draftSessionID() ?? undefined
   const ctx = () => {
     const id = props.boxId
@@ -359,15 +359,17 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   window.addEventListener("focusPrompt", onFocusPrompt)
   onCleanup(() => window.removeEventListener("focusPrompt", onFocusPrompt))
 
-  // Start a new task, carrying over the current prompt text (without auto-sending it)
+  // Start a new task, carrying over the current prompt text (without auto-sending it).
+  // In Agent Manager the pending-tab owner is handleAddSession — avoid a
+  // simultaneous clearCurrentSession that would orphan the active tab.
   const onNewTaskRequest = () => {
+    if (inAgentManager) return
     const draft = text().trim()
     const comments = reviewComments()
     const imgs = imageAttach.images()
     const scroll = textareaRef?.scrollTop ?? 0
-    const id = tabs?.add()
-    if (!id) session.clearCurrentSession()
-    const key = id ? scopeDraftKey(boxKey(), pendingDraftKey(id) ?? "new") : draftKey()
+    session.clearCurrentSession()
+    const key = draftKey()
     saveDraft(key, draft, comments, imgs, scroll)
   }
   window.addEventListener("newTaskRequest", onNewTaskRequest)

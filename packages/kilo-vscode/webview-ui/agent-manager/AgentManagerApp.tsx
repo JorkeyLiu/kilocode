@@ -65,7 +65,14 @@ import { LanguageBridge } from "../src/context/language-bridge"
 import { useLanguage } from "../src/context/language"
 import { formatRelativeDate } from "../src/utils/date"
 import { createTabFocus } from "../src/utils/tab-navigation"
-import { adjacentHint, focusChatSearch, LOCAL } from "./navigate"
+import {
+  adjacentHint,
+  focusChatSearch,
+  LOCAL,
+  resolveNavigation,
+  resolveTabNavigation,
+  visibleSidebarIds,
+} from "./navigate"
 import {
   addPendingTab as addLocalPendingTab,
   nextTabAfterClose,
@@ -225,6 +232,7 @@ const AgentManagerContent: Component = () => {
   const sidebarCollapsed = sidebar.collapsed
   const expandSidebar = sidebar.expand
   const toggleSidebar = sidebar.toggle
+  const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
 
   // rAF coalescing for resize handlers — at most one signal write per frame
   let sidebarRaf: number | undefined
@@ -625,10 +633,48 @@ const AgentManagerContent: Component = () => {
 
   onMount(() => {
     const actionMap: Record<string, () => void> = {
-      sessionPrevious: () => {},
-      sessionNext: () => {},
-      tabPrevious: () => {},
-      tabNext: () => {},
+      sessionPrevious: () => {
+        const ids = visibleSidebarIds(
+          session.sessions() as unknown as Parameters<typeof visibleSidebarIds>[0],
+          expanded(),
+        )
+        const cur = session.currentSessionID()
+        const res = resolveNavigation("up", cur, ids)
+        if (res.action === "select") handleOpenSession(res.id)
+        else if (res.action === LOCAL) {
+          terms.setActiveId(undefined)
+          setHistory(false)
+          setActivePendingId(undefined)
+          session.clearCurrentSession()
+        }
+      },
+      sessionNext: () => {
+        const ids = visibleSidebarIds(
+          session.sessions() as unknown as Parameters<typeof visibleSidebarIds>[0],
+          expanded(),
+        )
+        const cur = session.currentSessionID()
+        const res = resolveNavigation("down", cur, ids)
+        if (res.action === "select") handleOpenSession(res.id)
+        else if (res.action === LOCAL) {
+          terms.setActiveId(undefined)
+          setHistory(false)
+          setActivePendingId(undefined)
+          session.clearCurrentSession()
+        }
+      },
+      tabPrevious: () => {
+        const ids = tabIds()
+        const cur = visibleTabId()
+        const next = resolveTabNavigation("prev", cur, ids)
+        if (next) focusTab(next)
+      },
+      tabNext: () => {
+        const ids = tabIds()
+        const cur = visibleTabId()
+        const next = resolveTabNavigation("next", cur, ids)
+        if (next) focusTab(next)
+      },
       search: handleSearchAction,
       showTerminal: handleShowTerminalAction,
       newTab: handleAddSession,
@@ -937,6 +983,11 @@ const AgentManagerContent: Component = () => {
     addPendingTab()
     setIsBottomPage(false)
   }
+  const onNewTaskRequest = () => {
+    handleAddSession()
+  }
+  window.addEventListener("newTaskRequest", onNewTaskRequest)
+  onCleanup(() => window.removeEventListener("newTaskRequest", onNewTaskRequest))
   // Phase 3A: fork always happens in LOCAL context.
   const handleForkSession = (sessionId: string, messageId?: string) => {
     const msg = { type: "agentManager.forkSession" as const, sessionId, ...(messageId ? { messageId } : {}) }
@@ -1099,8 +1150,9 @@ const AgentManagerContent: Component = () => {
     return activeTabs().find((s) => s.id === id)
   })
 
-  const focusTab = (id: string) =>
-    focusCurrentTab({
+  const focusTab = (id: string) => {
+    if (!isTerminalTabId(id)) tabMgr.select(LOCAL, id)
+    return focusCurrentTab({
       id,
       terms,
       isTerminal: isTerminalTabId,
@@ -1111,6 +1163,7 @@ const AgentManagerContent: Component = () => {
       selectSession: session.selectSession,
       activateTerminal: termHandlers.activate,
     })
+  }
   const tabFocus = createTabFocus({ ids: () => tabIds(), select: focusTab })
 
   // Close the currently active tab via keyboard shortcut.
@@ -1234,6 +1287,8 @@ const AgentManagerContent: Component = () => {
                 }}
                 untitledLabel={t("agentManager.session.untitled")}
                 t={t}
+                expanded={expanded}
+                setExpanded={setExpanded}
               />
             </Show>
           </div>

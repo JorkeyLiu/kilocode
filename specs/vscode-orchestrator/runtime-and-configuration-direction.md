@@ -329,6 +329,7 @@ Rules:
 - Derived snapshots are versioned values, not a second persisted store; their
   identity includes canonical file content, the schema version, and opaque
   secret references — never UI state (sections 5.1, 9 R2).
+- Surface applicability boundary: the runtime is agnostic to product chat surface hosting — Agent Manager is the only chat UI and may be hosted in Primary/Secondary Sidebar or editor group without changing judgment; that hosting choice is presentation-only and does not change runtime ownership, lifecycle, config, or transport boundaries (product detail lives in `agent-orchestration-direction.md` only).
 
 ### 3.1 Legal source taxonomy
 

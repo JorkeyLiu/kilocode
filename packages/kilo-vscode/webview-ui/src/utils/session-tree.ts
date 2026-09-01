@@ -105,11 +105,24 @@ export function buildDisplayList<T extends SessionLike>(sessions: T[], expanded:
   }
   // Cycle-only component fallback: sessions whose parent exists in the session set
   // but was never visited (i.e., part of a cycle with no reachable root).
-  // Collapsed children of visited parents are intentionally skipped.
+  // Collapsed children of visited parents are intentionally skipped — walk the
+  // ancestor chain so grandchildren of a collapsed node are also hidden.
   const cycleQueue: T[] = []
   for (const s of sessions) {
     if (visited.has(s.id)) continue
-    if (s.parentID && visited.has(s.parentID)) continue // collapsed child
+    let cur: T | undefined = s
+    let collapsed = false
+    const seen = new Set<string>()
+    while (cur?.parentID) {
+      if (seen.has(cur.parentID)) break
+      seen.add(cur.parentID)
+      if (visited.has(cur.parentID)) {
+        collapsed = true
+        break
+      }
+      cur = byID.get(cur.parentID)
+    }
+    if (collapsed) continue
     cycleQueue.push(s)
   }
   for (const s of cycleQueue) flatten(s, 0)

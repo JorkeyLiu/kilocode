@@ -352,9 +352,10 @@ describe("P3.4 message/build — no dormant protocol or build residue", () => {
 })
 
 describe("P3.4 retention — preserved surfaces survive (LOCK-005/006/007/008)", () => {
-  it("keeps the Agent Manager and Open-in-Tab serializers", () => {
+  it("keeps the Agent Manager serializer and removes the TabPanel serializer", () => {
     expect(ext).toContain("registerWebviewPanelSerializer(AgentManagerProvider.viewType")
-    expect(ext).toContain('registerWebviewPanelSerializer("kilo-code.new.TabPanel"')
+    expect(ext).not.toContain('registerWebviewPanelSerializer("kilo-code.new.TabPanel"')
+    expect(ext).not.toContain("kilo-code.new.TabPanel")
   })
 
   it("keeps the retained notebook helpers in src/services/notebook", () => {

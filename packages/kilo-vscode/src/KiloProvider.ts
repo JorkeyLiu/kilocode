@@ -406,7 +406,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private promptRecoveryQueued = false
   private promptRecovery: Promise<void> | null = null
   private trackedSessionIds: Set<string> = new Set()
-  private readonly openSessionIds = new Set<string>()
   private modelUsageSessionIds: Set<string> = new Set()
   private syncedChildSessions: Set<string> = new Set()
   private readonly checkpoints = new Map<string, Promise<void>>()
@@ -1345,15 +1344,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Report presence for this provider: the focused session is visible, and
-   * open local tab sessions (plus the focused one) stay attached even while
-   * the view is hidden.
+   * Report presence for this provider: the focused Agent Manager session is
+   * visible and attached. Agent Manager is the sole chat surface (LOCK-002).
    */
   private registerPresence(): void {
     if (this.opts.disableViewedRegistration) return
     const focused = this.streams.focused
     this.connectionService.registerVisible(this.instanceId, focused ? [focused] : [])
-    const attached = new Set(this.openSessionIds)
+    const attached = new Set<string>()
     if (focused) attached.add(focused)
     this.connectionService.registerAttached(this.instanceId, [...attached])
   }
@@ -1657,24 +1655,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     })
   }
 
-  private trackOpenSessions(ids: string[]): void {
-    const next = new Set(ids)
-    for (const id of this.openSessionIds) {
-      if (!next.has(id)) this.trackedSessionIds.delete(id)
-    }
-    this.openSessionIds.clear()
-    for (const id of next) {
-      this.openSessionIds.add(id)
-      this.trackedSessionIds.add(id)
-    }
-    const now = Date.now()
-    for (const [key, session] of this.draftSessions) {
-      if (next.has(session.sid) || session.expires <= now) this.draftSessions.delete(key)
-    }
-    this.registerPresence()
-    this.recoverPendingPrompts()
-  }
-
   private async flushPendingPrompts(): Promise<void> {
     while (this.promptRecoveryQueued && this.isWebviewReady) {
       if (!this.client) return
@@ -1730,7 +1710,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           dir: this.getWorkspaceDirectory(this.currentSession?.id),
           post: (msg) => this.postMessage(msg),
           exportTranscript: (sessionID) => this.handleExportSessionTranscript(sessionID),
-          openSessions: (ids) => this.trackOpenSessions(ids),
           variantCache: this.variantCache(),
           canonicalMode: this.canonicalMode,
         })
@@ -2881,7 +2860,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
    */
   private pruneDeletedSession(sessionID: string): void {
     this.trackedSessionIds.delete(sessionID)
-    this.openSessionIds.delete(sessionID)
     for (const [key, session] of this.draftSessions) {
       if (session.sid === sessionID) this.draftSessions.delete(key)
     }
@@ -6045,7 +6023,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.promptRecoveryQueued = false
     clearNetworkWaits(this.trackedSessionIds)
     this.trackedSessionIds.clear()
-    this.openSessionIds.clear()
     this.syncedChildSessions.clear()
     this.draftSessions.clear()
     this.sessionDirectories.clear()

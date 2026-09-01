@@ -146,44 +146,6 @@ async function requestPrivateStatus(
     }
   }
 }
-async function requestOpenTab(
-  scratch: string,
-  timeoutMs = 30_000,
-): Promise<{
-  nonce: string
-  before: {
-    backend: { pid: number | null; port: number | null; epoch: number | null }
-    private: { pid: number | null | undefined; epoch: number | null; hasSessionUpdate: boolean; available: boolean }
-  }
-  after: {
-    backend: { pid: number | null; port: number | null; epoch: number | null }
-    private: { pid: number | null | undefined; epoch: number | null; hasSessionUpdate: boolean; available: boolean }
-  }
-  openRes: { count: number; ready: boolean }
-}> {
-  const nonce = writeNonceRequest(scratch, "rr-open-tab-request", "rr-open-tab.json", {})
-  await waitForFile(join(scratch, "rr-open-tab.json"), timeoutMs, "rr-open-tab.json")
-  let parsed: Record<string, unknown>
-  try {
-    parsed = JSON.parse(readFileSync(join(scratch, "rr-open-tab.json"), "utf8"))
-  } catch (err) {
-    console.warn("[probe] malformed rr-open-tab.json (redacted):", String(err).slice(0, 200))
-    throw new Error("open-tab malformed JSON")
-  }
-  if ((parsed as { nonce?: string }).nonce !== nonce) throw new Error(`open-tab nonce mismatch (redacted)`)
-  return parsed as unknown as {
-    nonce: string
-    before: {
-      backend: { pid: number | null; port: number | null; epoch: number | null }
-      private: { pid: number | null | undefined; epoch: number | null; hasSessionUpdate: boolean; available: boolean }
-    }
-    after: {
-      backend: { pid: number | null; port: number | null; epoch: number | null }
-      private: { pid: number | null | undefined; epoch: number | null; hasSessionUpdate: boolean; available: boolean }
-    }
-    openRes: { count: number; ready: boolean }
-  }
-}
 async function requestTitleUpdate(
   scratch: string,
   sessionId: string,
@@ -833,11 +795,10 @@ export async function runRealRestartBoundaries(
   const snap = snapshotClient(scratch, "rr-snap")
   const phase0 = await restartPhase0(browser, plan, scratch, workspace, snap, model)
 
-  // ── Gate C preparation: shared-backend identity (Agent Manager + editor tab) ──
+  // ── Gate C preparation: Agent Manager backend identity (Agent Manager-only /2) ──
   const gcTitle = `GateC Title ${createHash("sha256").update(phase0.sessionId).digest("hex").slice(0, 6)}`
   // Hoisted for consolidated proof
   let gcPre: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
-  let gcOpen: Awaited<ReturnType<typeof requestOpenTab>> | null = null
   let gcTitleRes: Awaited<ReturnType<typeof requestTitleUpdate>> | null = null
   let gcReplay: Awaited<ReturnType<typeof requestPrivateReplay>> | null = null
   let gcPreA: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
@@ -849,42 +810,20 @@ export async function runRealRestartBoundaries(
     const pre = await requestPrivateStatus(scratch)
     gcPre = pre
     if (!pre.private.available)
-      throw new Error(`Gate C: private peer not available before openTab: ${JSON.stringify(pre)}`)
+      throw new Error(`Gate C: private peer not available: ${JSON.stringify(pre)}`)
     if (!pre.private.hasSessionUpdate)
-      throw new Error(`Gate C: missing session/update capability before openTab: ${JSON.stringify(pre)}`)
+      throw new Error(`Gate C: missing session/update capability: ${JSON.stringify(pre)}`)
     if (!pre.private.protocol || pre.private.protocol.name !== "kilo-private" || pre.private.protocol.major !== 1)
-      throw new Error(`Gate C: protocol not kilo-private/1 before openTab: ${JSON.stringify(pre.private.protocol)}`)
+      throw new Error(`Gate C: protocol not kilo-private/1: ${JSON.stringify(pre.private.protocol)}`)
     if (!pre.backend.pid || !pre.backend.port || !pre.backend.epoch)
-      throw new Error(`Gate C: backend pid/port/epoch missing before openTab: ${JSON.stringify(pre.backend)}`)
+      throw new Error(`Gate C: backend pid/port/epoch missing: ${JSON.stringify(pre.backend)}`)
     if (pre.private.pid !== pre.backend.pid)
-      throw new Error(`Gate C: private pid ${pre.private.pid} != backend pid ${pre.backend.pid} before openTab`)
+      throw new Error(`Gate C: private pid ${pre.private.pid} != backend pid ${pre.backend.pid}`)
     if (pre.private.epoch !== pre.backend.epoch)
-      throw new Error(`Gate C: private epoch ${pre.private.epoch} != backend epoch ${pre.backend.epoch} before openTab`)
-    const open = await requestOpenTab(scratch)
-    gcOpen = open
-    if (!open.openRes.ready) throw new Error(`Gate C: openInTab not ready: ${JSON.stringify(open.openRes)}`)
-    // both surfaces must share same backend identity — no second backend spawned
-    if (open.before.backend.pid !== pre.backend.pid || open.after.backend.pid !== pre.backend.pid)
-      throw new Error(
-        `Gate C: openTab changed backend pid before ${pre.backend.pid} -> after ${open.after.backend.pid}`,
-      )
-    if (open.before.backend.port !== pre.backend.port || open.after.backend.port !== pre.backend.port)
-      throw new Error(`Gate C: openTab changed backend port`)
-    if (open.before.backend.epoch !== pre.backend.epoch || open.after.backend.epoch !== pre.backend.epoch)
-      throw new Error(`Gate C: openTab changed backend epoch`)
-    if (!open.after.private.hasSessionUpdate) throw new Error(`Gate C: session/update capability lost after openTab`)
-    if (open.after.backend.pid !== open.after.private.pid)
-      throw new Error(
-        `Gate C: after openTab private pid ${open.after.private.pid} != backend pid ${open.after.backend.pid}`,
-      )
-    if (open.after.backend.epoch !== open.after.private.epoch)
-      throw new Error(`Gate C: after openTab private epoch mismatch`)
-    if (open.before.backend.pid !== open.before.private.pid)
-      throw new Error(`Gate C: before openTab private pid mismatch`)
+      throw new Error(`Gate C: private epoch ${pre.private.epoch} != backend epoch ${pre.backend.epoch}`)
     console.log(
-      `[probe] PASS Gate C shared backend identity: pid=${pre.backend.pid} port=${pre.backend.port} epoch=${pre.backend.epoch} capabilities=${pre.private.capabilities.join(",")}`,
+      `[probe] PASS Gate C Agent Manager backend identity: pid=${pre.backend.pid} port=${pre.backend.port} epoch=${pre.backend.epoch} capabilities=${pre.private.capabilities.join(",")}`,
     )
-    writeFileSync(join(scratch, "rr-gc-open-tab.json"), JSON.stringify({ pre, open }, null, 2))
   }
 
   // ── Gate C: durable title mutation via SDK authoritative + private replay ──
@@ -1074,10 +1013,9 @@ export async function runRealRestartBoundaries(
     ): { name: string; major: number; minor: number } | null =>
       p ? { name: p.name, major: p.major, minor: p.minor ?? 0 } : null
     const proof = {
-      schema: "kilo-gc-proof/1",
-      version: 1,
-      scope:
-        "real-restart Gate C: shared-backend + SDK-authoritative title + SSE same-epoch + worker-restart new-epoch",
+      schema: "kilo-gc-proof/2",
+      version: 2,
+      scope: "real-restart Gate C: SDK-authoritative title + SSE same-epoch + worker-restart new-epoch",
       fixtureIdHash: fixtureIdForHash,
       sessionIdHash: fixtureHash(phase0.sessionId),
       titleHash: fixtureHash(gcTitle),
@@ -1093,28 +1031,6 @@ export async function runRealRestartBoundaries(
               capabilities: gcPre.private.capabilities,
               hasSessionUpdate: gcPre.private.hasSessionUpdate,
             },
-          }
-        : null,
-      openTab: gcOpen
-        ? {
-            before: {
-              backend: gcOpen.before.backend,
-              private: (() => {
-                const p = gcOpen.before.private as unknown as Record<string, unknown>
-                if (!("protocol" in p)) return p as typeof gcOpen.before.private
-                return { ...p, protocol: canon(p.protocol as { name: string; major: number; minor?: number } | null | undefined) } as unknown as typeof gcOpen.before.private
-              })(),
-            },
-            after: {
-              backend: gcOpen.after.backend,
-              private: (() => {
-                const p = gcOpen.after.private as unknown as Record<string, unknown>
-                if (!("protocol" in p)) return p as typeof gcOpen.after.private
-                return { ...p, protocol: canon(p.protocol as { name: string; major: number; minor?: number } | null | undefined) } as unknown as typeof gcOpen.after.private
-              })(),
-            },
-            ready: gcOpen.openRes.ready,
-            count: gcOpen.openRes.count,
           }
         : null,
       sse: {

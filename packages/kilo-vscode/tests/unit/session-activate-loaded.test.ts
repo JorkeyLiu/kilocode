@@ -80,9 +80,10 @@ describe("activateLoadedSession product transition", () => {
   })
 
   it("generic welcome remains unchanged — zero-arg path does not require activation", () => {
-    // extension.ts generic path check
+    // extension.ts generic path check — TabPanel removed, Agent Manager is sole surface
     const extFile = fs.readFileSync(path.join(ROOT, "src/extension.ts"), "utf-8")
-    expect(extFile).toContain('if (typeof targetSessionId === "string" && targetSessionId.length > 0)')
+    expect(extFile).not.toContain('if (typeof targetSessionId === "string" && targetSessionId.length > 0)')
+    expect(extFile).toContain("AgentManagerProvider")
     // session.tsx clearCurrentSession keeps welcome
     expect(sessionSrc).toContain("function clearCurrentSession()")
     const clearBody = sessionSrc.slice(

@@ -25,42 +25,15 @@ export type ChatSurface = ChatTarget & {
   openPanel(): void
 }
 
-/** An open editor-tab chat panel. */
-export type ChatTab = ChatTarget & {
-  waitForReady(): Promise<void>
-}
-
 /**
- * Resolve the preferred ready chat target: the active Agent Manager panel,
- * else the active editor-tab panel, else the Agent Manager opened on demand.
- * Returns undefined when the chosen surface never reported readiness, so
- * callers skip posting instead of dropping messages into an unprepared panel.
- * P3.1: the removed sidebar provider is intentionally never resolved.
+ * Resolve the preferred ready chat target: Agent Manager is the sole chat
+ * surface. Opens the panel on demand and waits for readiness. Returns
+ * undefined when the panel never reports readiness.
  */
-export async function resolveChatTarget(
-  am: ChatSurface,
-  getActiveTab: () => ChatTab | undefined,
-): Promise<ChatTarget | undefined> {
+export async function resolveChatTarget(am: ChatSurface): Promise<ChatTarget | undefined> {
   if (am.isActive()) {
     return (await am.waitForReady()) ? am : undefined
   }
-  const tab = getActiveTab()
-  if (tab) {
-    await tab.waitForReady()
-    return tab
-  }
   am.openPanel()
   return (await am.waitForReady()) ? am : undefined
-}
-
-/**
- * Race a webview readiness wait against a deadline. Resolves true when the
- * wait settles first, false on timeout. Used where an unbounded readiness
- * wait would block a user-facing delivery (deep links).
- */
-export function waitForChatReady(wait: Promise<void>, timeoutMs: number): Promise<boolean> {
-  return Promise.race([
-    wait.then(() => true),
-    new Promise<false>((resolve) => setTimeout(() => resolve(false), timeoutMs)),
-  ])
 }

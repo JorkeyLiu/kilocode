@@ -456,7 +456,7 @@ export async function assertWorktreeRemovalLifecycle(
   if (forbiddenCount > 0 || runtimeEvidence.runtime.forbiddenCommandHits.length > 0) {
     throw new Error(`probe: extension-host runtime evidence recorded forbidden P3.2 surfaces: ${JSON.stringify(runtimeEvidence)}`)
   }
-  if (!runtimeEvidence.runtime.retainedCommands.agentManagerOpen || !runtimeEvidence.runtime.retainedCommands.openInTab) {
+  if (!runtimeEvidence.runtime.retainedCommands.agentManagerOpen) {
     throw new Error(`probe: extension-host runtime evidence lost a retained root-local command: ${JSON.stringify(runtimeEvidence)}`)
   }
   if (

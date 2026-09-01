@@ -57,6 +57,8 @@ interface SidebarSessionListProps {
   onSelectSession: (id: string) => void
   untitledLabel: string
   t: (key: string) => string
+  expanded?: () => Set<string>
+  setExpanded?: (updater: (prev: Set<string>) => Set<string>) => void
 }
 
 const DEPTH_PX = 12
@@ -65,7 +67,12 @@ export const SidebarSessionList: Component<SidebarSessionListProps> = (props) =>
   const session = useSession()
   const lang = useLanguage()
   const dialog = useDialog()
-  const [expanded, setExpanded] = createSignal<Set<string>>(new Set())
+  const [internalExpanded, setInternalExpanded] = createSignal<Set<string>>(new Set())
+  const expanded = () => (props.expanded ? props.expanded() : internalExpanded())
+  const setExpanded = (updater: (prev: Set<string>) => Set<string>) => {
+    if (props.setExpanded) props.setExpanded(updater)
+    else setInternalExpanded((prev: Set<string>) => updater(prev))
+  }
   const [defaultExpanded, setDefaultExpanded] = createSignal(false)
   const [renaming, setRenaming] = createSignal<string | null>(null)
   // Container-owned scroll anchor tracker — always has a pre-update anchor

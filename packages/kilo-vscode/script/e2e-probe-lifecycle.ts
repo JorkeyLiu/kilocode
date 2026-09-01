@@ -11,7 +11,6 @@ import { isIsolatedDataRoot, validateGateEvidence } from "./e2e-canonical"
 import {
   activeTabId,
   clickRealNewSessionAction,
-  describeTargets,
   E2EPlan,
   findAgentManagerFrameAnyRedacted,
   headerTitle,
@@ -101,18 +100,6 @@ export function deriveDataThemeKind(raw: string): DataThemeKind {
   return "other"
 }
 
-export function kiloTabPanelDomPredicate(): boolean {
-  const root = document.documentElement
-  if (root.getAttribute("data-theme") !== "kilo-vscode") return false
-  if (document.querySelector(".am-layout")) return false
-  if (!document.querySelector(".chat-view")) return false
-  if (!document.querySelector("textarea.prompt-input")) return false
-  if (document.readyState === "loading") return false
-  if (!document.body) return false
-  const hasContent = document.body.children.length > 0
-  if (!hasContent) return false
-  return true
-}
 
 export function isFrameDetachedError(err: unknown): boolean {
   const msg = err instanceof Error ? err.message : typeof err === "string" ? err : String(err)
@@ -374,113 +361,6 @@ async function requestPrivateStatus(
   }
 }
 
-async function requestOpenTab(
-  scratch: string,
-  sessionId?: string,
-  timeoutMs = 30000,
-): Promise<{
-  nonce: string
-  before: {
-    backend: { pid: number | null; port: number | null; epoch: number | null }
-    private: {
-      pid: number | null | undefined
-      epoch: number | null
-      available: boolean
-      state: string
-      protocol: { name: string; major: number; minor?: number } | null
-      capabilities: string[]
-      hasSessionUpdate: boolean
-    }
-  }
-  after: {
-    backend: { pid: number | null; port: number | null; epoch: number | null }
-    private: {
-      pid: number | null | undefined
-      epoch: number | null
-      available: boolean
-      state: string
-      protocol: { name: string; major: number; minor?: number } | null
-      capabilities: string[]
-      hasSessionUpdate: boolean
-    }
-  }
-  openRes: {
-    count: number
-    ready: boolean
-    attached?: boolean
-    loadOk?: boolean
-    currentSessionIdHash?: string | null
-    targetSessionIdHash?: string | null
-  }
-}> {
-  const payload: Record<string, unknown> = {}
-  if (sessionId) payload.sessionId = sessionId
-  const nonce = writeNonceRequest(scratch, "lc-open-tab-request", "lc-open-tab.json", payload)
-  await waitForFile(join(scratch, "lc-open-tab.json"), timeoutMs, "lc-open-tab.json")
-  let parsed: Record<string, unknown>
-  try {
-    parsed = JSON.parse(readFileSync(join(scratch, "lc-open-tab.json"), "utf8"))
-  } catch (err) {
-    console.warn("[probe] malformed lc-open-tab.json (redacted):", String(err).slice(0, 200))
-    throw new Error("lc open-tab malformed")
-  }
-  if ((parsed as { nonce?: string }).nonce !== nonce) throw new Error("lc open-tab nonce mismatch")
-  if (sessionId) {
-    const openRes = (
-      parsed as {
-        openRes?: {
-          attached?: boolean
-          loadOk?: boolean
-          targetSessionIdHash?: string | null
-          currentSessionIdHash?: string | null
-        }
-      }
-    ).openRes
-    if (!openRes || openRes.loadOk !== true) throw new Error(`lc open-tab loadOk not true ${JSON.stringify(openRes)}`)
-    if (!openRes || openRes.attached !== true)
-      throw new Error(`lc open-tab not attached to target ${JSON.stringify(openRes)}`)
-    const expectedHash = fixtureHash(sessionId)
-    if (openRes.targetSessionIdHash !== expectedHash) throw new Error(`lc open-tab targetSessionIdHash mismatch`)
-    if (openRes.currentSessionIdHash !== expectedHash) throw new Error(`lc open-tab currentSessionIdHash mismatch`)
-    const raw = JSON.stringify(parsed)
-    if (raw.includes(sessionId)) throw new Error("lc open-tab leaked raw sessionId")
-  }
-  return parsed as unknown as {
-    nonce: string
-    before: {
-      backend: { pid: number | null; port: number | null; epoch: number | null }
-      private: {
-        pid: number | null | undefined
-        epoch: number | null
-        available: boolean
-        state: string
-        protocol: { name: string; major: number; minor?: number } | null
-        capabilities: string[]
-        hasSessionUpdate: boolean
-      }
-    }
-    after: {
-      backend: { pid: number | null; port: number | null; epoch: number | null }
-      private: {
-        pid: number | null | undefined
-        epoch: number | null
-        available: boolean
-        state: string
-        protocol: { name: string; major: number; minor?: number } | null
-        capabilities: string[]
-        hasSessionUpdate: boolean
-      }
-    }
-    openRes: {
-      count: number
-      ready: boolean
-      attached?: boolean
-      loadOk?: boolean
-      currentSessionIdHash?: string | null
-      targetSessionIdHash?: string | null
-    }
-  }
-}
 
 async function requestTitleUpdate(
   scratch: string,
@@ -599,138 +479,13 @@ async function requestLcSeedCredential(scratch: string, timeoutMs = 30000): Prom
   return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
 }
 
-export async function safeLocatorCount(locator: { count: () => Promise<number> }, label: string): Promise<number> {
-  try {
-    return await locator.count()
-  } catch (err) {
-    throw new Error(`probe: ${label} count failed (redacted): ${String(err).slice(0, 120)}`)
-  }
-}
 
-export async function isKiloTabPanelFrame(frame: Frame): Promise<boolean> {
-  if (!frame.url().includes("vscode-webview")) return false
-  try {
-    return await frame.evaluate(kiloTabPanelDomPredicate)
-  } catch {
-    return false
-  }
-}
 
-export async function collectKiloTabPanelFrames(browser: Browser): Promise<Frame[]> {
-  const cand: Frame[] = []
-  for (const ctx of browser.contexts()) {
-    for (const page of ctx.pages()) {
-      for (const frame of page.frames()) {
-        if (await isKiloTabPanelFrame(frame)) cand.push(frame)
-      }
-    }
-  }
-  return cand
-}
 
-async function countEditorTabs(browser: Browser, _label: string): Promise<number> {
-  const frames = await collectKiloTabPanelFrames(browser)
-  return frames.length
-}
 
-async function assertNoEditorTabAtUrl(browser: Browser, url: string): Promise<void> {
-  for (const ctx of browser.contexts()) {
-    for (const page of ctx.pages()) {
-      for (const frame of page.frames()) {
-        if (frame.url() !== url) continue
-        if (await isKiloTabPanelFrame(frame)) throw new Error("editor tab frame not disposed after close")
-      }
-    }
-  }
-}
 
-async function findEditorTabFrame(browser: Browser, timeoutMs = 30000): Promise<Frame> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const cand = await collectKiloTabPanelFrames(browser)
-    if (cand.length === 1) return cand[0]!
-    if (cand.length > 1) {
-      // Fail closed: multiple Kilo TabPanels found — require unambiguous disambiguation via title/session hash
-      // instead of returning arbitrary first frame. Caller should ensure single TabPanel or provide disambiguation.
-      const hashes: string[] = []
-      for (const f of cand) {
-        try {
-          const h = await f.evaluate(() => document.documentElement.getAttribute("data-theme") ?? "")
-          hashes.push(h.slice(0, 20))
-        } catch {
-          hashes.push("<err>")
-        }
-      }
-      throw new Error(
-        `probe: multiple Kilo TabPanel frames found (${cand.length}) — fail closed, hashes ${hashes.join(",")}`,
-      )
-    }
-    if (Date.now() > deadline) throw new Error("probe: editor tab webview frame not found")
-    await sleep(250)
-  }
-}
 
-async function waitForEditorTabDisposed(browser: Browser, timeoutMs = 15000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const count = await countEditorTabs(browser, "disposed")
-    if (count === 0) return
-    if (Date.now() > deadline) throw new Error("probe: editor tab frame still present after close — disposal failed")
-    await sleep(250)
-  }
-}
 
-async function waitForEditorTabReady(browser: Browser, timeoutMs = 30000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  let lastDiag = ""
-  for (;;) {
-    try {
-      const cand = await collectKiloTabPanelFrames(browser)
-      if (cand.length === 1) return
-      if (cand.length > 1) throw new Error(`multiple Kilo frames ${cand.length} during ready`)
-      // 0 -> not ready
-      try {
-        // Provide diagnostic for 0 case: inventory of all vscode-webview frames
-        const parts: string[] = []
-        for (const ctx of browser.contexts()) {
-          for (const page of ctx.pages()) {
-            for (const frame of page.frames()) {
-              if (!frame.url().includes("vscode-webview")) continue
-              const hasAm = await safeLocatorCount(frame.locator(".am-layout"), "ready hasAm").catch(() => -1)
-              const theme = await frame
-                .evaluate(() => document.documentElement.getAttribute("data-theme") ?? "")
-                .catch(() => "<err>")
-              const hasChat = await safeLocatorCount(frame.locator(".chat-view"), "ready hasChat").catch(() => -1)
-              const hasPrompt = await safeLocatorCount(frame.locator("textarea.prompt-input"), "ready hasPrompt").catch(
-                () => -1,
-              )
-              parts.push(
-                `url=${frame.url().slice(0, 60)} theme=${theme} hasAm=${hasAm} hasChat=${hasChat} hasPrompt=${hasPrompt}`,
-              )
-            }
-          }
-        }
-        lastDiag = parts.join(" | ").slice(0, 800)
-      } catch (err) {
-        void err
-      }
-    } catch (err) {
-      if (Date.now() > deadline) {
-        const targets = await describeTargets(browser).catch(() => "<describe failed>")
-        throw new Error(
-          `openTab editor frame not observable via CDP after ${timeoutMs}ms: ${err instanceof Error ? err.message : String(err)} — ${targets} lastDiag=${lastDiag}`,
-        )
-      }
-      await sleep(250)
-      continue
-    }
-    if (Date.now() > deadline) {
-      const targets = await describeTargets(browser).catch(() => "<describe failed>")
-      throw new Error(`openTab editor Kilo frame not observable after ${timeoutMs}ms — ${targets} lastDiag=${lastDiag}`)
-    }
-    await sleep(250)
-  }
-}
 
 export function lifecyclePin(plan: E2EPlan): PinExpectation {
   return {
@@ -897,16 +652,6 @@ async function lifecyclePhase0(
   }
 }
 
-async function observeTitle(frame: Frame, expected: string, timeoutMs = 10000): Promise<void> {
-  const deadline = Date.now() + timeoutMs
-  for (;;) {
-    const title = await headerTitle(frame)
-    if (title === expected) return
-    if (Date.now() > deadline) throw new Error(`probe: title not observed ${expected} got ${title}`)
-    await sleep(250)
-  }
-}
-
 function assertExactOrder(ids: string[], expectedSet: Set<string>, label: string): void {
   if (ids.length !== expectedSet.size)
     throw new Error(
@@ -932,43 +677,8 @@ export async function runGcLifecycleBoundaries(
     const phase0 = await lifecyclePhase0(browser, plan, scratch, workspace, snap, model)
 
     const gcTitle = `GcLifecycle Title ${createHash("sha256").update(phase0.sessionId).digest("hex").slice(0, 6)}`
-    let gcPre: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
-    let gcOpen: Awaited<ReturnType<typeof requestOpenTab>> | null = null
     let gcTitleRes: Awaited<ReturnType<typeof requestTitleUpdate>> | null = null
     let gcReplay: Awaited<ReturnType<typeof requestPrivateReplay>> | null = null
-
-    {
-      await captureLcLayoutTimeline(browser, scratch, "pre-first-target-open")
-      const pre = await requestPrivateStatus(scratch)
-      gcPre = pre
-      if (!pre.private.available) throw new Error(`lc pre private not available ${JSON.stringify(pre)}`)
-      if (!pre.private.hasSessionUpdate) throw new Error(`lc pre missing session/update`)
-      if (!pre.backend.pid || !pre.backend.port || !pre.backend.epoch) throw new Error(`lc pre backend missing`)
-      if (pre.private.pid !== pre.backend.pid) throw new Error(`lc pre pid mismatch`)
-      if (pre.private.epoch !== pre.backend.epoch) throw new Error(`lc pre epoch mismatch`)
-      await captureLcLayoutTimeline(browser, scratch, "pre-open-request")
-      const open = await requestOpenTab(scratch, phase0.sessionId)
-      gcOpen = open
-      await captureLcLayoutTimeline(browser, scratch, "post-first-target-open-request")
-      if (!open.openRes.ready) throw new Error(`lc openTab not ready`)
-      if (!open.before.private.available)
-        throw new Error(`lc openTab before private not available ${JSON.stringify(open.before.private)}`)
-      if (!open.before.private.hasSessionUpdate)
-        throw new Error(`lc openTab before missing session/update ${JSON.stringify(open.before.private)}`)
-      if (!open.after.private.available)
-        throw new Error(`lc openTab after private not available ${JSON.stringify(open.after.private)}`)
-      if (!open.after.private.hasSessionUpdate)
-        throw new Error(`lc openTab after missing session/update ${JSON.stringify(open.after.private)}`)
-      if (open.before.backend.pid !== pre.backend.pid || open.after.backend.pid !== pre.backend.pid)
-        throw new Error(`lc openTab pid changed`)
-      if (open.before.backend.port !== pre.backend.port || open.after.backend.port !== pre.backend.port)
-        throw new Error(`lc openTab port changed`)
-      if (open.before.backend.epoch !== pre.backend.epoch || open.after.backend.epoch !== pre.backend.epoch)
-        throw new Error(`lc openTab epoch changed`)
-      await waitForEditorTabReady(browser, 30000)
-      await captureLcLayoutTimeline(browser, scratch, "post-first-target-open-ready")
-      await captureLcLayoutTimeline(browser, scratch, "post-first-target-open")
-    }
 
     let gcRevision: { session?: number; config?: number } | null = null
     {
@@ -1004,36 +714,18 @@ export async function runGcLifecycleBoundaries(
         throw new Error(`lc replay sessionIdHash mismatch`)
       if (JSON.stringify(replay.revision) !== JSON.stringify(gcRevision)) throw new Error(`lc replay revision mismatch`)
       writeFileSync(join(scratch, "lc-gc-replay.json"), JSON.stringify(replay, null, 2))
-      // Ensure the target session is active in the Agent Manager so the header reflects the new title
-      // Force a real tab switch (sibling -> target) to trigger focus/reconcile and refresh title — UI-only real interaction
       {
         let amFrame2 = (await findAgentManagerFrameAnyRedacted(browser, 30000)).frame
         const beforeActive = await activeTabId(amFrame2).catch(() => "")
         if (beforeActive === phase0.sessionId) {
-          // Already on target, bounce through sibling to force focus load
           amFrame2 = await selectLifecycleTab(browser, amFrame2, phase0.siblingId, 10000)
           amFrame2 = await selectLifecycleTab(browser, amFrame2, phase0.sessionId, 10000)
         } else if (beforeActive === phase0.siblingId) {
           amFrame2 = await selectLifecycleTab(browser, amFrame2, phase0.sessionId, 10000)
         } else {
-          // Unexpected active but target exists — ensure target active via real UI action
           amFrame2 = await selectLifecycleTab(browser, amFrame2, phase0.sessionId, 10000)
         }
-        // Wait for the agent header to converge to gcTitle after the bounce
         await waitForHeaderTitle(amFrame2, gcTitle, 10000)
-      }
-      {
-        const snapTmp = await snap.request()
-        const backendTitle = snapTmp.sessions.find((s) => s.id === phase0.sessionId)?.title ?? "<no backend title>"
-        const amFrameTmp = (await findAgentManagerFrameAnyRedacted(browser, 5000)).frame
-        const agentTitleTmp = (await headerTitle(amFrameTmp).catch(() => "<no header>")) ?? "<no header>"
-        const efTmp = await findEditorTabFrame(browser, 5000).catch(() => null)
-        const editorTitleTmp = efTmp
-          ? ((await headerTitle(efTmp).catch(() => "<no header>")) ?? "<no header>")
-          : "<no frame>"
-        console.log(
-          `[probe] diagnostic after title+re-select: backendHash=${fixtureHash(backendTitle)} agentHash=${fixtureHash(agentTitleTmp)} editorHash=${fixtureHash(editorTitleTmp)} expectedHash=${fixtureHash(gcTitle)}`,
-        )
       }
     }
 
@@ -1046,80 +738,16 @@ export async function runGcLifecycleBoundaries(
     const count = initialIds.length
     if (count !== expectedSet.size) throw new Error(`initial count mismatch`)
 
-    async function observeBothTitlesRequired(timeoutMs = 30000): Promise<{ agent: string; editor: string }> {
-      const amFrame = (await findAgentManagerFrameAnyRedacted(browser, 30000)).frame
-      const agentTitle = await headerTitle(amFrame)
-      if (!agentTitle) throw new Error("agent title observation absent")
-      const ef = await findEditorTabFrame(browser, timeoutMs)
-      const editorTitle = await headerTitle(ef)
-      if (!editorTitle) throw new Error("editor title observation absent")
-      return { agent: agentTitle, editor: editorTitle }
-    }
-
-    async function observeAgentTitleRequired(): Promise<string> {
+    async function observeSingleTitleRequired(): Promise<string> {
       const amFrame = (await findAgentManagerFrameAnyRedacted(browser, 30000)).frame
       const t = await headerTitle(amFrame)
       if (!t) throw new Error("agent title observation absent")
       return t
     }
 
-    async function waitForBothTitles(expected: string, timeoutMs = 90000): Promise<{ agent: string; editor: string }> {
-      const deadline = Date.now() + timeoutMs
-      let last: { agent: string; editor: string } | undefined
-      for (;;) {
-        let agentTitle = ""
-        let editorTitle = ""
-        try {
-          const amFrame = (await findAgentManagerFrameAnyRedacted(browser, 5000)).frame
-          agentTitle = ((await headerTitle(amFrame).catch(() => "")) ?? "").trim()
-          const ef = await findEditorTabFrame(browser, 5000).catch(() => null)
-          if (ef) editorTitle = ((await headerTitle(ef).catch(() => "")) ?? "").trim()
-        } catch (err) {
-          void err
-        }
-        last = { agent: agentTitle, editor: editorTitle }
-        if (agentTitle === expected && editorTitle === expected) return last
-        if (
-          agentTitle.includes(expected) &&
-          editorTitle.includes(expected) &&
-          agentTitle.length > 0 &&
-          editorTitle.length > 0
-        )
-          return last
-        if (Date.now() > deadline) {
-          let diag = ""
-          try {
-            const lines: string[] = []
-            for (const ctx of browser.contexts()) {
-              for (const page of ctx.pages()) {
-                for (const frame of page.frames()) {
-                  if (!frame.url().includes("vscode-webview")) continue
-                  const hasAm = await safeLocatorCount(frame.locator(".am-layout"), "diag hasAm").catch(() => -1)
-                  const hasHeader = await safeLocatorCount(
-                    frame.locator('[data-slot="task-header-title-label"]'),
-                    "diag hasHeader",
-                  ).catch(() => -1)
-                  const hdr = await headerTitle(frame).catch(() => "<err>")
-                  const url = frame.url().slice(0, 120)
-                  lines.push(`frame url=${url} hasAm=${hasAm} hasHeader=${hasHeader} header=${hdr?.slice(0, 80)}`)
-                }
-              }
-            }
-            diag = `\nframes:\n${lines.join("\n")}\n${await describeTargets(browser)}`
-          } catch (err) {
-            diag = ` diag failed ${String(err).slice(0, 200)}`
-          }
-          throw new Error(
-            `both titles not converged to ${expected} within ${timeoutMs}ms: last=${last ? `agent=${last.agent} editor=${last.editor}` : "<no observation>"}${diag}`,
-          )
-        }
-        await sleep(500)
-      }
-    }
-
     let panelPre: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
     let panelPost: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
-    let panelTitles: { agent: string; editor: string } | null = null
+    let panelTitle: string | null = null
     let panelOrderIds: string[] | null = null
     {
       let panelFrame: Frame = initialFrame
@@ -1137,7 +765,8 @@ export async function runGcLifecycleBoundaries(
       } else if ((await activeTabId(panelFrame).catch(() => "")) !== phase0.sessionId) {
         panelFrame = await selectLifecycleTab(browser, panelFrame, phase0.sessionId, 10000)
       }
-      const preBoth = await waitForBothTitles(gcTitle, 60000)
+      const preSingle = await observeSingleTitleRequired()
+      if (preSingle !== gcTitle) throw new Error(`panel pre title mismatch ${preSingle}`)
       await captureLcLayoutTimeline(browser, scratch, "pre-panel-close")
       panelPre = await requestPrivateStatus(scratch)
       writeFileSync(join(scratch, "lc-panel-close-request"), "ok")
@@ -1166,21 +795,19 @@ export async function runGcLifecycleBoundaries(
       if (panelPost.backend.pid !== panelPre.backend.pid) throw new Error(`panel pid changed`)
       if (panelPost.backend.port !== panelPre.backend.port) throw new Error(`panel port changed`)
       if (panelPost.backend.epoch !== panelPre.backend.epoch) throw new Error(`panel epoch changed`)
-      const postBoth = await observeBothTitlesRequired()
+      const postSingle = await observeSingleTitleRequired()
       await captureLcLayoutTimeline(browser, scratch, "post-panel-reopen")
-      if (postBoth.agent !== gcTitle) throw new Error(`panel post agent title mismatch ${postBoth.agent}`)
-      if (postBoth.editor !== gcTitle) throw new Error(`panel post editor title mismatch ${postBoth.editor}`)
-      panelTitles = postBoth
+      if (postSingle !== gcTitle) throw new Error(`panel post title mismatch ${postSingle}`)
+      panelTitle = postSingle
     }
 
     let reloadPre: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
     let reloadPost: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
-    let reloadTitles: { agent: string; editor: string } | null = null
+    let reloadTitle: string | null = null
     let reloadOrderIds: string[] | null = null
     {
-      const preBoth = await observeBothTitlesRequired()
-      if (preBoth.agent !== gcTitle) throw new Error(`reload pre agent title mismatch`)
-      if (preBoth.editor !== gcTitle) throw new Error(`reload pre editor title mismatch`)
+      const preSingle = await observeSingleTitleRequired()
+      if (preSingle !== gcTitle) throw new Error(`reload pre title mismatch`)
       await captureLcLayoutTimeline(browser, scratch, "pre-webview-reload")
       reloadPre = await requestPrivateStatus(scratch)
       const amFrame = (await findAgentManagerFrameAnyRedacted(browser, 30000)).frame
@@ -1204,8 +831,8 @@ export async function runGcLifecycleBoundaries(
                   const marked = (window as unknown as { __lcProbeMark?: string }).__lcProbeMark === "pre-reload"
                   return !marked && document.querySelector(".am-layout") !== null
                 })
-              } catch (err) {
-                throw new Error(`probe: reload fresh check failed (redacted): ${String(err).slice(0, 80)}`)
+              } catch {
+                throw new Error(`probe: reload fresh check failed (redacted)`)
               }
               if (fresh) {
                 reloaded = frame
@@ -1238,131 +865,25 @@ export async function runGcLifecycleBoundaries(
       reloadPost = await requestPrivateStatus(scratch)
       if (reloadPost.backend.pid !== reloadPre.backend.pid) throw new Error(`reload pid changed`)
       if (reloadPost.backend.epoch !== reloadPre.backend.epoch) throw new Error(`reload epoch changed`)
-      const postBoth = await observeBothTitlesRequired()
+      const postSingle = await observeSingleTitleRequired()
       await captureLcLayoutTimeline(browser, scratch, "post-webview-reload")
-      if (postBoth.agent !== gcTitle) throw new Error(`reload post agent title mismatch ${postBoth.agent}`)
-      if (postBoth.editor !== gcTitle) throw new Error(`reload post editor title mismatch ${postBoth.editor}`)
-      reloadTitles = postBoth
-    }
-
-    let tabPre: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
-    let tabPost: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
-    let tabTitles: { agent: string; editor: string } | null = null
-    let tabOrderAfterReopen: string[] | null = null
-    {
-      const preBoth = await observeBothTitlesRequired()
-      if (preBoth.agent !== gcTitle) throw new Error(`tab pre agent title mismatch`)
-      if (preBoth.editor !== gcTitle) throw new Error(`tab pre editor title mismatch`)
-      await captureLcLayoutTimeline(browser, scratch, "pre-editor-tab-close")
-      const amFrameBefore = (await findAgentManagerFrameAnyRedacted(browser, 30000)).frame
-      const beforeIds = (await tabStates(amFrameBefore)).map((t) => t.id)
-      assertExactOrder(beforeIds, expectedSet, "tab pre")
-      if (orderHash(beforeIds) !== oh) throw new Error(`tab pre orderHash mismatch`)
-      // Count editor tabs before close via probe-side frame count (exactly one TabPanel) — fail-closed on Playwright/CDP errors
-      const countBefore = await countEditorTabs(browser, "tab pre")
-      if (countBefore !== 1)
-        throw new Error(`tab pre editor count expected 1 got ${countBefore} — duplicate or missing`)
-      await captureLcLayoutTimeline(browser, scratch, "pre-editor-tab-close-counted")
-      // capture editor frame identity for disposal check
-      const editorFrameBefore = await findEditorTabFrame(browser, 10000)
-      const beforeUrl = editorFrameBefore.url()
-      tabPre = await requestPrivateStatus(scratch)
-      writeFileSync(join(scratch, "lc-tab-close-request"), "ok")
-      await captureLcLayoutTimeline(browser, scratch, "post-editor-tab-close-request")
-      await waitForFile(join(scratch, "lc-tab-close-done"), 30000, "lc-tab-close-done")
-      await captureLcLayoutTimeline(browser, scratch, "post-editor-tab-close-done")
-      await waitForEditorTabDisposed(browser, 15000)
-      await captureLcLayoutTimeline(browser, scratch, "post-editor-tab-disposed")
-      await assertNoEditorTabAtUrl(browser, beforeUrl)
-      // verify editor count is 0 after close — fail-closed distinction between valid zero and Playwright error
-      const countAfterClose = await countEditorTabs(browser, "tab after close")
-      if (countAfterClose !== 0) throw new Error(`editor count after close expected 0 got ${countAfterClose}`)
-      await captureLcLayoutTimeline(browser, scratch, "post-editor-tab-close")
-      // AM order must stay intact after tab close
-      const amFrameAfterClose = (await findAgentManagerFrameAnyRedacted(browser, 30000)).frame
-      const afterCloseIds = (await tabStates(amFrameAfterClose)).map((t) => t.id)
-      assertExactOrder(afterCloseIds, expectedSet, "tab close AM order")
-      if (orderHash(afterCloseIds) !== oh) throw new Error(`tab close AM orderHash mismatch`)
-      // verify AM title still observed after tab close (AM surface persists)
-      const agentAfterClose = await observeAgentTitleRequired()
-      if (agentAfterClose !== gcTitle) throw new Error(`AM title after tab close mismatch`)
-
-      const tabReopenNonce = newNonce()
-      writeFileSync(
-        join(scratch, "lc-tab-reopen-request"),
-        JSON.stringify({ nonce: tabReopenNonce, sessionId: phase0.sessionId }),
-      )
-      await captureLcLayoutTimeline(browser, scratch, "post-editor-tab-reopen-request")
-      await waitForFile(join(scratch, "lc-tab-reopen-done"), 60000, "lc-tab-reopen-done")
-      await captureLcLayoutTimeline(browser, scratch, "immediately-after-lc-tab-reopen-done-before-frame-selection")
-      {
-        const raw = readFileSync(join(scratch, "lc-tab-reopen-done"), "utf8")
-        let parsed: Record<string, unknown>
-        try {
-          parsed = JSON.parse(raw) as Record<string, unknown>
-        } catch {
-          throw new Error("probe: lc-tab-reopen-done malformed")
-        }
-        if ((parsed as { nonce?: string }).nonce !== tabReopenNonce)
-          throw new Error("probe: lc-tab-reopen-done nonce mismatch")
-        const probed = (
-          parsed as {
-            probed?: {
-              attached?: boolean
-              loadOk?: boolean
-              targetSessionIdHash?: string | null
-              currentSessionIdHash?: string | null
-            }
-          }
-        ).probed
-        if (!probed || probed.loadOk !== true)
-          throw new Error(`probe: tab reopen loadOk not true ${JSON.stringify(probed)}`)
-        if (!probed || probed.attached !== true)
-          throw new Error(`probe: tab reopen not attached ${JSON.stringify(probed)}`)
-        if (probed.targetSessionIdHash !== fixtureHash(phase0.sessionId))
-          throw new Error("probe: tab reopen targetSessionIdHash mismatch")
-        if (probed.currentSessionIdHash !== fixtureHash(phase0.sessionId))
-          throw new Error("probe: tab reopen currentSessionIdHash mismatch")
-        if (JSON.stringify(parsed).includes(phase0.sessionId)) throw new Error("probe: tab reopen leaked raw sessionId")
-      }
-      const ef = await findEditorTabFrame(browser, 30000)
-      await captureLcLayoutTimeline(browser, scratch, "after-chosen-frame")
-      await observeTitle(ef, gcTitle, 30000)
-      // verify editor count after reopen is exactly 1 (no duplicates) — fail-closed
-      const countAfterReopen = await countEditorTabs(browser, "tab after reopen")
-      if (countAfterReopen !== 1)
-        throw new Error(`editor count after reopen expected 1 got ${countAfterReopen} — duplicate tabs`)
-      await captureLcLayoutTimeline(browser, scratch, "post-editor-tab-reopen")
-      tabPost = await requestPrivateStatus(scratch)
-      if (tabPost.backend.pid !== tabPre.backend.pid) throw new Error(`tab pid changed`)
-      if (tabPost.backend.epoch !== tabPre.backend.epoch) throw new Error(`tab epoch changed`)
-      const postBoth = await observeBothTitlesRequired()
-      await captureLcLayoutTimeline(browser, scratch, "post-editor-tab-reopen-both-titles")
-      if (postBoth.agent !== gcTitle) throw new Error(`tab post agent title mismatch`)
-      if (postBoth.editor !== gcTitle) throw new Error(`tab post editor title mismatch ${postBoth.editor}`)
-      tabTitles = postBoth
-      const amFrame = (await findAgentManagerFrameAnyRedacted(browser, 30000)).frame
-      const states = await tabStates(amFrame)
-      const ids = states.map((t) => t.id)
-      assertExactOrder(ids, expectedSet, "tab reopen AM order")
-      if (orderHash(ids) !== oh) throw new Error(`tab reopen orderHash mismatch`)
-      tabOrderAfterReopen = ids
+      if (postSingle !== gcTitle) throw new Error(`reload post title mismatch ${postSingle}`)
+      reloadTitle = postSingle
     }
 
     let switchPre: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
     let switchMid: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
     let switchPost: Awaited<ReturnType<typeof requestPrivateStatus>> | null = null
-    let switchTitlesPre: { agent: string; editor: string } | null = null
-    let switchTitlesMid: { agent: string; editor: string } | null = null
-    let switchTitlesPost: { agent: string; editor: string } | null = null
+    let switchTitlePre: string | null = null
+    let switchTitleMid: string | null = null
+    let switchTitlePost: string | null = null
     let switchOrderMid: string[] | null = null
     let switchOrderPost: string[] | null = null
     {
-      const preBoth = await observeBothTitlesRequired()
-      if (preBoth.agent !== gcTitle) throw new Error(`switch pre agent title mismatch ${preBoth.agent}`)
-      if (preBoth.editor !== gcTitle) throw new Error(`switch pre editor title mismatch ${preBoth.editor}`)
+      const preSingle = await observeSingleTitleRequired()
+      if (preSingle !== gcTitle) throw new Error(`switch pre title mismatch ${preSingle}`)
       await captureLcLayoutTimeline(browser, scratch, "pre-session-switch")
-      switchTitlesPre = preBoth
+      switchTitlePre = preSingle
       switchPre = await requestPrivateStatus(scratch)
       let amFrame0 = (await findAgentManagerFrameAnyRedacted(browser, 30000)).frame
       amFrame0 = await selectLifecycleTab(browser, amFrame0, phase0.sessionId, 10000)
@@ -1376,20 +897,14 @@ export async function runGcLifecycleBoundaries(
       if (active !== phase0.siblingId) throw new Error(`switch to sibling failed ${active}`)
       const orderMid = (await tabStates(amFrame0)).map((t) => t.id)
       assertExactOrder(orderMid, expectedSet, "switch mid order")
-      if (orderHash(orderMid) !== oh)
-        throw new Error(`switch mid orderHash mismatch — order must not reorder on switch`)
+      if (orderHash(orderMid) !== oh) throw new Error(`switch mid orderHash mismatch`)
       switchOrderMid = orderMid
       switchMid = await requestPrivateStatus(scratch)
       await captureLcLayoutTimeline(browser, scratch, "switched-session")
-      const midBoth = await observeBothTitlesRequired()
-      switchTitlesMid = midBoth
-      // Asymmetric expectation: Agent Manager switches to sibling (shows sibling title), editor tab remains on target (shows durable gcTitle).
-      // This matches product ownership where TabPanel is independent of Agent Manager selection.
-      if (midBoth.agent === gcTitle)
-        throw new Error(`switch mid agent title must be sibling title, got durable target title`)
-      if (!midBoth.agent || midBoth.agent.length === 0) throw new Error(`switch mid agent title absent`)
-      if (midBoth.editor !== gcTitle)
-        throw new Error(`switch mid editor title must remain durable target title ${midBoth.editor}`)
+      const midSingle = await observeSingleTitleRequired()
+      switchTitleMid = midSingle
+      if (midSingle === gcTitle) throw new Error(`switch mid title must be sibling title, got durable target title`)
+      if (!midSingle || midSingle.length === 0) throw new Error(`switch mid title absent`)
       amFrame0 = await selectLifecycleTab(browser, amFrame0, phase0.sessionId, 10000)
       active = await activeTabId(amFrame0)
       if (active !== phase0.sessionId) throw new Error(`switch back failed ${active}`)
@@ -1399,13 +914,11 @@ export async function runGcLifecycleBoundaries(
       switchOrderPost = orderPost
       switchPost = await requestPrivateStatus(scratch)
       await captureLcLayoutTimeline(browser, scratch, "post-session-switch")
-      const postBoth = await observeBothTitlesRequired()
-      if (postBoth.agent !== gcTitle) throw new Error(`switch post agent title mismatch`)
-      if (postBoth.editor !== gcTitle) throw new Error(`switch post editor title mismatch`)
-      switchTitlesPost = postBoth
+      const postSingle = await observeSingleTitleRequired()
+      if (postSingle !== gcTitle) throw new Error(`switch post title mismatch`)
+      switchTitlePost = postSingle
       if (switchMid.backend.pid !== switchPre.backend.pid) throw new Error(`switch mid pid changed`)
       if (switchPost.backend.pid !== switchPre.backend.pid) throw new Error(`switch post pid changed`)
-      // capability equality will be validated in proof artifact too; quick check here
       const capsPre = switchPre.private.capabilities.slice().sort().join(",")
       const capsMid = switchMid.private.capabilities.slice().sort().join(",")
       const capsPost = switchPost.private.capabilities.slice().sort().join(",")
@@ -1474,13 +987,13 @@ export async function runGcLifecycleBoundaries(
         protocol: canon(p.private.protocol),
         capabilities: p.private.capabilities,
       })
-      // Re-derive orderHash from observed ordered IDs to prove exact order
       const proofOrderHash = oh
-      const siblingTitleHashObserved = fixtureHash(switchTitlesMid!.agent)
+      const siblingTitleHashObserved = fixtureHash(switchTitleMid!)
+      const gcPre = panelPre
       const proof = {
-        schema: "kilo-gc-lifecycle-proof/1",
-        version: 1,
-        scope: "real-lifecycle Gate C: UI-only lifecycle convergence with stable identity and same-key replay",
+        schema: "kilo-gc-lifecycle-proof/2",
+        version: 2,
+        scope: "real-lifecycle Gate C: Agent Manager lifecycle with stable identity and same-key replay",
         fixtureIdHash: fixtureIdForHash,
         sessionIdHash: fixtureHash(phase0.sessionId),
         siblingIdHash: fixtureHash(phase0.siblingId),
@@ -1488,40 +1001,8 @@ export async function runGcLifecycleBoundaries(
         siblingTitleHash: siblingTitleHashObserved,
         orderHash: proofOrderHash,
         pre: {
-          backend: { pid: gcPre!.backend.pid, port: gcPre!.backend.port, epoch: gcPre!.backend.epoch },
-          private: buildPriv(gcPre!),
-        },
-        openTab: {
-          before: {
-            backend: gcOpen!.before.backend,
-            private: {
-              pid: gcOpen!.before.private.pid ?? null,
-              epoch: gcOpen!.before.private.epoch,
-              available: gcOpen!.before.private.available,
-              hasSessionUpdate: gcOpen!.before.private.hasSessionUpdate,
-              state: gcOpen!.before.private.state,
-              protocol: canon(gcOpen!.before.private.protocol),
-              capabilities: gcOpen!.before.private.capabilities,
-            },
-          },
-          after: {
-            backend: gcOpen!.after.backend,
-            private: {
-              pid: gcOpen!.after.private.pid ?? null,
-              epoch: gcOpen!.after.private.epoch,
-              available: gcOpen!.after.private.available,
-              hasSessionUpdate: gcOpen!.after.private.hasSessionUpdate,
-              state: gcOpen!.after.private.state,
-              protocol: canon(gcOpen!.after.private.protocol),
-              capabilities: gcOpen!.after.private.capabilities,
-            },
-          },
-          editorCount: gcOpen!.openRes.count,
-          ready: gcOpen!.openRes.ready,
-          loadOk: gcOpen!.openRes.loadOk,
-          targetSessionIdHash: gcOpen!.openRes.targetSessionIdHash,
-          currentSessionIdHash: gcOpen!.openRes.currentSessionIdHash,
-          attached: gcOpen!.openRes.attached,
+          backend: { pid: panelPre!.backend.pid, port: panelPre!.backend.port, epoch: panelPre!.backend.epoch },
+          private: buildPriv(panelPre!),
         },
         titleOp: {
           opIdHash: gcTitleRes!.redacted.opIdHash,
@@ -1555,49 +1036,36 @@ export async function runGcLifecycleBoundaries(
             post: { backend: panelPost!.backend, private: buildPriv(panelPost!) },
             orderHash: orderHash(panelOrderIds!),
             orderCount: count,
-            agentTitleHash: fixtureHash(panelTitles!.agent),
-            tabTitleHash: fixtureHash(panelTitles!.editor),
+            titleHash: fixtureHash(panelTitle!),
           },
           webviewReload: {
             pre: { backend: reloadPre!.backend, private: buildPriv(reloadPre!) },
             post: { backend: reloadPost!.backend, private: buildPriv(reloadPost!) },
             orderHash: orderHash(reloadOrderIds!),
             orderCount: count,
-            agentTitleHash: fixtureHash(reloadTitles!.agent),
-            tabTitleHash: fixtureHash(reloadTitles!.editor),
-          },
-          tabCloseReopen: {
-            pre: { backend: tabPre!.backend, private: buildPriv(tabPre!) },
-            post: { backend: tabPost!.backend, private: buildPriv(tabPost!) },
-            orderHash: orderHash(tabOrderAfterReopen!),
-            orderCount: count,
-            agentTitleHash: fixtureHash(tabTitles!.agent),
-            tabTitleHash: fixtureHash(tabTitles!.editor),
+            titleHash: fixtureHash(reloadTitle!),
           },
           sessionSwitch: {
             pre: {
               backend: switchPre!.backend,
               private: buildPriv(switchPre!),
               activeIdHash: fixtureHash(phase0.sessionId),
-            },
-            post: {
-              backend: switchPost!.backend,
-              private: buildPriv(switchPost!),
-              activeIdHash: fixtureHash(phase0.sessionId),
+              titleHash: fixtureHash(switchTitlePre!),
             },
             switched: {
               backend: switchMid!.backend,
               private: buildPriv(switchMid!),
               activeIdHash: fixtureHash(phase0.siblingId),
+              titleHash: fixtureHash(switchTitleMid!),
+            },
+            post: {
+              backend: switchPost!.backend,
+              private: buildPriv(switchPost!),
+              activeIdHash: fixtureHash(phase0.sessionId),
+              titleHash: fixtureHash(switchTitlePost!),
             },
             orderHash: orderHash(switchOrderPost!),
             orderCount: count,
-            agentTitleHash: fixtureHash(switchTitlesPost!.agent),
-            tabTitleHash: fixtureHash(switchTitlesPost!.editor),
-            switchedAgentTitleHash: fixtureHash(switchTitlesMid!.agent),
-            switchedTabTitleHash: fixtureHash(switchTitlesMid!.editor),
-            preAgentTitleHash: fixtureHash(switchTitlesPre!.agent),
-            preTabTitleHash: fixtureHash(switchTitlesPre!.editor),
           },
         },
         finalReplay: {
@@ -1613,8 +1081,8 @@ export async function runGcLifecycleBoundaries(
         parity: gcTitleRes!.parity,
         collectedAt: new Date().toISOString(),
       }
-      // orderHash already validated to equal observed hashes above; switched hashes are now encoded in proof
       void switchOrderMid
+      void gcPre
       await captureLcLayoutTimeline(browser, scratch, "pre-proof-write")
       const proofRaw = JSON.stringify(proof, null, 2)
       if (proofRaw.includes(gcTitle)) throw new Error("lc proof leaked raw title")

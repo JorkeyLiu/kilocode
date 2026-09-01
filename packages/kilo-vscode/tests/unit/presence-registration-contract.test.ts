@@ -81,23 +81,20 @@ describe("KiloProvider disableViewedRegistration contract", () => {
     expect(attached).toBeGreaterThan(guard)
   })
 
-  it("focusSession and trackOpenSessions report through registerPresence", () => {
-    // Both the focused session (visible) and the open local tabs (attached)
-    // funnel into one snapshot so neither write can clobber the other.
+  it("focusSession reports through registerPresence", () => {
     const focus = kiloProvider.match(/private focusSession\(id\?: string\): void \{([\s\S]*?)\n {2}\}/)
     expect(focus).not.toBeNull()
     expect(focus![1]).toContain("this.registerPresence()")
-    const track = kiloProvider.match(/private trackOpenSessions\(ids: string\[\]\): void \{([\s\S]*?)\n {2}\}/)
-    expect(track).not.toBeNull()
-    expect(track![1]).toContain("this.registerPresence()")
+    expect(kiloProvider).not.toContain("private trackOpenSessions(")
   })
 
-  it("registerPresence attaches the open local tabs plus the focused session", () => {
+  it("registerPresence attaches the focused session (Agent Manager owns open-tab presence)", () => {
     const match = kiloProvider.match(/private registerPresence\(\): void \{([\s\S]*?)\n {2}\}/)
     expect(match).not.toBeNull()
     const body = match![1]
-    expect(body).toContain("const attached = new Set(this.openSessionIds)")
+    expect(body).toContain("const attached = new Set<string>()")
     expect(body).toContain("if (focused) attached.add(focused)")
+    expect(body).not.toContain("openSessionIds")
   })
 
   it("the editor-panel view-state callback honors the same option", () => {

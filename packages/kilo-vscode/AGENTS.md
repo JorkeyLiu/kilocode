@@ -30,7 +30,7 @@ Every client spawns or connects to a `kilo serve` process and communicates via H
 |---|---|---|---|
 | Kilo CLI (TUI) | `packages/opencode/` | Interactive terminal UI (SolidJS + OpenTUI) | In-process — TUI and server run together |
 | Kilo CLI (`kilo run`) | `packages/opencode/` | Non-interactive headless mode for scripting | In-process — no network socket |
-| **Kilo VS Code Extension** | **`packages/kilo-vscode/`** | VS Code extension with Agent Manager and editor-tab chat | Bundles CLI binary, spawns `kilo serve --port 0` as child process |
+| **Kilo VS Code Extension** | **`packages/kilo-vscode/`** | VS Code extension with Agent Manager (only chat UI; `kilo-code.new.TabPanel`/`kilo-code.new.openInTab` deleted in working tree P3.5 Complete 2026-09-01). Ordinary webview bundle may still serve settings/profile (not chat) | Bundles CLI binary, spawns `kilo serve --port 0` as child process |
 
 ### Kilo-Domain Packages
 
@@ -122,22 +122,23 @@ Extension (Node.js)                          CLI Backend (child process)
 │   ├── HttpClient         │                │   SSE event stream   │
 │   └── SSEClient          │                │   Session management │
 │                          │                │   AI agent runtime   │
-│ KiloProvider (agent mgr) │                └──────────────────────┘
-│ KiloProvider (open tabs) │
+│ Agent Manager (only chat UI, internal KiloProvider) │                └──────────────────────┘
 └──────────────────────────┘
 ```
 
-- **`KiloConnectionService`** (`src/services/cli-backend/connection-service.ts`) is created once during extension activation and shared across Kilo editor tabs and Agent Manager. It owns the current server process, HTTP client, and SSE connection.
+- **`KiloConnectionService`** (`src/services/cli-backend/connection-service.ts`) is created once during extension activation and shared by Agent Manager (the only chat UI). It owns the current server process, HTTP client, and SSE connection.
 - **`ServerManager`** (`src/services/cli-backend/server-manager.ts`) lazily spawns the CLI binary, reuses its current process, and can start a replacement if that process exits.
-- Every **Open in Tab** Kilo panel and the Agent Manager chat provider reuse this connection. Multiple **`KiloProvider`** instances subscribe to it, with SSE events filtered per-webview via a `trackedSessionIds` Set. Agent Manager terminals may use additional PTY/WebSocket channels to the same backend, not separate `kilo serve` processes.
+- Agent Manager (only chat UI, host in Primary/Secondary Sidebar or editor group does not change judgment) reuses this connection; its internal session sidebar/tabs/terminals/navigation/persistence are retained (LOCK-002). SSE events are filtered per-session via a `trackedSessionIds` Set. Agent Manager terminals may use additional PTY/WebSocket channels to the same backend, not separate `kilo serve` processes. Historical /1 `kilo-code.new.TabPanel`/`kilo-code.new.openInTab` dual-surface is deleted in working tree (P3.5 Complete 2026-09-01, `SessionTabStrip`/`local-tabs.tsx` removed) and no longer constitutes acceptance.
 - Backend state follows where it is allocated, not the panel shown in an editor tab. Snapshot repository state uses directory-keyed `InstanceState`, while `trackState` is created once in the active Snapshot service closure. For these shared VS Code session paths, its slow-track `asked` guard spans the root-local requests; choosing **Continue with snapshots** resets `asked` only when continued tracking returns a snapshot hash.
 
 ### Builds
 
-Two separate esbuild builds in [`esbuild.js`](esbuild.js):
+Two esbuild builds in [`esbuild.js`](esbuild.js) (Agent Manager is the only chat UI; ordinary webview bundle retained for non-chat surfaces):
 
 - **Extension** (Node/CJS): `src/extension.ts` → `dist/extension.js`
-- **Webview** (browser/IIFE): `webview-ui/src/index.tsx` → `dist/webview.js` AND `webview-ui/agent-manager/index.tsx` → `dist/agent-manager.js`
+- **Ordinary webview (non-chat, settings/profile etc)** (browser/IIFE): `webview-ui/src/index.tsx` → `dist/webview.js` — retained for non-chat surfaces; TabPanel chat (`kilo-code.new.TabPanel`) deleted in P3.5 working tree (historical /1 only, not current product)
+- **Agent Manager webview (only chat UI)** (browser/IIFE): `webview-ui/agent-manager/index.tsx` → `dist/agent-manager.js`
+- Shared Shiki worker (synthetic worker entry) → `dist/shiki-worker.js`
 
 ### Non-Obvious Details
 
@@ -167,21 +168,22 @@ Key patterns:
 - **Cached messages** (e.g. `cachedProvidersMessage`, `cachedAgentsMessage` in KiloProvider): Ensures webview refreshes get data immediately without waiting for a new HTTP round-trip
 - **Retry timers** (e.g. `agentRetryTimer` in session context): Handles race conditions where the extension's HTTP client isn't ready when the webview first requests data
 
-## Agent Manager
+## Agent Manager — the only chat UI (P3.5 Complete 2026-09-01, host agnostic)
 
-The Agent Manager is a feature within this extension (not a separate product). It opens as an **editor tab** (`Cmd+Shift+M`) and provides multi-session orchestration — running multiple independent AI sessions in parallel at the workspace root. Since the P3.1 sidebar removal, it is the primary chat entry point together with "Open in Tab" editor panels.
+The Agent Manager is a feature within this extension (not a separate product). It is the only chat UI and provides multi-session orchestration — running multiple independent AI sessions in parallel at the workspace root. It may be hosted in Primary/Secondary Sidebar or editor group without changing judgment; internal session sidebar/tabs/terminals/navigation/persistence/hydration are retained (LOCK-002). Since P3.1 sidebar and P3.5 TabPanel/Open in Tab removals, Agent Manager is the sole chat entry point (no `kilo-code.new.TabPanel`/`kilo-code.new.openInTab` retained; `SessionTabStrip`/`local-tabs.tsx` deleted, `chat-target.ts` is Agent Manager-only).
 
-### How It Compares to Open-in-Tab Editor Panels
+Historical /1 `real-lifecycle` preparation used a dual-surface TabPanel scope; that part is historical and no longer acceptance — current /2 is pure Agent Manager Complete 2026-09-01 (panel close/reopen, targeted reload, active session switch, title/order/persistence, same-key replay, no dual surface; validated `b2dc5002…` + `cd26b5f0…`).
 
-| Aspect | Open in Tab panel | Agent Manager |
-|---|---|---|
-| Location | Editor tab | Editor tab (full panel) |
-| Sessions | Single session at a time | Multiple parallel sessions with tabbed UI |
-| Working directory | Uses workspace root | Uses workspace root — sessions share it, no isolation |
-| State | No dedicated state file | Webview-local UI state (VS Code webview state API) |
-| Terminals | None | Dedicated VS Code terminal per session |
-| Setup scripts | None | None |
-| Multi-version | Not supported | Not supported — all sessions are independent tasks |
+| Aspect | Agent Manager (only chat UI) |
+|---|---|
+| Location | Primary/Secondary Sidebar or editor tab (host does not change judgment) |
+| Sessions | Multiple parallel sessions with tabbed UI |
+| Working directory | Workspace root — sessions share it, no isolation |
+| State | Workspace-owned durable open-tab persistence (`kilo.agentManager.persistence.v1` via `workspaceState`) + webview-local UI state |
+| Terminals | Dedicated VS Code terminal per session |
+| Gate C /2 acceptance (P3.5 Complete 2026-09-01) | Panel close/reopen, targeted reload (AM-only, same Provider), active session switch, title/order/persistence, same-key replay, no dual surface — validated `b2dc5002…` `pid:84320` stable `revision 32/0` + `cd26b5f0…` `89820/51036/1→90959/51147/2`; Gates C/D/P4.4/G3 remain Active |
+
+Historical Open in Tab `kilo-code.new.TabPanel` was a single-session editor tab sharing the same workspace root with no dedicated state file — deleted in working tree and not part of current acceptance.
 
 ### Architecture
 

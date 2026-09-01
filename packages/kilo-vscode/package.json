@@ -104,15 +104,6 @@
         "icon": "$(settings-gear)"
       },
       {
-        "command": "kilo-code.new.openInTab",
-        "title": "Open in Tab",
-        "category": "Kilo Code",
-        "icon": {
-          "light": "assets/icons/kilo-light.svg",
-          "dark": "assets/icons/kilo-dark.svg"
-        }
-      },
-      {
         "command": "kilo-code.new.agentManager.previousSession",
         "title": "Agent Manager: Previous Session",
         "category": "Kilo Code"
@@ -296,33 +287,6 @@
       }
     ],
     "menus": {
-      "editor/title": [
-        {
-          "command": "kilo-code.new.openInTab",
-          "group": "navigation",
-          "when": "true"
-        },
-        {
-          "command": "kilo-code.new.plusButtonClicked",
-          "group": "navigation@0",
-          "when": "activeWebviewPanelId == kilo-code.new.TabPanel"
-        },
-        {
-          "command": "kilo-code.new.historyButtonClicked",
-          "group": "navigation@1",
-          "when": "activeWebviewPanelId == kilo-code.new.TabPanel"
-        },
-        {
-          "command": "kilo-code.new.profileButtonClicked",
-          "group": "navigation@2",
-          "when": "activeWebviewPanelId == kilo-code.new.TabPanel"
-        },
-        {
-          "command": "kilo-code.new.settingsButtonClicked",
-          "group": "navigation@3",
-          "when": "activeWebviewPanelId == kilo-code.new.TabPanel"
-        }
-      ],
       "editor/context": [
         {
           "submenu": "kilo-code.new.editorContextMenu",
@@ -513,13 +477,13 @@
         "command": "kilo-code.new.cycleAgentMode",
         "key": "ctrl+.",
         "mac": "cmd+.",
-        "when": "activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel' || activeWebviewPanelId == 'kilo-code.new.TabPanel'"
+        "when": "activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel'"
       },
       {
         "command": "kilo-code.new.cyclePreviousAgentMode",
         "key": "ctrl+shift+.",
         "mac": "cmd+shift+.",
-        "when": "activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel' || activeWebviewPanelId == 'kilo-code.new.TabPanel'"
+        "when": "activeWebviewPanelId == 'kilo-code.new.AgentManagerPanel'"
       }
     ],
     "configuration": {

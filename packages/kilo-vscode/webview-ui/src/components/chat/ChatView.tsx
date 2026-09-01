@@ -5,20 +5,17 @@
  * Main chat container that combines all chat components
  */
 
-import { type Component, type JSX, Show, createMemo, createSignal } from "solid-js"
+import { type Component, type JSX, Show, createMemo } from "solid-js"
 import { Button } from "@kilocode/kilo-ui/button"
 import { Icon } from "@kilocode/kilo-ui/icon"
 import { Tooltip } from "@kilocode/kilo-ui/tooltip"
-import { showToast } from "@kilocode/kilo-ui/toast"
 import { TaskHeader } from "./TaskHeader"
 import { MessageList } from "./MessageList"
 import { AgentRequirements } from "./AgentRequirements"
 import { PromptInput } from "./PromptInput"
 import { PermissionDock } from "./PermissionDock"
 import { StartupErrorBanner } from "./StartupErrorBanner"
-import { SessionTabStrip } from "./SessionTabStrip"
 import { useSession } from "../../context/session"
-import { useLocalTabs } from "../../context/local-tabs"
 import { useVSCode } from "../../context/vscode"
 import { useLanguage } from "../../context/language"
 import { useAgentManager } from "../../context/agent-manager"
@@ -26,7 +23,6 @@ import { useServer } from "../../context/server"
 import { useAgentRequirements } from "../../context/agent-requirements"
 import { TranscriptSearchProvider } from "../../context/transcript-search"
 import { isPromptBlocked, isSuggesting, isQuestioning } from "./prompt-input-utils"
-import { showTabStrip } from "../../utils/local-tabs"
 
 interface ChatViewProps {
   onSelectSession?: (id: string) => void
@@ -41,42 +37,26 @@ interface ChatViewProps {
 
 export const ChatView: Component<ChatViewProps> = (props) => {
   const session = useSession()
-  const vscode = useVSCode()
   const language = useLanguage()
   const inAgentManager = useAgentManager()
   const server = useServer()
-  const tabs = useLocalTabs()
   const requirements = useAgentRequirements()
-  // Non-Agent-Manager (editor-tab chat) behaviors: session tab strip and
-  // message-list live-region announcements.
-  const isSidebar = () => !inAgentManager
-  const pendingSessionID = () => props.pendingSessionID ?? tabs?.pending()
+  const pendingSessionID = () => props.pendingSessionID
 
   const id = () => session.currentSessionID()
   const hasMessages = () => session.messages().length > 0
   const idle = () => session.status() !== "busy"
 
-  // Permissions and questions scoped to this session's family (self + subagents).
-  // Each ChatView only sees its own session tree — no cross-session leakage.
-  // Memoized so the BFS walk in sessionFamily() runs once per reactive update,
-  // not once per accessor call (questionRequest, permissionRequest, blocked all read these).
   const familyPermissions = createMemo(() => session.scopedPermissions(id()))
   const familyQuestions = createMemo(() => session.scopedQuestions(id()))
   const familySuggestions = createMemo(() => session.scopedSuggestions(id()))
-  // Non-tool questions (standalone, not from the question tool) render inline in
-  // the message list since they don't have an associated tool part in the conversation.
-  // Tool-linked questions render inline at their tool part position via AssistantMessage.
   const standaloneQuestions = createMemo(() => familyQuestions().filter((q) => !q.tool))
   const standaloneSuggestions = createMemo(() => familySuggestions().filter((s) => !s.tool))
   const permissionRequest = () => familyPermissions().find((p) => p.sessionID === id()) ?? familyPermissions()[0]
-  // Questions and suggestions do not block input; permissions and agent requirements do.
-  // Pending questions and suggestions are auto-dismissed in sendMessage/sendCommand.
   const blocked = () => isPromptBlocked(familyPermissions().length) || (!props.readonly && requirements.blocked())
   const requirementReason = () =>
     !props.readonly && requirements.blocked() ? language.t("agentRequirements.prompt.blocked") : undefined
-  // Session is busy only because a suggestion tool call is pending — prompt should behave as idle
   const suggesting = () => isSuggesting(blocked(), familySuggestions().length)
-  // Session is busy only because a question tool call is pending — prompt should behave as idle
   const questioning = () => isQuestioning(blocked(), familyQuestions().length)
   const dock = () => !props.readonly || !!permissionRequest()
 
@@ -96,7 +76,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
 
   const canStartSession = (hasChat: boolean) => hasChat
 
-  const canFork = (hasChat: boolean) => hasChat && !isSidebar() && session.status() === "idle" && !!props.onForkSession
+  const canFork = (hasChat: boolean) => hasChat && !!inAgentManager && session.status() === "idle" && !!props.onForkSession
 
   const hasActions = (hasChat: boolean) => canStartSession(hasChat) || canFork(hasChat)
 
@@ -138,9 +118,6 @@ export const ChatView: Component<ChatViewProps> = (props) => {
   return (
     <TranscriptSearchProvider>
       <div class="chat-view">
-        <Show when={isSidebar() && !props.readonly && tabs && showTabStrip(tabs.ids())}>
-          <SessionTabStrip />
-        </Show>
         <TaskHeader readonly={props.readonly} />
         <div class="chat-messages-wrapper">
           <div class="chat-messages">
@@ -155,7 +132,7 @@ export const ChatView: Component<ChatViewProps> = (props) => {
                   suggestions={standaloneSuggestions}
                   readonly={props.readonly}
                   emptyState={props.emptyState}
-                  announce={isSidebar()}
+                  announce={false}
                   sessionID={pendingSessionID}
                 />
               }

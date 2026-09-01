@@ -100,14 +100,15 @@
  *                           scripted provider) proves Revert-to-here restores
  *                           the exact original bytes and Redo All restores the
  *                           edited bytes through the retained chat UI.
- *   - cloud-claw-removal   => only the P3.3 runtime-absence scenario: the
- *                           extension host proves the loaded manifest, the
- *                           RUNTIME command table, and the built dist/ bundle
- *                           list expose no active cloud-session, KiloClaw, local
- *                           Console, or JetBrains product contribution
- *                           (identifier-based, no false-positive generic
- *                           retained names), and the retained "Open in Tab"
- *                           panel + Agent Manager still become ready. No
+  *   - cloud-claw-removal   => only the P3.3 runtime-absence scenario: the
+  *                           extension host proves the loaded manifest, the
+  *                           RUNTIME command table, and the built dist/ bundle
+  *                           list expose no active cloud-session, KiloClaw, local
+  *                           Console, or JetBrains product contribution
+  *                           (identifier-based, no false-positive generic
+  *                           retained names), and the retained Agent Manager as
+  *                           the sole chat UI still becomes ready (no Open in Tab,
+  *                           P3.5 Complete 2026-09-01). No
  *                           synthetic fixtures, no CDP DOM driving, no model
  *                           requests — all assertions run extension-host-side
  *                           and are recorded in
@@ -119,11 +120,11 @@
  *                           state expose no indexing / project memory /
  *                           user-visible context-management / manual-compaction
  *                           / autocomplete / commit-message surface
- *                           (LOCK-004/PERF-3/014/015), the fixture-gated
- *                           generation-request collector stays at ZERO model
- *                           requests (no external calls), and the retained
- *                           Open-in-Tab panel + Agent Manager still become
- *                           ready (LOCK-005/007/008). No synthetic fixtures,
+  *                           (LOCK-004/PERF-3/014/015), the fixture-gated
+  *                           generation-request collector stays at ZERO model
+  *                           requests (no external calls), and the retained Agent
+  *                           Manager as the sole chat UI still becomes ready (no
+  *                           Open in Tab, P3.5 Complete 2026-09-01) (LOCK-005/007/008). No synthetic fixtures,
  *                           no CDP DOM driving, no model requests — all
  *                           assertions run extension-host-side and are
  *                           recorded in `p3-4-removal-runtime-evidence`.

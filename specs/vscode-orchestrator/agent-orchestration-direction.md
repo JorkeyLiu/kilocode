@@ -45,7 +45,7 @@ project.
 
 | ID | Decision |
 |---|---|
-| LOCK-001 | The only product is the VS Code Agent Orchestrator. The ordinary single-chat sidebar is not co-equal and remains on the deprecation/removal path. |
+| LOCK-001 | Agent Manager is the only chat UI (hosting in Primary/Secondary Sidebar or editor group does not change judgment); `kilo-code.SidebarProvider` deleted at P3.1 and `kilo-code.new.TabPanel`/`kilo-code.new.openInTab` deleted in current working tree — P3.5 Complete (2026-09-01, validated `b2dc5002…` + `cd26b5f0…` `kilo-gc-lifecycle-proof/2`). |
 | LOCK-002 | Remove all worktree infrastructure and all custom Diff Viewer surfaces. Native VS Code diff APIs may still be used for checkpoint review where needed. |
 | LOCK-003 | Remove cloud sessions, JetBrains, Console, and KiloClaw completely; they are not deferred. |
 | LOCK-004 | Remove indexing, semantic indexing/search integration, project memory, memory tools/system-prompt injection, user-visible context management/compaction settings, and autocomplete completely. |
@@ -80,8 +80,9 @@ optimization demand; there are no numeric pass/fail performance thresholds
 | Area | Status |
 |---|---|
 | Shared `kilo serve` backend via `KiloConnectionService` + `ServerManager` | Current behavior; migration bridge only, not a target contract (LOCK-009) |
-| Ordinary single-chat sidebar | Current behavior; on the deprecation/removal path (LOCK-001) |
-| Agent Manager editor tab (parallel sessions, terminals, setup scripts) | Current behavior; orchestration surface; worktree capabilities are cleanup scope, not retained (LOCK-002) |
+| Ordinary single-chat sidebar (`kilo-code.SidebarProvider`) | Removed at P3.1 — no `viewsContainers`/`views` contribution, no `registerWebviewViewProvider` (LOCK-001) |
+| TabPanel / Open in Tab (`kilo-code.new.TabPanel`/`kilo-code.new.openInTab`) | Removed in current working tree — manifest/serializer/commands/local tabs deleted; product is Agent Manager-only (P3.5 Complete 2026-09-01, `b2dc5002…` + `cd26b5f0…` `kilo-gc-proof/2`) (LOCK-001) |
+| Agent Manager — only chat UI (any host: Primary/Secondary Sidebar or editor group) | Current behavior; sole chat surface; internal session sidebar/tabs/terminals/navigation/persistence/hydration retained; worktree capabilities are cleanup scope, not retained (LOCK-001/LOCK-002) |
 | Worktree infrastructure and custom Diff Viewer surfaces | Residual implementation present; removal decided (LOCK-002), not a retained capability |
 | Cloud sessions, JetBrains, Console, KiloClaw | Residual implementation present; removal decided (LOCK-003) |
 | Indexing, project memory, user-visible context management/compaction, autocomplete | Residual implementation present; removal decided (LOCK-004); only a minimal internal context-overflow safeguard is retained (LOCK-005) |
@@ -103,9 +104,9 @@ Grounded in the canonical architecture docs (`vscode-extension.md`) and
 
 | Surface | Location | Role today | Target classification |
 |---|---|---|---|
-| Ordinary single-chat sidebar | Activity bar (`kilo-code.SidebarProvider`) | Single-session chat | Deprecate, then remove (LOCK-001) |
-| Editor chat tab | Open in Tab | Single-session chat in an editor panel | Migrate into orchestration panels |
-| Agent Manager | Editor tab | Parallel sessions, terminals, setup scripts | Core orchestration surface; worktree capabilities removed (LOCK-002) |
+| Ordinary single-chat sidebar | `kilo-code.SidebarProvider` (Activity Bar) | — | Removed at P3.1 — deleted, must not be restored (LOCK-001) |
+| Editor chat tab (`kilo-code.new.TabPanel`/`kilo-code.new.openInTab`) | — | — | Removed in current working tree (P3.5 Complete 2026-09-01) — no manifest/serializer/commands/local tabs (LOCK-001) |
+| Agent Manager | Editor tab or Primary/Secondary Sidebar (host does not change judgment) | Only chat UI; parallel sessions, terminals, internal session sidebar/tabs/navigation/persistence/hydration | Core orchestration surface; sole chat UI (LOCK-001/LOCK-002) |
 | Diff viewer / diff virtual | Webviews | Diff rendering | Removed (LOCK-002); native VS Code diff APIs may serve checkpoint review |
 | KiloClaw | Webview | Additional assistant surface | Removed (LOCK-003) |
 | Cloud session surfaces | Panels/routes | Cloud sessions | Removed (LOCK-003) |
@@ -161,8 +162,7 @@ section 10).
 7. Return later: sessions and registered artifacts persist (ADR-0005) and
    resume in place.
 
-The ordinary single-chat sidebar habit is replaced by this loop through migration
-affordances, not by a forced break (section 10).
+The ordinary single-chat sidebar habit was replaced by this loop through migration affordances at P3.1 (now removed); TabPanel/Open in Tab habit is replaced by Agent Manager-only at P3.5 (Complete 2026-09-01, `b2dc5002…` + `cd26b5f0…`), not by a forced break (section 10).
 
 ## 4. Terminology Boundaries
 
@@ -174,7 +174,8 @@ affordances, not by a forced break (section 10).
 | Orchestrator UI | The product surface: panels, navigation, controls, panel lifecycle | Extension product ownership (section 7) |
 | Harness kernel | Runtime: agents, tools, permissions, session model, storage, lifecycle, execution, checkpoint rollback, context-overflow safeguard | Private runtime ownership (ADR-0003, runtime spec) |
 | Private runtime | Extension-owned headless worker process, outside the Extension Host | Runtime ownership (ADR-0003) |
-| Ordinary single-chat sidebar | The deprecated chat surface, distinct from topic/session navigation | On the deprecation/removal path (LOCK-001) |
+| Ordinary single-chat sidebar | Historical deprecated chat surface (`kilo-code.SidebarProvider`), distinct from topic/session navigation | Removed at P3.1 — deleted, must not be restored (LOCK-001) |
+| TabPanel / Open in Tab | Historical editor-tab chat (`kilo-code.new.TabPanel`/`kilo-code.new.openInTab`), distinct from Agent Manager | Removed in current working tree — deleted (P3.5 Complete 2026-09-01) (LOCK-001) |
 | Custom provider | A user-defined provider record: endpoint, protocol, model definitions, or supported discovery | Only provider kind retained (LOCK-006) |
 | Checkpoint rollback | SessionRevert + Snapshot semantics for withdrawing/reverting messages | Harness capability, distinct from the ADR-0005 storage foundation and ADR-0001's historical checkpoint/resync (LOCK-007) |
 | Operational fact | A runtime-owned fact about runtime/session state: session existence, lifecycle state, message presence/ordering, state-transition timing | Sole runtime authority; the UI renders it, never invents or revises it (runtime spec section 7.1) |
@@ -197,15 +198,12 @@ snapshot is an observation of runtime operational facts (runtime spec section
 
 | Surface | Role | Notes |
 |---|---|---|
-| Orchestration panel (editor tab) | Primary surface: session grid/list grouped by topic, spawn/stop/pause, agent + model selection, delegation | Reuses the Agent Manager pattern; worktree controls removed (LOCK-002) |
-| Session editor panels | Open sessions in editor tabs for focused single-session work | Replaces the ordinary single-chat sidebar habit via migration affordances |
+| Orchestration panel (Agent Manager — only chat UI) | Primary and sole chat surface: session grid/list grouped by topic, spawn/stop/pause, agent + model selection, delegation; may be hosted in Primary/Secondary Sidebar or editor group without changing judgment; internal session sidebar/tabs/terminals/navigation/persistence retained | Agent Manager only; TabPanel/Open in Tab deleted (LOCK-001/P3.5 Complete 2026-09-01); worktree controls removed (LOCK-002) |
 | Topic/session navigation | Main navigation: switch between topics and sessions | Derived from root sessions (Q1 resolved 2026-08-14): identity = root session ID, label = root title, membership = parentID, activity = max member updatedAt, descending order with deterministic ID tie-break; selection/expansion is presentation state only |
 | Checkpoint review | Native VS Code diff APIs for reviewing a revert/withdraw | Not a custom Diff Viewer surface (LOCK-002) |
-| Configuration surface | File-authoritative configuration: a bidirectional editor/read model over canonical config files and typed assets | Canonical files under one global config root and `<workspaceRoot>/.kilo/`; secrets via SecretStorage; VS Code state is UI-local/derived only (ADR-0003, runtime spec sections 3, 5.4) |
+| Configuration surface | File-authoritative configuration: a bidirectional editor/read model over canonical config files and typed assets | Canonical files under one global config root and `<workspaceRoot>/.kilo/`; secrets via SecretStorage; VS Code state is UI-local/derived only (ADR-0003, runtime spec section 5.4) |
 
-Not target surfaces: worktrees, custom Diff Viewer webviews, cloud sessions,
-JetBrains, Console, KiloClaw, indexing, project memory, user-visible context
-management, autocomplete, preset provider identities (LOCK-001..006).
+Not target surfaces: `kilo-code.SidebarProvider` sidebar (removed P3.1), `kilo-code.new.TabPanel`/`kilo-code.new.openInTab` (removed P3.5 Complete 2026-09-01), worktrees, custom Diff Viewer webviews, cloud sessions, JetBrains, Console, KiloClaw, indexing, project memory, user-visible context management, autocomplete, preset provider identities (LOCK-001..006).
 
 ## 6. Harness Capability Matrix
 
@@ -301,14 +299,13 @@ The target shape, bounded to avoid scope creep:
 - One authoritative runtime fact owner: the runtime is the sole authority for
   operational facts; extension/webview state is derived presentation/read-model
   state (runtime spec section 7.1).
-- View/session lifecycle isolation: panel close/reopen, reload, and session
+- View/session lifecycle isolation: panel close/reopen, targeted reload, and session
   switch never mutate runtime facts; transport reconnect and worker restart
   converge presentation state through the runtime observation/hydration contract
   (runtime spec section 7.1).
-- Orchestration panel as the primary surface with topic/session navigation as the
-  main view; session editor panels for focused work.
-- A reduced webview set: orchestration panel + session panels + configuration
-  surface. Removed surfaces (sidebar at P3.1, diff viewer/diff virtual at P3.2,
+- Agent Manager as the primary and sole chat surface with topic/session navigation as the
+  main view; no TabPanel/Open in Tab session editor panels — P3.5 Complete 2026-09-01; host in Primary/Secondary Sidebar or editor group does not change judgment; internal session sidebar/tabs/terminals/navigation/persistence retained (LOCK-002).
+- A reduced webview set: Agent Manager panel + configuration surface. Removed surfaces (sidebar at P3.1, TabPanel/Open in Tab at P3.5 Complete 2026-09-01, diff viewer/diff virtual at P3.2,
   KiloClaw at P3.3, autocomplete at P3.4) retire their message types and entry
   points.
 - File-authoritative configuration and persisted selector indexes (LOCK-010;
@@ -359,7 +356,8 @@ and no structurally unbounded growth/resource leak appears (R7 resolved
 
 | Removal (LOCK) | What is removed | Residual today | Gate |
 |---|---|---|---|
-| Ordinary single-chat sidebar (LOCK-001) | The sidebar surface and its dependent code | Present; on deprecation/removal path | P3.1 |
+| Ordinary single-chat sidebar (LOCK-001) | The sidebar surface and its dependent code (`kilo-code.SidebarProvider`) | Removed at P3.1 — deleted, must not be restored | P3.1 |
+| TabPanel / Open in Tab (`kilo-code.new.TabPanel`/`kilo-code.new.openInTab`) (LOCK-001) | TabPanel webview, `kilo-code.new.openInTab` command, serializer, local tabs/SessionTabStrip | Deleted in working tree (manifest/serializer/commands/local-tabs) — P3.5 Complete 2026-09-01 (`b2dc5002…` + `cd26b5f0…` `kilo-gc-proof/2`) | P3.5 |
 | Worktree infrastructure (LOCK-002) | Worktree session isolation, `.kilo/worktrees/`, setup scripts, worktree diff/review | Residual implementation in Agent Manager; cleanup scope | P3.2 |
 | Custom Diff Viewer surfaces (LOCK-002) | Diff Viewer and Diff Virtual webviews | Residual webviews present | P3.2 |
 | Cloud sessions (LOCK-003) | Cloud session panels and routes | Present | P3.3 |
@@ -390,6 +388,7 @@ feature-flag subsystem.
 | P1 Orchestration-first navigation | Topic/session navigation as the main view over the migration bridge backend; session picker; ordinary single-chat sidebar keeps working unchanged | Navigation works across sessions; no sidebar capability change; no worktree dependency (LOCK-002) |
 | P2 Harness surface parity | Every H-1..H-13 capability reachable from orchestration panels (agent/model selectors, delegation, tools/skills/MCP, permission rendering, checkpoint review) | Every H-1..H-13 target-surface acceptance criterion (section 6) passes from the target surface, with each criterion's named evidence (issue/PR/test/doc links) recorded in the tracker capability table. P2 establishes target-surface product/harness behavior for what is in scope (LOCK-014): temporary capability absence may be recorded explicitly but must be resolved before P2 exits, and final H parity under the private runtime is proven at P4 — never waived by a tracker or reconstruction-candidate entry |
 | P3 Product removal | Remove the decided surfaces: P3.1 sidebar deprecation then removal (LOCK-001); P3.2 worktree infrastructure + custom Diff Viewer surfaces (LOCK-002); P3.3 cloud/JetBrains/Console/KiloClaw (LOCK-003); P3.4 indexing/memory/context-management/autocomplete (LOCK-004) | Each removal's evidence recorded in the tracker removal inventory (source/tests/docs/generated SDK/config/i18n/build/package); H-1..H-13 parity intact (P2 evidence); documented rollback/revert path shipped with the phase; no removed feature reclassified as deferred |
+| P3.5 Agent Manager-only consolidation (LOCK-001) | Delete TabPanel/Open in Tab: manifest `kilo-code.new.TabPanel`/`kilo-code.new.openInTab`, serializer, commands, local tabs (`SessionTabStrip`/`local-tabs.tsx`), chat-target dual-surface branching; Agent Manager is sole chat UI (host in Primary/Secondary Sidebar or editor group does not change judgment; internal session sidebar/tabs/terminals/navigation/persistence retained) | Complete 2026-09-01 — deletions landed; Gate C /2 validated (`/tmp/kilo-lc-20260901-181400-0d78f02e` `b2dc5002…` + `/tmp/kilo-rr-20260901-181450-8a3f7c9e` `cd26b5f0…` both `validated:true` `kilo-gc-proof/2`); Gates C/D/P4.4/G3 remain Active per LOCK-004 |
 
 ## 11. Acceptance Gates And Complexity Budgets
 
@@ -570,15 +569,9 @@ decisions are listed in `runtime-and-configuration-direction.md` section 9.
 
 ## 15. Current Status Summary
 
-- Current (implemented): shared backend; ordinary single-chat sidebar + Agent
-  Manager + open-in-tab panels; residual worktree and Diff Viewer infrastructure;
-  cloud/JetBrains/Console/KiloClaw surfaces; indexing/memory/context-management/
-  autocomplete; preset provider catalogs. These are residual implementation, not
-  retained capabilities where removal is decided (LOCK-002/003/004/006).
-- Not implemented: topic/session navigation, orchestration-first main view,
-  product removals, private runtime, file-authoritative configuration (canonical
-  config files/assets with a bidirectional UI editor), action-specific
-  readiness. This direction is the design target, not shipped behavior.
+- Current (implemented, validated 2026-09-01): shared backend; Agent Manager is the only chat UI (host in Primary/Secondary Sidebar or editor group does not change judgment; internal session sidebar/tabs/terminals/navigation/persistence/hydration retained); `kilo-code.SidebarProvider` deleted at P3.1 and `kilo-code.new.TabPanel`/`kilo-code.new.openInTab` deleted in current working tree (manifest/serializer/commands/local tabs deleted); P3.5 Complete 2026-09-01 — lifecycle `/tmp/kilo-lc-20260901-181400-0d78f02e` `b2dc5002…` + restart `/tmp/kilo-rr-20260901-181450-8a3f7c9e` `cd26b5f0…` both `validated:true` `kilo-gc-proof/2`; historical /1 remains valid; Gates C/D/P4.4/G3 remain Active per LOCK-004 (no cutover/cross-dir/crash/retention/epoch-drift/Linux/Windows closure); residual worktree and Diff Viewer infrastructure; cloud/JetBrains/Console/KiloClaw surfaces; indexing/memory/context-management/autocomplete; preset provider catalogs. These are residual implementation, not retained capabilities where removal is decided (LOCK-002/003/004/006) except TabPanel/sidebar which are already deleted.
+- Historical /1 preparation evidence (pre-2026-09-01) proved EventV2/title/persistence/hydration/reload with dual-surface TabPanel scope — remains valid for EventV2/title/persistence/hydration/reload; TabPanel part no longer acceptance. New /2 is Agent Manager-only and Complete (validated).
+- Not implemented (remaining): private runtime, file-authoritative configuration (canonical config files/assets with bidirectional UI editor), action-specific readiness, broader Gates C/D/P4.4/G3 (transport cutover/cross-dir/crash/retention/epoch-drift/Linux/Windows). P3.5 bounded product phase is Complete; broader gates remain Active per LOCK-004.
 - ADR-0002 records the durable product decision; ADR-0003 records the durable
   runtime/config decision; ADR-0004 records the durable just-in-time direct-
   reconstruction policy; ADR-0005 records the durable bounded private-runtime
@@ -587,7 +580,7 @@ decisions are listed in `runtime-and-configuration-direction.md` section 9.
   runtime spec owns the runtime/config migration design and the bounded
   Failure/Outcome/Recovery target (section 7.2).
 - Phase status, exit evidence, and next actions are tracked in the migration
-  tracker (`migration-tracker.md`), the source of truth for progress.
+  tracker (`migration-tracker.md`), the source of truth for progress. P3.5 is Complete (2026-09-01) via `/2` evidence (`b2dc5002…` + `cd26b5f0…`); Gates C/D/P4.4/G3 remain Active per LOCK-004.
 
 ## Verification Commands
 

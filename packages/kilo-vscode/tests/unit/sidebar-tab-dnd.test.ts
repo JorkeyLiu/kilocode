@@ -1,39 +1,26 @@
 import { describe, expect, it } from "bun:test"
-import { readFileSync } from "node:fs"
+import { existsSync } from "node:fs"
 import { join } from "node:path"
 
-const root = join(__dirname, "..", "..", "webview-ui", "src")
-const strip = readFileSync(join(root, "components", "chat", "SessionTabStrip.tsx"), "utf8")
-const tabs = readFileSync(join(root, "context", "local-tabs.tsx"), "utf8")
+const root = join(__dirname, "..", "..")
 
-describe("sidebar tab drag ordering", () => {
-  it("uses shared pointer DnD and sortable tab primitives", () => {
-    expect(strip).toContain("<DragDropProvider")
-    expect(strip).toContain("<DragDropSensors />")
-    expect(strip).toContain("<ConstrainDragYAxis />")
-    expect(strip).toContain("<SortableProvider ids={tabs.ids()}>")
-    expect(strip).toContain("<SortableTabContainer id={id}>")
+describe("TabPanel removal — ordinary tab strip absent", () => {
+  it("deletes the ordinary SessionTabStrip and its local-tabs context", () => {
+    expect(existsSync(join(root, "webview-ui", "src", "components", "chat", "SessionTabStrip.tsx"))).toBe(false)
+    expect(existsSync(join(root, "webview-ui", "src", "context", "local-tabs.tsx"))).toBe(false)
   })
 
-  it("reorders while dragging and persists on drag end", () => {
-    expect(strip).toContain("tabs.reorder(from, to)")
-    expect(strip).toMatch(/const dragEnd = \(\) => \{[\s\S]*tabs\.persist\(\)/)
+  it("keeps the shared SessionTab and SessionTabMenu for Agent Manager", () => {
+    expect(existsSync(join(root, "webview-ui", "src", "components", "chat", "SessionTab.tsx"))).toBe(true)
+    expect(existsSync(join(root, "webview-ui", "src", "components", "chat", "SessionTabMenu.tsx"))).toBe(true)
   })
 
-  it("supports keyboard reorder without replacing selection navigation", () => {
-    expect(strip).toContain('tabs.move(id, event.key === "ArrowLeft" ? -1 : 1)')
-    expect(strip).toContain("handleTabKey({ ids: tabs.ids(), id, event, select: tabs.select, root })")
-    expect(strip).toContain('aria-live="polite"')
+  it("keeps the Agent Manager session tab registry", () => {
+    expect(existsSync(join(root, "webview-ui", "agent-manager", "session-tabs.ts"))).toBe(true)
+    expect(existsSync(join(root, "webview-ui", "agent-manager", "session-tab-manager.ts"))).toBe(true)
   })
 
-  it("persists real order and active tab through VS Code webview state", () => {
-    expect(tabs).toContain("sidebarSessionTabIDs: tabs")
-    expect(tabs).toContain("sidebarActiveSessionTabID: selected")
-    expect(tabs).toContain("timer = setTimeout(persist, 300)")
-  })
-
-  it("releases frozen widths after closing and after dragging", () => {
-    expect(strip.match(/requestAnimationFrame\(release\)/g)).toHaveLength(2)
-    expect(strip).toMatch(/const dragEnd = \(\) => \{[\s\S]*release\(\)/)
+  it("keeps the shared local-tabs utils for legacy import", () => {
+    expect(existsSync(join(root, "webview-ui", "src", "utils", "local-tabs.ts"))).toBe(true)
   })
 })

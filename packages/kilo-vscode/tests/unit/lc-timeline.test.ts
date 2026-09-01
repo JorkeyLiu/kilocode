@@ -43,16 +43,10 @@ function makeValidEntry(ts: number, phase: string) {
 function buildFullValidTimeline(): unknown[] {
   const base = Date.now()
   const phases = [
-    "pre-first-target-open",
-    "post-first-target-open",
     "pre-panel-close",
     "post-panel-reopen",
     "pre-webview-reload",
     "post-webview-reload",
-    "pre-editor-tab-close",
-    "post-editor-tab-close",
-    "immediately-after-lc-tab-reopen-done-before-frame-selection",
-    "after-chosen-frame",
     "pre-session-switch",
     "switched-session",
     "post-session-switch",
@@ -104,11 +98,9 @@ describe("lc-layout-timeline diagnostics", () => {
   })
 
   it("enum-only URL/page/frame kinds without raw substring storage", () => {
-    // urlKind must be enum, not fragment slice
     expect(lifecycleSrc).toContain("deriveUrlKind")
     expect(lifecycleSrc).not.toContain(".slice(0, 30)")
     expect(lifecycleSrc).not.toContain("replace(/[^a-zA-Z0-9")
-    // dataTheme must be enum-mapped
     expect(lifecycleSrc).toContain("deriveDataThemeKind")
   })
 
@@ -117,7 +109,6 @@ describe("lc-layout-timeline diagnostics", () => {
     expect(lifecycleSrc).toContain("lc timeline frame capture failed (redacted)")
     expect(lifecycleSrc).toContain("lc timeline write failed (redacted)")
     expect(lifecycleSrc).toContain("lc timeline read failed (redacted)")
-    // required captures must not be swallowed
     const swallowed = (lifecycleSrc.match(/captureLcLayoutTimeline\(.*\)\.catch/g) ?? []).length
     expect(swallowed).toBe(0)
   })
@@ -133,16 +124,10 @@ describe("lc-layout-timeline diagnostics", () => {
 
   it("captures at required lifecycle boundaries", () => {
     const phases = [
-      "pre-first-target-open",
-      "post-first-target-open",
       "pre-panel-close",
       "post-panel-reopen",
       "pre-webview-reload",
       "post-webview-reload",
-      "pre-editor-tab-close",
-      "post-editor-tab-close",
-      "immediately-after-lc-tab-reopen-done-before-frame-selection",
-      "after-chosen-frame",
       "pre-session-switch",
       "switched-session",
       "post-session-switch",
@@ -150,8 +135,15 @@ describe("lc-layout-timeline diagnostics", () => {
       "failure-diagnostics",
     ]
     for (const p of phases) {
+      if (p === "failure-diagnostics") {
+        expect(lifecycleSrc).toContain(p)
+        continue
+      }
       expect(lifecycleSrc).toContain(p)
     }
+    expect(lifecycleSrc).not.toContain("pre-editor-tab-close")
+    expect(lifecycleSrc).not.toContain("post-editor-tab-close")
+    expect(lifecycleSrc).not.toContain("pre-first-target-open")
   })
 
   it("evidence inventory includes lc-layout-timeline.json as required artifact", async () => {
@@ -175,7 +167,7 @@ describe("lc-layout-timeline diagnostics", () => {
   it("rejects missing required phase", async () => {
     const { validateLcTimeline } = await import("../../script/e2e-evidence")
     const valid = buildFullValidTimeline() as Record<string, unknown>[]
-    const missing = valid.filter((e) => e.phase !== "pre-first-target-open")
+    const missing = valid.filter((e) => e.phase !== "pre-panel-close")
     expect(validateLcTimeline(missing)).toContain("missing phase")
   })
 
@@ -221,16 +213,7 @@ describe("lc-layout-timeline diagnostics", () => {
     ;(withSecret[0] as Record<string, unknown>).secret = "e2e-fixture-key"
     expect(validateLcTimeline(withSecret)).not.toBeNull()
 
-    const withPath = JSON.parse(JSON.stringify(valid)) as unknown[]
-    // inject raw path via bodyClassHash not hash – already covered but also test parseFailure path leak
-    const rawLeak = JSON.stringify(valid).replace("vscode-webview", "/tmp/.kilo leaked")
-    // We need to inject path string into a string field that is not hex-checked but would be caught by raw leak regex
-    const leakEntry = JSON.parse(JSON.stringify(valid))
-    ;(leakEntry[0] as Record<string, unknown>).phase = "pre-first-target-open"
-    // directly test parseFailure path detection by adding a raw path in JSON that validator's raw check catches
-    const pathLeakTimeline = JSON.parse(JSON.stringify(valid))
-    // add a frame with dataTheme other but raw JSON contains path – we simulate by string replacement
-    const jsonWithPath = JSON.stringify(pathLeakTimeline).replace('"kilo-vscode"', '"/tmp/.kilo"')
+    const jsonWithPath = JSON.stringify(JSON.parse(JSON.stringify(valid))).replace('"kilo-vscode"', '"/tmp/.kilo"')
     const pathErr = parseFailure("lc-layout-timeline.json", Buffer.from(jsonWithPath)) as string
     expect(pathErr.includes("leaked") || pathErr.includes("dataTheme")).toBeTrue()
   })
@@ -238,12 +221,10 @@ describe("lc-layout-timeline diagnostics", () => {
   it("rejects phase order and monotonic timestamp violations", async () => {
     const { validateLcTimeline } = await import("../../script/e2e-evidence")
     const valid = buildFullValidTimeline() as Record<string, unknown>[]
-    // swap two required phases to break order
     const swapped = JSON.parse(JSON.stringify(valid))
     const tmp = swapped[0]
     swapped[0] = swapped[1]
     swapped[1] = tmp
-    // need to adjust ts to remain monotonic else ts violation masks order; keep ts monotonic but phases out of order
     for (let i = 0; i < swapped.length; i++) ((swapped[i].ts = valid[i].ts), (swapped[i].iso = valid[i].iso))
     expect(validateLcTimeline(swapped)).toContain("phase order")
 
@@ -271,5 +252,27 @@ describe("lc-layout-timeline diagnostics", () => {
     expect(lifecycleSrc).toContain("bodyClassHash")
     expect(lifecycleSrc).toContain("tabHashes")
     expect(lifecycleSrc).toContain("captureLcLayoutTimeline")
+    expect(lifecycleSrc).not.toContain("kiloTabPanelDomPredicate")
+  })
+  it("rejects duplicate required phase (exactly once) and duplicate after final", async () => {
+    const { validateLcTimeline } = await import("../../script/e2e-evidence")
+    const base = buildFullValidTimeline() as Record<string, unknown>[]
+    const dup = JSON.parse(JSON.stringify(base)) as Record<string, unknown>[]
+    const extra = JSON.parse(JSON.stringify(base[0])) as Record<string, unknown>
+    extra.ts = (base[base.length - 1] as Record<string, unknown>).ts as number + 1000
+    extra.iso = new Date(extra.ts as number).toISOString()
+    extra.phase = "pre-panel-close"
+    dup.push(extra)
+    expect(validateLcTimeline(dup)).toContain("exactly once")
+  })
+  it("rejects duplicate final-done (exactly once)", async () => {
+    const { validateLcTimeline } = await import("../../script/e2e-evidence")
+    const base = buildFullValidTimeline() as Record<string, unknown>[]
+    const dup = JSON.parse(JSON.stringify(base)) as Record<string, unknown>[]
+    const extra = JSON.parse(JSON.stringify(base[base.length - 1])) as Record<string, unknown>
+    extra.ts = (extra.ts as number) + 1000
+    extra.iso = new Date(extra.ts as number).toISOString()
+    dup.push(extra)
+    expect(validateLcTimeline(dup)).toContain("exactly once")
   })
 })

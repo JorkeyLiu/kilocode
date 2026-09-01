@@ -111,7 +111,7 @@ const TaskToolRenderer: Component<ToolProps> = (props) => {
     }),
   )
 
-  const openInTab = (e: MouseEvent) => {
+  const openChild = (e: MouseEvent) => {
     e.stopPropagation()
     const id = childSessionId()
     if (!id) return
@@ -139,7 +139,7 @@ const TaskToolRenderer: Component<ToolProps> = (props) => {
           size="small"
           variant="ghost"
           aria-label="Open sub-agent in tab"
-          onClick={openInTab}
+          onClick={openChild}
         />
       </Show>
     </div>
