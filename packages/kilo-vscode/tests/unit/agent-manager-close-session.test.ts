@@ -33,6 +33,14 @@ function createManager() {
   manager.getRoot = () => "/repo"
   manager.pushState = mock(() => undefined)
   manager.log = mock(() => undefined)
+  ;(manager as unknown as Record<string, unknown>)["LOCAL"] = "local"
+  ;(manager as unknown as Record<string, unknown>)["tabOrder"] = { ["local"]: ["s1"] }
+  ;(manager as unknown as Record<string, unknown>)["activeSessionId"] = "s1"
+  ;(manager as unknown as Record<string, unknown>)["recentSessions"] = new Set<string>()
+  ;(manager as unknown as Record<string, unknown>)["accumulatedCatalog"] = undefined
+  ;(manager as unknown as Record<string, unknown>)["accumulatedHasMore"] = undefined
+  ;(manager as unknown as Record<string, unknown>)["schedulePersist"] = mock(() => undefined)
+  ;(manager as unknown as Record<string, unknown>)["host"] = { workspaceStore: { get: () => undefined, update: () => Promise.resolve() } } as unknown as Record<string, unknown>
 
   return { manager, stopped, events }
 }
@@ -71,6 +79,14 @@ describe("AgentManagerProvider closeSession", () => {
     manager.getRoot = () => "/repo"
     manager.pushState = mock(() => undefined)
     manager.log = mock(() => undefined)
+    ;(manager as unknown as Record<string, unknown>)["LOCAL"] = "local"
+    ;(manager as unknown as Record<string, unknown>)["tabOrder"] = { ["local"]: ["s1"] }
+    ;(manager as unknown as Record<string, unknown>)["activeSessionId"] = "s1"
+    ;(manager as unknown as Record<string, unknown>)["recentSessions"] = new Set<string>()
+    ;(manager as unknown as Record<string, unknown>)["accumulatedCatalog"] = undefined
+    ;(manager as unknown as Record<string, unknown>)["accumulatedHasMore"] = undefined
+    ;(manager as unknown as Record<string, unknown>)["schedulePersist"] = mock(() => undefined)
+    ;(manager as unknown as Record<string, unknown>)["host"] = { workspaceStore: { get: () => undefined, update: () => Promise.resolve() } } as unknown as Record<string, unknown>
 
     await manager.onCloseSession("s1")
 

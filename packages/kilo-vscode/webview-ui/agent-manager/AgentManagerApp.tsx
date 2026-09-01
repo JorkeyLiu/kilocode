@@ -97,6 +97,7 @@ import { buildShortcutCategories } from "./shortcuts"
 import { tracker } from "./telemetry"
 import { createSessionTabManager } from "./session-tab-manager"
 import { openSession, openChildSession, type OpenChildSessionDeps, type OpenSessionDeps } from "./open-session"
+import { accumulateCatalog, reconcile } from "./hydration"
 import "./agent-manager.css"
 
 // Explicit tool registration at the Agent Manager boundary. The task renderer
@@ -159,6 +160,25 @@ const AgentManagerContent: Component = () => {
   const initialUI = loadLocalUIState(() => vscode.getState())
   const [localSessionIDs, setLocalSessionIDs] = createSignal<string[]>(initialUI.openTabIds)
   const [legacyImportDone, setLegacyImportDone] = createSignal(initialUI.legacyImported)
+  const [durableHydrated, setDurableHydrated] = createSignal(false)
+  let latestCatalog: Set<string> | undefined
+  let latestDurable: AgentManagerStateMessage | undefined
+  let catalogHasMore: boolean | undefined
+  let catalogPreserve: string[] | undefined
+  // Real sessionCreated IDs that have not yet appeared in the authoritative catalog.
+  // Protects the first real session from a stale empty catalog that races after creation.
+  // Bounded lifecycle: consumed once the catalog includes the ID or the session is deleted.
+  const recentRealIds = new Set<string>()
+  // AgentManager-owned fork/tool creation-origin marker.
+  // Populated by the actual ownership action (sessionForked/sessionAdded) that
+  // adds a local tab before an undrafted sessionCreated. When that later
+  // sessionCreated arrives for an already-local ID, we promote exactly that
+  // ID to recentRealIds — strict existing replay remains unprotected.
+  const creationOrigin = new Set<string>()
+  // Deletion barrier within current catalog collection cycle.
+  // Tombstoned IDs are filtered from subsequent append pages and final
+  // effective catalog until a fresh append=false refresh clears the cycle.
+  const deletedIds = new Set<string>()
   // Phase 1B: per-context session tab registry (source of truth for tab strip).
   const tabMgr = createSessionTabManager()
   /** Remove a session ID from the local tab (no-op if absent). */
@@ -166,6 +186,10 @@ const AgentManagerContent: Component = () => {
     setLocalSessionIDs((prev) => (prev.includes(sid) ? prev.filter((id) => id !== sid) : prev))
   const handleSessionDeletedFromBackend = (msg: { type: string; sessionID: string }) => {
     const sid = msg.sessionID
+    deletedIds.add(sid)
+    recentRealIds.delete(sid)
+    creationOrigin.delete(sid)
+    if (latestCatalog) latestCatalog.delete(sid)
     // Phase 3A: single LOCAL context — registry active is the source of truth.
     const wasActive = tabMgr.active(LOCAL) === sid
     tabMgr.remove(LOCAL, sid)
@@ -237,9 +261,9 @@ const AgentManagerContent: Component = () => {
   const releaseTabs = () => setTabWidths(false)
   // Tab ordering: context key → ordered session ID array (recovered from extension state)
   const [tabOrder, setTabOrder] = createSignal<Record<string, string[]>>({})
-  // Pin new tabs at the tail (see tab-order-sync); strip ephemeral terminal ids so the durable tab order stays clean.
+  // Pin new tabs at the tail (see tab-order-sync); strip ephemeral terminal+pending ids so the durable tab order stays clean.
   const persistTabOrder = (key: string, order: string[]) => {
-    const durable = order.filter((id) => !isTerminalTabId(id))
+    const durable = order.filter((id) => !isTerminalTabId(id) && !isPending(id))
     vscode.postMessage({ type: "agentManager.setTabOrder", key, order: durable })
   }
   const tabOrderSync = createTabOrderSync({
@@ -263,6 +287,124 @@ const AgentManagerContent: Component = () => {
     setActivePendingId(id)
     session.clearCurrentSession()
     return id
+  }
+
+  const applyReconciliation = () => {
+    const isFresh = !durableHydrated()
+    const combinedPreserve = (() => {
+      const fromCatalog = (catalogPreserve ?? []).filter((id) => !deletedIds.has(id))
+      const recentFiltered = [...recentRealIds].filter((id) => !deletedIds.has(id))
+      if (recentFiltered.length === 0) return fromCatalog.length > 0 ? fromCatalog : undefined
+      const merged = [...fromCatalog, ...recentFiltered]
+      const deduped = [...new Set(merged)].filter((id) => !deletedIds.has(id))
+      return deduped.length > 0 ? deduped : undefined
+    })()
+    const out = reconcile({
+      localIds: localSessionIDs(),
+      tabOrder: tabOrder()[LOCAL],
+      active: tabMgr.active(LOCAL),
+      durable: latestDurable as unknown as
+        | {
+            sessions: { id: string }[]
+            tabOrder?: Record<string, string[]>
+            activeSessionId?: string
+            sidebarCollapsed?: boolean
+          }
+        | undefined,
+      catalog: latestCatalog,
+      hasMore: catalogHasMore,
+      preserveSessionIds: combinedPreserve,
+      LOCAL,
+      isFresh,
+      durableHydrated: durableHydrated(),
+    })
+    // Avoid no-op write loop: suppress identical authoritative replacements
+    const equalIds = (a: string[], b: string[]) => a.length === b.length && a.every((v, i) => v === b[i])
+    let effNextIds = out.nextIds
+    let effNextOrder = out.nextOrder
+    if (effNextIds !== undefined && equalIds(effNextIds, localSessionIDs())) effNextIds = undefined
+    if (effNextOrder !== undefined) {
+      const curOrder = tabOrder()[LOCAL]
+      const bothUndef = curOrder === undefined && effNextOrder === undefined
+      const bothDefinedEqual = curOrder !== undefined && equalIds(effNextOrder, curOrder)
+      if (bothUndef || bothDefinedEqual) effNextOrder = undefined
+      else if (curOrder === undefined && effNextOrder.length === 0) {
+        // [] vs undefined is not equal — keep authoritative empty to clear stale undefined
+      }
+    }
+    const curActive = tabMgr.active(LOCAL)
+    let shouldApplyActive = false
+    let effNextActive: string | undefined
+    if (out.applyActive) {
+      const desired = out.nextActive
+      if (desired !== curActive) {
+        shouldApplyActive = true
+        effNextActive = desired
+      }
+    }
+    if (effNextIds !== undefined) setLocalSessionIDs(effNextIds)
+    if (effNextOrder !== undefined) setTabOrder((prev) => ({ ...prev, [LOCAL]: effNextOrder! }))
+    const shouldSeed = effNextIds !== undefined || shouldApplyActive
+    if (shouldSeed) {
+      const ids = effNextIds ?? localSessionIDs()
+      const act = shouldApplyActive ? effNextActive : tabMgr.active(LOCAL)
+      tabMgr.seed(LOCAL, ids, act)
+      if (act && isPending(act)) {
+        setActivePendingId(act)
+        session.clearCurrentSession()
+      } else if (act) {
+        setActivePendingId(undefined)
+        session.selectSession(act)
+      } else {
+        setActivePendingId(undefined)
+        session.clearCurrentSession()
+      }
+    }
+    // Consume recentRealIds once authoritative catalog includes them (bounded convergence)
+    if (latestCatalog) {
+      for (const id of [...recentRealIds]) if (latestCatalog.has(id)) recentRealIds.delete(id)
+    }
+    if (out.needsPending) {
+      const ids = effNextIds ?? localSessionIDs()
+      const hasPending = ids.some((id) => isPending(id))
+      if (ids.length === 0 && terms.current().length === 0 && !hasPending) {
+        addPendingTab()
+        // Derive bottom-page from final reconciled state: pending created by
+        // reconciliation represents fresh-empty hydration, not a user close-last.
+        // Keep tab bar visible (bottom false) so the pending tab is counted.
+        // Close-last's gated bottom state is set only via handleCloseTab.
+        setIsBottomPage(false)
+      }
+    }
+    if (out.markHydrated) {
+      setDurableHydrated(true)
+      setLegacyImportDone(true)
+      // Derive bottom-page from final state: after hydration, bottom is false
+      // when tabs exist or empty state is shown; contradicts hidden gated state.
+      const finalIds = tabMgr.ids(LOCAL)
+      const finalHasPending = finalIds.some((id) => isPending(id))
+      const finalEmpty = finalIds.length === 0 && terms.current().length === 0
+      if (finalEmpty && !finalHasPending) setIsBottomPage(false)
+      else setIsBottomPage(false)
+      if (latestDurable) {
+        const imported = importLegacyLocalTabs(
+          {
+            managedSessions: latestDurable.sessions,
+            tabOrder: latestDurable.tabOrder,
+            sidebarCollapsed: latestDurable.sidebarCollapsed,
+          },
+          LOCAL,
+        )
+        if (imported.sidebarCollapsed !== undefined) sidebar.hydrate(imported.sidebarCollapsed)
+      }
+    }
+    // Final invariant: reconciled tab registry + bottom flag cannot be contradictory hidden.
+    // If a reconcile left isBottomPage true but the final registry has a pending tab,
+    // the tab bar would be hidden while tabs exist (tabCount 0 probe). Derive from final state.
+    if (isBottomPage()) {
+      const finalIds = tabMgr.ids(LOCAL)
+      if (finalIds.length > 0) setIsBottomPage(false)
+    }
   }
 
   const placeLocal = (id: string, pending: string | undefined, active: string | undefined) => {
@@ -564,10 +706,21 @@ const AgentManagerContent: Component = () => {
       if (created.draftID && closedDrafts.delete(created.draftID)) return
       if (created.draftID && promotePendingDraftDiscard(created.draftID, created.session.id)) return
       const pending = created.draftID && localSessionIDs().includes(created.draftID) ? created.draftID : undefined
-      if (!pending && localSessionIDs().includes(created.session.id)) return
+      if (!pending && localSessionIDs().includes(created.session.id)) {
+        if (creationOrigin.has(created.session.id)) {
+          recentRealIds.add(created.session.id)
+          creationOrigin.delete(created.session.id)
+        }
+        return
+      }
       const active = activePendingId()
       const focus = !pending || pending === active
       placeLocal(created.session.id, pending, active)
+      if (pending) recentRealIds.add(created.session.id)
+      else if (creationOrigin.has(created.session.id)) {
+        recentRealIds.add(created.session.id)
+        creationOrigin.delete(created.session.id)
+      }
       setIsBottomPage(false)
       vscode.postMessage({
         type: "agentManager.persistSession",
@@ -577,9 +730,24 @@ const AgentManagerContent: Component = () => {
       if (focus) session.selectSession(created.session.id)
     })
 
-    // Mark sessions loaded as soon as the session context receives data (even if empty)
+    // Catalog readiness: retain latest backend catalog and reconcile independent of message order
     const unsubSessions = vscode.onMessage((msg) => {
-      if (msg.type === "sessionsLoaded" && !sessionsLoaded()) setSessionsLoaded(true)
+      if (msg.type === "sessionsLoaded") {
+        if (!sessionsLoaded()) setSessionsLoaded(true)
+        const m = msg as {
+          sessions?: Array<{ id: string }>
+          append?: boolean
+          hasMore?: boolean
+          preserveSessionIds?: string[]
+        }
+        if (m.append !== true) deletedIds.clear()
+        const filtered = (m.sessions ?? []).filter((s) => !deletedIds.has(s.id))
+        latestCatalog = accumulateCatalog(latestCatalog, filtered, m.append)
+        for (const del of deletedIds) latestCatalog?.delete(del)
+        catalogHasMore = m.hasMore
+        catalogPreserve = m.preserveSessionIds?.filter((id) => !deletedIds.has(id))
+        applyReconciliation()
+      }
     })
 
     // Terminal messages have their own subscription to keep main-handler complexity in check.
@@ -602,11 +770,15 @@ const AgentManagerContent: Component = () => {
       }
 
       if (msg.type === "agentManager.sessionAdded") {
-        // Session stays in LOCAL tab context.
+        // Session stays in LOCAL tab context. This is an AgentManager-owned creation
+        // that adds the local tab before any undrafted sessionCreated. Mark origin
+        // and protect against stale catalog pruning.
         const ev = msg as { type: string; sessionId: string }
         coverBottomPage()
         if (!localSessionIDs().includes(ev.sessionId)) appendToTabOrder(LOCAL, ev.sessionId)
         tabMgr.open(LOCAL, ev.sessionId)
+        creationOrigin.add(ev.sessionId)
+        recentRealIds.add(ev.sessionId)
         session.selectSession(ev.sessionId)
       }
 
@@ -620,6 +792,8 @@ const AgentManagerContent: Component = () => {
           return [...prev, ev.sessionId]
         })
         tabMgr.open(LOCAL, ev.sessionId)
+        creationOrigin.add(ev.sessionId)
+        recentRealIds.add(ev.sessionId)
         vscode.postMessage({ type: "agentManager.persistSession", sessionId: ev.sessionId })
         session.selectSession(ev.sessionId)
       }
@@ -640,8 +814,6 @@ const AgentManagerContent: Component = () => {
         setManagedSessions(state.sessions)
         if (state.timing) session.setTimingSnapshots(state.timing)
         if (state.isGitRepo !== undefined) setIsGitRepo(state.isGitRepo)
-        if (!sessionsLoaded()) setSessionsLoaded(true)
-        if (state.isGitRepo === false && !sessionsLoaded()) setSessionsLoaded(true)
         // Only update non-LOCAL tab order keys from extension state.
         if (state.tabOrder) {
           setTabOrder((prev) => {
@@ -652,8 +824,16 @@ const AgentManagerContent: Component = () => {
             return next
           })
         }
-        // One-time legacy import when no local UI state existed.
-        if (!legacyImportDone() && localSessionIDs().length === 0) {
+        latestDurable = state
+        applyReconciliation()
+        // One-time legacy sidebarCollapsed hydration when no durable hydrated yet and local empty (fallback for empty durable)
+        if (
+          !durableHydrated() &&
+          !latestCatalog &&
+          !legacyImportDone() &&
+          localSessionIDs().length === 0 &&
+          state.sessions.length === 0
+        ) {
           const imported = importLegacyLocalTabs(
             {
               managedSessions: state.sessions,
@@ -662,13 +842,6 @@ const AgentManagerContent: Component = () => {
             },
             LOCAL,
           )
-          if (imported.openTabIds.length > 0) {
-            setLocalSessionIDs(imported.openTabIds)
-            tabMgr.seed(LOCAL, imported.openTabIds, imported.activeTabId)
-            if (imported.activeTabId && !isPending(imported.activeTabId)) {
-              session.selectSession(imported.activeTabId)
-            }
-          }
           if (imported.sidebarCollapsed !== undefined) sidebar.hydrate(imported.sidebarCollapsed)
           setLegacyImportDone(true)
         }
@@ -716,11 +889,6 @@ const AgentManagerContent: Component = () => {
   onMount(() => {
     // Request state from extension
     vscode.postMessage({ type: "agentManager.requestState" })
-    // Open a pending "New Session" tab if there are no persisted local sessions
-    if (localSessionIDs().length === 0) {
-      addPendingTab()
-      setIsBottomPage(true)
-    }
     tabMgr.seed(LOCAL, localSessionIDs(), initialUI.activeTabId)
     // Phase 3B: restore active tab from local UI state
     if (initialUI.activeTabId && localSessionIDs().includes(initialUI.activeTabId)) {
@@ -730,6 +898,7 @@ const AgentManagerContent: Component = () => {
         session.selectSession(initialUI.activeTabId)
       }
     }
+    // Pending creation is deferred until reconciliation of durable state + catalog (fresh empty case)
   })
 
   const handleShowKeyboardShortcuts = () => {

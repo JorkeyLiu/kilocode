@@ -1439,6 +1439,10 @@ export const SessionProvider: ParentComponent = (props) => {
       case "sendMessageFailed":
         handleSendMessageFailed(message as unknown as SendMessageFailedMessage)
         break
+
+      case "activateSession":
+        activateLoadedSession(message.sessionID)
+        break
     }
   }
 
@@ -2745,19 +2749,19 @@ export const SessionProvider: ParentComponent = (props) => {
   // selection time. Replayed by the reconnect effect below.
   let deferredFetch: string | undefined
 
-  function selectSession(id: string) {
-    const ready = loaded().has(id)
-    // Reflect the selection locally and synchronously so the chat always tracks
-    // the tab/Agent Manager selection. These are local signals and need no backend, so
-    // they update even while disconnected. Bailing out here when not connected
-    // froze the chat on the previous session while the side diff (resolved from
-    // the selection) still moved (the reported "only the diff changes").
+  function applySessionSelectionState(id: string, ready: boolean) {
     agentDrafts.prune(draftSessionID())
     setCurrentSessionID(id)
     setDraftSessionID(id)
     setUserClearedSession(false)
     setLoading(!ready)
     if (!ready) patchPage(id, { loadingInitial: true, loadingOlder: false, before: undefined, hasMore: false })
+  }
+
+  function selectSession(id: string) {
+    const ready = loaded().has(id)
+    // setUserClearedSession(false) via applySessionSelectionState
+    applySessionSelectionState(id, ready)
     // Only the message fetch needs the backend. Defer it while offline and let
     // the reconnect effect replay it. We defer even for cached sessions: the
     // load message is what re-focuses the backend (focusSession, contextSessionID,
@@ -2769,6 +2773,15 @@ export const SessionProvider: ParentComponent = (props) => {
     }
     deferredFetch = undefined
     loadFocusedMessages(id, ready)
+  }
+
+  function activateLoadedSession(id: string) {
+    agentDrafts.prune(draftSessionID())
+    setCurrentSessionID(id)
+    setDraftSessionID(id)
+    setUserClearedSession(false)
+    deferredFetch = undefined
+    setLoading(false)
   }
 
   function loadFocusedMessages(id: string, ready: boolean) {

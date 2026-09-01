@@ -1,4 +1,6 @@
 import * as vscode from "vscode"
+import { createHash } from "node:crypto"
+import type { Session } from "@kilocode/sdk/v2/client"
 import { KiloProvider } from "./KiloProvider"
 import { AgentManagerProvider } from "./agent-manager/AgentManagerProvider"
 import { VscodeHost } from "./agent-manager/vscode-host"
@@ -543,7 +545,8 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.commands.registerCommand("kilo-code.new.toggleRemote", () => {
       remoteService.toggle().catch((err) => console.error("[Kilo New] toggleRemote command failed:", err))
     }),
-    vscode.commands.registerCommand("kilo-code.new.openInTab", () => {
+    vscode.commands.registerCommand("kilo-code.new.openInTab", (targetSessionId?: string) => {
+      const target = typeof targetSessionId === "string" && targetSessionId.length > 0 ? targetSessionId : undefined
       return openKiloInNewTab(
         context,
         connectionService,
@@ -551,6 +554,7 @@ export function activate(context: vscode.ExtensionContext) {
         remoteService,
         autoApprove,
         canonicalConfig,
+        target,
       )
     }),
     vscode.commands.registerCommand("kilo-code.new.agentManager.previousSession", () => {
@@ -691,6 +695,10 @@ export function activate(context: vscode.ExtensionContext) {
         await agentManagerProvider.settleSessionsForFixture()
         return true
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.reloadAgentManagerWebview", async () => {
+        await agentManagerProvider.reloadWebviewForFixture()
+        return true
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.backendSnapshot", async () => {
         return agentManagerProvider.backendSnapshotForFixture()
       }),
@@ -768,16 +776,96 @@ export function activate(context: vscode.ExtensionContext) {
       // through the production openInTab path and report whether its webview
       // reached readiness. Proves the session editor survives without the
       // removed sidebar provider.
-      vscode.commands.registerCommand("kilo-code.new.e2eFixture.openInTabReady", async () => {
-        await vscode.commands.executeCommand("kilo-code.new.openInTab")
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.openInTabReady", async (targetSessionId?: string) => {
+        const hasTarget = typeof targetSessionId === "string" && targetSessionId.length > 0
+        const hash16 = (v: string) => createHash("sha256").update(v).digest("hex").slice(0, 16)
+        let openOk = false
+        if (hasTarget) {
+          try {
+            await vscode.commands.executeCommand("kilo-code.new.openInTab", targetSessionId)
+            openOk = true
+          } catch {
+            openOk = false
+            console.error("[Kilo New] e2eFixture.openInTabReady: targeted open failed hash", hash16(targetSessionId!))
+          }
+        } else {
+          await vscode.commands.executeCommand("kilo-code.new.openInTab")
+          openOk = true
+        }
         const newest = [...tabPanels.entries()].at(-1)
-        if (!newest) return { count: 0, ready: false }
+        if (!newest) {
+          return {
+            count: 0,
+            ready: false,
+            attached: false,
+            loadOk: openOk,
+            targetSessionIdHash: hasTarget ? hash16(targetSessionId!) : null,
+            currentSessionIdHash: null,
+          }
+        }
         const [, tabProvider] = newest
         const ready = await Promise.race([
           tabProvider.waitForReady().then(() => true),
           new Promise<false>((resolve) => setTimeout(() => resolve(false), 30_000)),
         ])
-        return { count: tabPanels.size, ready }
+        if (!ready) {
+          return {
+            count: tabPanels.size,
+            ready: false,
+            attached: false,
+            loadOk: false,
+            targetSessionIdHash: hasTarget ? hash16(targetSessionId!) : null,
+            currentSessionIdHash: null,
+          }
+        }
+        if (!hasTarget) {
+          return {
+            count: tabPanels.size,
+            ready: true,
+            attached: false,
+            loadOk: openOk,
+            currentSessionIdHash: (() => {
+              const cur = tabProvider.getCurrentSessionId()
+              return cur ? hash16(cur) : null
+            })(),
+            targetSessionIdHash: null,
+          }
+        }
+        if (!openOk) {
+          const cur = tabProvider.getCurrentSessionId() ?? null
+          return {
+            count: tabPanels.size,
+            ready: true,
+            attached: false,
+            loadOk: false,
+            currentSessionIdHash: cur ? hash16(cur) : null,
+            targetSessionIdHash: hash16(targetSessionId!),
+          }
+        }
+        // Targeted path: verify attachment via existing product behavior (currentSession / tracking)
+        // Attached requires load success + currentSession equals target (LOCK-003)
+        const attached = await Promise.race([
+          (async () => {
+            const deadline = Date.now() + 5_000
+            while (Date.now() < deadline) {
+              const cur = tabProvider.getCurrentSessionId()
+              if (cur === targetSessionId) return true
+              await new Promise((r) => setTimeout(r, 100))
+            }
+            return tabProvider.getCurrentSessionId() === targetSessionId
+          })(),
+          new Promise<false>((resolve) => setTimeout(() => resolve(false), 5_000)),
+        ])
+        const cur = tabProvider.getCurrentSessionId() ?? null
+        const loadOk = openOk && attached
+        return {
+          count: tabPanels.size,
+          ready: true,
+          attached,
+          loadOk,
+          currentSessionIdHash: cur ? hash16(cur) : null,
+          targetSessionIdHash: hash16(targetSessionId!),
+        }
       }),
       // R9 private observation E2E bridge (KILO_E2E_FIXTURE only) — deterministic
       // probes for snapshot/read/ack/subscribe/hostState/reconnect and fixture-gated
@@ -975,6 +1063,96 @@ export async function deactivate() {
   TelemetryProxy.getInstance().shutdown()
 }
 
+type Resolved = { dir: string; info?: Session }
+
+async function resolveTargetSessionDirectory(
+  targetSessionId: string,
+  connectionService: KiloConnectionService,
+  agentManagerProvider: AgentManagerProvider,
+  tabPanels: Map<vscode.WebviewPanel, KiloProvider>,
+  selfProvider: KiloProvider,
+): Promise<Resolved | undefined> {
+  for (const [, p] of tabPanels) {
+    if (p === selfProvider) continue
+    const d = p.getSessionDirectories().get(targetSessionId)
+    if (d) return { dir: d }
+  }
+  const amDir = agentManagerProvider.getSessionDirectories().get(targetSessionId)
+  if (amDir) return { dir: amDir }
+  try {
+    const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
+    const client = await connectionService.getClientAsync(root)
+    const res = await (
+      client as unknown as {
+        session: { get: (a: unknown, b: unknown) => Promise<{ data?: Session }> }
+      }
+    ).session.get({ sessionID: targetSessionId, directory: root }, { throwOnError: true })
+    if (res?.data?.id === targetSessionId) return { dir: (res.data.directory as string) ?? root, info: res.data }
+  } catch {}
+  return undefined
+}
+
+async function attachTargetSessionToTab(
+  tabProvider: KiloProvider,
+  targetSessionId: string,
+  connectionService: KiloConnectionService,
+  agentManagerProvider: AgentManagerProvider,
+  tabPanels: Map<vscode.WebviewPanel, KiloProvider>,
+  disposedEarly: boolean,
+): Promise<void> {
+  const ready = await Promise.race([
+    tabProvider.waitForReady().then(() => true),
+    new Promise<false>((resolve) => setTimeout(() => resolve(false), 30_000)),
+  ])
+  if (!ready || disposedEarly) {
+    const hash = createHash("sha256").update(targetSessionId).digest("hex").slice(0, 16)
+    console.warn("[Kilo New] openKiloInNewTab: webview not ready for target attach hash", hash)
+    throw new Error("webview not ready for target attach")
+  }
+  const resolved = await resolveTargetSessionDirectory(
+    targetSessionId,
+    connectionService,
+    agentManagerProvider,
+    tabPanels,
+    tabProvider,
+  )
+  if (!resolved?.dir) {
+    const hash = createHash("sha256").update(targetSessionId).digest("hex").slice(0, 16)
+    console.error("[Kilo New] openKiloInNewTab: unresolved directory for target attach hash", hash)
+    throw new Error("unresolved directory for target attach")
+  }
+  const dir = resolved.dir
+  try {
+    const maybeTrack = (tabProvider as unknown as { trackDirectory?: (id: string, d: string) => void }).trackDirectory
+    if (typeof maybeTrack === "function") maybeTrack.call(tabProvider, targetSessionId, dir)
+    else {
+      const m = (tabProvider as unknown as { sessionDirectories?: Map<string, string> }).sessionDirectories
+      if (m) {
+        const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
+        const { resolve } = await import("node:path")
+        if (resolve(dir) === resolve(root)) m.delete(targetSessionId)
+        else m.set(targetSessionId, dir)
+      }
+    }
+  } catch {}
+  try {
+    const ok = await (
+      tabProvider as unknown as { loadMessagesStrict: (id: string, info?: Session) => Promise<boolean> }
+    ).loadMessagesStrict(targetSessionId, resolved.info)
+    if (!ok) throw new Error("target attach strict load failed")
+  } catch (err) {
+    const hash = createHash("sha256").update(targetSessionId).digest("hex").slice(0, 16)
+    console.error("[Kilo New] openKiloInNewTab: target attach failed hash", hash, String(err).slice(0, 120))
+    throw err
+  }
+  const cur = tabProvider.getCurrentSessionId()
+  if (cur !== targetSessionId) {
+    const hash = createHash("sha256").update(targetSessionId).digest("hex").slice(0, 16)
+    console.error("[Kilo New] openKiloInNewTab: attached mismatch hash", hash)
+    throw new Error("target attach mismatch")
+  }
+}
+
 async function openKiloInNewTab(
   context: vscode.ExtensionContext,
   connectionService: KiloConnectionService,
@@ -982,6 +1160,7 @@ async function openKiloInNewTab(
   remoteService: RemoteStatusService,
   autoApprove: ReturnType<typeof registerToggleAutoApprove>,
   canonicalConfig: CanonicalConfigService,
+  targetSessionId?: string,
 ): Promise<KiloProvider> {
   const lastCol = Math.max(...vscode.window.visibleTextEditors.map((e) => e.viewColumn || 0), 0)
   const hasVisibleEditors = vscode.window.visibleTextEditors.length > 0
@@ -1012,20 +1191,62 @@ async function openKiloInNewTab(
   tabProvider.resolveWebviewPanel(panel)
   tabPanels.set(panel, tabProvider)
 
-  // Wait for the new panel to become active before locking the editor group.
-  // This avoids the race where VS Code hasn't switched focus yet.
-  await waitForWebviewPanelToBeActive(panel)
-  await vscode.commands.executeCommand("workbench.action.lockEditorGroup")
-
-  panel.onDidDispose(
+  let disposedEarly = false
+  const disposeSub = panel.onDidDispose(
     () => {
-      console.log("[Kilo New] Tab panel disposed")
+      disposedEarly = true
       tabPanels.delete(panel)
       tabProvider.dispose()
+      console.log("[Kilo New] Tab panel disposed")
     },
     null,
     context.subscriptions,
   )
+
+  const activeOk = await waitForWebviewPanelToBeActiveBounded(panel, 30_000)
+  if (!activeOk || disposedEarly) {
+    if (!disposedEarly) {
+      try {
+        disposeSub.dispose()
+      } catch {}
+      tabPanels.delete(panel)
+      tabProvider.dispose()
+      try {
+        panel.dispose()
+      } catch {}
+    }
+    throw new Error("openKiloInNewTab: panel activation failed or disposed")
+  }
+
+  await vscode.commands.executeCommand("workbench.action.lockEditorGroup")
+
+  if (typeof targetSessionId === "string" && targetSessionId.length > 0) {
+    try {
+      await attachTargetSessionToTab(
+        tabProvider,
+        targetSessionId,
+        connectionService,
+        agentManagerProvider,
+        tabPanels,
+        disposedEarly,
+      )
+    } catch (err) {
+      try {
+        disposeSub.dispose()
+      } catch {}
+      tabPanels.delete(panel)
+      try {
+        tabProvider.dispose()
+      } catch {}
+      try {
+        panel.dispose()
+      } catch {}
+      const hash = createHash("sha256").update(targetSessionId).digest("hex").slice(0, 16)
+      console.error("[Kilo New] openKiloInNewTab: targeted attach cleanup hash", hash, String(err).slice(0, 120))
+      throw err
+    }
+  }
+
   return tabProvider
 }
 
@@ -1061,6 +1282,37 @@ function waitForWebviewPanelToBeActive(panel: vscode.WebviewPanel): Promise<void
       }
       disposable.dispose()
       resolve()
+    })
+  })
+}
+
+function waitForWebviewPanelToBeActiveBounded(panel: vscode.WebviewPanel, timeoutMs: number): Promise<boolean> {
+  if (panel.active) return Promise.resolve(true)
+  return new Promise<boolean>((resolve) => {
+    let done = false
+    const timer = setTimeout(() => {
+      if (done) return
+      done = true
+      stateSub.dispose()
+      disposeSub.dispose()
+      resolve(false)
+    }, timeoutMs)
+    const stateSub = panel.onDidChangeViewState((event) => {
+      if (!event.webviewPanel.active) return
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      stateSub.dispose()
+      disposeSub.dispose()
+      resolve(true)
+    })
+    const disposeSub = panel.onDidDispose(() => {
+      if (done) return
+      done = true
+      clearTimeout(timer)
+      stateSub.dispose()
+      disposeSub.dispose()
+      resolve(false)
     })
   })
 }

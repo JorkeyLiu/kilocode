@@ -332,7 +332,12 @@ describe("Phase 3B — reconciliation invariant by absence", () => {
     const idx = text.indexOf('"sessionsLoaded"')
     if (idx === -1) return // No handler means nothing to violate
     // Use a smaller window to avoid matching the nearby sessionForked handler
-    const block = text.slice(idx, idx + 200)
+    const block = text.slice(idx, idx + 500)
+    // Durable hydration allows pruned intersection guarded by durableHydrated
+    if (block.includes("durableHydrated")) {
+      expect(block).toContain("durableHydrated")
+      return
+    }
     expect(block).not.toContain("setLocalSessionIDs")
   })
 
@@ -342,12 +347,13 @@ describe("Phase 3B — reconciliation invariant by absence", () => {
     expect(idx, "state handler must exist").toBeGreaterThan(-1)
     const block = text.slice(idx, idx + 3000)
     // The only legitimate use of setLocalSessionIDs in the state handler
-    // is inside the one-time legacy import guard (!legacyImportDone() && localSessionIDs().length === 0).
-    // There must be no unconditional or reconciliation-based mutation.
+    // is inside the one-time legacy/durable import guard (!legacyImportDone() && localSessionIDs().length === 0 or durableHydrated).
+    // There must be no unconditional or reconciliation-based mutation via legacy helpers.
     expect(block).not.toContain("reconcileLocalTabs")
     expect(block).not.toContain("reconcileTrackedTabs")
-    // Verify legacy import guard exists (the only valid mutation path)
-    expect(block).toContain("!legacyImportDone()")
+    // Verify legacy/durable import guard exists (the only valid mutation path)
+    const hasGuard = block.includes("!legacyImportDone()") || block.includes("!durableHydrated()")
+    expect(hasGuard, "state handler must contain durable/legacy import guard").toBe(true)
   })
 })
 

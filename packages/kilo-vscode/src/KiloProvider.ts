@@ -402,6 +402,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private configWarningsShown = false
   private pendingKiloModel: { modelID?: string; agent?: string } | null = null
   private readyResolvers: (() => void)[] = []
+  private reloadInFlight: Promise<void> | null = null
   private promptRecoveryQueued = false
   private promptRecovery: Promise<void> | null = null
   private trackedSessionIds: Set<string> = new Set()
@@ -427,6 +428,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private readonly streams = new SessionStreamScheduler((msg) => this.postMessage(msg))
   private readonly visibleTaskStreams = new VisibleTaskStreams((id, visible) => this.streams.setVisible(id, visible))
   private readonly confirmations = new MessageConfirmation()
+  private catalogCbs: Array<(update: { ids: string[]; append?: boolean; hasMore?: boolean }) => void> = []
   private readonly costs = new MaxCostNudge()
   private readonly activeAlerts = new Map<string, number>() // sid -> limit currently shown in UI
   private unsubscribeEvent: (() => void) | null = null
@@ -1567,9 +1569,33 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     return this.handleLoadMessages(sessionID, { preserveStream: true })
   }
 
+  public async loadMessagesStrict(sessionID: string, info?: Session): Promise<boolean> {
+    return this.doLoadMessages(sessionID, { preserveStream: true }, true, info)
+  }
+
   /** Exposes the session→directory map so callers outside the webview can resolve session directories. */
   public getSessionDirectories(): ReadonlyMap<string, string> {
     return this.sessionDirectories
+  }
+
+  public onCatalog(cb: (update: { ids: string[]; append?: boolean; hasMore?: boolean }) => void): { dispose(): void } {
+    this.catalogCbs.push(cb)
+    return {
+      dispose: () => {
+        const i = this.catalogCbs.indexOf(cb)
+        if (i >= 0) this.catalogCbs.splice(i, 1)
+      },
+    }
+  }
+
+  private notifyCatalog(update: { ids: string[]; append?: boolean; hasMore?: boolean }): void {
+    for (const cb of [...this.catalogCbs]) {
+      try {
+        cb(update)
+      } catch (e) {
+        console.warn("[Kilo New] catalog cb failed", e)
+      }
+    }
   }
 
   public async getSessionInfo(sessionId: string): Promise<Session | undefined> {
@@ -1588,6 +1614,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   /** Return the currently active session ID, if any. */
   public getCurrentSessionId(): string | undefined {
     return this.currentSession?.id ?? undefined
+  }
+
+  /** Posts a webview activation for an already-loaded session without refetching. */
+  public activateSession(sessionID: string): void {
+    this.postMessage({ type: "activateSession", sessionID } as unknown as Record<string, unknown>)
   }
 
   /**
@@ -2557,76 +2588,115 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     sessionID: string,
     options: { mode?: MessageLoadMode; before?: string; limit?: number; preserveStream?: boolean } = {},
   ): Promise<void> {
+    try {
+      await this.doLoadMessages(sessionID, options, false)
+    } catch (error) {
+      if (this.loadMessagesAbort?.signal.aborted) return
+      console.error("[Kilo New] KiloProvider: Failed to load messages:", error)
+      this.postMessage({ type: "error", message: getErrorMessage(error) || "Failed to load messages", sessionID })
+    }
+  }
+
+  private async doLoadMessages(
+    sessionID: string,
+    options: { mode?: MessageLoadMode; before?: string; limit?: number; preserveStream?: boolean } = {},
+    strict: boolean,
+    info?: Session,
+  ): Promise<boolean> {
     const mode = options.mode ?? "replace"
+    const wasTracked = this.trackedSessionIds.has(sessionID)
     if (mode === "replace" || mode === "focus") {
       this.stopCurrentSessionProcesses(sessionID)
       this.trackedSessionIds.add(sessionID)
       this.focusSession(sessionID)
       this.contextSessionID = sessionID
     }
-    if (!this.client) {
-      this.postMessage({ type: "error", message: "Not connected to CLI backend", sessionID })
-      return
-    }
+    if (!this.client) throw new Error("Not connected to CLI backend")
     const dir = this.getWorkspaceDirectory(sessionID)
     if (mode === "focus") {
-      this.refreshSessionDetails(sessionID, dir)
-      // Reconcile tail so SSE drops self-heal. Throttled to skip rapid tab-switching bursts.
-      if (Date.now() - (this.lastReconciledAt.get(sessionID) ?? 0) < 1000) return
-      await this.handleLoadMessages(sessionID, { mode: "reconcile", limit: options.limit ?? MESSAGE_PAGE_LIMIT })
-      return
+      if (strict) {
+        if (info) {
+          this.setCurrentSession(info)
+          this.contextSessionID = info.id
+          if (!wasTracked) this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(info) })
+          this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(info) })
+        } else {
+          const meta = await this.client.session.get({ sessionID, directory: dir }, { throwOnError: true })
+          if (!meta.data) throw new Error("Session metadata not found")
+          this.setCurrentSession(meta.data as Session)
+          this.contextSessionID = (meta.data as Session).id
+          if (!wasTracked)
+            this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(meta.data as Session) })
+          this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(meta.data as Session) })
+        }
+      } else {
+        this.refreshSessionDetails(sessionID, dir)
+      }
+      if (Date.now() - (this.lastReconciledAt.get(sessionID) ?? 0) < 1000) return true
+      return this.doLoadMessages(sessionID, { mode: "reconcile", limit: options.limit ?? MESSAGE_PAGE_LIMIT }, strict)
     }
-    // Replace competes for the spinner and cancels earlier loads; prepend/reconcile run in parallel.
     const abort = mode === "replace" ? new AbortController() : undefined
     if (abort) {
       this.loadMessagesAbort?.abort()
       this.loadMessagesAbort = abort
-      this.refreshSessionDetails(sessionID, dir, abort.signal)
+      if (strict) {
+        if (info) {
+          if (abort.signal.aborted) return false
+          this.setCurrentSession(info)
+          this.contextSessionID = info.id
+          if (!wasTracked) this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(info) })
+          this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(info) })
+        } else {
+          const meta = await this.client.session.get({ sessionID, directory: dir }, {
+            throwOnError: true,
+            signal: abort.signal,
+          } as unknown as { throwOnError: true })
+          if (abort.signal.aborted) return false
+          if (!meta.data) throw new Error("Session metadata not found")
+          this.setCurrentSession(meta.data as Session)
+          this.contextSessionID = (meta.data as Session).id
+          if (!wasTracked)
+            this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(meta.data as Session) })
+          this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(meta.data as Session) })
+        }
+      } else {
+        this.refreshSessionDetails(sessionID, dir, abort.signal)
+      }
     }
     const since = mode === "reconcile" ? Date.now() : undefined
-    try {
-      const page = await fetchMessagePage(this.client, {
-        sessionID,
-        workspaceDir: dir,
-        limit: options.limit ?? MESSAGE_PAGE_LIMIT,
-        before: options.before,
-        signal: abort?.signal,
-      })
-      if (abort?.signal.aborted) return
-      // Drop results for a session deleted mid-fetch. Prepend/reconcile have
-      // no abort controller, so this guard prevents ghost entries.
-      if (!this.trackedSessionIds.has(sessionID)) return
-      const messages = page.items.map((m) => ({
-        ...this.slimInfo(m.info),
-        parts: this.slimParts(m.parts),
-        createdAt: new Date(m.info.time.created).toISOString(),
-      }))
-      for (const message of messages) {
-        this.connectionService.recordMessageSessionId(message.id, message.sessionID)
-      }
-      if (mode === "replace" || mode === "reconcile") this.resetMessageCosts(sessionID, messages)
-      // Authoritative snapshots normally supersede buffered deltas. A newly
-      // opened sub-agent viewer has no earlier renderer state, so its buffered
-      // updates arrived during this fetch and must follow the snapshot.
-      if ((mode === "replace" || mode === "reconcile") && !options.preserveStream) this.streams.drop(sessionID)
-      if (mode === "reconcile") this.lastReconciledAt.set(sessionID, Date.now())
-      this.postMessage({
-        type: "messagesLoaded",
-        sessionID,
-        messages,
-        mode,
-        cursor: page.cursor,
-        hasMore: Boolean(page.cursor),
-        since,
-      })
-      if (options.preserveStream) this.streams.flush(sessionID)
-      // Recover any prompts missed while the webview was loading or during an SSE reconnection.
-      this.recoverPendingPrompts()
-    } catch (error) {
-      if (abort?.signal.aborted) return
-      console.error("[Kilo New] KiloProvider: Failed to load messages:", error)
-      this.postMessage({ type: "error", message: getErrorMessage(error) || "Failed to load messages", sessionID })
+    const page = await fetchMessagePage(this.client, {
+      sessionID,
+      workspaceDir: dir,
+      limit: options.limit ?? MESSAGE_PAGE_LIMIT,
+      before: options.before,
+      signal: abort?.signal,
+    })
+    if (abort?.signal.aborted) return false
+    if (!this.trackedSessionIds.has(sessionID)) return false
+    const messages = page.items.map((m) => ({
+      ...this.slimInfo(m.info),
+      parts: this.slimParts(m.parts),
+      createdAt: new Date(m.info.time.created).toISOString(),
+    }))
+    for (const message of messages) {
+      this.connectionService.recordMessageSessionId(message.id, message.sessionID)
     }
+    if (mode === "replace" || mode === "reconcile") this.resetMessageCosts(sessionID, messages)
+    if ((mode === "replace" || mode === "reconcile") && !options.preserveStream) this.streams.drop(sessionID)
+    if (mode === "reconcile") this.lastReconciledAt.set(sessionID, Date.now())
+    this.postMessage({
+      type: "messagesLoaded",
+      sessionID,
+      messages,
+      mode,
+      cursor: page.cursor,
+      hasMore: Boolean(page.cursor),
+      since,
+    })
+    if (options.preserveStream) this.streams.flush(sessionID)
+    this.recoverPendingPrompts()
+    if (strict) this.activateSession(sessionID)
+    return true
   }
 
   /**
@@ -2885,11 +2955,18 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const dir = this.getWorkspaceDirectory(sessionID)
     const parsed = parseSessionTitle(title)
     if ("error" in parsed) {
-      this.postMessage({ type: "error", message: getErrorMessage(new Error("Invalid session title")) || "Invalid session title" })
+      this.postMessage({
+        type: "error",
+        message: getErrorMessage(new Error("Invalid session title")) || "Invalid session title",
+      })
       return
     }
     const { opId, idempotencyKey, requestId } = buildSessionUpdateIdentity(sessionID)
-    const durableContext: { directory: string; sessionId: string; parentSessionId: null } = { directory: dir, sessionId: sessionID, parentSessionId: null }
+    const durableContext: { directory: string; sessionId: string; parentSessionId: null } = {
+      directory: dir,
+      sessionId: sessionID,
+      parentSessionId: null,
+    }
     let sdkRes: { data?: Session; error?: unknown; response?: unknown }
     let sdkThrew = false
     try {
@@ -2921,11 +2998,17 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       }
     }
 
-    const isPrivateAvailable = (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
+    const isPrivateAvailable =
+      (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
     if (!isPrivateAvailable) return
     const sdkHasTerminal = (() => {
       const resp = (sdkRes as unknown as { response?: { status?: unknown } })?.response
-      const respStatus = resp && typeof resp.status === "number" && Number.isInteger(resp.status) ? (resp.status as number) : resp && typeof resp.status === "string" ? Number(resp.status) : null
+      const respStatus =
+        resp && typeof resp.status === "number" && Number.isInteger(resp.status)
+          ? (resp.status as number)
+          : resp && typeof resp.status === "string"
+            ? Number(resp.status)
+            : null
       if (respStatus !== null && Number.isInteger(respStatus) && respStatus >= 100 && respStatus < 600) {
         if ([400, 404, 409, 500].includes(respStatus)) return true
         if (sdkRes.error) return false
@@ -2942,8 +3025,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       }
       if (typeof err.message === "string" && /\b(400|404|409|500)\b/.test(err.message)) return true
       const tag = typeof err._tag === "string" ? String(err._tag).toLowerCase() : ""
-      if (tag.includes("badrequest") || tag.includes("notfound") || tag.includes("conflict") || tag.includes("internal")) return true
-      if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined") return false
+      if (
+        tag.includes("badrequest") ||
+        tag.includes("notfound") ||
+        tag.includes("conflict") ||
+        tag.includes("internal")
+      )
+        return true
+      if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined")
+        return false
       return false
     })()
     if (!sdkHasTerminal) return
@@ -2956,7 +3046,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       context: durableContext,
       payload: { title: parsed.value },
     }
-    const svc = this.connectionService as unknown as { privateSessionUpdate: (req: typeof privateReq) => Promise<unknown> }
+    const svc = this.connectionService as unknown as {
+      privateSessionUpdate: (req: typeof privateReq) => Promise<unknown>
+    }
     if (typeof svc.privateSessionUpdate !== "function") return
     let priv: unknown
     try {
@@ -2990,7 +3082,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     try {
       const { compareUpdateParity } = await import("./services/cli-backend/serve-private-peer")
-      const res = compareUpdateParity(priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateSessionUpdateResult, sdkRes as unknown as { data?: unknown; error?: unknown; response?: unknown })
+      const res = compareUpdateParity(
+        priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateSessionUpdateResult,
+        sdkRes as unknown as { data?: unknown; error?: unknown; response?: unknown },
+      )
       if (res.divergence) {
         const p = priv as Record<string, unknown>
         console.warn("[Kilo PrivateParity] divergence", {
@@ -4973,12 +5068,18 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       console.error("[Kilo New] KiloProvider: Failed to cancel queued message:", sdkRes.error)
       void vscode.window.showErrorMessage(getErrorMessage(sdkRes.error) || "Failed to cancel queued message")
     }
-    const isPrivateAvailable = (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
+    const isPrivateAvailable =
+      (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
     if (!isPrivateAvailable) return
     const sdkHasTerminal = (() => {
       // Authoritative: SDK tuple response.status is primary signal (LOCK-002)
       const resp = (sdkRes as unknown as { response?: { status?: unknown } })?.response
-      const respStatus = resp && typeof resp.status === "number" && Number.isInteger(resp.status) ? (resp.status as number) : resp && typeof resp.status === "string" ? Number(resp.status) : null
+      const respStatus =
+        resp && typeof resp.status === "number" && Number.isInteger(resp.status)
+          ? (resp.status as number)
+          : resp && typeof resp.status === "string"
+            ? Number(resp.status)
+            : null
       if (respStatus !== null && Number.isInteger(respStatus) && respStatus >= 100 && respStatus < 600) {
         if ([400, 404, 409, 500].includes(respStatus)) return true
         // SDK error with non-terminal HTTP status (e.g. 502) is not terminal
@@ -4996,8 +5097,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       }
       if (typeof err.message === "string" && /\b(400|404|409|500)\b/.test(err.message)) return true
       const tag = typeof err._tag === "string" ? String(err._tag).toLowerCase() : ""
-      if (tag.includes("badrequest") || tag.includes("notfound") || tag.includes("conflict") || tag.includes("internal")) return true
-      if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined") return false
+      if (
+        tag.includes("badrequest") ||
+        tag.includes("notfound") ||
+        tag.includes("conflict") ||
+        tag.includes("internal")
+      )
+        return true
+      if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined")
+        return false
       return false
     })()
     if (!sdkHasTerminal) return
@@ -5010,7 +5118,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       context: { directory: dir, sessionId: sessionID, parentSessionId: null },
       payload: { messageId: messageID },
     }
-    const svc = this.connectionService as unknown as { privateCancelQueued: (req: typeof privateReq) => Promise<unknown> }
+    const svc = this.connectionService as unknown as {
+      privateCancelQueued: (req: typeof privateReq) => Promise<unknown>
+    }
     let priv: unknown
     try {
       const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
@@ -5043,7 +5153,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     try {
       const { compareParity } = await import("./services/cli-backend/serve-private-peer")
-      const res = compareParity(priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateCancelQueuedResult, sdkRes as unknown as { data?: unknown; error?: unknown; response?: unknown })
+      const res = compareParity(
+        priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateCancelQueuedResult,
+        sdkRes as unknown as { data?: unknown; error?: unknown; response?: unknown },
+      )
       if (res.divergence) {
         const p = priv as Record<string, unknown>
         console.warn("[Kilo PrivateParity] divergence", {
@@ -5600,8 +5713,63 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   public waitForReady(): Promise<void> {
     return this.isWebviewReady && this.webview ? Promise.resolve() : new Promise((r) => this.readyResolvers.push(r))
   }
+
+  /** Fixture-only: count of pending webviewReady waiters (test inspection of exact removal). */
+  public getReadyResolverCountForFixture(): number {
+    return this.readyResolvers.length
+  }
+
+  /**
+   * Fixture-only: reset readiness and atomically re-assign HTML, awaiting the next real webviewReady.
+   * Owns a specific resolver callback registered before assign; on assign throw that exact resolver is
+   * removed, in-flight cleared, and a sanitized error is thrown. After the waiter resolves the
+   * provider checks not disposed, webview exists, and isWebviewReady true; a dispose-woke resolver
+   * rejects with `webview reload aborted` instead of success. Coalesces overlapping callers onto the
+   * same promise and clears in-flight on all paths. No rebind/init/recreate.
+   */
+  public reloadWebviewForFixture(assign: () => void): Promise<void> {
+    if (!this.webview || this.disposed) throw new Error("KiloProvider: no webview to reload or disposed")
+    if (this.reloadInFlight) return this.reloadInFlight
+    this.isWebviewReady = false
+    let owned!: () => void
+    const waiter = new Promise<void>((resolve) => {
+      owned = resolve
+      this.readyResolvers.push(resolve)
+    })
+    const p: Promise<void> = (async () => {
+      try {
+        assign()
+      } catch {
+        const idx = this.readyResolvers.indexOf(owned)
+        if (idx >= 0) this.readyResolvers.splice(idx, 1)
+        throw new Error("webview reload assign failed")
+      }
+      await waiter
+      if (this.disposed || !this.webview || !this.isWebviewReady) throw new Error("webview reload aborted")
+    })()
+    this.reloadInFlight = p
+    const clear = () => {
+      if (this.reloadInFlight === p) this.reloadInFlight = null
+    }
+    p.then(clear, clear)
+    return p
+  }
+
   /** Post a message to the webview. Public so toolbar button commands can send messages. */
   public postMessage(message: unknown): void {
+    if (
+      typeof message === "object" &&
+      message !== null &&
+      (message as { type?: string }).type === "sessionsLoaded" &&
+      Array.isArray((message as { sessions?: unknown }).sessions)
+    ) {
+      const ids = ((message as { sessions: Array<{ id?: string }> }).sessions ?? [])
+        .map((s) => s.id)
+        .filter((id): id is string => typeof id === "string")
+      const append = (message as { append?: unknown }).append as boolean | undefined
+      const hasMore = (message as { hasMore?: unknown }).hasMore as boolean | undefined
+      this.notifyCatalog({ ids, append, hasMore })
+    }
     if (!this.webview) {
       const type =
         typeof message === "object" &&
@@ -5832,8 +6000,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   /**
    * Dispose of the provider and clean up subscriptions.
    * Does NOT kill the server — that's the connection service's job.
+   * Idempotent: repeated calls are no-ops.
    */
   dispose(): void {
+    if (this.disposed) return
     this.unsubscribeRemote?.()
     this.streams.focus(undefined)
     this.connectionService.unregisterVisible(this.instanceId)

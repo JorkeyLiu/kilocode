@@ -169,6 +169,13 @@ export interface Interface {
   ) => Effect.Effect<string | undefined>
   readonly remove: (aggregateID: string) => Effect.Effect<void>
   readonly claim: (aggregateID: string, ownerID: string) => Effect.Effect<void>
+  readonly recordProjectedTx: <D extends Definition>(
+    tx: unknown,
+    definition: D,
+    data: Data<D>,
+    options?: { readonly id?: ID; readonly location?: Location.Ref; readonly metadata?: Record<string, unknown> },
+  ) => Effect.Effect<Payload<D>>
+  readonly notifyCommitted: (event: Payload) => Effect.Effect<void>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Event") {}
@@ -197,6 +204,11 @@ export const layerWith = (options?: LayerOptions) =>
           const pubsub = yield* PubSub.unbounded<Payload>()
           typed.set(definition.type, pubsub)
           return pubsub
+        })
+
+      const wakeAggregate = (aggregateID: string) =>
+        Effect.forEach(synchronized.get(aggregateID) ?? [], (pubsub) => PubSub.publish(pubsub, undefined), {
+          discard: true,
         })
 
       yield* Effect.addFinalizer(() =>
@@ -367,11 +379,7 @@ export const layerWith = (options?: LayerOptions) =>
                     )
                     .pipe(Effect.orDie)
                   if (committed) {
-                    yield* Effect.forEach(
-                      synchronized.get(committed.aggregateID) ?? [],
-                      (pubsub) => PubSub.publish(pubsub, undefined),
-                      { discard: true },
-                    )
+                    yield* wakeAggregate(committed.aggregateID)
                   }
                   return committed
                 }),
@@ -380,6 +388,104 @@ export const layerWith = (options?: LayerOptions) =>
           }
         })
       }
+
+      const recordProjectedTx = <D extends Definition>(
+        tx: any,
+        definition: D,
+        data: Data<D>,
+        options?: { readonly id?: ID; readonly location?: Location.Ref; readonly metadata?: Record<string, unknown> },
+      ) =>
+        Effect.gen(function* () {
+          const sync = (definition as Definition).sync
+          if (!sync) {
+            yield* Effect.die(
+              new InvalidSyncEventError({
+                type: definition.type,
+                message: `Definition ${definition.type} is not synchronized`,
+              }),
+            )
+          }
+          const syncSafe = sync as NonNullable<Definition["sync"]>
+          const aggregateID = (data as Record<string, unknown>)[syncSafe.aggregate]
+          if (typeof aggregateID !== "string") {
+            yield* Effect.die(
+              new InvalidSyncEventError({
+                type: definition.type,
+                message: `Expected string aggregate field ${syncSafe.aggregate}`,
+              }),
+            )
+          }
+          const versioned = versionedType(definition.type, syncSafe.version)
+          const syncDef = syncRegistry.get(versioned)
+          if (!syncDef) {
+            yield* Effect.die(
+              new InvalidSyncEventError({ type: definition.type, message: `Unknown sync definition ${versioned}` }),
+            )
+          }
+          const syncDefSafe = syncDef as SyncDefinition
+          const id = options?.id ?? ID.create()
+          const encoded = syncDefSafe.encode(data) as Record<string, unknown>
+          const row = yield* tx
+            .select({ seq: EventSequenceTable.seq, ownerID: EventSequenceTable.owner_id })
+            .from(EventSequenceTable)
+            .where(eq(EventSequenceTable.aggregate_id, aggregateID as string))
+            .get()
+            .pipe(Effect.orDie)
+          const latest = (row as { seq: number } | undefined)?.seq ?? -1
+          const seq = latest + 1
+          const existing = yield* tx
+            .select({ aggregateID: EventTable.aggregate_id, seq: EventTable.seq })
+            .from(EventTable)
+            .where(eq(EventTable.id, id))
+            .get()
+            .pipe(Effect.orDie)
+          if (existing) {
+            yield* Effect.die(
+              new InvalidSyncEventError({
+                type: definition.type,
+                message: `Event ${id} already exists at aggregate ${existing.aggregateID} sequence ${existing.seq}`,
+              }),
+            )
+          }
+          const payload: Payload = {
+            id,
+            type: definition.type,
+            version: syncSafe.version,
+            seq,
+            data: data as unknown as Record<string, unknown>,
+            ...(options?.location ? { location: options.location as Location.Ref } : {}),
+            ...(options?.metadata ? { metadata: options.metadata } : {}),
+          } as Payload
+          for (const guard of commitGuards) {
+            yield* guard(payload)
+          }
+          yield* tx
+            .insert(EventSequenceTable)
+            .values([{ aggregate_id: aggregateID as string, seq, owner_id: undefined }])
+            .onConflictDoUpdate({ target: EventSequenceTable.aggregate_id, set: { seq } })
+            .run()
+            .pipe(Effect.orDie)
+          yield* tx
+            .insert(EventTable)
+            .values([{ id, aggregate_id: aggregateID as string, seq, type: versioned, data: encoded }])
+            .run()
+            .pipe(Effect.orDie)
+          return payload as Payload<D>
+        })
+
+      const notifyCommitted = (event: Payload) =>
+        Effect.gen(function* () {
+          const definition = registry.get(event.type)
+          const sync = definition?.sync
+          if (sync && event.seq !== undefined) {
+            const aggregateID = (event.data as Record<string, unknown>)[sync.aggregate] as string | undefined
+            if (typeof aggregateID === "string") {
+              yield* wakeAggregate(aggregateID)
+            }
+          }
+          yield* Effect.forEach(syncHandlers, (h) => observe(event, "sync", h), { discard: true })
+          yield* notify(event, true)
+        })
 
       function publishEvent<D extends Definition>(event: Payload<D>, commit?: PublishOptions["commit"]) {
         return Effect.gen(function* () {
@@ -671,6 +777,8 @@ export const layerWith = (options?: LayerOptions) =>
         replayAll,
         remove,
         claim,
+        recordProjectedTx: recordProjectedTx as Interface["recordProjectedTx"],
+        notifyCommitted,
       })
     }),
   )

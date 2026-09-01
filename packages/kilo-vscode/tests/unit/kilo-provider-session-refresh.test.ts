@@ -6,6 +6,7 @@ import {
   SESSION_LOAD_MORE_LIMIT,
   type SessionRefreshContext,
 } from "../../src/kilo-provider-utils"
+import type { CatalogUpdate } from "../../src/agent-manager/host"
 
 // vscode mock is provided by the shared preload (tests/setup/vscode-mock.ts)
 const { KiloProvider } = await import("../../src/KiloProvider")
@@ -296,5 +297,64 @@ describe("KiloProvider pending session refresh", () => {
     })
 
     expect(errors).toEqual([])
+  })
+})
+
+describe("KiloProvider catalog forwarding", () => {
+  function catalogProvider() {
+    const client = createClient()
+    const connection = createConnection(client)
+    const provider = new KiloProvider({} as never, connection as never)
+    const internal = provider as unknown as ProviderInternals & {
+      webview: { postMessage: (message: unknown) => Promise<unknown> } | null
+      onCatalog: (cb: (update: CatalogUpdate) => void) => { dispose(): void }
+      postMessage: (msg: unknown) => void
+    }
+    // Ensure postMessage has a webview so it actually posts and also notifies catalog
+    internal.webview = { postMessage: async () => ({}) } as unknown as { postMessage: (message: unknown) => Promise<unknown> }
+    return { provider, internal }
+  }
+
+  it("forwards every sessionsLoaded to onCatalog including empty append final page", () => {
+    const { provider, internal } = catalogProvider()
+    const seen: CatalogUpdate[] = []
+    const sub = (provider as unknown as { onCatalog: (cb: (u: CatalogUpdate) => void) => { dispose(): void } }).onCatalog((u) => seen.push(u))
+
+    // First page full refresh
+    internal.postMessage({ type: "sessionsLoaded", sessions: [{ id: "ses_a" }], append: false, hasMore: true })
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toEqual({ ids: ["ses_a"], append: false, hasMore: true })
+
+    // Second page append with ids
+    internal.postMessage({ type: "sessionsLoaded", sessions: [{ id: "ses_b" }], append: true, hasMore: true })
+    expect(seen).toHaveLength(2)
+    expect(seen[1]).toEqual({ ids: ["ses_b"], append: true, hasMore: true })
+
+    // Empty append final page must still notify
+    internal.postMessage({ type: "sessionsLoaded", sessions: [], append: true, hasMore: false })
+    expect(seen).toHaveLength(3)
+    expect(seen[2]).toEqual({ ids: [], append: true, hasMore: false })
+
+    // Full refresh empty should also notify (append false)
+    internal.postMessage({ type: "sessionsLoaded", sessions: [], append: false, hasMore: false })
+    expect(seen).toHaveLength(4)
+    expect(seen[3]).toEqual({ ids: [], append: false, hasMore: false })
+
+    sub.dispose()
+    internal.postMessage({ type: "sessionsLoaded", sessions: [{ id: "ses_c" }], append: false, hasMore: false })
+    expect(seen).toHaveLength(4)
+  })
+
+  it("uses CatalogUpdate shape without broad cast", () => {
+    const { internal } = catalogProvider()
+    const seen: CatalogUpdate[] = []
+    ;(internal as unknown as { onCatalog: (cb: (u: CatalogUpdate) => void) => { dispose(): void } }).onCatalog((u: CatalogUpdate) => seen.push(u))
+    internal.postMessage({ type: "sessionsLoaded", sessions: [{ id: "ses_x" }], append: false, hasMore: false })
+    const first = seen[0] as CatalogUpdate
+    // Type shape must be CatalogUpdate, not a bare string[] cast
+    expect(Array.isArray(first.ids)).toBe(true)
+    expect(first.ids).toEqual(["ses_x"])
+    expect(typeof first.append).toBe("boolean")
+    expect(typeof first.hasMore).toBe("boolean")
   })
 })

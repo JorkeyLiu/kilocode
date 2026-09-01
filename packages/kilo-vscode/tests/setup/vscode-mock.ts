@@ -42,6 +42,8 @@ const mockVscode = {
     isTelemetryEnabled: false,
     shell: "/bin/bash",
     openExternal: noop,
+    onDidChangeTelemetryEnabled: () => ({ dispose: noop }),
+    clipboard: { writeText: async () => {} },
   },
   version: "1.90.0",
   workspace: {
@@ -172,6 +174,17 @@ const mockVscode = {
     constructor(private callback: () => void = noop) {}
     dispose() {
       this.callback()
+    }
+    static from(...disposables: Array<{ dispose(): void }>) {
+      return {
+        dispose: () => {
+          for (const d of disposables) {
+            try {
+              d.dispose()
+            } catch {}
+          }
+        },
+      }
     }
   },
   EventEmitter: class {

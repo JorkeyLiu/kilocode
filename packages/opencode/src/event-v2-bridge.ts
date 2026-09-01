@@ -37,16 +37,20 @@ export const layer = Layer.effect(
 
     const unsubscribe = yield* events.listen((event) =>
       Effect.gen(function* () {
+        const loc = event.location as unknown as Location.Info | undefined
         const ctx = yield* InstanceRef
-        const workspaceID = (yield* WorkspaceRef) ?? event.location?.workspaceID
+        const ambientWorkspace = yield* WorkspaceRef
+        const directory = loc ? (loc.directory as string) : (ctx?.directory ?? "global")
+        const project = loc ? (loc.project as { id: string } | undefined)?.id : ctx?.project?.id
+        const workspace = loc ? (loc.workspaceID as string | undefined) : ambientWorkspace
         // kilocode_change start - legacy bus and SSE consumers require the schema's encoded representation
         const definition = EventV2.registry.get(event.type)
         const data = definition ? EventWire.encode(definition.data, event.data) : event.data
         // kilocode_change end
         GlobalBus.emit("event", {
-          directory: event.location?.directory ?? ctx?.directory ?? "global", // kilocode_change - instance-less events are tagged "global" on the wire
-          project: ctx?.project.id,
-          workspace: workspaceID,
+          directory, // kilocode_change - instance-less events are tagged "global" on the wire
+          project,
+          workspace,
           payload: { id: event.id, type: event.type, properties: data }, // kilocode_change - encoded
         })
         const sync = definition?.sync
@@ -54,9 +58,9 @@ export const layer = Layer.effect(
         const aggregateID = (event.data as Record<string, unknown>)[sync.aggregate]
         if (typeof aggregateID !== "string") return
         GlobalBus.emit("event", {
-          directory: event.location?.directory ?? ctx?.directory ?? "global", // kilocode_change - instance-less events are tagged "global" on the wire
-          project: ctx?.project.id,
-          workspace: workspaceID,
+          directory, // kilocode_change - instance-less events are tagged "global" on the wire
+          project,
+          workspace,
           payload: {
             type: "sync",
             syncEvent: {

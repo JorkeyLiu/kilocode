@@ -239,6 +239,7 @@ import {
   agentOptions,
   assertNoWorktree,
   clickChildTaskLink,
+  clickRealNewSessionAction,
   clickRevertToHere,
   clickSidebarChild,
   clickSidebarTopic,
@@ -281,6 +282,7 @@ import {
 } from "./e2e-probe-dom"
 import { assertRealRestartReload, runRealRestartBoundaries } from "./e2e-probe-restart"
 import { assertR9ObservationLifecycle } from "./e2e-probe-r9"
+import { runGcLifecycleBoundaries } from "./e2e-probe-lifecycle"
 import { repoRootFrom } from "./p0-bench/repo-root"
 import {
   REAL_ROLLBACK_PROMPT,
@@ -293,8 +295,9 @@ import {
   waitForDock,
   waitForNoDock,
 } from "./e2e-probe-worktree"
+import { isDirectExecution } from "./e2e-direct"
 
-if (process.versions.bun) {
+if (process.versions.bun && isDirectExecution()) {
   console.error(
     "[probe] FATAL: this harness must run under Node, not Bun. " +
       "Playwright's connectOverCDP WS transport hangs under Bun against VS Code's CDP endpoint. " +
@@ -335,11 +338,13 @@ const timeoutMs = Number(
         ? 1_200_000
         : process.env.KILO_E2E_SCENARIO === "real-restart"
           ? 6_000_000
-          : process.env.KILO_E2E_SCENARIO === "worktree-removal"
-            ? 6_000_000
-            : process.env.KILO_E2E_SCENARIO === "r9-observation"
-              ? 1_200_000
-              : 300_000),
+          : process.env.KILO_E2E_SCENARIO === "real-lifecycle"
+            ? 1_200_000
+            : process.env.KILO_E2E_SCENARIO === "worktree-removal"
+              ? 6_000_000
+              : process.env.KILO_E2E_SCENARIO === "r9-observation"
+                ? 1_200_000
+                : 300_000),
 )
 
 // LOCK-002: scenario selection. `all` (default) runs every scenario in one VS
@@ -361,13 +366,14 @@ const SCENARIO_VALUES = [
   "real-completed",
   "real-overflow",
   "real-restart",
+  "real-lifecycle",
   "sidebar-removal",
   "worktree-removal",
   "cloud-claw-removal",
   "p3-4-removal",
   "r9-observation",
 ] as const
-function parseScenarios(value: string): Set<string> {
+export function parseScenarios(value: string): Set<string> {
   if (value === "all") return new Set(["tab-close", "child-task-order", "variant-memory"])
   if (
     value === "tab-close" ||
@@ -378,6 +384,7 @@ function parseScenarios(value: string): Set<string> {
     value === "real-completed" ||
     value === "real-overflow" ||
     value === "real-restart" ||
+    value === "real-lifecycle" ||
     value === "sidebar-removal" ||
     value === "worktree-removal" ||
     value === "cloud-claw-removal" ||
@@ -404,6 +411,7 @@ export function needsCanonicalStorage(value: string): boolean {
   return (
     parseScenarios(value).has("real-restart") ||
     parseScenarios(value).has("real-session") ||
+    parseScenarios(value).has("real-lifecycle") ||
     parseScenarios(value).has("r9-observation")
   )
 }
@@ -1269,12 +1277,11 @@ function writeRealSessionConfig(workspace: string, hangPort: number): string {
   return file
 }
 
-/** Click the real New session button in the tab bar (production add-pending path). */
-async function clickNewSession(frame: Frame, timeoutMs: number): Promise<void> {
-  const btn = frame.locator('.am-tab-add-split [data-component="icon-button"][data-icon="plus"]').first()
-  await btn.waitFor({ state: "visible", timeout: timeoutMs })
-  await btn.click({ timeout: timeoutMs })
-  console.log("[probe] clicked New session (production add-pending path)")
+/** Click the real New session button via visible semantic action (re-acquires AM frame, never via split container). */
+async function clickNewSession(browser: Browser, timeoutMs: number): Promise<Frame> {
+  const frame = await clickRealNewSessionAction(browser, timeoutMs)
+  console.log("[probe] clicked New session (production add-pending path via semantic action)")
+  return frame
 }
 
 /** Click the real Stop button (production abort path: webview → extension → SDK abort). */
@@ -1378,7 +1385,7 @@ async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scrat
   // anchored by any .am-tab-sortable tab (never rendered by the editor-tab
   // webview).
   const found = await findAgentManagerFrameAny(browser, 60_000)
-  const frame = found.frame
+  let frame = found.frame
   const snap = snapshotClient(scratch)
 
   const cstate = await requestRsCanonicalState(scratch, timeout)
@@ -1442,8 +1449,8 @@ async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scrat
   const sessionA = snapA.sessions[0]!
   console.log(`[probe] session A: ${sessionA.id}`)
 
-  // --- Phase 3 (H-8): second concurrent session with a different agent+model ---
-  await clickNewSession(frame, timeout)
+  // --- Phase 3 (H-8): second concurrent session with a different agent+model (re-acquired AM frame) ---
+  frame = await clickNewSession(browser, timeout)
   await waitForAgentOption(frame, plan.customAgentBLabel, timeout)
   await pickAgent(frame, plan.customAgentBLabel, timeout)
   await waitForLabel(frame, ".mode-switcher-trigger-label", plan.customAgentBLabel, timeout, "custom agent B selected")
@@ -2494,6 +2501,18 @@ async function prepareRealRestart(workspace: string, real: boolean): Promise<Scr
   return handle
 }
 
+async function prepareRealLifecycle(workspace: string, real: boolean): Promise<ScriptedModelHandle | undefined> {
+  if (!real) return undefined
+  const handle = await createScriptedModel(workspace)
+  const pluginToolUrl = pathToFileURL(join(root, "..", "plugin", "src", "tool.ts")).href
+  const scratch = join(workspace, "..")
+  const seed = writeRealRestartSeed(workspace, handle.port, pluginToolUrl, scratch)
+  console.log(
+    `[probe] real-lifecycle seed: ${seed.configFile} + ${seed.canonicalFile} (scripted model port ${handle.port})`,
+  )
+  return handle
+}
+
 /** Dispatch the selected focused scenarios to their assertion functions. */
 async function runScenario(
   browser: Browser,
@@ -2504,6 +2523,7 @@ async function runScenario(
   completed?: { handle: ScriptedModelHandle; mcpServerFile: string },
   overflowModel?: ScriptedModelHandle,
   wtModel?: ScriptedModelHandle,
+  lifecycleModel?: ScriptedModelHandle,
 ): Promise<void> {
   if (scenarios.has("tab-close")) {
     await assertTabCloseSuccessor(browser, plan, scratch)
@@ -2548,6 +2568,11 @@ async function runScenario(
   if (scenarios.has("r9-observation")) {
     await assertR9ObservationLifecycle(browser, plan, scratch)
     console.log("[probe] r9-observation lifecycle assertion passed")
+  }
+  if (scenarios.has("real-lifecycle")) {
+    if (!lifecycleModel) throw new Error("probe: real-lifecycle preparation missing")
+    await runGcLifecycleBoundaries(browser, plan, scratch, workspace, lifecycleModel)
+    console.log("[probe] real-lifecycle lifecycle assertion passed")
   }
 }
 
@@ -2634,6 +2659,7 @@ function readyMarkerFor(scenarios: Set<string>): string {
   if (scenarios.has("real-completed")) return "real-completed-ready"
   if (scenarios.has("real-overflow")) return "real-overflow-ready"
   if (scenarios.has("real-restart")) return "rr-ready"
+  if (scenarios.has("real-lifecycle")) return "lc-ready"
   if (scenarios.has("worktree-removal")) return "worktree-removal-ready"
   if (scenarios.has("cloud-claw-removal")) return "cloud-claw-removal-ready"
   if (scenarios.has("p3-4-removal")) return "p3-4-removal-ready"
@@ -2911,6 +2937,7 @@ async function main() {
   let completed: Awaited<ReturnType<typeof prepareRealCompleted>>
   let overflowModel: Awaited<ReturnType<typeof prepareRealOverflow>>
   let restartModel: Awaited<ReturnType<typeof prepareRealRestart>>
+  let lifecycleModel: Awaited<ReturnType<typeof prepareRealLifecycle>>
   let wtModel: Awaited<ReturnType<typeof prepareWorktreeRemoval>>
   try {
     // LOCK-013: test-only evidence contract — resolve/validate fail-fast (e2e-evidence.ts).
@@ -2937,6 +2964,7 @@ async function main() {
     // no-op dependency guard, plain single git repo) must also exist BEFORE VS
     // Code launches so the lazily-spawned CLI backend loads them at startup.
     wtModel = await prepareWorktreeRemoval(workspace, scenarios.has("worktree-removal"))
+    lifecycleModel = await prepareRealLifecycle(workspace, scenarios.has("real-lifecycle"))
     // canonical post-cutover wiring (P4.2 H-10/H-11 for real-restart + real-session):
     // allocate a run-owned isolated temp root at scratch/xdg-data/kilo, execute
     // the existing hidden `__internal-storage-cutover cutover --data-root` against
@@ -2997,6 +3025,8 @@ async function main() {
         console.error(`[probe] FAIL canonical archive stability: ${err instanceof Error ? err.message : String(err)}`)
       }
     } else {
+      const providerBaseURL =
+        scenarios.has("real-lifecycle") && lifecycleModel ? `http://127.0.0.1:${lifecycleModel.port}/v1` : undefined
       vscodeRun = launchVSCode({
         executable,
         runnerOut,
@@ -3007,6 +3037,7 @@ async function main() {
         extensions,
         workspace,
         port: cdpPort,
+        providerBaseURL,
       })
 
       await waitForCdp(cdpPort, 90_000)
@@ -3026,7 +3057,17 @@ async function main() {
             `topicRoot=${plan.topicRootId} topicChild=${plan.topicChildId} topicSibling=${plan.topicSiblingId} ` +
             `realAgent=${plan.customAgent} realAgentB=${plan.customAgentB} realModel=${plan.customProvider}/${plan.customModel}`,
         )
-        await runScenario(browser, scenarios, plan, scratch, workspace, completed, overflowModel, wtModel)
+        await runScenario(
+          browser,
+          scenarios,
+          plan,
+          scratch,
+          workspace,
+          completed,
+          overflowModel,
+          wtModel,
+          lifecycleModel,
+        )
         // Real-session post-boundary canonical archive stability: same fresh
         // canonical data root must show no archive mutation after the panel
         // close/reopen + session-switch boundaries. Reuses the same predicate
@@ -3056,7 +3097,7 @@ async function main() {
   }
 
   // Release the run-owned scripted/hang listeners before process settle + scratch deletion.
-  await closeHandles({ hang, completed, overflowModel, restartModel, wtModel })
+  await closeHandles({ hang, completed, overflowModel, restartModel, lifecycleModel, wtModel })
 
   // VS Code exits only after the runner sees the `done` marker (or times out).
   // Await it before touching the scratch dir so the unique user-data/extensions
@@ -3128,9 +3169,10 @@ async function closeHandles(opts: {
   completed: { handle: { close: () => Promise<void> } } | undefined
   overflowModel: { close: () => Promise<void> } | undefined
   restartModel: { close: () => Promise<void> } | undefined
+  lifecycleModel: { close: () => Promise<void> } | undefined
   wtModel: { close: () => Promise<void> } | undefined
 }) {
-  const { hang, completed, overflowModel, restartModel, wtModel } = opts
+  const { hang, completed, overflowModel, restartModel, lifecycleModel, wtModel } = opts
   if (hang) await hang.close().catch((err) => console.error("[probe] hang server close failed:", err))
   if (completed)
     await completed.handle.close().catch((err) => console.error("[probe] scripted model close failed:", err))
@@ -3138,6 +3180,8 @@ async function closeHandles(opts: {
     await overflowModel.close().catch((err) => console.error("[probe] overflow scripted model close failed:", err))
   if (restartModel)
     await restartModel.close().catch((err) => console.error("[probe] restart scripted model close failed:", err))
+  if (lifecycleModel)
+    await lifecycleModel.close().catch((err) => console.error("[probe] lifecycle scripted model close failed:", err))
   if (wtModel)
     await wtModel.close().catch((err) => console.error("[probe] worktree-removal scripted model close failed:", err))
 }
@@ -3176,7 +3220,9 @@ async function verifyCleanup(userData: string, cdpPort: number, scratch: string)
   if (!gone) throw new Error("cleanup: scratch dir could not be removed")
 }
 
-main().catch((err) => {
-  console.error(`[probe] FATAL: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
-  process.exit(1)
-})
+if (isDirectExecution()) {
+  main().catch((err) => {
+    console.error(`[probe] FATAL: ${err instanceof Error ? (err.stack ?? err.message) : String(err)}`)
+    process.exit(1)
+  })
+}

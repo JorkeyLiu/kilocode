@@ -41,6 +41,12 @@ export interface Store {
 // Session provider (abstracts KiloProvider interactions)
 // ---------------------------------------------------------------------------
 
+export interface CatalogUpdate {
+  ids: string[]
+  append?: boolean
+  hasMore?: boolean
+}
+
 export interface SessionProvider {
   getSessionDirectories(): ReadonlyMap<string, string>
   getSessionInfo?(id: string): Promise<Session | undefined>
@@ -57,6 +63,8 @@ export interface SessionProvider {
   acknowledgeDraft(draftID: string, sessionID: string): void
   abortSessions(ids: readonly string[]): Promise<void>
   dispose(): void
+  /** Optional catalog hook for persistence reconciliation (internal). */
+  onCatalog?(cb: (update: CatalogUpdate) => void): Disposable
 }
 
 // ---------------------------------------------------------------------------
@@ -136,6 +144,9 @@ export interface Host {
 
   /** Open a URL in the user's default browser. */
   openExternal(url: string): void
+
+  /** Fixture-only: targeted reload preserving provider/streams/panel; only HTML reassigned. */
+  reloadAgentManagerPanelForFixture?(): Promise<PanelContext | void>
 
   /** Dispose all host resources. */
   dispose(): void

@@ -14,9 +14,7 @@ import { Project, SyntaxKind } from "ts-morph"
 
 const ROOT = path.resolve(import.meta.dir, "../..")
 const KILO_PROVIDER_FILE = path.join(ROOT, "src/KiloProvider.ts")
-const CSS_FILES = [
-  path.join(ROOT, "webview-ui/agent-manager/agent-manager.css"),
-]
+const CSS_FILES = [path.join(ROOT, "webview-ui/agent-manager/agent-manager.css")]
 const TSX_FILES = [
   path.join(ROOT, "webview-ui/agent-manager/AgentManagerApp.tsx"),
   path.join(ROOT, "webview-ui/agent-manager/SidebarSessionList.tsx"),
@@ -185,10 +183,29 @@ describe("Agent Manager Provider Messages", () => {
     expect(getMethodBody("onMessage")).toContain("if (this.shouldWaitForState(m)) await this.waitForStateReady(m.type)")
   })
 
-  it("initializeState pushes empty state for local-only mode", () => {
-    const body = getMethodBody("initializeState")
-    // Phase 4C: initializeState just calls pushState() — no more worktree recovery
-    expect(body).toContain("pushState()")
+  it("initializeState delegates to runInitialization which pushes panel state on every path", () => {
+    // UI-only lifecycle: workspace persistence owner + runInitialization serialization unchanged.
+    // initializeState must only serialize via initializationOp and delegate to runInitialization;
+    // runInitialization flushes/loads authoritative/pending fallback then pushes current panel state.
+    const init = getMethodBody("initializeState")
+    expect(init, "initializeState must delegate to runInitialization").toContain("runInitialization")
+    expect(init, "initializeState must serialize via initializationOp").toContain("initializationOp")
+    expect(init, "initializeState must not directly pushState — owner is runInitialization").not.toContain("pushState")
+    expect(init, "initializeState must not directly load persisted state").not.toContain("loadPersisted")
+    expect(init, "initializeState must not directly flush dirty persistence").not.toContain("flush()")
+
+    const run = getMethodBody("runInitialization")
+    // runInitialization owns the pushState contract on all success/dirty-fallback paths
+    expect(run, "runInitialization must flush dirty persistence when hasDirty").toContain("this.flush()")
+    expect(run, "runInitialization must load authoritative persisted state").toContain("this.loadPersisted()")
+    expect(run, "runInitialization dirty-fallback path must restore pending snapshot").toContain("pendingSnapshot")
+    expect(run, "runInitialization must push current panel state via pushState").toContain("this.pushState()")
+    // Both the dirty-fallback early-return and the authoritative-load fallthrough must push guarded by panel
+    const guarded = [...run.matchAll(/if\s*\(\s*this\.panel\s*\)\s*this\.pushState\(\)/g)]
+    expect(guarded.length, "runInitialization must have guarded pushState on dirty fallback + authoritative path").toBeGreaterThanOrEqual(2)
+    // Ensure pushes are not arbitrary file-wide but owned by runInitialization
+    const pushes = [...run.matchAll(/this\.pushState\(\)/g)]
+    expect(pushes.length, "runInitialization must own at least two pushState calls").toBeGreaterThanOrEqual(2)
   })
 
   it("async shutdown waits for terminal router cleanup", () => {
@@ -358,27 +375,48 @@ describe("Agent Manager Provider — onMessage routing", () => {
 })
 
 // ---------------------------------------------------------------------------
-// Webview — non-git skeleton fix
+// Webview — catalog readiness contract
 // ---------------------------------------------------------------------------
 
-describe("Agent Manager Webview — non-git sessionsLoaded fix", () => {
+describe("Agent Manager Webview — catalog readiness contract", () => {
   const tsx = readAllTsx()
 
   /**
-   * Regression: when isGitRepo is false, the Kilo server never sends a
-   * "sessionsLoaded" message, so the skeleton was stuck forever.
-   * The fix must set sessionsLoaded(true) when receiving a state message
-   * with isGitRepo === false.
+   * Contract: catalog readiness (sessionsLoaded) comes ONLY from the real
+   * "sessionsLoaded" backend message. Durable `agentManager.state` restores
+   * IDs/order/active for hydration but must never mark the catalog as ready —
+   * conflating persisted UI state with authoritative backend catalog would
+   * mask missing/deleted sessions. Non-git intent is preserved via the
+   * `isGitRepo` signal stored from state and rendered inside the
+   * sessionsLoaded-gated UI, not via state-driven readiness.
    */
-  it("sets sessionsLoaded when agentManager.state arrives with isGitRepo false", () => {
-    // Find the agentManager.state handler block
+  it("agentManager.state does NOT set catalog readiness — only sessionsLoaded does", () => {
     const start = tsx.indexOf('"agentManager.state"')
     expect(start, "agentManager.state handler must exist").toBeGreaterThan(-1)
+    const snippet = tsx.slice(start, start + 2500)
+    expect(
+      snippet,
+      "agentManager.state must NOT call setSessionsLoaded — catalog readiness comes only from real sessionsLoaded message",
+    ).not.toContain("setSessionsLoaded")
+    expect(snippet, "state handler must still capture isGitRepo for non-git UI").toContain("setIsGitRepo")
+  })
+
+  it("sessionsLoaded handler is the sole setter of catalog readiness", () => {
+    const start = tsx.indexOf('"sessionsLoaded"')
+    expect(start, "sessionsLoaded handler must exist").toBeGreaterThan(-1)
     const snippet = tsx.slice(start, start + 800)
-    expect(snippet, "must call setSessionsLoaded in the non-git branch").toContain("setSessionsLoaded")
-    expect(snippet, "must check isGitRepo === false before setting sessionsLoaded").toMatch(
-      /isGitRepo.*false|false.*isGitRepo/,
-    )
+    expect(snippet, "sessionsLoaded handler must set catalog readiness").toContain("setSessionsLoaded(true)")
+    expect(snippet, "sessionsLoaded handler must accumulate catalog").toContain("accumulateCatalog")
+    expect(snippet, "sessionsLoaded handler must trigger reconciliation").toContain("applyReconciliation")
+  })
+
+  it("preserves non-git behavior via isGitRepo signal without conflating with catalog readiness", () => {
+    expect(tsx, "non-git notice must still exist").toContain("am-not-git-notice")
+    expect(tsx, "non-git notice must be gated by isGitRepo signal").toContain("!isGitRepo()")
+    const skeletonIdx = tsx.indexOf("when={sessionsLoaded()}")
+    const noticeIdx = tsx.indexOf("am-not-git-notice")
+    expect(skeletonIdx, "skeleton must gate on sessionsLoaded").toBeGreaterThan(-1)
+    expect(noticeIdx, "non-git notice must appear after sessionsLoaded gate").toBeGreaterThan(skeletonIdx)
   })
 })
 
@@ -939,5 +977,44 @@ describe("Agent Manager — P1 derived Topic navigation", () => {
   it("AgentManagerApp still uses SidebarSessionList unchanged as the sidebar", () => {
     const app = fs.readFileSync(AGENT_MANAGER_APP_FILE, "utf-8")
     expect(app).toContain("<SidebarSessionList")
+  })
+})
+
+describe("Agent Manager — Gate C in-flight preservation and bottom-page derivation", () => {
+  const app = fs.readFileSync(AGENT_MANAGER_APP_FILE, "utf-8")
+  it("tracks recentRealIds from sessionCreated and consumes on catalog inclusion", () => {
+    expect(app).toContain("recentRealIds")
+    expect(app).toContain("recentRealIds.add(created.session.id)")
+    expect(app).toContain("for (const id of [...recentRealIds]) if (latestCatalog.has(id)) recentRealIds.delete(id)")
+    expect(app).toContain("recentRealIds.delete(sid)")
+  })
+  it("passes combined preserve (catalogPreserve + recentRealIds) to reconcile", () => {
+    expect(app).toContain("combinedPreserve")
+    expect(app).toContain("preserveSessionIds: combinedPreserve")
+  })
+  it("reconciliation needsPending does not gate bottom page (visible pending)", () => {
+    // pending created by reconciliation must be visible, not gated hidden
+    const block = app.slice(app.indexOf("if (out.needsPending)"), app.indexOf("if (out.needsPending)") + 600)
+    expect(block).toContain("setIsBottomPage(false)")
+    expect(block).not.toContain("setIsBottomPage(true)")
+  })
+  it("reconciliation final invariant derives bottom-page from tab registry", () => {
+    expect(app).toContain("if (isBottomPage())")
+    expect(app).toContain("finalIds.length > 0")
+  })
+  it("does not synthesize sessionsLoaded/sessionCreated/sessionAdded/title", () => {
+    // Only real events may change state — no synthetic injections
+    expect(app).not.toContain('postMessage({ type: "sessionsLoaded"')
+    expect(app).not.toContain('postMessage({ type: "sessionCreated"')
+    expect(app).not.toContain('postMessage({ type: "agentManager.sessionAdded"')
+    expect(app).not.toContain("synthetic")
+  })
+  it("provider reconcile preserves recentSessions until catalog includes", () => {
+    const provider = fs.readFileSync(PROVIDER_FILE, "utf-8")
+    expect(provider).toContain("recentSessions")
+    expect(provider).toContain("recentSessions.add(m.sessionId)")
+    expect(provider).toContain("recentSessions.delete")
+    expect(provider).toContain("effective")
+    expect(provider).toContain("new Set([...catalog, ...this.recentSessions])")
   })
 })

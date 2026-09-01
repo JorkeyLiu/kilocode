@@ -106,6 +106,10 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     count: 131,
     reason: "B2 durable sessionUpdate integration test via AppRuntime and InstanceRef (title-only, replay, stale, scope, validation, rollback, legacy, HTTP, successive distinct, replay after mutation, private read-only, context mismatch, malformed, not-found, fd-carrier, HTTP unknown fields, partial identity, private explicit null, private opId collision, reader-failure replay, barrier, migration snapshot, concurrency, malformed object snapshot, single lease, rollback, omitted-context durable HTTP 400, HTTP concurrent distinct via Server.listen)",
   },
+  "kilocode/session/session-update-b2-event.test.ts": {
+    count: 146,
+    reason: "B2 EventV2 atomic propagation integration test via AppRuntime and InstanceRef (concurrent distinct, fault-injection rollback, aggregateEvents propagation, prior/future generation, same-key replay, seq monotonic, location regressions, notify isolation, deterministic aggregate rollback, present invalid resultSnapshot fail-closed, empty-string present invalid, JSON null text present invalid)",
+  },
 }
 
 const owned = (file: string) => file.startsWith("kilocode/") || file.startsWith("kilo-sessions/")

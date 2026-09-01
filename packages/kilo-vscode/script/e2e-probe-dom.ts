@@ -5,11 +5,25 @@
  * node fs) and are used by every scenario.
  */
 
+import { createHash } from "node:crypto"
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Browser, Frame, Page } from "@playwright/test"
 import type { BackendSnapshot } from "../src/agent-manager/fixture-backend"
 import { isWrongPin, withPin, type PinExpectation } from "./e2e-pin"
+
+const LC_SELECT_VERSION = "lc-select-v1"
+
+function lcHash(v: string): string {
+  return createHash("sha256").update(v).digest("hex").slice(0, 16)
+}
+
+function lcBucket(remaining: number): string {
+  if (remaining <= 0) return "0"
+  if (remaining < 1_000) return "lt1s"
+  if (remaining < 5_000) return "lt5s"
+  return "ge5s"
+}
 
 export const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
@@ -116,9 +130,62 @@ export function snapshotClient(scratch: string, prefix = "real-snap") {
  * `index.html` path. Re-enumerates contexts/pages on every poll, so it also
  * survives the page churn of workbench.action.reloadWindow (Phase C).
  */
+async function throwRedactedFrameLookupFailed(browser: Browser): Promise<never> {
+  let contexts = 0
+  let pages = 0
+  let totalFrames = 0
+  let vscodeWebviewFrames = 0
+  let enumerationFailed = false
+  try {
+    const ctxs = browser.contexts()
+    contexts = ctxs.length
+    for (const ctx of ctxs) {
+      const ps = ctx.pages()
+      pages += ps.length
+      for (const page of ps) {
+        const frames = page.frames()
+        totalFrames += frames.length
+        for (const frame of frames) {
+          if (frame.url().includes("vscode-webview")) vscodeWebviewFrames++
+        }
+      }
+    }
+  } catch (err) {
+    void err
+    enumerationFailed = true
+  }
+  throw new Error(
+    `probe: Agent Manager webview frame not found (any tab). frame-lookup-failed counts=${JSON.stringify({ contexts, pages, totalFrames, vscodeWebviewFrames, enumerationFailed })} enums=${JSON.stringify({ urlKind: "vscode-webview", bodyCategory: "unknown" })}`,
+  )
+}
+
+async function throwVerboseFrameLookupFailed(browser: Browser): Promise<never> {
+  const details: string[] = []
+  for (const ctx of browser.contexts()) {
+    for (const page of ctx.pages()) {
+      for (const frame of page.frames()) {
+        if (!frame.url().includes("vscode-webview")) continue
+        const state = await frame
+          .evaluate(() => ({
+            amLayout: document.querySelectorAll(".am-layout").length,
+            amTabs: document.querySelectorAll(".am-tab-sortable[data-tab-id]").length,
+            bodyLen: (document.body?.innerHTML ?? "").length,
+            text: (document.body?.innerText ?? "").slice(0, 200),
+          }))
+          .catch(() => ({ amLayout: -1, amTabs: -1, bodyLen: -1, text: "<unreadable>" }))
+        details.push(`    frame: ${frame.url().slice(0, 140)} ${JSON.stringify(state)}`)
+      }
+    }
+  }
+  throw new Error(
+    `probe: Agent Manager webview frame not found (any tab).\n${details.join("\n")}\n${await describeTargets(browser)}`,
+  )
+}
+
 export async function findAgentManagerFrameAny(
   browser: Browser,
   timeoutMs: number,
+  opts: { redacted?: boolean } = {},
 ): Promise<{ page: Page; frame: Frame; url: string }> {
   const deadline = Date.now() + timeoutMs
   let found: { page: Page; frame: Frame; url: string } | undefined
@@ -143,31 +210,21 @@ export async function findAgentManagerFrameAny(
       if (found) break
     }
     if (found) break
-    if (Date.now() > deadline) {
-      const details: string[] = []
-      for (const ctx of browser.contexts()) {
-        for (const page of ctx.pages()) {
-          for (const frame of page.frames()) {
-            if (!frame.url().includes("vscode-webview")) continue
-            const state = await frame
-              .evaluate(() => ({
-                amLayout: document.querySelectorAll(".am-layout").length,
-                amTabs: document.querySelectorAll(".am-tab-sortable[data-tab-id]").length,
-                bodyLen: (document.body?.innerHTML ?? "").length,
-                text: (document.body?.innerText ?? "").slice(0, 200),
-              }))
-              .catch(() => ({ amLayout: -1, amTabs: -1, bodyLen: -1, text: "<unreadable>" }))
-            details.push(`    frame: ${frame.url().slice(0, 140)} ${JSON.stringify(state)}`)
-          }
-        }
-      }
-      throw new Error(
-        `probe: Agent Manager webview frame not found (any tab).\n${details.join("\n")}\n${await describeTargets(browser)}`,
-      )
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      if (opts.redacted) await throwRedactedFrameLookupFailed(browser)
+      await throwVerboseFrameLookupFailed(browser)
     }
-    await sleep(250)
+    await sleep(Math.min(250, remaining))
   }
   return found
+}
+
+export async function findAgentManagerFrameAnyRedacted(
+  browser: Browser,
+  timeoutMs: number,
+): Promise<{ page: Page; frame: Frame; url: string }> {
+  return findAgentManagerFrameAny(browser, timeoutMs, { redacted: true })
 }
 
 /** Session tabs only — the `pending:` draft tabs are excluded. */
@@ -327,7 +384,12 @@ export async function sendTurnWithPin(
 }
 
 /** Poll until the given text appears anywhere in the real webview DOM. */
-export async function expectTranscriptText(frame: Frame, text: string, timeoutMs: number, label: string): Promise<void> {
+export async function expectTranscriptText(
+  frame: Frame,
+  text: string,
+  timeoutMs: number,
+  label: string,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const hit = await frame
@@ -369,7 +431,7 @@ export async function tabStates(frame: Frame): Promise<Array<{ id: string; label
     for (const container of containers) {
       const id = container.getAttribute("data-tab-id") ?? ""
       const label = container.querySelector(".am-tab-label")?.textContent?.trim() ?? ""
-      if (label) out.push({ id, label })
+      if (id) out.push({ id, label })
     }
     return out
   })
@@ -578,10 +640,245 @@ export async function waitForModelSelected(
   }
 }
 
-export async function clickTab(frame: Frame, tabId: string, timeoutMs: number): Promise<void> {
+export async function waitForTab(frame: Frame, tabId: string, timeoutMs: number): Promise<void> {
   const tab = frame.locator(`.am-tab-sortable[data-tab-id="${tabId}"]`).first()
   await tab.waitFor({ state: "visible", timeout: timeoutMs })
-  await tab.click({ timeout: timeoutMs })
+}
+
+export async function waitForTabTarget(frame: Frame, tabId: string, timeoutMs: number): Promise<void> {
+  const target = frame.locator(`.am-tab-sortable[data-tab-id="${tabId}"] .am-tab-target`).first()
+  await target.waitFor({ state: "visible", timeout: timeoutMs })
+}
+
+export async function clickVisibleTabTarget(frame: Frame, tabId: string, timeoutMs: number): Promise<void> {
+  const target = frame.locator(`.am-tab-sortable[data-tab-id="${tabId}"] .am-tab-target`).first()
+  await target.click({ timeout: timeoutMs })
+}
+
+function tabDeadlineError(targetHash: string, activeHash: string, bucket: string, stage: string): Error {
+  return new Error(`probe: tab-select deadline stage=${stage} targetHash=${targetHash} activeHash=${activeHash} bucket=${bucket}`)
+}
+
+function tabStageError(stage: string, targetHash: string, bucket: string): Error {
+  return new Error(`probe: tab-select ${stage} failed targetHash=${targetHash} bucket=${bucket}`)
+}
+
+export async function clickTab(frame: Frame, tabId: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  const targetHash = lcHash(tabId)
+  const remainingOrThrow = (active = "<detached>"): number => {
+    const remaining = deadline - Date.now()
+    if (remaining <= 0) {
+      const activeHash = lcHash(active)
+      throw tabDeadlineError(targetHash, activeHash, lcBucket(remaining), "clickTab")
+    }
+    return remaining
+  }
+  const remainingWait = remainingOrThrow("<detached>")
+  try {
+    await waitForTabTarget(frame, tabId, remainingWait)
+  } catch (err) {
+    void err
+    throw tabStageError("wait", targetHash, lcBucket(remainingWait))
+  }
+  const remainingClick = remainingOrThrow("<detached>")
+  try {
+    await clickVisibleTabTarget(frame, tabId, remainingClick)
+  } catch (err) {
+    void err
+    throw tabStageError("click", targetHash, lcBucket(remainingClick))
+  }
+}
+
+export async function waitForActiveTabId(frame: Frame, expectedId: string, timeoutMs: number): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  const targetHash = lcHash(expectedId)
+  for (;;) {
+    const active = await activeTabId(frame).catch(() => undefined)
+    if (active === expectedId) return
+    if (Date.now() > deadline) {
+      const activeHash = lcHash(active ?? "none")
+      const remaining = deadline - Date.now()
+      throw tabDeadlineError(targetHash, activeHash, lcBucket(remaining), "poll")
+    }
+    await sleep(250)
+  }
+}
+
+export async function selectLifecycleTab(
+  browser: Browser,
+  frame: Frame,
+  tabId: string,
+  timeoutMs: number,
+): Promise<Frame> {
+  const deadline = Date.now() + timeoutMs
+  const targetHash = lcHash(tabId)
+  let waitAttempts = 0
+  let clickAttempts = 0
+  let reacquires = 0
+  let detachedSeen = 0
+  let activePolls = 0
+  let lastActive: string | undefined
+  let stage: string = "init"
+  let lastRemaining = timeoutMs
+  let cur = frame
+
+  const frameHashSync = (f: Frame): string => {
+    try {
+      const u = (f as unknown as { url?: () => string }).url?.()
+      if (typeof u === "string" && u.length > 0) return lcHash(u)
+    } catch (err) {
+      void err
+      return "none"
+    }
+    return "none"
+  }
+
+  const emit = (s: string, active?: string, remaining?: number): void => {
+    stage = s
+    if (active !== undefined) lastActive = active
+    const r = remaining ?? lastRemaining
+    lastRemaining = r
+    const activeHash = lastActive ? lcHash(lastActive) : "none"
+    const bucket = lcBucket(r)
+    let fHash = "none"
+    try {
+      fHash = frameHashSync(cur)
+    } catch (err) {
+      void err
+      fHash = "none"
+    }
+    const payload = {
+      v: LC_SELECT_VERSION,
+      targetHash,
+      activeHash,
+      stage,
+      waitAttempts,
+      clickAttempts,
+      reacquires,
+      detachedSeen,
+      activePolls,
+      remainingBucket: bucket,
+      frameHash: fHash,
+    }
+    console.log(`[probe] lifecycle-select ${JSON.stringify(payload)}`)
+  }
+
+  const remainingOrThrow = (active?: string): number => {
+    const remaining = deadline - Date.now()
+    lastRemaining = remaining
+    if (active !== undefined) lastActive = active
+    if (remaining <= 0) {
+      emit("deadline", active, remaining)
+      const activeHash = lcHash(active ?? "none")
+      throw tabDeadlineError(targetHash, activeHash, lcBucket(remaining), "deadline")
+    }
+    return remaining
+  }
+
+  // initial detach reacquire (positive frame, no extra sampling)
+  {
+    remainingOrThrow("<detached>")
+    let detached = false
+    try {
+      detached = cur.isDetached()
+    } catch {
+      detached = true
+    }
+    if (detached) {
+      detachedSeen++
+      stage = "detach"
+      const remaining = remainingOrThrow("<detached>")
+      const fresh = await findAgentManagerFrameAnyRedacted(browser, remaining)
+      cur = fresh.frame
+      reacquires++
+    }
+  }
+  {
+    // Wait stage outside retry boundary — wait failure never retries even if detached
+    stage = "wait"
+    const remainingWait = remainingOrThrow("<detached>")
+    waitAttempts++
+    try {
+      await waitForTabTarget(cur, tabId, remainingWait)
+    } catch (err) {
+      void err
+      emit("wait", "<detached>", remainingWait)
+      throw tabStageError("wait", targetHash, lcBucket(remainingWait))
+    }
+    stage = "click"
+    const remainingClick = remainingOrThrow("<detached>")
+    clickAttempts++
+    try {
+      await clickVisibleTabTarget(cur, tabId, remainingClick)
+    } catch (err) {
+      void err
+      remainingOrThrow("<detached>")
+      let isDetached = false
+      try {
+        isDetached = cur.isDetached()
+      } catch (err2) {
+        void err2
+        isDetached = true
+      }
+      if (isDetached) {
+        detachedSeen++
+        emit("click", "<detached>", remainingClick)
+        const rem2 = remainingOrThrow("<detached>")
+        const fresh = await findAgentManagerFrameAnyRedacted(browser, rem2)
+        cur = fresh.frame
+        reacquires++
+        stage = "wait"
+        const remWait2 = remainingOrThrow("<detached>")
+        waitAttempts++
+        try {
+          await waitForTabTarget(cur, tabId, remWait2)
+        } catch (err2) {
+          void err2
+          emit("wait", "<detached>", remWait2)
+          throw tabStageError("wait", targetHash, lcBucket(remWait2))
+        }
+        stage = "click"
+        const rem3 = remainingOrThrow("<detached>")
+        clickAttempts++
+        try {
+          await clickVisibleTabTarget(cur, tabId, rem3)
+        } catch (err3) {
+          void err3
+          emit("click", "<detached>", rem3)
+          throw tabStageError("click", targetHash, lcBucket(rem3))
+        }
+      } else {
+        emit("click", "<detached>", remainingClick)
+        throw tabStageError("click", targetHash, lcBucket(remainingClick))
+      }
+    }
+  }
+  for (;;) {
+    remainingOrThrow("<detached>")
+    let needReacquire = false
+    try {
+      needReacquire = cur.isDetached()
+    } catch {
+      needReacquire = true
+    }
+    if (needReacquire) {
+      detachedSeen++
+      stage = "detach"
+      const remaining = remainingOrThrow("<detached>")
+      const fresh = await findAgentManagerFrameAnyRedacted(browser, remaining)
+      cur = fresh.frame
+      reacquires++
+    }
+    stage = "poll"
+    remainingOrThrow("<detached>")
+    const active = await activeTabId(cur).catch(() => undefined)
+    lastActive = active
+    activePolls++
+    if (active === tabId) return cur
+    const remaining = remainingOrThrow(active ?? "<none>")
+    await sleep(Math.min(250, remaining))
+  }
 }
 
 /**
@@ -722,7 +1019,12 @@ export async function headerTitle(frame: Frame): Promise<string | undefined> {
 }
 
 /** Poll until the chat header title equals the expected session title. */
-export async function expectHeaderTitle(frame: Frame, expected: string, timeoutMs: number, label: string): Promise<void> {
+export async function expectHeaderTitle(
+  frame: Frame,
+  expected: string,
+  timeoutMs: number,
+  label: string,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const title = await headerTitle(frame)
@@ -1042,7 +1344,9 @@ export async function requestSeedCredential(scratch: string, timeoutMs = 60_000)
   // the fresh command execution, not a stale pre-rr-ready write.
   try {
     rmSync(file, { force: true } as never)
-  } catch {}
+  } catch (err) {
+    void err
+  }
   writeFileSync(marker, "ok")
   await waitForFile(file, timeoutMs, "rr-credential.json (credential seeding probe)")
   return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
@@ -1073,14 +1377,21 @@ export async function requestRsSeedCredential(scratch: string, timeoutMs = 60_00
   const file = join(scratch, "rs-credential.json")
   try {
     rmSync(file, { force: true } as never)
-  } catch {}
+  } catch (err) {
+    void err
+  }
   writeFileSync(marker, "ok")
   await waitForFile(file, timeoutMs, "rs-credential.json (credential seeding probe)")
   return JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>
 }
 
 /** Poll until the given file's bytes exactly equal `expected`. */
-export async function waitForFileBytes(file: string, expected: string, timeoutMs: number, label: string): Promise<void> {
+export async function waitForFileBytes(
+  file: string,
+  expected: string,
+  timeoutMs: number,
+  label: string,
+): Promise<void> {
   const deadline = Date.now() + timeoutMs
   for (;;) {
     const bytes = existsSync(file) ? readFileSync(file, "utf8") : "<missing>"
@@ -1134,6 +1445,274 @@ export async function expectBannerFile(frame: Frame, file: string, timeoutMs: nu
       throw new Error(`probe: ${label} failed: banner filenames=[${names.join(", ")}]`)
     }
     await sleep(250)
+  }
+}
+
+/**
+ * Pure decision for the visible "New session" primary action.
+ *
+ * Candidates are split into role-based (accessible name "New session") and
+ * fallback icon-based (icon-button plus). Preference is role; fallback is used
+ * only when no role candidate is visible. Requires exactly one visible primary
+ * candidate before a click — multiple visible candidates fail closed. Never
+ * uses the tab-add split container hierarchy as a locator scope.
+ */
+export type NewSessionRoleFallback = "role" | "fallback"
+export interface NewSessionCandidateDecisionInputs {
+  roleCandidates: Array<{ visible: boolean }>
+  fallbackCandidates: Array<{ visible: boolean }>
+}
+export function decideNewSessionCandidates(
+  inputs: NewSessionCandidateDecisionInputs,
+): { pick: NewSessionRoleFallback } | { error: string } {
+  const roleVisible = inputs.roleCandidates.filter((c) => c.visible).length
+  const fallbackVisible = inputs.fallbackCandidates.filter((c) => c.visible).length
+  if (roleVisible === 1) return { pick: "role" }
+  if (roleVisible > 1)
+    return {
+      error: `ambiguous New session role candidates visible=${roleVisible} totalRole=${inputs.roleCandidates.length} fallbackVisible=${fallbackVisible}`,
+    }
+  if (roleVisible === 0 && fallbackVisible === 1) return { pick: "fallback" }
+  if (roleVisible === 0 && fallbackVisible > 1)
+    return {
+      error: `ambiguous fallback New session candidates visible=${fallbackVisible} totalFallback=${inputs.fallbackCandidates.length} roleVisible=${roleVisible}`,
+    }
+  return {
+    error: `no visible New session candidate roleCount=${inputs.roleCandidates.length} fallbackCount=${inputs.fallbackCandidates.length} roleVisible=${roleVisible} fallbackVisible=${fallbackVisible}`,
+  }
+}
+
+async function classifyNewSessionFrame(frame: Frame): Promise<Record<string, unknown>> {
+  try {
+    return await frame.evaluate(() => {
+      const tabs = document.querySelectorAll(".am-tab-sortable[data-tab-id]").length
+      const emptyEl = document.querySelector(".am-empty-state") as HTMLElement | null
+      const emptyVisible = (() => {
+        if (!emptyEl) return false
+        const s = window.getComputedStyle(emptyEl)
+        const r = emptyEl.getBoundingClientRect()
+        return s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0
+      })()
+      const tabBar = document.querySelector(".am-tab-bar:not(.am-tab-bar-empty)")
+      const tabBarVisible = (() => {
+        if (!tabBar) return false
+        const s = window.getComputedStyle(tabBar as Element)
+        const r = (tabBar as Element).getBoundingClientRect()
+        return s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0
+      })()
+      const tabBarEmpty = document.querySelector(".am-tab-bar-empty")
+      const tabBarEmptyVisible = (() => {
+        if (!tabBarEmpty) return false
+        const s = window.getComputedStyle(tabBarEmpty as Element)
+        const r = (tabBarEmpty as Element).getBoundingClientRect()
+        return s.display !== "none" && s.visibility !== "hidden" && r.width > 0 && r.height > 0
+      })()
+      const bottomGated = !tabBarVisible && tabBarEmptyVisible
+      return { tabCount: tabs, emptyVisible, tabBarVisible, tabBarEmptyVisible, bottomGated }
+    })
+  } catch (err) {
+    void err
+    return { tabCount: -1, emptyVisible: false, tabBarVisible: false, tabBarEmptyVisible: false, bottomGated: false }
+  }
+}
+
+async function collectNewSessionCandidates(frame: Frame): Promise<{
+  roleCount: number
+  fallbackCount: number
+  roleVisibleCount: number
+  fallbackVisibleCount: number
+  roleCandidates: Array<{ visible: boolean }>
+  fallbackCandidates: Array<{ visible: boolean }>
+}> {
+  const roleLocator = frame.getByRole("button", { name: "New session", exact: true })
+  const fallbackLocator = frame.locator('button[data-component="icon-button"][data-icon="plus"]')
+  let roleCount = -1
+  let fallbackCount = -1
+  let roleVisibleCount = 0
+  let fallbackVisibleCount = 0
+  let roleCandidates: Array<{ visible: boolean }> = []
+  let fallbackCandidates: Array<{ visible: boolean }> = []
+  try {
+    roleCount = await roleLocator.count()
+    const handles = await roleLocator.all().catch(() => [])
+    for (const h of handles) {
+      const vis = await h.isVisible().catch(() => false)
+      roleCandidates.push({ visible: vis })
+      if (vis) roleVisibleCount++
+    }
+    if (roleCount === 0) roleCandidates = []
+  } catch (err) {
+    void err
+    roleCount = -1
+  }
+  try {
+    fallbackCount = await fallbackLocator.count()
+    const fbHandles = await fallbackLocator.all().catch(() => [])
+    for (const h of fbHandles) {
+      const vis = await h.isVisible().catch(() => false)
+      fallbackCandidates.push({ visible: vis })
+      if (vis) fallbackVisibleCount++
+    }
+    if (fallbackCount === 0) fallbackCandidates = []
+  } catch (err) {
+    void err
+    fallbackCount = -1
+  }
+  return { roleCount, fallbackCount, roleVisibleCount, fallbackVisibleCount, roleCandidates, fallbackCandidates }
+}
+
+/**
+ * Bounded helper to click the real visible "New session" primary action.
+ *
+ * Each invocation re-acquires the current Agent Manager frame via
+ * findAgentManagerFrameAny (positive AM identity, never first non-AM), then
+ * observes visible candidates in that frame:
+ *   - preferred: getByRole button named New session exact
+ *   - fallback: icon-button plus scoped by the AM frame
+ * Distinct from the dropdown trigger (More new-tab options) and the hidden
+ * menu item (New Session). Fails closed when zero or multiple visible primary
+ * candidates exist, emitting redacted diagnostics (counts/visibility/frame
+ * detached + tab/empty classification) without leaking raw titles/session ids.
+ */
+export async function clickRealNewSessionAction(browser: Browser, timeoutMs: number): Promise<Frame> {
+  const deadline = Date.now() + timeoutMs
+  let lastDiag = ""
+  let lastError = ""
+  // Re-acquire the AM frame positively on every call (LOCK-LC-004)
+  // redacted diagnostics keys: tabCount emptyVisible tabBarVisible tabBarEmptyVisible frameDetached roleCount roleVisibleCount fallbackCount fallbackVisibleCount
+  let frame: Frame
+  try {
+    const initial = await findAgentManagerFrameAny(browser, Math.min(15_000, timeoutMs), { redacted: true })
+    frame = initial.frame
+  } catch (err) {
+    void err
+    lastError = "frame-lookup-failed"
+    lastDiag = JSON.stringify({ frameLookup: lastError, timeoutMs })
+    throw new Error(`probe: New session action not unique/visible within ${timeoutMs}ms: ${lastError} lastDiag=${lastDiag}`)
+  }
+  /**
+   * Bounded helper — clicks the first visible handle for the picked candidate
+   * (role vs fallback icon). Pure click attempt with no deadline math; deadline
+   * and redaction are owned by the caller so the action stays strict-deadline
+   * and fixed-category. Keeps the loop/visibility branch out of the main loop
+   * to satisfy the eslint complexity cap.
+   */
+  const clickVisibleForPick = async (
+    target: Frame,
+    pick: NewSessionRoleFallback,
+    clickTimeout: number,
+    diag: string,
+  ): Promise<{ clicked: boolean; error?: string }> => {
+    if (pick === "role") {
+      const loc = target.getByRole("button", { name: "New session", exact: true })
+      const handles = await loc.all()
+      for (const h of handles) {
+        if (await h.isVisible().catch(() => false)) {
+          await h.click({ timeout: clickTimeout })
+          console.log(`[probe] clicked New session via role diag=${diag}`)
+          return { clicked: true }
+        }
+      }
+      return { clicked: false, error: `role pick but no visible handle found diag=${diag}` }
+    }
+    const loc = target.locator('button[data-component="icon-button"][data-icon="plus"]')
+    const handles = await loc.all()
+    for (const h of handles) {
+      if (await h.isVisible().catch(() => false)) {
+        await h.click({ timeout: clickTimeout })
+        console.log(`[probe] clicked New session via fallback icon diag=${diag}`)
+        return { clicked: true }
+      }
+    }
+    return { clicked: false, error: `fallback pick but no visible handle found diag=${diag}` }
+  }
+  for (;;) {
+    const remainingBefore = deadline - Date.now()
+    if (remainingBefore <= 0) {
+      throw new Error(`probe: New session action not unique/visible within ${timeoutMs}ms: ${lastError} lastDiag=${lastDiag}`)
+    }
+    let frameDetached = false
+    try {
+      frameDetached = frame.isDetached()
+    } catch (err) {
+      void err
+      frameDetached = true
+    }
+    if (frameDetached) {
+      const remaining = deadline - Date.now()
+      if (remaining <= 0) {
+        throw new Error(
+          `probe: New session action failed: frame detached before click diag=${JSON.stringify({ frameDetached, timeoutMs, remainingMs: remaining })} lastDiag=${lastDiag} lastError=${lastError}`,
+        )
+      }
+      try {
+        const fresh = await findAgentManagerFrameAny(browser, Math.min(remaining, 15_000), { redacted: true })
+        frame = fresh.frame
+        lastError = "frame-detached-reacquired"
+      } catch (err) {
+        void err
+        lastError = "frame-lookup-failed"
+        if (Date.now() > deadline) {
+          throw new Error(`probe: New session action not unique/visible within ${timeoutMs}ms: ${lastError} lastDiag=${lastDiag}`)
+        }
+      }
+      const remainingAfter = deadline - Date.now()
+      if (remainingAfter <= 0) {
+        throw new Error(`probe: New session action not unique/visible within ${timeoutMs}ms: ${lastError} lastDiag=${lastDiag}`)
+      }
+      await sleep(Math.min(250, remainingAfter))
+      continue
+    }
+    const classification = await classifyNewSessionFrame(frame)
+    const cand = await collectNewSessionCandidates(frame)
+    const decision = decideNewSessionCandidates({ roleCandidates: cand.roleCandidates, fallbackCandidates: cand.fallbackCandidates })
+    const diagBase = {
+      roleCount: cand.roleCount,
+      roleVisibleCount: cand.roleVisibleCount,
+      fallbackCount: cand.fallbackCount,
+      fallbackVisibleCount: cand.fallbackVisibleCount,
+      frameDetached,
+      ...classification,
+    }
+    lastDiag = JSON.stringify(diagBase)
+    if ("pick" in decision) {
+      const remainingClick = deadline - Date.now()
+      if (remainingClick <= 0) {
+        lastError = "deadline-exceeded"
+        throw new Error(`probe: New session action not unique/visible within ${timeoutMs}ms: ${lastError} lastDiag=${lastDiag}`)
+      }
+      const clickTimeout = Math.min(5_000, remainingClick)
+      try {
+        const clicked = await clickVisibleForPick(frame, decision.pick, clickTimeout, lastDiag)
+        if (clicked.clicked) return frame
+        if (clicked.error) lastError = clicked.error
+      } catch (err) {
+        void err
+        lastError = `click-failed diag=${lastDiag}`
+        const remaining = deadline - Date.now()
+        if (remaining <= 0) {
+          throw new Error(`probe: New session action not unique/visible within ${timeoutMs}ms: ${lastError} lastDiag=${lastDiag}`)
+        }
+        try {
+          const fresh = await findAgentManagerFrameAny(browser, Math.min(remaining, 5_000), { redacted: true })
+          frame = fresh.frame
+        } catch (inner) {
+          void inner
+          lastError = "frame-lookup-failed"
+        }
+      }
+    } else {
+      lastError = `${decision.error} diag=${lastDiag}`
+    }
+
+    if (Date.now() > deadline) {
+      throw new Error(`probe: New session action not unique/visible within ${timeoutMs}ms: ${lastError} lastDiag=${lastDiag}`)
+    }
+    const remainingAfter = deadline - Date.now()
+    if (remainingAfter <= 0) {
+      throw new Error(`probe: New session action not unique/visible within ${timeoutMs}ms: ${lastError} lastDiag=${lastDiag}`)
+    }
+    await sleep(Math.min(250, remainingAfter))
   }
 }
 

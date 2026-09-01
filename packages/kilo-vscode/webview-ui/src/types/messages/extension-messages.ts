@@ -334,7 +334,8 @@ export interface AgentsLoadedMessage {
   diagnostics?: Record<string, unknown>
 }
 
-export interface CanonicalAgentsLoadedMessage extends Omit<AgentsLoadedMessage, "canonical" | "materializationVersion" | "contentHash" | "stamp"> {
+export interface CanonicalAgentsLoadedMessage
+  extends Omit<AgentsLoadedMessage, "canonical" | "materializationVersion" | "contentHash" | "stamp"> {
   canonical: true
   /** P4.1: explicit readiness signal — false for pre-materialization not-ready state. */
   ready: boolean
@@ -521,7 +522,18 @@ export interface ConfigLoadedMessage {
   diagnostics?: Array<{ path: string[]; message: string }>
 }
 
-export interface CanonicalConfigLoadedMessage extends Omit<ConfigLoadedMessage, "canonical" | "config" | "globalConfig" | "projectConfig" | "contentHash" | "materializationVersion" | "diagnostics" | "stamp"> {
+export interface CanonicalConfigLoadedMessage
+  extends Omit<
+    ConfigLoadedMessage,
+    | "canonical"
+    | "config"
+    | "globalConfig"
+    | "projectConfig"
+    | "contentHash"
+    | "materializationVersion"
+    | "diagnostics"
+    | "stamp"
+  > {
   canonical: true
   /** P4.1: explicit readiness signal — false for pre-materialization not-ready state. */
   ready: boolean
@@ -556,7 +568,18 @@ export interface ConfigUpdatedMessage {
   diagnostics?: Array<{ path: string[]; message: string }>
 }
 
-export interface CanonicalConfigUpdatedMessage extends Omit<ConfigUpdatedMessage, "canonical" | "config" | "globalConfig" | "projectConfig" | "contentHash" | "materializationVersion" | "diagnostics" | "stamp"> {
+export interface CanonicalConfigUpdatedMessage
+  extends Omit<
+    ConfigUpdatedMessage,
+    | "canonical"
+    | "config"
+    | "globalConfig"
+    | "projectConfig"
+    | "contentHash"
+    | "materializationVersion"
+    | "diagnostics"
+    | "stamp"
+  > {
   canonical: true
   /** P4.1: explicit readiness signal — false for pre-materialization not-ready state. */
   ready: boolean
@@ -653,6 +676,7 @@ export interface AgentManagerStateMessage {
   sessionsCollapsed?: boolean
   sidebarCollapsed?: boolean
   isGitRepo?: boolean
+  activeSessionId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -897,13 +921,25 @@ export interface ProviderActionErrorMessage {
   canonical?: false
   kind?: string
   diagnostic?: boolean
-  retry?: { type: "retryProviderCleanup"; mode: "delete" | "restore"; scope: "global" | "project"; stamp: CanonicalStamp; retryID: string }
+  retry?: {
+    type: "retryProviderCleanup"
+    mode: "delete" | "restore"
+    scope: "global" | "project"
+    stamp: CanonicalStamp
+    retryID: string
+  }
 }
 
 export interface CanonicalProviderActionErrorMessage extends Omit<ProviderActionErrorMessage, "canonical" | "retry"> {
   canonical: true
   stamp: CanonicalStamp
-  retry?: { type: "retryProviderCleanup"; mode: "delete" | "restore"; scope: "global" | "project"; stamp: CanonicalStamp; retryID: string }
+  retry?: {
+    type: "retryProviderCleanup"
+    mode: "delete" | "restore"
+    scope: "global" | "project"
+    stamp: CanonicalStamp
+    retryID: string
+  }
 }
 
 export interface ProviderCredentialLoadedMessage {
@@ -983,6 +1019,11 @@ export interface RemoteStatusMessage {
   connected: boolean
 }
 
+export interface ActivateSessionMessage {
+  type: "activateSession"
+  sessionID: string
+}
+
 export interface ValidateFilesResultMessage {
   type: "validateFilesResult"
   id: string
@@ -990,6 +1031,7 @@ export interface ValidateFilesResultMessage {
 }
 
 export type ExtensionMessage =
+  | ActivateSessionMessage
   | ReadyMessage
   | FontSizeChangedMessage
   | GitStatusMessage

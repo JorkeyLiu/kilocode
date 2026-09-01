@@ -60,6 +60,7 @@ import {
   writeFileSync,
 } from "node:fs"
 import { randomBytes } from "node:crypto"
+import { createRequire } from "node:module"
 import { fileURLToPath } from "node:url"
 import { basename, dirname, join, resolve } from "node:path"
 
@@ -68,6 +69,26 @@ const root = join(here, "..")
 const outfile = join(root, "out", "e2e-probe.cjs")
 
 const evidenceEnv = process.env.KILO_E2E_EVIDENCE_DIR
+
+/**
+ * Force jsonc-parser to resolve to its ESM module entry instead of the UMD
+ * main entry. The UMD bundle uses runtime `require2("./impl/format")` calls
+ * that fail at extension-host load time because the impl submodules are not
+ * shipped in dist. The ESM entry statically imports its dependencies, so
+ * esbuild can bundle them all into a single file.
+ * Mirrors packages/kilo-vscode/esbuild.js jsoncParserEsmPlugin (lines ~67-76).
+ */
+const jsoncParserEsmPlugin = {
+  name: "jsonc-parser-esm",
+  setup(build) {
+    build.onResolve({ filter: /^jsonc-parser$/ }, () => {
+      const require = createRequire(import.meta.url)
+      const pkg = require.resolve("jsonc-parser/package.json")
+      const dir = dirname(pkg)
+      return { path: join(dir, "lib", "esm", "main.js") }
+    })
+  },
+}
 
 function fail(message) {
   console.error(`[e2e-launch] FAIL: ${message}`)
@@ -102,8 +123,10 @@ await build({
   format: "cjs",
   target: "node20",
   external: ["@vscode/test-electron", "@playwright/test", "esbuild"],
+  define: { __KILO_E2E_BUNDLE__: "true" },
   outfile,
   logLevel: "silent",
+  plugins: [jsoncParserEsmPlugin],
 })
 
 // Pin the CWD to the package root so @vscode/test-electron's auto-download

@@ -40,6 +40,7 @@
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, join, resolve } from "node:path"
+import { parse as jsoncParse, type ParseError as JsoncParseError } from "jsonc-parser"
 
 /** Manifest schema version. The launcher's finalize step shares this literal. */
 export const EVIDENCE_SCHEMA = "kilo-e2e-evidence/1"
@@ -127,6 +128,7 @@ const SNAP_PREFIXES: Record<string, string[]> = {
   "real-completed": ["rc-snap-"],
   "real-overflow": ["of-snap-"],
   "real-restart": ["rr-snap-", "rr-c-snap-"],
+  "real-lifecycle": ["lc-snap-"],
   "worktree-removal": ["p32-snap-"],
   "r9-observation": ["r9-snap-"],
 }
@@ -137,6 +139,7 @@ const READY_MARKERS: Record<string, string[]> = {
   "real-completed": ["real-completed-ready"],
   "real-overflow": ["real-overflow-ready"],
   "real-restart": ["rr-ready"],
+  "real-lifecycle": ["lc-ready"],
   "worktree-removal": ["worktree-removal-ready"],
   "r9-observation": ["r9-ready"],
 }
@@ -231,7 +234,14 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
     { rel: "runner-done", base: "scratch" },
     { rel: "ready", base: "scratch" },
   ]
-  const real = new Set(["real-session", "real-completed", "real-overflow", "real-restart", "worktree-removal"])
+  const real = new Set([
+    "real-session",
+    "real-completed",
+    "real-overflow",
+    "real-restart",
+    "real-lifecycle",
+    "worktree-removal",
+  ])
 
   for (const scenario of scenarios) {
     for (const dom of DOM_EVIDENCE[scenario] ?? []) {
@@ -242,7 +252,10 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
         { rel: "llm-requests.jsonl", base: "scratch" },
         { rel: `llm-requests-${scenario}.json`, base: "scratch" },
         { rel: `llm-matrix-${scenario}-final.json`, base: "scratch" },
-        { rel: scenario === "real-restart" ? ".kilo/kilo.jsonc" : ".kilo/kilo.json", base: "workspace" },
+        {
+          rel: scenario === "real-restart" || scenario === "real-lifecycle" ? ".kilo/kilo.jsonc" : ".kilo/kilo.json",
+          base: "workspace",
+        },
       )
       for (const prefix of SNAP_PREFIXES[scenario] ?? []) {
         required.push({ rel: `${prefix}*.json`, base: "scratch", glob: true })
@@ -357,6 +370,21 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
     )
     optional.push({ rel: "e2e-custom-called.txt", base: "workspace" })
   }
+  if (scenarios.has("real-lifecycle")) {
+    required.push(
+      { rel: "canonical-gate.json", base: "scratch" },
+      { rel: "canonical-archive-before.json", base: "scratch" },
+      { rel: "canonical-archive-after.json", base: "scratch" },
+      { rel: "lc-cstate.json", base: "scratch" },
+      { rel: "lc-credential.json", base: "scratch" },
+      { rel: "lc-gc-proof.json", base: "scratch" },
+      { rel: "lc-layout-timeline.json", base: "scratch" },
+    )
+    optional.push(
+      { rel: "e2e-custom-called.txt", base: "workspace" },
+      { rel: "lc-dom-evidence", base: "scratch" },
+    )
+  }
   if (scenarios.has("real-session")) {
     required.push(
       { rel: "canonical-gate.json", base: "scratch" },
@@ -422,12 +450,12 @@ export function expandGlob(base: string, rel: string): string[] {
     .map((name) => name)
 }
 
-/** True when the file must be parseable as evidence (JSON or the raw JSONL store). */
+/** True when the file must be parseable as evidence (JSON/JSONC or the raw JSONL store). */
 function needsParse(dest: string): boolean {
-  return dest === "llm-requests.jsonl" || dest.endsWith(".json")
+  return dest === "llm-requests.jsonl" || dest.endsWith(".json") || dest.endsWith(".jsonc")
 }
 
-/** Validate the file parses (JSON whole-file, or every JSONL line). Returns the failure or null. */
+/** Validate the file parses (JSON/JSONC whole-file, or every JSONL line). Returns the failure or null. */
 export function parseFailure(dest: string, bytes: Buffer): string | null {
   if (dest === "llm-requests.jsonl") {
     const lines = bytes
@@ -439,9 +467,18 @@ export function parseFailure(dest: string, bytes: Buffer): string | null {
       try {
         JSON.parse(line)
       } catch {
-        return `corrupt JSONL line: ${JSON.stringify(line.slice(0, 120))}`
+        return "corrupt JSONL line"
       }
     }
+    return null
+  }
+  if (dest.endsWith(".jsonc")) {
+    const text = bytes.toString("utf8")
+    if (text.trim() === "") return "empty file (expected JSONC)"
+    const errors: JsoncParseError[] = []
+    const parsed = jsoncParse(text, errors, { allowTrailingComma: true })
+    if (errors.length > 0) return "invalid JSONC"
+    if (parsed === undefined) return "invalid JSONC"
     return null
   }
   if (dest.endsWith(".json")) {
@@ -451,7 +488,7 @@ export function parseFailure(dest: string, bytes: Buffer): string | null {
     try {
       parsed = JSON.parse(text)
     } catch {
-      return `invalid JSON: ${JSON.stringify(text.slice(0, 120))}`
+      return "invalid JSON"
     }
     if (dest === "rr-gc-proof.json") {
       const err = validateGcProof(parsed)
@@ -462,6 +499,24 @@ export function parseFailure(dest: string, bytes: Buffer): string | null {
       // ensure no filesystem path leaked (heuristic: absolute path not allowed except scratch not stored)
       // proof must not contain raw title — titleHash is hex, not raw; check proof doesn't contain plain GateC Title string
       if (/GateC Title/.test(raw)) return "rr-gc-proof leaked raw title"
+    }
+    if (dest === "lc-gc-proof.json") {
+      const err = validateLcProof(parsed)
+      if (err) return `lc-gc-proof malformed: ${err}`
+      const raw = text
+      if (raw.includes("e2e-fixture-key") || raw.includes("KILO_SERVER_PASSWORD")) return "lc-gc-proof leaked secret"
+      if (/GcLifecycle Title/.test(raw)) return "lc-gc-proof leaked raw title"
+      if (/GateC Title/.test(raw)) return "lc-gc-proof leaked raw title"
+    }
+    if (dest === "lc-layout-timeline.json") {
+      const err = validateLcTimeline(parsed)
+      if (err) return `lc-layout-timeline malformed: ${err}`
+      const raw = text
+      if (raw.includes("e2e-fixture-key") || raw.includes("KILO_SERVER_PASSWORD"))
+        return "lc-layout-timeline leaked secret"
+      if (/GcLifecycle Title/.test(raw)) return "lc-layout-timeline leaked raw title"
+      if (/GateC Title/.test(raw)) return "lc-layout-timeline leaked raw title"
+      if (/\/[a-z]+\/[^\s"]*\.kilo/.test(raw)) return "lc-layout-timeline leaked path"
     }
   }
   return null
@@ -501,7 +556,6 @@ export function validateGcProof(parsed: unknown): string | null {
     "sessionID",
     "requestID",
   ])
-  // eslint-disable-next-line complexity
   const checkForbidden = (obj: unknown, at: string): string | null => {
     if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null
     const rec = obj as Record<string, unknown>
@@ -537,7 +591,7 @@ export function validateGcProof(parsed: unknown): string | null {
     return null
   }
   const onlyAllowed = (obj: Record<string, unknown>, allowed: string[], at: string): string | null => {
-    for (const k of Object.keys(obj)) if (!allowed.includes(k)) return `${at} unknown key ${k}`
+    for (const k of Object.keys(obj)) if (!allowed.includes(k)) return `${at} unknown key`
     return null
   }
   const requireHex = (obj: Record<string, unknown>, key: string, at: string): string | null => {
@@ -559,12 +613,15 @@ export function validateGcProof(parsed: unknown): string | null {
       return `${at}.minor invalid`
     return null
   }
+  const protoEqual = (a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
+    return a.name === b.name && a.major === b.major && ((a.minor as number | undefined) ?? 0) === ((b.minor as number | undefined) ?? 0)
+  }
   const validateCaps = (caps: unknown, at: string): string | null => {
     if (!Array.isArray(caps)) return `${at} must be array`
     for (let i = 0; i < caps.length; i++) {
       const c = caps[i]
       if (typeof c !== "string") return `${at}[${i}] must be string`
-      if (!ALLOWED_CAPS.has(c)) return `${at}[${i}] unknown capability ${c}`
+      if (!ALLOWED_CAPS.has(c)) return `${at}[${i}] unknown capability`
     }
     if (!caps.includes("session/update")) return `${at} missing session/update`
     return null
@@ -961,6 +1018,862 @@ export function validateGcProof(parsed: unknown): string | null {
     if (JSON.stringify(par) !== JSON.stringify(toPar)) return "parity must equal titleOp.parity"
   }
 
+  return null
+}
+
+// eslint-disable-next-line complexity
+export function validateLcProof(parsed: unknown): string | null {
+  const hex16 = /^[0-9a-f]{16}$/
+  const hex64 = /^[0-9a-f]{64}$/
+  const isHex16 = (v: unknown): boolean => typeof v === "string" && hex16.test(v)
+  const isHex64 = (v: unknown): boolean => typeof v === "string" && hex64.test(v)
+  const isPid = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v > 0 && v < 1_000_0000
+  const isPort = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= 65535
+  const isEpoch = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 1
+  const isRevision = (v: unknown): v is { session: number; config?: number } => {
+    if (!v || typeof v !== "object" || Array.isArray(v)) return false
+    const r = v as Record<string, unknown>
+    if (typeof r.session !== "number" || !Number.isInteger(r.session) || r.session < 0) return false
+    if (r.config !== undefined && (typeof r.config !== "number" || !Number.isInteger(r.config) || r.config < 0))
+      return false
+    const allowed = new Set(["session", "config"])
+    for (const k of Object.keys(r)) if (!allowed.has(k)) return false
+    return true
+  }
+  const ALLOWED_CAPS = new Set(["session/cancelQueued", "session/update"])
+  const forbidKeys = new Set([
+    "title",
+    "payload",
+    "path",
+    "secret",
+    "password",
+    "apiKey",
+    "sessionId",
+    "opId",
+    "requestId",
+    "idempotencyKey",
+    "rawTitle",
+    "sessionID",
+    "requestID",
+    "error",
+    "stack",
+  ])
+  const checkForbidden = (obj: unknown, at: string): string | null => {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null
+    const rec = obj as Record<string, unknown>
+    for (const k of Object.keys(rec)) {
+      if (forbidKeys.has(k)) return `${at}.${k} forbidden key`
+      if (/secret|password|apiKey|error/i.test(k) && !k.endsWith("Hash") && k !== "order" && k !== "state")
+        return `${at}.${k} forbidden pattern`
+      const child = rec[k]
+      if (child && typeof child === "object") {
+        const nested = Array.isArray(child) ? null : checkForbidden(child, `${at}.${k}`)
+        if (nested) return nested
+        if (Array.isArray(child)) {
+          for (let i = 0; i < child.length; i++) {
+            const el = child[i]
+            if (el && typeof el === "object" && !Array.isArray(el)) {
+              const e = checkForbidden(el, `${at}.${k}[${i}]`)
+              if (e) return e
+            }
+          }
+        }
+      }
+      if (typeof child === "string" && (child.includes("e2e-fixture-key") || child.includes("KILO_SERVER_PASSWORD"))) {
+        return `${at}.${k} leaked secret string`
+      }
+    }
+    return null
+  }
+  const exactKeys = (obj: Record<string, unknown>, allowed: string[], at: string): string | null => {
+    const keys = Object.keys(obj).sort()
+    const want = [...allowed].sort()
+    if (keys.length !== want.length || !keys.every((k, i) => k === want[i])) {
+      return `${at} keys mismatch: got [${keys.join(",")}] want [${want.join(",")}]`
+    }
+    return null
+  }
+  const onlyAllowed = (obj: Record<string, unknown>, allowed: string[], at: string): string | null => {
+    for (const k of Object.keys(obj)) if (!allowed.includes(k)) return `${at} unknown key`
+    return null
+  }
+  const requireHex = (obj: Record<string, unknown>, key: string, at: string): string | null => {
+    if (!isHex16(obj[key])) return `${at}.${key} must be 16-hex`
+    return null
+  }
+  const validateProto = (proto: unknown, at: string): string | null => {
+    if (!proto || typeof proto !== "object" || Array.isArray(proto)) return `${at} must be object`
+    const p = proto as Record<string, unknown>
+    const e = onlyAllowed(p, ["name", "major", "minor"], at)
+    if (e) return e
+    if (!("name" in p) || !("major" in p)) return `${at} missing name/major`
+    if (p.name !== "kilo-private") return `${at}.name must be kilo-private`
+    if (p.major !== 1) return `${at}.major must be 1`
+    if (
+      "minor" in p &&
+      (typeof p.minor !== "number" || !Number.isInteger(p.minor as number) || (p.minor as number) < 0)
+    )
+      return `${at}.minor invalid`
+    return null
+  }
+  const protoEqual = (a: Record<string, unknown>, b: Record<string, unknown>): boolean => {
+    return a.name === b.name && a.major === b.major && ((a.minor as number | undefined) ?? 0) === ((b.minor as number | undefined) ?? 0)
+  }
+  const validateCaps = (caps: unknown, at: string): string | null => {
+    if (!Array.isArray(caps)) return `${at} must be array`
+    for (let i = 0; i < caps.length; i++) {
+      const c = caps[i]
+      if (typeof c !== "string") return `${at}[${i}] must be string`
+      if (!ALLOWED_CAPS.has(c)) return `${at}[${i}] unknown capability`
+    }
+    if (!caps.includes("session/update")) return `${at} missing session/update`
+    return null
+  }
+  const validateBackend = (b: unknown, at: string): string | null => {
+    if (!b || typeof b !== "object" || Array.isArray(b)) return `${at} missing`
+    const rec = b as Record<string, unknown>
+    const e = exactKeys(rec, ["pid", "port", "epoch"], at)
+    if (e) return e
+    if (!isPid(rec.pid)) return `${at}.pid invalid`
+    if (!isPort(rec.port)) return `${at}.port invalid`
+    if (!isEpoch(rec.epoch)) return `${at}.epoch invalid`
+    return null
+  }
+  const validatePrivate = (pr: unknown, at: string): string | null => {
+    if (!pr || typeof pr !== "object" || Array.isArray(pr)) return `${at} missing`
+    const r = pr as Record<string, unknown>
+    const e = exactKeys(r, ["pid", "epoch", "available", "hasSessionUpdate", "protocol", "capabilities", "state"], at)
+    if (e) return e
+    if (r.pid !== null && !isPid(r.pid)) return `${at}.pid invalid`
+    if (!isEpoch(r.epoch)) return `${at}.epoch invalid`
+    if (typeof r.available !== "boolean" || r.available !== true) return `${at}.available must be true`
+    if (typeof r.hasSessionUpdate !== "boolean" || r.hasSessionUpdate !== true)
+      return `${at}.hasSessionUpdate must be true`
+    if (typeof r.state !== "string" || r.state.length === 0) return `${at}.state missing`
+    const pe = validateProto(r.protocol, `${at}.protocol`)
+    if (pe) return pe
+    const ce = validateCaps(r.capabilities, `${at}.capabilities`)
+    if (ce) return ce
+    return null
+  }
+  const validateBoundary = (b: unknown, at: string, allowOrder: boolean): string | null => {
+    if (!b || typeof b !== "object" || Array.isArray(b)) return `${at} missing`
+    const rec = b as Record<string, unknown>
+    const allowed = allowOrder
+      ? ["pre", "post", "orderHash", "orderCount", "agentTitleHash", "tabTitleHash"]
+      : ["pre", "post", "orderHash", "orderCount", "titleHash"]
+    const e = exactKeys(rec, allowed, at)
+    if (e) return e
+    for (const side of ["pre", "post"] as const) {
+      const node = rec[side] as Record<string, unknown>
+      if (!node || typeof node !== "object" || Array.isArray(node)) return `${at}.${side} missing`
+      const ee = exactKeys(node, ["backend", "private"], `${at}.${side}`)
+      if (ee) return ee
+      const be = validateBackend(node.backend, `${at}.${side}.backend`)
+      if (be) return be
+      const pe = validatePrivate(node.private, `${at}.${side}.private`)
+      if (pe) return pe
+    }
+    if (!isHex16(rec.orderHash) && !isHex64(rec.orderHash)) return `${at}.orderHash must be hex`
+    if (typeof rec.orderCount !== "number" || !Number.isInteger(rec.orderCount) || rec.orderCount < 0)
+      return `${at}.orderCount invalid`
+    if (allowOrder) {
+      if (!isHex16(rec.agentTitleHash)) return `${at}.agentTitleHash must be 16-hex`
+      if (!isHex16(rec.tabTitleHash)) return `${at}.tabTitleHash must be 16-hex`
+    } else {
+      if (!isHex16(rec.titleHash)) return `${at}.titleHash must be 16-hex`
+    }
+    return null
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "not an object"
+  const p = parsed as Record<string, unknown>
+  const topAllowed = [
+    "schema",
+    "version",
+    "scope",
+    "fixtureIdHash",
+    "sessionIdHash",
+    "siblingIdHash",
+    "titleHash",
+    "siblingTitleHash",
+    "orderHash",
+    "pre",
+    "openTab",
+    "titleOp",
+    "replay",
+    "boundaries",
+    "finalReplay",
+    "parity",
+    "collectedAt",
+  ]
+  {
+    const e = exactKeys(p, topAllowed, "proof")
+    if (e) return e
+  }
+  if (p.schema !== "kilo-gc-lifecycle-proof/1") return "schema must be kilo-gc-lifecycle-proof/1"
+  if (p.version !== 1) return "version must be 1"
+  const FIXED_SCOPE = "real-lifecycle Gate C: UI-only lifecycle convergence with stable identity and same-key replay"
+  if (p.scope !== FIXED_SCOPE) return `scope must be "${FIXED_SCOPE}"`
+  for (const k of ["fixtureIdHash", "sessionIdHash", "siblingIdHash", "titleHash", "siblingTitleHash", "orderHash"]) {
+    const e = requireHex(p, k, "proof")
+    if (e) return e
+  }
+  if (typeof p.collectedAt !== "string" || Number.isNaN(Date.parse(p.collectedAt as string)))
+    return "collectedAt must be ISO date"
+  const forb = checkForbidden(p, "proof")
+  if (forb) return forb
+
+  if (!p.pre || typeof p.pre !== "object" || Array.isArray(p.pre)) return "pre missing"
+  {
+    const pre = p.pre as Record<string, unknown>
+    const e = exactKeys(pre, ["backend", "private"], "pre")
+    if (e) return e
+    const be = validateBackend(pre.backend, "pre.backend")
+    if (be) return be
+    const pe = validatePrivate(pre.private, "pre.private")
+    if (pe) return pe
+    if ((pre.private as Record<string, unknown>).pid !== (pre.backend as Record<string, unknown>).pid)
+      return "pre.private.pid must equal backend pid"
+    if ((pre.private as Record<string, unknown>).epoch !== (pre.backend as Record<string, unknown>).epoch)
+      return "pre.private.epoch must equal backend epoch"
+  }
+
+  if (!p.openTab || typeof p.openTab !== "object" || Array.isArray(p.openTab)) return "openTab missing"
+  {
+    const ot = p.openTab as Record<string, unknown>
+    const e = exactKeys(
+      ot as Record<string, unknown>,
+      ["after", "attached", "before", "currentSessionIdHash", "editorCount", "loadOk", "ready", "targetSessionIdHash"],
+      "openTab",
+    )
+    if (e) return e
+    if (!ot.before || !ot.after) return "openTab before/after missing"
+    for (const side of ["before", "after"] as const) {
+      const node = ot[side] as Record<string, unknown>
+      if (!node || typeof node !== "object" || Array.isArray(node)) return `openTab.${side} missing`
+      const ee = exactKeys(node, ["backend", "private"], `openTab.${side}`)
+      if (ee) return ee
+      const be = validateBackend(node.backend, `openTab.${side}.backend`)
+      if (be) return be
+      const pr = node.private as Record<string, unknown>
+      const ae = exactKeys(
+        pr,
+        ["pid", "epoch", "available", "hasSessionUpdate", "state", "protocol", "capabilities"],
+        `openTab.${side}.private`,
+      )
+      if (ae) return ae
+      if (pr.pid !== null && !isPid(pr.pid)) return `openTab.${side}.private.pid invalid`
+      if (!isEpoch(pr.epoch)) return `openTab.${side}.private.epoch invalid`
+      if (pr.available !== true) return `openTab.${side}.private.available must be true`
+      if (pr.hasSessionUpdate !== true) return `openTab.${side}.private.hasSessionUpdate must be true`
+      const pe = validateProto(pr.protocol, `openTab.${side}.private.protocol`)
+      if (pe) return pe
+      const ce = validateCaps(pr.capabilities, `openTab.${side}.private.capabilities`)
+      if (ce) return ce
+    }
+    if (
+      typeof ot.editorCount !== "number" ||
+      !Number.isInteger(ot.editorCount as number) ||
+      (ot.editorCount as number) !== 1
+    )
+      return "openTab.editorCount must be 1 (exactly one TabPanel after open)"
+    if (ot.ready !== true) return "openTab.ready must be true"
+    if (ot.loadOk !== true) return "openTab.loadOk must be true"
+    if (!isHex16(ot.targetSessionIdHash)) return "openTab.targetSessionIdHash must be 16-hex"
+    if (!isHex16(ot.currentSessionIdHash)) return "openTab.currentSessionIdHash must be 16-hex"
+    if (ot.attached !== true) return "openTab.attached must be true"
+    if (ot.targetSessionIdHash !== p.sessionIdHash) return "openTab.targetSessionIdHash must equal proof sessionIdHash"
+    if (ot.currentSessionIdHash !== p.sessionIdHash)
+      return "openTab.currentSessionIdHash must equal proof sessionIdHash"
+    if (ot.targetSessionIdHash !== ot.currentSessionIdHash) return "openTab target/current hash mismatch"
+    const preB = (p.pre as Record<string, unknown>).backend as Record<string, unknown>
+    const prePriv = (p.pre as Record<string, unknown>).private as Record<string, unknown>
+    const beforeB = (p.openTab as Record<string, unknown>).before as Record<string, unknown> as Record<string, unknown>
+    const afterB2 = (p.openTab as Record<string, unknown>).after as Record<string, unknown> as Record<string, unknown>
+    const bBefore = (beforeB as Record<string, unknown>).backend as Record<string, unknown>
+    const bAfter = (afterB2 as Record<string, unknown>).backend as Record<string, unknown>
+    if (bBefore.pid !== bAfter.pid || bBefore.port !== bAfter.port || bBefore.epoch !== bAfter.epoch)
+      return "openTab before/after backend mismatch"
+    if (bBefore.pid !== preB.pid || bBefore.port !== preB.port || bBefore.epoch !== preB.epoch)
+      return "openTab backend must equal pre.backend"
+    if (bAfter.pid !== preB.pid || bAfter.port !== preB.port || bAfter.epoch !== preB.epoch)
+      return "openTab after backend must equal pre.backend"
+    for (const side of ["before", "after"] as const) {
+      const pr = (ot[side] as Record<string, unknown>).private as Record<string, unknown>
+      if (pr.pid !== prePriv.pid) return `openTab.${side}.private.pid must equal pre.private.pid`
+      if (pr.epoch !== prePriv.epoch) return `openTab.${side}.private.epoch must equal pre.private.epoch`
+      if (pr.available !== prePriv.available)
+        return `openTab.${side}.private.available must equal pre.private.available`
+      if (pr.hasSessionUpdate !== prePriv.hasSessionUpdate)
+        return `openTab.${side}.private.hasSessionUpdate must equal pre.private.hasSessionUpdate`
+      if (pr.state !== prePriv.state) return `openTab.${side}.private.state must equal pre.private.state`
+      if (!protoEqual(pr.protocol as Record<string, unknown>, prePriv.protocol as Record<string, unknown>))
+        return `openTab.${side}.private.protocol must equal pre.private.protocol`
+      if (
+        JSON.stringify((pr.capabilities as string[]).slice().sort()) !==
+        JSON.stringify((prePriv.capabilities as string[]).slice().sort())
+      )
+        return `openTab.${side}.private.capabilities must equal pre.private.capabilities`
+    }
+    {
+      const bPriv = (ot.before as Record<string, unknown>).private as Record<string, unknown>
+      const aPriv = (ot.after as Record<string, unknown>).private as Record<string, unknown>
+      if (bPriv.pid !== aPriv.pid) return "openTab before/after private pid mismatch"
+      if (bPriv.epoch !== aPriv.epoch) return "openTab before/after private epoch mismatch"
+      if (bPriv.available !== aPriv.available) return "openTab before/after private available mismatch"
+      if (bPriv.hasSessionUpdate !== aPriv.hasSessionUpdate)
+        return "openTab before/after private hasSessionUpdate mismatch"
+      if (bPriv.state !== aPriv.state) return "openTab before/after private state mismatch"
+      if (!protoEqual(bPriv.protocol as Record<string, unknown>, aPriv.protocol as Record<string, unknown>))
+        return "openTab before/after private protocol mismatch"
+      if (
+        JSON.stringify((bPriv.capabilities as string[]).slice().sort()) !==
+        JSON.stringify((aPriv.capabilities as string[]).slice().sort())
+      )
+        return "openTab before/after private capabilities mismatch"
+    }
+  }
+
+  if (!p.titleOp || typeof p.titleOp !== "object" || Array.isArray(p.titleOp)) return "titleOp missing"
+  {
+    const to = p.titleOp as Record<string, unknown>
+    const e = exactKeys(
+      to,
+      [
+        "opIdHash",
+        "idempotencyKeyHash",
+        "requestIdHash",
+        "sessionIdHash",
+        "titleHash",
+        "order",
+        "sdk",
+        "private",
+        "parity",
+        "revision",
+      ],
+      "titleOp",
+    )
+    if (e) return e
+    for (const k of ["opIdHash", "idempotencyKeyHash", "requestIdHash", "sessionIdHash", "titleHash"]) {
+      const ee = requireHex(to, k, "titleOp")
+      if (ee) return ee
+    }
+    if (to.sessionIdHash !== p.sessionIdHash) return "titleOp.sessionIdHash must equal proof sessionIdHash"
+    if (to.titleHash !== p.titleHash) return "titleOp.titleHash must equal proof titleHash"
+    if (!Array.isArray(to.order) || to.order.length !== 2 || to.order[0] !== "sdk" || to.order[1] !== "private")
+      return "titleOp.order must be [sdk,private]"
+    {
+      const sdk = to.sdk as Record<string, unknown>
+      if (!sdk || typeof sdk !== "object" || Array.isArray(sdk)) return "titleOp.sdk missing"
+      const se = exactKeys(sdk as Record<string, unknown>, ["status", "httpStatus", "hasData"], "titleOp.sdk")
+      if (se) return se
+      if (sdk.status !== "succeeded") return "titleOp.sdk.status must be succeeded"
+      if (sdk.httpStatus !== 200) return "titleOp.sdk.httpStatus must be 200"
+      if (sdk.hasData !== true) return "titleOp.sdk.hasData must be true"
+    }
+    {
+      const priv = to.private as Record<string, unknown>
+      if (!priv || typeof priv !== "object" || Array.isArray(priv)) return "titleOp.private missing"
+      const ae = exactKeys(priv as Record<string, unknown>, ["status", "hasData"], "titleOp.private")
+      if (ae) return ae
+      if (priv.status !== "succeeded") return "titleOp.private.status must be succeeded"
+      if (priv.hasData !== true) return "titleOp.private.hasData must be true"
+    }
+    {
+      const par = to.parity as Record<string, unknown>
+      if (!par || typeof par !== "object" || Array.isArray(par)) return "titleOp.parity missing"
+      const pe = exactKeys(par, ["divergence", "details"], "titleOp.parity")
+      if (pe) return pe
+      if (par.divergence !== null) return "titleOp.parity.divergence must be null"
+      if (
+        !par.details ||
+        typeof par.details !== "object" ||
+        Array.isArray(par.details) ||
+        Object.keys(par.details as object).length !== 0
+      )
+        return "titleOp.parity.details must be empty object"
+    }
+    if (!isRevision(to.revision)) return "titleOp.revision invalid"
+  }
+
+  if (!p.replay || typeof p.replay !== "object" || Array.isArray(p.replay)) return "replay missing"
+  {
+    const r = p.replay as Record<string, unknown>
+    const e = exactKeys(
+      r,
+      ["found", "private", "revision", "titleHash", "opIdHash", "idempotencyKeyHash", "requestIdHash", "sessionIdHash"],
+      "replay",
+    )
+    if (e) return e
+    if (r.found !== true) return "replay.found must be true"
+    if (r.titleHash !== p.titleHash) return "replay.titleHash must equal proof titleHash"
+    if (!isHex16(r.titleHash)) return "replay.titleHash must be 16-hex"
+    for (const k of ["opIdHash", "idempotencyKeyHash", "requestIdHash", "sessionIdHash"] as const) {
+      if (!isHex16(r[k])) return `replay.${k} must be 16-hex`
+    }
+    const titleOp = p.titleOp as Record<string, unknown>
+    if (r.opIdHash !== titleOp.opIdHash) return "replay.opIdHash must equal titleOp.opIdHash"
+    if (r.idempotencyKeyHash !== titleOp.idempotencyKeyHash)
+      return "replay.idempotencyKeyHash must equal titleOp.idempotencyKeyHash"
+    if (r.requestIdHash !== titleOp.requestIdHash) return "replay.requestIdHash must equal titleOp.requestIdHash"
+    if (r.sessionIdHash !== titleOp.sessionIdHash) return "replay.sessionIdHash must equal titleOp.sessionIdHash"
+    const priv = r.private as Record<string, unknown>
+    if (!priv || typeof priv !== "object" || Array.isArray(priv)) return "replay.private missing"
+    {
+      const ae = exactKeys(priv as Record<string, unknown>, ["status", "hasData"], "replay.private")
+      if (ae) return ae
+      if (priv.status !== "succeeded") return "replay.private.status must be succeeded"
+      if (priv.hasData !== true) return "replay.private.hasData must be true"
+    }
+    if (!isRevision(r.revision)) return "replay.revision invalid"
+    const toRev = (p.titleOp as Record<string, unknown>).revision
+    if (JSON.stringify(r.revision) !== JSON.stringify(toRev)) return "replay.revision must equal titleOp.revision"
+  }
+
+  if (!p.boundaries || typeof p.boundaries !== "object" || Array.isArray(p.boundaries)) return "boundaries missing"
+  {
+    const b = p.boundaries as Record<string, unknown>
+    const e = exactKeys(b, ["panelCloseReopen", "webviewReload", "tabCloseReopen", "sessionSwitch"], "boundaries")
+    if (e) return e
+    const be1 = validateBoundary(b.panelCloseReopen, "boundaries.panelCloseReopen", true)
+    if (be1) return be1
+    const be2 = validateBoundary(b.webviewReload, "boundaries.webviewReload", true)
+    if (be2) return be2
+    const be3 = validateBoundary(b.tabCloseReopen, "boundaries.tabCloseReopen", true)
+    if (be3) return be3
+    const be4 = (() => {
+      const v = b.sessionSwitch
+      if (!v || typeof v !== "object" || Array.isArray(v)) return "boundaries.sessionSwitch missing"
+      const rec = v as Record<string, unknown>
+      const ee = exactKeys(
+        rec,
+        [
+          "pre",
+          "post",
+          "switched",
+          "orderHash",
+          "orderCount",
+          "agentTitleHash",
+          "tabTitleHash",
+          "switchedAgentTitleHash",
+          "switchedTabTitleHash",
+          "preAgentTitleHash",
+          "preTabTitleHash",
+        ],
+        "boundaries.sessionSwitch",
+      )
+      if (ee) return ee
+      for (const side of ["pre", "post", "switched"] as const) {
+        const node = rec[side] as Record<string, unknown>
+        if (!node || typeof node !== "object" || Array.isArray(node)) return `boundaries.sessionSwitch.${side} missing`
+        const e2 = exactKeys(node, ["backend", "private", "activeIdHash"], `boundaries.sessionSwitch.${side}`)
+        if (e2) return e2
+        const be = validateBackend(node.backend, `boundaries.sessionSwitch.${side}.backend`)
+        if (be) return be
+        const pe = validatePrivate(node.private, `boundaries.sessionSwitch.${side}.private`)
+        if (pe) return pe
+        if (!isHex16(node.activeIdHash)) return `boundaries.sessionSwitch.${side}.activeIdHash must be 16-hex`
+      }
+      if (!isHex16(rec.orderHash) && !isHex64(rec.orderHash)) return "boundaries.sessionSwitch.orderHash must be hex"
+      if (typeof rec.orderCount !== "number" || !Number.isInteger(rec.orderCount) || rec.orderCount < 0)
+        return "boundaries.sessionSwitch.orderCount invalid"
+      if (!isHex16(rec.agentTitleHash)) return "boundaries.sessionSwitch.agentTitleHash must be 16-hex"
+      if (!isHex16(rec.tabTitleHash)) return "boundaries.sessionSwitch.tabTitleHash must be 16-hex"
+      if (!isHex16(rec.switchedAgentTitleHash)) return "boundaries.sessionSwitch.switchedAgentTitleHash must be 16-hex"
+      if (!isHex16(rec.switchedTabTitleHash)) return "boundaries.sessionSwitch.switchedTabTitleHash must be 16-hex"
+      if (!isHex16(rec.preAgentTitleHash)) return "boundaries.sessionSwitch.preAgentTitleHash must be 16-hex"
+      if (!isHex16(rec.preTabTitleHash)) return "boundaries.sessionSwitch.preTabTitleHash must be 16-hex"
+      return null
+    })()
+    if (be4) return be4
+    const preB = (p.pre as Record<string, unknown>).backend as Record<string, unknown>
+    for (const key of ["panelCloseReopen", "webviewReload", "tabCloseReopen"] as const) {
+      const node = b[key] as Record<string, unknown>
+      for (const side of ["pre", "post"] as const) {
+        const bb = (node[side] as Record<string, unknown>).backend as Record<string, unknown>
+        if (bb.pid !== preB.pid || bb.port !== preB.port || bb.epoch !== preB.epoch)
+          return `${key}.${side} backend must equal pre.backend`
+        const priv = (node[side] as Record<string, unknown>).private as Record<string, unknown>
+        const prePriv = (p.pre as Record<string, unknown>).private as Record<string, unknown>
+        if (priv.pid !== prePriv.pid || priv.epoch !== prePriv.epoch)
+          return `${key}.${side} private pid/epoch must equal pre`
+        if (!protoEqual(priv.protocol as Record<string, unknown>, prePriv.protocol as Record<string, unknown>))
+          return `${key}.${side} private protocol must equal pre`
+        if (
+          JSON.stringify((priv.capabilities as string[]).slice().sort()) !==
+          JSON.stringify((prePriv.capabilities as string[]).slice().sort())
+        )
+          return `${key}.${side} private capabilities must equal pre`
+      }
+      if (node.agentTitleHash !== p.titleHash) return `${key} agentTitleHash must equal titleHash`
+      if (node.tabTitleHash !== p.titleHash) return `${key} tabTitleHash must equal titleHash`
+      if (node.orderHash !== p.orderHash) return `${key} orderHash must equal orderHash`
+    }
+    {
+      const sw = b.sessionSwitch as Record<string, unknown>
+      for (const side of ["pre", "post", "switched"] as const) {
+        const bb = (sw[side] as Record<string, unknown>).backend as Record<string, unknown>
+        if (bb.pid !== preB.pid || bb.port !== preB.port || bb.epoch !== preB.epoch)
+          return `sessionSwitch.${side} backend must equal pre.backend`
+        const priv = (sw[side] as Record<string, unknown>).private as Record<string, unknown>
+        const prePriv = (p.pre as Record<string, unknown>).private as Record<string, unknown>
+        if (priv.pid !== prePriv.pid || priv.epoch !== prePriv.epoch)
+          return `sessionSwitch.${side} private pid/epoch must equal pre`
+        if (!protoEqual(priv.protocol as Record<string, unknown>, prePriv.protocol as Record<string, unknown>))
+          return `sessionSwitch.${side} protocol must equal pre`
+        if (
+          JSON.stringify((priv.capabilities as string[]).slice().sort()) !==
+          JSON.stringify((prePriv.capabilities as string[]).slice().sort())
+        )
+          return `sessionSwitch.${side} private capabilities must equal pre`
+      }
+      if ((sw as Record<string, unknown>).orderHash !== p.orderHash)
+        return "sessionSwitch orderHash must equal orderHash"
+      if ((sw as Record<string, unknown>).agentTitleHash !== p.titleHash)
+        return "sessionSwitch agentTitleHash must equal titleHash"
+      if ((sw as Record<string, unknown>).tabTitleHash !== p.titleHash)
+        return "sessionSwitch tabTitleHash must equal titleHash"
+      if ((sw as Record<string, unknown>).preAgentTitleHash !== p.titleHash)
+        return "sessionSwitch preAgentTitleHash must equal titleHash"
+      if ((sw as Record<string, unknown>).preTabTitleHash !== p.titleHash)
+        return "sessionSwitch preTabTitleHash must equal titleHash"
+      if ((sw as Record<string, unknown>).switchedAgentTitleHash !== p.siblingTitleHash)
+        return "sessionSwitch switchedAgentTitleHash must equal siblingTitleHash"
+      if ((sw as Record<string, unknown>).switchedTabTitleHash !== p.titleHash)
+        return "sessionSwitch switchedTabTitleHash must equal titleHash (asymmetric: editor stays on target)"
+      if (p.siblingTitleHash === p.titleHash) return "siblingTitleHash must differ from titleHash"
+      if ((sw.pre as Record<string, unknown>).activeIdHash !== p.sessionIdHash)
+        return "sessionSwitch pre activeIdHash must equal sessionIdHash"
+      if ((sw.post as Record<string, unknown>).activeIdHash !== p.sessionIdHash)
+        return "sessionSwitch post activeIdHash must equal sessionIdHash"
+      if ((sw.switched as Record<string, unknown>).activeIdHash !== p.siblingIdHash)
+        return "sessionSwitch switched activeIdHash must equal siblingIdHash"
+      {
+        const counts = [
+          (b.panelCloseReopen as Record<string, unknown>).orderCount,
+          (b.webviewReload as Record<string, unknown>).orderCount,
+          (b.tabCloseReopen as Record<string, unknown>).orderCount,
+          (b.sessionSwitch as Record<string, unknown>).orderCount,
+        ]
+        const baseline = 2
+        for (let i = 0; i < counts.length; i++) {
+          if (counts[i] !== baseline)
+            return `boundaries orderCount baseline mismatch at ${i}: got ${counts[i]} want ${baseline}`
+        }
+        const first = counts[0]
+        for (const c of counts) if (c !== first) return `boundaries orderCount mismatch ${counts.join(",")}`
+      }
+    }
+  }
+
+  if (!p.finalReplay || typeof p.finalReplay !== "object" || Array.isArray(p.finalReplay)) return "finalReplay missing"
+  {
+    const r = p.finalReplay as Record<string, unknown>
+    const e = exactKeys(
+      r,
+      ["found", "private", "revision", "titleHash", "opIdHash", "idempotencyKeyHash", "requestIdHash", "sessionIdHash"],
+      "finalReplay",
+    )
+    if (e) return e
+    if (r.found !== true) return "finalReplay.found must be true"
+    if (r.titleHash !== p.titleHash) return "finalReplay.titleHash must equal proof titleHash"
+    if (!isHex16(r.titleHash)) return "finalReplay.titleHash must be 16-hex"
+    for (const k of ["opIdHash", "idempotencyKeyHash", "requestIdHash", "sessionIdHash"] as const) {
+      if (!isHex16(r[k])) return `finalReplay.${k} must be 16-hex`
+    }
+    const titleOp = p.titleOp as Record<string, unknown>
+    if (r.opIdHash !== titleOp.opIdHash) return "finalReplay.opIdHash must equal titleOp.opIdHash"
+    if (r.idempotencyKeyHash !== titleOp.idempotencyKeyHash)
+      return "finalReplay.idempotencyKeyHash must equal titleOp.idempotencyKeyHash"
+    if (r.requestIdHash !== titleOp.requestIdHash) return "finalReplay.requestIdHash must equal titleOp.requestIdHash"
+    if (r.sessionIdHash !== titleOp.sessionIdHash) return "finalReplay.sessionIdHash must equal titleOp.sessionIdHash"
+    const priv = r.private as Record<string, unknown>
+    if (!priv || typeof priv !== "object" || Array.isArray(priv)) return "finalReplay.private missing"
+    {
+      const ae = exactKeys(priv as Record<string, unknown>, ["status", "hasData"], "finalReplay.private")
+      if (ae) return ae
+      if (priv.status !== "succeeded") return "finalReplay.private.status must be succeeded"
+      if (priv.hasData !== true) return "finalReplay.private.hasData must be true"
+    }
+    if (!isRevision(r.revision)) return "finalReplay.revision invalid"
+    const toRev = (p.titleOp as Record<string, unknown>).revision
+    if (JSON.stringify(r.revision) !== JSON.stringify(toRev)) return "finalReplay.revision must equal titleOp.revision"
+    const replayRev = (p.replay as Record<string, unknown>).revision
+    if (JSON.stringify(r.revision) !== JSON.stringify(replayRev))
+      return "finalReplay.revision must equal replay.revision"
+  }
+
+  {
+    const par = p.parity as Record<string, unknown>
+    if (!par || typeof par !== "object" || Array.isArray(par)) return "parity missing"
+    const pe = exactKeys(par, ["divergence", "details"], "parity")
+    if (pe) return pe
+    if (par.divergence !== null) return "parity.divergence must be null"
+    if (
+      !par.details ||
+      typeof par.details !== "object" ||
+      Array.isArray(par.details) ||
+      Object.keys(par.details as object).length !== 0
+    )
+      return "parity.details must be empty object"
+    const toPar = (p.titleOp as Record<string, unknown>).parity as Record<string, unknown>
+    if (JSON.stringify(par) !== JSON.stringify(toPar)) return "parity must equal titleOp.parity"
+  }
+
+  return null
+}
+
+// eslint-disable-next-line complexity
+export function validateLcTimeline(parsed: unknown): string | null {
+  if (!Array.isArray(parsed)) return "timeline must be array"
+  if (parsed.length === 0) return "timeline empty"
+  const hex16 = /^[0-9a-f]{16}$/
+  const allowedPhases = new Set([
+    "lifecycle-start",
+    "pre-first-target-open",
+    "pre-open-request",
+    "post-first-target-open-request",
+    "post-first-target-open-ready",
+    "post-first-target-open",
+    "pre-panel-close",
+    "post-panel-close-request",
+    "post-panel-close-ready",
+    "post-panel-reopen-tabs",
+    "post-panel-reopen",
+    "pre-webview-reload",
+    "post-webview-reload-request",
+    "post-webview-reload-ready",
+    "post-webview-reload",
+    "pre-editor-tab-close",
+    "pre-editor-tab-close-counted",
+    "post-editor-tab-close-request",
+    "post-editor-tab-close-done",
+    "post-editor-tab-disposed",
+    "post-editor-tab-close",
+    "post-editor-tab-reopen-request",
+    "immediately-after-lc-tab-reopen-done-before-frame-selection",
+    "after-chosen-frame",
+    "post-editor-tab-reopen",
+    "post-editor-tab-reopen-both-titles",
+    "pre-session-switch",
+    "switched-session",
+    "post-session-switch",
+    "pre-proof-write",
+    "final-done",
+    "final-done-outer",
+    "failure-diagnostics",
+  ])
+  const requiredPhases = [
+    "pre-first-target-open",
+    "post-first-target-open",
+    "pre-panel-close",
+    "post-panel-reopen",
+    "pre-webview-reload",
+    "post-webview-reload",
+    "pre-editor-tab-close",
+    "post-editor-tab-close",
+    "immediately-after-lc-tab-reopen-done-before-frame-selection",
+    "after-chosen-frame",
+    "pre-session-switch",
+    "switched-session",
+    "post-session-switch",
+    "final-done",
+  ]
+  const forbidKeys = new Set([
+    "title",
+    "payload",
+    "path",
+    "secret",
+    "password",
+    "apiKey",
+    "sessionId",
+    "sessionID",
+    "opId",
+    "requestId",
+    "requestID",
+    "idempotencyKey",
+    "rawTitle",
+    "error",
+    "stack",
+    "url",
+    "rawUrl",
+    "variable",
+    "session",
+    "request",
+    "response",
+    "body",
+  ])
+  const allowedUrlKind = new Set(["vscode-webview", "other"])
+  const allowedPageKind = new Set(["webview", "other"])
+  const allowedDataTheme = new Set(["kilo-vscode", "other", ""])
+  const allowedCat = new Set(["agent-manager", "kilo-chat", "kilo-welcome", "native-chat", "placeholder", "unknown"])
+  const exactKeys = (obj: Record<string, unknown>, allowed: string[], at: string): string | null => {
+    const keys = Object.keys(obj).sort()
+    const want = [...allowed].sort()
+    if (keys.length !== want.length || !keys.every((k, i) => k === want[i])) {
+      return `${at} keys mismatch: got [${keys.join(",")}] want [${want.join(",")}]`
+    }
+    return null
+  }
+  const checkForbidden = (obj: unknown, at: string): string | null => {
+    if (!obj || typeof obj !== "object" || Array.isArray(obj)) return null
+    const rec = obj as Record<string, unknown>
+    for (const k of Object.keys(rec)) {
+      if (forbidKeys.has(k)) return `${at}.${k} forbidden key`
+      if (/secret|password|apiKey|error/i.test(k) && !k.endsWith("Hash")) return `${at}.${k} forbidden pattern`
+      const child = rec[k]
+      if (typeof child === "string" && (child.includes("e2e-fixture-key") || child.includes("KILO_SERVER_PASSWORD"))) {
+        return `${at}.${k} leaked secret string`
+      }
+    }
+    return null
+  }
+  let prevTs = -Infinity
+  let prevIsoMs = -Infinity
+  for (let i = 0; i < parsed.length; i++) {
+    const e = parsed[i] as Record<string, unknown>
+    if (!e || typeof e !== "object" || Array.isArray(e)) return `entry ${i} not object`
+    const ek = exactKeys(e, ["ts", "iso", "phase", "auxiliaryBar", "chat", "editors", "frames"], `entry ${i}`)
+    if (ek) return ek
+    const forb = checkForbidden(e, `entry ${i}`)
+    if (forb) return forb
+    if (typeof e.ts !== "number" || !Number.isFinite(e.ts) || !Number.isInteger(e.ts) || e.ts <= 0)
+      return `entry ${i} ts invalid`
+    if (e.ts < prevTs) return `entry ${i} ts not monotonic`
+    prevTs = e.ts as number
+    if (typeof e.iso !== "string" || Number.isNaN(Date.parse(e.iso as string))) return `entry ${i} iso invalid`
+    const isoMs = Date.parse(e.iso as string)
+    if (isoMs < prevIsoMs) return `entry ${i} iso not monotonic`
+    prevIsoMs = isoMs
+    if (Math.abs(isoMs - (e.ts as number)) > 5000) return `entry ${i} iso/ts mismatch`
+    if (typeof e.phase !== "string" || (e.phase as string).length === 0) return `entry ${i} phase invalid`
+    if (!allowedPhases.has(e.phase as string)) return `entry ${i} phase unknown`
+    if (/GcLifecycle Title|GateC Title/.test(e.phase as string)) return `entry ${i} phase leaked raw title`
+    const ab = e.auxiliaryBar as Record<string, unknown> | undefined
+    if (!ab || typeof ab !== "object" || Array.isArray(ab)) return `entry ${i} auxiliaryBar missing`
+    {
+      const ae = exactKeys(
+        ab as Record<string, unknown>,
+        ["exists", "visible", "width", "height", "focusWithin"],
+        `entry ${i}.auxiliaryBar`,
+      )
+      if (ae) return ae
+      const fb = checkForbidden(ab, `entry ${i}.auxiliaryBar`)
+      if (fb) return fb
+      if (typeof ab.exists !== "boolean" || typeof ab.visible !== "boolean" || typeof ab.focusWithin !== "boolean")
+        return `entry ${i} auxiliaryBar fields invalid`
+      if (
+        typeof ab.width !== "number" ||
+        !Number.isInteger(ab.width as number) ||
+        (ab.width as number) < 0 ||
+        (ab.width as number) > 5000
+      )
+        return `entry ${i} auxiliaryBar width invalid`
+      if (
+        typeof ab.height !== "number" ||
+        !Number.isInteger(ab.height as number) ||
+        (ab.height as number) < 0 ||
+        (ab.height as number) > 5000
+      )
+        return `entry ${i} auxiliaryBar height invalid`
+    }
+    const ch = e.chat as Record<string, unknown> | undefined
+    if (!ch || typeof ch !== "object" || Array.isArray(ch)) return `entry ${i} chat missing`
+    {
+      const ce = exactKeys(ch as Record<string, unknown>, ["exists", "visible", "inputVisible"], `entry ${i}.chat`)
+      if (ce) return ce
+      const fb = checkForbidden(ch, `entry ${i}.chat`)
+      if (fb) return fb
+      if (typeof ch.exists !== "boolean" || typeof ch.visible !== "boolean" || typeof ch.inputVisible !== "boolean")
+        return `entry ${i} chat fields invalid`
+    }
+    const ed = e.editors as Record<string, unknown> | undefined
+    if (!ed || typeof ed !== "object" || Array.isArray(ed)) return `entry ${i} editors missing`
+    {
+      const ee = exactKeys(ed as Record<string, unknown>, ["tabCount", "groupCount", "tabHashes"], `entry ${i}.editors`)
+      if (ee) return ee
+      const fb = checkForbidden(ed, `entry ${i}.editors`)
+      if (fb) return fb
+      if (
+        typeof ed.tabCount !== "number" ||
+        !Number.isInteger(ed.tabCount as number) ||
+        (ed.tabCount as number) < 0 ||
+        (ed.tabCount as number) > 100
+      )
+        return `entry ${i} editors tabCount invalid`
+      if (
+        typeof ed.groupCount !== "number" ||
+        !Number.isInteger(ed.groupCount as number) ||
+        (ed.groupCount as number) < 0 ||
+        (ed.groupCount as number) > 100
+      )
+        return `entry ${i} editors groupCount invalid`
+      if (!Array.isArray(ed.tabHashes)) return `entry ${i} editors tabHashes not array`
+      for (let t = 0; t < (ed.tabHashes as unknown[]).length; t++) {
+        const h = (ed.tabHashes as unknown[])[t]
+        if (typeof h !== "string" || !hex16.test(h)) return `entry ${i} editors tabHashes[${t}] invalid`
+      }
+    }
+    const fr = e.frames as unknown[] | undefined
+    if (!Array.isArray(fr)) return `entry ${i} frames missing`
+    for (let j = 0; j < fr.length; j++) {
+      const f = fr[j] as Record<string, unknown>
+      if (!f || typeof f !== "object" || Array.isArray(f)) return `entry ${i} frame ${j} not object`
+      const fe = exactKeys(
+        f as Record<string, unknown>,
+        [
+          "urlHash",
+          "urlKind",
+          "pageKind",
+          "dataTheme",
+          "hasAm",
+          "hasKiloChat",
+          "hasPrompt",
+          "hasHeader",
+          "bodyClassHash",
+          "bodyCategory",
+          "visible",
+        ],
+        `entry ${i} frame ${j}`,
+      )
+      if (fe) return fe
+      const fb = checkForbidden(f, `entry ${i} frame ${j}`)
+      if (fb) return fb
+      if (typeof f.urlHash !== "string" || !hex16.test(f.urlHash as string))
+        return `entry ${i} frame ${j} urlHash invalid`
+      if (typeof f.urlKind !== "string" || !allowedUrlKind.has(f.urlKind as string))
+        return `entry ${i} frame ${j} urlKind invalid`
+      if (typeof f.pageKind !== "string" || !allowedPageKind.has(f.pageKind as string))
+        return `entry ${i} frame ${j} pageKind invalid`
+      if (typeof f.dataTheme !== "string" || !allowedDataTheme.has(f.dataTheme as string))
+        return `entry ${i} frame ${j} dataTheme invalid`
+      if (
+        typeof f.hasAm !== "boolean" ||
+        typeof f.hasKiloChat !== "boolean" ||
+        typeof f.hasPrompt !== "boolean" ||
+        typeof f.hasHeader !== "boolean" ||
+        typeof f.visible !== "boolean"
+      )
+        return `entry ${i} frame ${j} flags invalid`
+      if (typeof f.bodyCategory !== "string" || !allowedCat.has(f.bodyCategory as string))
+        return `entry ${i} frame ${j} bodyCategory unknown`
+      if (f.bodyClassHash !== "" && (typeof f.bodyClassHash !== "string" || !hex16.test(f.bodyClassHash as string)))
+        return `entry ${i} frame ${j} bodyClassHash invalid`
+    }
+    const raw = JSON.stringify(e)
+    if (/GcLifecycle Title/.test(raw) || /GateC Title/.test(raw)) return `entry ${i} leaked raw title`
+    if (raw.includes("e2e-fixture-key") || raw.includes("KILO_SERVER_PASSWORD")) return `entry ${i} leaked secret`
+    if (/\/[a-z]+\/[^\s"]*\.kilo/.test(raw)) return `entry ${i} leaked path`
+  }
+  const phases = new Set((parsed as Array<Record<string, unknown>>).map((x) => x.phase as string))
+  for (const p of requiredPhases) if (!phases.has(p)) return `timeline missing phase ${p}`
+  const orderPhases = requiredPhases.filter((p) => p !== "failure-diagnostics")
+  const indices = orderPhases.map((p) => (parsed as Array<Record<string, unknown>>).findIndex((x) => x.phase === p))
+  for (let k = 1; k < indices.length; k++) {
+    if (indices[k] !== -1 && indices[k - 1] !== -1 && indices[k] < indices[k - 1])
+      return `timeline phase order invalid ${orderPhases[k - 1]} before ${orderPhases[k]}`
+  }
   return null
 }
 

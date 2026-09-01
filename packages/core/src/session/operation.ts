@@ -732,14 +732,22 @@ export interface SessionUpdateRecord extends FailureRecord {
   revision: number
 }
 
+export function hasSnapshot(record: SessionUpdateRecord): boolean {
+  return Object.hasOwn(record as object, "resultSnapshot")
+}
+
 function rowToSessionUpdateRecord(row: typeof SessionOperationTable.$inferSelect): SessionUpdateRecord {
   const base = rowToRecord(row)
   let snapshot: unknown | undefined
   const rawSnap = (row as unknown as Record<string, unknown>).result_snapshot as string | null | undefined
-  if (typeof rawSnap === "string" && rawSnap.length > 0) {
-    try {
-      snapshot = JSON.parse(rawSnap)
-    } catch {
+  if (rawSnap !== null && rawSnap !== undefined) {
+    if (typeof rawSnap === "string") {
+      try {
+        snapshot = JSON.parse(rawSnap)
+      } catch {
+        snapshot = rawSnap
+      }
+    } else {
       snapshot = rawSnap
     }
   }

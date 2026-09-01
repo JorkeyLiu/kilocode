@@ -752,6 +752,7 @@
     "test:e2e:real-completed": "KILO_E2E_SCENARIO=real-completed node script/e2e-probe-launch.mjs",
     "test:e2e:real-overflow": "KILO_E2E_SCENARIO=real-overflow node script/e2e-probe-launch.mjs",
     "test:e2e:real-restart": "KILO_E2E_SCENARIO=real-restart node script/e2e-probe-launch.mjs",
+    "test:e2e:real-lifecycle": "KILO_E2E_SCENARIO=real-lifecycle node script/e2e-probe-launch.mjs",
     "test:e2e:sidebar-removal": "KILO_E2E_SCENARIO=sidebar-removal node script/e2e-probe-launch.mjs",
     "test:e2e:worktree-removal": "KILO_E2E_SCENARIO=worktree-removal node script/e2e-probe-launch.mjs",
     "test:e2e:cloud-claw-removal": "KILO_E2E_SCENARIO=cloud-claw-removal node script/e2e-probe-launch.mjs",

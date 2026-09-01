@@ -2,6 +2,7 @@ import { isAbsolute, resolve, normalize as normalizePath } from "path"
 import { Context, Effect, Layer, Option, Schema } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
+import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
 import { SessionRevision } from "@opencode-ai/core/session/revision"
 import { ConfigConvergence } from "@/kilocode/server/config-convergence"
@@ -9,7 +10,13 @@ import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { eq } from "drizzle-orm"
 import { SessionID } from "@/session/schema"
 import { Session } from "@/session/session"
-import { GlobalBus } from "@/bus/global"
+import { EventV2 } from "@opencode-ai/core/event"
+import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { Location } from "@opencode-ai/core/location"
+import { AbsolutePath } from "@opencode-ai/core/schema"
+import { Project } from "@opencode-ai/core/project"
+import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { Log } from "@opencode-ai/core/util/log"
 
 export const VERSION = 1 as const
 export const OP = "session/update" as const
@@ -213,10 +220,13 @@ export class SessionUpdateDispatchService extends Context.Service<SessionUpdateD
   "SessionUpdateDispatch",
 ) {}
 
+const log = Log.create({ service: "sessionUpdate" })
+
 export const layer = Layer.effect(
   SessionUpdateDispatchService,
   Effect.gen(function* () {
     const { db } = yield* Database.Service
+    const events = yield* EventV2.Service
     const cfg = Option.getOrElse(yield* Effect.serviceOption(ConfigConvergence.Service), () => ConfigConvergence.noop)
     const gate = Option.getOrElse(yield* Effect.serviceOption(GenerationGate.Service), () => GenerationGate.noop)
 
@@ -297,7 +307,7 @@ export const layer = Layer.effect(
 
       const inner = Effect.gen(function* () {
         const sessionRow = yield* db
-          .select({ directory: SessionTable.directory, project_id: SessionTable.project_id })
+          .select({ directory: SessionTable.directory, project_id: SessionTable.project_id, workspace_id: SessionTable.workspace_id })
           .from(SessionTable)
           .where(eq(SessionTable.id, sessionId))
           .get()
@@ -320,6 +330,19 @@ export const layer = Layer.effect(
           const revision = makeRevision(curRev, cfgVer)
           return buildFailed(req, "scope_mismatch", `directory mismatch for session ${sessionId}`, false, false, revision)
         }
+        const projectRow = yield* db
+          .select({ worktree: ProjectTable.worktree })
+          .from(ProjectTable)
+          .where(eq(ProjectTable.id, sessionRow.project_id))
+          .get()
+          .pipe(Effect.orDie)
+        if (!projectRow) {
+          const curRev = yield* readRevOmit(sessionId)
+          const curCfg = yield* readCfgOmit(canonDir)
+          const revision = makeRevision(curRev, curCfg)
+          return buildFailed(req, "internal", "project not found for session", false, false, revision)
+        }
+        const projectWorktree = canonicalDirectory(projectRow.worktree)
 
         // Idempotency/opId replay and conflict lookup MUST happen before any freshness-authority reads.
         // Freshness checks (sessionRevision/configVersion) apply only when no committed replay/conflict exists.
@@ -341,8 +364,10 @@ export const layer = Layer.effect(
             return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
           }
           if (existing.outcome === "succeeded") {
-            const hasSnapshot = existing.resultSnapshot !== undefined && existing.resultSnapshot !== null
-            const persisted = hasSnapshot ? snapshotToInfo(existing.resultSnapshot) : undefined
+            const hasSnapshot = SessionOperation.hasSnapshot(existing as unknown as SessionOperation.SessionUpdateRecord)
+            const persisted = hasSnapshot
+              ? snapshotToInfo((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
+              : undefined
             if (hasSnapshot && !persisted) {
               const curRevS = yield* readRevOmit(sessionId)
               const curCfgS = yield* readCfgOmit(canonDir)
@@ -450,7 +475,7 @@ export const layer = Layer.effect(
           | { status: "conflict"; existing: SessionOperation.SessionUpdateRecord }
           | { status: "replay"; existing: SessionOperation.SessionUpdateRecord }
           | { status: "internal"; message: string }
-          | { status: "reserved"; record: SessionOperation.SessionUpdateRecord }
+          | { status: "reserved"; record: SessionOperation.SessionUpdateRecord; event: EventV2.Payload }
 
         const reserveResult: ReserveResult = yield* db.transaction(
           (tx) =>
@@ -502,7 +527,34 @@ export const layer = Layer.effect(
                 return { status: "stale" as const, authRev: revForStale }
               }
               const inserted = yield* SessionOperation.insertSessionUpdateSucceededTx(tx as unknown as typeof db, sessionId, record, meta)
-              return { status: "reserved" as const, record: inserted }
+              const hasSnapshot = SessionOperation.hasSnapshot(inserted)
+              const rawSnap = hasSnapshot ? (inserted as unknown as { resultSnapshot: unknown }).resultSnapshot : undefined
+              let infoForEvent: Session.Info | undefined
+              if (hasSnapshot) {
+                const parsed = snapshotToInfo(rawSnap as unknown)
+                if (!parsed) {
+                  yield* Effect.die(new Error("invalid persisted snapshot"))
+                }
+                infoForEvent = parsed
+              } else {
+                const row = yield* tx
+                  .select()
+                  .from(SessionTable)
+                  .where(eq(SessionTable.id, sessionId))
+                  .get()
+                  .pipe(Effect.orDie)
+                if (row) infoForEvent = Session.fromRow(row as unknown as Parameters<typeof Session.fromRow>[0]) as unknown as Session.Info
+              }
+              if (!infoForEvent) {
+                yield* Effect.die(new Error("session missing after update"))
+              }
+              const loc = new Location.Info({
+                directory: AbsolutePath.make(canonDir),
+                ...(sessionRow.workspace_id ? { workspaceID: sessionRow.workspace_id as unknown as WorkspaceV2.ID } : {}),
+                project: { id: Project.ID.make(sessionRow.project_id), directory: AbsolutePath.make(projectWorktree) },
+              })
+              const event = yield* events.recordProjectedTx(tx as unknown as typeof db, SessionV1.Event.Updated, { sessionID: sessionId, info: infoForEvent as unknown as Session.Info }, { location: loc as unknown as Location.Ref })
+              return { status: "reserved" as const, record: inserted, event }
             }),
           { behavior: "immediate" },
         )
@@ -528,8 +580,10 @@ export const layer = Layer.effect(
           const latestCfg = isLeft(cfgEither2) ? undefined : (rightValue(cfgEither2) as number | undefined)
           const existingReplay = reserveResult.existing
           if (existingReplay.outcome === "succeeded") {
-            const hasSnap = existingReplay.resultSnapshot !== undefined && existingReplay.resultSnapshot !== null
-            const persisted = hasSnap ? snapshotToInfo(existingReplay.resultSnapshot) : undefined
+            const hasSnap = SessionOperation.hasSnapshot(existingReplay)
+            const persisted = hasSnap
+              ? snapshotToInfo((existingReplay as unknown as { resultSnapshot: unknown }).resultSnapshot)
+              : undefined
             if (hasSnap && !persisted) {
               const revision = makeRevision((existingReplay as unknown as { revision: number }).revision ?? latestRev ?? actualSessionRev, latestCfg ?? effectiveConfigBeforeTx)
               return buildFailed(req, "internal", "invalid persisted snapshot", false, false, revision)
@@ -567,69 +621,22 @@ export const layer = Layer.effect(
           return buildFailed(req, "internal", reserveResult.message, false, false, revision)
         }
 
-        // Use persisted snapshot from inserted record
         if (reserveResult.status !== "reserved") {
           return buildFailed(req, "internal", "unexpected reserve status", false, false, undefined)
         }
-        const hasInsertedSnap = (reserveResult as unknown as { record: SessionOperation.SessionUpdateRecord }).record.resultSnapshot !== undefined && (reserveResult as unknown as { record: SessionOperation.SessionUpdateRecord }).record.resultSnapshot !== null
-        const persistedInserted = hasInsertedSnap ? snapshotToInfo((reserveResult as unknown as { record: SessionOperation.SessionUpdateRecord }).record.resultSnapshot) : undefined
-        if (hasInsertedSnap && !persistedInserted) {
-          const latestRev = yield* readSessionRev(sessionId).pipe(Effect.map((e) => (isLeft(e) ? undefined : (rightValue(e) as number | undefined))), Effect.orDie)
-          const latestCfg = yield* readConfigVer(canonDir).pipe(Effect.map((e) => (isLeft(e) ? undefined : (rightValue(e) as number | undefined))), Effect.orDie)
-          const revision = makeRevision(latestRev as unknown as number | undefined, latestCfg as unknown as number | undefined)
-          return buildFailed(req, "internal", "invalid persisted snapshot", false, false, revision)
-        }
-        let updatedInfo: Session.Info | undefined = persistedInserted as unknown as Session.Info | undefined
-        if (!updatedInfo) {
-          updatedInfo = (yield* db
-            .select()
-            .from(SessionTable)
-            .where(eq(SessionTable.id, sessionId))
-            .get()
-            .pipe(Effect.orDie)
-            .pipe(Effect.map((row) => (row ? Session.fromRow(row as unknown as Parameters<typeof Session.fromRow>[0]) : undefined)))) as unknown as Session.Info | undefined
-        }
-
-        if (!updatedInfo) {
-          const revEither2 = yield* readSessionRev(sessionId)
-          const cfgEither2 = yield* readConfigVer(canonDir)
-          const latestRev = isLeft(revEither2) ? undefined : (rightValue(revEither2) as number | undefined)
-          const latestCfg = isLeft(cfgEither2) ? undefined : (rightValue(cfgEither2) as number | undefined)
-          const revision = makeRevision(latestRev, latestCfg)
-          return buildFailed(req, "internal", "session missing after update", false, false, revision)
-        }
-
-        yield* Effect.sync(() => {
-          try {
-            const directory = canonDir
-            const project = sessionRow.project_id
-            GlobalBus.emit("event", {
-              directory,
-              project,
-              workspace: undefined,
-              payload: { id: req.opId, type: "session.updated", properties: { sessionID: sessionId, info: updatedInfo } },
-            })
-            GlobalBus.emit("event", {
-              directory,
-              project,
-              workspace: undefined,
-              payload: {
-                type: "sync",
-                syncEvent: { id: req.opId, type: "session.updated.1", seq: 0, aggregateID: sessionId, data: { sessionID: sessionId, info: updatedInfo } },
-              },
-            })
-          } catch (err) {
-            console.warn("[sessionUpdate] GlobalBus emit failed:", err instanceof Error ? err.message : String(err))
-          }
-        }).pipe(Effect.ignore)
-
-        const persistedRev = ((reserveResult as unknown as { record: SessionOperation.SessionUpdateRecord }).record as unknown as { revision: number }).revision
+        const updatedInfo = (reserveResult.event.data as { info: Session.Info }).info as unknown as Session.Info
+        const persistedRev = (reserveResult.record as unknown as { revision: number }).revision
         const revEither3 = yield* readSessionRev(sessionId)
         const newRev = persistedRev ?? (isLeft(revEither3) ? undefined : (rightValue(revEither3) as number | undefined))
         const cfgEither3 = yield* readConfigVer(canonDir)
         const cfgVerAfter = isLeft(cfgEither3) ? undefined : (rightValue(cfgEither3) as number | undefined)
         const revision = makeRevision(newRev as number | undefined, cfgVerAfter)
-        return buildSucceeded(req, updatedInfo as unknown as Session.Info, revision)
+        const succeeded = buildSucceeded(req, updatedInfo as unknown as Session.Info, revision)
+        yield* events.notifyCommitted(reserveResult.event).pipe(
+          Effect.catch((cause: unknown) => Effect.sync(() => log.warn("notifyCommitted failed", { error: cause instanceof Error ? cause.message : String(cause) }))),
+          Effect.catchDefect((defect: unknown) => Effect.sync(() => log.warn("notifyCommitted defect", { defect: defect instanceof Error ? defect.message : String(defect) }))),
+        )
+        return succeeded
         }).pipe(Effect.ensuring(leaseRelease))
         return txInnerResult
       }).pipe(
@@ -712,7 +719,7 @@ export const layer = Layer.effect(
 
       const inner = Effect.gen(function* () {
         const sessionRow = yield* db
-          .select({ directory: SessionTable.directory, project_id: SessionTable.project_id })
+          .select({ directory: SessionTable.directory, project_id: SessionTable.project_id, workspace_id: SessionTable.workspace_id })
           .from(SessionTable)
           .where(eq(SessionTable.id, sessionId))
           .get()
@@ -756,9 +763,11 @@ export const layer = Layer.effect(
             return buildFailed(req, "conflict", "idempotencyKey conflict: different operation facts with same key", false, false, revision)
           }
           // Same-key same-facts replay — return exact persisted terminal facts with omitted authority on read failure
-          if (existing.outcome === "succeeded") {
-            const hasSnapshot = existing.resultSnapshot !== undefined && existing.resultSnapshot !== null
-            const persisted = hasSnapshot ? snapshotToInfo(existing.resultSnapshot) : undefined
+           if (existing.outcome === "succeeded") {
+            const hasSnapshot = SessionOperation.hasSnapshot(existing as unknown as SessionOperation.SessionUpdateRecord)
+            const persisted = hasSnapshot
+              ? snapshotToInfo((existing as unknown as { resultSnapshot: unknown }).resultSnapshot)
+              : undefined
             if (hasSnapshot && !persisted) {
               const curRev = yield* readRevOmit(sessionId)
               const curCfg = yield* readCfgOmit(canonDir)

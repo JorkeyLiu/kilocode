@@ -140,6 +140,7 @@ const CMD_OPEN_TAB_READY = "kilo-code.new.e2eFixture.openInTabReady"
 const CMD_PRIVATE_PEER_STATUS = "kilo-code.new.e2eFixture.privatePeerStatus"
 const CMD_SESSION_UPDATE = "kilo-code.new.e2eFixture.sessionUpdate"
 const CMD_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.privateReplay"
+const CMD_RELOAD_AM = "kilo-code.new.e2eFixture.reloadAgentManagerWebview"
 const AM_VIEW_TYPE = "kilo-code.new.AgentManagerPanel"
 
 // --- Fixture session IDs (deterministic per run; shared with the harness via plan.json) ---
@@ -469,6 +470,7 @@ interface ScenarioFlags {
   runRealCompleted: boolean
   runRealOverflow: boolean
   runRealRestart: boolean
+  runRealLifecycle: boolean
   runSidebarRemoval: boolean
   runWorktreeRemoval: boolean
   runCloudClawRemoval: boolean
@@ -507,6 +509,7 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     // the runner itself executes workbench.action.reloadWindow mid-run, which
     // re-runs this runner in a fresh Extension Host (see serviceRealRestartBoundary).
     runRealRestart: scenario === "real-restart",
+    runRealLifecycle: scenario === "real-lifecycle",
     // P3.1 sidebar-removal is focused-only: it asserts manifest absence and
     // opens an "Open in Tab" editor panel (no synthetic fixtures, no CDP DOM
     // driving — all assertions run extension-host-side).
@@ -561,6 +564,7 @@ export async function run(): Promise<void> {
     "real-completed",
     "real-overflow",
     "real-restart",
+    "real-lifecycle",
     "sidebar-removal",
     "worktree-removal",
     "cloud-claw-removal",
@@ -570,7 +574,7 @@ export async function run(): Promise<void> {
   if (!supported.has(scenario)) {
     throw new Error(
       `probe runner: unknown KILO_E2E_SCENARIO "${scenario}". ` +
-        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation (default: all)",
+        "Supported values: all | tab-close | child-task-order | variant-memory | topic-navigation | real-session | real-completed | real-overflow | real-restart | real-lifecycle | sidebar-removal | worktree-removal | cloud-claw-removal | p3-4-removal | r9-observation (default: all)",
     )
   }
   const {
@@ -582,6 +586,7 @@ export async function run(): Promise<void> {
     runRealCompleted,
     runRealOverflow,
     runRealRestart,
+    runRealLifecycle,
     runSidebarRemoval,
     runWorktreeRemoval,
     runCloudClawRemoval,
@@ -985,6 +990,10 @@ export async function run(): Promise<void> {
   // --- R9 private observation scenario (focused only) ---
   if (runR9Observation) {
     await serviceR9ObservationBoundary(vscode, scratch, fixtureId)
+  }
+
+  if (runRealLifecycle) {
+    await serviceRealLifecycleBoundary(vscode, scratch, fixtureId)
   }
 
   await waitForHarness(scratch, join(scratch, "done"), 120_000, "harness done marker")
@@ -3366,4 +3375,216 @@ async function serviceR9ObservationBoundary(
   // Ensure status/cstate still present for harness final check
   const finalStatus = await vscodeApi.commands.executeCommand(CMD_R9_STATUS)
   writeFileSync(join(scratch, "r9-status.json"), JSON.stringify(finalStatus, null, 2))
+}
+
+const LC_SERVICE_BUDGET = 900_000
+
+async function handleLcOpenTabRequest(vscodeApi: typeof vscode, scratch: string): Promise<void> {
+  const req = join(scratch, "lc-open-tab-request")
+  if (!existsSync(req)) return
+  const raw = readFileSync(req, "utf8")
+  try {
+    rmSync(req)
+  } catch {}
+  let nonce = ""
+  let sessionId: string | undefined
+  try {
+    const parsed = JSON.parse(raw) as { nonce?: string; sessionId?: string }
+    nonce = parsed.nonce ?? ""
+    sessionId = parsed.sessionId
+  } catch {}
+  const before = await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)
+  let openRes: unknown
+  try {
+    if (sessionId) openRes = await vscodeApi.commands.executeCommand(CMD_OPEN_TAB_READY, sessionId)
+    else openRes = await vscodeApi.commands.executeCommand(CMD_OPEN_TAB_READY)
+  } catch (err) {
+    openRes = { count: 0, ready: false, error: String(err).slice(0, 120) }
+  }
+  const after = await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)
+  writeFileSync(join(scratch, "lc-open-tab.json"), JSON.stringify({ nonce, before, after, openRes }, null, 2))
+}
+
+async function handleLcTabReopenRequest(vscodeApi: typeof vscode, scratch: string): Promise<void> {
+  const req = join(scratch, "lc-tab-reopen-request")
+  if (!existsSync(req)) return
+  const raw = readFileSync(req, "utf8")
+  try {
+    rmSync(req)
+  } catch {}
+  let nonce = ""
+  let sessionId = ""
+  try {
+    const parsed = JSON.parse(raw) as { nonce?: string; sessionId?: string }
+    nonce = parsed.nonce ?? ""
+    sessionId = parsed.sessionId ?? ""
+  } catch {}
+  let probed: unknown
+  try {
+    probed = await vscodeApi.commands.executeCommand(CMD_OPEN_TAB_READY, sessionId)
+  } catch (err) {
+    probed = { ready: false, error: String(err).slice(0, 120) }
+  }
+  writeFileSync(join(scratch, "lc-tab-reopen-done"), JSON.stringify({ nonce, probed }, null, 2))
+}
+
+// eslint-disable-next-line complexity
+async function serviceRealLifecycleBoundary(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  fixtureId: string,
+): Promise<void> {
+  await resetLlmRequests(vscodeApi)
+  try {
+    const seeded = await vscodeApi.commands.executeCommand(CMD_SEED_CREDENTIAL)
+    writeFileSync(join(scratch, "lc-credential.json"), JSON.stringify(seeded, null, 2))
+  } catch (err) {
+    writeFileSync(join(scratch, "lc-credential.json"), JSON.stringify({ ok: false, error: String(err) }, null, 2))
+    throw err
+  }
+  await vscodeApi.commands.executeCommand(CMD_SETTLE)
+  writeFileSync(join(scratch, "lc-ready"), fixtureId)
+  let snap = 1
+  const deadline = Date.now() + LC_SERVICE_BUDGET
+  while (Date.now() < deadline) {
+    if (existsSync(join(scratch, "done"))) break
+    await handleLcOpenTabRequest(vscodeApi, scratch)
+    await handleLcTabReopenRequest(vscodeApi, scratch)
+    const cstate = join(scratch, "lc-cstate-request")
+    if (existsSync(cstate)) {
+      rmSync(cstate)
+      const state = await vscodeApi.commands.executeCommand(CMD_CANONICAL_STATE)
+      writeFileSync(join(scratch, "lc-cstate.json"), JSON.stringify(state, null, 2))
+    }
+    const credSeed = join(scratch, "lc-credseed-request")
+    if (existsSync(credSeed)) {
+      rmSync(credSeed)
+      const seeded = await vscodeApi.commands.executeCommand(CMD_SEED_CREDENTIAL)
+      writeFileSync(join(scratch, "lc-credential.json"), JSON.stringify(seeded, null, 2))
+    }
+    const privReq = join(scratch, "lc-private-status-request")
+    if (existsSync(privReq)) {
+      const raw = readFileSync(privReq, "utf8")
+      try {
+        rmSync(privReq)
+      } catch {}
+      let nonce = ""
+      try {
+        nonce = (JSON.parse(raw) as { nonce?: string }).nonce ?? ""
+      } catch {}
+      const status = await vscodeApi.commands.executeCommand(CMD_PRIVATE_PEER_STATUS)
+      writeFileSync(join(scratch, "lc-private-status.json"), JSON.stringify({ ...(status as object), nonce }, null, 2))
+    }
+    const titleReq = join(scratch, "lc-title-request")
+    if (existsSync(titleReq)) {
+      const raw = readFileSync(titleReq, "utf8")
+      try {
+        rmSync(titleReq)
+      } catch {}
+      let payload: { sessionId: string; title: string; nonce?: string }
+      try {
+        payload = JSON.parse(raw) as { sessionId: string; title: string; nonce?: string }
+      } catch {
+        payload = { sessionId: "", title: "" }
+      }
+      const nonce = payload.nonce ?? ""
+      const { nonce: _n, ...cmdPayload } = payload
+      const result = await vscodeApi.commands.executeCommand(CMD_SESSION_UPDATE, cmdPayload)
+      const out = { ...(result as object), nonce }
+      const serialized = JSON.stringify(out)
+      if (payload.title && serialized.includes(payload.title)) throw new Error("runner: title result leaked raw title")
+      writeFileSync(join(scratch, "lc-title-result.json"), JSON.stringify(out, null, 2))
+    }
+    const replayReq = join(scratch, "lc-replay-request")
+    if (existsSync(replayReq)) {
+      const raw = readFileSync(replayReq, "utf8")
+      try {
+        rmSync(replayReq)
+      } catch {}
+      let sid = raw.trim()
+      let nonce = ""
+      try {
+        const parsed = JSON.parse(raw) as { sessionId?: string; nonce?: string } | string
+        if (typeof parsed === "string") sid = parsed
+        else if (parsed && typeof parsed.sessionId === "string") {
+          sid = parsed.sessionId
+          nonce = parsed.nonce ?? ""
+        } else if (parsed && typeof parsed.nonce === "string") {
+          nonce = parsed.nonce
+          sid = (parsed as { sessionId?: string }).sessionId ?? sid
+        }
+      } catch {}
+      const result = await vscodeApi.commands.executeCommand(CMD_PRIVATE_REPLAY, sid)
+      writeFileSync(join(scratch, "lc-replay-result.json"), JSON.stringify({ ...(result as object), nonce }, null, 2))
+    }
+    const snapReq = join(scratch, `lc-snap-${snap}-request`)
+    if (existsSync(snapReq)) {
+      const snapshot = await vscodeApi.commands.executeCommand(CMD_SNAPSHOT)
+      writeFileSync(join(scratch, `lc-snap-${snap}.json`), JSON.stringify(snapshot, null, 2))
+      snap += 1
+    }
+    const settleReq = join(scratch, "lc-settle-request")
+    if (existsSync(settleReq)) {
+      rmSync(settleReq)
+      await vscodeApi.commands.executeCommand(CMD_SETTLE)
+      writeFileSync(join(scratch, "lc-settle-done"), fixtureId)
+    }
+    const panelClose = join(scratch, "lc-panel-close-request")
+    if (existsSync(panelClose)) {
+      rmSync(panelClose)
+      const amTab = vscodeApi.window.tabGroups.all.flatMap((group) => group.tabs).find(isAgentManagerTab)
+      if (!amTab) throw new Error("probe runner: Agent Manager tab not found for lc panel close")
+      await vscodeApi.window.tabGroups.close(amTab, true)
+      await waitFor(async () => (agentManagerTabOpen() ? undefined : "closed"), 30_000, "lc panel disposed")
+      await vscodeApi.commands.executeCommand(CMD_OPEN)
+      await waitFor(async () => (agentManagerTabOpen() ? true : undefined), 30_000, "lc reopened panel present")
+      await waitFor(
+        async () => {
+          try {
+            const ready = await vscodeApi.commands.executeCommand<boolean>(CMD_READY)
+            return ready ? true : undefined
+          } catch {
+            return undefined
+          }
+        },
+        60_000,
+        "lc reopened webview readiness",
+      )
+      await vscodeApi.commands.executeCommand(CMD_SETTLE)
+      writeFileSync(join(scratch, "lc-panel-close-ready"), fixtureId)
+    }
+    const reloadReq = join(scratch, "lc-reload-request")
+    if (existsSync(reloadReq)) {
+      rmSync(reloadReq)
+      await vscodeApi.commands.executeCommand(CMD_RELOAD_AM)
+      await vscodeApi.commands.executeCommand(CMD_SETTLE)
+      writeFileSync(join(scratch, "lc-reload-ready"), fixtureId)
+    }
+    const tabClose = join(scratch, "lc-tab-close-request")
+    if (existsSync(tabClose)) {
+      rmSync(tabClose)
+      const tabPanel = vscodeApi.window.tabGroups.all
+        .flatMap((group) => group.tabs)
+        .find(
+          (tab) => tab.input instanceof vscode.TabInputWebview && tab.input.viewType.endsWith("kilo-code.new.TabPanel"),
+        )
+      if (!tabPanel) throw new Error("probe runner: TabPanel not found for lc tab close")
+      await vscodeApi.window.tabGroups.close(tabPanel, true)
+      await waitFor(
+        async () => {
+          const has = vscodeApi.window.tabGroups.all.some((group) =>
+            group.tabs.some(
+              (t) => t.input instanceof vscode.TabInputWebview && t.input.viewType.endsWith("kilo-code.new.TabPanel"),
+            ),
+          )
+          return has ? undefined : "closed"
+        },
+        15_000,
+        "lc tab disposed",
+      )
+      writeFileSync(join(scratch, "lc-tab-close-done"), fixtureId)
+    }
+    await sleep(200)
+  }
+  await writeLlmRequestsEvidence(vscodeApi, scratch, "real-lifecycle")
 }

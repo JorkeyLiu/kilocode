@@ -78,6 +78,15 @@ function createManager() {
   manager.log = mock(() => undefined)
   manager.run = { state: () => ({}) }
   manager.statsPoller = { setEnabled: mock(() => undefined) }
+  ;(manager as unknown as Record<string, unknown>)["LOCAL"] = "local"
+  ;(manager as unknown as Record<string, unknown>)["tabOrder"] = {}
+  ;(manager as unknown as Record<string, unknown>)["activeSessionId"] = undefined
+  ;(manager as unknown as Record<string, unknown>)["recentSessions"] = new Set<string>()
+  ;(manager as unknown as Record<string, unknown>)["accumulatedCatalog"] = undefined
+  ;(manager as unknown as Record<string, unknown>)["accumulatedHasMore"] = undefined
+  ;(manager as unknown as Record<string, unknown>)["host"] = { workspaceStore: fakeStore().store } as unknown as Store
+  ;(manager as unknown as Record<string, unknown>)["schedulePersist"] = mock(() => undefined)
+  ;(manager as unknown as Record<string, unknown>)["flush"] = mock(async () => undefined)
   return manager
 }
 
@@ -148,6 +157,14 @@ function createLifecycleManager() {
   manager.sidebarCollapsed = false
   manager.run = { state: () => ({}) }
   manager.statsPoller = { setEnabled: mock(() => undefined) }
+  ;(manager as unknown as Record<string, unknown>)["LOCAL"] = "local"
+  ;(manager as unknown as Record<string, unknown>)["recentSessions"] = new Set<string>()
+  ;(manager as unknown as Record<string, unknown>)["accumulatedCatalog"] = undefined
+  ;(manager as unknown as Record<string, unknown>)["accumulatedHasMore"] = undefined
+  ;(manager as unknown as Record<string, unknown>)["host"] = { workspaceStore: store } as unknown as Store
+  ;(manager as unknown as Record<string, unknown>)["schedulePersist"] = mock(() => undefined)
+  ;(manager as unknown as Record<string, unknown>)["flush"] = mock(async () => undefined)
+  ;(manager as unknown as Record<string, unknown>)["activeSessionId"] = undefined
   manager.pushState = () => {
     const proto = AgentManagerProvider.prototype as unknown as { pushState: (this: LifecycleManager) => void }
     proto.pushState.call(manager)
@@ -196,6 +213,14 @@ describe("AgentManagerProvider timing wiring", () => {
     manager.log = mock(() => undefined)
     manager.run = { state: () => ({}) }
     manager.statsPoller = { setEnabled: mock(() => undefined) }
+    ;(manager as unknown as Record<string, unknown>)["LOCAL"] = "local"
+    ;(manager as unknown as Record<string, unknown>)["tabOrder"] = {}
+    ;(manager as unknown as Record<string, unknown>)["activeSessionId"] = undefined
+    ;(manager as unknown as Record<string, unknown>)["recentSessions"] = new Set<string>()
+    ;(manager as unknown as Record<string, unknown>)["accumulatedCatalog"] = undefined
+    ;(manager as unknown as Record<string, unknown>)["accumulatedHasMore"] = undefined
+    ;(manager as unknown as Record<string, unknown>)["host"] = { workspaceStore: fakeStore().store } as unknown as Store
+    ;(manager as unknown as Record<string, unknown>)["schedulePersist"] = mock(() => undefined)
 
     manager.onSessionStatus({ properties: { sessionID: "s1", status: { type: "busy" } } })
     expect(manager.pushState).toHaveBeenCalledTimes(1)
@@ -223,6 +248,15 @@ describe("AgentManagerProvider timing wiring", () => {
     manager.log = mock(() => undefined)
     manager.run = { state: () => ({}) }
     manager.statsPoller = { setEnabled: mock(() => undefined) }
+    ;(manager as unknown as Record<string, unknown>)["LOCAL"] = "local"
+    ;(manager as unknown as Record<string, unknown>)["tabOrder"] = { ["local"]: ["s1", "s2"] }
+    ;(manager as unknown as Record<string, unknown>)["activeSessionId"] = "s1"
+    ;(manager as unknown as Record<string, unknown>)["recentSessions"] = new Set<string>()
+    ;(manager as unknown as Record<string, unknown>)["accumulatedCatalog"] = undefined
+    ;(manager as unknown as Record<string, unknown>)["accumulatedHasMore"] = undefined
+    ;(manager as unknown as Record<string, unknown>)["host"] = { workspaceStore: store.store } as unknown as Store
+    ;(manager as unknown as Record<string, unknown>)["schedulePersist"] = mock(() => undefined)
+    ;(manager as unknown as Record<string, unknown>)["flush"] = mock(async () => undefined)
 
     // The backend emits transient {type:'session.deleted',
     // properties:{sessionID}} without any managed-session participation; the
@@ -388,6 +422,17 @@ describe("AgentManagerProvider timing wiring", () => {
     manager.panel = { postMessage: (msg) => captured.push(msg) }
     manager.managedSessions = new Map([["s1", { id: "s1" }]])
     manager.panelSessions = new Set(["s1"])
+    ;(manager as unknown as Record<string, unknown>)["LOCAL"] = "local"
+    ;(manager as unknown as Record<string, unknown>)["tabOrder"] = { ["local"]: ["s1"] }
+    ;(manager as unknown as Record<string, unknown>)["activeSessionId"] = "s1"
+    ;(manager as unknown as Record<string, unknown>)["recentSessions"] = new Set<string>()
+    ;(manager as unknown as Record<string, unknown>)["accumulatedCatalog"] = undefined
+    ;(manager as unknown as Record<string, unknown>)["accumulatedHasMore"] = undefined
+    ;(manager as unknown as Record<string, unknown>)["host"] = { workspaceStore: fakeStore().store } as unknown as Store
+    ;(manager as unknown as Record<string, unknown>)["schedulePersist"] = mock(() => undefined)
+    ;(manager as unknown as Record<string, unknown>)["visiblePresence"] = { clear: mock(() => undefined), flush: mock(() => undefined) } as unknown as Store
+    ;(manager as unknown as Record<string, unknown>)["statsPoller"] = { setEnabled: mock(() => undefined), setVisible: mock(() => undefined), stop: mock(() => undefined) } as unknown as Record<string, unknown>
+    ;(manager as unknown as Record<string, unknown>)["stateReady"] = Promise.resolve()
     manager.pushState = () => {
       const proto = AgentManagerProvider.prototype as unknown as { pushState: (this: Manager) => void }
       proto.pushState.call(manager)

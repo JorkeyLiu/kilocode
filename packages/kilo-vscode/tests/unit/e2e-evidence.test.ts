@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test"
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
 import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 import {
@@ -15,6 +16,8 @@ import {
   sha256Of,
   validateEvidenceDestination,
   validateGcProof,
+  validateLcProof,
+  validateLcTimeline,
 } from "../../script/e2e-evidence"
 
 function tempRoot(): string {
@@ -85,7 +88,316 @@ function seededRun(
   return { scratch, workspace, staging }
 }
 
+function hash16(v: string): string {
+  return createHash("sha256").update(v).digest("hex").slice(0, 16)
+}
+
+function makeValidLcProof(): Record<string, unknown> {
+  const h = "aaaaaaaaaaaaaaaa"
+  const pid = 1234
+  const port = 4321
+  const epoch = 1
+  const backend = { pid, port, epoch }
+  const priv = {
+    pid,
+    epoch,
+    available: true,
+    state: "open",
+    protocol: { name: "kilo-private", major: 1 },
+    capabilities: ["session/cancelQueued", "session/update"],
+    hasSessionUpdate: true,
+  }
+  const revision = { session: 5, config: 2 }
+  const sdk = { status: "succeeded", httpStatus: 200, hasData: true }
+  const privRes = { status: "succeeded", hasData: true }
+  const cloneB = () => ({ pid, port, epoch })
+  const prPriv = () => ({ ...priv, protocol: { ...priv.protocol }, capabilities: [...priv.capabilities] })
+  const siblingTitle = "bbbbbbbbbbbbbbbb"
+  return {
+    schema: "kilo-gc-lifecycle-proof/1",
+    version: 1,
+    scope: "real-lifecycle Gate C: UI-only lifecycle convergence with stable identity and same-key replay",
+    fixtureIdHash: h,
+    sessionIdHash: h,
+    siblingIdHash: h,
+    titleHash: h,
+    siblingTitleHash: siblingTitle,
+    orderHash: h,
+    pre: { backend: cloneB(), private: prPriv() },
+    openTab: {
+      before: {
+        backend: cloneB(),
+        private: {
+          pid,
+          epoch,
+          available: true,
+          hasSessionUpdate: true,
+          state: "open",
+          protocol: { name: "kilo-private", major: 1 },
+          capabilities: ["session/cancelQueued", "session/update"],
+        },
+      },
+      after: {
+        backend: cloneB(),
+        private: {
+          pid,
+          epoch,
+          available: true,
+          hasSessionUpdate: true,
+          state: "open",
+          protocol: { name: "kilo-private", major: 1 },
+          capabilities: ["session/cancelQueued", "session/update"],
+        },
+      },
+      editorCount: 1,
+      ready: true,
+      loadOk: true,
+      targetSessionIdHash: h,
+      currentSessionIdHash: h,
+      attached: true,
+    },
+    titleOp: {
+      opIdHash: h,
+      idempotencyKeyHash: h,
+      requestIdHash: h,
+      sessionIdHash: h,
+      titleHash: h,
+      order: ["sdk", "private"],
+      sdk: { ...sdk },
+      private: { ...privRes },
+      parity: { divergence: null, details: {} },
+      revision: { ...revision },
+    },
+    replay: {
+      found: true,
+      private: { ...privRes },
+      revision: { ...revision },
+      titleHash: h,
+      opIdHash: h,
+      idempotencyKeyHash: h,
+      requestIdHash: h,
+      sessionIdHash: h,
+    },
+    boundaries: {
+      panelCloseReopen: {
+        pre: { backend: cloneB(), private: prPriv() },
+        post: { backend: cloneB(), private: prPriv() },
+        orderHash: h,
+        orderCount: 2,
+        agentTitleHash: h,
+        tabTitleHash: h,
+      },
+      webviewReload: {
+        pre: { backend: cloneB(), private: prPriv() },
+        post: { backend: cloneB(), private: prPriv() },
+        orderHash: h,
+        orderCount: 2,
+        agentTitleHash: h,
+        tabTitleHash: h,
+      },
+      tabCloseReopen: {
+        pre: { backend: cloneB(), private: prPriv() },
+        post: { backend: cloneB(), private: prPriv() },
+        orderHash: h,
+        orderCount: 2,
+        agentTitleHash: h,
+        tabTitleHash: h,
+      },
+      sessionSwitch: {
+        pre: { backend: cloneB(), private: prPriv(), activeIdHash: h },
+        post: { backend: cloneB(), private: prPriv(), activeIdHash: h },
+        switched: { backend: cloneB(), private: prPriv(), activeIdHash: h },
+        orderHash: h,
+        orderCount: 2,
+        agentTitleHash: h,
+        tabTitleHash: h,
+        switchedAgentTitleHash: siblingTitle,
+        switchedTabTitleHash: h,
+        preAgentTitleHash: h,
+        preTabTitleHash: h,
+      },
+    },
+    finalReplay: {
+      found: true,
+      private: { ...privRes },
+      revision: { ...revision },
+      titleHash: h,
+      opIdHash: h,
+      idempotencyKeyHash: h,
+      requestIdHash: h,
+      sessionIdHash: h,
+    },
+    parity: { divergence: null, details: {} },
+    collectedAt: new Date().toISOString(),
+  }
+}
+
+function makeValidTimelineEntry(ts: number, phase: string) {
+  return {
+    ts,
+    iso: new Date(ts).toISOString(),
+    phase,
+    auxiliaryBar: { exists: true, visible: true, width: 300, height: 600, focusWithin: false },
+    chat: { exists: true, visible: true, inputVisible: true },
+    editors: { tabCount: 1, groupCount: 1, tabHashes: [hash16("tab")] },
+    frames: [
+      {
+        urlHash: hash16("vscode-webview://a"),
+        urlKind: "vscode-webview",
+        pageKind: "webview",
+        dataTheme: "kilo-vscode",
+        hasAm: false,
+        hasKiloChat: true,
+        hasPrompt: true,
+        hasHeader: false,
+        bodyClassHash: hash16("cls"),
+        bodyCategory: "kilo-welcome",
+        visible: true,
+      },
+    ],
+  }
+}
+
+function buildValidLifecycleTimeline(): unknown[] {
+  const base = Date.now()
+  const phases = [
+    "pre-first-target-open",
+    "post-first-target-open",
+    "pre-panel-close",
+    "post-panel-reopen",
+    "pre-webview-reload",
+    "post-webview-reload",
+    "pre-editor-tab-close",
+    "post-editor-tab-close",
+    "immediately-after-lc-tab-reopen-done-before-frame-selection",
+    "after-chosen-frame",
+    "pre-session-switch",
+    "switched-session",
+    "post-session-switch",
+    "final-done",
+  ]
+  return phases.map((p, i) => makeValidTimelineEntry(base + i * 1000, p))
+}
+
+const TRANSIENT_FORBIDDEN_LC = [
+  // IPC requests + results (runner/lifecycle producer; nonce-driven)
+  // private-status: request + result
+  "lc-private-status-request",
+  "lc-private-status.json",
+  // open-tab: request + result
+  "lc-open-tab-request",
+  "lc-open-tab.json",
+  // title: request + result
+  "lc-title-request",
+  "lc-title-result.json",
+  // replay: request + result
+  "lc-replay-request",
+  "lc-replay-result.json",
+  // cstate/credential/snap: requests only (results are required durable evidence)
+  "lc-cstate-request",
+  "lc-credseed-request",
+  "lc-snap-1-request",
+  "lc-snap-2-request",
+  // boundary barriers: request / ready / done
+  "lc-settle-request",
+  "lc-settle-done",
+  "lc-panel-close-request",
+  "lc-panel-close-ready",
+  "lc-reload-request",
+  "lc-reload-ready",
+  "lc-tab-close-request",
+  "lc-tab-close-done",
+  "lc-tab-reopen-request",
+  "lc-tab-reopen-done",
+  // lifecycle diagnostics (probe-local, not durable evidence)
+  "lc-gc-replay.json",
+  "lc-model-requests.json",
+]
+
+function seededLifecycle(
+  root: string,
+  over: { drop?: string[]; corrupt?: string[] } = {},
+): { scratch: string; workspace: string; staging: string } {
+  const scratch = join(root, "scratch")
+  const workspace = join(root, "workspace")
+  const staging = join(root, "staging")
+  mkdirSync(scratch, { recursive: true })
+  mkdirSync(staging, { recursive: true })
+  const plan = { sourceId: "s-A", customAgent: "e2e-agent", customProvider: "e2e-local", customModel: "e2e-model" }
+  writeFileSync(join(scratch, "plan.json"), JSON.stringify(plan))
+  writeFileSync(join(scratch, "runner-pid"), "4242")
+  writeFileSync(
+    join(scratch, "llm-requests.jsonl"),
+    JSON.stringify({
+      providerID: "e2e-local",
+      modelID: "e2e-model",
+      agent: "e2e-agent",
+      small: false,
+      sessionID: "s",
+      pid: 1,
+      instance: 1,
+      ts: 0,
+    }) + "\n",
+  )
+  writeFileSync(
+    join(scratch, "llm-requests-real-lifecycle.json"),
+    JSON.stringify({ scenario: "real-lifecycle", records: [] }),
+  )
+  writeFileSync(
+    join(scratch, "llm-matrix-real-lifecycle-final.json"),
+    JSON.stringify({ phase: "real-lifecycle-final", total: 1, violations: [] }),
+  )
+  writeFileSync(
+    join(scratch, "lc-snap-1.json"),
+    JSON.stringify({ requestedAt: "t", sessions: [], messages: {}, statuses: {} }),
+  )
+  writeFileSync(
+    join(scratch, "lc-snap-2.json"),
+    JSON.stringify({ requestedAt: "t2", sessions: [], messages: {}, statuses: {} }),
+  )
+  writeFileSync(join(scratch, "canonical-gate.json"), JSON.stringify({ gate: "ok", at: new Date().toISOString() }))
+  writeFileSync(
+    join(scratch, "canonical-archive-before.json"),
+    JSON.stringify({ before: true, ts: Date.now() }),
+  )
+  writeFileSync(join(scratch, "canonical-archive-after.json"), JSON.stringify({ after: true, ts: Date.now() }))
+  writeFileSync(join(scratch, "lc-cstate.json"), JSON.stringify({ state: "ready", hash: hash16("cstate") }))
+  writeFileSync(join(scratch, "lc-credential.json"), JSON.stringify({ provisioned: true, hash: hash16("cred") }))
+  writeFileSync(join(scratch, "lc-gc-proof.json"), JSON.stringify(makeValidLcProof()))
+  writeFileSync(join(scratch, "lc-layout-timeline.json"), JSON.stringify(buildValidLifecycleTimeline()))
+  const kilo = join(workspace, ".kilo")
+  mkdirSync(kilo, { recursive: true })
+  writeFileSync(join(kilo, "kilo.jsonc"), JSON.stringify({ provider: {}, agent: {} }))
+  // drops: support both scratch rels and workspace kilo.jsonc variants
+  for (const drop of over.drop ?? []) {
+    if (drop === ".kilo/kilo.jsonc" || drop === "workspace/.kilo/kilo.jsonc" || drop === "kilo.jsonc") {
+      rmSync(join(workspace, ".kilo", "kilo.jsonc"), { force: true })
+    } else if (drop.includes("*")) {
+      // glob pattern drop: remove matching files
+      const star = drop.indexOf("*")
+      const prefix = drop.slice(0, star)
+      const suffix = drop.slice(star + 1)
+      if (existsSync(scratch)) {
+        for (const name of readdirSync(scratch)) {
+          if (name.startsWith(prefix) && name.endsWith(suffix)) rmSync(join(scratch, name), { force: true })
+        }
+      }
+    } else {
+      rmSync(join(scratch, drop), { force: true })
+    }
+  }
+  for (const corrupt of over.corrupt ?? []) {
+    if (corrupt === ".kilo/kilo.jsonc" || corrupt === "workspace/.kilo/kilo.jsonc" || corrupt === "kilo.jsonc") {
+      writeFileSync(join(workspace, ".kilo", "kilo.jsonc"), "{not jsonc")
+    } else {
+      writeFileSync(join(scratch, corrupt), "{not json")
+    }
+  }
+  return { scratch, workspace, staging }
+}
+
 const realCompleted = new Set(["real-completed"])
+const realLifecycle = new Set(["real-lifecycle"])
 
 function collect(root: string) {
   const { scratch, workspace, staging } = seededRun(root)
@@ -277,6 +589,45 @@ describe("parseFailure (required-artifact malformation)", () => {
     expect(parseFailure("llm-requests.jsonl", Buffer.from('{"a":1}\nbroken\n'))).toContain("corrupt JSONL line")
     expect(parseFailure("llm-requests.jsonl", Buffer.from(""))).toContain("empty JSONL store")
     expect(parseFailure("ask.txt", Buffer.from("plain text"))).toBeNull()
+  })
+
+  it("validates JSONC with comments/trailing commas via real parser and rejects malformed without leaking content", () => {
+    // valid JSONC with comments and trailing comma must pass (Kilo config semantics)
+    expect(parseFailure("workspace/.kilo/kilo.jsonc", Buffer.from('// comment\n{"a":1,}\n'))).toBeNull()
+    expect(parseFailure(".kilo/kilo.jsonc", Buffer.from('{"provider": {}, "agent": {},}'))).toBeNull()
+    expect(parseFailure("workspace/.kilo/kilo.jsonc", Buffer.from('{"x":1, // trailing\n "y":2,}'))).toBeNull()
+    // malformed/truncated JSONC returns stable category without raw content
+    const malformed1 = parseFailure("workspace/.kilo/kilo.jsonc", Buffer.from("{not jsonc")) as string
+    expect(malformed1).toContain("invalid JSONC")
+    expect(malformed1).not.toContain("{not jsonc")
+    expect(malformed1).not.toContain("not jsonc")
+    const malformed2 = parseFailure("workspace/.kilo/kilo.jsonc", Buffer.from("")) as string
+    expect(malformed2).toContain("empty file")
+    const malformed3 = parseFailure(".kilo/kilo.jsonc", Buffer.from('{"a":')) as string
+    expect(malformed3).toContain("invalid JSONC")
+    expect(malformed3).not.toContain('{"a":')
+    // stable error: same category for different malformed inputs, no path leak beyond dest
+    expect(parseFailure("workspace/.kilo/kilo.jsonc", Buffer.from("{bad"))).toBe(
+      parseFailure("workspace/.kilo/kilo.jsonc", Buffer.from("{worse")),
+    )
+    // invalid JSON without content leak
+    const inv = parseFailure("plan.json", Buffer.from('{not json content "secret"}')) as string
+    expect(inv).toBe("invalid JSON")
+    expect(inv).not.toContain("secret")
+    // corrupt JSONL without content leak
+    const corruptLine = JSON.stringify("secret-payload-123")
+    const invJsonl = parseFailure("llm-requests.jsonl", Buffer.from(`{"a":1}\n${corruptLine.slice(1,-1)} not json\n`)) as string
+    expect(invJsonl).toBe("corrupt JSONL line")
+    expect(invJsonl).not.toContain("secret")
+  })
+
+  it("needsParse recognizes .jsonc as parse-required", () => {
+    // .kilo/kilo.jsonc must be recognized as required parse artifact; .jsonc success allows comments
+    expect(parseFailure("workspace/.kilo/kilo.jsonc", Buffer.from('{"ok":1}'))).toBeNull()
+    // ensure evidenceInventory for real-lifecycle includes .kilo/kilo.jsonc
+    const { required } = evidenceInventory(new Set(["real-lifecycle"]))
+    const rels = required.map((s) => `${s.base}:${s.rel}`)
+    expect(rels).toContain("workspace:.kilo/kilo.jsonc")
   })
 })
 
@@ -893,5 +1244,524 @@ describe("collectEvidence (byte-exact handoff + manifest)", () => {
     // never silently chooses one.
     expect(() => claimDestination(claimed, "plan.json", "/workspace/plan.json")).toThrow(/conflicting evidence sources/)
     expect(() => claimDestination(claimed, "plan.json", "/scratch/other.json")).toThrow()
+  })
+})
+
+describe("collectEvidence real-lifecycle (full inventory matrix)", () => {
+  function collectLifecycle(root: string, over: { drop?: string[]; corrupt?: string[] } = {}) {
+    const { scratch, workspace, staging } = seededLifecycle(root, over)
+    return collectEvidence({
+      staging,
+      scratch,
+      workspace,
+      scenarios: realLifecycle,
+      fixtureId: "e2e-probe-1234",
+      startedAt: Date.now() - 60_000,
+      probePid: 4242,
+      success: true,
+      destination: resolve(join(root, "dest")),
+    })
+  }
+
+  it("seeds all required files with schema-valid minimal contents and passes complete", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededLifecycle(root)
+      const manifest = collectEvidence({
+        staging,
+        scratch,
+        workspace,
+        scenarios: realLifecycle,
+        fixtureId: "e2e-probe-1234",
+        startedAt: Date.now() - 60_000,
+        probePid: 4242,
+        success: true,
+        destination: resolve(join(root, "dest")),
+      })
+      expect(manifest.status).toBe("complete")
+      expect(manifest.validated).toBe(true)
+      expect(manifest.missing).toEqual([])
+      expect(manifest.malformed).toEqual([])
+      // required inventory contains all decision-critical artifacts
+      expect(manifest.required).toContain("plan.json")
+      expect(manifest.required).toContain("llm-requests.jsonl")
+      expect(manifest.required).toContain("llm-requests-real-lifecycle.json")
+      expect(manifest.required).toContain("llm-matrix-real-lifecycle-final.json")
+      expect(manifest.required).toContain("workspace/.kilo/kilo.jsonc")
+      expect(manifest.required).toContain("lc-gc-proof.json")
+      expect(manifest.required).toContain("lc-layout-timeline.json")
+      expect(manifest.required).toContain("canonical-gate.json")
+      expect(manifest.required).toContain("lc-cstate.json")
+      expect(manifest.required).toContain("lc-credential.json")
+      // snapshot glob expanded
+      expect(manifest.required).toContain("lc-snap-1.json")
+      expect(manifest.required).toContain("lc-snap-2.json")
+      // byte-exact
+      for (const entry of manifest.files) {
+        const destBytes = readFileSync(join(staging, entry.dest))
+        expect(sha256Of(destBytes)).toBe(entry.sha256)
+        expect(readFileSync(entry.source).equals(destBytes)).toBe(true)
+      }
+      // JSONC with comments/trailing commas still validates (allow semantics)
+      const kiloBytes = readFileSync(join(workspace, ".kilo", "kilo.jsonc"))
+      expect(parseFailure("workspace/.kilo/kilo.jsonc", kiloBytes)).toBeNull()
+      // proof and timeline validators pass
+      expect(validateLcProof(JSON.parse(readFileSync(join(scratch, "lc-gc-proof.json"), "utf8")))).toBeNull()
+      expect(validateLcTimeline(JSON.parse(readFileSync(join(scratch, "lc-layout-timeline.json"), "utf8")))).toBeNull()
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("allows JSONC comments/trailing commas in required config without failing", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededLifecycle(root)
+      // overwrite config with comments/trailing commas
+      writeFileSync(join(workspace, ".kilo", "kilo.jsonc"), '// comment\n{"provider": {}, "agent": {},}\n')
+      const manifest = collectEvidence({
+        staging,
+        scratch,
+        workspace,
+        scenarios: realLifecycle,
+        fixtureId: "e2e-probe-1234",
+        startedAt: Date.now(),
+        probePid: 4242,
+        success: true,
+        destination: resolve(join(root, "dest")),
+      })
+      expect(manifest.status).toBe("complete")
+      expect(manifest.malformed).not.toContain("workspace/.kilo/kilo.jsonc")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  const missingMatrix: Array<{ name: string; drop: string[]; missing: string }> = [
+    { name: "lc-gc-proof", drop: ["lc-gc-proof.json"], missing: "lc-gc-proof.json" },
+    { name: "lc-layout-timeline", drop: ["lc-layout-timeline.json"], missing: "lc-layout-timeline.json" },
+    { name: "llm-requests.jsonl", drop: ["llm-requests.jsonl"], missing: "llm-requests.jsonl" },
+    { name: "scenario requests JSON", drop: ["llm-requests-real-lifecycle.json"], missing: "llm-requests-real-lifecycle.json" },
+    { name: "final matrix", drop: ["llm-matrix-real-lifecycle-final.json"], missing: "llm-matrix-real-lifecycle-final.json" },
+    { name: "config JSONC", drop: [".kilo/kilo.jsonc"], missing: "workspace/.kilo/kilo.jsonc" },
+    { name: "zero snap glob", drop: ["lc-snap-1.json", "lc-snap-2.json"], missing: "lc-snap-*.json" },
+    { name: "lc-cstate", drop: ["lc-cstate.json"], missing: "lc-cstate.json" },
+    { name: "lc-credential", drop: ["lc-credential.json"], missing: "lc-credential.json" },
+  ]
+
+  for (const c of missingMatrix) {
+    it(`fails missing when ${c.name} is absent`, () => {
+      const root = tempRoot()
+      try {
+        const manifest = collectLifecycle(root, { drop: c.drop })
+        expect(manifest.status).toBe("missing")
+        expect(manifest.validated).toBe(false)
+        expect(manifest.missing).toContain(c.missing)
+        expect(manifest.missing.length).toBeGreaterThan(0)
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+  }
+
+  it("fails missing when canonical-gate is absent", () => {
+    const root = tempRoot()
+    try {
+      const manifest = collectLifecycle(root, { drop: ["canonical-gate.json"] })
+      expect(manifest.status).toBe("missing")
+      expect(manifest.missing).toContain("canonical-gate.json")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  const malformedMatrix: Array<{ name: string; corrupt: string[]; malformed: string }> = [
+    { name: "corrupt JSONC", corrupt: [".kilo/kilo.jsonc"], malformed: "workspace/.kilo/kilo.jsonc" },
+    { name: "corrupt proof", corrupt: ["lc-gc-proof.json"], malformed: "lc-gc-proof.json" },
+    { name: "corrupt timeline", corrupt: ["lc-layout-timeline.json"], malformed: "lc-layout-timeline.json" },
+    { name: "corrupt JSONL", corrupt: ["llm-requests.jsonl"], malformed: "llm-requests.jsonl" },
+    { name: "corrupt cstate", corrupt: ["lc-cstate.json"], malformed: "lc-cstate.json" },
+    { name: "corrupt credential", corrupt: ["lc-credential.json"], malformed: "lc-credential.json" },
+  ]
+
+  for (const c of malformedMatrix) {
+    it(`fails malformed when ${c.name} is corrupt without leaking content`, () => {
+      const root = tempRoot()
+      try {
+        const manifest = collectLifecycle(root, { corrupt: c.corrupt })
+        expect(manifest.status).toBe("malformed")
+        expect(manifest.validated).toBe(false)
+        expect(manifest.malformed).toContain(c.malformed)
+        // notes must be stable and not leak raw content
+        const notes = manifest.notes.join("\n")
+        expect(notes).toContain(c.malformed)
+        expect(notes).not.toContain("{not json")
+        expect(notes).not.toContain("secret")
+        // error category stable, not raw slice
+        if (c.malformed === "workspace/.kilo/kilo.jsonc") expect(notes).toContain("invalid JSONC")
+        if (c.malformed === "llm-requests.jsonl") expect(notes).toContain("corrupt JSONL")
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+  }
+
+  it("fails malformed when proof schema is invalid (still without content leak)", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededLifecycle(root)
+      const badProof = makeValidLcProof() as Record<string, unknown>
+      ;(badProof as Record<string, unknown>).schema = "bad-schema"
+      writeFileSync(join(scratch, "lc-gc-proof.json"), JSON.stringify(badProof))
+      const manifest = collectEvidence({
+        staging,
+        scratch,
+        workspace,
+        scenarios: realLifecycle,
+        fixtureId: "e2e-probe-1234",
+        startedAt: Date.now(),
+        probePid: 4242,
+        success: true,
+        destination: resolve(join(root, "dest")),
+      })
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("lc-gc-proof.json")
+      expect(manifest.notes.join("\n")).not.toContain("bad-schema")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("fails malformed when timeline is truncated", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededLifecycle(root)
+      writeFileSync(join(scratch, "lc-layout-timeline.json"), "[]")
+      const manifest = collectEvidence({
+        staging,
+        scratch,
+        workspace,
+        scenarios: realLifecycle,
+        fixtureId: "e2e-probe-1234",
+        startedAt: Date.now(),
+        probePid: 4242,
+        success: true,
+        destination: resolve(join(root, "dest")),
+      })
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("lc-layout-timeline.json")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("optional lc-ready and lc-dom-evidence absence does not fail", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededLifecycle(root)
+      // ensure optional files are absent (they were never seeded)
+      expect(existsSync(join(scratch, "lc-ready"))).toBe(false)
+      expect(existsSync(join(scratch, "lc-dom-evidence"))).toBe(false)
+      const manifest = collectEvidence({
+        staging,
+        scratch,
+        workspace,
+        scenarios: realLifecycle,
+        fixtureId: "e2e-probe-1234",
+        startedAt: Date.now(),
+        probePid: 4242,
+        success: true,
+        destination: resolve(join(root, "dest")),
+      })
+      expect(manifest.status).toBe("complete")
+      // when present, they are copied but still not required
+      writeFileSync(join(scratch, "lc-ready"), "ready")
+      writeFileSync(join(scratch, "lc-dom-evidence"), JSON.stringify({ ok: true }))
+      // create a fresh root for second check to avoid polluting staging
+      const root2 = tempRoot()
+      try {
+        const { scratch: sc, workspace: ws, staging: st } = seededLifecycle(root2)
+        writeFileSync(join(sc, "lc-ready"), "ready")
+        writeFileSync(join(sc, "lc-dom-evidence"), JSON.stringify({ ok: true }))
+        const m2 = collectEvidence({
+          staging: st,
+          scratch: sc,
+          workspace: ws,
+          scenarios: realLifecycle,
+          fixtureId: "e2e-probe-1234",
+          startedAt: Date.now(),
+          probePid: 4242,
+          success: true,
+          destination: resolve(join(root2, "dest2")),
+        })
+        expect(m2.required).not.toContain("lc-ready")
+        expect(m2.required).not.toContain("lc-dom-evidence")
+        expect(m2.files.some((f) => f.dest === "lc-ready")).toBe(true)
+        expect(m2.files.some((f) => f.dest === "lc-dom-evidence")).toBe(true)
+        expect(m2.status).toBe("complete")
+      } finally {
+        rmSync(root2, { recursive: true, force: true })
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("forbidden transients are absent from inventory and never copied", () => {
+    const root = tempRoot()
+    try {
+      const { required, optional } = evidenceInventory(realLifecycle)
+      const allRels = [...required, ...optional].map((s) => s.rel)
+      const req = required.map((s) => s.rel)
+      const opt = optional.map((s) => s.rel)
+
+      // Locked exclusions: optional lc-ready/lc-dom-evidence and required lc-snap-*.json must NOT be forbidden
+      expect(TRANSIENT_FORBIDDEN_LC).not.toContain("lc-ready")
+      expect(TRANSIENT_FORBIDDEN_LC).not.toContain("lc-dom-evidence")
+      expect(TRANSIENT_FORBIDDEN_LC).not.toContain("lc-snap-1.json")
+      expect(TRANSIENT_FORBIDDEN_LC).not.toContain("lc-snap-2.json")
+      expect(TRANSIENT_FORBIDDEN_LC).not.toContain("lc-snap-*.json")
+      expect(TRANSIENT_FORBIDDEN_LC).not.toContain("lc-cstate.json")
+      expect(TRANSIENT_FORBIDDEN_LC).not.toContain("lc-credential.json")
+      // durable artifacts remain correctly inventoried (locked)
+      expect(req).toContain("lc-snap-*.json")
+      expect(req).toContain("lc-cstate.json")
+      expect(req).toContain("lc-credential.json")
+      expect(opt).toContain("lc-ready")
+      expect(opt).toContain("lc-dom-evidence")
+
+      // grouping: each producer category is covered (requests/results/done/ready)
+      // IPC requests
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-private-status-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-open-tab-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-title-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-replay-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-cstate-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-credseed-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-snap-1-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-snap-2-request")
+      // IPC results
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-private-status.json")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-open-tab.json")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-title-result.json")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-replay-result.json")
+      // boundary request/ready/done
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-settle-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-settle-done")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-panel-close-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-panel-close-ready")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-reload-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-reload-ready")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-tab-close-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-tab-close-done")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-tab-reopen-request")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-tab-reopen-done")
+      // diagnostics (probe-local)
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-gc-replay.json")
+      expect(TRANSIENT_FORBIDDEN_LC).toContain("lc-model-requests.json")
+
+      // pattern: all forbidden must be absent from both required and optional
+      for (const trans of TRANSIENT_FORBIDDEN_LC) {
+        expect(allRels).not.toContain(trans)
+        expect(req).not.toContain(trans)
+        expect(opt).not.toContain(trans)
+        // glob check: no entry should be a prefix match for request
+        expect(allRels.some((r) => r === trans || r.startsWith(trans))).toBe(false)
+      }
+      // also ensure no lc request pattern is present at all (llm-requests is allowed)
+      expect(allRels.some((r) => r.startsWith("lc-") && r.includes("request"))).toBe(false)
+      // seed transients into scratch and ensure they are not copied
+      const { scratch, workspace, staging } = seededLifecycle(root)
+      for (const trans of TRANSIENT_FORBIDDEN_LC) {
+        writeFileSync(join(scratch, trans), "transient")
+      }
+      const manifest = collectEvidence({
+        staging,
+        scratch,
+        workspace,
+        scenarios: realLifecycle,
+        fixtureId: "e2e-probe-1234",
+        startedAt: Date.now(),
+        probePid: 4242,
+        success: true,
+        destination: resolve(join(root, "dest")),
+      })
+      for (const trans of TRANSIENT_FORBIDDEN_LC) {
+        expect(manifest.files.some((f) => f.dest === trans)).toBe(false)
+        expect(manifest.files.some((f) => f.source.endsWith(`/${trans}`))).toBe(false)
+        expect(manifest.required).not.toContain(trans)
+      }
+      expect(manifest.status).toBe("complete")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+
+  it("duplicate destination prevention still holds for lifecycle", () => {
+    const claimed = new Map<string, string>()
+    expect(claimDestination(claimed, "lc-gc-proof.json", "/scratch/lc-gc-proof.json")).toBe(true)
+    expect(claimDestination(claimed, "lc-gc-proof.json", "/scratch/lc-gc-proof.json")).toBe(false)
+    expect(() => claimDestination(claimed, "lc-gc-proof.json", "/other/lc-gc-proof.json")).toThrow(/conflicting/)
+  })
+
+  it("real-lifecycle inventory exact normalized required/optional sets (glob explicit)", () => {
+    const { required, optional } = evidenceInventory(realLifecycle)
+    const req = required.map((s) => (s.base === "workspace" ? `workspace/${s.rel}` : s.rel)).sort()
+    const opt = optional.map((s) => (s.base === "workspace" ? `workspace/${s.rel}` : s.rel)).sort()
+    expect(req).toEqual([
+      "canonical-archive-after.json",
+      "canonical-archive-before.json",
+      "canonical-gate.json",
+      "lc-credential.json",
+      "lc-cstate.json",
+      "lc-gc-proof.json",
+      "lc-layout-timeline.json",
+      "lc-snap-*.json",
+      "llm-matrix-real-lifecycle-final.json",
+      "llm-requests-real-lifecycle.json",
+      "llm-requests.jsonl",
+      "plan.json",
+      "runner-pid",
+      "workspace/.kilo/kilo.jsonc",
+    ])
+    expect(opt).toEqual([
+      "child-phase1-done",
+      "child-phase2-done",
+      "child-phase2-ready",
+      "lc-dom-evidence",
+      "lc-ready",
+      "llm-matrix-*.json",
+      "ready",
+      "real-completed-mcp-disconnect-done",
+      "real-completed-ready",
+      "real-completed-reopen-ready",
+      "real-overflow-ready",
+      "real-ready",
+      "real-reopen-ready",
+      "rr-conn.json",
+      "rr-gc-*.json",
+      "rr-kill.json",
+      "rr-model-requests.json",
+      "rr-open-tab.json",
+      "rr-pin.json",
+      "rr-private-status.json",
+      "rr-ready",
+      "rr-reconnect.json",
+      "rr-reload-executed",
+      "rr-reloaded",
+      "rr-replay-result.json",
+      "rr-title-result.json",
+      "runner-alive",
+      "runner-done",
+      "tab-close-done",
+      "topic-nav-done",
+      "topic-reload-done",
+      "topic-reload-frame",
+      "topic-reload-ready",
+      "topic-reload-start",
+      "topic-reopen-done",
+      "topic-reopen-ready",
+      "variant-ready",
+      "workspace/e2e-custom-called.txt",
+    ])
+  })
+})
+
+describe("hostile capability/phase values do not leak into notes", () => {
+  it("validateGcProof unknown capability does not echo hostile value", () => {
+    const hostile = "__HOSTILE_CAP_9f8e7d6c__"
+    const p = makeValidProof() as Record<string, unknown>
+    ;((p.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [hostile]
+    const err = validateGcProof(p) as string
+    expect(err).not.toBeNull()
+    expect(err).not.toContain(hostile)
+    expect(err).toContain("unknown capability")
+    // parseFailure wrapper also must not leak
+    const pf = parseFailure("rr-gc-proof.json", Buffer.from(JSON.stringify(p))) as string
+    expect(pf).not.toContain(hostile)
+    expect(pf).toContain("unknown capability")
+  })
+
+  it("validateLcProof unknown capability does not echo hostile value", () => {
+    const hostile = "__HOSTILE_CAP_LC_abcdef__"
+    const p = makeValidLcProof() as Record<string, unknown>
+    ;((p.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [hostile]
+    const err = validateLcProof(p) as string
+    expect(err).not.toBeNull()
+    expect(err).not.toContain(hostile)
+    expect(err).toContain("unknown capability")
+    const pf = parseFailure("lc-gc-proof.json", Buffer.from(JSON.stringify(p))) as string
+    expect(pf).not.toContain(hostile)
+    expect(pf).toContain("unknown capability")
+  })
+
+  it("validateLcTimeline unknown phase does not echo hostile value", () => {
+    const hostile = "__HOSTILE_PHASE_XYZ123__"
+    const timeline = buildValidLifecycleTimeline() as Record<string, unknown>[]
+    timeline[0].phase = hostile
+    const err = validateLcTimeline(timeline) as string
+    expect(err).not.toBeNull()
+    expect(err).not.toContain(hostile)
+    expect(err).toContain("phase unknown")
+    const pf = parseFailure("lc-layout-timeline.json", Buffer.from(JSON.stringify(timeline))) as string
+    expect(pf).not.toContain(hostile)
+    expect(pf).toContain("phase unknown")
+  })
+
+  it("collectEvidence malformed notes do not echo hostile capability/phase", () => {
+    const hostileCap = "__HOSTILE_CAP_MANIFEST__"
+    const hostilePhase = "__HOSTILE_PHASE_MANIFEST__"
+    // hostile capability via proof
+    const root1 = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededLifecycle(root1)
+      const badProof = makeValidLcProof() as Record<string, unknown>
+      ;((badProof.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [hostileCap]
+      writeFileSync(join(scratch, "lc-gc-proof.json"), JSON.stringify(badProof))
+      const manifest = collectEvidence({
+        staging,
+        scratch,
+        workspace,
+        scenarios: realLifecycle,
+        fixtureId: "e2e-probe-1234",
+        startedAt: Date.now(),
+        probePid: 4242,
+        success: true,
+        destination: resolve(join(root1, "dest")),
+      })
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("lc-gc-proof.json")
+      const notes = manifest.notes.join("\n")
+      expect(notes).not.toContain(hostileCap)
+      expect(notes).toContain("unknown capability")
+    } finally {
+      rmSync(root1, { recursive: true, force: true })
+    }
+    // hostile phase via timeline
+    const root2 = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededLifecycle(root2)
+      const timeline = buildValidLifecycleTimeline() as Record<string, unknown>[]
+      timeline[0].phase = hostilePhase
+      writeFileSync(join(scratch, "lc-layout-timeline.json"), JSON.stringify(timeline))
+      const manifest = collectEvidence({
+        staging,
+        scratch,
+        workspace,
+        scenarios: realLifecycle,
+        fixtureId: "e2e-probe-1234",
+        startedAt: Date.now(),
+        probePid: 4242,
+        success: true,
+        destination: resolve(join(root2, "dest")),
+      })
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("lc-layout-timeline.json")
+      const notes = manifest.notes.join("\n")
+      expect(notes).not.toContain(hostilePhase)
+      expect(notes).toContain("phase unknown")
+    } finally {
+      rmSync(root2, { recursive: true, force: true })
+    }
   })
 })

@@ -52,6 +52,7 @@ interface StateMessage {
   sessionsCollapsed?: boolean
   sidebarCollapsed?: boolean
   isGitRepo?: boolean
+  activeSessionId?: string
 }
 
 interface TerminalCreatedMessage {

@@ -319,10 +319,7 @@ describe("P3.1 routing — preserved surfaces and command re-routing", () => {
     expect(provider).not.toContain("appendReviewComments")
     const promptInput = fs.readFileSync(path.join(ROOT, "webview-ui/src/components/chat/PromptInput.tsx"), "utf-8")
     expect(promptInput).not.toContain('message.type === "appendReviewComments"')
-    const terminalTab = fs.readFileSync(
-      path.join(ROOT, "webview-ui/agent-manager/terminal/TerminalTab.tsx"),
-      "utf-8",
-    )
+    const terminalTab = fs.readFileSync(path.join(ROOT, "webview-ui/agent-manager/terminal/TerminalTab.tsx"), "utf-8")
     expect(terminalTab).not.toContain("appendReviewCommentsToTerminal")
     // The webview-internal review payload behavior that survives: pull-back restores
     // the composer's review set and sends format the review markdown.

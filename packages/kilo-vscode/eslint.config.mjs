@@ -113,7 +113,25 @@ export default [
     // lifecycle stays in one file so the five-boundary claim aggregates across
     // manifests; helper logic already lives in e2e-canonical.ts,
     // e2e-probe-dom.ts, and e2e-probe-restart.ts.
-    rules: { complexity: ["error", 27], "max-lines": ["error", 3200] },
+    // max-lines is file-level (cannot be narrowed to a function), so keep the
+    // minimal justified override here after removing the source global disable.
+    rules: { complexity: ["error", 27], "max-lines": ["error", 3250] },
+  },
+  {
+    files: ["script/e2e-evidence.ts"],
+    // Evidence validators (validateGcProof/validateLcProof/validateLcTimeline) are
+    // intentionally exhaustive hash/field checks — complexity is domain-required.
+    // Narrowed from a file-level disable to a scoped override after removing
+    // the source global disable.
+    rules: { complexity: ["error", 40] },
+  },
+  {
+    files: ["script/e2e-probe-lifecycle.ts"],
+    // Lifecycle boundary orchestration (captureLcLayoutTimeline/lifecyclePhase0/
+    // runGcLifecycleBoundaries) converges five boundaries with hashed evidence —
+    // narrowed from a file-level disable to a scoped override plus function-level
+    // directives.
+    rules: { complexity: ["error", 40] },
   },
 
   eslintConfigPrettier,

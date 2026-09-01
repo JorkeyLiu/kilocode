@@ -29,6 +29,7 @@ import { buildKeybindingMap } from "./format-keybinding"
 import { Semaphore } from "./semaphore"
 import { SessionTiming } from "./session-timing"
 import { PLATFORM } from "./constants"
+import * as Persist from "./persistence"
 import type { AgentManagerOutMessage, AgentManagerInMessage, ManagedSession } from "./types"
 import type { Host, PanelContext, OutputHandle, Disposable } from "./host"
 
@@ -60,6 +61,20 @@ export class AgentManagerProvider implements Disposable {
 
   /** Session ID most recently loaded via `loadMessages`; updated synchronously. */
   private activeSessionId: string | undefined
+  private pendingSnapshot: Persist.State | null = null
+  private persistInFlight: Promise<void> | null = null
+  private catalogUnsub: Disposable | undefined
+  private readonly LOCAL = "local"
+  // In-flight real sessions not yet confirmed in the authoritative catalog.
+  // Protects the first real session from a stale empty catalog race before
+  // the webview's persist adds it to durable state and the next catalog includes it.
+  private recentSessions = new Set<string>()
+  private accumulatedCatalog: Set<string> | undefined
+  private accumulatedHasMore: boolean | undefined
+  // Deletion barrier within current catalog collection cycle.
+  // On real session.deleted, the ID is tombstoned and filtered from subsequent
+  // append pages and final effective catalog until a fresh append=false refresh.
+  private catalogTombstone = new Set<string>()
   private visiblePresence = new AgentManagerVisiblePresence(
     (ids) => this.connectionService.registerVisible("agent-manager", ids),
     () => this.panel?.visible ?? false,
@@ -143,7 +158,32 @@ export class AgentManagerProvider implements Disposable {
    */
   private onSessionDeleted(event: unknown): void {
     const sid = (event as { properties?: { sessionID?: string } }).properties?.sessionID
-    if (sid) this.timing.forget(sid)
+    if (!sid) return
+    this.timing.forget(sid)
+    if (!this.catalogTombstone) this.catalogTombstone = new Set<string>()
+    this.catalogTombstone.add(sid)
+    if (!this.recentSessions) this.recentSessions = new Set<string>()
+    const hadRecent = this.recentSessions.has(sid)
+    if (hadRecent) this.recentSessions.delete(sid)
+    if (this.accumulatedCatalog) this.accumulatedCatalog.delete(sid)
+    let changed = false
+    if (this.managedSessions.has(sid)) {
+      this.managedSessions.delete(sid)
+      changed = true
+    }
+    const order = this.tabOrder[this.LOCAL]
+    if (order && order.includes(sid)) {
+      this.tabOrder[this.LOCAL] = order.filter((id) => id !== sid)
+      changed = true
+    }
+    if (this.activeSessionId === sid) {
+      this.activeSessionId = this.tabOrder[this.LOCAL]?.[0] ?? [...this.managedSessions.keys()][0]
+      changed = true
+    }
+    if (changed) {
+      this.schedulePersist()
+      this.pushState()
+    }
   }
 
   private log(...args: unknown[]) {
@@ -224,6 +264,19 @@ export class AgentManagerProvider implements Disposable {
     return this.onMessage(msg)
   }
 
+  /**
+   * Fixture-only: targeted reload preserving same outer PanelContext, inner KiloProvider,
+   * streams and listeners. Only HTML is reassigned; readiness awaits next real webviewReady.
+   * No panel/catalog/visibility replacement, no synthetic state injection.
+   */
+  public async reloadWebviewForFixture(): Promise<void> {
+    const cur = this.panel
+    if (!cur) throw new Error("AgentManagerProvider: no panel to reload")
+    const hostAny = this.host as unknown as { reloadAgentManagerPanelForFixture?: () => Promise<PanelContext | void> }
+    if (!hostAny.reloadAgentManagerPanelForFixture) throw new Error("Host does not support AM reload")
+    await hostAny.reloadAgentManagerPanelForFixture()
+  }
+
   /** Wire up a panel context (shared by openPanel and deserializePanel). */
   private attachPanel(ctx: PanelContext): void {
     if (this.panel) {
@@ -242,10 +295,24 @@ export class AgentManagerProvider implements Disposable {
       this.emitVisibilityChanged(visible)
     })
 
+    if (this.catalogUnsub) {
+      this.catalogUnsub.dispose()
+      this.catalogUnsub = undefined
+    }
+    this.accumulatedCatalog = undefined
+    this.accumulatedHasMore = undefined
+    if (!this.catalogTombstone) this.catalogTombstone = new Set<string>()
+    this.catalogTombstone.clear()
+    if (ctx.sessions.onCatalog) {
+      this.catalogUnsub = ctx.sessions.onCatalog((update) => this.onCatalogUpdate(update))
+    }
     this.stateReady = this.initializeState()
     void this.sendRepoInfo()
     this.sendKeybindings()
+    let panelDisposed = false
     ctx.onDidDispose(() => {
+      if (panelDisposed) return
+      panelDisposed = true
       if (this.panel === ctx) {
         this.log("Panel disposed")
         const ids = [...this.panelSessions]
@@ -253,10 +320,18 @@ export class AgentManagerProvider implements Disposable {
         this.panelSessions.clear()
         void ctx.sessions.abortSessions(ids).catch((err) => this.log("Failed to abort sessions on panel close:", err))
         this.statsPoller.stop()
-        this.activeSessionId = undefined
+        // Durable open-tab state survives panel dispose; only ephemeral
+        // presence/streams are cleared. Keep managedSessions/tabOrder/active
+        // in memory and in workspaceStore for next attach. Do not mutate
+        // durable fields or schedule a cleared snapshot here.
+        // this.activeSessionId = undefined // intentionally not cleared; durable survives
         this.visiblePresence.clear()
         this.panel = undefined
         this.emitVisibilityChanged(false)
+        if (this.catalogUnsub) {
+          this.catalogUnsub.dispose()
+          this.catalogUnsub = undefined
+        }
       }
       ctx.sessions.dispose()
     })
@@ -264,8 +339,181 @@ export class AgentManagerProvider implements Disposable {
 
   // State initialization
 
+  private initializationOp: Promise<void> | null = null
+
   private async initializeState(): Promise<void> {
-    this.pushState()
+    if (this.initializationOp) return this.initializationOp
+    const op = this.runInitialization()
+    this.initializationOp = op
+    try {
+      await op
+    } finally {
+      if (this.initializationOp === op) this.initializationOp = null
+    }
+  }
+
+  private async runInitialization(): Promise<void> {
+    const hasDirty = this.persistInFlight !== null || this.pendingSnapshot !== null
+    if (hasDirty) {
+      await this.flush()
+      if (this.pendingSnapshot) {
+        this.log("initializeState: persist pending retained after bounded retry, preserving intended snapshot")
+        const latest = this.pendingSnapshot
+        this.managedSessions.clear()
+        for (const id of latest.sessions) this.managedSessions.set(id, { id })
+        this.tabOrder[this.LOCAL] = [...latest.order]
+        this.activeSessionId = latest.active
+        if (this.activeSessionId && !this.managedSessions.has(this.activeSessionId)) this.activeSessionId = undefined
+        if (this.panel) this.pushState()
+        return
+      }
+    }
+    this.loadPersisted()
+    if (this.panel) this.pushState()
+  }
+
+  private loadPersisted(): void {
+    // Store is authoritative for durable fields at every attach.
+    // Missing/malformed store clears durable fields; no merge with retained memory.
+    const p = Persist.load(this.host.workspaceStore)
+    this.managedSessions.clear()
+    this.tabOrder = {}
+    this.activeSessionId = undefined
+    if (!p) return
+    for (const id of p.sessions) this.managedSessions.set(id, { id })
+    // Persisted order is already normalized (subset/permutation), but rebuild
+    // defensively to append any omitted sessions deterministically.
+    const order = p.order.length > 0 ? [...p.order] : [...p.sessions]
+    this.tabOrder[this.LOCAL] = [...order]
+    if (p.active && this.managedSessions.has(p.active)) this.activeSessionId = p.active
+  }
+
+  private buildPersisted(): Persist.State {
+    const sessions = [...this.managedSessions.keys()]
+    const order = this.tabOrder[this.LOCAL] ?? []
+    return Persist.build(sessions, order, this.activeSessionId)
+  }
+
+  private schedulePersist(): void {
+    if (!this.host?.workspaceStore) return
+    const snapshot = this.buildPersisted()
+    this.pendingSnapshot = snapshot
+    if (this.persistInFlight) return
+    void this.runPersistLoop()
+  }
+
+  private async runPersistLoop(): Promise<void> {
+    if (this.persistInFlight) return
+    const loop = (async () => {
+      while (this.pendingSnapshot) {
+        const toWrite = this.pendingSnapshot
+        this.pendingSnapshot = null
+        try {
+          await this.host.workspaceStore.update(Persist.KEY, toWrite)
+        } catch (err) {
+          this.log("persist failed:", err)
+          if (this.pendingSnapshot) {
+            // Newer dirty snapshot already coalesced; keep it for next retry.
+          } else {
+            this.pendingSnapshot = toWrite
+          }
+          break
+        }
+      }
+    })()
+    this.persistInFlight = loop
+    try {
+      await loop
+    } finally {
+      this.persistInFlight = null
+      // If a new mutation arrived after we broke on failure, it will be
+      // retried on next mutation/flush without an unbounded timer loop.
+      // On success, a newly enqueued pending will have been drained by the
+      // while loop; if one arrived after the loop exited, the next
+      // schedulePersist will start a new loop.
+    }
+  }
+
+  public async flush(): Promise<void> {
+    if (this.persistInFlight) {
+      try {
+        await this.persistInFlight
+      } catch {}
+      if (this.pendingSnapshot) {
+        try {
+          await this.runPersistLoop()
+        } catch {}
+      }
+      return
+    }
+    if (this.pendingSnapshot) {
+      try {
+        await this.runPersistLoop()
+      } catch {}
+    }
+  }
+
+  private onCatalogUpdate(update: { ids: string[]; append?: boolean; hasMore?: boolean }): void {
+    const { ids, append, hasMore } = update
+    if (!this.catalogTombstone) this.catalogTombstone = new Set<string>()
+    if (append !== true) this.catalogTombstone.clear()
+    const filtered = ids.filter((id) => !this.catalogTombstone.has(id))
+    if (append === true && this.accumulatedCatalog) {
+      for (const id of filtered) this.accumulatedCatalog.add(id)
+    } else if (append === true && !this.accumulatedCatalog) {
+      this.accumulatedCatalog = new Set(filtered)
+    } else {
+      this.accumulatedCatalog = new Set(filtered)
+    }
+    // Ensure tombstoned IDs never linger in accumulated across appends
+    for (const del of this.catalogTombstone) this.accumulatedCatalog?.delete(del)
+    this.accumulatedHasMore = hasMore
+    if (hasMore === true) return
+    const effective = [...(this.accumulatedCatalog ?? new Set<string>())]
+    this.reconcile(effective)
+  }
+
+  private reconcile(ids: string[]): void {
+    const catalog = new Set(ids)
+    if (!this.recentSessions) this.recentSessions = new Set<string>()
+    // Consume recent in-flight IDs once the catalog includes them
+    for (const id of [...this.recentSessions]) if (catalog.has(id)) this.recentSessions.delete(id)
+    const effective = new Set([...catalog, ...this.recentSessions])
+    let changed = false
+    for (const sid of [...this.managedSessions.keys()]) {
+      if (!effective.has(sid)) {
+        this.managedSessions.delete(sid)
+        changed = true
+      }
+    }
+    // Order/active are subsets of the resulting managed sessions, not catalog alone.
+    const remaining = new Set(this.managedSessions.keys())
+    const order = this.tabOrder[this.LOCAL]
+    if (order) {
+      const filtered = order.filter((id) => remaining.has(id))
+      if (filtered.length !== order.length) {
+        this.tabOrder[this.LOCAL] = filtered
+        changed = true
+      }
+      // Append any remaining sessions missing from order deterministically.
+      const missing = [...remaining].filter((id) => !filtered.includes(id))
+      if (missing.length > 0) {
+        this.tabOrder[this.LOCAL] = [...filtered, ...missing]
+        changed = true
+      }
+    } else if (remaining.size > 0) {
+      this.tabOrder[this.LOCAL] = [...remaining]
+      changed = true
+    }
+    if (this.activeSessionId && !remaining.has(this.activeSessionId)) {
+      const ord = this.tabOrder[this.LOCAL] ?? [...remaining]
+      this.activeSessionId = ord[0]
+      changed = true
+    }
+    if (changed) {
+      this.schedulePersist()
+      this.pushState()
+    }
   }
 
   // Message interceptor
@@ -318,19 +566,38 @@ export class AgentManagerProvider implements Disposable {
 
     if (m.type === "agentManager.persistSession" || m.type === "agentManager.forgetSession") {
       const persist = m.type === "agentManager.persistSession"
+      const pendingDraft = persist && m.draftID ? m.draftID : undefined
+      const isTrueCreation = !!pendingDraft && this.panelSessions.has(pendingDraft)
       if (persist && m.draftID) {
         this.panel?.sessions.acknowledgeDraft(m.draftID, m.sessionId)
         this.panelSessions.delete(m.draftID)
         this.panelSessions.add(m.sessionId)
       }
       if (persist) {
-        if (!this.managedSessions.has(m.sessionId)) this.addSession(m.sessionId)
+        if (!this.managedSessions.has(m.sessionId)) this.addSession(m.sessionId, { recent: isTrueCreation })
+        else {
+          if (isTrueCreation) {
+            if (!this.recentSessions) this.recentSessions = new Set<string>()
+            this.recentSessions.add(m.sessionId)
+          }
+          this.schedulePersist()
+        }
       } else {
         // Explicit permanent forget (counterpart of persistSession): the
         // session leaves the manager's persisted registry, so its timing
         // entry goes with it. This is not the tab-close path.
+        if (!this.recentSessions) this.recentSessions = new Set<string>()
+        this.recentSessions.delete(m.sessionId)
         this.managedSessions.delete(m.sessionId)
         this.timing.forget(m.sessionId)
+        if (this.tabOrder && this.LOCAL) {
+          const ord = this.tabOrder[this.LOCAL]
+          if (ord) this.tabOrder[this.LOCAL] = ord.filter((id) => id !== m.sessionId)
+          if (this.activeSessionId === m.sessionId)
+            this.activeSessionId = this.tabOrder[this.LOCAL]?.[0] ?? [...this.managedSessions.keys()][0]
+        }
+        this.schedulePersist()
+        if (this.pushState) this.pushState()
       }
       return null
     }
@@ -350,7 +617,9 @@ export class AgentManagerProvider implements Disposable {
       m.draftID &&
       !m.sessionID
     ) {
-      this.activeSessionId = m.draftID
+      // Draft/pending IDs are never durable. Keep ephemeral active separate
+      // until the session is registered via persistSession; do not persist.
+      // We track the draft for panel lifecycle but do not update durable active.
       return msg
     }
 
@@ -368,6 +637,7 @@ export class AgentManagerProvider implements Disposable {
       this.activeSessionId = m.sessionID
       this.terminalManager.syncOnSessionSwitch(m.sessionID)
       this.emitActiveSessionChanged(m.sessionID)
+      this.schedulePersist()
       return msg
     }
 
@@ -439,6 +709,7 @@ export class AgentManagerProvider implements Disposable {
     }
     if (m.type === "agentManager.setTabOrder") {
       this.tabOrder[m.key] = m.order
+      if (m.key === this.LOCAL) this.schedulePersist()
       return null
     }
     if (m.type === "agentManager.setSessionsCollapsed") {
@@ -537,8 +808,9 @@ export class AgentManagerProvider implements Disposable {
               ),
             (...args) => this.log(...args),
           )
-          this.addSession(session.id)
+          this.addSession(session.id, { recent: true })
           this.push()
+          this.postToWebview({ type: "agentManager.sessionAdded", sessionId: session.id })
           this.panel?.sessions.registerSession(session)
           const body = task.prompt?.trim()
           if (body) {
@@ -580,6 +852,8 @@ export class AgentManagerProvider implements Disposable {
    */
   private async onCloseSession(sessionId: string): Promise<void> {
     this.panelSessions.delete(sessionId)
+    if (!this.recentSessions) this.recentSessions = new Set<string>()
+    this.recentSessions.delete(sessionId)
     const root = this.getRoot() ?? ""
     try {
       const { stopSessionProcesses } = await import("../kilo-provider/background-process")
@@ -588,6 +862,15 @@ export class AgentManagerProvider implements Disposable {
       this.log(`Failed to stop session processes for ${sessionId}:`, err)
     }
     this.managedSessions.delete(sessionId)
+    if (this.tabOrder && this.LOCAL) {
+      const ord = this.tabOrder[this.LOCAL]
+      if (ord) this.tabOrder[this.LOCAL] = ord.filter((id) => id !== sessionId)
+      if (this.activeSessionId === sessionId)
+        this.activeSessionId = this.tabOrder[this.LOCAL]?.[0] ?? [...this.managedSessions.keys()][0]
+    } else if (this.activeSessionId === sessionId) {
+      this.activeSessionId = [...this.managedSessions.keys()][0]
+    }
+    this.schedulePersist()
     this.pushState()
   }
 
@@ -614,7 +897,9 @@ export class AgentManagerProvider implements Disposable {
       return
     }
 
-    this.addSession(forked.id)
+    this.addSession(forked.id, { recent: true })
+    this.activeSessionId = forked.id
+    this.schedulePersist()
     this.pushState()
     this.postToWebview({ type: "agentManager.sessionForked", sessionId: forked.id, forkedFromId: sessionId })
     this.panel?.sessions.registerSession(forked)
@@ -646,9 +931,20 @@ export class AgentManagerProvider implements Disposable {
 
   // State helpers
 
-  private addSession(sessionId: string): void {
+  private addSession(sessionId: string, opts?: { recent?: boolean }): void {
+    if (opts?.recent) {
+      if (!this.recentSessions) this.recentSessions = new Set<string>()
+      this.recentSessions.add(sessionId)
+    }
     this.managedSessions.set(sessionId, { id: sessionId })
     this.panel?.sessions.trackSession(sessionId)
+    if (this.tabOrder && this.LOCAL) {
+      const ord = this.tabOrder[this.LOCAL] ?? [...this.managedSessions.keys()].filter((id) => id !== sessionId)
+      if (!ord.includes(sessionId)) ord.push(sessionId)
+      this.tabOrder[this.LOCAL] = ord
+    }
+    if (!this.activeSessionId) this.activeSessionId = sessionId
+    this.schedulePersist()
   }
 
   private push(): void {
@@ -664,6 +960,7 @@ export class AgentManagerProvider implements Disposable {
       sessionsCollapsed: this.sessionsCollapsed,
       sidebarCollapsed: this.sidebarCollapsed,
       isGitRepo: true,
+      ...(this.activeSessionId ? { activeSessionId: this.activeSessionId } : {}),
     })
 
     this.statsPoller.setEnabled(this.panel !== undefined)
@@ -904,6 +1201,7 @@ export class AgentManagerProvider implements Disposable {
     // Normal extension shutdown: settle every active segment and await the
     // durable write so later downtime is never counted as session runtime.
     await this.timing.settle()
+    await this.flush()
     this.unsubTool?.()
     this.unsubFont?.()
     this.visiblePresence.clear()

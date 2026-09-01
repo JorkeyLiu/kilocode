@@ -1069,6 +1069,10 @@ export async function runRealRestartBoundaries(
     if (rel !== "e2e-marker.json") throw new Error(`marker not inside scratch: ${rel}`)
     if (!basename(scratch).startsWith("kilo-e2e-")) throw new Error("scratch basename not kilo-e2e-")
     const fixtureIdForHash = createHash("sha256").update(fid).digest("hex").slice(0, 16)
+    const canon = (
+      p: { name: string; major: number; minor?: number } | null | undefined,
+    ): { name: string; major: number; minor: number } | null =>
+      p ? { name: p.name, major: p.major, minor: p.minor ?? 0 } : null
     const proof = {
       schema: "kilo-gc-proof/1",
       version: 1,
@@ -1085,9 +1089,7 @@ export async function runRealRestartBoundaries(
               epoch: gcPre.private.epoch,
               available: gcPre.private.available,
               state: gcPre.private.state,
-              protocol: gcPre.private.protocol
-                ? { name: gcPre.private.protocol.name, major: gcPre.private.protocol.major }
-                : null,
+              protocol: canon(gcPre.private.protocol),
               capabilities: gcPre.private.capabilities,
               hasSessionUpdate: gcPre.private.hasSessionUpdate,
             },
@@ -1095,8 +1097,22 @@ export async function runRealRestartBoundaries(
         : null,
       openTab: gcOpen
         ? {
-            before: { backend: gcOpen.before.backend, private: gcOpen.before.private },
-            after: { backend: gcOpen.after.backend, private: gcOpen.after.private },
+            before: {
+              backend: gcOpen.before.backend,
+              private: (() => {
+                const p = gcOpen.before.private as unknown as Record<string, unknown>
+                if (!("protocol" in p)) return p as typeof gcOpen.before.private
+                return { ...p, protocol: canon(p.protocol as { name: string; major: number; minor?: number } | null | undefined) } as unknown as typeof gcOpen.before.private
+              })(),
+            },
+            after: {
+              backend: gcOpen.after.backend,
+              private: (() => {
+                const p = gcOpen.after.private as unknown as Record<string, unknown>
+                if (!("protocol" in p)) return p as typeof gcOpen.after.private
+                return { ...p, protocol: canon(p.protocol as { name: string; major: number; minor?: number } | null | undefined) } as unknown as typeof gcOpen.after.private
+              })(),
+            },
             ready: gcOpen.openRes.ready,
             count: gcOpen.openRes.count,
           }
@@ -1110,9 +1126,7 @@ export async function runRealRestartBoundaries(
                 epoch: gcPreA.private.epoch,
                 available: gcPreA.private.available,
                 hasSessionUpdate: gcPreA.private.hasSessionUpdate,
-                protocol: gcPreA.private.protocol
-                  ? { name: gcPreA.private.protocol.name, major: gcPreA.private.protocol.major }
-                  : null,
+                protocol: canon(gcPreA.private.protocol),
               },
             }
           : null,
@@ -1138,9 +1152,7 @@ export async function runRealRestartBoundaries(
                 epoch: gcPostA.private.epoch,
                 available: gcPostA.private.available,
                 hasSessionUpdate: gcPostA.private.hasSessionUpdate,
-                protocol: gcPostA.private.protocol
-                  ? { name: gcPostA.private.protocol.name, major: gcPostA.private.protocol.major }
-                  : null,
+                protocol: canon(gcPostA.private.protocol),
               },
             }
           : null,
@@ -1190,9 +1202,7 @@ export async function runRealRestartBoundaries(
               epoch: gcPostB.private.epoch,
               available: gcPostB.private.available,
               hasSessionUpdate: gcPostB.private.hasSessionUpdate,
-              protocol: gcPostB.private.protocol
-                ? { name: gcPostB.private.protocol.name, major: gcPostB.private.protocol.major }
-                : null,
+              protocol: canon(gcPostB.private.protocol),
               state: gcPostB.private.state,
               capabilities: gcPostB.private.capabilities,
             },

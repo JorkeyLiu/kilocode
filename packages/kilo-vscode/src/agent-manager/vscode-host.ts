@@ -20,6 +20,14 @@ import type { CanonicalConfigService } from "../config/service"
 
 export class VscodeHost implements Host {
   private autoApprove: AutoApproveController | undefined
+  private amPanel: vscode.WebviewPanel | undefined
+  private amProvider: KiloProvider | undefined
+  private amStreams: vscode.Disposable | undefined
+  private amContext: PanelContext | undefined
+  private amCloseSub: vscode.Disposable | undefined
+  private amOnBeforeMessage:
+    | ((msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>)
+    | undefined
 
   constructor(
     private readonly extensionUri: vscode.Uri,
@@ -59,22 +67,80 @@ export class VscodeHost implements Host {
     return this.wirePanel(panel, opts)
   }
 
-  private wirePanel(
-    panel: vscode.WebviewPanel,
-    opts: {
-      onBeforeMessage: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>
-    },
-  ): PanelContext {
+  /**
+   * Host-owned cleanup for the current Agent Manager panel. Disposes the host's
+   * view-state stream exactly once and clears host refs. Does not dispose the
+   * provider — sessions disposal is owned by AgentManagerProvider's
+   * panel.onDidDispose callback via ctx.sessions.dispose(). Idempotent and
+   * scoped to the exact closing panel.
+   */
+  private clearAgentManagerPanel(closing: vscode.WebviewPanel): void {
+    if (this.amPanel !== closing) return
+    if (this.amStreams) {
+      try {
+        this.amStreams.dispose()
+      } catch (err) {
+        console.warn("[Kilo New] VscodeHost: dispose stream failed")
+        void err
+      }
+      this.amStreams = undefined
+    }
+    if (this.amCloseSub) {
+      const sub = this.amCloseSub
+      this.amCloseSub = undefined
+      try {
+        sub.dispose()
+      } catch (err) {
+        console.warn("[Kilo New] VscodeHost: dispose close subscription failed")
+        void err
+      }
+    }
+    this.amPanel = undefined
+    this.amProvider = undefined
+    this.amContext = undefined
+    this.amOnBeforeMessage = undefined
+  }
+
+  /**
+   * Fixture-only: targeted reload preserving same outer PanelContext, inner KiloProvider,
+   * streams and listeners. Only production HTML is reassigned and the next real
+   * webviewReady drives normal sync/hydration. No dispose/recreate/rebind.
+   * Rejects if no current live panel/context/provider or the panel is considered disposed.
+   */
+  async reloadAgentManagerPanelForFixture(): Promise<PanelContext> {
+    const panel = this.amPanel
+    const provider = this.amProvider
+    const ctx = this.amContext
+    if (!panel || !provider || !ctx) throw new Error("VscodeHost: no Agent Manager panel to reload")
+    // Panel considered disposed when host has already cleared it or the
+    // provider is disposed. Stale refs must not be targeted.
+    const anyPanel = panel as unknown as { _disposed?: boolean; disposed?: boolean }
+    const anyProv = provider as unknown as { disposed?: boolean }
+    if (anyPanel._disposed || anyPanel.disposed || anyProv.disposed) {
+      throw new Error("VscodeHost: Agent Manager panel is disposed")
+    }
+    const anyProvider = provider as unknown as {
+      reloadWebviewForFixture?: (assign: () => void) => Promise<void>
+    }
+    if (!anyProvider.reloadWebviewForFixture) throw new Error("VscodeHost: Host does not support AM reload")
+    await anyProvider.reloadWebviewForFixture(() => this.assignAgentManagerHtml(panel))
+    // Verify still alive after await (panel/provider could have been disposed while waiting)
+    if (this.amPanel !== panel || this.amProvider !== provider || this.amContext !== ctx) {
+      throw new Error("webview reload aborted")
+    }
+    if (anyProv.disposed || anyPanel._disposed || anyPanel.disposed) throw new Error("webview reload aborted")
+    return ctx
+  }
+
+  private assignAgentManagerHtml(panel: vscode.WebviewPanel): void {
     panel.webview.options = {
       enableScripts: true,
       localResourceRoots: [this.extensionUri],
     }
-
     panel.iconPath = {
       light: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "kilo-light.svg"),
       dark: vscode.Uri.joinPath(this.extensionUri, "assets", "icons", "kilo-dark.svg"),
     }
-
     const port = this.connectionService.getServerInfo()?.port
     panel.webview.html = buildWebviewHtml(panel.webview, {
       scriptUri: panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "agent-manager.js")),
@@ -83,29 +149,15 @@ export class VscodeHost implements Host {
       workerUri: panel.webview.asWebviewUri(vscode.Uri.joinPath(this.extensionUri, "dist", "shiki-worker.js")),
       title: "Agent Manager",
       port,
-      // P0 benchmark webview timing (opt-in KILO_P0_PERF only, same as the
-      // editor-tab webview's HTML — the Agent Manager panel must also set
-      // window.__KILO_P0_PERF__ so its load/render/paint/mount stages stream).
       perfEnabled: isP0PerfEnabled(),
     })
+  }
 
-    const provider = new KiloProvider(this.extensionUri, this.connectionService, this.context, {
-      platform: PLATFORM,
-      snapshotInitialization: SNAPSHOT_INITIALIZATION,
-      slimEditMetadata: true,
-      disableViewedRegistration: true,
-      canonicalConfig: this.canonicalConfig,
-    })
-    provider.setRemoteService(this.remoteService)
-    provider.attachToWebview(panel.webview, {
-      onBeforeMessage: opts.onBeforeMessage,
-    })
-    provider.setStreamVisibility(panel.active && panel.visible)
-    const streams = panel.onDidChangeViewState((event) =>
-      provider.setStreamVisibility(event.webviewPanel.active && event.webviewPanel.visible),
-    )
-    if (this.autoApprove) provider.setAutoApproveController(this.autoApprove)
-
+  private buildPanelContext(
+    panel: vscode.WebviewPanel,
+    provider: KiloProvider,
+    streams: vscode.Disposable,
+  ): PanelContext {
     const sessions: SessionProvider = {
       getSessionDirectories: () => provider.getSessionDirectories(),
       getSessionInfo: (id) => provider.getSessionInfo(id),
@@ -117,8 +169,11 @@ export class VscodeHost implements Host {
       acknowledgeDraft: (draftID, sessionID) => provider.acknowledgeDraft(draftID, sessionID),
       abortSessions: (ids) => provider.abortSessions(ids),
       dispose: () => provider.dispose(),
+      onCatalog: (cb) => provider.onCatalog(cb),
     }
-
+    // Capture host for reuse in dispose path
+    const host = this
+    let disposed = false
     return {
       get active() {
         return panel.active
@@ -153,11 +208,74 @@ export class VscodeHost implements Host {
         return panel.onDidDispose(cb)
       },
       dispose() {
-        streams.dispose()
-        provider.dispose()
-        panel.dispose()
+        if (disposed) return
+        disposed = true
+        // Reuse host-owned clear for streams/refs exactly once; provider disposal
+        // is owned by AgentManagerProvider's panel.onDidDispose -> ctx.sessions.dispose().
+        // This path may be called for explicit context.dispose() or replacement;
+        // clearing here ensures streams not double-disposed when the panel's
+        // onDidDispose fires after panel.dispose().
+        if (host.amPanel === panel) host.clearAgentManagerPanel(panel)
+        else {
+          // Fallback if host already cleared (idempotent)
+          try {
+            streams.dispose()
+          } catch (err) {
+            console.warn("[Kilo New] VscodeHost: dispose stream fallback failed")
+            void err
+          }
+        }
+        try {
+          panel.dispose()
+        } catch (err) {
+          console.warn("[Kilo New] VscodeHost: dispose panel failed")
+          void err
+        }
       },
     }
+  }
+
+  private wirePanel(
+    panel: vscode.WebviewPanel,
+    opts: {
+      onBeforeMessage: (msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>
+    },
+  ): PanelContext {
+    this.assignAgentManagerHtml(panel)
+    const provider = new KiloProvider(this.extensionUri, this.connectionService, this.context, {
+      platform: PLATFORM,
+      snapshotInitialization: SNAPSHOT_INITIALIZATION,
+      slimEditMetadata: true,
+      disableViewedRegistration: true,
+      canonicalConfig: this.canonicalConfig,
+    })
+    provider.setRemoteService(this.remoteService)
+    provider.attachToWebview(panel.webview, {
+      onBeforeMessage: opts.onBeforeMessage,
+    })
+    provider.setStreamVisibility(panel.active && panel.visible)
+    const streams = panel.onDidChangeViewState((event) =>
+      provider.setStreamVisibility(event.webviewPanel.active && event.webviewPanel.visible),
+    )
+    if (this.autoApprove) provider.setAutoApproveController(this.autoApprove)
+    // Clear any previous host subscription before overwriting (defensive)
+    if (this.amCloseSub) {
+      try {
+        this.amCloseSub.dispose()
+      } catch (err) {
+        console.warn("[Kilo New] VscodeHost: dispose previous close sub failed")
+        void err
+      }
+      this.amCloseSub = undefined
+    }
+    this.amPanel = panel
+    this.amProvider = provider
+    this.amStreams = streams
+    this.amOnBeforeMessage = opts.onBeforeMessage
+    const ctx = this.buildPanelContext(panel, provider, streams)
+    this.amContext = ctx
+    this.amCloseSub = panel.onDidDispose(() => this.clearAgentManagerPanel(panel))
+    return ctx
   }
 
   workspacePath(): string | undefined {

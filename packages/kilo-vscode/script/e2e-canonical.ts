@@ -65,7 +65,10 @@ export function parseCutoverOutput(stdout: string): { archiveID: string; archive
   const text = stdout.trim()
   if (!text) throw new Error("cutover output empty")
   // The CLI may have extra lines; find the JSON line containing "ok":true
-  const lines = text.split("\n").map((l) => l.trim()).filter(Boolean)
+  const lines = text
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean)
   let last: unknown
   for (const line of lines) {
     try {
@@ -102,7 +105,8 @@ export function validateGateEvidence(obj: unknown): string | undefined {
   if (!zero) return "zeroState missing"
   // Every zero-table count must be 0 and session_changefeed_state must be 1 row zero retained
   for (const [k, v] of Object.entries(zero)) {
-    if (k === "session_changefeed_state" || k === "storage_identity_count" || k === "session_changefeed_state_count") continue
+    if (k === "session_changefeed_state" || k === "storage_identity_count" || k === "session_changefeed_state_count")
+      continue
     if (typeof v !== "number") return `zeroState ${k} not a number`
     if (v !== 0) return `zeroState ${k}=${v} expected 0`
   }
@@ -163,7 +167,9 @@ export function collectArchiveState(dataRoot: string): {
         // unstattable before statSync (concurrent tmp-dir cleanup). Skip it,
         // but never silently — a missing archive must stay visible because
         // before/after evidence depends on a complete inventory.
-        console.error(`[canonical] skipping unstattable archive entry ${name}: ${err instanceof Error ? err.message : String(err)}`)
+        console.error(
+          `[canonical] skipping unstattable archive entry ${name}: ${err instanceof Error ? err.message : String(err)}`,
+        )
       }
     }
     archives.sort((a, b) => a.id.localeCompare(b.id))
@@ -182,13 +188,15 @@ export function archiveMutationError(
   before: ReturnType<typeof collectArchiveState>,
   after: ReturnType<typeof collectArchiveState>,
 ): string | undefined {
-  if (before.archiveCount === 0) return `archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session`
+  if (before.archiveCount === 0)
+    return `archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session`
   if (before.archiveCount !== after.archiveCount) {
     return `archive count changed before=${before.archiveCount} after=${after.archiveCount}`
   }
   const idsBefore = before.archives.map((a) => a.id).sort()
   const idsAfter = after.archives.map((a) => a.id).sort()
-  if (idsBefore.join(",") !== idsAfter.join(",")) return `archive ids changed before=[${idsBefore.join(",")}] after=[${idsAfter.join(",")}]`
+  if (idsBefore.join(",") !== idsAfter.join(","))
+    return `archive ids changed before=[${idsBefore.join(",")}] after=[${idsAfter.join(",")}]`
   for (const b of before.archives) {
     const a = after.archives.find((x) => x.id === b.id)
     if (!a) return `archive ${b.id} missing after`
@@ -205,16 +213,18 @@ export function archiveMutationError(
 /** Ensure the harness never targets the user's real home/data. */
 export function assertIsolatedOrThrow(scratch: string, dataRoot: string): void {
   if (!isIsolatedDataRoot(scratch, dataRoot)) {
-    throw new Error(`dataRoot ${dataRoot} not inside run-owned scratch ${scratch} — refusing to target real HOME/XDG data`)
+    throw new Error(
+      `dataRoot ${dataRoot} not inside run-owned scratch ${scratch} — refusing to target real HOME/XDG data`,
+    )
   }
 }
 
 /** The real-* scenario names that consume the hermetic global root seed. */
-const REAL_SCENARIOS = ["real-session", "real-completed", "real-overflow", "real-restart"]
+const REAL_SCENARIOS = ["real-session", "real-completed", "real-overflow", "real-restart", "real-lifecycle"]
 
 /** True when the scenario set requires the fresh canonical DB + hidden cutover + archive stability. */
 export function needsCanonicalStorage(scenarios: Set<string>): boolean {
-  return scenarios.has("real-restart") || scenarios.has("real-session")
+  return scenarios.has("real-restart") || scenarios.has("real-session") || scenarios.has("real-lifecycle")
 }
 
 /**
@@ -226,7 +236,12 @@ export function needsCanonicalStorage(scenarios: Set<string>): boolean {
  * real-session (predicate: needsCanonicalStorage).
  * Call BEFORE the first VS Code launch / kilo serve spawn.
  */
-export async function prepareCanonicalRun(opts: { scenarios: Set<string>; scratch: string; repoRoot: string; realRestart: boolean }): Promise<void> {
+export async function prepareCanonicalRun(opts: {
+  scenarios: Set<string>
+  scratch: string
+  repoRoot: string
+  realRestart: boolean
+}): Promise<void> {
   if (REAL_SCENARIOS.some((name) => opts.scenarios.has(name))) {
     const seed = writeRealGlobalSeed(opts.scratch)
     console.log(`[probe] real global seed: ${seed.configDir} (${seed.assetFiles.length} agent assets)`)
@@ -269,9 +284,12 @@ function parseGateJson(stdout: string, helper: string): Record<string, unknown> 
   try {
     obj = JSON.parse(text)
   } catch (e) {
-    throw new Error(`gate helper ${helper} produced invalid JSON: ${String((e as Error).message)} — ${text.slice(0, 500)}`)
+    throw new Error(
+      `gate helper ${helper} produced invalid JSON: ${String((e as Error).message)} — ${text.slice(0, 500)}`,
+    )
   }
-  if (!obj || typeof obj !== "object" || Array.isArray(obj)) throw new Error(`gate helper ${helper} produced non-object JSON`)
+  if (!obj || typeof obj !== "object" || Array.isArray(obj))
+    throw new Error(`gate helper ${helper} produced non-object JSON`)
   return obj as Record<string, unknown>
 }
 
@@ -327,10 +345,14 @@ export async function ensureFreshCanonicalRoot(opts: {
   }
   const cliEntry = join(repoRoot, "packages/opencode/src/index.ts")
   if (!existsSync(cliEntry)) throw new Error(`cli entry missing at ${cliEntry}`)
-  const spawned = spawnSync("bun", ["run", "--conditions=browser", cliEntry, "__internal-storage-cutover", "cutover", "--data-root", dataRoot], {
-    encoding: "utf8",
-    env: scratchEnv(scratch),
-  })
+  const spawned = spawnSync(
+    "bun",
+    ["run", "--conditions=browser", cliEntry, "__internal-storage-cutover", "cutover", "--data-root", dataRoot],
+    {
+      encoding: "utf8",
+      env: scratchEnv(scratch),
+    },
+  )
   const combined = `${spawned.stdout ?? ""}\n${spawned.stderr ?? ""}`
   if (spawned.status !== 0) {
     if (combined.includes("fresh canonical DB already active")) {
@@ -353,11 +375,14 @@ export async function ensureFreshCanonicalRoot(opts: {
   const gate = await readGateEvidence(dbPath, dataRoot, repoRoot, scratch)
   if (!archiveID) archiveID = String((gate.identity as Record<string, unknown>).cutover_archive_id ?? "")
   const validation = validateGateEvidence(gate)
-  if (validation) throw new Error(`canonical gate validation failed: ${validation} — ${JSON.stringify(gate).slice(0, 2000)}`)
+  if (validation)
+    throw new Error(`canonical gate validation failed: ${validation} — ${JSON.stringify(gate).slice(0, 2000)}`)
   writeFileSync(join(scratch, "canonical-gate.json"), JSON.stringify(gate, null, 2))
   const before = collectArchiveState(dataRoot)
   if (before.archiveCount === 0) {
-    throw new Error(`canonical archive count is 0 after cutover — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session (dataRoot=${dataRoot})`)
+    throw new Error(
+      `canonical archive count is 0 after cutover — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session (dataRoot=${dataRoot})`,
+    )
   }
   writeFileSync(join(scratch, "canonical-archive-before.json"), JSON.stringify(before, null, 2))
   console.log(`[probe] canonical gate ready: archiveID=${archiveID} dataRoot=${dataRoot}`)
@@ -385,12 +410,15 @@ export async function readGateEvidence(
   }
   const gate = parseGateJson(spawned.stdout ?? "", helper)
   // Strict validation of helper output shape before returning
-  if (!gate.identity || typeof gate.identity !== "object") throw new Error(`gate helper ${helper} output missing identity`)
+  if (!gate.identity || typeof gate.identity !== "object")
+    throw new Error(`gate helper ${helper} output missing identity`)
   if (typeof gate.autoVacuum !== "number") throw new Error(`gate helper ${helper} output missing autoVacuum`)
-  if (!gate.zeroState || typeof gate.zeroState !== "object") throw new Error(`gate helper ${helper} output missing zeroState`)
+  if (!gate.zeroState || typeof gate.zeroState !== "object")
+    throw new Error(`gate helper ${helper} output missing zeroState`)
   if (!gate.family || typeof gate.family !== "object") throw new Error(`gate helper ${helper} output missing family`)
   // Ensure the helper echoed back the requested paths (no shell interpolation drift)
-  if (gate.dbPath !== undefined && gate.dbPath !== dbPath) throw new Error(`gate helper dbPath mismatch: ${String(gate.dbPath)} vs ${dbPath}`)
+  if (gate.dbPath !== undefined && gate.dbPath !== dbPath)
+    throw new Error(`gate helper dbPath mismatch: ${String(gate.dbPath)} vs ${dbPath}`)
   if (gate.dataRoot !== undefined && gate.dataRoot !== dataRoot) throw new Error(`gate helper dataRoot mismatch`)
   return gate
 }
@@ -412,9 +440,13 @@ export function _parseGateJsonForTest(stdout: string, helper: string): Record<st
  */
 export function assertArchiveStable(scratch: string, dataRoot: string): ReturnType<typeof collectArchiveState> {
   const beforePath = join(scratch, "canonical-archive-before.json")
-  if (!existsSync(beforePath)) throw new Error("canonical-archive-before.json missing — ensureFreshCanonicalRoot was not called")
+  if (!existsSync(beforePath))
+    throw new Error("canonical-archive-before.json missing — ensureFreshCanonicalRoot was not called")
   const before = JSON.parse(readFileSync(beforePath, "utf8")) as ReturnType<typeof collectArchiveState>
-  if (before.archiveCount === 0) throw new Error(`archive stability check failed: archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session`)
+  if (before.archiveCount === 0)
+    throw new Error(
+      `archive stability check failed: archive count before is 0 — fresh canonical DB and at least one archive must exist before the Extension Host creates the canonical-era session`,
+    )
   const after = collectArchiveState(dataRoot)
   writeFileSync(join(scratch, "canonical-archive-after.json"), JSON.stringify(after, null, 2))
   const err = archiveMutationError(before, after)
