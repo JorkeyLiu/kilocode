@@ -2,7 +2,6 @@ import { describe, expect, test } from "bun:test"
 import { Schema } from "effect"
 import { ConfigProviderV1 } from "@opencode-ai/core/v1/config/provider"
 import { CatalogModelStatus, ModelStatus } from "@/provider/model-status"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { Provider } from "@/provider/provider"
 
 describe("provider model status schemas", () => {
@@ -14,18 +13,8 @@ describe("provider model status schemas", () => {
 
   test("accepts active status across public provider schemas", () => {
     expect(Schema.decodeUnknownSync(ConfigProviderV1.Model)({ status: "active" }).status).toBe("active")
-    expect(
-      Schema.decodeUnknownSync(ModelsDev.Model)({
-        id: "test-model",
-        name: "Test Model",
-        release_date: "2026-01-01",
-        attachment: false,
-        reasoning: false,
-        temperature: true,
-        tool_call: true,
-        limit: { context: 128000, output: 8192 },
-      }).status,
-    ).toBeUndefined()
+    // P4.4-G2: preset ModelsDev.Model schema removed; catalog status is now via CatalogModelStatus only
+    expect(Schema.decodeUnknownSync(CatalogModelStatus)("deprecated")).toBe("deprecated")
     expect(
       Schema.decodeUnknownSync(Provider.Model)({
         id: "test-model",

@@ -13,7 +13,6 @@ import { EventV2 } from "../event"
 import { FSUtil } from "../fs-util"
 import { Global } from "../global"
 import { Location } from "../location"
-import { ModelsDev } from "../models-dev"
 import { Npm } from "../npm"
 import { PluginV2 } from "../plugin"
 import { AccountPlugin } from "./account"
@@ -21,7 +20,6 @@ import { AgentPlugin } from "./agent"
 import { CommandPlugin } from "./command"
 import { ConfigProviderPlugin } from "../config/plugin/provider"
 import { EnvPlugin } from "./env"
-import { ModelsDevPlugin } from "./models-dev"
 import { ProviderPlugins } from "./provider"
 import { SkillV2 } from "../skill"
 
@@ -39,7 +37,6 @@ type Plugin = {
     | Location.Service
     | PluginV2.Service
     | Config.Service
-    | ModelsDev.Service
     | SkillV2.Service
   >
 }
@@ -60,7 +57,6 @@ export const layer = Layer.effect(
     const agents = yield* AgentV2.Service
     const config = yield* Config.Service
     const location = yield* Location.Service
-    const modelsDev = yield* ModelsDev.Service
     const npm = yield* Npm.Service
     const events = yield* EventV2.Service
     const fs = yield* FSUtil.Service
@@ -78,7 +74,6 @@ export const layer = Layer.effect(
           Effect.provideService(AgentV2.Service, agents),
           Effect.provideService(Config.Service, config),
           Effect.provideService(Location.Service, location),
-          Effect.provideService(ModelsDev.Service, modelsDev),
           Effect.provideService(Npm.Service, npm),
           Effect.provideService(EventV2.Service, events),
           Effect.provideService(FSUtil.Service, fs),
@@ -98,7 +93,6 @@ export const layer = Layer.effect(
       for (const item of ProviderPlugins) {
         yield* add(item)
       }
-      yield* add(ModelsDevPlugin)
       yield* add(ConfigProviderPlugin.Plugin)
       yield* add(ConfigAgentPlugin.Plugin)
       yield* add(ConfigCommandPlugin.Plugin)

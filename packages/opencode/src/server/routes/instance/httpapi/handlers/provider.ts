@@ -1,12 +1,10 @@
 import { ProviderAuth } from "@/provider/auth"
 import { Config } from "@/config/config"
-import * as ModelsDev from "@/provider/models" // kilocode_change - use Kilo wrapper for defect protection
 import { Provider } from "@/provider/provider"
 
-import { mapValues, pickBy } from "remeda" // kilocode_change
+import { pickBy } from "remeda" // kilocode_change
 import { invalidateAfterProviderAuthChange } from "@/kilocode/server/provider-auth-lifecycle" // kilocode_change
 import { filterPromptTrainingModels } from "@/kilocode/provider/model-filter" // kilocode_change
-import { overlay as overlayAnacondaDesktop } from "@/kilocode/anaconda-desktop/provider" // kilocode_change
 import { Effect, Schema } from "effect"
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http"
 import { HttpApiBuilder } from "effect/unstable/httpapi"
@@ -42,22 +40,8 @@ export const providerHandlers = HttpApiBuilder.group(InstanceHttpApi, "provider"
 
     const list = Effect.fn("ProviderHttpApi.list")(function* () {
       const config = yield* cfg.get()
-      const all = yield* ModelsDev.Service.use((s) => s.get())
-      const overlaid = overlayAnacondaDesktop(all)
-      const disabled = new Set(config.disabled_providers ?? [])
-      const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
-      const filtered: Record<string, (typeof overlaid)[string]> = {}
-      for (const [key, value] of Object.entries(overlaid)) {
-        if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) filtered[key] = value
-      }
       const connected = yield* provider.list()
-      const providers = filterPromptTrainingModels(
-        Object.assign(
-          mapValues(filtered, (item) => Provider.fromModelsDevProvider(item)),
-          connected,
-        ),
-        config.hide_prompt_training_models === true,
-      )
+      const providers = filterPromptTrainingModels(connected, config.hide_prompt_training_models === true)
       const failed: string[] = []
       const validProviders = pickBy(
         providers,

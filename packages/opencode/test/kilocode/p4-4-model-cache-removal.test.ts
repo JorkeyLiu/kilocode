@@ -98,18 +98,20 @@ describe("P4.4 ModelCache residual removal — file deleted", () => {
     expect(read("kilocode/anaconda-desktop/service.ts")).not.toContain("ModelCache")
   })
 
-  test("generic catalog and provider artifacts remain (LOCK-006)", () => {
+  test("generic catalog and provider artifacts remain (LOCK-006) — updated P4.4-G2: preset catalog deleted, adapters retained", () => {
     expect(existsSync(join(opencode, "kilocode/provider/provider.ts"))).toBe(true)
-    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
+    // P4.4-G2 deletes preset catalog per LOCK-006
+    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(false)
     expect(existsSync(join(opencode, "provider/provider.ts"))).toBe(true)
-    expect(existsSync(join(opencode, "provider/models.ts"))).toBe(true)
-    expect(existsSync(resolve(join(repo, "packages/core/src/models-dev.ts")))).toBe(true)
+    expect(existsSync(join(opencode, "provider/models.ts"))).toBe(false)
+    expect(existsSync(resolve(join(repo, "packages/core/src/models-dev.ts")))).toBe(false)
     const provider = read("provider/provider.ts")
     expect(provider).toContain("const BUNDLED_PROVIDERS")
     expect(provider).toContain('"@ai-sdk/openai"')
     const kilo = read("kilocode/provider/provider.ts")
     expect(kilo).toContain("KILO_MODEL_SCHEMA_EXTENSIONS")
-    expect(kilo).toContain("patchModelsDevModel")
+    // patchModelsDevModel was catalog-specific and removed with G2; patchConfigModel retained
+    expect(kilo).toContain("patchConfigModel")
   })
 
   test("provider group endpoint contract remains (LOCK-009)", () => {

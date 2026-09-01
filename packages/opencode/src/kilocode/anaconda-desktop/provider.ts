@@ -1,7 +1,16 @@
 import type { Hooks, Plugin } from "@kilocode/plugin"
 import type { Model } from "@kilocode/sdk/v2"
-import type { Provider } from "@opencode-ai/core/models-dev"
 import { decodeMetadata, PROVIDER_ID, type Metadata, type Modality, type ModelDescriptor } from "./domain"
+
+type Provider = {
+  id: string
+  name: string
+  description?: string
+  env: string[]
+  api?: string
+  npm?: string
+  models: Record<string, any>
+}
 
 export const PLACEHOLDER_MODEL_ID = "setup-required"
 

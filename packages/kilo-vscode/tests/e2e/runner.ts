@@ -38,11 +38,12 @@
  *      lands immediately right of A; on `child-phase1-done` re-selects A so
  *      the harness can re-click and prove an already-open child is focused
  *      WITHOUT reordering, then writes `child-phase2-ready`,
- *   8. on `child-phase2-done` seeds the variant scenario: opens variant
- *      session D, loads a transcript pinning `kilo/e2e-probe`, calls
- *      `provisionVariantModel` LAST so the synthetic providersLoaded stays the
- *      final provider message, re-seeds the session list so D survives, then
- *      writes `variant-ready`,
+  *   8. on `child-phase2-done` seeds the variant scenario: opens variant
+  *      session D, loads a transcript pinning `kilo/e2e-probe` (synthetic
+  *      explicit-provider fixture, LOCK-006 explicit-config-only, no preset
+  *      catalog/models.dev), calls `provisionVariantModel` LAST so the synthetic
+  *      explicit-provider providersLoaded stays the final provider message,
+  *      re-seeds the session list so D survives, then writes `variant-ready`,
  *   9. topic-navigation scenario (focused runs only, see below): seeds a
  *      parentID hierarchy — root T1, child T1C (parentID=T1), sibling root T2 —
  *      through production message shapes, then hands the harness three
@@ -535,20 +536,21 @@ function scenarioFlags(scenario: string): ScenarioFlags {
     runWorktreeRemoval: scenario === "worktree-removal",
     // P3.3 cloud-claw-removal is focused-only: it asserts runtime manifest /
     // command-table / bundle-list absence of the removed cloud-session, KiloClaw,
-    // local Console, and JetBrains product surfaces, then proves the retained
-    // Open-in-Tab and Agent Manager surfaces stay ready. No synthetic fixtures,
-    // no CDP DOM driving, no model requests — all assertions run
-    // extension-host-side and are recorded into
+    // local Console, and JetBrains product surfaces, then proves the Agent Manager
+    // as the sole chat UI still becomes ready (no Open in Tab, P3.5 Complete
+    // 2026-09-01) (LOCK-008). No synthetic fixtures, no CDP DOM driving, no model
+    // requests — all assertions run extension-host-side and are recorded into
     // `<scratch>/cloud-claw-removal-runtime-evidence`.
     runCloudClawRemoval: scenario === "cloud-claw-removal",
     // P3.4 remaining-feature-removal is focused-only: it asserts runtime
     // manifest / command-table / bundle-list / workspace-state absence of the
     // removed indexing, project memory, user-visible context/compaction
     // controls, autocomplete, and commit-message surfaces, proves the
-    // generation-request collector stayed at zero model requests, then reads
-    // back the retained Open-in-Tab and Agent Manager surfaces. No synthetic
-    // fixtures, no CDP DOM driving — all assertions run extension-host-side
-    // and are recorded into `<scratch>/p3-4-removal-runtime-evidence`.
+    // generation-request collector stayed at zero model requests, and that the
+    // Agent Manager as the sole chat UI still becomes ready (no Open in Tab,
+    // P3.5 Complete 2026-09-01) (LOCK-005/007/008). No synthetic fixtures, no CDP
+    // DOM driving — all assertions run extension-host-side and are recorded into
+    // `<scratch>/p3-4-removal-runtime-evidence`.
     runP34Removal: scenario === "p3-4-removal",
     // R9 private observation is focused-only: proves the five lifecycle
     // boundaries (panel close/reopen, reload, session switch, transport
@@ -821,12 +823,16 @@ export async function run(): Promise<void> {
 
   // --- Variant-memory scenario fixtures (D) — independent of the child ---
   if (runVariant) {
-    // The models.dev snapshot ships no model with ≥2 reasoning variants, so the
-    // fixture bridge injects one into the real served catalog AND pins it as
+    // Explicit-config-only state provides no preset model catalog (LOCK-006
+    // P4.4-G2 deleted `models-api.json` (3 MB) and `Core.ModelsDev`
+    // `packages/core/src/models-dev.ts` disk/network/refresh plus models
+    // snapshot/build machinery); the fixture bridge injects a synthetic
+    // explicit-provider fixture variant model (kilo/e2e-probe) and pins it as
     // the per-agent model for every backend agent (so switching agents keeps
     // the variant-bearing model). The runner opens a session whose recovery
-    // selects it, then re-provisions the catalog LAST so the synthetic
-    // providersLoaded stays the final provider message the webview processes.
+    // selects it, then re-provisions the synthetic explicit-provider
+    // providersLoaded LAST so it stays the final provider message the webview
+    // processes.
     await post(vscode, {
       type: "sessionCreated",
       session: session(plan.variantId, plan.variantTitle, iso),
@@ -1057,9 +1063,9 @@ async function runRemovalScenarios(
   // P3.3 cloud-claw-removal: proves the loaded manifest, runtime command table,
   // and built bundle list expose no active cloud-session, KiloClaw, local
   // Console, or JetBrains product contribution (LOCK-003/PERF-3), while the
-  // retained Open-in-Tab and Agent Manager surfaces still become ready
-  // (LOCK-008). No synthetic fixtures, no CDP DOM driving, and no model
-  // requests or external calls; evidence in
+  // Agent Manager as the sole chat UI still becomes ready (no Open in Tab,
+  // P3.5 Complete 2026-09-01) (LOCK-008). No synthetic fixtures, no CDP DOM
+  // driving, and no model requests or external calls; evidence in
   // `<scratch>/cloud-claw-removal-runtime-evidence`.
   if (runCloudClawRemoval) {
     await assertCloudClawRemoval(vscodeApi, ext, scratch, fixtureId)
@@ -1070,9 +1076,10 @@ async function runRemovalScenarios(
   // indexing / project memory / context-management / manual-compaction /
   // autocomplete / commit-message surface (LOCK-004/PERF-3/014/015), that the
   // generation-request collector stayed at zero model requests, and that the
-  // retained Open-in-Tab + Agent Manager surfaces still become ready
-  // (LOCK-005/007/008). No synthetic fixtures, no CDP DOM driving, no model
-  // requests; evidence in `<scratch>/p3-4-removal-runtime-evidence`.
+  // Agent Manager as the sole chat UI still becomes ready (no Open in Tab,
+  // P3.5 Complete 2026-09-01) (LOCK-005/007/008). No synthetic fixtures, no CDP
+  // DOM driving, no model requests; evidence in
+  // `<scratch>/p3-4-removal-runtime-evidence`.
   if (runP34Removal) {
     await assertP34Removal(vscodeApi, ext, scratch, fixtureId)
   }

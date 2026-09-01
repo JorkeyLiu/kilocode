@@ -197,7 +197,7 @@ export function detectBinary(buf: Uint8Array): BinaryInfo {
   }
   // Text wrappers that somehow lack a shebang (e.g. generated on Windows).
   const head = new TextDecoder().decode(buf.subarray(0, 512))
-  if (head.includes("src/index.ts") || head.includes("--conditions=browser") || head.includes("KILO_MODELS_PATH")) {
+  if (head.includes("src/index.ts") || head.includes("--conditions=browser")) {
     return { format: "wrapper", archs: [] }
   }
   return { format: "unknown", archs: [] }

@@ -11,7 +11,6 @@ import { Project } from "./project"
 import { EventV2 } from "./event"
 import { Auth } from "./auth"
 import { Npm } from "./npm"
-import { ModelsDev } from "./models-dev"
 import { FSUtil } from "./fs-util"
 import { Global } from "./global"
 import { Database } from "./database/database"
@@ -107,7 +106,6 @@ export class LocationServiceMap extends LayerMap.Service<LocationServiceMap>()("
     EventV2.defaultLayer,
     Auth.defaultLayer,
     Npm.defaultLayer,
-    ModelsDev.defaultLayer,
     FSUtil.defaultLayer,
     AppProcess.defaultLayer,
     Global.defaultLayer,

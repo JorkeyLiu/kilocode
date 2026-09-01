@@ -161,32 +161,17 @@ Evidence:
 - `packages/kilo-docs/pages/contributing/architecture/cli-runtime.md` - "Config
   precedence" table (12 rows) and "Config update lifecycle".
 
-### 2.3 Provider catalogs and preset loaders
+### 2.3 Provider catalogs and preset loaders (historical before 2026-09-01; G2 deleted after)
 
-Provider state combines preset catalog data, config, auth records, and
-organization sources with many preset loaders. Bundled provider identities carry
-metadata and option patches; models.dev catalog data is loaded with a fallback to
-an empty catalog when unavailable; a large checked-in catalog file exists; auth
-records use `api`/`oauth`/`wellknown` variants plus a separate v2 multi-account
-store; organization IDs participate in model fetch; custom-endpoint overrides
-exist (cli-runtime.md, "Outbound provider authentication" and "Provider routing").
-ModelCache (historical five-minute TTL at `packages/opencode/src/provider/model-cache.ts`)
-was deleted 2026-08-27 (LOCK-MODELCACHE-001) — no model cache remains; the prior
-five-minute TTL description is historical only and not current behavior.
+Before P4.4-G2 (2026-09-01, LOCK-006), provider state combined preset catalog data, config, auth records, and organization sources with many preset loaders: bundled provider identities carried metadata and option patches; models.dev catalog data was loaded with a fallback to an empty catalog when unavailable; a large checked-in catalog file (`packages/opencode/src/kilocode/provider/models-api.json`, 3 MB) existed; auth records used `api`/`oauth`/`wellknown` variants plus a separate v2 multi-account store; organization IDs participated in model fetch; custom-endpoint overrides existed (cli-runtime.md, "Outbound provider authentication" and "Provider routing"). ModelCache (historical five-minute TTL at `packages/opencode/src/provider/model-cache.ts`) was deleted 2026-08-27 (LOCK-MODELCACHE-001) — no model cache remains.
 
-Evidence:
+As of 2026-09-01 (P4.4-G2, LOCK-006), the preset provider catalog and models.dev fallback are fully deleted and no longer current behavior: `packages/opencode/src/kilocode/provider/models-api.json` (3 MB), `packages/core/src/models-dev.ts` (disk `models.json` / `models-<hash>.json`, `GET ${source}/api.json` fallback, 5-min TTL, 60-min background refresh, `kilo models --refresh`), `packages/core/src/kilocode/models-refresh.ts`, `packages/core/src/plugin/models-dev.ts`, `packages/opencode/src/provider/models.ts`, `packages/opencode/src/kilocode/provider/models-refresh.ts` / `models-snapshot-shape.ts`, `script/kilocode/refresh-models.ts` / `models-snapshot.ts`, build embedding `KILO_MODELS_DEV` / `MODELS_SNAPSHOT_RELATIVE` / `refresh:models` script and `KILO_MODELS_URL` / `KILO_MODELS_PATH` / `KILO_DISABLE_MODELS_FETCH` controls deleted; `ModelsDev` service/layer wiring removed from `provider/provider.ts`, `effect/app-runtime.ts`, `server/routes/instance/httpapi/server.ts` / `handlers/provider.ts`, `cli/cmd/models.ts` / `providers.ts` / `github.handler.ts`, `test/preload.ts`, and `kilo-vscode` source wrapper. Current provider state is custom-provider-only: user-defined `provider.<id>` records with `name`/`npm`/`api`/`models` plus generic `BUNDLED_PROVIDERS` adapters (`@ai-sdk/*`, `@openrouter/ai-sdk-provider`, etc.) and `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchConfigModel` helpers remain; no preset catalog, snapshot, or models.dev network/disk/background-refresh runtime remains (LOCK-006).
 
-- `packages/opencode/src/kilocode/provider/provider.ts` - bundled providers,
-  `patchModelsDevModel`, provider option patches.
-- `packages/opencode/src/kilocode/provider/metadata.ts` - deleted 2026-08-27
-  (P4.4-T5) — historical preset provider metadata keys, no current reader.
-- `packages/opencode/src/kilocode/provider/models-api.json` - checked-in provider
-  catalog.
-- `packages/opencode/src/provider/models.ts` - "models.dev catalog unavailable,
-  using empty catalog" fallback.
-- `packages/opencode/src/provider/provider.ts` - models.dev data handling.
-- `packages/kilo-docs/pages/contributing/architecture/cli-runtime.md` - provider
-  auth and routing sections.
+Evidence (historical vs current):
+
+- Historical (pre-G2, now deleted): `packages/opencode/src/kilocode/provider/provider.ts` bundled providers, `patchModelsDevModel` (deleted T6 subject, but `patchModelsDevModel`/`KILO_MODEL_SCHEMA_EXTENSIONS` retained as generic); `packages/opencode/src/kilocode/provider/metadata.ts` deleted 2026-08-27 (P4.4-T5); `packages/opencode/src/kilocode/provider/models-api.json` deleted 2026-09-01 (P4.4-G2); `packages/opencode/src/provider/models.ts` fallback deleted 2026-09-01 (P4.4-G2); `packages/opencode/src/provider/provider.ts` models.dev handling deleted 2026-09-01; `packages/core/src/models-dev.ts` deleted 2026-09-01.
+- Current (post-G2): `packages/opencode/src/provider/provider.ts` `BUNDLED_PROVIDERS` generic adapters retained; `packages/opencode/src/kilocode/provider/provider.ts` `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchConfigModel` retained; `packages/opencode/test/kilocode/p4-4-g2-preset-catalog-removal.test.ts` proves absence; `packages/kilo-docs/pages/contributing/architecture/cli-runtime.md` documents custom-provider-only.
+- Historical ModelCache TTL description remains historical only and not current behavior.
 
 ### 2.4 Cold runtime identity rebuild and convergence
 
@@ -872,7 +857,7 @@ the item has recorded evidence; nothing removed is reclassified as deferred.
 | Project memory (LOCK-004) | Memory tools, memory fetch, system-prompt injection | Present in repo | P3.4 |
 | User-visible context management/compaction (LOCK-004) | Compaction settings and context-management UI | Present in repo; minimal internal overflow safeguard retained separately (LOCK-005) | P3.4 |
 | Autocomplete (LOCK-004) | Inline completions and commit-message generation | Present in repo | P3.4 |
-| Preset providers/catalog/onboarding/org sources (LOCK-006) | Preset provider identities, models.dev catalog, bundled gateway onboarding/auth, organization/cloud provider sources | Present in repo | P4.4 |
+| Preset providers/catalog/onboarding/org sources (LOCK-006) | Preset provider identities, models.dev catalog, bundled gateway onboarding/auth, organization/cloud provider sources | Deleted 2026-09-01 (P4.4-G2, LOCK-006): `models-api.json` (3 MB), `core/src/models-dev.ts` (disk/network/refresh), `core/src/kilocode/models-refresh.ts`, `core/src/plugin/models-dev.ts`, `provider/models.ts`, `kilocode/provider/models-refresh.ts` / `models-snapshot-shape.ts`, `script/kilocode/refresh-models.ts` / `models-snapshot.ts`, build embedding `KILO_MODELS_DEV` / `MODELS_SNAPSHOT_RELATIVE` / `refresh:models` and `KILO_MODELS_URL` / `KILO_MODELS_PATH` / `KILO_DISABLE_MODELS_FETCH` controls, plus `ModelsDev` wiring from provider/runtime/server/CLI/preload/source-wrapper; generic `BUNDLED_PROVIDERS` adapters, `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchConfigModel`, custom-provider save/delete/auth retained per LOCK-006/009; old CLI/TUI/server/generated-SDK surfaces retained until P4.5 per LOCK-009 | P4.4-G2 (residual) |
 
 ### 8.1 Effective-config source removal
 
@@ -1055,10 +1040,7 @@ Evidence-based conclusion:
     (`InstanceBootstrap`) loads config, initializes plugins and the Kilo
     bootstrap, then concurrently initializes reference/lsp/format/vcs/snapshot/
     project services per directory on first access.
-  - Config/provider initialization: the 12+ source merge (section 2.2), preset
-    provider loaders and the 3.0 MB checked-in models-dev catalog
-    (`packages/opencode/src/kilocode/provider/models-api.json`, section 2.3), and
-    the convergence/rebuild machinery (section 2.4).
+  - Config/provider initialization: the 12+ source merge (section 2.2; historical: preset provider loaders and the 3.0 MB checked-in models-dev catalog `packages/opencode/src/kilocode/provider/models-api.json` (section 2.3, deleted P4.4-G2 2026-09-01 — now explicit `provider.<id>.models` only, no catalog load)), and the convergence/rebuild machinery (section 2.4).
   - Feature layers include removed-feature services (Worktree, MemoryService,
     Notebook, AgentManager, KiloViewers, ShareNext) that under LOCK-PERF-3 must
     not contribute to startup once removed.
@@ -1099,9 +1081,7 @@ measurement. None is claimed as removable or removed here.
   - the server listener build for the serve path
   (`server.ts` `Server.listen` -> `KiloListener.build`, `listener.ts`
   `Layer.buildWithMemoMap`).
-- Preset provider surface: 3.0 MB models-dev catalog
-  (`kilocode/provider/models-api.json`), preset provider identities, metadata
-  keys, and loaders (section 2.3; LOCK-006 removal).
+- Preset provider surface (historical, deleted P4.4-G2 2026-09-01): 3.0 MB models-dev catalog (`kilocode/provider/models-api.json`), preset provider identities, metadata keys, and loaders (section 2.3; LOCK-006 removal — current provider state is explicit `provider.<id>.models` only, no catalog load or startup catalog cost remains).
 - Config machinery: 12+ source merge and cold convergence/rebuild passes
   (sections 2.2, 2.4; LOCK-011 target removes process-global rebuild).
 - Per-instance bootstrap work, including removed-feature initialization (memory,

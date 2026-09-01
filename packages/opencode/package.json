@@ -14,7 +14,6 @@
     "bench:p0": "bun run script/p0-benchmark.ts",
     "profile:test": "bun run script/profile-test-files.ts",
     "build": "bun run script/build.ts",
-    "refresh:models": "bun run script/kilocode/refresh-models.ts",
     "dev": "bun run --conditions=browser ./src/index.ts",
     "dev:temporary": "bun run --conditions=browser ./src/temporary.ts"
   },

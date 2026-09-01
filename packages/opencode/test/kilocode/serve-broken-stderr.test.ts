@@ -45,7 +45,6 @@ function isolatedEnv(home: string, parent: number): Record<string, string> {
     KILO_PURE: "1",
     KILO_DISABLE_AUTOUPDATE: "1",
     KILO_DISABLE_AUTOCOMPACT: "1",
-    KILO_DISABLE_MODELS_FETCH: "1",
     KILO_SERVER_PASSWORD: "testpass",
   }
 }

@@ -100,7 +100,6 @@ async function spawnRealServer(dbPath: string) {
     KILO_PURE: "1",
     KILO_DISABLE_AUTOUPDATE: "1",
     KILO_DISABLE_AUTOCOMPACT: "1",
-    KILO_DISABLE_MODELS_FETCH: "1",
     KILO_AUTH_CONTENT: "{}",
     KILO_SERVER_PASSWORD: "",
     KILO_SERVER_USERNAME: "",

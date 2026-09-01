@@ -17,8 +17,8 @@ import type {
   PullRequestEvent,
 } from "@octokit/webhooks-types"
 import { UI } from "../ui"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
 import { InstanceRef } from "@/effect/instance-ref"
+import { Config } from "@/config/config"
 import { SessionShare } from "@/share/session"
 import { Session } from "@/session/session"
 import type { SessionID } from "../../session/schema"
@@ -35,6 +35,7 @@ import { parseGitHubRemote } from "@/util/repository"
 import { Effect } from "effect"
 import { GitHubSecurity } from "@/kilocode/security/github" // kilocode_change
 import { extractResponseText, formatPromptTooLargeError } from "./github.shared"
+import { buildWorkflowContent, buildGithubWorkflowEnv as buildEnv } from "@/kilocode/github-workflow"
 
 type GitHubAuthor = {
   login: string
@@ -165,24 +166,50 @@ export function buildGithubProviderOptions(providers: Record<string, { id: strin
   )
 }
 
+export function buildGithubModelOptions(models: Record<string, { id?: string; name?: string }>): Array<{ label: string; value: string }> {
+  return pipe(
+    Object.entries(models),
+    sortBy(([, v]) => (v.name ?? v.id ?? "") as string),
+    map(([key, v]) => ({
+      label: v.name ?? v.id ?? key,
+      value: v.id ?? key,
+    })),
+  )
+}
+
+export function buildGithubWorkflowEnv(provider: string, env: string[]): string {
+  return buildEnv(provider, env)
+}
+
+export { isValidModelID, isValidEnvName, isValidProviderID, validateWorkflowInputs, buildWorkflowContent } from "@/kilocode/github-workflow"
+
 export const githubInstall = Effect.fn("Cli.github.install")(function* () {
   const maybeCtx = yield* InstanceRef
   if (!maybeCtx) return yield* Effect.die("InstanceRef not provided")
   const ctx = maybeCtx
-  const modelsDev = yield* ModelsDev.Service
   const gitSvc = yield* Git.Service
+  const cfgSvc = yield* Config.Service
+  const cfg = yield* cfgSvc.get()
+  const disabled = new Set(cfg.disabled_providers ?? [])
+  const enabled = cfg.enabled_providers ? new Set(cfg.enabled_providers) : undefined
+  const providers: Record<string, { id: string; name: string; env: string[]; models: Record<string, any> }> = {}
+  for (const [id, p] of Object.entries(cfg.provider ?? {})) {
+    if (!p) continue
+    if (disabled.has(id)) continue
+    if (enabled && !enabled.has(id)) continue
+    providers[id] = {
+      id,
+      name: (p as any).name ?? id,
+      env: (p as any).env ?? [],
+      models: (p as any).models ?? {},
+    }
+  }
   yield* Effect.promise(async () => {
     {
       UI.empty()
       prompts.intro("Install GitHub agent")
       const app = await getAppInfo()
       await installGitHubApp()
-
-      const providers = await Effect.runPromise(modelsDev.get()).then((p) => {
-        // TODO: add guide for copilot, for now just hide it
-        delete p["github-copilot"]
-        return p
-      })
 
       const provider = await promptProvider()
       const model = await promptModel()
@@ -197,10 +224,11 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
           step2 =
             "Configure OIDC in AWS - https://docs.github.com/en/actions/how-tos/security-for-github-actions/security-hardening-your-deployments/configuring-openid-connect-in-amazon-web-services"
         } else {
+          const envList = providers[provider]?.env ?? []
           step2 = [
             `    2. Add the following secrets in org or repo (${app.owner}/${app.repo}) settings`,
             "",
-            ...providers[provider].env.map((e) => `       - ${e}`),
+            ...envList.map((e) => `       - ${e}`),
           ].join("\n")
         }
 
@@ -238,32 +266,51 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
       }
 
       async function promptProvider() {
+        const options = buildGithubProviderOptions(providers)
+        if (options.length === 0) {
+          prompts.log.warn("No providers configured — enter provider manually")
+          const manual = await prompts.text({
+            message: "Enter provider id",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          })
+          if (prompts.isCancel(manual)) throw new UI.CancelledError()
+          return String(manual)
+        }
+        const withOther = [...options, { value: "other", label: "Other (manual)" }]
         let provider = await prompts.select({
           message: "Select provider",
           maxItems: 8,
-          options: buildGithubProviderOptions(providers),
+          options: withOther,
         })
 
         if (prompts.isCancel(provider)) throw new UI.CancelledError()
+        if (provider === "other") {
+          const manual = await prompts.text({
+            message: "Enter provider id",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          })
+          if (prompts.isCancel(manual)) throw new UI.CancelledError()
+          return String(manual)
+        }
 
         return provider
       }
 
       async function promptModel() {
-        const providerData = providers[provider]!
+        const providerData = providers[provider]
+        if (!providerData || !providerData.models || Object.keys(providerData.models).length === 0) {
+          const manual = await prompts.text({
+            message: "Enter model id",
+            validate: (x) => (x && x.length > 0 ? undefined : "Required"),
+          })
+          if (prompts.isCancel(manual)) throw new UI.CancelledError()
+          return String(manual)
+        }
 
         const model = await prompts.select({
           message: "Select model",
           maxItems: 8,
-          options: pipe(
-            providerData.models,
-            values(),
-            sortBy((x) => x.name ?? x.id),
-            map((x) => ({
-              label: x.name ?? x.id,
-              value: x.id,
-            })),
-          ),
+          options: buildGithubModelOptions(providerData.models),
         })
 
         if (prompts.isCancel(model)) throw new UI.CancelledError()
@@ -324,53 +371,10 @@ export const githubInstall = Effect.fn("Cli.github.install")(function* () {
       }
 
       async function addWorkflowFiles() {
-        // kilocode_change start - updated workflow template with Kilo branding and gateway secrets
-        const providerEnvStr =
-          provider === "amazon-bedrock"
-            ? ""
-            : providers[provider].env.map((e) => `\n          ${e}: \${{ secrets.${e} }}`).join("")
-
-        const kiloGatewayEnv =
-          provider === "kilo"
-            ? `\n          KILO_API_KEY: \${{ secrets.KILO_API_KEY }}\n          KILO_ORG_ID: \${{ secrets.KILO_ORG_ID }}`
-            : ""
-
-        const envStr = providerEnvStr || kiloGatewayEnv ? `\n        env:${providerEnvStr}${kiloGatewayEnv}` : ""
-
-        await Filesystem.write(
-          path.join(app.root, WORKFLOW_FILE),
-          `name: kilo
-
-on:
-  issue_comment:
-    types: [created]
-  pull_request_review_comment:
-    types: [created]
-
-jobs:
-  kilo:
-    if: |
-      contains(github.event.comment.body, ' /kc') ||
-      startsWith(github.event.comment.body, '/kc') ||
-      contains(github.event.comment.body, ' /kilo') ||
-      startsWith(github.event.comment.body, '/kilo')
-    runs-on: ubuntu-latest
-    permissions:
-      id-token: write
-      contents: read
-      pull-requests: read
-      issues: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          persist-credentials: false
-
-      - name: Run Kilo
-        uses: Kilo-Org/kilocode/github@latest${envStr}
-        with:
-          model: ${provider}/${model}`,
-        )
+        // kilocode_change start - validated workflow write (LOCK-006 workflow safety)
+        const env = providers[provider]?.env ?? []
+        const content = buildWorkflowContent(provider, model, env)
+        await Filesystem.write(path.join(app.root, WORKFLOW_FILE), content)
         // kilocode_change end
 
         prompts.log.success(`Added workflow file: "${WORKFLOW_FILE}"`)

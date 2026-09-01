@@ -205,17 +205,16 @@ jobs:
             fi
             root="$(mktemp -d)"
             trap 'rm -rf "$root"' RETURN
+            mkdir -p "$root/config/kilo"
+            printf '%s' '{"provider":{"test-provider":{"name":"Test","npm":"@ai-sdk/openai-compatible","api":"https://example.test/v1","models":{"test-model":{"name":"Test Model"}}}}}' > "$root/config/kilo/kilo.jsonc"
             (
-              unset KILO_MODELS_PATH KILO_MODELS_URL KILO_CONFIG KILO_CONFIG_DIR
+              unset KILO_CONFIG KILO_CONFIG_DIR
               export XDG_DATA_HOME="$root/data"
               export XDG_CACHE_HOME="$root/cache"
               export XDG_CONFIG_HOME="$root/config"
               export XDG_STATE_HOME="$root/state"
-              export KILO_DISABLE_MODELS_FETCH=1
               export KILO_DISABLE_PROJECT_CONFIG=1
-              export KILO_CONFIG_CONTENT='{"enabled_providers":["anthropic"]}'
-              export ANTHROPIC_API_KEY=dummy
-              "$binary" --pure models anthropic | grep -q '^anthropic/'
+              "$binary" --pure models test-provider | grep -q '^test-provider/test-model'
             )
           }
 
@@ -242,16 +241,15 @@ jobs:
               grep -q '\''^SPDX-License-Identifier: LGPL-2.0-or-later$'\'' "/dist/$PACKAGE/bin/licenses/bubblewrap/NOTICE" # kilocode_change
               root="$(mktemp -d)"
               trap '\''rm -rf "$root"'\'' EXIT
-              unset KILO_MODELS_PATH KILO_MODELS_URL KILO_CONFIG KILO_CONFIG_DIR
+              mkdir -p "$root/config/kilo"
+              printf '\''%s'\'' '\''{"provider":{"test-provider":{"name":"Test","npm":"@ai-sdk/openai-compatible","api":"https://example.test/v1","models":{"test-model":{"name":"Test Model"}}}}}'\'' > "$root/config/kilo/kilo.jsonc"
+              unset KILO_CONFIG KILO_CONFIG_DIR
               export XDG_DATA_HOME="$root/data"
               export XDG_CACHE_HOME="$root/cache"
               export XDG_CONFIG_HOME="$root/config"
               export XDG_STATE_HOME="$root/state"
-              export KILO_DISABLE_MODELS_FETCH=1
               export KILO_DISABLE_PROJECT_CONFIG=1
-              export KILO_CONFIG_CONTENT='\''{"enabled_providers":["anthropic"]}'\''
-              export ANTHROPIC_API_KEY=dummy
-              "$binary" --pure models anthropic | grep -q "^anthropic/"
+              "$binary" --pure models test-provider | grep -q "^test-provider/test-model"
             '
 
   validate-cli-windows:
@@ -300,21 +298,22 @@ jobs:
           $root = Join-Path $env:RUNNER_TEMP ([guid]::NewGuid().ToString())
           New-Item -ItemType Directory -Force -Path $root | Out-Null
           try {
-            foreach ($name in "KILO_MODELS_PATH", "KILO_MODELS_URL", "KILO_CONFIG", "KILO_CONFIG_DIR") {
+            foreach ($name in "KILO_CONFIG", "KILO_CONFIG_DIR") {
               Remove-Item "Env:$name" -ErrorAction SilentlyContinue
             }
             $env:XDG_DATA_HOME = Join-Path $root "data"
             $env:XDG_CACHE_HOME = Join-Path $root "cache"
             $env:XDG_CONFIG_HOME = Join-Path $root "config"
             $env:XDG_STATE_HOME = Join-Path $root "state"
-            $env:KILO_DISABLE_MODELS_FETCH = "1"
             $env:KILO_DISABLE_PROJECT_CONFIG = "1"
-            $env:KILO_CONFIG_CONTENT = '{"enabled_providers":["anthropic"]}'
-            $env:ANTHROPIC_API_KEY = "dummy"
-            $output = & $binary --pure models anthropic
+            $configDir = Join-Path $env:XDG_CONFIG_HOME "kilo"
+            New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+            $configFile = Join-Path $configDir "kilo.jsonc"
+            Set-Content -Path $configFile -Value '{"provider":{"test-provider":{"name":"Test","npm":"@ai-sdk/openai-compatible","api":"https://example.test/v1","models":{"test-model":{"name":"Test Model"}}}}}'
+            $output = & $binary --pure models test-provider
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-            if (-not ($output -match "(?m)^anthropic/")) {
-              throw "Compiled Windows binary did not list Anthropic models from the embedded snapshot"
+            if (-not ($output -match "(?m)^test-provider/test-model")) {
+              throw "Compiled Windows binary did not list custom test-provider model"
             }
           } finally {
             Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue

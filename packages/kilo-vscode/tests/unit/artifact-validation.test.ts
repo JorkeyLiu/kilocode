@@ -185,7 +185,6 @@ function pe(machine: number): Buffer {
 
 const WRAPPER = Buffer.from(
   '#!/usr/bin/env bash\nset -euo pipefail\ncd "/Users/x/repos/kilocode/packages/opencode"\n' +
-    'export KILO_MODELS_PATH="${KILO_MODELS_PATH:-/Users/x/.../models-api.json}"\n' +
     'exec "/usr/local/bin/bun" --conditions=browser src/index.ts "$@"\n',
 )
 

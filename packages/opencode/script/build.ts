@@ -2,7 +2,6 @@
 
 import { $ } from "bun"
 import fs from "fs"
-import os from "os" // kilocode_change
 import path from "path"
 import { fileURLToPath } from "url"
 import { createSolidTransformPlugin } from "@opentui/solid/bun-plugin"
@@ -14,8 +13,6 @@ const dir = path.resolve(__dirname, "..")
 const require = createRequire(import.meta.url) // kilocode_change
 
 process.chdir(dir)
-
-const generated = await import("./generate.ts")
 
 import { Script } from "@opencode-ai/script"
 import pkg from "../package.json"
@@ -48,38 +45,6 @@ async function copyTreeSitterWasms(outputDir: string) {
   )
 
   console.log(`copied ${languageWasmFiles.length + 1} tree-sitter wasm files to ${targetDir}`)
-}
-
-function smokeEnv(root: string) {
-  const env = { ...process.env }
-  delete env.KILO_MODELS_PATH
-  delete env.KILO_MODELS_URL
-  delete env.KILO_CONFIG
-  delete env.KILO_CONFIG_DIR
-  return {
-    ...env,
-    XDG_DATA_HOME: path.join(root, "data"),
-    XDG_CACHE_HOME: path.join(root, "cache"),
-    XDG_CONFIG_HOME: path.join(root, "config"),
-    XDG_STATE_HOME: path.join(root, "state"),
-    KILO_DISABLE_MODELS_FETCH: "1",
-    KILO_DISABLE_PROJECT_CONFIG: "1",
-    KILO_CONFIG_CONTENT: JSON.stringify({ enabled_providers: ["anthropic"] }),
-    ANTHROPIC_API_KEY: "dummy",
-  }
-}
-
-async function smokeModels(binaryPath: string) {
-  const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "kilo-models-"))
-  try {
-    const out = await $`${binaryPath} --pure models anthropic`.env(smokeEnv(root)).text()
-    if (out.split(/\r?\n/).some((line) => line.startsWith("anthropic/"))) return
-    throw new Error("Compiled binary did not list Anthropic models from the embedded snapshot")
-  } finally {
-    await fs.promises
-      .rm(root, { recursive: true, force: true })
-      .catch((err) => console.warn(`Failed to remove smoke test directory ${root}`, err))
-  }
 }
 
 // Kilo dropped the packages/app web UI. Kept here as a commented reference so the
@@ -274,7 +239,6 @@ for (const item of targets) {
     // kilocode_change end
     define: {
       KILO_VERSION: `'${Script.version}'`,
-      KILO_MODELS_DEV: generated.modelsData,
       OTUI_TREE_SITTER_WORKER_PATH: bunfsRoot + workerRelativePath,
       KILO_WORKER_PATH: workerPath,
       // kilocode_change start
@@ -323,14 +287,11 @@ for (const item of targets) {
   // Smoke test: only run if binary is for current platform
   if (item.os === process.platform && item.arch === process.arch && !item.abi) {
     const binaryPath = `dist/${name}/bin/kilo` // kilocode_change
-    console.log(`Running smoke test: ${binaryPath} --version`)
+      console.log(`Running smoke test: ${binaryPath} --version`)
     try {
       const versionOutput = await $`${binaryPath} --version`.text()
       console.log(`Smoke test passed: ${versionOutput.trim()}`)
       // kilocode_change start
-      console.log(`Running smoke test: ${binaryPath} --pure models anthropic`)
-      await smokeModels(binaryPath)
-      console.log("Models snapshot smoke test passed")
       await KiloSandboxWorker.smoke(binaryPath)
       console.log("Kilo sandbox mutation worker smoke test passed")
       // kilocode_change end

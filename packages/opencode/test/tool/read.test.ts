@@ -29,9 +29,6 @@ import { RepositoryCache } from "@/reference/repository-cache"
 import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
 
 const FIXTURES_DIR = path.join(import.meta.dir, "fixtures")
-// kilocode_change start - canonical models snapshot moved to src/kilocode/provider
-const MODELS_FIXTURE = path.join(import.meta.dir, "..", "..", "src", "kilocode", "provider", "models-api.json")
-// kilocode_change end
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -366,9 +363,9 @@ describe("tool.read truncation", () => {
   it.instance("truncates large file by bytes and sets truncated metadata", () =>
     Effect.gen(function* () {
       const test = yield* TestInstance
-      const base = yield* load(MODELS_FIXTURE) // kilocode_change
+      const base = "x".repeat(1024) + "\n"
       const target = 60 * 1024
-      const content = base.length >= target ? base : base.repeat(Math.ceil(target / base.length))
+      const content = base.repeat(Math.ceil(target / base.length))
       yield* put(path.join(test.directory, "large.json"), content)
 
       const result = yield* run({ filePath: path.join(test.directory, "large.json") })

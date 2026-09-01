@@ -14,7 +14,6 @@ import { FSUtil } from "../src/fs-util"
 import { Auth } from "../src/auth"
 import { EventV2 } from "../src/event"
 import { Global } from "../src/global"
-import { ModelsDev } from "../src/models-dev"
 import { Npm } from "../src/npm"
 import { Project } from "../src/project"
 import { ProjectReference } from "../src/project-reference"
@@ -33,7 +32,6 @@ const it = testEffect(
           EventV2.defaultLayer,
           Auth.defaultLayer,
           Npm.defaultLayer,
-          ModelsDev.defaultLayer,
           FSUtil.defaultLayer,
           Global.defaultLayer,
         ),
@@ -58,9 +56,22 @@ describe("LocationServiceMap", () => {
               execute: () => Effect.succeed({ ok: true }),
             }),
           })
+          for (const dir of [blocked, allowed]) {
+            yield* Effect.promise(async () => {
+              const proc = Bun.spawn(["git", "init"], { cwd: dir.path, stdout: "ignore", stderr: "ignore" })
+              await proc.exited
+              const cfg1 = Bun.spawn(["git", "config", "user.email", "test@test.com"], { cwd: dir.path, stdout: "ignore", stderr: "ignore" })
+              await cfg1.exited
+              const cfg2 = Bun.spawn(["git", "config", "user.name", "Test"], { cwd: dir.path, stdout: "ignore", stderr: "ignore" })
+              await cfg2.exited
+              const commit = Bun.spawn(["git", "commit", "--allow-empty", "-m", "init"], { cwd: dir.path, stdout: "ignore", stderr: "ignore" })
+              await commit.exited
+            })
+          }
+          yield* Effect.promise(() => fs.mkdir(path.join(blocked.path, ".kilo"), { recursive: true }))
           yield* Effect.promise(() =>
             fs.writeFile(
-              path.join(blocked.path, "opencode.json"),
+              path.join(blocked.path, ".kilo", "kilo.jsonc"),
               JSON.stringify({
                 experimental: { policies: [{ effect: "deny", action: "provider.use", resource: "test" }] },
               }),

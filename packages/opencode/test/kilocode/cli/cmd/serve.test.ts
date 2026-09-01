@@ -22,7 +22,6 @@ test("prints the local IPv6 URL for wildcard binds", async () => {
         KILO_CONFIG_CONTENT: "{}",
         KILO_DISABLE_PROJECT_CONFIG: "1",
         KILO_DISABLE_AUTOUPDATE: "1",
-        KILO_DISABLE_MODELS_FETCH: "1",
         KILO_PURE: "1",
         KILO_SERVER_PASSWORD: "test",
       },

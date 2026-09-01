@@ -42,9 +42,9 @@ describe("P4.4 bundled provider loader removal — preset identity absent", () =
     expect(src).not.toContain("'@kilocode/kilo-gateway': async")
     // The bundled helper type was only for that loader
     expect(src).not.toContain("type BundledSDK")
-    // Retained: generic schema extensions and kilo-specific provider helpers
+    // Retained: generic schema extensions and kilo-specific provider helpers (G2: patchModelsDevModel removed)
     expect(src).toContain("KILO_MODEL_SCHEMA_EXTENSIONS")
-    expect(src).toContain("patchModelsDevModel")
+    expect(src).not.toContain("patchModelsDevModel")
     expect(src).toContain("patchConfigModel")
     expect(src).toContain("kiloCustomLoaders")
     expect(src).toContain("patchCustomLoaderResult")
@@ -64,7 +64,9 @@ describe("P4.4 bundled provider loader removal — preset identity absent", () =
     expect(src).not.toContain("KILO_BUNDLED_PROVIDERS,")
     expect(src).toContain("kiloCustomLoaders")
     expect(src).toContain("KILO_MODEL_SCHEMA_EXTENSIONS")
-    expect(src).toContain("patchModelsDevModel as patchKiloModel")
+    // patchModelsDevModel was catalog-specific and removed in G2
+    expect(src).not.toContain("patchModelsDevModel as patchKiloModel")
+    expect(src).toContain("patchConfigModel as patchKiloConfigModel")
     // Generic loader map remains
     expect(src).toContain("const BUNDLED_PROVIDERS")
     expect(src).toContain('"@ai-sdk/openai"')
@@ -97,46 +99,44 @@ describe("P4.4 bundled provider loader removal — preset identity absent", () =
     expect(combined).not.toContain('"@kilocode/kilo-gateway": async')
   })
 
-  test("generic provider adapters and catalog artifacts remain (LOCK-006) — static source presence, not dynamic resolution proof", () => {
+  test("generic provider adapters and catalog artifacts remain (LOCK-006) — updated P4.4-G2: catalog deleted, adapters retained", () => {
     expect(existsSync(join(opencode, "kilocode/provider/provider.ts"))).toBe(true)
-    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
+    // P4.4-G2 deletes preset catalog
+    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(false)
     expect(existsSync(join(opencode, "provider/provider.ts"))).toBe(true)
-    expect(existsSync(join(opencode, "provider/models.ts"))).toBe(true)
+    expect(existsSync(join(opencode, "provider/models.ts"))).toBe(false)
     expect(existsSync(join(opencode, "kilocode/provider/model-filter.ts"))).toBe(true)
     expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(false)
-    // Provider handler now depends on catalog only (ModelCache removed from handler in P4.4-T7)
+    // Provider handler now depends only on Provider.Service (catalog removed in G2)
     const handler = read("server/routes/instance/httpapi/handlers/provider.ts")
-    expect(handler).toContain("ModelsDev.Service")
+    expect(handler).not.toContain("ModelsDev.Service")
     expect(handler).not.toContain("ModelCache.Service")
     expect(handler).toContain("Provider.Service")
     expect(handler).toContain("Config.Service")
     expect(handler).toContain("filterPromptTrainingModels")
-    expect(handler).toContain("overlayAnacondaDesktop")
+    expect(handler).not.toContain("overlayAnacondaDesktop")
     expect(handler).toContain("Provider.toPublicInfo(item)")
     expect(handler).toContain("connected: Object.keys(connected)")
     expect(handler).toContain("failed,")
     // Custom provider lifecycle remains
-    expect(existsSync(join(opencode, "kilocode/custom-provider.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/server/custom-provider-save.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/server/custom-provider-delete.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/server/provider-auth-lifecycle.ts"))).toBe(true)
     expect(existsSync(join(opencode, "provider/auth.ts"))).toBe(true)
   })
 
-  test("ModelsDev provider source remains — static source presence, not runtime fallback proof", () => {
-    const models = read("provider/models.ts")
-    expect(models).not.toContain("ModelCache")
-    expect(models).toContain("overlay")
-    expect(models).not.toContain("KILO_OPENROUTER_BASE")
-    const providerSrc = read("provider/provider.ts")
-    expect(providerSrc).toContain("fromModelsDevProvider")
-    expect(providerSrc).toContain("ModelsDev.Service")
+  test("ModelsDev provider source removed in G2 — catalog wiring absent", () => {
+    expect(existsSync(join(opencode, "provider/models.ts"))).toBe(false)
     expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(false)
-    // KILO constants for models snapshot remain
-    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
+    // KILO constants for models snapshot removed in G2
+    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(false)
+    const providerSrc = read("provider/provider.ts")
+    expect(providerSrc).not.toContain("fromModelsDevProvider")
+    expect(providerSrc).not.toContain("ModelsDev.Service")
     const kProvider = read("kilocode/provider/provider.ts")
     expect(kProvider).toContain("KILO_MODEL_SCHEMA_EXTENSIONS")
-    expect(kProvider).toContain("patchModelsDevModel")
+    expect(kProvider).not.toContain("patchModelsDevModel")
+    expect(kProvider).toContain("patchConfigModel")
   })
 
   test("provider group endpoint contract remains (HTTP/SSE bridge preserved per LOCK-009) — static endpoint presence", () => {

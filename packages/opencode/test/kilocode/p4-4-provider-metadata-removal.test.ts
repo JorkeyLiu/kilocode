@@ -78,12 +78,12 @@ describe("P4.4 provider metadata removal — preset display metadata absent", ()
     expect(handler).toContain("connected: Object.keys(connected)")
     expect(handler).toContain("failed,")
     expect(handler).toContain("default: Provider.defaultModelIDs")
-    // Retained dependencies: auth/model/config and endpoint wiring (ModelCache removed from handler in P4.4-T7)
+    // Retained dependencies: auth/model/config and endpoint wiring (ModelCache removed from handler in P4.4-T7; ModelsDev removed in G2)
     expect(handler).toContain("Config.Service")
     expect(handler).toContain("Provider.Service")
     expect(handler).toContain("ProviderAuth.Service")
     expect(handler).not.toContain("ModelCache.Service")
-    expect(handler).toContain("ModelsDev.Service.use")
+    expect(handler).not.toContain("ModelsDev.Service")
     expect(handler).toContain('HttpApiBuilder.group(InstanceHttpApi, "provider"')
     expect(handler).toContain('.handle("list"')
     expect(handler).toContain('.handle("auth"')
@@ -139,27 +139,25 @@ describe("P4.4 provider metadata removal — preset display metadata absent", ()
     )
   })
 
-  test("generic provider adapters and custom-provider paths remain (LOCK-006)", () => {
-    // Bundled/provider catalog artifacts are intentionally retained in this unit
-    // provider/model-cache.ts is deleted (LOCK-MODELCACHE-001) — no ModelCache boundary remains
+  test("generic provider adapters and custom-provider paths remain (LOCK-006) — updated G2: catalog deleted, adapters retained", () => {
+    // P4.4-G2 deletes preset catalog per LOCK-006
     expect(existsSync(join(opencode, "kilocode/provider/provider.ts"))).toBe(true)
-    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
+    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(false)
     expect(existsSync(join(opencode, "provider/provider.ts"))).toBe(true)
-    expect(existsSync(join(opencode, "provider/models.ts"))).toBe(true)
+    expect(existsSync(join(opencode, "provider/models.ts"))).toBe(false)
     expect(existsSync(join(opencode, "kilocode/provider/model-filter.ts"))).toBe(true)
     expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(false)
     // Custom provider save/delete/validation remain
-    expect(existsSync(join(opencode, "kilocode/custom-provider.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/server/custom-provider-save.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/server/custom-provider-delete.ts"))).toBe(true)
     // Auth lifecycle remains
     expect(existsSync(join(opencode, "kilocode/server/provider-auth-lifecycle.ts"))).toBe(true)
     expect(existsSync(join(opencode, "provider/auth.ts"))).toBe(true)
-    // Handler still uses generic adapters
+    // Handler now uses only Provider.Service (catalog removed in G2)
     const handler = read("server/routes/instance/httpapi/handlers/provider.ts")
     expect(handler).toContain("filterPromptTrainingModels")
-    expect(handler).toContain("Provider.fromModelsDevProvider")
-    expect(handler).toContain("overlayAnacondaDesktop")
+    expect(handler).not.toContain("Provider.fromModelsDevProvider")
+    expect(handler).not.toContain("overlayAnacondaDesktop")
   })
 
   test("webview provider-catalog fallback remains (missing metadata handled)", () => {

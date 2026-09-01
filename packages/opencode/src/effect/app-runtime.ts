@@ -12,8 +12,6 @@ import { Ripgrep } from "@opencode-ai/core/filesystem/ripgrep"
 import { Storage } from "@/storage/storage"
 import { Snapshot } from "@/snapshot"
 import { Plugin } from "@/plugin"
-import { ModelsDev as CoreModelsDev } from "@opencode-ai/core/models-dev" // kilocode_change - provide core ModelsDev for direct CLI consumers
-import * as KiloModelsDev from "@/provider/models" // kilocode_change - use Kilo wrapper for defect protection
 import { Provider } from "@/provider/provider"
 import { ProviderAuth } from "@/provider/auth"
 import { Agent } from "@/agent/agent"
@@ -71,14 +69,10 @@ import * as CancelQueuedDispatch from "@/kilocode/session/cancel-queued-dispatch
 import * as SessionUpdateDispatch from "@/kilocode/session/session-update-dispatch" // kilocode_change - P4.4-G3-B2 durable title
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
-// kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers
-type ModelsLayer = Layer.Layer<CoreModelsDev.Service | KiloModelsDev.Service, never, never>
+// kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers (P4.4-G2: no preset catalog)
 type ProviderLayer = Layer.Layer<Provider.Service, never, never>
 
-const buildCoreLayer = (
-  models: ModelsLayer = Provider.defaultModels,
-  provider: ProviderLayer = Provider.defaultLayer,
-) =>
+const buildCoreLayer = (provider: ProviderLayer = Provider.defaultLayer) =>
   // kilocode_change end
   Layer.mergeAll(
     // kilocode_change
@@ -95,7 +89,6 @@ const buildCoreLayer = (
     Storage.defaultLayer, // kilocode_change - canonical AppLayer service
     Snapshot.defaultLayer, // kilocode_change - canonical AppLayer service
     Plugin.defaultLayer,
-    models, // kilocode_change - canonical combined models layer (Provider.defaultModels)
     provider, // kilocode_change - canonical Provider.defaultLayer identity shared with feature layers
     ProviderAuth.layer, // kilocode_change - canonical AppLayer service; consumes the same Auth/Plugin graph (LOCK-001)
     Agent.defaultLayer, // kilocode_change - canonical AppLayer service
@@ -112,14 +105,11 @@ const buildCoreLayer = (
     // kilocode_change end
   ) // kilocode_change
 
-// kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair
+// kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair (P4.4-G2: provider only)
 export function makeCoreLayer(): ReturnType<typeof buildCoreLayer>
-export function makeCoreLayer(models: ModelsLayer, provider: ProviderLayer): ReturnType<typeof buildCoreLayer>
-export function makeCoreLayer(
-  models: ModelsLayer = Provider.defaultModels,
-  provider: ProviderLayer = Provider.defaultLayer,
-) {
-  return buildCoreLayer(models, provider)
+export function makeCoreLayer(provider: ProviderLayer): ReturnType<typeof buildCoreLayer>
+export function makeCoreLayer(provider: ProviderLayer = Provider.defaultLayer) {
+  return buildCoreLayer(provider)
 }
 // kilocode_change end
 
@@ -167,13 +157,10 @@ const FeatureLayer = Layer.mergeAll(
   // kilocode_change - canonical feature service layer
 ) // kilocode_change - canonical feature service layer
 
-// kilocode_change start - LOCK-003: makeAppLayer shares canonical defaults
-const buildAppLayer = (
-  models: ModelsLayer = Provider.defaultModels,
-  provider: ProviderLayer = Provider.defaultLayer,
-) => {
+// kilocode_change start - LOCK-003: makeAppLayer shares canonical defaults (P4.4-G2: no preset catalog)
+const buildAppLayer = (provider: ProviderLayer = Provider.defaultLayer) => {
   const base = Layer.mergeAll(
-    buildCoreLayer(models, provider),
+    buildCoreLayer(provider),
     SessionLayer,
     FeatureLayer,
     RetentionOwnership.layer,
@@ -195,14 +182,11 @@ const buildAppLayer = (
 }
 // kilocode_change end
 
-// kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair
+// kilocode_change start - LOCK-002/LOCK-003: zero-arg defaults or a matching models+provider pair (P4.4-G2: provider only)
 export function makeAppLayer(): ReturnType<typeof buildAppLayer>
-export function makeAppLayer(models: ModelsLayer, provider: ProviderLayer): ReturnType<typeof buildAppLayer>
-export function makeAppLayer(
-  models: ModelsLayer = Provider.defaultModels,
-  provider: ProviderLayer = Provider.defaultLayer,
-) {
-  return buildAppLayer(models, provider)
+export function makeAppLayer(provider: ProviderLayer): ReturnType<typeof buildAppLayer>
+export function makeAppLayer(provider: ProviderLayer = Provider.defaultLayer) {
+  return buildAppLayer(provider)
 }
 
 /**

@@ -57,25 +57,6 @@ export const KILO_MODEL_SCHEMA_EXTENSIONS = {
 }
 
 // ---------------------------------------------------------------------------
-// fromModelsDevModel patch — returns kilo-specific fields
-// ---------------------------------------------------------------------------
-
-export function patchModelsDevModel(providerID: string, source: any) {
-  return {
-    variants: providerID === "kilo" ? (source.variants ?? {}) : {},
-    recommendedIndex: source.recommendedIndex,
-    prompt: source.prompt,
-    isFree: source.isFree,
-    mayTrainOnYourPrompts: source.mayTrainOnYourPrompts,
-    hasUserByokAvailable: source.hasUserByokAvailable,
-    terminalBench: source.terminalBench,
-    autoRouting: source.autoRouting,
-    ai_sdk_provider: source.ai_sdk_provider,
-    options: source.options ?? {},
-  }
-}
-
-// ---------------------------------------------------------------------------
 // Config model patch — merges kilo-specific fields from config + existing
 // ---------------------------------------------------------------------------
 

@@ -70,7 +70,6 @@ function isolatedEnv(home: string, configJson: string): Record<string, string> {
     KILO_PURE: "1",
     KILO_DISABLE_AUTOUPDATE: "1",
     KILO_DISABLE_AUTOCOMPACT: "1",
-    KILO_DISABLE_MODELS_FETCH: "1",
     KILO_AUTH_CONTENT: "{}",
   }
 }

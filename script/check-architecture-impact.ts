@@ -925,7 +925,7 @@ const validRef = (ref: string | undefined): ref is string =>
 class GitError extends Error {}
 
 function run(cmd: string, args: string[]): string {
-  const res = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8" })
+  const res = spawnSync(cmd, args, { cwd: ROOT, encoding: "utf8", maxBuffer: 20 * 1024 * 1024 })
   if (res.status !== 0) {
     throw new GitError(`Command failed: ${cmd} ${args.join(" ")}\n${res.stderr?.trim() || res.stdout?.trim() || "unknown error"}`)
   }

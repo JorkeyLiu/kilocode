@@ -61,9 +61,9 @@ describe("P4.4 provider login preset removal — hardcoded selector identity abs
     expect(aliasMatches.length).toBe(0)
   })
 
-  test("providers.ts generic catalog/plugin/custom paths remain", () => {
+  test("providers.ts generic catalog/plugin/custom paths remain (G2 catalog absent)", () => {
     const src = read("cli/cmd/providers.ts")
-    expect(src).toContain("ModelsDev.Service")
+    expect(src).not.toContain("ModelsDev.Service")
     expect(src).toContain("Plugin.Service")
     expect(src).toContain("Config.Service")
     expect(src).toContain("resolvePluginProviders")
@@ -119,21 +119,25 @@ describe("P4.4 provider login preset removal — hardcoded selector identity abs
     expect(ghHintCount).toBe(0)
   })
 
-  test("generic catalog artifacts remain — Core ModelsDev and models-api.json not removed", () => {
-    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
-    expect(existsSync(resolve(join(repo, "packages/core/src/models-dev.ts")))).toBe(true)
-    expect(read("cli/cmd/providers.ts")).toContain("ModelsDev.Service")
-    expect(read("cli/cmd/github.handler.ts")).toContain("ModelsDev.Service")
+  test("generic catalog artifacts removed — G2 absence plus custom/provider preserved (LOCK-006)", () => {
+    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(false)
+    expect(existsSync(resolve(join(repo, "packages/core/src/models-dev.ts")))).toBe(false)
+    expect(read("cli/cmd/providers.ts")).not.toContain("ModelsDev.Service")
+    expect(read("cli/cmd/github.handler.ts")).not.toContain("ModelsDev.Service")
     expect(existsSync(join(opencode, "provider/provider.ts"))).toBe(true)
     const provider = read("provider/provider.ts")
     expect(provider).toContain("const BUNDLED_PROVIDERS")
     expect(provider).toContain('"@ai-sdk/openai"')
+    expect(provider).toContain('"@ai-sdk/openai-compatible"')
     expect(existsSync(join(opencode, "kilocode/custom-provider.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/server/custom-provider-save.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/server/custom-provider-delete.ts"))).toBe(true)
+    // Custom provider save/delete no longer pulls ModelsDev
+    expect(read("kilocode/server/custom-provider-save.ts")).not.toContain("ModelsDev")
+    expect(read("kilocode/server/custom-provider-delete.ts")).not.toContain("ModelsDev")
   })
 
-  test("provider HTTP/SSE/generated-SDK bridge remains per LOCK-009", () => {
+  test("provider HTTP/SSE/generated-SDK bridge remains per LOCK-009 (G2 catalog absent)", () => {
     const group = read("server/routes/instance/httpapi/groups/provider.ts")
     expect(group).toContain('HttpApiEndpoint.get("list"')
     expect(group).toContain('HttpApiEndpoint.get("auth"')
@@ -146,7 +150,7 @@ describe("P4.4 provider login preset removal — hardcoded selector identity abs
     expect(handler).toContain('handleRaw("authorize"')
     expect(handler).toContain('.handle("callback"')
     expect(handler).toContain("Provider.toPublicInfo")
-    expect(handler).toContain("ModelsDev.Service")
+    expect(handler).not.toContain("ModelsDev.Service")
     expect(handler).toContain("connected: Object.keys(connected)")
     expect(handler).toContain("failed,")
   })

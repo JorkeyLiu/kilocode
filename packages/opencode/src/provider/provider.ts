@@ -10,7 +10,6 @@ import { Hash } from "@opencode-ai/core/util/hash"
 import { Plugin } from "../plugin"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { type LanguageModelV3 } from "@ai-sdk/provider"
-import * as ModelsDev from "./models" // kilocode_change - assemble dynamic Kilo models around upstream core catalog
 import { Auth } from "../auth"
 import { Env } from "../env"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
@@ -34,7 +33,6 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import {
   kiloCustomLoaders,
   KILO_MODEL_SCHEMA_EXTENSIONS,
-  patchModelsDevModel as patchKiloModel,
   patchConfigModel as patchKiloConfigModel,
   patchCustomLoaderResult,
   patchKiloProviderPrivacy,
@@ -42,7 +40,6 @@ import {
   buildTimeoutSignal,
   resolveFirstChunkTimeout, // kilocode_change
 } from "@/kilocode/provider/provider"
-import * as ModelsRefresh from "@/kilocode/provider/models-refresh"
 // kilocode_change end
 import { ProviderError } from "./error"
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
@@ -428,7 +425,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
           if (model?.api.npm === "@ai-sdk/amazon-bedrock/mantle") return selectBedrockMantleLanguageModel(sdk, modelID)
 
           // Skip region prefixing if model already has a cross-region inference profile prefix
-          // Models from models.dev may already include prefixes like us., eu., global., etc.
+          // Models may already include prefixes like us., eu., global., etc.
           const crossRegionPrefixes = ["global.", "us.", "eu.", "jp.", "apac.", "au."]
           if (crossRegionPrefixes.some((prefix) => modelID.startsWith(prefix))) {
             return sdk.languageModel(modelID)
@@ -557,8 +554,7 @@ function custom(dep: CustomDep): Record<string, CustomLoader> {
       }),
     "google-vertex": Effect.fnUntraced(function* (provider: Info) {
       const env = yield* dep.env()
-      // models.dev advertises GOOGLE_VERTEX_PROJECT for Vertex; keep the wider
-      // Google Cloud project env names as fallbacks for existing ADC setups.
+      // Keep the wider Google Cloud project env names as fallbacks for existing ADC setups.
       const project =
         provider.options?.project ??
         env["GOOGLE_VERTEX_PROJECT"] ??
@@ -1213,7 +1209,6 @@ export interface Interface {
 interface State {
   models: Map<string, LanguageModelV3>
   providers: Record<ProviderV2.ID, Info>
-  catalog: Record<ProviderV2.ID, Info>
   sdk: Map<string, BundledSDK>
   modelLoaders: Record<string, CustomModelLoader>
   varsLoaders: Record<string, CustomVarsLoader>
@@ -1222,126 +1217,6 @@ interface State {
 export class Service extends Context.Service<Service, Interface>()("@opencode/Provider") {}
 
 export const use = serviceUse(Service)
-
-function cost(c: ModelsDev.Model["cost"]): Model["cost"] {
-  const result: Model["cost"] = {
-    input: c?.input ?? 0,
-    output: c?.output ?? 0,
-    cache: {
-      read: c?.cache_read ?? 0,
-      write: c?.cache_write ?? 0,
-    },
-  }
-  if (c?.tiers) {
-    result.tiers = c.tiers.map((item) => ({
-      input: item.input,
-      output: item.output,
-      cache: {
-        read: item.cache_read ?? 0,
-        write: item.cache_write ?? 0,
-      },
-      tier: item.tier,
-    }))
-  }
-  if (c?.context_over_200k) {
-    result.experimentalOver200K = {
-      cache: {
-        read: c.context_over_200k.cache_read ?? 0,
-        write: c.context_over_200k.cache_write ?? 0,
-      },
-      input: c.context_over_200k.input,
-      output: c.context_over_200k.output,
-    }
-  }
-  return result
-}
-
-function fromModelsDevModel(provider: ModelsDev.Provider, model: ModelsDev.Model): Model {
-  const base: Model = {
-    id: ModelV2.ID.make(model.id),
-    providerID: ProviderV2.ID.make(provider.id),
-    name: model.name,
-    family: model.family,
-    api: {
-      id: model.id,
-      url: model.provider?.api ?? provider.api ?? "",
-      npm: model.provider?.npm ?? provider.npm ?? "@ai-sdk/openai-compatible",
-    },
-    status: model.status ?? "active",
-    headers: {},
-    options: {},
-    cost: cost(model.cost),
-    limit: {
-      context: model.limit.context,
-      input: model.limit.input,
-      output: model.limit.output,
-    },
-    capabilities: {
-      temperature: model.temperature ?? false,
-      reasoning: model.reasoning ?? false,
-      attachment: model.attachment ?? false,
-      toolcall: model.tool_call ?? true,
-      input: {
-        text: model.modalities?.input?.includes("text") ?? false,
-        audio: model.modalities?.input?.includes("audio") ?? false,
-        image: model.modalities?.input?.includes("image") ?? false,
-        video: model.modalities?.input?.includes("video") ?? false,
-        pdf: model.modalities?.input?.includes("pdf") ?? false,
-      },
-      output: {
-        text: model.modalities?.output?.includes("text") ?? false,
-        audio: model.modalities?.output?.includes("audio") ?? false,
-        image: model.modalities?.output?.includes("image") ?? false,
-        video: model.modalities?.output?.includes("video") ?? false,
-        pdf: model.modalities?.output?.includes("pdf") ?? false,
-      },
-      interleaved: model.interleaved ?? false,
-    },
-    release_date: model.release_date ?? "",
-    variants: {},
-  }
-  Object.assign(base, patchKiloModel(provider.id, model)) // kilocode_change
-
-  return {
-    ...base,
-    variants: mapValues(ProviderTransform.variants(base), (v) => v),
-  }
-}
-
-export function fromModelsDevProvider(provider: ModelsDev.Provider): Info {
-  const models: Record<string, Model> = {}
-  for (const [key, model] of Object.entries(provider.models)) {
-    models[key] = fromModelsDevModel(provider, model)
-    for (const [mode, opts] of Object.entries(model.experimental?.modes ?? {})) {
-      const id = `${model.id}-${mode}`
-      const base = fromModelsDevModel(provider, model)
-      models[id] = {
-        ...base,
-        id: ModelV2.ID.make(id),
-        name: `${model.name} ${mode[0].toUpperCase()}${mode.slice(1)}`,
-        cost: opts.cost ? mergeDeep(base.cost, cost(opts.cost)) : base.cost,
-        options: opts.provider?.body
-          ? Object.fromEntries(
-              Object.entries(opts.provider.body).map(([k, v]) => [
-                k.replace(/_([a-z])/g, (_, c) => c.toUpperCase()),
-                v,
-              ]),
-            )
-          : base.options,
-        headers: opts.provider?.headers ?? base.headers,
-      }
-    }
-  }
-  return {
-    id: ProviderV2.ID.make(provider.id),
-    source: "custom",
-    name: provider.name,
-    description: provider.description, // kilocode_change
-    env: [...(provider.env ?? [])],
-    options: {},
-    models,
-  }
-}
 
 function modelSuggestions(provider: Info | undefined, modelID: ModelV2.ID, enableExperimentalModels: boolean) {
   const available = provider
@@ -1380,7 +1255,6 @@ export const layer = Layer.effect(
     const auth = yield* Auth.Service
     const env = yield* Env.Service
     const plugin = yield* Plugin.Service
-    const modelsDevSvc = yield* ModelsDev.Service
     const runtimeFlags = yield* RuntimeFlags.Service
 
     const state = yield* InstanceState.make<State>((ctx) =>
@@ -1390,9 +1264,7 @@ export const layer = Layer.effect(
         const timer = P0Perf.span("provider_state_init", { dir: ctx.directory })
         const bridge = yield* EffectBridge.make()
         const cfg = yield* config.get()
-        const modelsDev = yield* modelsDevSvc.get()
-        const catalog = mapValues(modelsDev, fromModelsDevProvider)
-        const database = mapValues(catalog, toPublicInfo)
+        const database: Record<string, Info> = {}
 
         const providers: Record<ProviderV2.ID, Info> = {} as Record<ProviderV2.ID, Info>
         const languages = new Map<string, LanguageModelV3>()
@@ -1490,7 +1362,6 @@ export const layer = Layer.effect(
               model.provider?.npm ??
               provider.npm ??
               existingModel?.api.npm ??
-              modelsDev[providerID]?.npm ??
               "@ai-sdk/openai-compatible"
             const name = iife(() => {
               if (model.name) return model.name
@@ -1502,7 +1373,7 @@ export const layer = Layer.effect(
               api: {
                 id: apiID,
                 npm: apiNpm,
-                url: model.provider?.api ?? provider?.api ?? existingModel?.api.url ?? modelsDev[providerID]?.api ?? "",
+                url: model.provider?.api ?? provider?.api ?? existingModel?.api.url ?? "",
               },
               status: model.status ?? existingModel?.status ?? "active",
               name,
@@ -1733,14 +1604,12 @@ export const layer = Layer.effect(
         return {
           models: languages,
           providers,
-          catalog,
           sdk,
           modelLoaders,
           varsLoaders,
         }
       }),
     )
-    yield* ModelsRefresh.watch(state) // kilocode_change
 
     const list = Effect.fn("Provider.list")(() => InstanceState.use(state, (s) => s.providers))
 
@@ -1931,22 +1800,16 @@ export const layer = Layer.effect(
       const s = yield* InstanceState.get(state)
       const provider = s.providers[providerID]
       if (!provider) {
-        const catalogProvider = s.catalog[providerID]
-        const suggestions = catalogProvider
-          ? modelSuggestions(catalogProvider, modelID, runtimeFlags.enableExperimentalModels)
-          : fuzzysort
-              .go(providerID, Object.keys({ ...s.catalog, ...s.providers }), { limit: 3, threshold: -10000 })
-              .map((m) => m.target)
+        const suggestions = fuzzysort
+          .go(providerID, Object.keys(s.providers), { limit: 3, threshold: -10000 })
+          .map((m) => m.target)
         const empty = false // kilocode_change
         return yield* new ModelNotFoundError({ providerID, modelID, suggestions, modelsEmpty: empty }) // kilocode_change
       }
 
       const info = provider.models[modelID]
       if (!info) {
-        const current = modelSuggestions(provider, modelID, runtimeFlags.enableExperimentalModels)
-        const suggestions = current.length
-          ? current
-          : modelSuggestions(s.catalog[providerID], modelID, runtimeFlags.enableExperimentalModels)
+        const suggestions = modelSuggestions(provider, modelID, runtimeFlags.enableExperimentalModels)
         const empty = Object.keys(provider.models).length === 0 // kilocode_change
         return yield* new ModelNotFoundError({ providerID, modelID, suggestions, modelsEmpty: empty }) // kilocode_change
       }
@@ -2114,25 +1977,19 @@ export const layer = Layer.effect(
   }),
 )
 
-// kilocode_change start - LOCK-001: canonical combined models layer + injectable factory
-export const defaultModels = ModelsDev.combinedLayer()
+// kilocode_change start - LOCK-001: canonical provider layer without preset catalog (P4.4-G2)
+export const defaultLayer: Layer.Layer<Service, never, never> = Layer.suspend(() =>
+  layer.pipe(
+    Layer.provide(FSUtil.defaultLayer),
+    Layer.provide(Env.defaultLayer),
+    Layer.provide(Config.defaultLayer),
+    Layer.provide(Auth.defaultLayer),
+    Layer.provide(Plugin.defaultLayer),
+    Layer.provide(RuntimeFlags.defaultLayer),
+  ),
+)
 
-export const makeDefaultLayer = (
-  models: Layer.Layer<ModelsDev.Service, never, never> = defaultModels,
-): Layer.Layer<Service, never, never> =>
-  Layer.suspend(() =>
-    layer.pipe(
-      Layer.provide(FSUtil.defaultLayer),
-      Layer.provide(Env.defaultLayer),
-      Layer.provide(Config.defaultLayer),
-      Layer.provide(Auth.defaultLayer),
-      Layer.provide(Plugin.defaultLayer),
-      Layer.provide(models),
-      Layer.provide(RuntimeFlags.defaultLayer),
-    ),
-  )
-
-export const defaultLayer = makeDefaultLayer()
+export const makeDefaultLayer = (): Layer.Layer<Service, never, never> => defaultLayer
 // kilocode_change end
 
 const priority = ["gpt-5", "claude-sonnet-4", "big-pickle", "gemini-3-pro"]

@@ -7,7 +7,6 @@
   nodejs,
   sysctl,
   makeBinaryWrapper,
-  models-dev,
   ripgrep,
   installShellFiles,
   versionCheckHook,
@@ -24,7 +23,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     nodejs # for patchShebangs node_modules
     installShellFiles
     makeBinaryWrapper
-    models-dev
     writableTmpDirAsHomeHook
   ];
 
@@ -38,8 +36,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
     runHook postConfigure
   '';
 
-  env.MODELS_DEV_API_JSON = "${models-dev}/dist/_api.json";
-  env.KILO_DISABLE_MODELS_FETCH = true;
   env.KILO_SKIP_BUNDLED_BWRAP = "1";
   env.KILO_VERSION = finalAttrs.version;
   env.KILO_CHANNEL = "local";
@@ -89,7 +85,6 @@ stdenvNoCC.mkDerivation (finalAttrs: {
   doInstallCheck = true;
   versionCheckKeepEnvironment = [
     "HOME"
-    "KILO_DISABLE_MODELS_FETCH"
   ];
   versionCheckProgramArg = "--version";
 

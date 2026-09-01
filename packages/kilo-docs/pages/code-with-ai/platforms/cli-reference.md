@@ -694,7 +694,6 @@ Options:
   --help     Show help  [boolean]
   --version  Show version number  [boolean]
   --verbose  use more verbose model output (includes metadata like costs)  [boolean]
-  --refresh  refresh the models cache from models.dev  [boolean]
 ```
 
 ## kilo roll-call

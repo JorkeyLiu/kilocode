@@ -134,9 +134,9 @@ describe("P4.4 well-known provider auth removal — legacy URL discovery absent"
     expect(src).toContain("authSvc.set")
     expect(src).toContain("authSvc.remove")
     // Legacy HTTP/SSE/generated SDK bridge is not narrowed by this unit
-    // (LOCK-009); provider login still uses Config.Service/Plugin/ModelsDev.
+    // (LOCK-009); provider login now uses Config.Service/Plugin only (ModelsDev removed in G2).
     expect(src).toContain("Config.Service")
     expect(src).toContain("Plugin.Service")
-    expect(src).toContain("ModelsDev.Service")
+    expect(src).not.toContain("ModelsDev.Service")
   })
 })

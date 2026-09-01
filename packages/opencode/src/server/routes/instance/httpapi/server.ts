@@ -32,7 +32,6 @@ import { ProjectV2 } from "@opencode-ai/core/project"
 import { ProjectCopy } from "@opencode-ai/core/project/copy"
 import { MoveSession } from "@opencode-ai/core/control-plane/move-session"
 import { ProviderAuth } from "@/provider/auth"
-import * as ModelsDev from "@/provider/models" // kilocode_change - use Kilo wrapper for defect protection
 import { Provider } from "@/provider/provider"
 import { PtyTicket } from "@opencode-ai/core/pty/ticket"
 import { Question } from "@/question"
@@ -212,9 +211,8 @@ type RouteRequirements =
   | HttpRouter.Request<"Requires", unknown>
   | HttpRouter.Request<"GlobalRequires", never>
 
-// kilocode_change start - canonical AppLayer with injectable model/provider test boundary
+// kilocode_change start - canonical AppLayer with injectable provider test boundary (P4.4-G2: no preset catalog)
 type AppOptions = {
-  readonly models?: Layer.Layer<ModelsDev.Service, never, never>
   readonly provider?: Layer.Layer<Provider.Service, never, never>
 }
 
@@ -222,11 +220,8 @@ type RouteApp = AppLayer | AppOptions
 
 function resolveApp(app?: RouteApp) {
   if (!app) return AppLayer
-  if ("models" in app || "provider" in app) {
-    return makeAppLayer(
-      (app.models ?? Provider.defaultModels) as never,
-      (app.provider ?? Provider.defaultLayer) as never,
-    )
+  if ("provider" in app) {
+    return makeAppLayer((app.provider ?? Provider.defaultLayer) as never)
   }
   return app
 }

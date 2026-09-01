@@ -109,12 +109,12 @@ describe("P4.4-T23 presence invalidation removal — preset helper absent, gener
     expect(lifecycle).toContain("KilocodeConfig")
     expect(lifecycle).toContain("configDiscoveryGlobalKey")
     expect(lifecycle).toContain("invalidateAfterProviderAuthChange")
-    // provider handler retains generic provider surface
+    // provider handler retains generic provider surface (G2: ModelsDev/overlay removed)
     const provider = read("server/routes/instance/httpapi/handlers/provider.ts")
     expect(provider).toContain("ProviderAuth.Service")
-    expect(provider).toContain("ModelsDev.Service")
+    expect(provider).not.toContain("ModelsDev.Service")
     expect(provider).toContain("filterPromptTrainingModels")
-    expect(provider).toContain("overlayAnacondaDesktop")
+    expect(provider).not.toContain("overlayAnacondaDesktop")
     expect(provider).toContain("Provider.toPublicInfo")
     const control = read("server/routes/instance/httpapi/handlers/control.ts")
     expect(control).toContain("Auth.Service")
@@ -154,8 +154,10 @@ describe("P4.4-T23 presence invalidation removal — preset helper absent, gener
     expect(existsSync(join(opencode, "kilocode/provider/provider.ts"))).toBe(true)
     const kiloProvider = read("kilocode/provider/provider.ts")
     expect(kiloProvider).toContain("KILO_MODEL_SCHEMA_EXTENSIONS")
-    // models-api snapshot retained
-    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(true)
+    // models-api snapshot deleted in G2 — absence preserved, custom paths remain
+    expect(existsSync(join(opencode, "kilocode/provider/models-api.json"))).toBe(false)
+    expect(existsSync(join(opencode, "kilocode/provider/provider.ts"))).toBe(true)
+    expect(kiloProvider).toContain("patchConfigModel")
     // custom-provider still via generic lifecycle, model-cache deleted
     expect(existsSync(join(opencode, "kilocode/server/provider-auth-lifecycle.ts"))).toBe(true)
     expect(existsSync(join(opencode, "provider/model-cache.ts"))).toBe(false)

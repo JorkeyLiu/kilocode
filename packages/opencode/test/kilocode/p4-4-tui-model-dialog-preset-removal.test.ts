@@ -97,7 +97,7 @@ describe("P4.4-T26 TUI model dialog preset removal — preset presentation absen
     const provider = read("kilocode/provider/provider.ts")
     expect(provider).toContain("recommendedIndex")
     expect(provider).toContain("KILO_MODEL_SCHEMA_EXTENSIONS")
-    expect(provider).toContain("patchModelsDevModel")
+    expect(provider).toContain("patchConfigModel")
     const catalog = read("kilo-sessions/remote-model-catalog.ts")
     expect(catalog).toContain("recommendedIndex")
     const dialog = read("cli/cmd/tui/component/dialog-model.tsx")

@@ -6,9 +6,9 @@ platform: new
 
 # Custom Models
 
-Kilo Code ships with a curated list of models for each provider, but you can use **any model** your provider supports — including models that aren't in the built-in list. This is useful for:
+Kilo Code uses **explicit provider configuration** — every model comes from your `provider.<id>.models` entries. You can use **any model** your provider supports, including newly released, fine-tuned, or self-hosted models. This is useful for:
 
-- Using a newly released model before it's added to the built-in catalog
+- Using a newly released model immediately via explicit config
 - Running a custom or fine-tuned model via LM Studio, Ollama, or another local provider
 - Connecting to a self-hosted model through a custom API endpoint
 - Configuring model-specific options like token limits, pricing, or reasoning settings
@@ -75,7 +75,7 @@ The `model` key uses the format `provider_id/model_id`, where:
 
 ## Model Configuration Fields
 
-All fields are optional. When a model ID matches one already in the built-in catalog, your values are merged on top of the defaults — you only need to specify what you want to override.
+All fields are optional. Every model is defined explicitly in your config — there is no built-in catalog to merge with. Specify only the fields you need; omitted fields use Kilo's generic defaults. Historical: before P4.4-G2 (2026-09-01) a built-in models.dev snapshot existed and config values were merged on top of catalog defaults — that catalog is now deleted and no merging occurs.
 
 | Field | Type | Description |
 |---|---|---|
@@ -95,7 +95,7 @@ All fields are optional. When a model ID matches one already in the built-in cat
 
 ### Modalities (modalities)
 
-The `modalities` object declares which content types the model can receive and produce. It is optional — omit it to use defaults from the catalog or fallback to text-only. When `modalities` is provided, both `input` and `output` arrays are required. Each array can include `text`, `image`, `audio`, `video`, or `pdf`.
+The `modalities` object declares which content types the model can receive and produce. It is optional — omit it to use Kilo's generic text-only fallback. When `modalities` is provided, both `input` and `output` arrays are required. Each array can include `text`, `image`, `audio`, `video`, or `pdf`.
 
 | Sub-field | Type | Required | Description |
 |---|---|---|---|
@@ -111,7 +111,7 @@ For a standard text model that can also inspect images, use:
 }
 ```
 
-If `modalities` is omitted and the model ID matches a models.dev catalog entry for that provider, Kilo uses the catalog's modalities. For completely custom models with no catalog match, Kilo defaults to text input and text output only. Set `attachment: true` alongside image, audio, video, or PDF input modalities when the provider supports sending those files as attachments.
+If `modalities` is omitted, Kilo defaults to text input and text output only — there is no catalog to supply defaults. Set `attachment: true` alongside image, audio, video, or PDF input modalities when the provider supports sending those files as attachments. Historical: before P4.4-G2, Kilo used a built-in models.dev snapshot to supply modalities when the ID matched a catalog entry.
 
 ### Token Limits (limit)
 
@@ -137,12 +137,13 @@ If a model stops because it reaches `limit.output`, Kilo shows a visible warning
 Kilo resolves token limits in this order:
 
 1. **Your config** — values you set under `provider.<id>.models.<model>.limit`
-2. **Built-in catalog** — Kilo ships a snapshot of [models.dev](https://models.dev) and refreshes it hourly. If your model ID matches a known model, catalog values are used as defaults.
-3. **Fallback** — if neither source provides a value, `context` and `output` default to `0`.
+2. **Fallback** — if no value is configured, `context` and `output` default to `0`.
+
+Historical: before P4.4-G2 (2026-09-01) a second source existed — a built-in [models.dev](https://models.dev) snapshot refreshed hourly — and catalog values were used as defaults when the ID matched. That catalog is now deleted; only explicit config and the `0` fallback remain.
 
 #### What happens when limits are `0`
 
-If you use a custom or local model and don't specify limits — and the model isn't in the built-in catalog — both `context` and `output` resolve to `0`. This has meaningful side effects:
+If you use a custom or local model and don't specify limits, both `context` and `output` resolve to `0`. This has meaningful side effects:
 
 - **Compaction is disabled.** Kilo uses `context` to detect when the conversation exceeds the model's window and needs to be summarized. With `context: 0`, overflow detection is skipped and conversations will grow unbounded until the provider rejects the request.
 - **Output falls back to 32,000 tokens.** When `output` is `0`, Kilo uses its internal default of 32,000 tokens (configurable via the `KILO_EXPERIMENTAL_OUTPUT_TOKEN_MAX` environment variable).
@@ -199,7 +200,7 @@ Register a model that LM Studio serves under a custom name:
 
 ### New or unlisted model from a cloud provider
 
-Use a model that's not yet in the built-in catalog:
+Use a model that's not yet widely listed — define it explicitly:
 
 ```jsonc
 {

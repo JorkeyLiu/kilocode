@@ -1399,6 +1399,35 @@ describe("check-architecture-impact CLI (real git)", () => {
       rmSync(repo, { recursive: true, force: true })
     }
   }, { timeout: 30000 })
+
+  test("large diff (>1 MiB) does not ENOBUFS with 20 MiB maxBuffer", () => {
+    const repo = freshRepo("kilo-arch-large-")
+    try {
+      const dir = path.join(repo, "packages/opencode/src/kilocode/server")
+      mkdirSync(dir, { recursive: true })
+      const f = path.join(dir, "large.ts")
+      writeFileSync(f, "export const a = 1\n")
+      git(repo, ["add", "-A"])
+      git(repo, ["commit", "-qm", "baseline"])
+      const base = git(repo, ["rev-parse", "HEAD"])
+      const line = "export const v = 'x'.repeat(80) // padding to grow file\n"
+      const repeat = Math.ceil((1.4 * 1024 * 1024) / line.length)
+      writeFileSync(f, Array(repeat).fill(line).join(""))
+      git(repo, ["add", "-A"])
+      git(repo, ["commit", "-qm", "large change"])
+      const head = git(repo, ["rev-parse", "HEAD"])
+      const body = path.join(repo, "body.md")
+      writeFileSync(body, "## Documentation Impact\n- [x] Not applicable\n  Rationale: large file test, no contract change.\n")
+      const res = run(repo, ["--base", base, "--head", head, "--pr-body-file", body])
+      expect(res.status).toBe(0)
+      expect(res.stdout).toContain("RESULT: PASS")
+      expect(res.stdout).not.toContain("ENOBUFS")
+      expect(res.stdout).not.toContain("maxBuffer")
+      expect(res.stdout).toContain("architecture signal(s)")
+    } finally {
+      rmSync(repo, { recursive: true, force: true })
+    }
+  }, { timeout: 30000 })
 })
 
 // ─── worktree advice vs PR template ─────────────────────────────────────────

@@ -3,7 +3,6 @@ import { cmd } from "./cmd"
 import { CliError, effectCmd, fail } from "../effect-cmd"
 import { UI } from "../ui"
 import * as Prompt from "../effect/prompt"
-import { ModelsDev } from "@opencode-ai/core/models-dev"
 
 import { map, pipe, sortBy, values } from "remeda"
 import path from "path"
@@ -14,6 +13,7 @@ import { Plugin } from "../../plugin"
 import type { Hooks } from "@kilocode/plugin"
 import { errorMessage } from "@/util/error"
 import { Effect, Option } from "effect"
+import { isProviderID } from "@/kilocode/custom-provider"
 
 type PluginAuth = NonNullable<Hooks["auth"]>
 
@@ -285,7 +285,7 @@ export const ProvidersListCommand = effectCmd({
   instance: false,
   handler: Effect.fn("Cli.providers.list")(function* (_args) {
     const authSvc = yield* Auth.Service
-    const modelsDev = yield* ModelsDev.Service
+    const cfgSvc = yield* Config.Service
 
     UI.empty()
     const authPath = path.join(Global.Path.data, "auth.json")
@@ -293,10 +293,10 @@ export const ProvidersListCommand = effectCmd({
     const displayPath = authPath.startsWith(homedir) ? authPath.replace(homedir, "~") : authPath
     yield* Prompt.intro(`Credentials ${UI.Style.TEXT_DIM}${displayPath}`)
     const results = Object.entries(yield* Effect.orDie(authSvc.all()))
-    const database = yield* modelsDev.get()
+    const cfg = yield* cfgSvc.getGlobal()
 
     for (const [providerID, result] of results) {
-      const name = database[providerID]?.name || providerID
+      const name = (cfg.provider?.[providerID] as any)?.name || providerID
       yield* Prompt.log.info(`${name} ${UI.Style.TEXT_DIM}${result.type}`)
     }
 
@@ -304,11 +304,12 @@ export const ProvidersListCommand = effectCmd({
 
     const activeEnvVars: Array<{ provider: string; envVar: string }> = []
 
-    for (const [providerID, provider] of Object.entries(database)) {
-      for (const envVar of provider.env) {
+    for (const [providerID, provider] of Object.entries(cfg.provider ?? {})) {
+      if (!provider) continue
+      for (const envVar of (provider as any).env ?? []) {
         if (process.env[envVar]) {
           activeEnvVars.push({
-            provider: provider.name || providerID,
+            provider: (provider as any).name || providerID,
             envVar,
           })
         }
@@ -351,19 +352,20 @@ export const ProvidersLoginCommand = effectCmd({
 
     const cfgSvc = yield* Config.Service
     const pluginSvc = yield* Plugin.Service
-    const modelsDev = yield* ModelsDev.Service
-    yield* Effect.ignore(modelsDev.refresh(true))
 
     const config = yield* cfgSvc.get()
 
     const disabled = new Set(config.disabled_providers ?? [])
     const enabled = config.enabled_providers ? new Set(config.enabled_providers) : undefined
 
-    const allProviders = yield* modelsDev.get()
-    const providers: Record<string, (typeof allProviders)[string]> = {}
-    for (const [key, value] of Object.entries(allProviders)) {
-      if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) providers[key] = value
+    const allProviders: Record<string, { id: string; name: string }> = {}
+    for (const [key, value] of Object.entries(config.provider ?? {})) {
+      if (!value) continue
+      if ((enabled ? enabled.has(key) : true) && !disabled.has(key)) {
+        allProviders[key] = { id: key, name: (value as any).name ?? key }
+      }
     }
+    const providers: Record<string, { id: string; name: string }> = allProviders
     const hooks = yield* pluginSvc.list()
 
     const pluginProviders = resolvePluginProviders({
@@ -405,7 +407,7 @@ export const ProvidersLoginCommand = effectCmd({
       provider = (yield* promptValue(
         yield* Prompt.text({
           message: "Enter provider id",
-          validate: (x) => (x && x.match(/^[0-9a-z-]+$/) ? undefined : "a-z, 0-9 and hyphens only"),
+          validate: (x) => (x && isProviderID(x) ? undefined : "lowercase alphanumeric, dash and underscore only (must start with alphanumeric)"),
         }),
       )).replace(/^@ai-sdk\//, "")
 
@@ -477,7 +479,7 @@ export const ProvidersLogoutCommand = effectCmd({
   instance: false,
   handler: Effect.fn("Cli.providers.logout")(function* (_args) {
     const authSvc = yield* Auth.Service
-    const modelsDev = yield* ModelsDev.Service
+    const cfgSvc = yield* Config.Service
 
     UI.empty()
     const credentials: Array<[string, Auth.Info]> = Object.entries(yield* Effect.orDie(authSvc.all()))
@@ -486,11 +488,11 @@ export const ProvidersLogoutCommand = effectCmd({
       yield* Prompt.log.error("No credentials found")
       return
     }
-    const database = yield* modelsDev.get()
+    const cfg = yield* cfgSvc.getGlobal()
     const selected = yield* Prompt.select({
       message: "Select provider",
       options: credentials.map(([key, value]) => ({
-        label: (database[key]?.name || key) + UI.Style.TEXT_DIM + " (" + value.type + ")",
+        label: ((cfg.provider?.[key] as any)?.name || key) + UI.Style.TEXT_DIM + " (" + value.type + ")",
         value: key,
       })),
     })

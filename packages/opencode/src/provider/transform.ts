@@ -2,13 +2,12 @@ import type { ModelMessage, ToolResultPart } from "ai"
 import { mergeDeep, unique } from "remeda"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type * as Provider from "./provider"
-import type * as ModelsDev from "@opencode-ai/core/models-dev"
 import { iife } from "@/util/iife"
 import { kiloProviderOptions } from "@/kilocode/provider-options"
 import { isLing } from "@/kilocode/model-match" // kilocode_change
 import { reasoningSummary } from "@/kilocode/provider/reasoning-summary" // kilocode_change
 
-type Modality = NonNullable<ModelsDev.Model["modalities"]>["input"][number]
+type Modality = "text" | "audio" | "image" | "video" | "pdf"
 
 function mimeToModality(mime: string): Modality | undefined {
   if (mime.startsWith("image/")) return "image"
@@ -714,7 +713,7 @@ export function variants(model: Provider.Model): Record<string, Record<string, a
     // id.includes("minimax") || // kilocode_change
     // id.includes("glm") || // kilocode_change
     // id.includes("kimi") || // kilocode_change
-    // TODO: Remove this after models.dev data is fixed to use "kimi-k2.5" instead of "k2p5"
+    // Legacy alias: handle "k2p5" model IDs (historical models.dev data used "k2p5" instead of "kimi-k2.5")
     id.includes("k2p") ||
     id.includes("qwen") ||
     id.includes("big-pickle")

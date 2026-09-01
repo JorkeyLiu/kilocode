@@ -3,8 +3,7 @@ import { PluginV2 } from "../../plugin"
 import { ProviderV2 } from "../../provider"
 
 function resolveProject(options: Record<string, any>) {
-  // models.dev advertises GOOGLE_VERTEX_PROJECT for Vertex, while Google SDKs
-  // and ADC examples commonly use the broader Google Cloud project aliases.
+  // Support GOOGLE_VERTEX_PROJECT and the broader Google Cloud project aliases.
   return (
     options.project ??
     process.env.GOOGLE_VERTEX_PROJECT ??

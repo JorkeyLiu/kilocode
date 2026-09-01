@@ -12,9 +12,6 @@ import { testEffect } from "../lib/effect"
 import { writeFileStringScoped } from "../lib/filesystem"
 import { TestConfig } from "../fixture/config"
 
-// kilocode_change start - canonical models snapshot moved to src/kilocode/provider
-const MODELS_FIXTURE = path.join(import.meta.dir, "..", "..", "src", "kilocode", "provider", "models-api.json")
-// kilocode_change end
 const ROOT = path.resolve(import.meta.dir, "..", "..")
 
 const it = testEffect(Layer.mergeAll(Truncate.defaultLayer, NodeFileSystem.layer, FSUtil.defaultLayer))
@@ -33,8 +30,7 @@ describe("Truncate", () => {
     it.live("truncates large json file by bytes", () =>
       Effect.gen(function* () {
         const svc = yield* Truncate.Service
-        const fsys = yield* FSUtil.Service
-        const content = yield* fsys.readFileString(MODELS_FIXTURE) // kilocode_change
+        const content = "x".repeat(Truncate.MAX_BYTES + 1024)
         const result = yield* svc.output(content)
 
         expect(result.truncated).toBe(true)
@@ -167,8 +163,7 @@ describe("Truncate", () => {
     it.live("large single-line file truncates with byte message", () =>
       Effect.gen(function* () {
         const svc = yield* Truncate.Service
-        const fsys = yield* FSUtil.Service
-        const content = yield* fsys.readFileString(MODELS_FIXTURE) // kilocode_change
+        const content = "y".repeat(Truncate.MAX_BYTES + 5000)
         const result = yield* svc.output(content)
 
         expect(result.truncated).toBe(true)
