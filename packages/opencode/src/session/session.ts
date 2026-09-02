@@ -53,6 +53,7 @@ import { AbsolutePath } from "@opencode-ai/core/schema" // kilocode_change
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
+import { cloneMessageDataForFork, clonePartDataForFork, filterMessagesForFork, getForkedTitle, resolveForkModelAtCheckpoint, sessionPath } from "@/kilocode/session/fork"
 
 const log = Log.create({ service: "session" })
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
@@ -156,19 +157,7 @@ export function toRow(info: Info) {
   }
 }
 
-function getForkedTitle(title: string): string {
-  const match = title.match(/^(.+) \(fork #(\d+)\)$/)
-  if (match) {
-    const base = match[1]
-    const num = parseInt(match[2], 10)
-    return `${base} (fork #${num + 1})`
-  }
-  return `${title} (fork #1)`
-}
 
-function sessionPath(worktree: string, cwd: string) {
-  return path.relative(path.resolve(worktree), cwd).replaceAll("\\", "/")
-}
 
 const Summary = Schema.Struct({
   additions: Schema.Finite,
@@ -883,22 +872,11 @@ export const layer: Layer.Layer<
       // kilocode_change end
       // kilocode_change start - historical forks must use the model from retained context, not a later source-session selection
       const msgs = yield* messages({ sessionID: input.sessionID })
-      const point = input.messageID
-      const message = point
-        ? msgs.findLast((msg) => msg.info.id < point && msg.info.role === "user")
-        : undefined
-      const model =
-        message?.info.role === "user"
-          ? {
-              id: message.info.model.modelID,
-              providerID: message.info.model.providerID,
-              variant: message.info.model.variant,
-            }
-          : point
-            ? undefined
-            : original.model
-              ? { ...original.model }
-              : undefined
+      const model = resolveForkModelAtCheckpoint({
+        sourceModel: original.model as unknown as { id: string; providerID: string; variant?: string } | null,
+        checkpointId: input.messageID as unknown as string | null,
+        orderedMessages: msgs.map((m) => ({ id: m.info.id, role: m.info.role, model: (m.info as unknown as { model?: unknown }).model })),
+      }) as unknown as typeof original.model
       // kilocode_change end
       const session = yield* createNext({
         directory: ctx.directory,
@@ -911,34 +889,29 @@ export const layer: Layer.Layer<
         sandboxFallback, // kilocode_change - seed confinement from the source session's original directory
       })
       const idMap = new Map<string, MessageID>()
+      const filtered = filterMessagesForFork(msgs as unknown as Array<{ id: string }>, input.messageID as unknown as string | null) as unknown as typeof msgs
 
-      for (const msg of msgs) {
-        if (input.messageID && msg.info.id >= input.messageID) break
+      for (const msg of filtered) {
         const newID = MessageID.ascending()
         idMap.set(msg.info.id, newID)
 
-        const parentID = msg.info.role === "assistant" && msg.info.parentID ? idMap.get(msg.info.parentID) : undefined
+        const data = cloneMessageDataForFork(msg.info as unknown as Record<string, unknown>, idMap as unknown as Map<string, string>)
         const cloned = yield* updateMessage({
-          ...msg.info,
+          ...data,
           sessionID: session.id,
           id: newID,
-          ...(msg.info.role === "assistant" && { cost: 0 }), // kilocode_change - count only spend incurred after the fork
-          ...(parentID && { parentID }),
-        })
+        } as unknown as typeof msg.info & { sessionID: string; id: string })
 
         for (const part of msg.parts) {
           // kilocode_change - detach task calls + drop transient parts before copying the forked transcript
           const prepared = KiloSession.prepareForkedPart(part)
           if (!prepared) continue
+          const mappedPartData = clonePartDataForFork(prepared as unknown as MessageV2.Part, idMap as unknown as Map<string, string>)
           const p: SessionV1.Part = {
-            ...prepared,
+            ...(mappedPartData as unknown as SessionV1.Part),
             id: PartID.ascending(),
             messageID: cloned.id,
             sessionID: session.id,
-            ...(prepared.type === "step-finish" && { cost: 0 }), // kilocode_change - exclude pre-fork spend from model stats
-          }
-          if (p.type === "compaction" && p.tail_start_id) {
-            p.tail_start_id = idMap.get(p.tail_start_id)
           }
           yield* updatePart(p)
         }

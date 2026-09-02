@@ -1,5 +1,7 @@
-import { isAbsolute, resolve, normalize as normalizePath, relative as relativePath } from "path"
+import { isAbsolute } from "path"
 import { Context, Effect, Layer, Option, Schema } from "effect"
+import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { cloneMessageDataForFork, clonePartDataForFork, filterMessagesForFork, getForkedTitle, resolveForkModelAtCheckpoint, sessionPath } from "@/kilocode/session/fork"
 import { Database } from "@opencode-ai/core/database/database"
 import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
@@ -96,25 +98,7 @@ function isNonEmptyString(v: unknown): boolean {
 function isSafeInt(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && Number.isSafeInteger(v)
 }
-export function canonicalDirectory(dir: string): string {
-  if (typeof dir !== "string" || !isAbsolute(dir)) throw new Error("context.directory must be absolute path")
-  if (dir.includes("\0")) throw new Error("context.directory must not contain null bytes")
-  const normalized = normalizePath(resolve(dir))
-  if (!isAbsolute(normalized)) throw new Error("context.directory must be absolute path")
-  return normalized
-}
-function getForkedTitle(title: string): string {
-  const match = title.match(/^(.+) \(fork #(\d+)\)$/)
-  if (match) {
-    const base = match[1]
-    const num = parseInt(match[2]!, 10)
-    return `${base} (fork #${num + 1})`
-  }
-  return `${title} (fork #1)`
-}
-function sessionPath(worktree: string, cwd: string): string {
-  return relativePath(resolve(worktree), resolve(cwd)).replaceAll("\\", "/")
-}
+export { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 
 export function validateRequest(raw: unknown): SessionForkRequest {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("params must be object")
@@ -528,33 +512,12 @@ export const layer = Layer.effect(
                   .orderBy(asc(MessageTable.time_created), asc(MessageTable.id))
                   .all()
                   .pipe(Effect.orDie)
-                const filteredRows = messageId ? msgRows.filter((r) => (r.id as string) < (messageId as unknown as string)) : msgRows
-                let model: unknown = undefined
-                if (messageId) {
-                  let found: typeof msgRows[0] | undefined
-                  for (let i = filteredRows.length - 1; i >= 0; i--) {
-                    const row = filteredRows[i]!
-                    const data = row.data as Record<string, unknown>
-                    if (data.role === "user") {
-                      found = row
-                      break
-                    }
-                  }
-                  if (found) {
-                    const d = found.data as Record<string, unknown>
-                    const m = d.model as Record<string, unknown> | undefined
-                    if (m && typeof m.modelID === "string" && typeof m.providerID === "string") {
-                      model = { id: m.modelID, providerID: m.providerID, variant: (m as { variant?: string }).variant }
-                    } else {
-                      model = undefined
-                    }
-                  } else {
-                    model = undefined
-                  }
-                } else {
-                  model = (src as unknown as { model: unknown }).model ?? null
-                  if (model === null) model = undefined
-                }
+                const filteredRows = filterMessagesForFork(msgRows as unknown as Array<{ id: string }>, messageId as unknown as string | null) as typeof msgRows
+                const model = resolveForkModelAtCheckpoint({
+                  sourceModel: (src as unknown as { model: { id: string; providerID: string; variant?: string } | null }).model as unknown as { id: string; providerID: string; variant?: string } | null,
+                  checkpointId: messageId as unknown as string | null,
+                  orderedMessages: msgRows.map((r) => ({ id: r.id as unknown as string, role: (r.data as Record<string, unknown>).role as string, model: (r.data as Record<string, unknown>).model })),
+                }) as unknown
 
                 const newId = SessionID.descending()
                 const newTitle = getForkedTitle((src as unknown as { title: string }).title)
@@ -609,20 +572,14 @@ export const layer = Layer.effect(
 
                 yield* tx.insert(SessionTable).values(newRow as unknown as typeof SessionTable.$inferInsert).run().pipe(Effect.orDie)
 
-                // Copy messages and parts with checkpoint
+                // Copy messages and parts with checkpoint — uses shared kernel for transcript mapping
                 const idMap = new Map<string, MessageID>()
                 for (const row of filteredRows) {
                   const oldId = row.id as unknown as string
                   const newMsgId = MessageID.ascending()
                   idMap.set(oldId, newMsgId)
                   const oldData = row.data as Record<string, unknown>
-                  const parentIdRaw = oldData.parentID as string | undefined
-                  const mappedParent = parentIdRaw ? idMap.get(parentIdRaw) : undefined
-                  const clonedData: Record<string, unknown> = {
-                    ...oldData,
-                    parentID: mappedParent ?? oldData.parentID,
-                    ...(oldData.role === "assistant" ? { cost: 0 } : {}),
-                  }
+                  const clonedData = cloneMessageDataForFork(oldData, idMap as unknown as Map<string, string>)
                   const newMsgRow = {
                     id: newMsgId,
                     session_id: newId,
@@ -641,16 +598,12 @@ export const layer = Layer.effect(
                   for (const prow of partRows) {
                     const prepared = KiloSession.prepareForkedPart(prow.data as unknown as Parameters<typeof KiloSession.prepareForkedPart>[0])
                     if (!prepared) continue
+                    const mapped = clonePartDataForFork(prepared as unknown as import("@/session/message-v2").MessageV2.Part, idMap as unknown as Map<string, string>)
                     const p: Record<string, unknown> = {
-                      ...prepared,
+                      ...mapped,
                       id: PartID.ascending(),
                       messageID: newMsgId,
                       sessionID: newId,
-                      ...(prepared.type === "step-finish" ? { cost: 0 } : {}),
-                    }
-                    if ((p as { type: string }).type === "compaction" && (p as { tail_start_id?: string }).tail_start_id) {
-                      const mapped = idMap.get((p as { tail_start_id: string }).tail_start_id)
-                      if (mapped) (p as Record<string, unknown>).tail_start_id = mapped
                     }
                     const partInsert = {
                       id: p.id as string,

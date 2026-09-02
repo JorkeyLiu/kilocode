@@ -1,5 +1,6 @@
-import { isAbsolute, resolve, normalize as normalizePath } from "path"
+import { isAbsolute } from "path"
 import { Context, Effect, Layer, Option, Schema } from "effect"
+import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
@@ -84,13 +85,7 @@ function isSafeInt(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v >= 0 && Number.isSafeInteger(v)
 }
 
-export function canonicalDirectory(dir: string): string {
-  if (typeof dir !== "string" || !isAbsolute(dir)) throw new Error("context.directory must be absolute path")
-  if (dir.includes("\0")) throw new Error("context.directory must not contain null bytes")
-  const normalized = normalizePath(resolve(dir))
-  if (!isAbsolute(normalized)) throw new Error("context.directory must be absolute path")
-  return normalized
-}
+export { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 
 export function validateRequest(raw: unknown): CancelQueuedRequest {
   if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw new Error("params must be object")
