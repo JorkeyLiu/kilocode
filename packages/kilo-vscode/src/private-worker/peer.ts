@@ -99,6 +99,33 @@ export class JsonRpcPeer {
     })
   }
 
+  getPendingCount(): number {
+    return this.pending.size
+  }
+
+  getPendingIds(): JsonRpcId[] {
+    return [...this.pending.keys()]
+  }
+
+  peekNextId(): number {
+    return this.nextId
+  }
+
+  /**
+   * Explicit cancellation/removal API for the owned request. Removes the
+   * pending entry for `id` and rejects it with a timeout error. Returns
+   * true if an entry was removed, false if none existed. This is the
+   * natural private-peer boundary ownership for timed-out observer
+   * requests — the timed-out pending must not accumulate until peer close.
+   */
+  tryCancelPending(id: JsonRpcId, message = "private parity timeout"): boolean {
+    const entry = this.pending.get(id)
+    if (!entry) return false
+    this.pending.delete(id)
+    entry.reject(makePeerError(ErrorCode.InternalError, message))
+    return true
+  }
+
   /** Send a JSON-RPC notification (event envelope, no id). */
   notify(method: string, params?: unknown): void {
     if (this.state !== "open") return

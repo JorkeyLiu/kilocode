@@ -119,8 +119,12 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason: "B3 fork regression: transcript checkpoint, cross-directory, stale, SDK payload, private validation",
   },
   "kilocode/session/session-fork-additional.test.ts": {
-    count: 16,
+    count: 17,
     reason: "B3 fork additional: cross-directory identity, event, raw unknown-field, SDK generation, private exact",
+  },
+  "kilocode/session/session-fork-http-mapping.test.ts": {
+    count: 14,
+    reason: "B3 fork HTTP mapping integration test via AppRuntime and InstanceRef (error mapping matrix 400/404/409/500, directory/sessionId/idempotencyKey/opId/barrier cases)",
   },
 }
 

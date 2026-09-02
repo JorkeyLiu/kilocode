@@ -892,16 +892,31 @@ export class AgentManagerProvider implements Disposable {
     const { buildForkIdentity, executeDurableFork, observeForkParity } = await import("../kilo-provider/fork-session")
     const identity = buildForkIdentity(sessionId)
     const params = { sessionId, directory, messageId, opId: identity.opId, idempotencyKey: identity.idempotencyKey, requestId: identity.requestId }
-    let forked: Session
+    let forked: Session | undefined
+    let sdkResult: { data?: Session; error?: unknown; response?: unknown } | null = null
     try {
       const res = await executeDurableFork(client, params)
-      forked = res.data
-      await observeForkParity(this.connectionService, { data: res.data, response: res.response }, params)
+      sdkResult = { data: res.data as Session | undefined, response: res.response, error: res.error }
+      if (res.error) {
+        const err = getErrorMessage(res.error)
+        this.postToWebview({ type: "error", message: `Failed to fork session: ${err}` })
+      } else if (res.data) {
+        forked = res.data as Session
+      }
     } catch (error) {
+      const asRec = error as Record<string, unknown>
+      sdkResult = { data: (asRec?.data as Session) ?? undefined, error: (asRec?.error as unknown) ?? error, response: (asRec?.response as unknown) ?? undefined }
       const err = getErrorMessage(error)
       this.postToWebview({ type: "error", message: `Failed to fork session: ${err}` })
-      return
     }
+    if (sdkResult) {
+      try {
+        await observeForkParity(this.connectionService, sdkResult as { data?: unknown; error?: unknown; response?: unknown }, params)
+      } catch (err) {
+        console.warn("[Kilo Fork] AgentManager observeForkParity failed:", String(err).slice(0, 200), { opId: params.opId, requestId: params.requestId })
+      }
+    }
+    if (!forked) return
     this.addSession(forked.id, { recent: true })
     this.activeSessionId = forked.id
     this.schedulePersist()

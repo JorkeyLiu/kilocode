@@ -1,4 +1,4 @@
-import { isAbsolute } from "path"
+import { isAbsolute, normalize, resolve } from "path"
 import { JsonRpcPeer } from "../../private-worker/peer"
 import type { ChildProcess } from "child_process"
 
@@ -95,7 +95,13 @@ function validateTitleStrict(raw: unknown): string {
   return value
 }
 function isSessionId(v: unknown): boolean {
-  return typeof v === "string" && /^ses[^\s:]*$/.test(v) && !v.includes(":") && v.length > 0
+  return typeof v === "string" && (v as string).startsWith("ses")
+}
+function isMessageId(v: unknown): boolean {
+  return typeof v === "string" && (v as string).startsWith("msg")
+}
+function canonicalDir(dir: string): string {
+  return normalize(resolve(dir))
 }
 function parseSessionUpdateOpId(opId: string): { kind: string; parts: string[] } {
   if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
@@ -510,9 +516,17 @@ export function validateSessionUpdateRequest(raw: unknown): ServePrivateSessionU
     if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
   if (ctx.parentSessionId !== null && ctx.parentSessionId !== undefined)
     throw new Error("parentSessionId must be null for sessionUpdate")
-  const parsed = parseSessionUpdateOpId(raw.opId as string)
-  if (parsed.parts[0] !== ctx.sessionId)
-    throw new Error(`opId session binding mismatch: ${raw.opId} vs ${ctx.sessionId}`)
+  const opId = raw.opId as string
+  if (opId === `sessionUpdate:${ctx.sessionId as string}`) {
+    // base, no token
+  } else if ((opId as string).startsWith(`sessionUpdate:${ctx.sessionId as string}:`)) {
+    const token = (opId as string).slice(`sessionUpdate:${ctx.sessionId as string}:`.length)
+    if (token.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
+    if (token.includes(":")) throw new TypeError(`token must not contain ':'`)
+  } else {
+    const parsed = parseSessionUpdateOpId(opId)
+    if (parsed.parts[0] !== ctx.sessionId) throw new Error(`opId session binding mismatch: ${opId} vs ${ctx.sessionId}`)
+  }
   return raw as unknown as ServePrivateSessionUpdateRequest
 }
 
@@ -641,7 +655,7 @@ export function validateForkRequest(raw: unknown): ServePrivateForkRequest {
   const payload = raw.payload
   if (!isRecord(payload)) throw new Error("payload must be object")
   if ("messageId" in payload && payload.messageId !== null && payload.messageId !== undefined) {
-    if (typeof payload.messageId !== "string" || payload.messageId.length === 0) throw new Error("payload.messageId must be non-empty string")
+    if (!isMessageId(payload.messageId)) throw new Error("payload.messageId must be MessageID")
   }
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
   for (const k of Object.keys(raw as Record<string, unknown>)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
@@ -649,8 +663,19 @@ export function validateForkRequest(raw: unknown): ServePrivateForkRequest {
   for (const k of Object.keys(ctx as Record<string, unknown>)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
   const allowedPayload = new Set(["messageId"])
   for (const k of Object.keys(payload as Record<string, unknown>)) if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
-  const parsed = parseForkOpId(raw.opId as string)
-  if (parsed.parts[0] !== ctx.sessionId) throw new Error(`opId session binding mismatch: ${raw.opId} vs ${ctx.sessionId}`)
+  const opId = raw.opId as string
+  // Backend authoritative SessionID predicate allows colon/space; opId must be exactly `fork:<sessionId>` or `fork:<sessionId>:<token>` with token non-empty no colon.
+  if (opId === `fork:${ctx.sessionId as string}`) {
+    // no token, ok
+  } else if ((opId as string).startsWith(`fork:${ctx.sessionId as string}:`)) {
+    const token = (opId as string).slice(`fork:${ctx.sessionId as string}:`.length)
+    if (token.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
+    if (token.includes(":")) throw new TypeError(`token must not contain ':'`)
+  } else {
+    // fallback to strict parser for non-colon sessionIds to preserve error shape
+    const parsed = parseForkOpId(opId)
+    if (parsed.parts[0] !== ctx.sessionId) throw new Error(`opId session binding mismatch: ${opId} vs ${ctx.sessionId}`)
+  }
   return raw as unknown as ServePrivateForkRequest
 }
 
@@ -1121,6 +1146,34 @@ export class ServePrivatePeer {
     this.peer = null
   }
 
+  getPendingCount(): number {
+    return this.peer?.getPendingCount() ?? 0
+  }
+
+  peekNextJsonRpcId(): number | null {
+    return this.peer?.peekNextId() ?? null
+  }
+
+  tryCancelPending(id: number, message = "private parity timeout"): boolean {
+    return this.peer?.tryCancelPending(id as unknown as never, message) ?? false
+  }
+
+  /**
+   * Private observer timeout invalidates this private peer epoch; thereafter
+   * private parity remains disabled (fail-closed) until the next full backend
+   * connection/server reset (no automatic retry/reconnect, no detached work).
+   * The owner (KiloConnectionService) disposes and nulls this peer and will
+   * re-negotiate only on next connect/reconnect.
+   */
+  invalidateOnObserverTimeout(reason: string): void {
+    console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch ${this.opts.epoch}: ${reason}`)
+    try {
+      this.dispose()
+    } catch (e) {
+      console.warn("[Kilo PrivatePeer] invalidate dispose failed:", String(e))
+    }
+  }
+
   getProtocolForFixture(): { name: string; major: number; minor?: number } | null {
     const raw = this.initRaw as Record<string, unknown> | null
     if (!raw) return null
@@ -1443,17 +1496,35 @@ export function compareForkParity(
   }
   if (sdkStatus === "succeeded" && privStatus === "succeeded") {
     const sdkData = sdk.data as Record<string, unknown> | undefined
-    const sdkId: unknown = (sdkData as Record<string, unknown> | undefined)?.id ?? sdk.data
+    const sdkSess = (sdkData as Record<string, unknown> | undefined) ?? (sdk.data as Record<string, unknown> | undefined)
+    const sdkId: unknown = (sdkSess as Record<string, unknown> | undefined)?.id ?? sdk.data
     const pdata = (priv as Extract<ServePrivateForkResult, { status: "succeeded" }>).data as Record<string, unknown>
-    const privId: unknown = (pdata.session as Record<string, unknown> | undefined)?.id ?? pdata.id
-    if (typeof sdkId === "string" && typeof privId === "string") {
-      if (sdkId !== privId) {
-        return { divergence: `fork-id-mismatch`, details: { mismatch: true } }
-      }
-      return { divergence: null, details: {} }
-    }
+    const privSess = (pdata.session as Record<string, unknown> | undefined) ?? (pdata as Record<string, unknown>)
+    const privId: unknown = (privSess as Record<string, unknown>)?.id ?? pdata.id
     if (String(sdkId) !== String(privId)) {
-      return { divergence: `fork-id-mismatch`, details: { mismatch: true } }
+      return { divergence: `fork-id-mismatch`, details: { mismatch: true, field: "id", sdkId: String(sdkId), privId: String(privId) } }
+    }
+    const sdkParent: unknown = (sdkSess as Record<string, unknown> | undefined)?.parentID ?? (sdkSess as Record<string, unknown> | undefined)?.parent_id
+    const privParent: unknown = (privSess as Record<string, unknown> | undefined)?.parentID ?? (privSess as Record<string, unknown> | undefined)?.parent_id
+    if (String(sdkParent ?? "") !== String(privParent ?? "")) {
+      return { divergence: `fork-parent-mismatch`, details: { mismatch: true, field: "parentID", sdkParent: String(sdkParent ?? ""), privParent: String(privParent ?? "") } }
+    }
+    const sdkDirRaw: unknown = (sdkSess as Record<string, unknown> | undefined)?.directory
+    const privDirRaw: unknown = (privSess as Record<string, unknown> | undefined)?.directory
+    if (typeof sdkDirRaw === "string" && typeof privDirRaw === "string") {
+      let sdkDir = sdkDirRaw
+      let privDir = privDirRaw
+      try {
+        sdkDir = canonicalDir(sdkDirRaw)
+      } catch {}
+      try {
+        privDir = canonicalDir(privDirRaw)
+      } catch {}
+      if (sdkDir !== privDir) {
+        return { divergence: `fork-directory-mismatch`, details: { mismatch: true, field: "directory", sdkDir, privDir } }
+      }
+    } else if (String(sdkDirRaw ?? "") !== String(privDirRaw ?? "")) {
+      return { divergence: `fork-directory-mismatch`, details: { mismatch: true, field: "directory", sdkDir: String(sdkDirRaw ?? ""), privDir: String(privDirRaw ?? "") } }
     }
     return { divergence: null, details: {} }
   }

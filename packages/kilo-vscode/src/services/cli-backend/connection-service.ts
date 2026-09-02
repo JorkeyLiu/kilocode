@@ -833,6 +833,41 @@ export class KiloConnectionService {
     this.privatePid = undefined
   }
 
+  getPrivatePeerPendingCount(): number {
+    return this.privatePeer?.getPendingCount() ?? 0
+  }
+
+  peekPrivatePeerNextId(): number | null {
+    return this.privatePeer?.peekNextJsonRpcId() ?? null
+  }
+
+  tryCancelPrivatePending(id: number, message = "private parity timeout"): boolean {
+    return this.privatePeer?.tryCancelPending(id, message) ?? false
+  }
+
+  /**
+   * Owner-managed invalidation after a private observer timeout. The timed-out
+   * pending request is owned by the JsonRpcPeer and must not accumulate. This
+   * invalidates the private peer epoch; thereafter private parity remains
+   * disabled (fail-closed) until the next full backend connection/server reset
+   * (no automatic retry/reconnect, no detached work). The SDK result remains
+   * authoritative.
+   */
+  invalidatePrivatePeerOnObserverTimeout(reason: string): void {
+    const peer = this.privatePeer
+    if (!peer) return
+    console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch ${String(this.privateEpoch)}: ${reason}`)
+    try {
+      peer.invalidateOnObserverTimeout(reason)
+    } catch (e) {
+      console.warn("[Kilo] invalidateOnObserverTimeout failed:", String(e))
+    }
+    this.privatePeer = null
+    this.privateAvailable = false
+    this.privateEpoch = null
+    this.privatePid = undefined
+  }
+
   private async initPrivatePeer(server: import("./server-manager").ServerInstance): Promise<void> {
     if (this.privateEpoch !== null && this.privateEpoch === server.epoch) return
     if (this.privatePeer) {

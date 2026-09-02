@@ -195,17 +195,23 @@ describe("ServePrivatePeer B1", () => {
       },
     })
     const peer = new ServePrivatePeer({ reader: toClient, writer: toBackend, pid: 131, epoch: 9, initializeTimeoutMs: 300 })
-    expect(await peer.initialize(300)).toBeTrue()
-    const req = { v: 1 as const, requestId: "req2", opId: "cancelQueued:ses_a:msg_b", op: "session/cancelQueued" as const, idempotencyKey: "idem2", context: { directory: "/tmp", sessionId: "ses_a" }, payload: { messageId: "msg_b" } }
-    const p = peer.privateCancelQueued(req)
-    setTimeout(() => {
-      toClient.end()
-      backendPeer.dispose()
-    }, 30)
-    const res = await p
-    expect(res.status).toBe("ambiguous")
-    expect((res as unknown as { transportUnknown?: boolean }).transportUnknown).toBeTrue()
-    peer.dispose()
+    try {
+      expect(await peer.initialize(300)).toBeTrue()
+      const req = { v: 1 as const, requestId: "req2", opId: "cancelQueued:ses_a:msg_b", op: "session/cancelQueued" as const, idempotencyKey: "idem2", context: { directory: "/tmp", sessionId: "ses_a" }, payload: { messageId: "msg_b" } }
+      const p = peer.privateCancelQueued(req)
+      setTimeout(() => {
+        toClient.end()
+        backendPeer.dispose()
+      }, 30)
+      const res = await p
+      expect(res.status).toBe("ambiguous")
+      expect((res as unknown as { transportUnknown?: boolean }).transportUnknown).toBeTrue()
+    } finally {
+      try { peer.dispose() } catch {}
+      try { backendPeer.dispose() } catch {}
+      try { toClient.destroy() } catch {}
+      try { toBackend.destroy() } catch {}
+    }
   })
 
   test("stale old response dropped does not enter new epoch", async () => {
@@ -219,29 +225,33 @@ describe("ServePrivatePeer B1", () => {
       throw new Error("x")
     })
     const peer1 = new ServePrivatePeer({ reader: r1, writer: w1, pid: 132, epoch: 10, initializeTimeoutMs: 300 })
-    expect(await peer1.initialize(300)).toBeTrue()
-    const req = { v: 1 as const, requestId: "req3", opId: "cancelQueued:ses_a:msg_c", op: "session/cancelQueued" as const, idempotencyKey: "idem3", context: { directory: "/tmp", sessionId: "ses_a" }, payload: { messageId: "msg_c" } }
-    const p1 = peer1.privateCancelQueued(req)
-    const { clientReader: r2, clientWriter: w2 } = createLinkedChannel(async (method, params) => {
-      if (method === "initialize") return { protocol: { name: "kilo-private", major: 1, minor: 0 }, serverInfo: { name: "kilo", version: "1" }, capabilities: ["session/cancelQueued"] }
-      if (method === "session/cancelQueued") {
-        const req2 = params as { requestId: string; opId: string; idempotencyKey: string }
-        return { v: 1, requestId: req2.requestId, opId: req2.opId, op: "session/cancelQueued", idempotencyKey: req2.idempotencyKey, status: "succeeded", outcome: { type: "succeeded", time: Date.now() }, accepted: true, data: { cancelled: false } }
-      }
-      throw new Error("x")
-    })
-    const peer2 = new ServePrivatePeer({ reader: r2, writer: w2, pid: 132, epoch: 11, initializeTimeoutMs: 300 })
-    expect(await peer2.initialize(300)).toBeTrue()
-    const res2 = await peer2.privateCancelQueued({ v: 1, requestId: "req4", opId: "cancelQueued:ses_a:msg_d", op: "session/cancelQueued", idempotencyKey: "idem4", context: { directory: "/tmp", sessionId: "ses_a" }, payload: { messageId: "msg_d" } })
-    expect(res2.status).toBe("succeeded")
-    if (res2.status === "succeeded") expect(res2.data.cancelled).toBeFalse()
-    const res1 = await p1
-    expect(res1.status).toBe("succeeded")
-    if (res1.status === "succeeded") expect(res1.data.cancelled).toBeTrue()
-    expect(peer1.getEpoch()).toBe(10)
-    expect(peer2.getEpoch()).toBe(11)
-    peer1.dispose()
-    peer2.dispose()
+    let peer2: ServePrivatePeer | null = null
+    try {
+      expect(await peer1.initialize(300)).toBeTrue()
+      const req = { v: 1 as const, requestId: "req3", opId: "cancelQueued:ses_a:msg_c", op: "session/cancelQueued" as const, idempotencyKey: "idem3", context: { directory: "/tmp", sessionId: "ses_a" }, payload: { messageId: "msg_c" } }
+      const p1 = peer1.privateCancelQueued(req)
+      const { clientReader: r2, clientWriter: w2 } = createLinkedChannel(async (method, params) => {
+        if (method === "initialize") return { protocol: { name: "kilo-private", major: 1, minor: 0 }, serverInfo: { name: "kilo", version: "1" }, capabilities: ["session/cancelQueued"] }
+        if (method === "session/cancelQueued") {
+          const req2 = params as { requestId: string; opId: string; idempotencyKey: string }
+          return { v: 1, requestId: req2.requestId, opId: req2.opId, op: "session/cancelQueued", idempotencyKey: req2.idempotencyKey, status: "succeeded", outcome: { type: "succeeded", time: Date.now() }, accepted: true, data: { cancelled: false } }
+        }
+        throw new Error("x")
+      })
+      peer2 = new ServePrivatePeer({ reader: r2, writer: w2, pid: 132, epoch: 11, initializeTimeoutMs: 300 })
+      expect(await peer2.initialize(300)).toBeTrue()
+      const res2 = await peer2.privateCancelQueued({ v: 1, requestId: "req4", opId: "cancelQueued:ses_a:msg_d", op: "session/cancelQueued", idempotencyKey: "idem4", context: { directory: "/tmp", sessionId: "ses_a" }, payload: { messageId: "msg_d" } })
+      expect(res2.status).toBe("succeeded")
+      if (res2.status === "succeeded") expect(res2.data.cancelled).toBeFalse()
+      const res1 = await p1
+      expect(res1.status).toBe("succeeded")
+      if (res1.status === "succeeded") expect(res1.data.cancelled).toBeTrue()
+      expect(peer1.getEpoch()).toBe(10)
+      expect(peer2.getEpoch()).toBe(11)
+    } finally {
+      try { peer1.dispose() } catch {}
+      try { peer2?.dispose() } catch {}
+    }
   })
 
   test("compareParity detects divergences", () => {
