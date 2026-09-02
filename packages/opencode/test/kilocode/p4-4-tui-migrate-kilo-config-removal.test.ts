@@ -117,7 +117,7 @@ describe("P4.4 TUI migration helper removal — file and Flag.KILO_TUI_CONFIG ab
     expect(kcfg).not.toContain("Filesystem.findUp")
   })
 
-  test("generated SDK and OpenAPI unchanged (HTTP/SSE bridge preserved)", () => {
+  test("generated SDK/OpenAPI static absence of KILO_CONFIG_CONTENT (static preservation anchor — no KILO_CONFIG_CONTENT in generated files)", () => {
     const gen = readRepo("packages/sdk/js/src/gen/sdk.gen.ts")
     expect(gen).not.toContain("KILO_CONFIG_CONTENT")
     expect(gen).not.toContain("Flag.KILO_CONFIG")
@@ -141,7 +141,7 @@ describe("P4.4 TUI migration helper removal — file and Flag.KILO_TUI_CONFIG ab
     expect(policy).toContain('"KILO_CONFIG_CONTENT"')
   })
 
-  test("provider/catalog and custom-provider lifecycle untouched", () => {
+  test("provider/catalog custom-provider files present and BUNDLED_PROVIDERS retained (static source-presence anchor)", () => {
     expect(existsSync(join(opencode, "kilocode/provider/provider.ts"))).toBe(true)
     expect(existsSync(join(opencode, "provider/provider.ts"))).toBe(true)
     expect(existsSync(join(opencode, "kilocode/custom-provider.ts"))).toBe(true)
