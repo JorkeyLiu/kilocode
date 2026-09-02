@@ -6,6 +6,8 @@ import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
 import { CancelQueuedDispatchService, type CancelQueuedResult } from "@/kilocode/session/cancel-queued-dispatch" // kilocode_change - P4.4-G3-B0
 import { SessionUpdateDispatchService, type SessionUpdateResult } from "@/kilocode/session/session-update-dispatch" // kilocode_change - P4.4-G3-B2 durable title
 import { SessionForkDispatchService, type SessionForkResult } from "@/kilocode/session/session-fork-dispatch" // kilocode_change - P4.4-G3-B3 fork
+import { canonicalDirectory } from "@/kilocode/session/canonical-directory" // kilocode_change - P4.4-G3 double directory contract
+import { forkTargetDirectory } from "@/kilocode/server/routes/fork-routing" // kilocode_change - P4.4-G3 double directory contract
 import { SessionOperation } from "@opencode-ai/core/session/operation" // kilocode_change - LOCK-201 canonical opId
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -323,6 +325,22 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         const c = p.context as Record<string, unknown>
         if (typeof c.sessionId !== "string" || c.sessionId !== ctx.params.sessionID) return yield* new HttpApiError.BadRequest({})
         if (typeof c.directory !== "string" || c.directory.length === 0) return yield* new HttpApiError.BadRequest({})
+        // kilocode_change - P4.4-G3 double-directory fail-closed: route directory vs body directory must canonical-equivalent
+        const reqOpt = yield* Effect.serviceOption(HttpServerRequest.HttpServerRequest)
+        if (Option.isSome(reqOpt)) {
+          const httpReq = reqOpt.value
+          const url = new URL(httpReq.url, "http://localhost")
+          const routeDirectory = forkTargetDirectory(httpReq.method, url, httpReq.headers as Record<string, string | undefined>)
+          if (routeDirectory !== undefined) {
+            try {
+              const canonRoute = canonicalDirectory(routeDirectory)
+              const canonBody = canonicalDirectory(c.directory as string)
+              if (canonRoute !== canonBody) return yield* new HttpApiError.BadRequest({})
+            } catch {
+              return yield* new HttpApiError.BadRequest({})
+            }
+          }
+        }
         const req = {
           v: 1 as const,
           requestId: p.requestId as string,

@@ -1,28 +1,27 @@
 // @ts-nocheck
 import { afterEach, describe, expect } from "bun:test"
-import { Effect, Layer } from "effect"
+import { Effect } from "effect"
 import { eq } from "drizzle-orm"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
-import { EventTable, EventSequenceTable } from "@opencode-ai/core/event/sql"
+import { EventTable } from "@opencode-ai/core/event/sql"
+import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { Session } from "../../../src/session/session"
 import { SessionID } from "../../../src/session/schema"
 import { SessionForkDispatchService } from "../../../src/kilocode/session/session-fork-dispatch"
 import { testEffect } from "../../lib/effect"
 import { resetDatabase } from "../../fixture/db"
-import { disposeAllInstances, provideInstance, tmpdir } from "../../fixture/fixture"
+import { disposeAllInstances, provideInstance, tmpdirScoped } from "../../fixture/fixture"
 import { AppRuntime } from "../../../src/effect/app-runtime"
 import { Server } from "../../../src/server/server"
 import { KiloSession } from "../../../src/kilocode/session"
 import { GlobalBus } from "../../../src/bus/global"
-import { SessionV1 } from "@opencode-ai/core/v1/session"
 import * as Log from "@opencode-ai/core/util/log"
-import path from "path"
 
 void Log.init({ print: false })
 
-const it = testEffect(Layer.empty)
+const it = testEffect(CrossSpawnSpawner.defaultLayer)
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -32,10 +31,10 @@ afterEach(async () => {
 describe("sessionFork additional coverage", () => {
   it.live("cross-directory fork sets correct target project and path", () =>
     Effect.gen(function* () {
-      const tmpA = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
-      const tmpB = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
-      const dirA = tmpA.path
-      const dirB = tmpB.path
+      const dirA = yield* tmpdirScoped({ git: true })
+      const dirB = yield* tmpdirScoped({ git: true })
+      // Ensure global AppRuntime instances are disposed before scoped tmpdir finalizers run (LIFO: dispose before dir cleanup)
+      yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
       const source = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirA)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.create({ title: "srcA" }) })))) as unknown as Effect.Effect<any, any, any>)
       // Get source project for later comparison
       const sourceRow = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dirA)(Effect.gen(function* () { const db = (yield* Database.Service).db; return yield* db.select().from(SessionTable).where(eq(SessionTable.id, SessionID.make(source.id))).get().pipe(Effect.orDie) })))) as unknown as Effect.Effect<any, any, any>)
@@ -66,8 +65,8 @@ describe("sessionFork additional coverage", () => {
 
   it.live("fork publishes SessionV1.Event.Created and KiloSession registration", () =>
     Effect.gen(function* () {
-      const tmp = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
-      const dir = tmp.path
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
       const source = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.create({ title: "srcEvt" }) })))) as unknown as Effect.Effect<any, any, any>)
       const captured: any[] = []
       const handler = (ev: any) => {
@@ -103,54 +102,46 @@ describe("sessionFork additional coverage", () => {
 
   it.live("public raw fork rejects unknown fields before stripping", () =>
     Effect.gen(function* () {
-      const tmp = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
-      const dir = tmp.path
-      const listener = yield* Effect.promise(() => Server.listen({ hostname: "127.0.0.1", port: 0 }))
-      try {
-        const createUrl = new URL(`/session?directory=${encodeURIComponent(dir)}`, listener.url).toString()
-        const createRes = yield* Effect.promise(() => fetch(createUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "srcRaw" }) }))
-        expect(createRes.status).toBe(200)
-        const source = yield* Effect.promise(() => createRes.json() as Promise<{ id: string }>)
-        const token = "raw-" + Math.random().toString(36).slice(2, 6)
-        const opId = SessionOperation.forkId(source.id, token)
-        // Unknown root field should be rejected
-        const badBody1 = { messageID: undefined, unknownField: "evil", idempotencyKey: `fork:${source.id}:${token}`, requestId: "req-bad-root", opId, context: { directory: dir, sessionId: source.id, parentSessionId: null } }
-        const url1 = new URL(`/session/${source.id}/fork?directory=${encodeURIComponent(dir)}`, listener.url).toString()
-        const res1 = yield* Effect.promise(() => fetch(url1, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(badBody1) }))
-        expect(res1.status).toBe(400)
-        // Unknown context field should be rejected
-        const badBody2 = { idempotencyKey: `fork:${source.id}:${token}`, requestId: "req-bad-ctx", opId, context: { directory: dir, sessionId: source.id, parentSessionId: null, evilCtx: "x" } }
-        const res2 = yield* Effect.promise(() => fetch(url1, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(badBody2) }))
-        expect(res2.status).toBe(400)
-        // Bodyless legacy should still succeed (empty body)
-        const emptyRes = yield* Effect.promise(() => fetch(url1, { method: "POST", headers: { "Content-Type": "application/json" }, body: "" }))
-        // empty body triggers legacy fork (no durable context) -> should succeed 200
-        expect([200, 400].includes(emptyRes.status)).toBe(true)
-        if (emptyRes.status === 200) {
-          const data = yield* Effect.promise(() => emptyRes.json() as Promise<{ id: string }>)
-          expect(data.id).toBeDefined()
-        }
-      } finally {
-        yield* Effect.promise(() => listener.stop())
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
+      const listener = yield* Effect.acquireRelease(
+        Effect.promise(() => Server.listen({ hostname: "127.0.0.1", port: 0 })),
+        (l) => Effect.promise(() => l.stop()),
+      )
+      const createUrl = new URL(`/session?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const createRes = yield* Effect.promise(() => fetch(createUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "srcRaw" }) }))
+      expect(createRes.status).toBe(200)
+      const source = yield* Effect.promise(() => createRes.json() as Promise<{ id: string }>)
+      const token = "raw-" + Math.random().toString(36).slice(2, 6)
+      const opId = SessionOperation.forkId(source.id, token)
+      // Unknown root field should be rejected
+      const badBody1 = { messageID: undefined, unknownField: "evil", idempotencyKey: `fork:${source.id}:${token}`, requestId: "req-bad-root", opId, context: { directory: dir, sessionId: source.id, parentSessionId: null } }
+      const url1 = new URL(`/session/${source.id}/fork?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const res1 = yield* Effect.promise(() => fetch(url1, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(badBody1) }))
+      expect(res1.status).toBe(400)
+      // Unknown context field should be rejected
+      const badBody2 = { idempotencyKey: `fork:${source.id}:${token}`, requestId: "req-bad-ctx", opId, context: { directory: dir, sessionId: source.id, parentSessionId: null, evilCtx: "x" } }
+      const res2 = yield* Effect.promise(() => fetch(url1, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(badBody2) }))
+      expect(res2.status).toBe(400)
+      // Bodyless legacy should still succeed (empty body)
+      const emptyRes = yield* Effect.promise(() => fetch(url1, { method: "POST", headers: { "Content-Type": "application/json" }, body: "" }))
+      // empty body triggers legacy fork (no durable context) -> should succeed 200
+      expect([200, 400].includes(emptyRes.status)).toBe(true)
+      if (emptyRes.status === 200) {
+        const data = yield* Effect.promise(() => emptyRes.json() as Promise<{ id: string }>)
+        expect(data.id).toBeDefined()
       }
     }),
   )
 
-  it.live("durable fork with sandbox/cumulative diff failure does not report succeeded", () =>
+  it.live("durable fork validation failure for relative directory does not create session", () =>
     Effect.gen(function* () {
-      const tmp = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
-      const dir = tmp.path
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
       const source = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.create({ title: "srcFail" }) })))) as unknown as Effect.Effect<any, any, any>)
-      // Force a failure by making the target directory's sandbox policy fail?
-      // We can simulate by temporarily mocking SandboxPolicy.inherit to fail, but simpler check that current implementation does not swallow after success
-      // For this test, we verify that a normal fork succeeds and that the operation is not incorrectly marked succeeded when we inject a failure via invalid directory
       const token = "fail-" + Math.random().toString(36).slice(2, 8)
       const opId = SessionOperation.forkId(source.id, token)
-      // Use an absolute directory that is not a valid project (but canonicalDirectory will still accept it)
-      // The dispatch should still succeed for valid directory; we test that invalid payload still fails correctly without mutation
-      const badDir = path.join(dir, "..", "nonexistent-" + Math.random().toString(36).slice(2, 6))
-      // Ensure badDir is absolute but does not exist - Project.fromDirectory should still handle it (it will create project)
-      // Instead test that a validation failure does not create a session
+      // Test that a validation failure does not create a session
       const badReq = { v: 1 as const, requestId: "req-bad-dir", opId, op: "session/fork" as const, idempotencyKey: `fork:${source.id}:${token}`, context: { directory: "relative/path", sessionId: source.id, parentSessionId: null }, payload: {} }
       const badRes = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionForkDispatchService; return yield* d.dispatch(badReq) })))) as unknown as Effect.Effect<any, any, any>)
       expect(badRes.status).toBe("failed")
@@ -162,7 +153,7 @@ describe("sessionFork additional coverage", () => {
 
   it.live("openapi and SDK retain durable fork fields", () =>
     Effect.gen(function* () {
-      const openapiPath = path.resolve(import.meta.dir, "../../../../sdk/openapi.json")
+      const openapiPath = `${import.meta.dir}/../../../../sdk/openapi.json`
       const openapi = yield* Effect.promise(() => Bun.file(openapiPath).json() as Promise<any>)
       const fork = openapi.paths["/session/{sessionID}/fork"]?.post
       expect(fork).toBeDefined()
@@ -176,7 +167,7 @@ describe("sessionFork additional coverage", () => {
       expect(fork.responses?.["409"]).toBeDefined()
       expect(fork.responses?.["500"]).toBeDefined()
       // SDK v2 retains durable fields
-      const sdkPath = path.resolve(import.meta.dir, "../../../../sdk/js/src/v2/gen/types.gen.ts")
+      const sdkPath = `${import.meta.dir}/../../../../sdk/js/src/v2/gen/types.gen.ts`
       const sdkTypes = yield* Effect.promise(() => Bun.file(sdkPath).text())
       expect(sdkTypes.includes("SessionForkData")).toBe(true)
       expect(sdkTypes.includes("idempotencyKey")).toBe(true)
@@ -186,8 +177,8 @@ describe("sessionFork additional coverage", () => {
 
   it.live("ServePrivatePeer privateFork request/response validates exact committed result", () =>
     Effect.gen(function* () {
-      const tmp = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
-      const dir = tmp.path
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
       const source = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.create({ title: "privExact" }) })))) as unknown as Effect.Effect<any, any, any>)
       const token = "priv-exact-" + Math.random().toString(36).slice(2, 8)
       const opId = SessionOperation.forkId(source.id, token)
@@ -208,6 +199,127 @@ describe("sessionFork additional coverage", () => {
       expect(miss.status).toBe("failed")
       const list = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.list({}) })))) as unknown as Effect.Effect<any, any, any>)
       expect((list as any[]).filter((s) => s.parentID === source.id).length).toBe(1)
+    }),
+  )
+
+  it.live("durable fork query directory mismatch fails closed with 400 and no session/operation", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const dirOther = yield* tmpdirScoped({ git: true })
+      yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
+      const listener = yield* Effect.acquireRelease(
+        Effect.promise(() => Server.listen({ hostname: "127.0.0.1", port: 0 })),
+        (l) => Effect.promise(() => l.stop()),
+      )
+      const createUrl = new URL(`/session?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const createRes = yield* Effect.promise(() => fetch(createUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "srcMismatchQ" }) }))
+      expect(createRes.status).toBe(200)
+      const source = yield* Effect.promise(() => createRes.json() as Promise<{ id: string }>)
+      const token = "mismatch-q-" + Math.random().toString(36).slice(2, 6)
+      const opId = SessionOperation.forkId(source.id, token)
+      const idempotencyKey = `fork:${source.id}:${token}`
+      const body = { idempotencyKey, requestId: "req-mismatch-q", opId, context: { directory: dir, sessionId: source.id, parentSessionId: null } }
+      const url = new URL(`/session/${source.id}/fork?directory=${encodeURIComponent(dirOther)}`, listener.url).toString()
+      const res = yield* Effect.promise(() => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }))
+      expect(res.status).toBe(400)
+      // verify no child via HTTP children endpoint (same Server DB)
+      const childrenUrl = new URL(`/session/${source.id}/children?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const childrenRes = yield* Effect.promise(() => fetch(childrenUrl))
+      expect(childrenRes.status).toBe(200)
+      const children = yield* Effect.promise(() => childrenRes.json() as Promise<any[]>)
+      expect((children as any[]).length).toBe(0)
+      // verify no operation persisted: retry same key with correct directory should succeed
+      const retryUrl = new URL(`/session/${source.id}/fork?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const retryRes = yield* Effect.promise(() => fetch(retryUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }))
+      expect(retryRes.status).toBe(200)
+      const retryData = yield* Effect.promise(() => retryRes.json() as Promise<{ id: string }>)
+      expect(retryData.id).toBeDefined()
+      // after successful retry, children should be 1, proving first request did not create anything
+      const children2 = yield* Effect.promise(() => fetch(childrenUrl).then((r) => r.json() as Promise<any[]>))
+      expect((children2 as any[]).length).toBe(1)
+    }),
+  )
+
+  it.live("durable fork header directory mismatch fails closed with 400 and no session/operation", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const dirOther = yield* tmpdirScoped({ git: true })
+      yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
+      const listener = yield* Effect.acquireRelease(
+        Effect.promise(() => Server.listen({ hostname: "127.0.0.1", port: 0 })),
+        (l) => Effect.promise(() => l.stop()),
+      )
+      const createUrl = new URL(`/session?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const createRes = yield* Effect.promise(() => fetch(createUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "srcMismatchH" }) }))
+      expect(createRes.status).toBe(200)
+      const source = yield* Effect.promise(() => createRes.json() as Promise<{ id: string }>)
+      const token = "mismatch-h-" + Math.random().toString(36).slice(2, 6)
+      const opId = SessionOperation.forkId(source.id, token)
+      const idempotencyKey = `fork:${source.id}:${token}`
+      const body = { idempotencyKey, requestId: "req-mismatch-h", opId, context: { directory: dir, sessionId: source.id, parentSessionId: null } }
+      const url = new URL(`/session/${source.id}/fork`, listener.url).toString()
+      const res = yield* Effect.promise(() => fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-kilo-directory": dirOther }, body: JSON.stringify(body) }))
+      expect(res.status).toBe(400)
+      const childrenUrl = new URL(`/session/${source.id}/children?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const childrenRes = yield* Effect.promise(() => fetch(childrenUrl))
+      expect(childrenRes.status).toBe(200)
+      const children = yield* Effect.promise(() => childrenRes.json() as Promise<any[]>)
+      expect((children as any[]).length).toBe(0)
+      // retry with correct header should succeed, proving no operation leaked
+      const retryRes = yield* Effect.promise(() => fetch(url, { method: "POST", headers: { "Content-Type": "application/json", "x-kilo-directory": dir }, body: JSON.stringify(body) }))
+      expect(retryRes.status).toBe(200)
+    }),
+  )
+
+  it.live("durable fork canonical-equivalent directories succeed", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      const dirWithSlash = dir.endsWith("/") ? dir : dir + "/"
+      yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
+      const listener = yield* Effect.acquireRelease(
+        Effect.promise(() => Server.listen({ hostname: "127.0.0.1", port: 0 })),
+        (l) => Effect.promise(() => l.stop()),
+      )
+      const createUrl = new URL(`/session?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const createRes = yield* Effect.promise(() => fetch(createUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "srcCanon" }) }))
+      expect(createRes.status).toBe(200)
+      const source = yield* Effect.promise(() => createRes.json() as Promise<{ id: string }>)
+      const token = "canon-" + Math.random().toString(36).slice(2, 6)
+      const opId = SessionOperation.forkId(source.id, token)
+      const body = { idempotencyKey: `fork:${source.id}:${token}`, requestId: "req-canon", opId, context: { directory: dir, sessionId: source.id, parentSessionId: null } }
+      const url = new URL(`/session/${source.id}/fork?directory=${encodeURIComponent(dirWithSlash)}`, listener.url).toString()
+      const res = yield* Effect.promise(() => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) }))
+      expect(res.status).toBe(200)
+      const data = yield* Effect.promise(() => res.json() as Promise<{ id: string; directory: string }>)
+      expect(data.id).toBeDefined()
+      expect(data.directory).toBe(dir)
+      // verify via children endpoint that fork persisted
+      const childrenUrl = new URL(`/session/${source.id}/children?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const childrenRes = yield* Effect.promise(() => fetch(childrenUrl))
+      expect(childrenRes.status).toBe(200)
+      const children = yield* Effect.promise(() => childrenRes.json() as Promise<any[]>)
+      expect((children as any[]).length).toBe(1)
+      expect((children[0] as any).id).toBe(data.id)
+    }),
+  )
+
+  it.live("legacy bodyless fork still succeeds when query directory present", () =>
+    Effect.gen(function* () {
+      const dir = yield* tmpdirScoped({ git: true })
+      yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
+      const listener = yield* Effect.acquireRelease(
+        Effect.promise(() => Server.listen({ hostname: "127.0.0.1", port: 0 })),
+        (l) => Effect.promise(() => l.stop()),
+      )
+      const createUrl = new URL(`/session?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const createRes = yield* Effect.promise(() => fetch(createUrl, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: "srcLegacy" }) }))
+      expect(createRes.status).toBe(200)
+      const source = yield* Effect.promise(() => createRes.json() as Promise<{ id: string }>)
+      const url = new URL(`/session/${source.id}/fork?directory=${encodeURIComponent(dir)}`, listener.url).toString()
+      const res = yield* Effect.promise(() => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: "" }))
+      expect(res.status).toBe(200)
+      const data = yield* Effect.promise(() => res.json() as Promise<{ id: string }>)
+      expect(data.id).toBeDefined()
     }),
   )
 })
