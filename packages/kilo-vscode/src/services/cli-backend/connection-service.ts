@@ -12,6 +12,8 @@ import {
   type ServePrivateCancelQueuedResult,
   type ServePrivateSessionUpdateRequest,
   type ServePrivateSessionUpdateResult,
+  type ServePrivateForkRequest,
+  type ServePrivateForkResult,
   compareUpdateParity,
 } from "./serve-private-peer"
 import * as crypto from "crypto"
@@ -968,6 +970,45 @@ export class KiloConnectionService {
         accepted: false,
         transportUnknown: true,
       } as unknown as ServePrivateSessionUpdateResult
+    }
+    return result
+  }
+
+  async privateFork(req: ServePrivateForkRequest): Promise<ServePrivateForkResult> {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("session/fork")) {
+      throw new Error("Private peer missing session/fork capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const result = await peerAtCall.privateFork(req)
+    if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+      return {
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "session/fork",
+        idempotencyKey: req.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      } as unknown as ServePrivateForkResult
+    }
+    if (this.privatePeer !== peerAtCall) {
+      return {
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "session/fork",
+        idempotencyKey: req.idempotencyKey,
+        status: "ambiguous",
+        outcome: { type: "ambiguous", time: Date.now() },
+        accepted: false,
+        transportUnknown: true,
+      } as unknown as ServePrivateForkResult
     }
     return result
   }

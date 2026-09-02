@@ -69,7 +69,21 @@ export const UpdatePayload = Schema.Struct({
     }),
   ),
 })
-export const ForkPayload = Schema.Struct(Struct.omit(Session.ForkInput.fields, ["sessionID"]))
+export const ForkPayload = Schema.Struct({
+  messageID: Schema.optional(MessageID),
+  idempotencyKey: Schema.optional(Schema.String),
+  requestId: Schema.optional(Schema.String),
+  opId: Schema.optional(Schema.String),
+  context: Schema.optional(
+    Schema.Struct({
+      directory: Schema.String,
+      sessionId: SessionID,
+      parentSessionId: Schema.optional(Schema.NullOr(SessionID)),
+      configVersion: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }))),
+      sessionRevision: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }))),
+    }),
+  ),
+})
 export const InitPayload = Schema.Struct({
   modelID: ModelV2.ID,
   providerID: ProviderV2.ID,
@@ -264,7 +278,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: [HttpApiSchema.NoContent, ForkPayload], // kilocode_change - carry upstream bodyless full-session fork support
           success: described(Session.Info, "200"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError], // kilocode_change - carry upstream malformed payload response
+          error: [HttpApiError.BadRequest, ApiNotFoundError, HttpApiError.Conflict, HttpApiError.InternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.fork",

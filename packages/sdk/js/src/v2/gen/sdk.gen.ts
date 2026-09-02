@@ -4314,6 +4314,16 @@ export class Session2 extends HeyApiClient {
       directory?: string
       workspace?: string
       messageID?: string
+      idempotencyKey?: string
+      requestId?: string
+      opId?: string
+      context?: {
+        directory: string
+        sessionId: string
+        parentSessionId?: string | null
+        configVersion?: number
+        sessionRevision?: number
+      }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -4326,6 +4336,10 @@ export class Session2 extends HeyApiClient {
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
             { in: "body", key: "messageID" },
+            { in: "body", key: "idempotencyKey" },
+            { in: "body", key: "requestId" },
+            { in: "body", key: "opId" },
+            { in: "body", key: "context" },
           ],
         },
       ],

@@ -25,6 +25,21 @@ export namespace KiloSessionHttpApi {
           try: () => JSON.parse(body) as unknown,
           catch: () => new HttpApiError.BadRequest({}),
         })
+        // Strict unknown-field rejection before stripping (preserves bodyless legacy)
+        if (json !== null && typeof json === "object" && !Array.isArray(json)) {
+          const j = json as Record<string, unknown>
+          const allowedRoot = new Set(["messageID", "idempotencyKey", "requestId", "opId", "context"])
+          for (const k of Object.keys(j)) if (!allowedRoot.has(k)) return yield* new HttpApiError.BadRequest({})
+          const c = j.context as unknown
+          if (c !== null && typeof c === "object" && !Array.isArray(c)) {
+            const allowedCtx = new Set(["directory", "sessionId", "parentSessionId", "configVersion", "sessionRevision"])
+            for (const k of Object.keys(c as Record<string, unknown>)) if (!allowedCtx.has(k)) return yield* new HttpApiError.BadRequest({})
+          }
+          if ("payload" in j && j.payload !== null && typeof j.payload === "object" && !Array.isArray(j.payload)) {
+            const allowedPayload = new Set(["messageId"])
+            for (const k of Object.keys(j.payload as Record<string, unknown>)) if (!allowedPayload.has(k)) return yield* new HttpApiError.BadRequest({})
+          }
+        }
         return yield* Schema.decodeUnknownEffect(ForkPayload)(json).pipe(
           Effect.mapError(() => new HttpApiError.BadRequest({})),
         )

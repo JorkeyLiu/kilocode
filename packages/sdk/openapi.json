@@ -7141,6 +7141,26 @@
                 }
               }
             }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/effect_HttpApiError_Conflict"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "InternalServerError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/effect_HttpApiError_InternalServerError"
+                }
+              }
+            }
           }
         },
         "description": "Create a new session by forking an existing session at a specific message point.",
@@ -7154,6 +7174,53 @@
                   "messageID": {
                     "type": "string",
                     "pattern": "^msg"
+                  },
+                  "idempotencyKey": {
+                    "type": "string"
+                  },
+                  "requestId": {
+                    "type": "string"
+                  },
+                  "opId": {
+                    "type": "string"
+                  },
+                  "context": {
+                    "type": "object",
+                    "properties": {
+                      "directory": {
+                        "type": "string"
+                      },
+                      "sessionId": {
+                        "type": "string",
+                        "pattern": "^ses"
+                      },
+                      "parentSessionId": {
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "pattern": "^ses"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "configVersion": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      },
+                      "sessionRevision": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": [
+                      "directory",
+                      "sessionId"
+                    ],
+                    "additionalProperties": false
                   }
                 },
                 "additionalProperties": false
@@ -19429,9 +19496,6 @@
             "$ref": "#/components/schemas/EventKilo-sessionsRemote-status-changed"
           },
           {
-            "$ref": "#/components/schemas/EventModels-devRefreshed"
-          },
-          {
             "$ref": "#/components/schemas/EventServerConnected"
           },
           {
@@ -22964,9 +23028,6 @@
               },
               {
                 "$ref": "#/components/schemas/EventKilo-sessionsRemote-status-changed"
-              },
-              {
-                "$ref": "#/components/schemas/EventModels-devRefreshed"
               },
               {
                 "$ref": "#/components/schemas/EventServerConnected"
@@ -31715,30 +31776,6 @@
               "connected"
             ],
             "additionalProperties": false
-          }
-        },
-        "required": [
-          "id",
-          "type",
-          "properties"
-        ],
-        "additionalProperties": false
-      },
-      "EventModels-devRefreshed": {
-        "type": "object",
-        "properties": {
-          "id": {
-            "type": "string"
-          },
-          "type": {
-            "type": "string",
-            "enum": [
-              "models-dev.refreshed"
-            ]
-          },
-          "properties": {
-            "type": "object",
-            "properties": {}
           }
         },
         "required": [

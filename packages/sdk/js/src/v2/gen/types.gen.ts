@@ -26,7 +26,6 @@ export type Event =
   | EventKilocodeNotebookRequested
   | EventKilocodeNotebookCancelled
   | EventKiloSessionsRemoteStatusChanged
-  | EventModelsDevRefreshed
   | EventServerConnected
   | EventGlobalDisposed
   | EventGlobalConfigUpdated
@@ -982,7 +981,6 @@ export type GlobalEvent = {
     | EventKilocodeNotebookRequested
     | EventKilocodeNotebookCancelled
     | EventKiloSessionsRemoteStatusChanged
-    | EventModelsDevRefreshed
     | EventServerConnected
     | EventGlobalDisposed
     | EventGlobalConfigUpdated
@@ -3412,14 +3410,6 @@ export type EventKiloSessionsRemoteStatusChanged = {
   properties: {
     enabled: boolean
     connected: boolean
-  }
-}
-
-export type EventModelsDevRefreshed = {
-  id: string
-  type: "models-dev.refreshed"
-  properties: {
-    [key: string]: unknown
   }
 }
 
@@ -8617,6 +8607,16 @@ export type SessionMessageResponse = SessionMessageResponses[keyof SessionMessag
 export type SessionForkData = {
   body?: {
     messageID?: string
+    idempotencyKey?: string
+    requestId?: string
+    opId?: string
+    context?: {
+      directory: string
+      sessionId: string
+      parentSessionId?: string | null
+      configVersion?: number
+      sessionRevision?: number
+    }
   }
   path: {
     sessionID: string
@@ -8637,6 +8637,14 @@ export type SessionForkErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type SessionForkError = SessionForkErrors[keyof SessionForkErrors]

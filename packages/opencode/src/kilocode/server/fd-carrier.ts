@@ -4,6 +4,7 @@ import { ErrorCode } from "@/private-worker/json-rpc"
 import { AppRuntime } from "@/effect/app-runtime"
 import { CancelQueuedDispatchService } from "@/kilocode/session/cancel-queued-dispatch"
 import { SessionUpdateDispatchService } from "@/kilocode/session/session-update-dispatch"
+import { SessionForkDispatchService } from "@/kilocode/session/session-fork-dispatch"
 import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
 
@@ -115,6 +116,21 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
             const fn = (svc as unknown as { dispatchPrivate?: (p: unknown) => Effect.Effect<unknown> }).dispatchPrivate
             if (!fn) {
               const err = new Error("session/update private replay unavailable") as Error & { code: number }
+              err.code = ErrorCode.MethodNotFound
+              throw err
+            }
+            return yield* (fn as (p: unknown) => Effect.Effect<unknown>)(params)
+          }),
+        )
+        return result
+      }
+      if (method === "session/fork") {
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const svc = yield* SessionForkDispatchService
+            const fn = (svc as unknown as { dispatchPrivate?: (p: unknown) => Effect.Effect<unknown> }).dispatchPrivate
+            if (!fn) {
+              const err = new Error("session/fork private replay unavailable") as Error & { code: number }
               err.code = ErrorCode.MethodNotFound
               throw err
             }

@@ -874,7 +874,7 @@ export class AgentManagerProvider implements Disposable {
     this.pushState()
   }
 
-  /** Fork a session via the CLI backend (local-only). */
+  /** Fork a session via the CLI backend (local-only) — shared durable SDK-first/private-observation path. */
   private async onForkSession(sessionId: string, messageId?: string): Promise<void> {
     let client: KiloClient
     try {
@@ -884,19 +884,24 @@ export class AgentManagerProvider implements Disposable {
       this.postToWebview({ type: "error", message: "Not connected to CLI backend" })
       return
     }
-
     const directory = this.getRoot()
+    if (!directory) {
+      this.postToWebview({ type: "error", message: "Workspace root not available" })
+      return
+    }
+    const { buildForkIdentity, executeDurableFork, observeForkParity } = await import("../kilo-provider/fork-session")
+    const identity = buildForkIdentity(sessionId)
+    const params = { sessionId, directory, messageId, opId: identity.opId, idempotencyKey: identity.idempotencyKey, requestId: identity.requestId }
     let forked: Session
     try {
-      const input = { sessionID: sessionId, directory, ...(messageId ? { messageID: messageId } : {}) }
-      const { data } = await client.session.fork(input, { throwOnError: true })
-      forked = data
+      const res = await executeDurableFork(client, params)
+      forked = res.data
+      await observeForkParity(this.connectionService, { data: res.data, response: res.response }, params)
     } catch (error) {
       const err = getErrorMessage(error)
       this.postToWebview({ type: "error", message: `Failed to fork session: ${err}` })
       return
     }
-
     this.addSession(forked.id, { recent: true })
     this.activeSessionId = forked.id
     this.schedulePersist()

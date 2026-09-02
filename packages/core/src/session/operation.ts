@@ -12,7 +12,7 @@ import { SessionRevision } from "./revision"
 // ---------------------------------------------------------------------------
 // R12-compatible record shape (persist tier = full redacted record)
 // ---------------------------------------------------------------------------
-export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate"] as const
+export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork"] as const
 export type OpKind = (typeof OP_KINDS)[number]
 
 export const OUTCOMES = ["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"] as const
@@ -198,6 +198,17 @@ export function sessionUpdateId(sessionID: string, token?: string): string {
   return `sessionUpdate:${sessionID}`
 }
 
+export function forkId(sessionID: string, token?: string): string {
+  if (typeof sessionID !== "string" || sessionID.length === 0) throw new TypeError("sessionID must be non-empty string")
+  assertNoColon(sessionID, "sessionID")
+  if (token !== undefined) {
+    if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
+    assertNoColon(token, "token")
+    return `fork:${sessionID}:${token}`
+  }
+  return `fork:${sessionID}`
+}
+
 export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
   const segments = opId.split(":")
@@ -224,6 +235,9 @@ export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   } else if (kind === "sessionUpdate") {
     if (rest.length !== 1 && rest.length !== 2) throw new TypeError(`sessionUpdate opId must have 1 or 2 segments: ${opId}`)
     if (rest.length === 2 && rest[1]!.length === 0) throw new TypeError(`sessionUpdate token must be non-empty: ${opId}`)
+  } else if (kind === "fork") {
+    if (rest.length !== 1 && rest.length !== 2) throw new TypeError(`fork opId must have 1 or 2 segments: ${opId}`)
+    if (rest.length === 2 && rest[1]!.length === 0) throw new TypeError(`fork token must be non-empty: ${opId}`)
   }
   return { kind: kind as OpKind, parts: rest }
 }
@@ -883,5 +897,172 @@ export function insertSessionUpdateSucceededTx(
       .pipe(Effect.orDie)
     if (!rowRaw) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
     return rowToSessionUpdateRecord(rowRaw as typeof SessionOperationTable.$inferSelect)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Fork durable helpers (P4.4-G3-B3 fork)
+// ---------------------------------------------------------------------------
+export interface SessionForkMeta {
+  idempotencyHash: string
+  requestId: string
+  directory: string
+  parentSessionId?: string | null
+  configVersion?: number | null
+  sessionRevision?: number | null
+  messageId?: string | null
+  forkedSessionId?: string | null
+}
+
+export interface SessionForkRecord extends FailureRecord {
+  meta: SessionForkMeta
+  resultSnapshot?: unknown
+  revision: number
+}
+
+function rowToSessionForkRecord(row: typeof SessionOperationTable.$inferSelect): SessionForkRecord {
+  const base = rowToRecord(row)
+  let snapshot: unknown | undefined
+  const rawSnap = (row as unknown as Record<string, unknown>).result_snapshot as string | null | undefined
+  if (rawSnap !== null && rawSnap !== undefined) {
+    if (typeof rawSnap === "string") {
+      try {
+        snapshot = JSON.parse(rawSnap)
+      } catch {
+        snapshot = rawSnap
+      }
+    } else {
+      snapshot = rawSnap
+    }
+  }
+  return {
+    ...base,
+    revision: row.revision as number,
+    meta: {
+      idempotencyHash: row.idempotency_hash ?? "",
+      requestId: row.request_id ?? "",
+      directory: row.directory ?? "",
+      parentSessionId: row.parent_session_id ?? null,
+      configVersion: row.config_version ?? null,
+      sessionRevision: row.session_revision ?? null,
+      messageId: row.message_id ?? null,
+      forkedSessionId: row.title ? row.title : null,
+    },
+    ...(snapshot !== undefined ? { resultSnapshot: snapshot } : {}),
+  }
+}
+
+export function getSessionForkByIdempotencyHash(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+  hash: string,
+): Effect.Effect<SessionForkRecord | undefined> {
+  return Effect.gen(function* () {
+    if (typeof hash !== "string" || hash.length === 0) yield* Effect.die(new TypeError("hash must be non-empty string"))
+    const row = yield* db
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.session_id, sessionID), eq(SessionOperationTable.idempotency_hash, hash)))
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return undefined
+    if ((row.op_kind as string) !== "fork") return rowToSessionForkRecord(row as typeof SessionOperationTable.$inferSelect)
+    return rowToSessionForkRecord(row as typeof SessionOperationTable.$inferSelect)
+  }).pipe(Effect.orDie) as Effect.Effect<SessionForkRecord | undefined>
+}
+
+export function getSessionForkByIdempotencyHashTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  hash: string,
+): Effect.Effect<SessionForkRecord | undefined> {
+  return Effect.gen(function* () {
+    const row = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(and(eq(SessionOperationTable.session_id, sessionID), eq(SessionOperationTable.idempotency_hash, hash)))
+      .get()
+      .pipe(Effect.orDie)
+    if (!row) return undefined
+    return rowToSessionForkRecord(row as typeof SessionOperationTable.$inferSelect)
+  }).pipe(Effect.orDie) as Effect.Effect<SessionForkRecord | undefined>
+}
+
+export function isSessionForkConflict(
+  prev: SessionForkRecord,
+  next: {
+    opId: string
+    directory: string
+    parentSessionId?: string | null
+    configVersion?: number | null
+    sessionRevision?: number | null
+    messageId?: string | null
+  },
+): boolean {
+  if (prev.opId !== next.opId) return true
+  if (prev.meta.directory !== next.directory) return true
+  if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
+  if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
+  if ((prev.meta.sessionRevision ?? null) !== (next.sessionRevision ?? null)) return true
+  if ((prev.meta.messageId ?? null) !== (next.messageId ?? null)) return true
+  return false
+}
+
+export function insertSessionForkSucceededTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+  meta: SessionForkMeta,
+  snapshotJson: string | null,
+): Effect.Effect<SessionForkRecord> {
+  return Effect.gen(function* () {
+    validateRecord(record)
+    if (record.outcome !== "succeeded") yield* Effect.die(new Error("insertSessionForkSucceededTx requires succeeded outcome"))
+    if (record.opKind !== "fork") yield* Effect.die(new Error("insertSessionForkSucceededTx requires fork opKind"))
+    const normalized = normalizeRecord(record)
+    const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, sessionID)).get().pipe(Effect.orDie)
+    if (!session) yield* Effect.die(new Error(`session not found ${sessionID}`))
+    // fork does not bump source revision, but we record current source revision
+    const cur = yield* tx
+      .select({ rev: SessionTable.revision })
+      .from(SessionTable)
+      .where(eq(SessionTable.id, sessionID))
+      .get()
+      .pipe(Effect.orDie)
+    const nextRev = cur ? (cur as unknown as { rev: number }).rev : 0
+    yield* tx
+      .insert(SessionOperationTable)
+      .values({
+        op_id: normalized.opId,
+        session_id: sessionID,
+        op_kind: normalized.opKind,
+        outcome: normalized.outcome,
+        code: normalized.code,
+        message: normalized.message,
+        time: normalized.time,
+        cancel: normalized.cancel?.source ?? null,
+        detail: normalized.detail ?? null,
+        stack: normalized.stack ?? null,
+        revision: nextRev,
+        idempotency_hash: meta.idempotencyHash,
+        request_id: meta.requestId,
+        directory: meta.directory,
+        message_id: meta.messageId ?? null,
+        parent_session_id: meta.parentSessionId ?? null,
+        config_version: meta.configVersion ?? null,
+        session_revision: meta.sessionRevision ?? null,
+        title: meta.forkedSessionId ?? null,
+        result_snapshot: snapshotJson,
+      } as unknown as typeof SessionOperationTable.$inferInsert)
+      .run()
+      .pipe(Effect.orDie)
+    const rowRaw = yield* tx
+      .select()
+      .from(SessionOperationTable)
+      .where(eq(SessionOperationTable.op_id, normalized.opId))
+      .get()
+      .pipe(Effect.orDie)
+    if (!rowRaw) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
+    return rowToSessionForkRecord(rowRaw as typeof SessionOperationTable.$inferSelect)
   })
 }

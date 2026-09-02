@@ -110,6 +110,18 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     count: 146,
     reason: "B2 EventV2 atomic propagation integration test via AppRuntime and InstanceRef (concurrent distinct, fault-injection rollback, aggregateEvents propagation, prior/future generation, same-key replay, seq monotonic, location regressions, notify isolation, deterministic aggregate rollback, present invalid resultSnapshot fail-closed, empty-string present invalid, JSON null text present invalid)",
   },
+  "kilocode/session/session-fork-b3.test.ts": {
+    count: 30,
+    reason: "B3 durable fork integration test via AppRuntime and InstanceRef (success, replay, conflict, validation, private replay, HTTP, fd-carrier)",
+  },
+  "kilocode/session/session-fork-regression.test.ts": {
+    count: 21,
+    reason: "B3 fork regression: transcript checkpoint, cross-directory, stale, SDK payload, private validation",
+  },
+  "kilocode/session/session-fork-additional.test.ts": {
+    count: 16,
+    reason: "B3 fork additional: cross-directory identity, event, raw unknown-field, SDK generation, private exact",
+  },
 }
 
 const owned = (file: string) => file.startsWith("kilocode/") || file.startsWith("kilo-sessions/")

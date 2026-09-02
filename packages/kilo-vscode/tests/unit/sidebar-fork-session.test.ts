@@ -12,7 +12,11 @@ function ctx(overrides: Partial<ForkContext> = {}): ForkContext {
     },
   }
   return {
-    connection: { getClient: () => client } as never,
+    connection: {
+      getClient: () => client,
+      isPrivateAvailable: () => false,
+      privateFork: mock(async () => ({ v: 1, requestId: "r", opId: "fork:source:x", op: "session/fork", idempotencyKey: "k", status: "failed", outcome: { type: "failed", time: Date.now(), failure: { code: "internal", message: "no", retryable: false } }, accepted: false, failure: { code: "internal", message: "no", retryable: false } })),
+    } as never,
     post: () => undefined,
     register: () => undefined,
     forked: () => undefined,

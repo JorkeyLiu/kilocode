@@ -5,6 +5,7 @@ import { PermissionV1 } from "@opencode-ai/core/v1/permission"
 import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
 import { CancelQueuedDispatchService, type CancelQueuedResult } from "@/kilocode/session/cancel-queued-dispatch" // kilocode_change - P4.4-G3-B0
 import { SessionUpdateDispatchService, type SessionUpdateResult } from "@/kilocode/session/session-update-dispatch" // kilocode_change - P4.4-G3-B2 durable title
+import { SessionForkDispatchService, type SessionForkResult } from "@/kilocode/session/session-fork-dispatch" // kilocode_change - P4.4-G3-B3 fork
 import { SessionOperation } from "@opencode-ai/core/session/operation" // kilocode_change - LOCK-201 canonical opId
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -307,10 +308,64 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* updateCore(ctx.params.sessionID, decoded)
     })
 
+    const forkDispatch = yield* SessionForkDispatchService // kilocode_change - P4.4-G3-B3 fork
     const fork = Effect.fn("SessionHttpApi.fork")(function* (ctx: {
       params: { sessionID: SessionID }
       payload?: typeof ForkPayload.Type
     }) {
+      const p = ctx.payload as unknown as { idempotencyKey?: string; requestId?: string; opId?: string; context?: unknown; messageID?: string }
+      const isDurable =
+        p?.idempotencyKey !== undefined || p?.requestId !== undefined || p?.opId !== undefined || p?.context !== undefined
+      if (isDurable) {
+        if (p?.idempotencyKey === undefined || p?.requestId === undefined || p?.opId === undefined)
+          return yield* new HttpApiError.BadRequest({})
+        if (p?.context === undefined) return yield* new HttpApiError.BadRequest({})
+        const c = p.context as Record<string, unknown>
+        if (typeof c.sessionId !== "string" || c.sessionId !== ctx.params.sessionID) return yield* new HttpApiError.BadRequest({})
+        if (typeof c.directory !== "string" || c.directory.length === 0) return yield* new HttpApiError.BadRequest({})
+        const req = {
+          v: 1 as const,
+          requestId: p.requestId as string,
+          opId: p.opId as string,
+          op: "session/fork" as const,
+          idempotencyKey: p.idempotencyKey as string,
+          context: {
+            directory: c.directory as string,
+            sessionId: ctx.params.sessionID,
+            parentSessionId: (c.parentSessionId ?? null) as string | null,
+            configVersion: c.configVersion as number | undefined,
+            sessionRevision: c.sessionRevision as number | undefined,
+          },
+          payload: { messageId: (p.messageID as string | undefined) ?? null },
+        }
+        const result = yield* (forkDispatch.dispatch(req).pipe(
+          Effect.catchDefect(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+          Effect.catch(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+        ) as Effect.Effect<SessionForkResult, HttpApiError.InternalServerError>)
+        if (result.status === "succeeded") return result.data
+        if (result.status === "failed") {
+          if (result.failure.code === "session.not_found") {
+            return yield* Effect.fail(new ApiNotFoundError({ name: "NotFoundError", data: { message: result.failure.message } }))
+          }
+          if (result.failure.code === "validation.failed") {
+            return yield* Effect.fail(new HttpApiError.BadRequest({}))
+          }
+          if (result.failure.code === "scope_mismatch") {
+            return yield* Effect.fail(new HttpApiError.BadRequest({}))
+          }
+          if (result.failure.code === "stale" || result.failure.code === "conflict") {
+            return yield* Effect.fail(new HttpApiError.Conflict({}))
+          }
+          if (result.failure.code === "InstanceUnavailableDuringConfigRebuild") {
+            return yield* Effect.fail(new HttpApiError.Conflict({}))
+          }
+          if (result.failure.code === "internal") {
+            return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+          }
+          return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+        }
+        return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+      }
       return yield* SessionError.mapStorageNotFound(
         session.fork({
           sessionID: ctx.params.sessionID,
