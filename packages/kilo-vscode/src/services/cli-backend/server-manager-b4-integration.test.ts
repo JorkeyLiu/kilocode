@@ -48,7 +48,7 @@ function makeCtx(storage: string, extensionPath: string): unknown {
 }
 
 describe("ServerManager → real kilo serve → fd3/fd4 → SessionCreate durable production", () => {
-  test.skipIf(process.platform !== "darwin")(
+  test.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
     "covers SDK durable create + private replay same revision/no duplicate, restart epoch/capability, private-unavailable/fail-closed authoritative",
     async () => {
       const extensionPath = path.resolve(import.meta.dir, "../../..")

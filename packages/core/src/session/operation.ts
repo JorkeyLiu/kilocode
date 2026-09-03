@@ -250,6 +250,24 @@ export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   return { kind: kind as OpKind, parts: rest }
 }
 
+export function parseForkOpIdForSession(opId: string, sessionId: string): { kind: "fork"; sessionId: string; token?: string } {
+  if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
+  if (typeof sessionId !== "string" || sessionId.length === 0) throw new TypeError("sessionId must be non-empty string")
+  const prefix = `fork:${sessionId}`
+  if (opId === prefix) return { kind: "fork", sessionId }
+  if (opId.startsWith(prefix + ":")) {
+    const token = opId.slice(prefix.length + 1)
+    if (token.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
+    if (token.includes(":")) throw new TypeError(`token must not contain ':'`)
+    return { kind: "fork", sessionId, token }
+  }
+  const parsed = parseOpId(opId)
+  if (parsed.kind !== "fork") throw new TypeError(`opId kind must be fork: ${opId}`)
+  if (parsed.parts[0] !== sessionId) throw new TypeError(`opId session binding mismatch: ${opId} vs ${sessionId}`)
+  if (parsed.parts.length === 1) return { kind: "fork", sessionId }
+  return { kind: "fork", sessionId, token: parsed.parts[1] }
+}
+
 function assertOpIdMatchesKind(opId: string, opKind: OpKind) {
   const parsed = parseOpId(opId)
   if (parsed.kind !== opKind) throw new TypeError(`opId kind ${parsed.kind} does not match record opKind ${opKind}`)
@@ -293,6 +311,51 @@ export function validateRecord(record: unknown): FailureRecord {
   const stack = r["stack"]
   if (stack !== undefined && typeof stack !== "string") throw new TypeError("stack must be string")
   // reject unexpected keys beyond the 9
+  const allowed = new Set(["opId", "opKind", "outcome", "code", "message", "time", "cancel", "detail", "stack"])
+  for (const k of Object.keys(r)) if (!allowed.has(k)) throw new TypeError(`unexpected field ${k}`)
+  return r as unknown as FailureRecord
+}
+
+// ---------------------------------------------------------------------------
+// Fork session-aware validation (colon-containing SessionID parity)
+// Generic validateRecord/parseOpId remain unchanged; fork persistence uses
+// session-bound parse so SessionIDs accepted by request validation (e.g.
+// "ses:colon:id") are accepted at the succeeded-record insertion boundary.
+// Token colon rejection and session binding stay strict via the bound parser.
+// ---------------------------------------------------------------------------
+export function validateForkRecordForSession(record: unknown, sessionId: string): FailureRecord {
+  if (typeof sessionId !== "string" || sessionId.length === 0) throw new TypeError("sessionId must be non-empty string")
+  if (record === null || typeof record !== "object") throw new TypeError("record must be object")
+  const r = record as Record<string, unknown>
+  const opId = r["opId"]
+  if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
+  parseForkOpIdForSession(opId, sessionId)
+  const opKind = r["opKind"]
+  if (opKind !== "fork") throw new TypeError(`opKind must be fork for fork record`)
+  const outcome = r["outcome"]
+  if (typeof outcome !== "string" || !outcomeSet.has(outcome))
+    throw new TypeError(`outcome must be one of ${OUTCOMES.join(", ")}`)
+  const code = r["code"]
+  if (typeof code !== "string" || code.length === 0) throw new TypeError("code must be non-empty string")
+  const message = r["message"]
+  if (typeof message !== "string") throw new TypeError("message must be string")
+  const time = r["time"]
+  if (typeof time !== "number" || !Number.isFinite(time)) throw new TypeError("time must be finite number")
+  const cancel = r["cancel"]
+  if (cancel !== undefined) {
+    if (cancel === null || typeof cancel !== "object" || Array.isArray(cancel))
+      throw new TypeError("cancel must be object")
+    const c = cancel as Record<string, unknown>
+    const source = c["source"]
+    if (typeof source !== "string" || !cancelSet.has(source))
+      throw new TypeError(`cancel.source must be one of ${CANCEL_SOURCES.join(", ")}`)
+    const extraKeys = Object.keys(c).filter((k) => k !== "source")
+    if (extraKeys.length > 0) throw new TypeError(`cancel has extra keys: ${extraKeys.join(",")}`)
+  }
+  const detail = r["detail"]
+  if (detail !== undefined && typeof detail !== "string") throw new TypeError("detail must be string")
+  const stack = r["stack"]
+  if (stack !== undefined && typeof stack !== "string") throw new TypeError("stack must be string")
   const allowed = new Set(["opId", "opKind", "outcome", "code", "message", "time", "cancel", "detail", "stack"])
   for (const k of Object.keys(r)) if (!allowed.has(k)) throw new TypeError(`unexpected field ${k}`)
   return r as unknown as FailureRecord
@@ -1035,7 +1098,7 @@ export function insertSessionForkSucceededTx(
   snapshotJson: string | null,
 ): Effect.Effect<SessionForkRecord> {
   return Effect.gen(function* () {
-    validateRecord(record)
+    validateForkRecordForSession(record, sessionID as unknown as string)
     if (record.outcome !== "succeeded") yield* Effect.die(new Error("insertSessionForkSucceededTx requires succeeded outcome"))
     if (record.opKind !== "fork") yield* Effect.die(new Error("insertSessionForkSucceededTx requires fork opKind"))
     const normalized = normalizeRecord(record)

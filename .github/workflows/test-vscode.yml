@@ -9,12 +9,16 @@ on:
       - "packages/kilo-vscode/**"
       - "packages/ui/**"
       - "packages/kilo-ui/**"
+      - "packages/opencode/**"
+      - "packages/core/**"
       - ".github/workflows/test-vscode.yml"
   pull_request:
     paths:
       - "packages/kilo-vscode/**"
       - "packages/ui/**"
       - "packages/kilo-ui/**"
+      - "packages/opencode/**"
+      - "packages/core/**"
       - ".github/workflows/test-vscode.yml"
   workflow_dispatch:
 
@@ -49,3 +53,32 @@ jobs:
       - name: Check for dead code (knip)
         working-directory: packages/kilo-vscode
         run: bun run knip
+
+  b4-production:
+    name: B4 production carrier (linux)
+    runs-on: blacksmith-4vcpu-ubuntu-2404 # kilocode_change
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6 # kilocode_change
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Bun
+        uses: ./.github/actions/setup-bun
+
+      # Same repository-supported binary setup as vscode-e2e.yml: stage the
+      # compiled CLI at packages/kilo-vscode/bin/kilo via script/local-bin.ts.
+      # KILO_SKIP_BUNDLED_BWRAP is scoped to this step (no Zig on the runner;
+      # the B4 fixture path never invokes sandbox tooling).
+      - name: Build bundled CLI binary for the extension
+        working-directory: packages/kilo-vscode
+        env:
+          KILO_SKIP_BUNDLED_BWRAP: "1"
+        run: bun script/local-bin.ts
+
+      - name: Run B4 production carrier test
+        working-directory: packages/kilo-vscode
+        run: bun test src/services/cli-backend/server-manager-b4-integration.test.ts

@@ -147,18 +147,14 @@ export function validateRequest(raw: unknown): SessionForkRequest {
   const allowedPayload = new Set(["messageId"])
   for (const k of Object.keys(p)) if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
   try {
-    const parsed = SessionOperation.parseOpId(o.opId as string)
-    if (parsed.kind !== "fork") throw new Error(`opId kind must be fork: ${o.opId}`)
-    if (parsed.parts[0] !== c.sessionId) throw new Error(`opId session binding mismatch: ${o.opId} vs ${c.sessionId}`)
+    SessionOperation.parseForkOpIdForSession(o.opId as string, c.sessionId as string)
   } catch (e) {
     throw new Error(e instanceof Error ? e.message : String(e))
   }
-  // Canonical identity: opId and idempotencyKey must be identical; colon in token rejected by parseOpId
+  // Canonical identity: opId and idempotencyKey must be identical; token colon rejected by bound fork parse
   if (o.idempotencyKey !== o.opId) throw new Error("idempotencyKey must equal opId for fork")
   try {
-    const parsedKey = SessionOperation.parseOpId(o.idempotencyKey as string)
-    if (parsedKey.kind !== "fork") throw new Error(`idempotencyKey kind must be fork: ${o.idempotencyKey}`)
-    if (parsedKey.parts[0] !== c.sessionId) throw new Error(`idempotencyKey session binding mismatch: ${o.idempotencyKey} vs ${c.sessionId}`)
+    SessionOperation.parseForkOpIdForSession(o.idempotencyKey as string, c.sessionId as string)
   } catch (e) {
     throw new Error(e instanceof Error ? e.message : String(e))
   }
@@ -341,7 +337,10 @@ export const layer = Layer.effect(
         const time = Date.now()
         const opIdSafe = (() => {
           try {
-            SessionOperation.parseOpId(opId)
+            const ctx = (fallback as Record<string, unknown>)?.context as Record<string, unknown> | undefined
+            const sid = ctx?.sessionId
+            if (typeof sid === "string" && sid.length > 0) SessionOperation.parseForkOpIdForSession(opId, sid)
+            else SessionOperation.parseOpId(opId)
             return opId
           } catch {
             return `fork:ses_unknown`
@@ -1190,7 +1189,10 @@ export const layer = Layer.effect(
         const time = Date.now()
         const opIdSafe = (() => {
           try {
-            SessionOperation.parseOpId(opId)
+            const ctx = (fallback as Record<string, unknown>)?.context as Record<string, unknown> | undefined
+            const sid = ctx?.sessionId
+            if (typeof sid === "string" && sid.length > 0) SessionOperation.parseForkOpIdForSession(opId, sid)
+            else SessionOperation.parseOpId(opId)
             return opId
           } catch {
             return `fork:ses_unknown`
