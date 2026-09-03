@@ -1,4 +1,5 @@
 import * as vscode from "vscode"
+import { normalize, resolve } from "path"
 import { ServerManager } from "./server-manager"
 import { createKiloClient, type KiloClient } from "@kilocode/sdk/v2/client"
 import { SdkSSEAdapter, type SSEPayload } from "./sdk-sse-adapter"
@@ -16,6 +17,9 @@ import {
   type ServePrivateForkResult,
   type ServePrivateCreateRequest,
   type ServePrivateCreateResult,
+  type PrivateStatusWireOutcome,
+  type ServePrivateStatusRequest,
+  type ServePrivateStatusResult,
   compareUpdateParity,
 } from "./serve-private-peer"
 import * as crypto from "crypto"
@@ -23,6 +27,14 @@ import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
+/**
+ * B5 status-observer cancel classification (LOCK-007). `true` is exact
+ * cancellation success (current peer preserved), `false` is a current-epoch
+ * miss/throw (owner must fail-closed invalidate the current peer), and
+ * `"stale"` is a replaced-epoch cleanup (only the captured peer was
+ * touched; the owner must never invalidate the replacement peer).
+ */
+export type PrivateStatusObserverCancelResult = boolean | "stale"
 type SSEEventListener = (event: SSEPayload, directory?: string, transaction?: string) => void
 type StateListener = (state: ConnectionState, error?: Error) => void
 type SSEEventFilter = (event: SSEPayload, directory?: string) => boolean
@@ -123,6 +135,21 @@ export class KiloConnectionService {
   private privateAvailable = false
   private privateEpoch: number | null = null
   private privatePid: number | undefined
+  /**
+   * One-shot late observers (status parity seed race): listeners run once
+   * when the current backend's private negotiation completes. Cleared on
+   * connection reset/dispose/invalidation so a stale seed never observes
+   * against a later backend.
+   */
+  private readonly privateAvailableListeners: Set<() => void> = new Set()
+  /**
+   * Keyed deferred status observers: at most one deferred private status
+   * observation per backend epoch + effective directory. Wrappers live in
+   * `privateAvailableListeners` too, so notify/reset paths treat them as
+   * ordinary one-shot listeners; the map only provides the dedupe key.
+   * No timers, no polling, no detached work.
+   */
+  private readonly deferredStatusObservers: Map<string, () => void> = new Map()
   // Lazy fixture-only replay state: single active operation, recorded only
   // after successful SDK result, cleared on dispose/prune, retained across
   // child restart within same Extension Host, no production allocation.
@@ -664,6 +691,8 @@ export class KiloConnectionService {
     this.questionRevision += 1
     this.seenConfigTransactions.clear()
     this.configRevisionListeners.clear()
+    this.privateAvailableListeners.clear()
+    this.clearAllDeferredStatusObservers()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -704,6 +733,8 @@ export class KiloConnectionService {
   private resetConnection(): void {
     this.stopCheckin()
     this.disposePrivatePeer()
+    this.privateAvailableListeners.clear()
+    this.clearAllDeferredStatusObservers()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -898,6 +929,64 @@ export class KiloConnectionService {
     this.privateAvailable = false
     this.privateEpoch = null
     this.privatePid = undefined
+    this.privateAvailableListeners.clear()
+    this.clearAllDeferredStatusObservers()
+  }
+
+  /**
+   * Deferred status observer key: current backend epoch plus effective
+   * (canonicalized) directory. Duplicate seeds for the same backend and
+   * directory share one key, hence one deferred observation.
+   */
+  deferredStatusObserverKey(dir: string): string {
+    let canonical = dir
+    try {
+      canonical = normalize(resolve(dir))
+    } catch {
+      canonical = dir
+    }
+    return `status:${this.privateEpoch ?? "none"}:${canonical}`
+  }
+
+  /**
+   * Register a one-shot deferred status observation for the current backend
+   * epoch + directory. A duplicate registration for the same key is absorbed
+   * (returns a no-op unsubscribe) so multiple seeds before private
+   * negotiation yield at most one deferred observation. The entry is released
+   * when it fires, when its owner unsubscribes, or when negotiation for its
+   * epoch definitively fails / the connection resets / disposes / invalidates.
+   */
+  addDeferredStatusObserver(dir: string, listener: () => void): () => void {
+    const key = this.deferredStatusObserverKey(dir)
+    if (this.deferredStatusObservers.has(key)) return () => {}
+    let wrapper: () => void = () => {
+      this.removeDeferredStatusObserver(key, wrapper)
+      listener()
+    }
+    this.deferredStatusObservers.set(key, wrapper)
+    this.privateAvailableListeners.add(wrapper)
+    return () => {
+      this.removeDeferredStatusObserver(key, wrapper)
+    }
+  }
+
+  private removeDeferredStatusObserver(key: string, wrapper: () => void): void {
+    if (this.deferredStatusObservers.get(key) === wrapper) this.deferredStatusObservers.delete(key)
+    this.privateAvailableListeners.delete(wrapper)
+  }
+
+  private clearDeferredStatusObserversForEpoch(epoch: number | null): void {
+    const prefix = `status:${epoch ?? "none"}:`
+    for (const [key, wrapper] of [...this.deferredStatusObservers]) {
+      if (!key.startsWith(prefix)) continue
+      this.deferredStatusObservers.delete(key)
+      this.privateAvailableListeners.delete(wrapper)
+    }
+  }
+
+  private clearAllDeferredStatusObservers(): void {
+    for (const [, wrapper] of [...this.deferredStatusObservers]) this.privateAvailableListeners.delete(wrapper)
+    this.deferredStatusObservers.clear()
   }
 
   private toError(error: unknown): Error {
@@ -975,17 +1064,57 @@ export class KiloConnectionService {
     pidAtStart: number | undefined,
     epochAtStart: number,
   ): void {
+    // A stale completion (newer backend/epoch installed meanwhile) must
+    // neither mutate availability nor release another epoch's listeners.
+    if (this.privateEpoch !== epochAtStart) return
     if (!peer.isAvailable() && ok) {
-      this.privateAvailable = false
-      console.warn("[Kilo] PrivatePeer negotiation failed (fail-closed) pid", pidAtStart, "epoch", epochAtStart)
+      this.failPrivateNegotiation(epochAtStart, pidAtStart)
       return
     }
     this.privateAvailable = ok && peer.isAvailable()
     if (!this.privateAvailable) {
-      console.warn("[Kilo] PrivatePeer negotiation failed (fail-closed) pid", pidAtStart, "epoch", epochAtStart)
+      this.failPrivateNegotiation(epochAtStart, pidAtStart)
       return
     }
     console.log("[Kilo] PrivatePeer negotiated pid", pidAtStart, "epoch", epochAtStart)
+    this.notifyPrivateAvailable()
+  }
+
+  /**
+   * Definitive negotiation failure for the current backend epoch: it will
+   * never notify availability, so deferred status observers for that epoch
+   * are released without notifying. The epoch guard in the caller protects a
+   * newer backend/epoch's listeners.
+   */
+  private failPrivateNegotiation(epochAtStart: number, pidAtStart: number | undefined): void {
+    this.privateAvailable = false
+    console.warn("[Kilo] PrivatePeer negotiation failed (fail-closed) pid", pidAtStart, "epoch", epochAtStart)
+    this.clearDeferredStatusObserversForEpoch(epochAtStart)
+    this.privateAvailableListeners.clear()
+  }
+
+  /**
+   * Subscribe to the current backend's private-negotiation completion.
+   * Listeners are one-shot by convention (unsubscribe inside the callback);
+   * the set is cleared on connection reset/dispose/invalidation.
+   */
+  onPrivateAvailable(listener: () => void): () => void {
+    this.privateAvailableListeners.add(listener)
+    return () => {
+      this.privateAvailableListeners.delete(listener)
+    }
+  }
+
+  private notifyPrivateAvailable(): void {
+    if (this.privateAvailableListeners.size === 0) return
+    const listeners = [...this.privateAvailableListeners]
+    for (const listener of listeners) {
+      try {
+        listener()
+      } catch (err) {
+        console.warn("[Kilo] PrivatePeer availability listener failed:", String(err))
+      }
+    }
   }
 
   private async initPrivatePeer(server: import("./server-manager").ServerInstance, generation?: number): Promise<void> {
@@ -996,6 +1125,11 @@ export class KiloConnectionService {
     this.setPrivateEpoch(server)
     if (!this.hasPrivateTransport(server)) {
       console.warn("[Kilo] PrivatePeer unavailable: fd3/fd4 not exposed for pid", server.pid, "epoch", server.epoch)
+      // No negotiation will run for this backend epoch, so it will never
+      // notify: release deferred observers without notifying (same fail-closed
+      // cleanup as a definitive negotiation failure).
+      this.clearDeferredStatusObserversForEpoch(server.epoch)
+      this.privateAvailableListeners.clear()
       return
     }
     const epochAtStart = server.epoch
@@ -1307,6 +1441,213 @@ export class KiloConnectionService {
   async privateCreate(req: ServePrivateCreateRequest): Promise<ServePrivateCreateResult> {
     const handle = this.privateCreateWithHandle(req)
     return handle.promise
+  }
+
+  privateStatusWithHandle(req: ServePrivateStatusRequest): { id: number; promise: Promise<ServePrivateStatusResult>; cancel: (msg?: string) => boolean } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("session/status")) {
+      throw new Error("Private peer missing session/status capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const handle = peerAtCall.privateStatusWithHandle(req)
+    const promise = handle.promise.then((result) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/status",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateStatusResult
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/status",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateStatusResult
+      }
+      return result
+    })
+    const cancel = (msg = "private parity timeout"): boolean => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout(`stale observer timeout opId=${req.opId}`)
+        } catch (err) {
+          console.warn("[Kilo] stale observer cleanup failed:", String(err).slice(0, 200), {
+            op: "session/status",
+            opId: req.opId,
+            epoch: epochAtCall,
+          })
+        }
+        return false
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch (err) {
+        console.warn("[Kilo] observer timeout cancel failed:", String(err).slice(0, 200), {
+          op: "session/status",
+          opId: req.opId,
+          epoch: epochAtCall,
+        })
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout cancel throw opId=${req.opId}`)
+        } catch (inner) {
+          console.warn("[Kilo] observer timeout invalidate failed:", String(inner).slice(0, 200), {
+            op: "session/status",
+            opId: req.opId,
+            epoch: epochAtCall,
+          })
+        }
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout exact cancel miss opId=${req.opId}`)
+        } catch (err) {
+          console.warn("[Kilo] observer timeout invalidate failed:", String(err).slice(0, 200), {
+            op: "session/status",
+            opId: req.opId,
+            epoch: epochAtCall,
+          })
+        }
+        return false
+      }
+      return true
+    }
+    return { id: handle.id, promise, cancel }
+  }
+
+  async privateStatus(req: ServePrivateStatusRequest): Promise<ServePrivateStatusResult> {
+    const handle = this.privateStatusWithHandle(req)
+    return handle.promise
+  }
+
+  /**
+   * Epoch-aware production pass-through for the read-only status parity
+   * observer (LOCK-007/008/013). Delegates to the peer's normalized outcome
+   * handle so malformed wire resolves as `{ kind: "invalid" }` and reaches
+   * the observer before any comparator. Epoch drift or peer replacement maps
+   * to `{ kind: "valid", ambiguous transportUnknown }`; exact cancel
+   * preserves the peer while current-epoch cancel miss/throw fail-closed via
+   * owner invalidation. A stale captured handle cleans only its captured
+   * peer and returns `"stale"` so the observer never invalidates the
+   * replacement peer. The legacy valid-result handle above stays unchanged
+   * for existing callers (B0-B4 APIs unchanged).
+   */
+  privateStatusOutcomeWithHandle(req: ServePrivateStatusRequest): {
+    id: number
+    promise: Promise<PrivateStatusWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("session/status")) {
+      throw new Error("Private peer missing session/status capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const handle = peerAtCall.privateStatusOutcomeWithHandle(req)
+    const promise = handle.promise.then((outcome) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: req.requestId,
+            opId: req.opId,
+            op: "session/status",
+            idempotencyKey: req.idempotencyKey,
+            status: "ambiguous",
+            outcome: { type: "ambiguous", time: Date.now() },
+            accepted: false,
+            transportUnknown: true,
+          },
+        } as PrivateStatusWireOutcome
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: req.requestId,
+            opId: req.opId,
+            op: "session/status",
+            idempotencyKey: req.idempotencyKey,
+            status: "ambiguous",
+            outcome: { type: "ambiguous", time: Date.now() },
+            accepted: false,
+            transportUnknown: true,
+          },
+        } as PrivateStatusWireOutcome
+      }
+      return outcome
+    })
+    const cancel = (msg = "private parity timeout"): PrivateStatusObserverCancelResult => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout(`stale observer timeout opId=${req.opId}`)
+        } catch (err) {
+          console.warn("[Kilo] stale observer cleanup failed:", String(err).slice(0, 200), {
+            op: "session/status",
+            opId: req.opId,
+            epoch: epochAtCall,
+          })
+        }
+        return "stale"
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch (err) {
+        console.warn("[Kilo] observer timeout cancel failed:", String(err).slice(0, 200), {
+          op: "session/status",
+          opId: req.opId,
+          epoch: epochAtCall,
+        })
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout cancel throw opId=${req.opId}`)
+        } catch (inner) {
+          console.warn("[Kilo] observer timeout invalidate failed:", String(inner).slice(0, 200), {
+            op: "session/status",
+            opId: req.opId,
+            epoch: epochAtCall,
+          })
+        }
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout exact cancel miss opId=${req.opId}`)
+        } catch (err) {
+          console.warn("[Kilo] observer timeout invalidate failed:", String(err).slice(0, 200), {
+            op: "session/status",
+            opId: req.opId,
+            epoch: epochAtCall,
+          })
+        }
+        return false
+      }
+      return true
+    }
+    return { id: handle.id, promise, cancel }
   }
 
   /**

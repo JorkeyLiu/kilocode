@@ -4176,7 +4176,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private async seedSessionStatusMap(reconcile = true): Promise<void> {
     if (!this.client || this.connectionState !== "connected") return
     const dir = this.getWorkspaceDirectory()
-    await seedSessionStatuses(this.client, dir, this.sessionStatusMap, (msg) => this.postMessage(msg), reconcile)
+    // SDK-first: the SDK result seeds the map and drives reconcile; the
+    // private carrier only observes parity and never overrides the SDK.
+    await seedSessionStatuses(this.client, dir, this.sessionStatusMap, (msg) => this.postMessage(msg), reconcile, {
+      connection: this.connectionService,
+    })
   }
 
   /**

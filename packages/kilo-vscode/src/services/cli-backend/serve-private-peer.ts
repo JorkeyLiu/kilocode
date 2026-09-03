@@ -90,6 +90,310 @@ export function canonicalCreateOpId(token: string): string {
   return `create:${token}`
 }
 
+export function buildStatusOpId(token: string): string {
+  if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
+  if (token.includes(":")) throw new TypeError("token must not contain ':'")
+  return `status:${token}`
+}
+
+export interface ServePrivateStatusRequest {
+  v: 1
+  requestId: string
+  opId: string
+  op: "session/status"
+  idempotencyKey: string
+  context: {
+    directory: string
+  }
+  payload: Record<string, never>
+}
+
+export type ServePrivateStatusResult =
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "session/status"
+      idempotencyKey: string
+      status: "succeeded"
+      outcome: { type: "succeeded"; time: number }
+      accepted: true
+      data: { statuses: Record<string, Record<string, unknown>> }
+    }
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "session/status"
+      idempotencyKey: string
+      status: "failed"
+      outcome: {
+        type: "failed"
+        time: number
+        failure: { code: string; message: string; retryable: boolean; detail?: string }
+      }
+      accepted: boolean
+      failure: { code: string; message: string; retryable: boolean; detail?: string }
+    }
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "session/status"
+      idempotencyKey: string
+      status: "ambiguous"
+      outcome: { type: "ambiguous"; time: number }
+      accepted: false
+      transportUnknown?: boolean
+    }
+
+function makeStatusAmbiguous(req: ServePrivateStatusRequest, transportUnknown = true): ServePrivateStatusResult {
+  const out: ServePrivateStatusResult = {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: "session/status",
+    idempotencyKey: req.idempotencyKey,
+    status: "ambiguous",
+    outcome: { type: "ambiguous", time: Date.now() },
+    accepted: false,
+  }
+  if (transportUnknown) (out as { transportUnknown?: boolean }).transportUnknown = true
+  return out
+}
+
+export function validateStatusRequest(raw: unknown): ServePrivateStatusRequest {
+  if (!isRecord(raw)) throw new Error("request must be object")
+  if (raw.v !== 1) throw new Error("v must be 1")
+  if (!isNonEmptyString(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmptyString(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== "session/status") throw new Error("op must be session/status")
+  if (!isNonEmptyString(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for status")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory"])
+  for (const k of Object.keys(ctx as Record<string, unknown>)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || !isAbsolute(ctx.directory as string) || (ctx.directory as string).includes("\0"))
+    throw new Error("context.directory must be absolute path")
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload as Record<string, unknown>).length !== 0) throw new Error("payload must be empty object for status")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw as Record<string, unknown>)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  return raw as unknown as ServePrivateStatusRequest
+}
+
+const STATUS_TYPES = new Set(["idle", "busy", "retry", "offline"])
+const STATUS_RETRY_ACTION_FIELDS = new Set(["reason", "provider", "title", "message", "label", "link"])
+
+function isQuestionId(v: unknown): boolean {
+  return typeof v === "string" && (v as string).startsWith("que")
+}
+
+function validateStatusAction(sid: string, action: unknown): void {
+  if (!isRecord(action)) throw new Error(`statuses[${sid}].action invalid`)
+  const rec = action as Record<string, unknown>
+  for (const f of ["reason", "provider", "title", "message", "label"]) {
+    if (typeof rec[f] !== "string") throw new Error(`statuses[${sid}].action.${f} invalid`)
+  }
+  if (rec.link !== undefined && typeof rec.link !== "string") throw new Error(`statuses[${sid}].action.link invalid`)
+  for (const k of Object.keys(rec)) {
+    if (!STATUS_RETRY_ACTION_FIELDS.has(k)) throw new Error(`unexpected statuses[${sid}].action field ${k}`)
+  }
+}
+
+function validateStatusEntry(sid: string, entry: unknown): void {
+  if (!isRecord(entry)) throw new Error(`statuses[${sid}] must be object`)
+  const rec = entry as Record<string, unknown>
+  const type = rec.type
+  if (typeof type !== "string" || !STATUS_TYPES.has(type)) throw new Error(`statuses[${sid}].type invalid`)
+  if (type === "idle" || type === "busy") {
+    for (const k of Object.keys(rec)) {
+      if (k !== "type") throw new Error(`unexpected statuses[${sid}] field ${k}`)
+    }
+    return
+  }
+  if (type === "retry") {
+    if (!isSafeInt(rec.attempt)) throw new Error(`statuses[${sid}].attempt invalid`)
+    if (typeof rec.message !== "string") throw new Error(`statuses[${sid}].message invalid`)
+    if (!isSafeInt(rec.next)) throw new Error(`statuses[${sid}].next invalid`)
+    if (rec.action !== undefined) validateStatusAction(sid, rec.action)
+    const allowed = new Set(["type", "attempt", "message", "action", "next"])
+    for (const k of Object.keys(rec)) {
+      if (!allowed.has(k)) throw new Error(`unexpected statuses[${sid}] field ${k}`)
+    }
+    return
+  }
+  if (!isQuestionId(rec.requestID)) throw new Error(`statuses[${sid}].requestID invalid`)
+  if (typeof rec.message !== "string") throw new Error(`statuses[${sid}].message invalid`)
+  const allowed = new Set(["type", "requestID", "message"])
+  for (const k of Object.keys(rec)) {
+    if (!allowed.has(k)) throw new Error(`unexpected statuses[${sid}] field ${k}`)
+  }
+}
+
+const STATUS_RESULT_ROOT_SUCCEEDED = new Set([
+  "v",
+  "requestId",
+  "opId",
+  "op",
+  "idempotencyKey",
+  "status",
+  "outcome",
+  "accepted",
+  "data",
+])
+const STATUS_RESULT_ROOT_FAILED = new Set([
+  "v",
+  "requestId",
+  "opId",
+  "op",
+  "idempotencyKey",
+  "status",
+  "outcome",
+  "accepted",
+  "failure",
+])
+const STATUS_RESULT_ROOT_AMBIGUOUS = new Set([
+  "v",
+  "requestId",
+  "opId",
+  "op",
+  "idempotencyKey",
+  "status",
+  "outcome",
+  "accepted",
+  "transportUnknown",
+])
+const STATUS_FAILURE_FIELDS = new Set(["code", "message", "retryable", "detail"])
+const STATUS_OUTCOME_SUCCEEDED_FIELDS = new Set(["type", "time"])
+const STATUS_OUTCOME_FAILED_FIELDS = new Set(["type", "time", "failure"])
+const STATUS_OUTCOME_AMBIGUOUS_FIELDS = new Set(["type", "time"])
+
+/**
+ * Type-honest wire normalization for `session/status` (LOCK-008/LOCK-013).
+ * A raw wire payload is either a strictly valid private status result or an
+ * invalid-wire diagnostic. Invalid wire is never a normal `failed` result and
+ * never reaches `compareStatusParity` or SDK state.
+ */
+export type PrivateStatusWireOutcome =
+  | { kind: "valid"; result: ServePrivateStatusResult }
+  | { kind: "invalid"; detail: string }
+
+export class PrivateStatusValidationError extends Error {
+  readonly kind = "private-status-validation" as const
+  readonly detail: string
+  constructor(detail: string) {
+    super(`invalid private response shape: ${detail}`)
+    this.name = "PrivateStatusValidationError"
+    this.detail = detail
+  }
+}
+
+export function isPrivateStatusValidationError(v: unknown): v is PrivateStatusValidationError {
+  return !!v && typeof v === "object" && (v as { kind?: unknown }).kind === "private-status-validation"
+}
+
+export function normalizePrivateStatusWire(raw: unknown, req: ServePrivateStatusRequest): PrivateStatusWireOutcome {
+  try {
+    const result = validateStatusResult(raw, req)
+    return { kind: "valid", result }
+  } catch (e) {
+    const detail = String(e instanceof Error ? e.message : e).slice(0, 200)
+    return { kind: "invalid", detail }
+  }
+}
+
+function assertFailureDetailMirror(top: Record<string, unknown>, out: Record<string, unknown>): void {
+  const hasTop = top.detail !== undefined
+  const hasOut = out.detail !== undefined
+  if (!hasTop && !hasOut) return
+  if (hasTop !== hasOut) throw new Error("failure detail presence mismatch")
+  if (top.detail !== out.detail) throw new Error("failure detail mismatch")
+}
+
+function assertAllowedKeys(rec: Record<string, unknown>, allowed: Set<string>, label: string): void {
+  for (const k of Object.keys(rec)) if (!allowed.has(k)) throw new Error(`unexpected ${label} field ${k}`)
+}
+
+function validateStatusFailureShape(v: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(v)) throw new Error(`${label} invalid`)
+  assertAllowedKeys(v as Record<string, unknown>, STATUS_FAILURE_FIELDS, label)
+  const rec = v as Record<string, unknown>
+  if (typeof rec.code !== "string" || typeof rec.message !== "string" || typeof rec.retryable !== "boolean")
+    throw new Error(`${label} invalid`)
+  if (rec.detail !== undefined && typeof rec.detail !== "string") throw new Error(`${label}.detail must be string if present`)
+  return rec
+}
+
+// eslint-disable-next-line complexity
+export function validateStatusResult(raw: unknown, req: ServePrivateStatusRequest): ServePrivateStatusResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  if (raw.v !== 1) throw new Error("result v must be 1")
+  if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+  if (raw.opId !== req.opId) throw new Error("opId mismatch")
+  if (raw.op !== "session/status") throw new Error("op mismatch")
+  if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+  const status = raw.status
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous") throw new Error("status must be succeeded/failed/ambiguous")
+  if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
+  const outcome = raw.outcome
+  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number") throw new Error("outcome invalid")
+  if (outcome.type !== status) throw new Error("outcome.type must match status")
+  if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
+  const rec = raw as Record<string, unknown>
+  const outRec = outcome as Record<string, unknown>
+  if (status === "succeeded") {
+    assertAllowedKeys(rec, STATUS_RESULT_ROOT_SUCCEEDED, "result")
+    assertAllowedKeys(outRec, STATUS_OUTCOME_SUCCEEDED_FIELDS, "outcome")
+    if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
+    if (rec.transportUnknown !== undefined) throw new Error("succeeded must not have transportUnknown")
+    if (rec.revision !== undefined) throw new Error("revision not accepted for status result")
+    const data = rec.data
+    if (!isRecord(data)) throw new Error("succeeded data must be object")
+    const allowedData = new Set(["statuses"])
+    for (const k of Object.keys(data as Record<string, unknown>)) if (!allowedData.has(k)) throw new Error(`unexpected data field ${k}`)
+    const statuses = (data as Record<string, unknown>).statuses
+    if (!isRecord(statuses)) throw new Error("succeeded data.statuses must be object")
+    for (const [sid, entry] of Object.entries(statuses as Record<string, unknown>)) validateStatusEntry(sid, entry)
+    if (rec.failure !== undefined) throw new Error("succeeded must not have failure")
+    if (outRec.failure !== undefined) throw new Error("succeeded outcome must not have failure")
+    if (outRec.data !== undefined) throw new Error("succeeded outcome must not have data")
+    return raw as unknown as ServePrivateStatusResult
+  }
+  if (status === "failed") {
+    assertAllowedKeys(rec, STATUS_RESULT_ROOT_FAILED, "result")
+    assertAllowedKeys(outRec, STATUS_OUTCOME_FAILED_FIELDS, "outcome")
+    if (rec.transportUnknown !== undefined) throw new Error("failed must not have transportUnknown")
+    if (rec.revision !== undefined) throw new Error("revision not accepted for status result")
+    if (rec.configVersion !== undefined) throw new Error("configVersion not accepted for status result")
+    if (rec.sessionRevision !== undefined) throw new Error("sessionRevision not accepted for status result")
+    const failure = validateStatusFailureShape(rec.failure, "failed failure")
+    const outFailure = validateStatusFailureShape(outRec.failure, "failed outcome.failure")
+    if (failure.code !== outFailure.code) throw new Error("failure code mismatch")
+    if (failure.message !== outFailure.message) throw new Error("failure message mismatch")
+    if (failure.retryable !== outFailure.retryable) throw new Error("failure retryable mismatch")
+    assertFailureDetailMirror(failure, outFailure)
+    if (rec.data !== undefined) throw new Error("failed must not have data")
+    if (outRec.data !== undefined) throw new Error("failed outcome must not have data")
+    return raw as unknown as ServePrivateStatusResult
+  }
+  assertAllowedKeys(rec, STATUS_RESULT_ROOT_AMBIGUOUS, "result")
+  assertAllowedKeys(outRec, STATUS_OUTCOME_AMBIGUOUS_FIELDS, "outcome")
+  if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+  if (rec.transportUnknown !== undefined && typeof rec.transportUnknown !== "boolean")
+    throw new Error("transportUnknown must be boolean")
+  if (rec.revision !== undefined) throw new Error("revision not accepted for status result")
+  if (rec.configVersion !== undefined) throw new Error("configVersion not accepted for status result")
+  if (rec.sessionRevision !== undefined) throw new Error("sessionRevision not accepted for status result")
+  if (rec.data !== undefined) throw new Error("ambiguous must not have data")
+  if (rec.failure !== undefined) throw new Error("ambiguous must not have failure")
+  if (outRec.failure !== undefined) throw new Error("ambiguous outcome must not have failure")
+  if (outRec.data !== undefined) throw new Error("ambiguous outcome must not have data")
+  return raw as unknown as ServePrivateStatusResult
+}
+
 const SESSION_TITLE_LIMIT = 200
 const unsafeTitle = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u
 function validateTitleStrict(raw: unknown): string {
@@ -1027,7 +1331,7 @@ export class ServePrivatePeer {
     const initPromise = peerAtStart.request("initialize", {
       protocol: { name: "kilo-private", major: 1, minor: 0 },
       clientInfo: { name: "kilo-vscode", version: "7.4.11" },
-      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create"],
+      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status"],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
 
@@ -1091,11 +1395,13 @@ export class ServePrivatePeer {
       let hasSessionUpdate = false
       let hasFork = false
       let hasCreate = false
+      let hasStatus = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
         hasFork = caps.includes("session/fork")
         hasCreate = caps.includes("session/create")
+        hasStatus = caps.includes("session/status")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -1138,15 +1444,26 @@ export class ServePrivatePeer {
           const sess = (c as Record<string, unknown>).session as Record<string, unknown>
           if ((sess as Record<string, unknown>).create) hasCreate = true
         } else if (c["session/create"] === true) hasCreate = true
+        if ((c as Record<string, unknown>)["session/status"]) hasStatus = true
+        else if (
+          Array.isArray((c as Record<string, unknown>).session) &&
+          ((c as Record<string, unknown>).session as unknown[]).includes("status")
+        )
+          hasStatus = true
+        else if ((c as Record<string, unknown>).session && typeof (c as Record<string, unknown>).session === "object") {
+          const sess = (c as Record<string, unknown>).session as Record<string, unknown>
+          if ((sess as Record<string, unknown>).status) hasStatus = true
+        } else if (c["session/status"] === true) hasStatus = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
           hasFork = false
           hasCreate = false
+          hasStatus = false
         }
       }
 
-      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate) {
+      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
         if (this.peer === peerAtStart) this.peer = null
@@ -1277,6 +1594,20 @@ export class ServePrivatePeer {
     }
   }
 
+  private failedStatus(req: ServePrivateStatusRequest, code: string, msg: string): ServePrivateStatusResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/status",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
   private makeHandleCancel(id: number, opId: string, peerAtCall: JsonRpcPeer, epoch: number): (msg?: string) => boolean {
     return (msg = "private parity timeout"): boolean => {
       if (this.isStaleHandle(peerAtCall, epoch)) {
@@ -1360,6 +1691,12 @@ export class ServePrivatePeer {
       if (cap === "session/create" && typeof c.session === "object" && c.session !== null) {
         const sess = c.session as Record<string, unknown>
         if (sess.create) return true
+      }
+      if (cap === "session/status" && c["session/status"] === true) return true
+      if (cap === "session/status" && Array.isArray(c.session) && (c.session as unknown[]).includes("status")) return true
+      if (cap === "session/status" && typeof c.session === "object" && c.session !== null) {
+        const sess = c.session as Record<string, unknown>
+        if (sess.status) return true
       }
     }
     return false
@@ -1477,6 +1814,84 @@ export class ServePrivatePeer {
     return { id: id as unknown as number, promise, cancel }
   }
 
+  async privateStatus(req: ServePrivateStatusRequest): Promise<ServePrivateStatusResult> {
+    const handle = this.privateStatusWithHandle(req)
+    return handle.promise
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid results; invalid wire rejects
+   * with PrivateStatusValidationError and never resolves as a normal result.
+   */
+  privateStatusWithHandle(req: ServePrivateStatusRequest): { id: number; promise: Promise<ServePrivateStatusResult>; cancel: (msg?: string) => boolean } {
+    validateStatusRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/status")) {
+      throw new Error("Private peer missing session/status capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/status", req)
+    const promise = (async (): Promise<ServePrivateStatusResult> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeStatusAmbiguous(req, true)
+        const { code, msg } = this.parseFailedInfo(e)
+        return this.failedStatus(req, code, msg)
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeStatusAmbiguous(req, true)
+      const out = normalizePrivateStatusWire(raw, req)
+      if (out.kind === "invalid") throw new PrivateStatusValidationError(out.detail)
+      return out.result
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  /**
+   * Internal normalized handle for the read-only status parity observer.
+   * Resolves the discriminated wire outcome so invalid wire is an explicit
+   * `{ kind: "invalid" }` value consumed before any comparator, never a
+   * normal result. Transport/closed/epoch semantics match the public handle.
+   */
+  privateStatusOutcomeWithHandle(req: ServePrivateStatusRequest): {
+    id: number
+    promise: Promise<PrivateStatusWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateStatusRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/status")) {
+      throw new Error("Private peer missing session/status capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/status", req)
+    const promise = (async (): Promise<PrivateStatusWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return { kind: "valid", result: makeStatusAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedStatus(req, code, msg) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeStatusAmbiguous(req, true) }
+      return normalizePrivateStatusWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -1557,7 +1972,7 @@ export class ServePrivatePeer {
 
   private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {
     for (const k of Object.keys(c)) {
-      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create") && c[k]) out.push(k)
+      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status") && c[k]) out.push(k)
     }
   }
 
@@ -1568,6 +1983,7 @@ export class ServePrivatePeer {
       else if (v === "update") out.push("session/update")
       else if (v === "fork") out.push("session/fork")
       else if (v === "create") out.push("session/create")
+      else if (v === "status") out.push("session/status")
     }
   }
 
@@ -1578,6 +1994,7 @@ export class ServePrivatePeer {
     if (sess.update) out.push("session/update")
     if (sess.fork) out.push("session/fork")
     if (sess.create) out.push("session/create")
+    if (sess.status) out.push("session/status")
   }
 
   private capsFromRecord(c: Record<string, unknown>): string[] {
@@ -1892,6 +2309,145 @@ export function compareForkParity(
   }
   if (sdkStatus === "failed" && privStatus === "failed") {
     const privCode: string = ((priv as Extract<ServePrivateForkResult, { status: "failed" }>).failure?.code ?? "unknown") as string
+    const http = sdkHttpStatus(sdk)
+    const cls = sdkStatusClass(http)
+    const allowed = (() => {
+      if (cls === "400") return new Set(["validation.failed", "scope_mismatch"])
+      if (cls === "404") return new Set(["session.not_found"])
+      if (cls === "409") return new Set(["stale", "conflict", "InstanceUnavailableDuringConfigRebuild"])
+      if (cls === "500") return new Set(["internal"])
+      return null
+    })()
+    if (allowed) {
+      if (!allowed.has(privCode)) {
+        return {
+          divergence: `failure-class-mismatch:sdk=${String(cls)} priv=${privCode}`,
+          details: { sdkClass: cls, privCode, http },
+        }
+      }
+      return { divergence: null, details: { sdkClass: cls, privCode } }
+    }
+    const sdkCodeRaw: string | undefined = (() => {
+      const e = sdk.error as Record<string, unknown>
+      const c = e.code ?? e.status ?? e._tag
+      if (typeof c === "string" && c.length > 0 && !/^\d+$/.test(c)) return c
+      return undefined
+    })()
+    if (sdkCodeRaw && privCode !== sdkCodeRaw) {
+      return {
+        divergence: `failure-code-mismatch:sdk=${sdkCodeRaw} priv=${privCode}`,
+        details: { sdkCode: sdkCodeRaw, privCode },
+      }
+    }
+    return { divergence: null, details: {} }
+  }
+  return { divergence: null, details: {} }
+}
+
+// Stable field-wise comparison of one shared status entry. Only the complete
+// SessionStatus semantic fields are compared (idle/busy: type only; retry:
+// attempt/message/next/action incl. nested action fields with optional link;
+// offline: requestID/message). No revision/time metadata exists on entries
+// and none is compared. Returns the first differing field, or null when equal.
+function compareStatusEntryField(sdkEntry: unknown, privEntry: unknown): string | null {
+  if (!isRecord(sdkEntry) || !isRecord(privEntry)) return "entry"
+  const sdk = sdkEntry as Record<string, unknown>
+  const priv = privEntry as Record<string, unknown>
+  const type = sdk.type
+  if (type === "retry") {
+    for (const f of ["attempt", "message", "next"]) {
+      if (sdk[f] !== priv[f]) return f
+    }
+    const sdkAction = sdk.action
+    const privAction = priv.action
+    if (sdkAction === undefined && privAction === undefined) return null
+    if (sdkAction === undefined || privAction === undefined) return "action"
+    if (!isRecord(sdkAction) || !isRecord(privAction)) return "action"
+    const sdkRec = sdkAction as Record<string, unknown>
+    const privRec = privAction as Record<string, unknown>
+    for (const f of ["reason", "provider", "title", "message", "label", "link"]) {
+      if ((sdkRec[f] ?? undefined) !== (privRec[f] ?? undefined)) return `action.${f}`
+    }
+    return null
+  }
+  if (type === "offline") {
+    if (sdk.requestID !== priv.requestID) return "requestID"
+    if (sdk.message !== priv.message) return "message"
+    return null
+  }
+  return null
+}
+
+// eslint-disable-next-line complexity
+export function compareStatusParity(
+  priv: ServePrivateStatusResult,
+  sdk: { data?: unknown; error?: unknown; response?: unknown },
+): { divergence: string | null; details: Record<string, unknown> } {
+  const privStatus: string = priv.status
+  const isTransportUnknown = !!(priv as Record<string, unknown>).transportUnknown
+  if (isTransportUnknown) {
+    return { divergence: "transport-unknown", details: { privStatus, transportUnknown: true } }
+  }
+  const sdkError = sdk.error !== undefined && sdk.error !== null
+  const sdkStatus: string = sdkError ? "failed" : "succeeded"
+  if (privStatus === "ambiguous" && sdkStatus === "failed") {
+    const http = sdkHttpStatus(sdk)
+    if (http === 409) {
+      return { divergence: null, details: { sdkStatus, privStatus, http } }
+    }
+    return {
+      divergence: `status-mismatch:sdk=failed(${String(http ?? "unknown")}) priv=ambiguous`,
+      details: { sdkStatus, privStatus, http },
+    }
+  }
+  if (privStatus === "ambiguous" && sdkStatus === "succeeded") {
+    return { divergence: `status-mismatch:sdk=succeeded priv=ambiguous`, details: { sdkStatus, privStatus } }
+  }
+  if (sdkStatus !== privStatus) {
+    return { divergence: `status-mismatch:sdk=${sdkStatus} priv=${privStatus}`, details: { sdkStatus, privStatus } }
+  }
+  if (sdkStatus === "succeeded" && privStatus === "succeeded") {
+    const sdkMap = (sdk.data ?? {}) as Record<string, { type?: unknown } | unknown>
+    const privData = (priv as Extract<ServePrivateStatusResult, { status: "succeeded" }>).data
+    const privMap = (privData.statuses ?? {}) as Record<string, { type?: unknown } | unknown>
+    const sdkKeys = new Set(Object.keys(sdkMap))
+    const privKeys = new Set(Object.keys(privMap))
+    const missing = [...sdkKeys].filter((k) => !privKeys.has(k)).slice(0, 10)
+    const extra = [...privKeys].filter((k) => !sdkKeys.has(k)).slice(0, 10)
+    const typeMismatch: string[] = []
+    for (const k of sdkKeys) {
+      if (!privKeys.has(k)) continue
+      const sdkType = (sdkMap[k] as { type?: unknown })?.type
+      const privType = (privMap[k] as { type?: unknown })?.type
+      if (sdkType !== privType) {
+        typeMismatch.push(k)
+        if (typeMismatch.length >= 10) break
+      }
+    }
+    const fieldMismatch: string[] = []
+    const fieldDetails: Array<{ sid: string; field: string }> = []
+    for (const k of sdkKeys) {
+      if (!privKeys.has(k)) continue
+      const sdkType = (sdkMap[k] as { type?: unknown })?.type
+      const privType = (privMap[k] as { type?: unknown })?.type
+      if (sdkType !== privType) continue
+      const field = compareStatusEntryField(sdkMap[k], privMap[k])
+      if (field) {
+        fieldMismatch.push(k)
+        if (fieldDetails.length < 10) fieldDetails.push({ sid: k, field })
+        if (fieldMismatch.length >= 10) break
+      }
+    }
+    if (missing.length > 0 || extra.length > 0 || typeMismatch.length > 0 || fieldMismatch.length > 0) {
+      return {
+        divergence: `status-map-mismatch:missing=${missing.length} extra=${extra.length} typeMismatch=${typeMismatch.length} fieldMismatch=${fieldMismatch.length}`,
+        details: { sdkSize: sdkKeys.size, privSize: privKeys.size, missing, extra, typeMismatch, fieldMismatch, fields: fieldDetails },
+      }
+    }
+    return { divergence: null, details: { sdkSize: sdkKeys.size, privSize: privKeys.size } }
+  }
+  if (sdkStatus === "failed" && privStatus === "failed") {
+    const privCode: string = ((priv as Extract<ServePrivateStatusResult, { status: "failed" }>).failure?.code ?? "unknown") as string
     const http = sdkHttpStatus(sdk)
     const cls = sdkStatusClass(http)
     const allowed = (() => {

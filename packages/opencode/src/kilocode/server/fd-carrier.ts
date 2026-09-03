@@ -6,6 +6,10 @@ import { CancelQueuedDispatchService } from "@/kilocode/session/cancel-queued-di
 import { SessionUpdateDispatchService } from "@/kilocode/session/session-update-dispatch"
 import { SessionForkDispatchService } from "@/kilocode/session/session-fork-dispatch"
 import { SessionCreateDispatchService } from "@/kilocode/session/session-create-dispatch"
+import { SessionStatus } from "@/session/status"
+import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
+import { acquireDrainControl, InstanceUnavailableDuringConfigRebuildError } from "@/kilocode/server/drain-control-acquire"
+import { InstanceRef } from "@/effect/instance-ref"
 import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
 
@@ -52,6 +56,81 @@ function bestEffortClose(stream: unknown, label: string): void {
   } catch (err) {
     console.warn(`[kilo fd-carrier] best-effort ${label} cleanup failed:`, String(err))
   }
+}
+
+export const FD_STATUS_VERSION = 1 as const
+export const FD_STATUS_OP = "session/status" as const
+
+export interface FdStatusRequest {
+  v: typeof FD_STATUS_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_STATUS_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+  }
+  payload: Record<string, never>
+}
+
+function isNonEmpty(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return !!v && typeof v === "object" && !Array.isArray(v)
+}
+
+function statusFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_STATUS_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_STATUS_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function validateStatusRequest(raw: unknown): FdStatusRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_STATUS_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_STATUS_OP) throw new Error("op must be session/status")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for status")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for status")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  return raw as unknown as FdStatusRequest
+}
+
+function fallbackIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  const requestId = isNonEmpty(o.requestId) ? (o.requestId as string) : "unknown"
+  const opId = isNonEmpty(o.opId) ? (o.opId as string) : "unknown"
+  const idempotencyKey = isNonEmpty(o.idempotencyKey) ? (o.idempotencyKey as string) : "unknown"
+  return { requestId, opId, idempotencyKey }
 }
 
 export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.WritableStream): FdCarrierHandle {
@@ -151,6 +230,67 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               throw err
             }
             return yield* (fn as (p: unknown) => Effect.Effect<unknown>)(params)
+          }),
+        )
+        return result
+      }
+      if (method === "session/status") {
+        // B5 parity-only read-only: same-directory StatusMap via drain-control snapshot, never mutates.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdStatusRequest
+            try {
+              req = validateStatusRequest(params)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return statusFailed(fallbackIds(params), "validation.failed", msg, false)
+            }
+            const dir = canonicalDirectory(req.context.directory)
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence = err instanceof InstanceUnavailableDuringConfigRebuildError
+                const msg = err instanceof Error ? err.message : String(err)
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: statusFailed(req, code, msg, fence),
+                })
+              }),
+              Effect.catchDefect((defect: unknown) => {
+                const msg = defect instanceof Error ? defect.message : String(defect)
+                return Effect.succeed({ tag: "fail" as const, result: statusFailed(req, "internal", msg, false) })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              const svc = yield* SessionStatus.Service
+              const map = yield* svc.list()
+              return {
+                v: FD_STATUS_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_STATUS_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { statuses: Object.fromEntries(map) },
+              }
+            }).pipe(
+              Effect.provideService(InstanceRef, acquired.value.ctx),
+              Effect.ensuring(acquired.value.release),
+            )
+            return yield* inner.pipe(
+              Effect.catch((err: unknown) => {
+                const msg = err instanceof Error ? err.message : String(err)
+                return Effect.succeed(statusFailed(req, "internal", msg, false))
+              }),
+              Effect.catchDefect((defect: unknown) => {
+                const msg = defect instanceof Error ? defect.message : String(defect)
+                return Effect.succeed(statusFailed(req, "internal", msg, false))
+              }),
+            )
           }),
         )
         return result
