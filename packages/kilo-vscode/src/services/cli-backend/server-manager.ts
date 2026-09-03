@@ -112,6 +112,9 @@ export class ServerManager {
   private instance: ServerInstance | null = null
   private startupPromise: Promise<ServerInstance> | null = null
   private epochCounter = 0
+  private disposed = false
+  private startupGeneration = 0
+  private startingProc: ChildProcess | null = null
 
   /**
    * E2E fixture generation-request collector (KILO_E2E_FIXTURE only): sees
@@ -133,9 +136,17 @@ export class ServerManager {
    */
   async getServer(): Promise<ServerInstance> {
     console.log("[Kilo New] ServerManager: 🔍 getServer called")
+    if (this.disposed) throw new Error("ServerManager disposed")
     if (this.instance) {
-      console.log("[Kilo New] ServerManager: ♻️ Returning existing instance:", { port: this.instance.port })
-      return this.instance
+      if (this.instance.process.exitCode !== null) {
+        // Dead process cannot be cached — clear and fall through to restart
+        const dying = this.instance
+        this.instance = null
+        ServerManager.releasePrivateStreams(dying)
+      } else {
+        console.log("[Kilo New] ServerManager: ♻️ Returning existing instance:", { port: this.instance.port })
+        return this.instance
+      }
     }
 
     if (this.startupPromise) {
@@ -144,17 +155,32 @@ export class ServerManager {
     }
 
     console.log("[Kilo New] ServerManager: 🚀 Starting new server instance...")
-    this.startupPromise = this.startServer()
+    const genAtStart = ++this.startupGeneration
+    this.startupPromise = this.startServer(genAtStart)
     try {
-      this.instance = await this.startupPromise
+      const started = await this.startupPromise
+      if (this.disposed || this.startupGeneration !== genAtStart) {
+        // Startup outlived dispose or was superseded — kill exact owned child only
+        if (started.process.exitCode === null) ServerManager.killProcess(started.process, "SIGTERM")
+        ServerManager.releasePrivateStreams(started)
+        throw new Error("Server startup superseded by dispose")
+      }
+      if (started.process.exitCode !== null) {
+        ServerManager.releasePrivateStreams(started)
+        throw new ServerStartupError("CLI background process exited after port detection", `pid ${started.pid ?? "?"} exited with code ${started.process.exitCode}`)
+      }
+      this.instance = started
       console.log("[Kilo New] ServerManager: ✅ Server started successfully:", { port: this.instance.port })
       return this.instance
     } finally {
-      this.startupPromise = null
+      if (this.startupGeneration === genAtStart) {
+        this.startupPromise = null
+        this.startingProc = null
+      }
     }
   }
 
-  private async startServer(): Promise<ServerInstance> {
+  private async startServer(generation: number): Promise<ServerInstance> {
     const password = crypto.randomBytes(32).toString("hex")
     const cliPath = this.getCliPath()
     console.log("[Kilo New] ServerManager: 📍 CLI path:", cliPath)
@@ -273,6 +299,7 @@ export class ServerManager {
         detached: true,
       })
       console.log("[Kilo New] ServerManager: 📦 Process spawned with PID:", serverProcess.pid)
+      this.startingProc = serverProcess
       this.epochCounter += 1
       const epoch = this.epochCounter
       const pid = serverProcess.pid
@@ -281,6 +308,28 @@ export class ServerManager {
       p0Stage("spawn.done", { pid: serverProcess.pid })
 
       let resolved = false
+      let startupTimeout: ReturnType<typeof setTimeout> | null = null
+      let startupSigkill: ReturnType<typeof setTimeout> | null = null
+      const clearStartupWatchdog = () => {
+        if (startupTimeout) {
+          clearTimeout(startupTimeout)
+          startupTimeout = null
+        }
+      }
+      const clearSigkillWatchdog = () => {
+        if (startupSigkill) {
+          clearTimeout(startupSigkill)
+          startupSigkill = null
+        }
+      }
+      const scheduleStartupSigkill = () => {
+        clearSigkillWatchdog()
+        startupSigkill = setTimeout(() => {
+          if (serverProcess.exitCode === null) ServerManager.killProcess(serverProcess, "SIGKILL")
+        }, 5000)
+        ;(startupSigkill as unknown as { unref?: () => void })?.unref?.()
+        serverProcess.on("exit", () => clearSigkillWatchdog())
+      }
       // Bounded stderr relay: chunks are reassembled into complete
       // newline-delimited lines before logging, so a backend log record split
       // across pipe chunks is still relayed (and parsed by the P0 harness) as
@@ -305,9 +354,53 @@ export class ServerManager {
 
         const port = parseServerPort(output)
         if (port !== null && !resolved) {
+          if (this.disposed || this.startupGeneration !== generation) {
+            console.warn("[Kilo New] ServerManager: port detected but startup superseded by dispose — discarding")
+            ServerManager.releasePrivateStreams({ privateReader, privateWriter } as unknown as ServerInstance)
+            if (serverProcess.exitCode === null) {
+              ServerManager.killProcess(serverProcess, "SIGTERM")
+              scheduleStartupSigkill()
+            }
+            if (!resolved) {
+              clearStartupWatchdog()
+              clearSigkillWatchdog()
+              stderrTail.flush()
+              reject(new ServerStartupError("Server startup superseded by dispose", `pid ${String(pid ?? "?")} port ${String(port)} generation ${String(generation)}`))
+              resolved = true
+            }
+            return
+          }
+          if (serverProcess.exitCode !== null) {
+            console.warn("[Kilo New] ServerManager: port detected but process already exited — not caching")
+            ServerManager.releasePrivateStreams({ privateReader, privateWriter } as unknown as ServerInstance)
+            if (!resolved) {
+              clearStartupWatchdog()
+              clearSigkillWatchdog()
+              stderrTail.flush()
+              const { userMessage, userDetails } = toErrorMessage(
+                t("server.processExited", { code: String(serverProcess.exitCode) }),
+                stderrTail.tail(),
+                cliPath,
+              )
+              reject(new ServerStartupError(userMessage, userDetails))
+              resolved = true
+            }
+            return
+          }
           resolved = true
+          clearStartupWatchdog()
+          clearSigkillWatchdog()
           console.log("[Kilo New] ServerManager: 🎯 Port detected:", port)
           p0Stage("port.detected", { port })
+          // Defer install until next tick so an immediate exit after port log is observed
+          setImmediate(() => {
+            if (serverProcess.exitCode !== null) {
+              console.warn("[Kilo New] ServerManager: process exited immediately after port detection — not caching")
+              ServerManager.releasePrivateStreams({ privateReader, privateWriter } as unknown as ServerInstance)
+              // If already resolved, getServer's post-install check will handle; here we already resolved so rely on that check
+              return
+            }
+          })
           resolve({ port, password, process: serverProcess, privateReader, privateWriter, pid, epoch })
         }
       })
@@ -319,6 +412,9 @@ export class ServerManager {
       serverProcess.on("error", (error) => {
         console.error("[Kilo New] ServerManager: ❌ Process error:", error)
         if (!resolved) {
+          resolved = true
+          clearStartupWatchdog()
+          clearSigkillWatchdog()
           stderrTail.flush()
           reject(error)
         }
@@ -326,6 +422,8 @@ export class ServerManager {
 
       serverProcess.on("exit", (code) => {
         console.log("[Kilo New] ServerManager: 🛑 Process exited with code:", code)
+        clearStartupWatchdog()
+        clearSigkillWatchdog()
         if (this.instance?.process === serverProcess) {
           const dying = this.instance
           this.instance = null
@@ -335,6 +433,7 @@ export class ServerManager {
           ServerManager.releasePrivateStreams({ privateReader, privateWriter } as unknown as ServerInstance)
         }
         if (!resolved) {
+          resolved = true
           stderrTail.flush()
           const { userMessage, userDetails } = toErrorMessage(
             t("server.processExited", { code: code ?? "null" }),
@@ -345,10 +444,13 @@ export class ServerManager {
         }
       })
 
-      setTimeout(() => {
+      startupTimeout = setTimeout(() => {
         if (!resolved) {
+          resolved = true
           console.error(`[Kilo New] ServerManager: ⏰ Server startup timeout (${STARTUP_TIMEOUT_SECONDS}s)`)
-          ServerManager.killProcess(serverProcess)
+          ServerManager.killProcess(serverProcess, "SIGTERM")
+          scheduleStartupSigkill()
+          clearStartupWatchdog()
           stderrTail.flush()
           const { userMessage, userDetails } = toErrorMessage(
             t("server.startupTimeout", { seconds: STARTUP_TIMEOUT_SECONDS }),
@@ -358,6 +460,7 @@ export class ServerManager {
           reject(new ServerStartupError(userMessage, userDetails))
         }
       }, STARTUP_TIMEOUT_SECONDS * 1000)
+      ;(startupTimeout as unknown as { unref?: () => void })?.unref?.()
     })
   }
 
@@ -505,6 +608,35 @@ export class ServerManager {
   }
 
   dispose(): void {
+    if (this.disposed) {
+      // Already disposed — ensure starting proc also cleaned if still pending
+      if (this.startingProc && this.startingProc.exitCode === null) {
+        ServerManager.killProcess(this.startingProc, "SIGTERM")
+        ServerManager.releasePrivateStreams({
+          privateReader: (this.startingProc.stdio[4] as unknown as NodeJS.ReadableStream) ?? null,
+          privateWriter: (this.startingProc.stdio[3] as unknown as NodeJS.WritableStream) ?? null,
+        } as unknown as ServerInstance)
+      }
+      this.startingProc = null
+      return
+    }
+    this.disposed = true
+    this.startupGeneration += 1
+    const starting = this.startingProc
+    this.startingProc = null
+    if (starting && starting.exitCode === null) {
+      console.log("[Kilo New] ServerManager: 🔴 Disposing — killing in-flight startup PID:", starting.pid)
+      ServerManager.releasePrivateStreams({
+        privateReader: (starting.stdio[4] as unknown as NodeJS.ReadableStream) ?? null,
+        privateWriter: (starting.stdio[3] as unknown as NodeJS.WritableStream) ?? null,
+      } as unknown as ServerInstance)
+      ServerManager.killProcess(starting, "SIGTERM")
+      const timer = setTimeout(() => {
+        if (starting.exitCode === null) ServerManager.killProcess(starting, "SIGKILL")
+      }, 5000)
+      timer.unref()
+      starting.on("exit", () => clearTimeout(timer))
+    }
     if (!this.instance) {
       return
     }

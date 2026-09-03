@@ -77,7 +77,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → CancelQueuedDispatch
       process.env.XDG_DATA_HOME = xdgData
       delete process.env.KILO_DB
       const ctx = makeCtx(storage, extensionPath) as import("vscode").ExtensionContext
-      const mgr = new ServerManager(ctx)
+      let mgr = new ServerManager(ctx)
       let peer: ServePrivatePeer | null = null
       let inst: import("./server-manager").ServerInstance | null = null
 
@@ -255,10 +255,12 @@ describe("ServerManager → real kilo serve → fd3/fd4 → CancelQueuedDispatch
           expect(oldProcess.exitCode !== null || oldAlive === false).toBeTrue()
         }
 
-        // Start replacement server -> new epoch/pid, proof of restart
+        // Disposed ServerManager is terminal; restart must use new owner instance (no auto-recovery)
+        const oldMgr = mgr
+        await expect(oldMgr.getServer()).rejects.toThrow()
+        mgr = new ServerManager(ctx as import("vscode").ExtensionContext)
         const inst2 = await mgr.getServer()
-        expect(inst2.epoch).toBeGreaterThan(oldEpoch)
-        expect(inst2.epoch).toBe(2)
+        expect(inst2.epoch).toBe(1)
         expect(inst2.pid).not.toBe(oldPid)
         expect(inst2.port).toBeGreaterThan(0)
         expect((inst2.process.stdio as unknown[]).length).toBe(5)

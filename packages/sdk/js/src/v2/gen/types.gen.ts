@@ -2307,6 +2307,10 @@ export type Session3 = {
   }
 }
 
+export type EffectHttpApiErrorConflict = {
+  _tag: "Conflict"
+}
+
 export type Session4 = {
   id: string
   slug: string
@@ -2358,10 +2362,6 @@ export type Session4 = {
     snapshot?: string
     diff?: string
   }
-}
-
-export type EffectHttpApiErrorConflict = {
-  _tag: "Conflict"
 }
 
 export type Session5 = {
@@ -8144,6 +8144,14 @@ export type SessionCreateData = {
     platform?: string
     workspaceID?: string
     sandboxInheritanceToken?: string
+    idempotencyKey?: string
+    requestId?: string
+    opId?: string
+    context?: {
+      directory: string
+      parentSessionId?: string | null
+      configVersion?: number
+    }
   }
   path?: never
   query?: {
@@ -8158,6 +8166,18 @@ export type SessionCreateErrors = {
    * BadRequest | InvalidRequestError
    */
   400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type SessionCreateError = SessionCreateErrors[keyof SessionCreateErrors]

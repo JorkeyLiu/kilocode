@@ -277,10 +277,11 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionFork durable 
         const oldPid = pid1
         const oldEpoch = epoch1
         const oldProcess = inst.process
+        const oldMgr = mgr!
         peer.dispose()
         expect(peer.isDisposed()).toBeTrue()
         expect(peer.isAvailable()).toBeFalse()
-        mgr.dispose()
+        mgr!.dispose()
         {
           const deadline = Date.now() + 5000
           let oldAlive = true
@@ -302,10 +303,10 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionFork durable 
           expect(oldAlive).toBeFalse()
           expect(oldProcess.exitCode !== null || oldAlive === false).toBeTrue()
         }
-
+        await expect(oldMgr.getServer()).rejects.toThrow()
+        mgr = new ServerManager(ctx as import("vscode").ExtensionContext)
         const inst2 = await mgr.getServer()
-        expect(inst2.epoch).toBeGreaterThan(oldEpoch)
-        expect(inst2.epoch).toBe(2)
+        expect(inst2.epoch).toBe(1)
         expect(inst2.pid).not.toBe(oldPid)
         expect(inst2.port).toBeGreaterThan(0)
         expect((inst2.process.stdio as unknown[]).length).toBe(5)
@@ -367,7 +368,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionFork durable 
         // 10. Private unavailable still leaves SDK fork authoritative: new durable mutation while private unavailable
         const token2 = crypto.randomUUID().replace(/-/g, "").slice(0, 8)
         const opId2 = canonicalForkOpId(source.id, token2)
-        const idempotencyKey2 = `fork:${source.id}:${token2}:second`
+        const idempotencyKey2 = opId2
         const sdkRes3 = await client2.session.fork({
           sessionID: source.id,
           directory: workspace,

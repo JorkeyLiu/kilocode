@@ -78,6 +78,14 @@ export namespace SandboxStore {
     })
   }
 
+  export async function writeExclusive(directory: string, sessionID: SessionID, snapshot: Snapshot) {
+    const folder = dir(sessionID)
+    const target = file(directory, sessionID)
+    await fs.mkdir(folder, { recursive: true, mode: 0o700 })
+    const { writeExclusiveJson } = await import("@/storage/claimed-file")
+    await writeExclusiveJson(target, snapshot)
+  }
+
   export async function remove(directory: string, sessionID: SessionID) {
     await fs.rm(file(directory, sessionID), { force: true })
     await fs.rmdir(dir(sessionID)).catch((err: NodeJS.ErrnoException) => {

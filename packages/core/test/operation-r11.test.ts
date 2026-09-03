@@ -149,7 +149,7 @@ describe("R11 operation record foundation", () => {
       const reconstruct = (c: any) =>
         (c.value.queryChunks as any[]).map((ch: any) => (ch.name ? `"${ch.name}"` : (ch.value?.[0] ?? ""))).join("")
       expect(reconstruct(byName["session_operation_op_kind_check"])).toBe(
-        `"op_kind" IN ('prompt','provider','tool','permission','task','cancelQueued','sessionUpdate')`,
+        `"op_kind" IN ('prompt','provider','tool','permission','task','cancelQueued','sessionUpdate','fork','create')`,
       )
       expect(reconstruct(byName["session_operation_outcome_check"])).toBe(
         `"outcome" IN ('succeeded','failed','ambiguous','in-flight','superseded','abandoned')`,
@@ -219,9 +219,9 @@ describe("R11 operation record foundation", () => {
     }),
   )
 
-  it.effect("validates seven kinds exactly and rejects config kind", () =>
+  it.effect("validates nine kinds exactly and rejects config kind", () =>
     Effect.gen(function* () {
-      expect([...SessionOperation.OP_KINDS]).toEqual(["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate"])
+      expect([...SessionOperation.OP_KINDS]).toEqual(["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork", "create"])
       const { db } = yield* Database.Service
       yield* setup
       const svc = yield* SessionV2.Service
@@ -234,7 +234,9 @@ describe("R11 operation record foundation", () => {
         else if (kind === "permission") opId = SessionOperation.permissionId(`req_${kind}`)
         else if (kind === "task") opId = SessionOperation.taskId(`ses_${kind}`)
         else if (kind === "cancelQueued") opId = SessionOperation.cancelQueuedId(`ses_${kind}`, `msg_${kind}`)
-        else opId = SessionOperation.sessionUpdateId(`ses_${kind}`)
+        else if (kind === "sessionUpdate") opId = SessionOperation.sessionUpdateId(`ses_${kind}`)
+        else if (kind === "fork") opId = SessionOperation.forkId(`ses_${kind}`)
+        else opId = SessionOperation.createId(`tok_${kind}`)
         const rec: SessionOperation.FailureRecord = {
           opId,
           opKind: kind,

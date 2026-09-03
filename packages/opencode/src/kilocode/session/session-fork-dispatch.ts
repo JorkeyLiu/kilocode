@@ -1,8 +1,12 @@
+import fs from "node:fs/promises"
+import path from "node:path"
 import { isAbsolute } from "path"
-import { Context, Effect, Layer, Option, Schema } from "effect"
+import { Cause, Context, Effect, Layer, Option, Schema } from "effect"
+import { Global } from "@opencode-ai/core/global"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import { cloneMessageDataForFork, clonePartDataForFork, filterMessagesForFork, getForkedTitle, resolveForkModelAtCheckpoint, sessionPath } from "@/kilocode/session/fork"
 import { Database } from "@opencode-ai/core/database/database"
+import { EventSequenceTable, EventTable } from "@opencode-ai/core/event/sql"
 import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
@@ -17,15 +21,20 @@ import { InstallationVersion } from "@opencode-ai/core/installation/version"
 import { Log } from "@opencode-ai/core/util/log"
 import { KiloSession } from "@/kilocode/session"
 import * as SandboxPolicy from "@/kilocode/sandbox/policy"
-import { carryForkDiff } from "@/kilocode/session-portability/cumulative-diff"
+import { SandboxStore } from "@/kilocode/sandbox/store"
+import { baseKey, carryForkDiff, cumulativeSessionDiff, mergeSessionDiffs, readSessionDiffBase } from "@/kilocode/session-portability/cumulative-diff"
 import { InstanceStore } from "@/project/instance-store"
 import { InstanceRef } from "@/effect/instance-ref"
 import { EventV2 } from "@opencode-ai/core/event"
+import { Storage, NotFoundError } from "@/storage/storage"
+import { makeRuntime } from "@opencode-ai/core/effect/runtime"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Location } from "@opencode-ai/core/location"
 import { AbsolutePath } from "@opencode-ai/core/schema"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { WorkspaceV2 } from "@opencode-ai/core/workspace"
+import { ForkSeam } from "@/kilocode/session/fork-seam"
+import { storageFileForKey, writeExclusiveJson, isClaimedWriteError, ClaimedWriteError } from "@/storage/claimed-file"
 
 export const VERSION = 1 as const
 export const OP = "session/fork" as const
@@ -144,6 +153,15 @@ export function validateRequest(raw: unknown): SessionForkRequest {
   } catch (e) {
     throw new Error(e instanceof Error ? e.message : String(e))
   }
+  // Canonical identity: opId and idempotencyKey must be identical; colon in token rejected by parseOpId
+  if (o.idempotencyKey !== o.opId) throw new Error("idempotencyKey must equal opId for fork")
+  try {
+    const parsedKey = SessionOperation.parseOpId(o.idempotencyKey as string)
+    if (parsedKey.kind !== "fork") throw new Error(`idempotencyKey kind must be fork: ${o.idempotencyKey}`)
+    if (parsedKey.parts[0] !== c.sessionId) throw new Error(`idempotencyKey session binding mismatch: ${o.idempotencyKey} vs ${c.sessionId}`)
+  } catch (e) {
+    throw new Error(e instanceof Error ? e.message : String(e))
+  }
   if (c.parentSessionId !== null && c.parentSessionId !== undefined) throw new Error("parentSessionId must be null for fork")
   return o as unknown as SessionForkRequest
 }
@@ -246,6 +264,31 @@ export class SessionForkDispatchService extends Context.Service<SessionForkDispa
 ) {}
 
 const log = Log.create({ service: "sessionFork" })
+
+function isNotFound(err: unknown): boolean {
+  return err instanceof NotFoundError || (err as unknown as { _tag?: string })?._tag === "NotFoundError"
+}
+
+function isEnoent(err: unknown): boolean {
+  const c = (err as unknown as { code?: string })?.code
+  if (c === "ENOENT") return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes("ENOENT")
+}
+
+function isEexist(err: unknown): boolean {
+  const c = (err as unknown as { code?: string })?.code
+  if (c === "EEXIST") return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes("EEXIST")
+}
+
+function isUniqueViolation(err: unknown): boolean {
+  const code = (err as unknown as { code?: string })?.code
+  if (code === "SQLITE_CONSTRAINT" || code === "SQLITE_CONSTRAINT_PRIMARYKEY" || code === "SQLITE_CONSTRAINT_UNIQUE") return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes("UNIQUE constraint") || msg.includes("unique constraint") || msg.includes("UNIQUE") || msg.includes("SQLITE_CONSTRAINT")
+}
 
 export const layer = Layer.effect(
   SessionForkDispatchService,
@@ -408,6 +451,83 @@ export const layer = Layer.effect(
         }
         const leaseRelease: Effect.Effect<void> = needsConfigLease ? yield* gate.acquire(canonDir) : Effect.void
 
+        // Ownership-aware execution: filesystem side effects are outside the DB transaction
+        // and are compensated only for artifacts owned by this attempt. Post-crash
+        // interruption (process kill between FS write and DB commit) may leave orphaned
+        // artifacts; no automatic recovery subsystem claims cross-resource crash atomicity.
+        let forkedId: string | undefined
+        let ownedBase = false
+        let ownedDiff = false
+        let ownedSandbox = false
+        const storageRuntime = makeRuntime(Storage.Service, Storage.defaultLayer)
+        const cleanupOwned = Effect.gen(function* () {
+          if (forkedId) {
+            if (ownedBase) {
+              const okStorage = yield* (ForkSeam.failCleanupStorage
+                ? Effect.gen(function* () {
+                    ForkSeam.capturedCleanupWarnings.push({ target: forkedId as string, cause: "injected cleanup storage failure" })
+                    yield* Effect.logWarning("durable fork cleanup base storage failed", { target: forkedId, cause: "injected cleanup storage failure" })
+                  }).pipe(Effect.as(false as const))
+                : Effect.promise(() => storageRuntime.runPromise((s) => s.remove(baseKey(forkedId as string)))).pipe(
+                    Effect.map(() => true as const),
+                    Effect.catch((e) => Effect.logWarning("durable fork cleanup base storage failed", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                    Effect.catchDefect((e) => Effect.logWarning("durable fork cleanup base storage defect", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                  ))
+              const okFs = yield* (ForkSeam.failCleanupFs
+                ? Effect.gen(function* () {
+                    ForkSeam.capturedCleanupWarnings.push({ target: forkedId as string, cause: "injected cleanup fs failure" })
+                    yield* Effect.logWarning("durable fork cleanup base fs failed", { target: forkedId, cause: "injected cleanup fs failure" })
+                  }).pipe(Effect.as(false as const))
+                : Effect.promise(() => fs.rm(storageFileForKey(baseKey(forkedId as string), Global.Path.data), { force: true })).pipe(
+                    Effect.map(() => true as const),
+                    Effect.catch((e) => Effect.logWarning("durable fork cleanup base fs failed", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                    Effect.catchDefect((e) => Effect.logWarning("durable fork cleanup base fs defect", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                  ))
+              if (okStorage && okFs) ownedBase = false
+            }
+            if (ownedDiff) {
+              const okStorage = yield* (ForkSeam.failCleanupStorage
+                ? Effect.gen(function* () {
+                    ForkSeam.capturedCleanupWarnings.push({ target: forkedId as string, cause: "injected cleanup storage failure" })
+                    yield* Effect.logWarning("durable fork cleanup diff storage failed", { target: forkedId, cause: "injected cleanup storage failure" })
+                  }).pipe(Effect.as(false as const))
+                : Effect.promise(() => storageRuntime.runPromise((s) => s.remove(["session_diff", forkedId as string]))).pipe(
+                    Effect.map(() => true as const),
+                    Effect.catch((e) => Effect.logWarning("durable fork cleanup diff storage failed", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                    Effect.catchDefect((e) => Effect.logWarning("durable fork cleanup diff storage defect", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                  ))
+              const okFs = yield* (ForkSeam.failCleanupFs
+                ? Effect.gen(function* () {
+                    ForkSeam.capturedCleanupWarnings.push({ target: forkedId as string, cause: "injected cleanup fs failure" })
+                    yield* Effect.logWarning("durable fork cleanup diff fs failed", { target: forkedId, cause: "injected cleanup fs failure" })
+                  }).pipe(Effect.as(false as const))
+                : Effect.promise(() => fs.rm(storageFileForKey(["session_diff", forkedId as string], Global.Path.data), { force: true })).pipe(
+                    Effect.map(() => true as const),
+                    Effect.catch((e) => Effect.logWarning("durable fork cleanup diff fs failed", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                    Effect.catchDefect((e) => Effect.logWarning("durable fork cleanup diff fs defect", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                  ))
+              if (okStorage && okFs) ownedDiff = false
+            }
+            if (ownedSandbox) {
+              const okRemove = yield* Effect.promise(() => SandboxStore.remove(canonDir, forkedId as unknown as SessionID)).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((e) => Effect.logWarning("durable fork cleanup sandbox remove failed", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                Effect.catchDefect((e) => Effect.logWarning("durable fork cleanup sandbox remove defect", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+              )
+              const okEvict = yield* Effect.sync(() => SandboxPolicy.evict(canonDir, forkedId as unknown as SessionID)).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((e) => Effect.logWarning("durable fork cleanup sandbox evict failed", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+                Effect.catchDefect((e) => Effect.logWarning("durable fork cleanup sandbox evict defect", { target: forkedId, cause: String(e) }).pipe(Effect.as(false as const))),
+              )
+              if (okRemove && okEvict) ownedSandbox = false
+            }
+            yield* Effect.sync(() => KiloSession.clearPlatformOverride(forkedId as string)).pipe(
+              Effect.catch((e) => Effect.logWarning("durable fork cleanup KiloSession clear failed", { target: forkedId, cause: String(e) }).pipe(Effect.asVoid)),
+              Effect.catchDefect((e) => Effect.logWarning("durable fork cleanup KiloSession clear defect", { target: forkedId, cause: String(e) }).pipe(Effect.asVoid)),
+            )
+          }
+        })
+
         const txResult: SessionForkResult = yield* Effect.gen(function* () {
           // Freshness reads only when no committed replay/conflict
           const revEither = yield* readSessionRev(sessionId)
@@ -432,11 +552,305 @@ export const layer = Layer.effect(
             return buildFailed(req, "stale", "stale configVersion", false, false, revision) as unknown as SessionForkResult
           }
 
-          // Transaction with recheck - includes target identity and lifecycle
-          type TxOut = { result: SessionForkResult; event?: unknown }
+          // Generate target ID before filesystem ownership checks (deterministic seam for tests)
+          const newId = ForkSeam.nextId ? ForkSeam.nextId : SessionID.descending()
+          if (ForkSeam.nextId) ForkSeam.nextId = undefined
+          forkedId = newId
+
+          // Target session identity occupation must be rejected before any FS effects (strict IDs).
+          const idOccupied = yield* db
+            .select()
+            .from(SessionTable)
+            .where(eq(SessionTable.id, newId as unknown as SessionID))
+            .get()
+            .pipe(
+              Effect.map((v) => !!v),
+              Effect.orDie,
+            )
+          if (idOccupied) {
+            const curRev = yield* readRevOmit(sessionId)
+            const curCfg = yield* readCfgOmit(canonDir)
+            const revision = makeRevision(curRev, curCfg)
+            return buildFailed(req, "conflict", "fork target already exists", false, false, revision) as unknown as SessionForkResult
+          }
+
+          // Establish ownership: refuse if target artifacts already exist (fail closed on probe errors)
+          // Preflight target aggregate occupancy (SessionTable + EventSequence/EventTable) before any FS effects.
+          const eventSeqExists = yield* db
+            .select()
+            .from(EventSequenceTable)
+            .where(eq(EventSequenceTable.aggregate_id, newId as unknown as string))
+            .get()
+            .pipe(
+              Effect.map((v) => !!v),
+              Effect.orDie,
+            )
+          const eventExists = yield* db
+            .select()
+            .from(EventTable)
+            .where(eq(EventTable.aggregate_id, newId as unknown as string))
+            .get()
+            .pipe(
+              Effect.map((v) => !!v),
+              Effect.orDie,
+            )
+          if (eventSeqExists || eventExists) {
+            const curRev = yield* readRevOmit(sessionId)
+            const curCfg = yield* readCfgOmit(canonDir)
+            const revision = makeRevision(curRev, curCfg)
+            return buildFailed(req, "conflict", "fork target already exists", false, false, revision) as unknown as SessionForkResult
+          }
+          const writeStorageExclusive = async (key: string[], content: unknown) => {
+            await writeExclusiveJson(storageFileForKey(key, Global.Path.data), content)
+          }
+          // Probe existing artifacts — any error other than ENOENT fails closed (internal)
+          const existingSandbox = yield* Effect.promise(() => SandboxStore.read(canonDir, newId as unknown as SessionID)).pipe(
+            Effect.map((v) => v !== undefined),
+            Effect.catch((e) => (isEnoent(e) ? Effect.succeed(false) : Effect.fail(e))),
+            Effect.catchDefect((e) => Effect.fail(e)),
+          )
+          const baseExists = yield* Effect.promise(() =>
+            fs
+              .stat(storageFileForKey(baseKey(newId as string), Global.Path.data))
+              .then(() => true)
+              .catch((e: unknown) => {
+                if (isEnoent(e)) return false
+                throw e
+              }),
+          )
+          const diffExists = yield* Effect.promise(() =>
+            fs
+              .stat(storageFileForKey(["session_diff", String(newId)], Global.Path.data))
+              .then(() => true)
+              .catch((e: unknown) => {
+                if (isEnoent(e)) return false
+                throw e
+              }),
+          )
+
+          if (existingSandbox || baseExists || diffExists) {
+            const curRev = yield* readRevOmit(sessionId)
+            const curCfg = yield* readCfgOmit(canonDir)
+            const revision = makeRevision(curRev, curCfg)
+            return buildFailed(req, "conflict", "fork target already exists", false, false, revision) as unknown as SessionForkResult
+          }
+
+          // Perform required filesystem side effects with ownership tracking.
+          // All failures here fail closed and clean only owned artifacts.
+          const srcDir = (sourceRow as unknown as { directory: string }).directory
+          // Peek source sandbox (reads isolated store, not cached state)
+          const fallback = yield* SandboxPolicy.peek(srcDir, sessionId)
+          // Diff carry with exclusive claim and owned flags
+          const localForDiff = yield* Effect.promise(() =>
+            storageRuntime.runPromise((s) => s.read<any>(["session_diff", String(sessionId)]).pipe(Effect.catchIf(isNotFound, () => Effect.succeed([] as any)))),
+          ).pipe(
+            Effect.map((v) => v as unknown[]),
+            Effect.catch((e) => Effect.fail(e)),
+            Effect.catchDefect((e) => Effect.fail(e)),
+          )
+          const baseForDiff = yield* Effect.promise(() => storageRuntime.runPromise((s) => cumulativeSessionDiff(s, sessionId, localForDiff as any)))
+          const hasDiff = baseForDiff.length > 0
+          if (hasDiff) {
+            const firstKey = baseKey(newId as string)
+            const secondKey = ["session_diff", String(newId)] as unknown as string[]
+            // First diff write (exclusive) — on post-open ClaimedWriteError, transfer handle to caller and retain ownership until cleanup succeeds
+            const firstOutcome = yield* Effect.gen(function* () {
+              if (ForkSeam.failFirstDiffWrite) return yield* Effect.fail(new Error("injected first diff write failure"))
+              yield* Effect.promise(() => writeStorageExclusive(firstKey, baseForDiff))
+              ownedBase = true
+            }).pipe(
+              Effect.map(() => ({ _tag: "ok" as const })),
+              Effect.catch((e) => Effect.succeed({ _tag: "fail" as const, error: e })),
+              Effect.catchDefect((e) => Effect.succeed({ _tag: "fail" as const, error: e })),
+            )
+            if (firstOutcome._tag === "fail") {
+              const err = firstOutcome.error
+              if (isEexist(err)) {
+                const curRev = yield* readRevOmit(sessionId)
+                const curCfg = yield* readCfgOmit(canonDir)
+                return buildFailed(req, "conflict", "fork target already exists", false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+              }
+              if (isClaimedWriteError(err)) {
+                // transfer claim: file was created but write failed, caller retains ownership until cleanup succeeds
+                ownedBase = true
+                const claimed = err as ClaimedWriteError
+                const original = (claimed.cause as unknown) ?? claimed
+                const msg = original instanceof Error ? original.message : String(original)
+                // attempt cleanup via handle, retain ownership on failure and log with target/cause
+                const ok = yield* (ForkSeam.failCleanupFs
+                  ? Effect.gen(function* () {
+                      ForkSeam.capturedCleanupWarnings.push({ target: claimed.target, cause: "injected cleanup fs failure" })
+                      yield* Effect.logWarning("durable fork claimed cleanup failed", { target: claimed.target, cause: "injected cleanup fs failure" })
+                    }).pipe(Effect.as(false as const))
+                  : Effect.promise(() => claimed.handle.cleanup()).pipe(
+                      Effect.map((v) => v as boolean),
+                      Effect.catch((e) => Effect.logWarning("durable fork claimed cleanup failed", { target: claimed.target, cause: String(e) }).pipe(Effect.as(false as const))),
+                      Effect.catchDefect((e) => Effect.logWarning("durable fork claimed cleanup defect", { target: claimed.target, cause: String(e) }).pipe(Effect.as(false as const))),
+                    ))
+                if (ok) ownedBase = false
+                else yield* Effect.logWarning("durable fork claimed file retained (cleanup failed)", { target: claimed.target, cause: msg })
+                const curRev = yield* readRevOmit(sessionId)
+                const curCfg = yield* readCfgOmit(canonDir)
+                return buildFailed(req, "internal", msg, false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+              }
+              const msg = err instanceof Error ? err.message : String(err)
+              const curRev = yield* readRevOmit(sessionId)
+              const curCfg = yield* readCfgOmit(canonDir)
+              return buildFailed(req, "internal", msg, false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+            }
+            // Second diff write (exclusive) — partial failure must clean only first (owned)
+            const secondOutcome = yield* Effect.gen(function* () {
+              if (ForkSeam.failSecondDiffWrite) return yield* Effect.fail(new Error("injected second diff write failure"))
+              yield* Effect.promise(() => writeStorageExclusive(secondKey, baseForDiff))
+              ownedDiff = true
+            }).pipe(
+              Effect.map(() => ({ _tag: "ok" as const })),
+              Effect.catch((e) => Effect.succeed({ _tag: "fail" as const, error: e })),
+              Effect.catchDefect((e) => Effect.succeed({ _tag: "fail" as const, error: e })),
+            )
+            if (secondOutcome._tag === "fail") {
+              const err = secondOutcome.error
+              // If second write was a claimed failure, the second file exists orphan — transfer handle cleanup before partial first cleanup
+              if (isClaimedWriteError(err)) {
+                const claimed2 = err as ClaimedWriteError
+                ownedDiff = true
+                const original2 = (claimed2.cause as unknown) ?? claimed2
+                const msg2 = original2 instanceof Error ? original2.message : String(original2)
+                const ok2 = yield* (ForkSeam.failCleanupFs
+                  ? Effect.gen(function* () {
+                      ForkSeam.capturedCleanupWarnings.push({ target: claimed2.target, cause: "injected cleanup fs failure" })
+                      yield* Effect.logWarning("durable fork claimed second cleanup failed", { target: claimed2.target, cause: "injected cleanup fs failure" })
+                    }).pipe(Effect.as(false as const))
+                  : Effect.promise(() => claimed2.handle.cleanup()).pipe(
+                      Effect.map((v) => v as boolean),
+                      Effect.catch((e) => Effect.logWarning("durable fork claimed second cleanup failed", { target: claimed2.target, cause: String(e) }).pipe(Effect.as(false as const))),
+                      Effect.catchDefect((e) => Effect.logWarning("durable fork claimed second cleanup defect", { target: claimed2.target, cause: String(e) }).pipe(Effect.as(false as const))),
+                    ))
+                if (ok2) ownedDiff = false
+                else yield* Effect.logWarning("durable fork claimed second file retained", { target: claimed2.target, cause: msg2 })
+                // also clean owned first as before
+                const okFirst = yield* (ForkSeam.failCleanupFs
+                  ? Effect.gen(function* () {
+                      ForkSeam.capturedCleanupWarnings.push({ target: String(firstKey), cause: "injected cleanup fs failure" })
+                      yield* Effect.logWarning("durable fork second diff partial cleanup failed", { target: String(firstKey), cause: "injected cleanup fs failure" })
+                    }).pipe(Effect.as(false as const))
+                  : Effect.promise(() => fs.rm(storageFileForKey(firstKey, Global.Path.data), { force: true })).pipe(
+                      Effect.map(() => true as const),
+                      Effect.catch((e) => Effect.logWarning("durable fork second diff partial cleanup failed", { target: String(firstKey), cause: String(e) }).pipe(Effect.as(false as const))),
+                      Effect.catchDefect((e) => Effect.logWarning("durable fork second diff partial cleanup defect", { target: String(firstKey), cause: String(e) }).pipe(Effect.as(false as const))),
+                    ))
+                if (okFirst) ownedBase = false
+                if (isEexist(original2)) {
+                  const curRev = yield* readRevOmit(sessionId)
+                  const curCfg = yield* readCfgOmit(canonDir)
+                  return buildFailed(req, "conflict", "fork target already exists", false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+                }
+                const curRev = yield* readRevOmit(sessionId)
+                const curCfg = yield* readCfgOmit(canonDir)
+                return buildFailed(req, "internal", msg2, false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+              }
+              // Clean only owned first — log failures, retain ownership until success
+              const ok = yield* (ForkSeam.failCleanupFs
+                ? Effect.gen(function* () {
+                    ForkSeam.capturedCleanupWarnings.push({ target: String(firstKey), cause: "injected cleanup fs failure" })
+                    yield* Effect.logWarning("durable fork second diff partial cleanup failed", { target: String(firstKey), cause: "injected cleanup fs failure" })
+                  }).pipe(Effect.as(false as const))
+                : Effect.promise(() => fs.rm(storageFileForKey(firstKey, Global.Path.data), { force: true })).pipe(
+                    Effect.map(() => true as const),
+                    Effect.catch((e) => Effect.logWarning("durable fork second diff partial cleanup failed", { target: String(firstKey), cause: String(e) }).pipe(Effect.as(false as const))),
+                    Effect.catchDefect((e) => Effect.logWarning("durable fork second diff partial cleanup defect", { target: String(firstKey), cause: String(e) }).pipe(Effect.as(false as const))),
+                  ))
+              if (ok) ownedBase = false
+              if (isEexist(err)) {
+                const curRev = yield* readRevOmit(sessionId)
+                const curCfg = yield* readCfgOmit(canonDir)
+                return buildFailed(req, "conflict", "fork target already exists", false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+              }
+              const msg = err instanceof Error ? err.message : String(err)
+              const curRev = yield* readRevOmit(sessionId)
+              const curCfg = yield* readCfgOmit(canonDir)
+              return buildFailed(req, "internal", msg, false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+            }
+          }
+          if (ForkSeam.failSandboxWrite) {
+            // clean diff owned artifacts before failing — preserve ownership flags until cleanup succeeds
+            yield* cleanupOwned.pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+            const curRev = yield* readRevOmit(sessionId)
+            const curCfg = yield* readCfgOmit(canonDir)
+            return buildFailed(req, "internal", "injected sandbox write failure", false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+          }
+          // Sandbox inherit with exclusive claim (may be no-op if source has no sandbox)
+          let parentSnap: SandboxStore.Snapshot | undefined
+          if (fallback) {
+            parentSnap = fallback as unknown as SandboxStore.Snapshot
+          } else {
+            parentSnap = yield* Effect.promise(() => SandboxStore.read(srcDir, sessionId)).pipe(
+              Effect.map((v) => v as SandboxStore.Snapshot | undefined),
+              Effect.catch((e) => (isEnoent(e) ? Effect.succeed(undefined) : Effect.fail(e))),
+              Effect.catchDefect((e) => Effect.fail(e)),
+            )
+          }
+          if (parentSnap) {
+            const nextSnap: SandboxStore.Snapshot = { ...parentSnap, version: 0 }
+            const sandboxOutcome = yield* Effect.gen(function* () {
+              yield* Effect.promise(() => SandboxStore.writeExclusive(canonDir, newId as unknown as SessionID, nextSnap))
+              ownedSandbox = true
+            }).pipe(
+              Effect.map(() => ({ _tag: "ok" as const })),
+              Effect.catch((e) => Effect.succeed({ _tag: "fail" as const, error: e })),
+              Effect.catchDefect((e) => Effect.succeed({ _tag: "fail" as const, error: e })),
+            )
+            if (sandboxOutcome._tag === "fail") {
+              const err = sandboxOutcome.error
+              if (isClaimedWriteError(err)) {
+                const claimedSb = err as ClaimedWriteError
+                ownedSandbox = true
+                const originalSb = (claimedSb.cause as unknown) ?? claimedSb
+                const msgSb = originalSb instanceof Error ? originalSb.message : String(originalSb)
+                // clean owned diffs before handling sandbox claimed orphan
+                yield* cleanupOwned.pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+                const okSb = yield* (ForkSeam.failCleanupFs
+                  ? Effect.gen(function* () {
+                      ForkSeam.capturedCleanupWarnings.push({ target: claimedSb.target, cause: "injected cleanup fs failure" })
+                      yield* Effect.logWarning("durable fork sandbox claimed cleanup failed", { target: claimedSb.target, cause: "injected cleanup fs failure" })
+                    }).pipe(Effect.as(false as const))
+                  : Effect.promise(() => claimedSb.handle.cleanup()).pipe(
+                      Effect.map((v) => v as boolean),
+                      Effect.catch((e) => Effect.logWarning("durable fork sandbox claimed cleanup failed", { target: claimedSb.target, cause: String(e) }).pipe(Effect.as(false as const))),
+                      Effect.catchDefect((e) => Effect.logWarning("durable fork sandbox claimed cleanup defect", { target: claimedSb.target, cause: String(e) }).pipe(Effect.as(false as const))),
+                    ))
+                if (okSb) ownedSandbox = false
+                else yield* Effect.logWarning("durable fork sandbox claimed file retained", { target: claimedSb.target, cause: msgSb })
+                if (isEexist(originalSb)) {
+                  const curRev = yield* readRevOmit(sessionId)
+                  const curCfg = yield* readCfgOmit(canonDir)
+                  return buildFailed(req, "conflict", "fork target already exists", false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+                }
+                const curRev = yield* readRevOmit(sessionId)
+                const curCfg = yield* readCfgOmit(canonDir)
+                return buildFailed(req, "internal", msgSb, false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+              }
+              // Clean only owned diff artifacts — flags cleared only after successful removal inside cleanupOwned
+              yield* cleanupOwned.pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+              // ownedSandbox not set, so no sandbox to clean (failed before ownership)
+              if (isEexist(err)) {
+                const curRev = yield* readRevOmit(sessionId)
+                const curCfg = yield* readCfgOmit(canonDir)
+                return buildFailed(req, "conflict", "fork target already exists", false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+              }
+              const msg = err instanceof Error ? err.message : String(err)
+              const curRev = yield* readRevOmit(sessionId)
+              const curCfg = yield* readCfgOmit(canonDir)
+              return buildFailed(req, "internal", msg, false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+            }
+          }
+
+          // DB transaction (session/ messages/ parts/ event/ operation) - no filesystem inside.
+          type TxOut = { result: SessionForkResult; event?: unknown; sideEffect?: { newId: string; parentID: string } }
           const txOut: TxOut = yield* db.transaction(
             (tx) =>
               Effect.gen(function* () {
+                if (ForkSeam.failTxAfterFs) return yield* Effect.fail(new Error("injected transaction failure after filesystem writes"))
                 const already = yield* SessionOperation.getSessionForkByIdempotencyHashTx(tx as unknown as typeof db, sessionId, hash)
                 if (already) {
                   const c = SessionOperation.isSessionForkConflict(already, {
@@ -519,7 +933,6 @@ export const layer = Layer.effect(
                   orderedMessages: msgRows.map((r) => ({ id: r.id as unknown as string, role: (r.data as Record<string, unknown>).role as string, model: (r.data as Record<string, unknown>).model })),
                 }) as unknown
 
-                const newId = SessionID.descending()
                 const newTitle = getForkedTitle((src as unknown as { title: string }).title)
                 const now = Date.now()
                 const slug = Slug.create()
@@ -620,23 +1033,12 @@ export const layer = Layer.effect(
                   }
                 }
 
-                const inserted = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, newId)).get().pipe(Effect.orDie)
+                // @ts-ignore drizzle branded SessionID overload mismatch — runtime types are compatible (both SessionID strings)
+                const inserted = yield* (tx.select() as unknown as { from: (t: unknown) => { where: (c: unknown) => { get: () => unknown } } }).from(SessionTable).where(eq(SessionTable.id as unknown, newId as unknown)).get().pipe(Effect.orDie) as unknown as typeof SessionTable.$inferSelect | undefined
                 if (!inserted) yield* Effect.die(new Error("forked session missing after insert"))
                 const insertedNonNull = inserted as typeof inserted & { workspace_id: string | null; directory: string }
 
-                // Lifecycle: register, sandbox inherit, cumulative diff - must not be swallowed; failure rolls back
-                yield* Effect.sync(() => KiloSession.register({ id: newId, parentID: sessionId }))
-                const srcDir = (src as unknown as { directory: string }).directory
-                const fallback = yield* SandboxPolicy.peek(srcDir, sessionId).pipe(
-                  Effect.catch(() => Effect.succeed(undefined as unknown as SandboxPolicy.Snapshot | undefined)),
-                  Effect.catchDefect(() => Effect.succeed(undefined as unknown as SandboxPolicy.Snapshot | undefined)),
-                )
-                yield* SandboxPolicy.inherit(sessionId as unknown as SessionID, newId as unknown as SessionID, fallback as unknown as Omit<SandboxPolicy.Snapshot, "version"> | undefined, srcDir).pipe(
-                  Effect.provideService(InstanceRef, targetCtx),
-                )
-                yield* carryForkDiff(sessionId as unknown as SessionID, newId as unknown as SessionID)
-
-                // Event and operation in same tx
+                // Event and operation in same tx (filesystem side effects already done outside)
                 const info = Session.fromRow(insertedNonNull as unknown as Parameters<typeof Session.fromRow>[0]) as unknown as Session.Info
                 const loc = new Location.Info({
                   directory: AbsolutePath.make(canonDir),
@@ -671,10 +1073,23 @@ export const layer = Layer.effect(
                 const opRec = yield* SessionOperation.insertSessionForkSucceededTx(tx as unknown as typeof db, sessionId, record, meta, snapshotJson)
                 const opInfo = snapshotToInfo((opRec as unknown as { resultSnapshot: unknown }).resultSnapshot)
                 if (!opInfo) yield* Effect.die(new Error("invalid snapshot after fork insert"))
-                return { result: buildSucceeded(req, opInfo as unknown as Session.Info, makeRevision((opRec as unknown as { revision: number }).revision, effectiveInside)), event } as unknown as TxOut
+                return { result: buildSucceeded(req, opInfo as unknown as Session.Info, makeRevision((opRec as unknown as { revision: number }).revision, effectiveInside)), event, sideEffect: { newId, parentID: sessionId as unknown as string } } as unknown as TxOut
               }),
             { behavior: "immediate" },
           )
+          // If transaction returned a failed result (e.g., race-induced conflict/stale), clean owned filesystem artifacts before returning.
+          // Flags cleared only after successful removal inside cleanupOwned; retained ownership diagnostics on cleanup failure.
+          if ((txOut as unknown as { result: SessionForkResult }).result.status === "failed") {
+            yield* cleanupOwned.pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+          }
+          // Post-commit side effects (commit-safe boundary): register is best-effort; diff and sandbox inherit already committed outside tx
+          const side = (txOut as unknown as { sideEffect?: { newId: string; parentID: string } }).sideEffect
+          if (side) {
+            yield* Effect.sync(() => KiloSession.register({ id: side.newId, parentID: side.parentID })).pipe(
+              Effect.catch((e: unknown) => Effect.sync(() => log.warn("fork post-commit register failed", { error: e instanceof Error ? e.message : String(e), newId: side.newId }))),
+              Effect.catchDefect((e: unknown) => Effect.sync(() => log.warn("fork post-commit register defect", { error: String(e), newId: side.newId }))),
+            )
+          }
           // Notify outside transaction
           if ((txOut as unknown as { event?: unknown }).event) {
             const ev = (txOut as unknown as { event: unknown }).event
@@ -684,11 +1099,54 @@ export const layer = Layer.effect(
             )
           }
           return (txOut as unknown as { result: SessionForkResult }).result
-        }).pipe(Effect.ensuring(leaseRelease))
+        }).pipe(
+          Effect.ensuring(leaseRelease),
+          Effect.catch((cause: unknown) =>
+            Effect.gen(function* () {
+              // If cause is already a SessionForkFailed wrapped as success value, it would have been returned,
+              // not thrown. So this path is for Effect.fail (transaction or filesystem injection).
+              // Clean only owned artifacts.
+              yield* cleanupOwned.pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+              // If forkedId was set but transaction failed before sideEffect register, ensure no in-memory ghost
+              if (forkedId) yield* Effect.sync(() => KiloSession.clearPlatformOverride(forkedId as string)).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+              if (isUniqueViolation(cause)) {
+                const curRev = yield* readRevOmit(sessionId)
+                const curCfg = yield* readCfgOmit(canonDir)
+                return buildFailed(req, "conflict", "fork target already exists", false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+              }
+              // Return internal failure (preserve fork failure semantics)
+              const msg = cause instanceof Error ? cause.message : String(cause)
+              const curRev = yield* readRevOmit(sessionId)
+              const curCfg = yield* readCfgOmit(canonDir)
+              return buildFailed(req, "internal", msg, false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+            }),
+          ),
+          Effect.catchDefect((defect: unknown) =>
+            Effect.gen(function* () {
+              yield* cleanupOwned.pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+              if (forkedId) yield* Effect.sync(() => KiloSession.clearPlatformOverride(forkedId as string)).pipe(Effect.catch(() => Effect.void), Effect.catchDefect(() => Effect.void))
+              if (isUniqueViolation(defect)) {
+                const curRev = yield* readRevOmit(sessionId)
+                const curCfg = yield* readCfgOmit(canonDir)
+                return buildFailed(req, "conflict", "fork target already exists", false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+              }
+              const msg = defect instanceof Error ? defect.message : String(defect)
+              const curRev = yield* readRevOmit(sessionId)
+              const curCfg = yield* readCfgOmit(canonDir)
+              return buildFailed(req, "internal", msg, false, false, makeRevision(curRev, curCfg)) as unknown as SessionForkResult
+            }),
+          ),
+        )
         return txResult
       }).pipe(
         Effect.catchDefect((defect: unknown) =>
           Effect.gen(function* () {
+            if (isUniqueViolation(defect)) {
+              const curRev = yield* readRevOmit(sessionId)
+              const curCfg = yield* readCfgOmit(canonDir)
+              const revision = makeRevision(curRev, curCfg)
+              return buildFailed(req, "conflict", "fork target already exists", false, false, revision)
+            }
             const msg = defect instanceof Error ? defect.message : String(defect)
             const curRev = yield* readRevOmit(sessionId)
             const curCfg = yield* readCfgOmit(canonDir)
@@ -698,6 +1156,12 @@ export const layer = Layer.effect(
         ),
         Effect.catch((cause: unknown) =>
           Effect.gen(function* () {
+            if (isUniqueViolation(cause)) {
+              const curRev = yield* readRevOmit(sessionId)
+              const curCfg = yield* readCfgOmit(canonDir)
+              const revision = makeRevision(curRev, curCfg)
+              return buildFailed(req, "conflict", "fork target already exists", false, false, revision)
+            }
             const msg = cause instanceof Error ? cause.message : String(cause)
             const curRev = yield* readRevOmit(sessionId)
             const curCfg = yield* readCfgOmit(canonDir)

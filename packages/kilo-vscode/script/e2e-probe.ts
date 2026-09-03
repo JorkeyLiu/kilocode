@@ -297,6 +297,7 @@ import {
   waitForNoDock,
 } from "./e2e-probe-worktree"
 import { isDirectExecution } from "./e2e-direct"
+import { createE2EMarker } from "../src/util/e2e-fixture"
 
 if (process.versions.bun && isDirectExecution()) {
   console.error(
@@ -2916,7 +2917,7 @@ async function main() {
   // belongs to current harness run (not any absolute path). Created before
   // VS Code launch so both ServerManager and CLI provider seams validate it;
   // survives child restarts/window reload (scratch owner cleans it).
-  writeFileSync(join(scratch, "e2e-marker.json"), JSON.stringify({ v: 1, fixtureId }))
+  createE2EMarker(scratch, fixtureId)
   process.env.KILO_E2E_FIXTURE_ID = fixtureId
   process.env.KILO_E2E_SCRATCH = scratch
 

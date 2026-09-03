@@ -84,6 +84,12 @@ export function canonicalForkOpId(sessionId: string, token?: string): string {
   return `fork:${sessionId}`
 }
 
+export function canonicalCreateOpId(token: string): string {
+  if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
+  if (token.includes(":")) throw new TypeError("token must not contain ':'")
+  return `create:${token}`
+}
+
 const SESSION_TITLE_LIMIT = 200
 const unsafeTitle = /[\u0000-\u001f\u007f-\u009f\u061c\u200e\u200f\u2028\u2029\u202a-\u202e\u2066-\u2069]/u
 function validateTitleStrict(raw: unknown): string {
@@ -326,6 +332,94 @@ function makeForkFailedInternal(req: ServePrivateForkRequest, message: string, c
     requestId: req.requestId,
     opId: req.opId,
     op: "session/fork",
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time: Date.now(), failure: { code, message, retryable: false } },
+    accepted: false,
+    failure: { code, message, retryable: false },
+  }
+}
+
+export interface ServePrivateCreateRequest {
+  v: 1
+  requestId: string
+  opId: string
+  op: "session/create"
+  idempotencyKey: string
+  context: {
+    directory: string
+    parentSessionId?: string | null
+    configVersion?: number
+  }
+  payload: {
+    title?: string | null
+    parentID?: string | null
+  }
+}
+
+export type ServePrivateCreateResult =
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "session/create"
+      idempotencyKey: string
+      status: "succeeded"
+      outcome: { type: "succeeded"; time: number }
+      accepted: true
+      data: { session: Record<string, unknown> }
+      revision?: { session: number; config: number }
+    }
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "session/create"
+      idempotencyKey: string
+      status: "failed"
+      outcome: {
+        type: "failed"
+        time: number
+        failure: { code: string; message: string; retryable: boolean; detail?: string }
+      }
+      accepted: boolean
+      failure: { code: string; message: string; retryable: boolean; detail?: string }
+      revision?: { session: number; config: number }
+    }
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "session/create"
+      idempotencyKey: string
+      status: "ambiguous"
+      outcome: { type: "ambiguous"; time: number }
+      accepted: false
+      revision?: { session: number; config: number }
+      transportUnknown?: boolean
+    }
+
+function makeCreateAmbiguous(req: ServePrivateCreateRequest, transportUnknown = true): ServePrivateCreateResult {
+  const out: ServePrivateCreateResult = {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: "session/create",
+    idempotencyKey: req.idempotencyKey,
+    status: "ambiguous",
+    outcome: { type: "ambiguous", time: Date.now() },
+    accepted: false,
+  }
+  if (transportUnknown) (out as { transportUnknown?: boolean }).transportUnknown = true
+  return out
+}
+
+function makeCreateFailedInternal(req: ServePrivateCreateRequest, message: string, code = "internal"): ServePrivateCreateResult {
+  return {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: "session/create",
     idempotencyKey: req.idempotencyKey,
     status: "failed",
     outcome: { type: "failed", time: Date.now(), failure: { code, message, retryable: false } },
@@ -676,6 +770,17 @@ export function validateForkRequest(raw: unknown): ServePrivateForkRequest {
     const parsed = parseForkOpId(opId)
     if (parsed.parts[0] !== ctx.sessionId) throw new Error(`opId session binding mismatch: ${opId} vs ${ctx.sessionId}`)
   }
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for fork")
+  const idem = raw.idempotencyKey as string
+  if (idem === `fork:${ctx.sessionId as string}`) {
+  } else if (idem.startsWith(`fork:${ctx.sessionId as string}:`)) {
+    const token = idem.slice(`fork:${ctx.sessionId as string}:`.length)
+    if (token.length === 0) throw new TypeError(`idempotencyKey segment must be non-empty: ${idem}`)
+    if (token.includes(":")) throw new TypeError(`idempotencyKey token must not contain ':'`)
+  } else {
+    const parsed = parseForkOpId(idem)
+    if (parsed.parts[0] !== ctx.sessionId) throw new Error(`idempotencyKey session binding mismatch: ${idem} vs ${ctx.sessionId}`)
+  }
   return raw as unknown as ServePrivateForkRequest
 }
 
@@ -730,6 +835,108 @@ export function validateForkResult(raw: unknown, req: ServePrivateForkRequest): 
   return raw as unknown as ServePrivateForkResult
 }
 
+function parseCreateOpId(opId: string): { kind: string; parts: string[] } {
+  if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
+  const segs = opId.split(":")
+  if (segs.length < 2) throw new TypeError(`opId must contain ':'`)
+  const kind = segs[0]!
+  if (kind !== "create") throw new TypeError(`opId kind must be create: ${opId}`)
+  const rest = segs.slice(1)
+  for (const p of rest) if (p.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
+  if (rest.length !== 1) throw new TypeError(`create opId must have 1 segment: ${opId}`)
+  return { kind, parts: rest }
+}
+
+// eslint-disable-next-line complexity
+export function validateCreateRequest(raw: unknown): ServePrivateCreateRequest {
+  if (!isRecord(raw)) throw new Error("request must be object")
+  if (raw.v !== 1) throw new Error("v must be 1")
+  if (!isNonEmptyString(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmptyString(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== "session/create") throw new Error("op must be session/create")
+  if (!isNonEmptyString(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  if (typeof ctx.directory !== "string" || !isAbsolute(ctx.directory as string) || (ctx.directory as string).includes("\0"))
+    throw new Error("context.directory must be absolute path")
+  if ("parentSessionId" in ctx && ctx.parentSessionId !== null && ctx.parentSessionId !== undefined)
+    throw new Error("context.parentSessionId must be null")
+  if ("configVersion" in ctx && ctx.configVersion !== undefined && !isSafeInt(ctx.configVersion))
+    throw new Error("context.configVersion must be integer >=0")
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if ("title" in payload && payload.title !== null && payload.title !== undefined) {
+    if (typeof payload.title !== "string") throw new Error("payload.title must be string")
+    validateTitleStrict(payload.title)
+  }
+  if ("parentID" in payload && payload.parentID !== null && payload.parentID !== undefined) {
+    if (!isSessionId(payload.parentID)) throw new Error("payload.parentID must be SessionID")
+  }
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw as Record<string, unknown>)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const allowedCtx = new Set(["directory", "parentSessionId", "configVersion"])
+  for (const k of Object.keys(ctx as Record<string, unknown>)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  const allowedPayload = new Set(["title", "parentID"])
+  for (const k of Object.keys(payload as Record<string, unknown>)) if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
+  const opId = raw.opId as string
+  parseCreateOpId(opId)
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for create")
+  parseCreateOpId(raw.idempotencyKey as string)
+  return raw as unknown as ServePrivateCreateRequest
+}
+
+// eslint-disable-next-line complexity
+export function validateCreateResult(raw: unknown, req: ServePrivateCreateRequest): ServePrivateCreateResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  if (raw.v !== 1) throw new Error("result v must be 1")
+  if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+  if (raw.opId !== req.opId) throw new Error("opId mismatch")
+  if (raw.op !== "session/create") throw new Error("op mismatch")
+  if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+  const status = raw.status
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous") throw new Error("status must be succeeded/failed/ambiguous")
+  if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
+  const outcome = raw.outcome
+  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number") throw new Error("outcome invalid")
+  if (outcome.type !== status) throw new Error("outcome.type must match status")
+  if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
+  if ("revision" in raw && raw.revision !== undefined) {
+    const rev = raw.revision as unknown
+    if (!isRecord(rev) || typeof rev.session !== "number" || typeof rev.config !== "number" || !isSafeInt(rev.session) || !isSafeInt(rev.config))
+      throw new Error("revision must be {session,config} integers")
+  }
+  if ("transportUnknown" in raw && raw.transportUnknown !== undefined && typeof raw.transportUnknown !== "boolean")
+    throw new Error("transportUnknown must be boolean")
+  if (status === "succeeded") {
+    if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
+    const data = (raw as Record<string, unknown>).data
+    if (!isRecord(data)) throw new Error("succeeded data must be object")
+    if (!isRecord((data as Record<string, unknown>).session)) throw new Error("succeeded data.session must be object")
+    if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
+    if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("succeeded outcome must not have failure")
+    return raw as unknown as ServePrivateCreateResult
+  }
+  if (status === "failed") {
+    const failure = (raw as Record<string, unknown>).failure
+    const outFailure = (outcome as Record<string, unknown>).failure
+    if (!isRecord(failure) || typeof failure.code !== "string" || typeof failure.message !== "string" || typeof failure.retryable !== "boolean")
+      throw new Error("failed failure invalid")
+    if (!isRecord(outFailure) || typeof outFailure.code !== "string" || typeof outFailure.message !== "string" || typeof outFailure.retryable !== "boolean")
+      throw new Error("failed outcome.failure invalid")
+    if (failure.code !== (outFailure as Record<string, unknown>).code) throw new Error("failure code mismatch")
+    if (failure.message !== (outFailure as Record<string, unknown>).message) throw new Error("failure message mismatch")
+    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable) throw new Error("failure retryable mismatch")
+    if ((raw as Record<string, unknown>).data !== undefined) throw new Error("failed must not have data")
+    return raw as unknown as ServePrivateCreateResult
+  }
+  if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+  if ((raw as Record<string, unknown>).data !== undefined) throw new Error("ambiguous must not have data")
+  if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous must not have failure")
+  if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous outcome must not have failure")
+  if ((outcome as Record<string, unknown>).data !== undefined) throw new Error("ambiguous outcome must not have data")
+  return raw as unknown as ServePrivateCreateResult
+}
+
 export interface ServePrivatePeerOptions {
   reader: NodeJS.ReadableStream | null
   writer: NodeJS.WritableStream | null
@@ -739,13 +946,18 @@ export interface ServePrivatePeerOptions {
   initializeTimeoutMs?: number
 }
 
+const invalidatedTransports = new WeakSet<object>()
+
 export class ServePrivatePeer {
   private peer: JsonRpcPeer | null = null
   private available = false
   private disposed = false
+  private invalidated = false
   private capabilities: Record<string, unknown> | unknown[] | null = null
   private initRaw: unknown | null = null
   private initEpoch: number | null = null
+  private initializing: Promise<boolean> | null = null
+  private initSeq = 0
 
   constructor(private readonly opts: ServePrivatePeerOptions) {}
 
@@ -773,10 +985,24 @@ export class ServePrivatePeer {
     return this.initRaw
   }
 
-  // eslint-disable-next-line complexity
   async initialize(timeoutMs = 5000): Promise<boolean> {
     if (this.disposed) return false
+    if (this.invalidated) return false
+    if (this.opts.reader && invalidatedTransports.has(this.opts.reader as object)) return false
+    if (this.opts.writer && invalidatedTransports.has(this.opts.writer as object)) return false
     if (this.available) return true
+    if (this.initializing) return this.initializing
+    const seq = ++this.initSeq
+    this.initializing = this.doInitialize(timeoutMs, seq)
+    try {
+      return await this.initializing
+    } finally {
+      if (this.initSeq === seq) this.initializing = null
+    }
+  }
+
+  // eslint-disable-next-line complexity
+  private async doInitialize(timeoutMs: number, seq: number): Promise<boolean> {
     const actualTimeout = this.opts.initializeTimeoutMs ?? timeoutMs
     if (!this.opts.reader || !this.opts.writer) {
       this.available = false
@@ -789,6 +1015,8 @@ export class ServePrivatePeer {
       writer: this.opts.writer,
       child: this.opts.process ?? undefined,
       onClosed: () => {
+        if (this.initSeq !== seq) return
+        if (this.peer !== peerAtStart) return
         if (this.initEpoch !== epochAtStart) return
         if (this.opts.epoch !== epochAtStart) return
         this.available = false
@@ -799,7 +1027,7 @@ export class ServePrivatePeer {
     const initPromise = peerAtStart.request("initialize", {
       protocol: { name: "kilo-private", major: 1, minor: 0 },
       clientInfo: { name: "kilo-vscode", version: "7.4.11" },
-      capabilities: ["session/cancelQueued", "session/update", "session/fork"],
+      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create"],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
 
@@ -812,6 +1040,15 @@ export class ServePrivatePeer {
     try {
       const res = (await Promise.race([initPromise, timeout])) as Record<string, unknown>
       if (timer) clearTimeout(timer)
+      if (this.initSeq !== seq) {
+        bestEffortDispose(peerAtStart, "stale-seq")
+        if (this.peer === peerAtStart) this.peer = null
+        return false
+      }
+      if (this.peer !== peerAtStart) {
+        bestEffortDispose(peerAtStart, "stale-peer")
+        return false
+      }
       if (this.disposed) return false
       if (this.initEpoch !== epochAtStart) return false
       if (this.opts.epoch !== epochAtStart) return false
@@ -819,6 +1056,7 @@ export class ServePrivatePeer {
         this.available = false
         bestEffortDispose(peerAtStart, "post-initialize-closed")
         if (this.peer === peerAtStart) this.peer = null
+        this.markTransportInvalidated()
         return false
       }
 
@@ -844,6 +1082,7 @@ export class ServePrivatePeer {
         bestEffortDispose(peerAtStart, "protocol-mismatch")
         if (this.peer === peerAtStart) this.peer = null
         console.warn("[Kilo PrivatePeer] protocol mismatch fail-closed:", { protoName, protoMajor })
+        this.markTransportInvalidated()
         return false
       }
 
@@ -851,10 +1090,12 @@ export class ServePrivatePeer {
       let hasCancelQueued = false
       let hasSessionUpdate = false
       let hasFork = false
+      let hasCreate = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
         hasFork = caps.includes("session/fork")
+        hasCreate = caps.includes("session/create")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -887,21 +1128,39 @@ export class ServePrivatePeer {
           const sess = (c as Record<string, unknown>).session as Record<string, unknown>
           if ((sess as Record<string, unknown>).fork) hasFork = true
         } else if (c["session/fork"] === true) hasFork = true
+        if ((c as Record<string, unknown>)["session/create"]) hasCreate = true
+        else if (
+          Array.isArray((c as Record<string, unknown>).session) &&
+          ((c as Record<string, unknown>).session as unknown[]).includes("create")
+        )
+          hasCreate = true
+        else if ((c as Record<string, unknown>).session && typeof (c as Record<string, unknown>).session === "object") {
+          const sess = (c as Record<string, unknown>).session as Record<string, unknown>
+          if ((sess as Record<string, unknown>).create) hasCreate = true
+        } else if (c["session/create"] === true) hasCreate = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
           hasFork = false
+          hasCreate = false
         }
       }
 
-      if (!hasCancelQueued && !hasSessionUpdate && !hasFork) {
+      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
         if (this.peer === peerAtStart) this.peer = null
+        this.markTransportInvalidated()
         return false
       }
 
-      if (this.disposed || this.initEpoch !== epochAtStart || this.opts.epoch !== epochAtStart) {
+      if (
+        this.initSeq !== seq ||
+        this.peer !== peerAtStart ||
+        this.disposed ||
+        this.initEpoch !== epochAtStart ||
+        this.opts.epoch !== epochAtStart
+      ) {
         bestEffortDispose(peerAtStart, "stale-epoch")
         if (this.peer === peerAtStart) this.peer = null
         return false
@@ -914,7 +1173,7 @@ export class ServePrivatePeer {
     } catch (err) {
       if (timer) clearTimeout(timer)
       console.warn("[Kilo PrivatePeer] initialize failed:", String(err))
-      if (this.disposed || this.initEpoch !== epochAtStart) {
+      if (this.initSeq !== seq || this.peer !== peerAtStart || this.disposed || this.initEpoch !== epochAtStart) {
         bestEffortDispose(peerAtStart, "initialize-disposed")
         if (this.peer === peerAtStart) this.peer = null
         return false
@@ -922,12 +1181,130 @@ export class ServePrivatePeer {
       this.available = false
       bestEffortDispose(peerAtStart, "initialize-error")
       if (this.peer === peerAtStart) this.peer = null
+      this.markTransportInvalidated()
       return false
     }
   }
 
-  // eslint-disable-next-line complexity
   async privateCancelQueued(req: ServePrivateCancelQueuedRequest): Promise<ServePrivateCancelQueuedResult> {
+    const handle = this.privateCancelQueuedWithHandle(req)
+    return handle.promise
+  }
+
+  private isStaleHandle(peerAtCall: JsonRpcPeer, epoch: number): boolean {
+    if (this.disposed) return true
+    if (this.opts.epoch !== epoch) return true
+    if (this.peer !== peerAtCall) return true
+    if (peerAtCall.getState() === "closed") return true
+    return false
+  }
+
+  private isClosedHandle(peerAtCall: JsonRpcPeer, epoch: number, err: unknown): boolean {
+    if (this.isStaleHandle(peerAtCall, epoch)) return true
+    if (this.peer?.getState() === "closed") return true
+    const e = err as { code?: number; message?: string; stale?: boolean }
+    if (e?.stale === true) return true
+    if (e?.code === -32603) return true
+    const m = e?.message
+    if (typeof m === "string") {
+      if (m.includes("Peer closed")) return true
+      if (m.includes("Peer disposed")) return true
+      if (m.includes("Peer is closed")) return true
+    }
+    return false
+  }
+
+  private parseFailedInfo(err: unknown): { code: string; msg: string } {
+    const e = err as { code?: number; message?: string }
+    const code = typeof e?.code === "number" ? String(e.code) : "internal"
+    const msg = e?.message ?? String(err)
+    return { code, msg }
+  }
+
+  private failedCancelQueued(req: ServePrivateCancelQueuedRequest, code: string, msg: string): ServePrivateCancelQueuedResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/cancelQueued",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  private failedUpdate(req: ServePrivateSessionUpdateRequest, code: string, msg: string): ServePrivateSessionUpdateResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/update",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  private failedFork(req: ServePrivateForkRequest, code: string, msg: string): ServePrivateForkResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/fork",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  private failedCreate(req: ServePrivateCreateRequest, code: string, msg: string): ServePrivateCreateResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/create",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
+  private makeHandleCancel(id: number, opId: string, peerAtCall: JsonRpcPeer, epoch: number): (msg?: string) => boolean {
+    return (msg = "private parity timeout"): boolean => {
+      if (this.isStaleHandle(peerAtCall, epoch)) {
+        try {
+          this.invalidateOnObserverTimeout(`stale observer timeout opId=${opId}`)
+        } catch {}
+        return false
+      }
+      let ok = false
+      try {
+        ok = this.tryCancelPending(id, msg)
+      } catch {
+        try {
+          this.invalidateOnObserverTimeout(`observer timeout cancel throw opId=${opId}`)
+        } catch {}
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidateOnObserverTimeout(`observer timeout exact cancel miss opId=${opId}`)
+        } catch {}
+        return false
+      }
+      return true
+    }
+  }
+
+  privateCancelQueuedWithHandle(req: ServePrivateCancelQueuedRequest): { id: number; promise: Promise<ServePrivateCancelQueuedResult>; cancel: (msg?: string) => boolean } {
     validateCancelQueuedRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -935,55 +1312,25 @@ export class ServePrivatePeer {
     }
     const currentEpoch = this.opts.epoch
     const peerAtCall = this.peer
-    try {
-      const raw = (await peerAtCall.request("session/cancelQueued", req)) as unknown
-      if (
-        this.opts.epoch !== currentEpoch ||
-        this.disposed ||
-        this.peer !== peerAtCall ||
-        peerAtCall.getState() === "closed"
-      ) {
-        return makeAmbiguous(req, true)
-      }
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/cancelQueued", req)
+    const promise = (async (): Promise<ServePrivateCancelQueuedResult> => {
       try {
-        const validated = validateCancelQueuedResult(raw, req)
-        return validated
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        return makeFailedInternal(req, `invalid private response shape: ${msg}`)
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeAmbiguous(req, true)
+        try {
+          return validateCancelQueuedResult(raw, req)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          return makeFailedInternal(req, `invalid private response shape: ${msg}`)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeAmbiguous(req, true)
+        const { code, msg } = this.parseFailedInfo(e)
+        return this.failedCancelQueued(req, code, msg)
       }
-    } catch (e: unknown) {
-      const err = e as { code?: number; message?: string; stale?: boolean; data?: unknown }
-      const isPeerClosed =
-        peerAtCall.getState() === "closed" ||
-        this.peer?.getState() === "closed" ||
-        this.disposed ||
-        this.opts.epoch !== currentEpoch ||
-        this.peer !== peerAtCall ||
-        err?.message?.includes("Peer closed") ||
-        err?.message?.includes("Peer disposed") ||
-        err?.message?.includes("Peer is closed") ||
-        err?.code === -32603 ||
-        err?.stale === true
-
-      if (isPeerClosed) {
-        return makeAmbiguous(req, true)
-      }
-      const code = typeof err?.code === "number" ? String(err.code) : "internal"
-      const msg = err?.message ?? String(e)
-      const failed: ServePrivateCancelQueuedResult = {
-        v: 1,
-        requestId: req.requestId,
-        opId: req.opId,
-        op: "session/cancelQueued",
-        idempotencyKey: req.idempotencyKey,
-        status: "failed",
-        outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
-        accepted: false,
-        failure: { code, message: msg, retryable: false },
-      }
-      return failed
-    }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
   }
 
   // eslint-disable-next-line complexity
@@ -1008,12 +1355,22 @@ export class ServePrivatePeer {
         const sess = c.session as Record<string, unknown>
         if (sess.fork) return true
       }
+      if (cap === "session/create" && c["session/create"] === true) return true
+      if (cap === "session/create" && Array.isArray(c.session) && (c.session as unknown[]).includes("create")) return true
+      if (cap === "session/create" && typeof c.session === "object" && c.session !== null) {
+        const sess = c.session as Record<string, unknown>
+        if (sess.create) return true
+      }
     }
     return false
   }
 
-  // eslint-disable-next-line complexity
   async privateSessionUpdate(req: ServePrivateSessionUpdateRequest): Promise<ServePrivateSessionUpdateResult> {
+    const handle = this.privateSessionUpdateWithHandle(req)
+    return handle.promise
+  }
+
+  privateSessionUpdateWithHandle(req: ServePrivateSessionUpdateRequest): { id: number; promise: Promise<ServePrivateSessionUpdateResult>; cancel: (msg?: string) => boolean } {
     validateSessionUpdateRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -1024,59 +1381,33 @@ export class ServePrivatePeer {
     }
     const currentEpoch = this.opts.epoch
     const peerAtCall = this.peer
-    try {
-      const raw = (await peerAtCall.request("session/update", req)) as unknown
-      if (
-        this.opts.epoch !== currentEpoch ||
-        this.disposed ||
-        this.peer !== peerAtCall ||
-        peerAtCall.getState() === "closed"
-      ) {
-        return makeUpdateAmbiguous(req, true)
-      }
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/update", req)
+    const promise = (async (): Promise<ServePrivateSessionUpdateResult> => {
       try {
-        const validated = validateSessionUpdateResult(raw, req)
-        return validated
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        return makeUpdateFailedInternal(req, `invalid private response shape: ${msg}`)
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeUpdateAmbiguous(req, true)
+        try {
+          return validateSessionUpdateResult(raw, req)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          return makeUpdateFailedInternal(req, `invalid private response shape: ${msg}`)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeUpdateAmbiguous(req, true)
+        const { code, msg } = this.parseFailedInfo(e)
+        return this.failedUpdate(req, code, msg)
       }
-    } catch (e: unknown) {
-      const err = e as { code?: number; message?: string; stale?: boolean; data?: unknown }
-      const isPeerClosed =
-        peerAtCall.getState() === "closed" ||
-        this.peer?.getState() === "closed" ||
-        this.disposed ||
-        this.opts.epoch !== currentEpoch ||
-        this.peer !== peerAtCall ||
-        err?.message?.includes("Peer closed") ||
-        err?.message?.includes("Peer disposed") ||
-        err?.message?.includes("Peer is closed") ||
-        err?.code === -32603 ||
-        err?.stale === true
-
-      if (isPeerClosed) {
-        return makeUpdateAmbiguous(req, true)
-      }
-      const code = typeof err?.code === "number" ? String(err.code) : "internal"
-      const msg = err?.message ?? String(e)
-      const failed: ServePrivateSessionUpdateResult = {
-        v: 1,
-        requestId: req.requestId,
-        opId: req.opId,
-        op: "session/update",
-        idempotencyKey: req.idempotencyKey,
-        status: "failed",
-        outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
-        accepted: false,
-        failure: { code, message: msg, retryable: false },
-      }
-      return failed
-    }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
   }
 
-  // eslint-disable-next-line complexity
   async privateFork(req: ServePrivateForkRequest): Promise<ServePrivateForkResult> {
+    const handle = this.privateForkWithHandle(req)
+    return handle.promise
+  }
+
+  privateForkWithHandle(req: ServePrivateForkRequest): { id: number; promise: Promise<ServePrivateForkResult>; cancel: (msg?: string) => boolean } {
     validateForkRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -1087,63 +1418,80 @@ export class ServePrivatePeer {
     }
     const currentEpoch = this.opts.epoch
     const peerAtCall = this.peer
-    try {
-      const raw = (await peerAtCall.request("session/fork", req)) as unknown
-      if (
-        this.opts.epoch !== currentEpoch ||
-        this.disposed ||
-        this.peer !== peerAtCall ||
-        peerAtCall.getState() === "closed"
-      ) {
-        return makeForkAmbiguous(req, true)
-      }
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/fork", req)
+    const promise = (async (): Promise<ServePrivateForkResult> => {
       try {
-        const validated = validateForkResult(raw, req)
-        return validated
-      } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e)
-        return makeForkFailedInternal(req, `invalid private response shape: ${msg}`)
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeForkAmbiguous(req, true)
+        try {
+          return validateForkResult(raw, req)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          return makeForkFailedInternal(req, `invalid private response shape: ${msg}`)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeForkAmbiguous(req, true)
+        const { code, msg } = this.parseFailedInfo(e)
+        return this.failedFork(req, code, msg)
       }
-    } catch (e: unknown) {
-      const err = e as { code?: number; message?: string; stale?: boolean; data?: unknown }
-      const isPeerClosed =
-        peerAtCall.getState() === "closed" ||
-        this.peer?.getState() === "closed" ||
-        this.disposed ||
-        this.opts.epoch !== currentEpoch ||
-        this.peer !== peerAtCall ||
-        err?.message?.includes("Peer closed") ||
-        err?.message?.includes("Peer disposed") ||
-        err?.message?.includes("Peer is closed") ||
-        err?.code === -32603 ||
-        err?.stale === true
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
 
-      if (isPeerClosed) {
-        return makeForkAmbiguous(req, true)
-      }
-      const code = typeof err?.code === "number" ? String(err.code) : "internal"
-      const msg = err?.message ?? String(e)
-      const failed: ServePrivateForkResult = {
-        v: 1,
-        requestId: req.requestId,
-        opId: req.opId,
-        op: "session/fork",
-        idempotencyKey: req.idempotencyKey,
-        status: "failed",
-        outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
-        accepted: false,
-        failure: { code, message: msg, retryable: false },
-      }
-      return failed
+  async privateCreate(req: ServePrivateCreateRequest): Promise<ServePrivateCreateResult> {
+    const handle = this.privateCreateWithHandle(req)
+    return handle.promise
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership. */
+  privateCreateWithHandle(req: ServePrivateCreateRequest): { id: number; promise: Promise<ServePrivateCreateResult>; cancel: (msg?: string) => boolean } {
+    validateCreateRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
     }
+    if (!this.hasCapability("session/create")) {
+      throw new Error("Private peer missing session/create capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/create", req)
+    const promise = (async (): Promise<ServePrivateCreateResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeCreateAmbiguous(req, true)
+        try {
+          return validateCreateResult(raw, req)
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e)
+          return makeCreateFailedInternal(req, `invalid private response shape: ${msg}`)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeCreateAmbiguous(req, true)
+        const { code, msg } = this.parseFailedInfo(e)
+        return this.failedCreate(req, code, msg)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
   }
 
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
     this.available = false
+    this.initSeq += 1
+    this.initializing = null
     bestEffortDispose(this.peer, "dispose")
     this.peer = null
+  }
+
+  private markTransportInvalidated(): void {
+    this.invalidated = true
+    this.available = false
+    if (this.opts.reader) invalidatedTransports.add(this.opts.reader as object)
+    if (this.opts.writer) invalidatedTransports.add(this.opts.writer as object)
   }
 
   getPendingCount(): number {
@@ -1207,30 +1555,44 @@ export class ServePrivatePeer {
     }
   }
 
+  private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {
+    for (const k of Object.keys(c)) {
+      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create") && c[k]) out.push(k)
+    }
+  }
+
+  private collectSessionArray(c: Record<string, unknown>, out: string[]): void {
+    if (!Array.isArray(c.session)) return
+    for (const v of c.session as unknown[]) {
+      if (v === "cancelQueued") out.push("session/cancelQueued")
+      else if (v === "update") out.push("session/update")
+      else if (v === "fork") out.push("session/fork")
+      else if (v === "create") out.push("session/create")
+    }
+  }
+
+  private collectSessionObject(c: Record<string, unknown>, out: string[]): void {
+    if (typeof c.session !== "object" || c.session === null) return
+    const sess = c.session as Record<string, unknown>
+    if (sess.cancelQueued) out.push("session/cancelQueued")
+    if (sess.update) out.push("session/update")
+    if (sess.fork) out.push("session/fork")
+    if (sess.create) out.push("session/create")
+  }
+
+  private capsFromRecord(c: Record<string, unknown>): string[] {
+    const out: string[] = []
+    this.collectKnownKeys(c, out)
+    this.collectSessionArray(c, out)
+    this.collectSessionObject(c, out)
+    return [...new Set(out)]
+  }
+
   getCapabilitiesListForFixture(): string[] {
     const caps = this.capabilities
     if (!caps) return []
     if (Array.isArray(caps)) return [...(caps as string[])]
-    if (typeof caps === "object") {
-      const c = caps as Record<string, unknown>
-      const out: string[] = []
-      for (const k of Object.keys(c)) {
-        if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork") && c[k]) out.push(k)
-      }
-      if (Array.isArray(c.session)) {
-        for (const v of c.session as unknown[])
-          if (v === "cancelQueued") out.push("session/cancelQueued")
-          else if (v === "update") out.push("session/update")
-          else if (v === "fork") out.push("session/fork")
-      }
-      if (typeof c.session === "object" && c.session !== null) {
-        const sess = c.session as Record<string, unknown>
-        if (sess.cancelQueued) out.push("session/cancelQueued")
-        if (sess.update) out.push("session/update")
-        if (sess.fork) out.push("session/fork")
-      }
-      return [...new Set(out)]
-    }
+    if (typeof caps === "object") return this.capsFromRecord(caps as Record<string, unknown>)
     return []
   }
 }
@@ -1530,6 +1892,109 @@ export function compareForkParity(
   }
   if (sdkStatus === "failed" && privStatus === "failed") {
     const privCode: string = ((priv as Extract<ServePrivateForkResult, { status: "failed" }>).failure?.code ?? "unknown") as string
+    const http = sdkHttpStatus(sdk)
+    const cls = sdkStatusClass(http)
+    const allowed = (() => {
+      if (cls === "400") return new Set(["validation.failed", "scope_mismatch"])
+      if (cls === "404") return new Set(["session.not_found"])
+      if (cls === "409") return new Set(["stale", "conflict", "InstanceUnavailableDuringConfigRebuild"])
+      if (cls === "500") return new Set(["internal"])
+      return null
+    })()
+    if (allowed) {
+      if (!allowed.has(privCode)) {
+        return {
+          divergence: `failure-class-mismatch:sdk=${String(cls)} priv=${privCode}`,
+          details: { sdkClass: cls, privCode, http },
+        }
+      }
+      return { divergence: null, details: { sdkClass: cls, privCode } }
+    }
+    const sdkCodeRaw: string | undefined = (() => {
+      const e = sdk.error as Record<string, unknown>
+      const c = e.code ?? e.status ?? e._tag
+      if (typeof c === "string" && c.length > 0 && !/^\d+$/.test(c)) return c
+      return undefined
+    })()
+    if (sdkCodeRaw && privCode !== sdkCodeRaw) {
+      return {
+        divergence: `failure-code-mismatch:sdk=${sdkCodeRaw} priv=${privCode}`,
+        details: { sdkCode: sdkCodeRaw, privCode },
+      }
+    }
+    return { divergence: null, details: {} }
+  }
+  return { divergence: null, details: {} }
+}
+
+// eslint-disable-next-line complexity
+export function compareCreateParity(
+  priv: ServePrivateCreateResult,
+  sdk: { data?: unknown; error?: unknown; response?: unknown },
+): { divergence: string | null; details: Record<string, unknown> } {
+  const privStatus: string = priv.status
+  const isTransportUnknown = !!(priv as Record<string, unknown>).transportUnknown
+  if (isTransportUnknown) {
+    return { divergence: "transport-unknown", details: { privStatus, transportUnknown: true } }
+  }
+  const sdkError = sdk.error !== undefined && sdk.error !== null
+  const sdkStatus: string = sdkError ? "failed" : "succeeded"
+  if (privStatus === "ambiguous" && sdkStatus === "failed") {
+    const http = sdkHttpStatus(sdk)
+    if (http === 409) {
+      return { divergence: null, details: { sdkStatus, privStatus, http } }
+    }
+    return {
+      divergence: `status-mismatch:sdk=failed(${String(http ?? "unknown")}) priv=ambiguous`,
+      details: { sdkStatus, privStatus, http },
+    }
+  }
+  if (privStatus === "ambiguous" && sdkStatus === "succeeded") {
+    return { divergence: `status-mismatch:sdk=succeeded priv=ambiguous`, details: { sdkStatus, privStatus } }
+  }
+  if (sdkStatus !== privStatus) {
+    return { divergence: `status-mismatch:sdk=${sdkStatus} priv=${privStatus}`, details: { sdkStatus, privStatus } }
+  }
+  if (sdkStatus === "succeeded" && privStatus === "succeeded") {
+    const sdkData = sdk.data as Record<string, unknown> | undefined
+    const sdkSess = (sdkData as Record<string, unknown> | undefined) ?? (sdk.data as Record<string, unknown> | undefined)
+    const sdkId: unknown = (sdkSess as Record<string, unknown> | undefined)?.id ?? sdk.data
+    const pdata = (priv as Extract<ServePrivateCreateResult, { status: "succeeded" }>).data as Record<string, unknown>
+    const privSess = pdata.session as Record<string, unknown> | undefined
+    const privId: unknown = (privSess as Record<string, unknown>)?.id
+    if (String(sdkId) !== String(privId)) {
+      return { divergence: `create-id-mismatch`, details: { mismatch: true, field: "id", sdkId: String(sdkId), privId: String(privId) } }
+    }
+    const sdkDirRaw: unknown = (sdkSess as Record<string, unknown> | undefined)?.directory
+    const privDirRaw: unknown = (privSess as Record<string, unknown> | undefined)?.directory
+    if (typeof sdkDirRaw === "string" && typeof privDirRaw === "string") {
+      let sdkDir = sdkDirRaw
+      let privDir = privDirRaw
+      try {
+        sdkDir = canonicalDir(sdkDirRaw)
+      } catch {}
+      try {
+        privDir = canonicalDir(privDirRaw)
+      } catch {}
+      if (sdkDir !== privDir) {
+        return { divergence: `create-directory-mismatch`, details: { mismatch: true, field: "directory", sdkDir, privDir } }
+      }
+    } else if (String(sdkDirRaw ?? "") !== String(privDirRaw ?? "")) {
+      return { divergence: `create-directory-mismatch`, details: { mismatch: true, field: "directory", sdkDir: String(sdkDirRaw ?? ""), privDir: String(privDirRaw ?? "") } }
+    }
+    const sdkTitleRaw: unknown = (sdkSess as Record<string, unknown> | undefined)?.title
+    const privTitleRaw: unknown = (privSess as Record<string, unknown> | undefined)?.title
+    if (String(sdkTitleRaw ?? "") !== String(privTitleRaw ?? "")) {
+      return { divergence: `create-title-mismatch`, details: { mismatch: true, field: "title", sdkTitle: String(sdkTitleRaw ?? ""), privTitle: String(privTitleRaw ?? "") } }
+    }
+    // canonical requires priv session object; missing is divergence
+    if (!privSess || typeof (privSess as Record<string, unknown>).id !== "string") {
+      return { divergence: `create-id-mismatch`, details: { mismatch: true, field: "id", sdkId: String(sdkId), privId: String(privId) } }
+    }
+    return { divergence: null, details: {} }
+  }
+  if (sdkStatus === "failed" && privStatus === "failed") {
+    const privCode: string = ((priv as Extract<ServePrivateCreateResult, { status: "failed" }>).failure?.code ?? "unknown") as string
     const http = sdkHttpStatus(sdk)
     const cls = sdkStatusClass(http)
     const allowed = (() => {

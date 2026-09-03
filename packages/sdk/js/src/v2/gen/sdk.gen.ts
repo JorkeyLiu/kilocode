@@ -3836,6 +3836,14 @@ export class Session2 extends HeyApiClient {
       platform?: string
       workspaceID?: string
       sandboxInheritanceToken?: string
+      idempotencyKey?: string
+      requestId?: string
+      opId?: string
+      context?: {
+        directory: string
+        parentSessionId?: string | null
+        configVersion?: number
+      }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3855,6 +3863,10 @@ export class Session2 extends HeyApiClient {
             { in: "body", key: "platform" },
             { in: "body", key: "workspaceID" },
             { in: "body", key: "sandboxInheritanceToken" },
+            { in: "body", key: "idempotencyKey" },
+            { in: "body", key: "requestId" },
+            { in: "body", key: "opId" },
+            { in: "body", key: "context" },
           ],
         },
       ],

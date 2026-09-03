@@ -835,6 +835,153 @@ describe("R12 envelope", () => {
   })
 })
 
+describe("R12 JSON scrubbing/decoding — P4-G7 expanded parity", () => {
+  it("unicode-escaped key variations decode case-insensitively and redact all secret forms via direct redact", () => {
+    const pairs: Array<[string, string, string]> = [
+      [`{"api\\u005Fkey":"val1"}`, "api_key=[redacted]", "val1"],
+      [`{"API\\u005FKEY":"val2"}`, "API_KEY=[redacted]", "val2"],
+      [`{"ApI\\u005fKeY":"val3"}`, "ApI_KeY=[redacted]", "val3"],
+      [`{"api\\u004Bey":"sk1Val"}`, "apiKey=[redacted]", "sk1Val"],
+      [`{"\\u0074oken":"tokVal999"}`, "token=[redacted]", "tokVal999"],
+      [`{"\\u0050assword":"pwVal999"}`, "Password=[redacted]", "pwVal999"],
+      [`{"\\u0063redential":"credVal999"}`, "credential=[redacted]", "credVal999"],
+      [`{"\\u0053ecret":"secVal999"}`, "Secret=[redacted]", "secVal999"],
+    ]
+    for (const [input, contains, val] of pairs) {
+      const out = redact(input) as string
+      expect(out).toContain(contains)
+      expect(out).not.toContain(val)
+      expect(out).not.toContain("\\u00")
+    }
+    const nonSecret = redact(`{"not\\u0053ecret":"keep-me"}`) as string
+    expect(nonSecret).toContain("keep-me")
+    expect(nonSecret).not.toContain("[redacted]")
+    const decodedApiKey = redact(`{"api\\u005Fkey":"val"}`) as string
+    expect(decodedApiKey).toBe(`{api_key=[redacted]}`)
+  })
+
+  it("mixed valid escapes inside JSON keys decode before secret match — slash, quote, backslash, control forms", () => {
+    const slash = redact(`{"api\\/key":"val"}`) as string
+    expect(slash).toBe(`{"api\\/key":"val"}`)
+    expect(slash).not.toContain("[redacted]")
+    const quote = redact(`{"pass\\"word":"val"}`) as string
+    expect(quote).toBe(`{"pass\\"word":"val"}`)
+    expect(quote).not.toContain("[redacted]")
+    const escapedSecretWithSlashVal = redact(`{"secret":"foo\\/bar"}`) as string
+    expect(escapedSecretWithSlashVal).toBe(`{secret=[redacted]}`)
+    expect(escapedSecretWithSlashVal).not.toContain("foo")
+    const controlDecoded = redact(`{"sec\\u0072et":"val"}`) as string
+    expect(controlDecoded).toBe(`{secret=[redacted]}`)
+    const upperHex = redact(`{"api\\u004Bey":"val"}`) as string
+    expect(upperHex).toBe(`{apiKey=[redacted]}`)
+    const lowerHex = redact(`{"api\\u004bey":"val"}`) as string
+    expect(lowerHex).toBe(`{apiKey=[redacted]}`)
+  })
+
+  it("invalid JSON escape sequences in keys preserve verbatim and do not redact via direct redact", () => {
+    const cases = [
+      `{"secret\\q":"keep"}`,
+      `{"api\\key":"keep"}`,
+      `{"se\\cret":"keep"}`,
+      `{"secret\\u00":"keep"}`,
+      `{"secret\\u00zz":"keep"}`,
+      `{"api\\u004":"keep"}`,
+      `{"x\\secret":"keep"}`,
+    ]
+    for (const c of cases) {
+      const out = redact(c) as string
+      expect(out).toBe(c)
+      expect(out).not.toContain("[redacted]")
+    }
+    expect(redact(`{"secret\\q":"keep"}`) as string).toBe(`{"secret\\q":"keep"}`)
+  })
+
+  it("normalizeRecord and buildPanelEnvelope handle JSON-escaped keys with escaped-quote values without suffix leak — caps after redact", () => {
+    const raw: FailureRecord = {
+      opId: "prompt:json-escaped-expanded",
+      opKind: "prompt",
+      outcome: "failed",
+      code: "provider.unknown",
+      message: `prefix {"api\\u004bey":"foo\\"bar-secret"} tail ${"x".repeat(600)}`,
+      time: 300,
+      detail: `detail {"sec\\u0072et":"a\\"b-detail-secret"} tail`,
+      stack: `stack {"\\u0074oken":"tok\\"en-stack-secret"} tail`,
+    }
+    const env = buildPanelEnvelope(raw)
+    const msg = env.payload["message"] as string
+    expect(msg).toContain("apiKey=[redacted]")
+    expect(msg).not.toContain("foo")
+    expect(msg).not.toContain("bar-secret")
+    expect(msg).not.toContain("\\u004b")
+    expect(msg.length).toBeLessThanOrEqual(501)
+    expect(msg.endsWith("…")).toBe(true)
+    const norm = normalizeRecord(raw)
+    expect(norm.message).toBe(msg)
+    expect(norm.detail).toBe(`detail {secret=[redacted]} tail`)
+    expect(norm.detail).not.toContain("b-detail-secret")
+    expect(norm.stack).toBe(`stack {token=[redacted]} tail`)
+    expect(norm.stack).not.toContain("en-stack-secret")
+    const twice = normalizeRecord(norm)
+    expect(twice).toEqual(norm)
+    const already: FailureRecord = {
+      opId: raw.opId,
+      opKind: raw.opKind,
+      outcome: raw.outcome,
+      code: raw.code,
+      message: msg,
+      time: raw.time,
+    }
+    expect(buildPanelEnvelope(already).payload["message"]).toBe(msg)
+    expect(normalizeRecord(already).message).toBe(msg)
+  })
+})
+
+describe("R12 private observation preserves SDK outcomes — parity", () => {
+  it("normalize preserves every explicit OUTCOME verbatim when no error/cancel", () => {
+    for (const outcome of OUTCOMES) {
+      const rec = normalize({ opId: `op-${outcome}`, opKind: "prompt", domain: "provider", time: 1, outcome })
+      expect(rec.outcome).toBe(outcome)
+      expect(rec.code).toBe("unknown")
+      expect(rec.message).toBe("")
+      expect(rec.time).toBe(1)
+      expect(rec.detail).toBeUndefined()
+      expect(rec.stack).toBeUndefined()
+    }
+    const succeededViaMsg = normalize({ opId: "op-succ-msg", opKind: "prompt", domain: "provider", time: 2, outcome: "succeeded", message: "ok" })
+    expect(succeededViaMsg.outcome).toBe("succeeded")
+    expect(succeededViaMsg.message).toBe("ok")
+  })
+
+  it("error forces failed even when caller supplies competing outcome, cancel forces abandoned — SDK authoritative", () => {
+    const failedWins = normalize({ opId: "op-err", opKind: "prompt", domain: "provider", time: 1, error: makeErr("boom"), outcome: "succeeded" as unknown as typeof OUTCOMES[number] })
+    expect(failedWins.outcome).toBe("failed")
+    const abandonedWins = normalize({ opId: "op-cancel", opKind: "prompt", domain: "provider", time: 1, error: makeErr("boom"), cancel: "user_stop", outcome: "succeeded" as unknown as typeof OUTCOMES[number] })
+    expect(abandonedWins.outcome).toBe("abandoned")
+    expect(abandonedWins.cancel).toEqual({ source: "user_stop" })
+    const abandonedNoErr = normalize({ opId: "op-cancel2", opKind: "prompt", domain: "provider", time: 1, cancel: "timeout", outcome: "failed" as unknown as typeof OUTCOMES[number] })
+    expect(abandonedNoErr.outcome).toBe("abandoned")
+  })
+
+  it("buildPanelEnvelope preserves SDK outcome exactly and never invents recovery fields — observation only", () => {
+    for (const outcome of OUTCOMES) {
+      const raw: FailureRecord = { opId: `id-${outcome}`, opKind: "prompt", outcome, code: "provider.unknown", message: "m", time: 1 }
+      const env = buildPanelEnvelope(raw)
+      expect(env.payload["outcome"]).toBe(outcome)
+      expect(env.payload["opId"]).toBe(raw.opId)
+      expect(env.payload["code"]).toBe(raw.code)
+      expect((env.payload as Record<string, unknown>)["retryAfter"]).toBeUndefined()
+      expect((env.payload as Record<string, unknown>)["attempt"]).toBeUndefined()
+      const norm = normalizeRecord(raw)
+      expect(norm.outcome).toBe(outcome)
+      expect((norm as unknown as Record<string, unknown>)["retryAfter"]).toBeUndefined()
+    }
+    const withCancel: FailureRecord = { opId: "id-cancel", opKind: "prompt", outcome: "abandoned", code: "c", message: "m", time: 1, cancel: { source: "user_stop" } }
+    expect(buildPanelEnvelope(withCancel).payload["cancel"]).toEqual({ source: "user_stop" })
+    const afterNormalize = buildPanelEnvelope(normalize({ opId: "id-sdk", opKind: "prompt", domain: "provider", time: 1, outcome: "ambiguous" }))
+    expect(afterNormalize.payload["outcome"]).toBe("ambiguous")
+  })
+})
+
 describe("R12 isTerminal", () => {
   it("true for succeeded/failed/ambiguous/superseded/abandoned", () => {
     expect(isTerminal("succeeded")).toBe(true)

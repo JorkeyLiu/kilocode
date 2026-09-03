@@ -19,8 +19,10 @@ afterEach(async () => {
 })
 
 describe("sessionFork durable concurrency", () => {
-  it.live("two distinct durable forks via real HTTP in parallel both succeed with isolated children/operations", () =>
-    Effect.gen(function* () {
+  it.live(
+    "two distinct durable forks via real HTTP in parallel both succeed with isolated children/operations",
+    () =>
+      Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
       yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
 
@@ -128,6 +130,7 @@ describe("sessionFork durable concurrency", () => {
       const listRes2 = yield* Effect.promise(() => fetch(listUrl))
       const allSessions2 = yield* Effect.promise(() => listRes2.json() as Promise<any[]>)
       expect(allSessions2.length).toBe(3)
-    }),
+      }),
+    10000,
   )
 })

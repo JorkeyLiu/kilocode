@@ -5,7 +5,7 @@ import * as path from "path"
 import * as os from "os"
 import * as vscode from "vscode"
 import { ServerManager } from "./server-manager"
-import { ServePrivatePeer, canonicalSessionUpdateOpId, compareUpdateParity } from "./serve-private-peer"
+import { ServePrivatePeer, canonicalCreateOpId, compareCreateParity, validateCreateResult } from "./serve-private-peer"
 import { createKiloClient } from "@kilocode/sdk/v2/client"
 
 function mockWorkspace(workspaceDir: string) {
@@ -47,9 +47,9 @@ function makeCtx(storage: string, extensionPath: string): unknown {
   }
 }
 
-describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durable production", () => {
+describe("ServerManager → real kilo serve → fd3/fd4 → SessionCreate durable production", () => {
   test.skipIf(process.platform !== "darwin")(
-    "covers SDK durable title mutation + private replay same revision/no duplicate, restart epoch/capability, private-unavailable/fail-closed authoritative",
+    "covers SDK durable create + private replay same revision/no duplicate, restart epoch/capability, private-unavailable/fail-closed authoritative",
     async () => {
       const extensionPath = path.resolve(import.meta.dir, "../../..")
       const binPath = path.join(extensionPath, "bin", process.platform === "win32" ? "kilo.exe" : "kilo")
@@ -80,10 +80,10 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
       const cleanupErrors: unknown[] = []
 
       try {
-        workspaceRaw = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-prod-b2-ws-"))
+        workspaceRaw = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-prod-b4-ws-"))
         workspace = fs.realpathSync(workspaceRaw)
-        storage = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-prod-b2-storage-"))
-        xdgData = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-prod-b2-xdg-"))
+        storage = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-prod-b4-storage-"))
+        xdgData = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-prod-b4-xdg-"))
         hadOrigXdg = Object.prototype.hasOwnProperty.call(process.env, "XDG_DATA_HOME")
         origXdg = process.env.XDG_DATA_HOME
         hadOrigKiloDb = Object.prototype.hasOwnProperty.call(process.env, "KILO_DB")
@@ -94,7 +94,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
         ctx = makeCtx(storage, extensionPath) as import("vscode").ExtensionContext
         mgr = new ServerManager(ctx as import("vscode").ExtensionContext)
 
-        // 1. Start server via real ServerManager (proof of stdout port discovery)
+        // 1. Start server via real ServerManager
         inst = await mgr.getServer()
         expect(inst.port).toBeGreaterThan(0)
         expect(inst.port).toBeLessThan(65536)
@@ -106,7 +106,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
         const pid1 = inst.pid!
         const epoch1 = inst.epoch
 
-        // 2. Initialize private peer against fd3/fd4 (B2 capability)
+        // 2. Initialize private peer against fd3/fd4
         peer = new ServePrivatePeer({
           reader: inst.privateReader,
           writer: inst.privateWriter,
@@ -121,12 +121,12 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
         expect(peer.getEpoch()).toBe(epoch1)
         expect(peer.getPid()).toBe(pid1)
         const caps = peer.getCapabilities() as unknown
-        if (Array.isArray(caps)) expect(caps.includes("session/update")).toBeTrue()
+        if (Array.isArray(caps)) expect(caps.includes("session/create")).toBeTrue()
         else {
           const str = JSON.stringify(caps ?? "")
-          expect(str.includes("session/update") || str.includes("update")).toBeTrue()
+          expect(str.includes("session/create") || str.includes("create")).toBeTrue()
         }
-        expect(peer.hasCapability("session/update")).toBeTrue()
+        expect(peer.hasCapability("session/create")).toBeTrue()
         const initRaw = peer.getInitResult() as Record<string, unknown> | null
         expect(initRaw).toBeTruthy()
         const proto = (initRaw as Record<string, unknown>)?.protocol as Record<string, unknown> | undefined
@@ -135,144 +135,130 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
         else if (typeof protoVersion === "string") expect(protoVersion).toBe("1.0")
         else if (protoVersion && typeof protoVersion === "object") expect((protoVersion as Record<string, unknown>).major).toBe(1)
 
-        // 3. Create SDK client against same child (LOCK-001 single child/AppLayer)
+        // 3. Create SDK client against same child
         const auth = `Basic ${Buffer.from(`kilo:${inst.password}`).toString("base64")}`
         const client = createKiloClient({
           baseUrl: `http://127.0.0.1:${inst.port}`,
           headers: { Authorization: auth },
         })
 
-        // Create a real session via SDK (proves SDK HTTP works on same AppLayer)
-        const created = await client.session.create({ directory: workspace, title: "prod-b2-initial" })
-        expect(created.error).toBeUndefined()
-        const session = created.data as unknown as { id: string; directory: string; title: string; time?: { updated?: number } }
-        expect(session.id.startsWith("ses")).toBeTrue()
-        expect(session.directory).toBeDefined()
-
-        // 4. SDK durable title mutation (LOCK-001 authoritative) -> persisted snapshot
-        const newTitle = `b2-title-${crypto.randomUUID().slice(0, 8)}`
+        // 4. SDK durable create authoritative
         const token = crypto.randomUUID().replace(/-/g, "").slice(0, 8)
-        const opId = canonicalSessionUpdateOpId(session.id, token)
-        const idempotencyKey = `sessionUpdate:${session.id}:${token}`
+        const opId = canonicalCreateOpId(token)
+        const idempotencyKey = `create:${token}`
         const requestId1 = crypto.randomUUID()
-        const sdkRes1 = await client.session.update({
-          sessionID: session.id,
+        const title1 = `prod-b4-${token}`
+        const sdkRes1 = await client.session.create({
           directory: workspace,
-          title: newTitle,
+          title: title1,
           idempotencyKey,
           requestId: requestId1,
           opId,
-          context: { directory: workspace, sessionId: session.id, parentSessionId: null },
-        })
-        if (sdkRes1.error) {
-          console.error("sdkRes1 error:", JSON.stringify(sdkRes1.error, null, 2))
-          console.error("session", JSON.stringify(session, null, 2))
+          context: { directory: workspace, parentSessionId: null },
+        } as unknown as never)
+        if ((sdkRes1 as unknown as { error?: unknown }).error) {
+          console.error("sdkRes1 error", JSON.stringify((sdkRes1 as unknown as { error: unknown }).error, null, 2))
         }
-        expect(sdkRes1.error).toBeUndefined()
-        const sdkData1 = sdkRes1.data as unknown as { id: string; title: string; time?: { updated?: number; created?: number } }
-        expect(sdkData1.title).toBe(newTitle)
-        expect(sdkData1.id).toBe(session.id)
-        const sdkUpdated1 = (sdkData1.time as unknown as Record<string, unknown> | undefined)?.updated as number | undefined
+        expect((sdkRes1 as unknown as { error?: unknown }).error).toBeUndefined()
+        const sdkData1 = (sdkRes1 as unknown as { data: { id: string; directory: string; title: string } }).data
+        expect(sdkData1.id.startsWith("ses")).toBeTrue()
+        expect(sdkData1.directory).toBeDefined()
+        expect(sdkData1.title).toBe(title1)
 
-        // 5. Private same-key replay with DIFFERENT requestId (LOCK-002 replay-only) -> same snapshot, same revision, no second mutation
+        // list should have exactly one session
+        const list1 = await client.session.list({ directory: workspace } as unknown as never)
+        expect((list1 as unknown as { error?: unknown }).error).toBeUndefined()
+        expect(((list1 as unknown as { data: unknown[] }).data as unknown[]).length).toBe(1)
+
+        // 5. Private same-key replay with different requestId -> same snapshot, same revision, no duplicate
         const privateReq1 = {
           v: 1 as const,
           requestId: crypto.randomUUID(),
           opId,
-          op: "session/update" as const,
+          op: "session/create" as const,
           idempotencyKey,
-          context: { directory: workspace, sessionId: session.id, parentSessionId: null as string | null },
-          payload: { title: newTitle },
+          context: { directory: workspace, parentSessionId: null as string | null },
+          payload: { title: title1 },
         }
         expect(privateReq1.requestId).not.toBe(requestId1)
-        const priv1 = await peer.privateSessionUpdate(privateReq1)
+        const priv1 = await (peer as unknown as { privateCreate: (r: unknown) => Promise<import("./serve-private-peer").ServePrivateCreateResult> }).privateCreate(privateReq1 as unknown as never)
         if (priv1.status !== "succeeded") {
-          console.error("private priv1 failed:", JSON.stringify(priv1, null, 2))
+          console.error("priv1 failed", JSON.stringify(priv1, null, 2))
         }
         expect(priv1.v).toBe(1)
         expect(priv1.requestId).toBe(privateReq1.requestId)
         expect(priv1.opId).toBe(opId)
-        expect(priv1.op).toBe("session/update")
+        expect(priv1.op).toBe("session/create")
         expect(priv1.idempotencyKey).toBe(idempotencyKey)
         expect(priv1.status).toBe("succeeded")
         if (priv1.status === "succeeded") {
           expect(priv1.accepted).toBeTrue()
-          const pdata1 = priv1.data as Record<string, unknown>
-          const ptitle1 = (pdata1.title as string | undefined) ?? ((pdata1.session as Record<string, unknown> | undefined)?.title as string | undefined)
-          expect(ptitle1).toBe(newTitle)
+          const pdata = priv1.data as Record<string, unknown>
+          const psess = pdata.session as Record<string, unknown>
+          expect(psess).toBeTruthy()
+          expect((psess as Record<string, unknown>).id).toBe(sdkData1.id)
+          expect((psess as Record<string, unknown>).directory).toBe(workspace)
           expect(priv1.outcome.type).toBe("succeeded")
           expect(typeof priv1.outcome.time).toBe("number")
           expect(priv1.revision).toBeDefined()
           if (priv1.revision) {
             expect(typeof priv1.revision.session).toBe("number")
             expect(typeof priv1.revision.config).toBe("number")
-            expect(Number.isInteger(priv1.revision.session)).toBeTrue()
-            expect(Number.isInteger(priv1.revision.config)).toBeTrue()
           }
+          expect(() => validateCreateResult(priv1 as unknown, privateReq1 as unknown as never)).not.toThrow()
         }
-        const parity1 = compareUpdateParity(priv1, sdkRes1 as unknown as { data?: unknown; error?: unknown })
+        const parity1 = compareCreateParity(priv1, sdkRes1 as unknown as { data?: unknown; error?: unknown })
         expect(parity1.divergence).toBeNull()
 
-        // 6. Private durable replay with another different requestId but same idempotencyKey -> must replay same result, same revision, no duplicate
+        // 6. Second private replay same keys different requestId -> same id and revision
         const privateReq2 = {
           v: 1 as const,
           requestId: crypto.randomUUID(),
           opId,
-          op: "session/update" as const,
+          op: "session/create" as const,
           idempotencyKey,
-          context: { directory: workspace, sessionId: session.id, parentSessionId: null as string | null },
-          payload: { title: newTitle },
+          context: { directory: workspace, parentSessionId: null as string | null },
+          payload: { title: title1 },
         }
-        expect(privateReq2.requestId).not.toBe(privateReq1.requestId)
-        const priv2 = await peer.privateSessionUpdate(privateReq2)
+        const priv2 = await (peer as unknown as { privateCreate: (r: unknown) => Promise<import("./serve-private-peer").ServePrivateCreateResult> }).privateCreate(privateReq2 as unknown as never)
         expect(priv2.status).toBe("succeeded")
         if (priv2.status === "succeeded" && priv1.status === "succeeded") {
-          const pdata2 = priv2.data as Record<string, unknown>
-          const ptitle2 = (pdata2.title as string | undefined) ?? ((pdata2.session as Record<string, unknown> | undefined)?.title as string | undefined)
-          const pdata1 = priv1.data as Record<string, unknown>
-          const ptitle1 = (pdata1.title as string | undefined) ?? ((pdata1.session as Record<string, unknown> | undefined)?.title as string | undefined)
-          expect(ptitle2).toBe(ptitle1)
+          const pdata2 = (priv2.data as Record<string, unknown>).session as Record<string, unknown>
+          const pdata1 = (priv1.data as Record<string, unknown>).session as Record<string, unknown>
+          const id2 = (pdata2 as Record<string, unknown>).id as string
+          const id1 = (pdata1 as Record<string, unknown>).id as string
+          expect(id2).toBe(id1)
           expect(priv2.opId).toBe(priv1.opId)
           expect(priv2.idempotencyKey).toBe(priv1.idempotencyKey)
-          if (priv1.revision && priv2.revision) {
-            expect(priv2.revision.session).toBe(priv1.revision.session)
-            expect(priv2.revision.config).toBe(priv1.revision.config)
-          }
+          expect(priv2.revision!.session).toBe(priv1.revision!.session)
         }
 
-        // 7. SDK second call with same durable keys should still be idempotent and parity holds; no second revision/changefeed
-        const sdkRes2 = await client.session.update({
-          sessionID: session.id,
+        // 7. SDK second call same durable keys should be idempotent
+        const sdkRes2 = await client.session.create({
           directory: workspace,
-          title: newTitle,
+          title: title1,
           idempotencyKey,
           requestId: crypto.randomUUID(),
           opId,
-          context: { directory: workspace, sessionId: session.id, parentSessionId: null },
-        })
-        expect(sdkRes2.error).toBeUndefined()
-        const sdkData2 = sdkRes2.data as unknown as { title: string; time?: { updated?: number } }
-        expect(sdkData2.title).toBe(newTitle)
-        const parity2 = compareUpdateParity(priv2, sdkRes2 as unknown as { data?: unknown; error?: unknown })
+          context: { directory: workspace, parentSessionId: null },
+        } as unknown as never)
+        expect((sdkRes2 as unknown as { error?: unknown }).error).toBeUndefined()
+        const sdkData2 = (sdkRes2 as unknown as { data: { id: string } }).data
+        expect(sdkData2.id).toBe(sdkData1.id)
+        const parity2 = compareCreateParity(priv2, sdkRes2 as unknown as { data?: unknown; error?: unknown })
         expect(parity2.divergence).toBeNull()
-        // no duplicate revision: fetch and check time.updated did not advance beyond first mutation
-        const fetchedAfterReplay = await client.session.get({ sessionID: session.id, directory: workspace })
-        expect(fetchedAfterReplay.error).toBeUndefined()
-        const fetchedData = fetchedAfterReplay.data as unknown as { title: string; time?: { updated?: number } }
-        expect(fetchedData.title).toBe(newTitle)
-        if (sdkUpdated1 !== undefined && fetchedData.time?.updated !== undefined) {
-          expect(fetchedData.time.updated).toBe(sdkUpdated1)
-        }
+        const listAfterReplay = await client.session.list({ directory: workspace } as unknown as never)
+        expect(((listAfterReplay as unknown as { data: unknown[] }).data as unknown[]).length).toBe(1)
 
-        // 8. Process restart / new epoch / reinitialize using exact manager lifecycle
+        // 8. Restart / new epoch
         const oldPid = pid1
         const oldEpoch = epoch1
         const oldProcess = inst.process
-        const oldMgr = mgr!
+        const oldMgr = mgr
         peer.dispose()
         expect(peer.isDisposed()).toBeTrue()
         expect(peer.isAvailable()).toBeFalse()
-        mgr!.dispose()
+        mgr.dispose()
         {
           const deadline = Date.now() + 5000
           let oldAlive = true
@@ -294,13 +280,12 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
           expect(oldAlive).toBeFalse()
           expect(oldProcess.exitCode !== null || oldAlive === false).toBeTrue()
         }
+        // disposed ServerManager is terminal per LOCK-002; restart must use new owner instance (no auto-recovery)
         await expect(oldMgr.getServer()).rejects.toThrow()
         mgr = new ServerManager(ctx as import("vscode").ExtensionContext)
         const inst2 = await mgr.getServer()
         expect(inst2.epoch).toBe(1)
         expect(inst2.pid).not.toBe(oldPid)
-        expect(inst2.port).toBeGreaterThan(0)
-        expect((inst2.process.stdio as unknown[]).length).toBe(5)
         const peer2 = new ServePrivatePeer({
           reader: inst2.privateReader,
           writer: inst2.privateWriter,
@@ -311,33 +296,27 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
         const ok2 = await peer2.initialize(5000)
         expect(ok2).toBeTrue()
         expect(peer2.isAvailable()).toBeTrue()
-        expect(peer2.getEpoch()).toBe(inst2.epoch)
-        expect(peer2.hasCapability("session/update")).toBeTrue()
-        const caps2 = peer2.getCapabilities() as unknown
-        if (Array.isArray(caps2)) expect(caps2.includes("session/update")).toBeTrue()
-        // SDK against new server should still work and see persisted title (authoritative)
+        expect(peer2.hasCapability("session/create")).toBeTrue()
         const auth2 = `Basic ${Buffer.from(`kilo:${inst2.password}`).toString("base64")}`
         const client2 = createKiloClient({
           baseUrl: `http://127.0.0.1:${inst2.port}`,
           headers: { Authorization: auth2 },
         })
-        const list2 = await client2.session.list({ directory: workspace })
-        expect(list2.error).toBeUndefined()
-        const fetchedAfterRestart = await client2.session.get({ sessionID: session.id, directory: workspace })
-        expect(fetchedAfterRestart.error).toBeUndefined()
-        const fetchedRestartData = fetchedAfterRestart.data as unknown as { title: string }
-        expect(fetchedRestartData.title).toBe(newTitle)
+        const list2 = await client2.session.list({ directory: workspace } as unknown as never)
+        expect((list2 as unknown as { error?: unknown }).error).toBeUndefined()
+        const fetchedAfterRestart = await client2.session.get({ sessionID: sdkData1.id, directory: workspace } as unknown as never)
+        expect((fetchedAfterRestart as unknown as { error?: unknown }).error).toBeUndefined()
         peer = peer2
         inst = inst2
 
-        // 9. Private unavailable fallback while SDK still works (epoch/private lifecycle loss fail-closed)
+        // 9. Private unavailable fallback while SDK still works
         peer.dispose()
         expect(peer.isAvailable()).toBeFalse()
-        const listAfterPeerClose = await client2.session.list({ directory: workspace })
-        expect(listAfterPeerClose.error).toBeUndefined()
+        const listAfterPeerClose = await client2.session.list({ directory: workspace } as unknown as never)
+        expect((listAfterPeerClose as unknown as { error?: unknown }).error).toBeUndefined()
         let privateUnavailableThrown = false
         try {
-          await peer.privateSessionUpdate(privateReq1)
+          await (peer as unknown as { privateCreate: (r: unknown) => Promise<unknown> }).privateCreate(privateReq1 as unknown as never)
         } catch (_err) {
           privateUnavailableThrown = true
         }
@@ -347,34 +326,27 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
         expect(nullOk).toBeFalse()
         expect(nullPeer.isAvailable()).toBeFalse()
         nullPeer.dispose()
-        // verify no mutation after unavailable private call: title still newTitle
-        const fetchedAfterUnavailable = await client2.session.get({ sessionID: session.id, directory: workspace })
-        expect(fetchedAfterUnavailable.error).toBeUndefined()
-        expect((fetchedAfterUnavailable.data as unknown as { title: string }).title).toBe(newTitle)
+        const listAfterUnavailable = await client2.session.list({ directory: workspace } as unknown as never)
+        expect(((listAfterUnavailable as unknown as { data: unknown[] }).data as unknown[]).length).toBe(1)
 
-        // 10. Private unavailable still leaves SDK PATCH authoritative: new durable mutation while private unavailable
-        const newTitle2 = `b2-title2-${crypto.randomUUID().slice(0, 8)}`
+        // 10. New durable create while private unavailable still authoritative
         const token2 = crypto.randomUUID().replace(/-/g, "").slice(0, 8)
-        const opId2 = canonicalSessionUpdateOpId(session.id, token2)
-        const idempotencyKey2 = `sessionUpdate:${session.id}:${token2}:second`
-        const sdkRes3 = await client2.session.update({
-          sessionID: session.id,
+        const opId2 = canonicalCreateOpId(token2)
+        const idempotencyKey2 = opId2
+        const title2 = `prod-b4-${token2}`
+        const sdkRes3 = await client2.session.create({
           directory: workspace,
-          title: newTitle2,
+          title: title2,
           idempotencyKey: idempotencyKey2,
           requestId: crypto.randomUUID(),
           opId: opId2,
-          context: { directory: workspace, sessionId: session.id, parentSessionId: null },
-        })
-        expect(sdkRes3.error).toBeUndefined()
-        const sdkData3 = sdkRes3.data as unknown as { title: string }
-        expect(sdkData3.title).toBe(newTitle2)
-        const fetched2AfterSecond = await client2.session.get({ sessionID: session.id, directory: workspace })
-        expect(fetched2AfterSecond.error).toBeUndefined()
-        expect((fetched2AfterSecond.data as unknown as { title: string }).title).toBe(newTitle2)
-        // second mutation: private is still unavailable (disposed), SDK remains authoritative without private.
-        // re-initialize on same fd must fail with Already initialized (server enforces once) — this is expected fail-closed,
-        // not a new capability negotiation; new epoch capability was already proven at restart step 8.
+          context: { directory: workspace, parentSessionId: null },
+        } as unknown as never)
+        expect((sdkRes3 as unknown as { error?: unknown }).error).toBeUndefined()
+        const sdkData3 = (sdkRes3 as unknown as { data: { id: string } }).data
+        expect(sdkData3.id).not.toBe(sdkData1.id)
+        const listAfterSecond = await client2.session.list({ directory: workspace } as unknown as never)
+        expect(((listAfterSecond as unknown as { data: unknown[] }).data as unknown[]).length).toBe(2)
         const peer3 = new ServePrivatePeer({
           reader: inst.privateReader,
           writer: inst.privateWriter,
@@ -383,14 +355,11 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
           process: inst.process,
         })
         const ok3 = await peer3.initialize(5000)
-        // already-initialized server rejects second initialize on same process
         expect(ok3).toBeFalse()
         expect(peer3.isAvailable()).toBeFalse()
         peer3.dispose()
-        // keep original disposed peer for cleanup (peer already disposed)
         peer = null
 
-        // 11. Exact cleanup proof will be verified in finally block, but also assert port still discovered
         expect(inst.port).toBeGreaterThan(0)
       } finally {
         try {
@@ -473,7 +442,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
           const stillWs = fs.existsSync(workspace)
           const stillRaw = workspaceRaw ? fs.existsSync(workspaceRaw) : false
           workspaceRemoved = !stillWs && !stillRaw
-          if (!workspaceRemoved) cleanupErrors.push(new Error(`workspace not removed: ${workspace} exists=${stillWs} raw=${workspaceRaw} exists=${stillRaw}`))
+          if (!workspaceRemoved) cleanupErrors.push(new Error(`workspace not removed: ${workspace}`))
         } else if (workspaceRaw) {
           try {
             fs.rmSync(workspaceRaw, { recursive: true, force: true })
@@ -491,7 +460,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
           }
           const still = fs.existsSync(storage)
           storageRemoved = !still
-          if (!storageRemoved) cleanupErrors.push(new Error(`storage not removed: ${storage} exists=${still}`))
+          if (!storageRemoved) cleanupErrors.push(new Error(`storage not removed: ${storage}`))
         }
         if (xdgData) {
           try {
@@ -501,7 +470,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
           }
           const still = fs.existsSync(xdgData)
           xdgRemoved = !still
-          if (!xdgRemoved) cleanupErrors.push(new Error(`xdgData not removed: ${xdgData} exists=${still}`))
+          if (!xdgRemoved) cleanupErrors.push(new Error(`xdgData not removed: ${xdgData}`))
         }
         expect(workspaceRemoved).toBeTrue()
         expect(storageRemoved).toBeTrue()

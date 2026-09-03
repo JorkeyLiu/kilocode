@@ -14,6 +14,8 @@ import {
   type ServePrivateSessionUpdateResult,
   type ServePrivateForkRequest,
   type ServePrivateForkResult,
+  type ServePrivateCreateRequest,
+  type ServePrivateCreateResult,
   compareUpdateParity,
 } from "./serve-private-peer"
 import * as crypto from "crypto"
@@ -50,6 +52,8 @@ export class KiloConnectionService {
   private state: ConnectionState = "disconnected"
   private error: Error | null = null
   private connectPromise: Promise<void> | null = null
+  private connectGeneration = 0
+  private isDisposed = false
   private remoteService: import("../RemoteStatusService").RemoteStatusService | null = null
 
   private readonly eventListeners: Set<SSEEventListener> = new Set()
@@ -156,6 +160,7 @@ export class KiloConnectionService {
    * Lazily start server + SSE. Multiple callers share the same promise.
    */
   async connect(workspaceDir: string): Promise<void> {
+    if (this.isDisposed) throw new Error("KiloConnectionService disposed")
     this.trackDirectory(workspaceDir)
     if (this.connectPromise) {
       return this.connectPromise
@@ -168,15 +173,18 @@ export class KiloConnectionService {
     this.setState("connecting")
     p0Stage("connect.start")
 
-    this.connectPromise = this.doConnect(workspaceDir)
+    const gen = ++this.connectGeneration
+    this.connectPromise = this.doConnect(workspaceDir, gen)
     try {
       await this.connectPromise
+      if (this.isDisposed || this.connectGeneration !== gen) throw new Error("connect superseded by dispose")
     } catch (error) {
       // If doConnect() fails before SSE can emit a state transition, avoid leaving consumers stuck in "connecting".
-      this.setState("error", this.error ?? (error instanceof Error ? error : new Error(String(error))))
+      if (this.isDisposed || this.connectGeneration !== gen) throw this.toError(error)
+      this.setState("error", this.error ?? this.toError(error))
       throw error
     } finally {
-      this.connectPromise = null
+      if (this.connectGeneration === gen) this.connectPromise = null
     }
   }
 
@@ -634,6 +642,11 @@ export class KiloConnectionService {
    * Clean up everything: kill server, close SSE, clear listeners.
    */
   dispose(): void {
+    if (this.isDisposed) return
+    this.isDisposed = true
+    this.connectGeneration += 1
+    this.connectPromise = null
+    // Invalidate any pending connect continuations before resource installation
     this.sseClient?.dispose()
     this.disposePrivatePeer()
     this.serverManager.dispose()
@@ -716,11 +729,17 @@ export class KiloConnectionService {
     )
   }
 
-  private async doConnect(workspaceDir: string): Promise<void> {
+  private async doConnect(workspaceDir: string, generation: number): Promise<void> {
+    if (this.isDisposed || this.connectGeneration !== generation) throw new Error("connect superseded before start")
     // Never expose a stale SDK client while its replacement server is starting.
     this.resetConnection()
 
     const server = await this.serverManager.getServer()
+    if (this.isDisposed || this.connectGeneration !== generation) {
+      // Prevent post-dispose installation; clean up freshly acquired server resources
+      try { server.process.exitCode === null ? this.serverManager.dispose() : null } catch {}
+      throw new Error("connect superseded after getServer")
+    }
     this.info = { port: server.port }
 
     const config: ServerConfig = {
@@ -739,6 +758,10 @@ export class KiloConnectionService {
       },
     })
     const sse = new SdkSSEAdapter(client)
+    if (this.isDisposed || this.connectGeneration !== generation) {
+      try { sse.dispose() } catch {}
+      throw new Error("connect superseded before client install")
+    }
     this.client = client
     this.sseClient = sse
 
@@ -796,9 +819,18 @@ export class KiloConnectionService {
     sse.connect()
 
     await connectedPromise
+    if (this.isDisposed || this.connectGeneration !== generation) {
+      try { sse.dispose() } catch {}
+      if (this.sseClient === sse) this.sseClient = null
+      if (this.client === client) this.client = null
+      this.info = null
+      this.config = null
+      throw new Error("connect superseded before private peer init")
+    }
 
-    void this.initPrivatePeer(server).catch((err) => console.warn("[Kilo] PrivatePeer init failed:", String(err)))
+    void this.initPrivatePeer(server, generation).catch((err) => console.warn("[Kilo] PrivatePeer init failed:", String(err)))
 
+    if (this.isDisposed || this.connectGeneration !== generation) return
     this.startCheckin()
   }
 
@@ -868,43 +900,81 @@ export class KiloConnectionService {
     this.privatePid = undefined
   }
 
-  private async initPrivatePeer(server: import("./server-manager").ServerInstance): Promise<void> {
-    if (this.privateEpoch !== null && this.privateEpoch === server.epoch) return
-    if (this.privatePeer) {
-      try {
-        this.privatePeer.dispose()
-      } catch (err) {
-        console.warn("[Kilo] PrivatePeer prior dispose failed:", String(err))
-      }
-      this.privatePeer = null
+  private toError(error: unknown): Error {
+    return error instanceof Error ? error : new Error(String(error))
+  }
+
+  private isSuperseded(genAtStart: number): boolean {
+    return this.isDisposed || this.connectGeneration !== genAtStart
+  }
+
+  private isSameEpoch(epoch: number): boolean {
+    return this.privateEpoch !== null && this.privateEpoch === epoch
+  }
+
+  private disposeExistingPeerForInit(): void {
+    if (!this.privatePeer) return
+    try {
+      this.privatePeer.dispose()
+    } catch (err) {
+      console.warn("[Kilo] PrivatePeer prior dispose failed:", String(err))
     }
+    this.privatePeer = null
+  }
+
+  private setPrivateEpoch(server: import("./server-manager").ServerInstance): void {
     this.privateAvailable = false
     this.privateEpoch = server.epoch
     this.privatePid = server.pid
-    if (!server.privateReader || !server.privateWriter) {
-      console.warn("[Kilo] PrivatePeer unavailable: fd3/fd4 not exposed for pid", server.pid, "epoch", server.epoch)
-      return
-    }
-    const epochAtStart = server.epoch
-    const pidAtStart = server.pid
-    const peer = new ServePrivatePeer({
-      reader: server.privateReader,
-      writer: server.privateWriter,
+  }
+
+  private hasPrivateTransport(server: import("./server-manager").ServerInstance): boolean {
+    return !!server.privateReader && !!server.privateWriter
+  }
+
+  private makePrivatePeer(server: import("./server-manager").ServerInstance): ServePrivatePeer {
+    return new ServePrivatePeer({
+      reader: server.privateReader!,
+      writer: server.privateWriter!,
       pid: server.pid,
       epoch: server.epoch,
       process: server.process,
       initializeTimeoutMs: 5000,
     })
-    this.privatePeer = peer
-    const ok = await peer.initialize()
-    if (this.privatePeer !== peer || this.privateEpoch !== epochAtStart) {
-      try {
-        peer.dispose()
-      } catch (err) {
-        console.warn("[Kilo] PrivatePeer stale dispose failed:", String(err))
-      }
-      return
+  }
+
+  private handleSupersededInit(peer: ServePrivatePeer, genAtStart: number): boolean {
+    if (!this.isSuperseded(genAtStart)) return false
+    try {
+      peer.dispose()
+    } catch (err) {
+      console.warn("[Kilo] PrivatePeer dispose superseded failed:", String(err))
     }
+    if (this.privatePeer === peer) {
+      this.privatePeer = null
+      this.privateAvailable = false
+      this.privateEpoch = null
+      this.privatePid = undefined
+    }
+    return true
+  }
+
+  private handleStalePeer(peer: ServePrivatePeer, epochAtStart: number): boolean {
+    if (this.privatePeer === peer && this.privateEpoch === epochAtStart) return false
+    try {
+      peer.dispose()
+    } catch (err) {
+      console.warn("[Kilo] PrivatePeer stale dispose failed:", String(err))
+    }
+    return true
+  }
+
+  private completePrivateNegotiation(
+    peer: ServePrivatePeer,
+    ok: boolean,
+    pidAtStart: number | undefined,
+    epochAtStart: number,
+  ): void {
     if (!peer.isAvailable() && ok) {
       this.privateAvailable = false
       console.warn("[Kilo] PrivatePeer negotiation failed (fail-closed) pid", pidAtStart, "epoch", epochAtStart)
@@ -916,6 +986,26 @@ export class KiloConnectionService {
       return
     }
     console.log("[Kilo] PrivatePeer negotiated pid", pidAtStart, "epoch", epochAtStart)
+  }
+
+  private async initPrivatePeer(server: import("./server-manager").ServerInstance, generation?: number): Promise<void> {
+    const genAtStart = generation ?? this.connectGeneration
+    if (this.isSuperseded(genAtStart)) return
+    if (this.isSameEpoch(server.epoch)) return
+    this.disposeExistingPeerForInit()
+    this.setPrivateEpoch(server)
+    if (!this.hasPrivateTransport(server)) {
+      console.warn("[Kilo] PrivatePeer unavailable: fd3/fd4 not exposed for pid", server.pid, "epoch", server.epoch)
+      return
+    }
+    const epochAtStart = server.epoch
+    const pidAtStart = server.pid
+    const peer = this.makePrivatePeer(server)
+    this.privatePeer = peer
+    const ok = await peer.initialize()
+    if (this.handleSupersededInit(peer, genAtStart)) return
+    if (this.handleStalePeer(peer, epochAtStart)) return
+    this.completePrivateNegotiation(peer, ok, pidAtStart, epochAtStart)
   }
 
   isPrivateAvailable(): boolean {
@@ -934,43 +1024,76 @@ export class KiloConnectionService {
     return this.privatePid
   }
 
-  async privateCancelQueued(req: ServePrivateCancelQueuedRequest): Promise<ServePrivateCancelQueuedResult> {
+  privateCancelQueuedWithHandle(req: ServePrivateCancelQueuedRequest): { id: number; promise: Promise<ServePrivateCancelQueuedResult>; cancel: (msg?: string) => boolean } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
     const epochAtCall = this.privateEpoch
     const peerAtCall = this.privatePeer
-    const result = await peerAtCall.privateCancelQueued(req)
-    if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
-      return {
-        v: 1,
-        requestId: req.requestId,
-        opId: req.opId,
-        op: "session/cancelQueued",
-        idempotencyKey: req.idempotencyKey,
-        status: "ambiguous",
-        outcome: { type: "ambiguous", time: Date.now() },
-        accepted: false,
-        transportUnknown: true,
-      } as unknown as ServePrivateCancelQueuedResult
+    const handle = peerAtCall.privateCancelQueuedWithHandle(req)
+    const promise = handle.promise.then((result) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/cancelQueued",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateCancelQueuedResult
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/cancelQueued",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateCancelQueuedResult
+      }
+      return result
+    })
+    const cancel = (msg = "private parity timeout"): boolean => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout(`stale observer timeout opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout cancel throw opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout exact cancel miss opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      return true
     }
-    if (this.privatePeer !== peerAtCall) {
-      return {
-        v: 1,
-        requestId: req.requestId,
-        opId: req.opId,
-        op: "session/cancelQueued",
-        idempotencyKey: req.idempotencyKey,
-        status: "ambiguous",
-        outcome: { type: "ambiguous", time: Date.now() },
-        accepted: false,
-        transportUnknown: true,
-      } as unknown as ServePrivateCancelQueuedResult
-    }
-    return result
+    return { id: handle.id, promise, cancel }
   }
 
-  async privateSessionUpdate(req: ServePrivateSessionUpdateRequest): Promise<ServePrivateSessionUpdateResult> {
+  async privateCancelQueued(req: ServePrivateCancelQueuedRequest): Promise<ServePrivateCancelQueuedResult> {
+    const handle = this.privateCancelQueuedWithHandle(req)
+    return handle.promise
+  }
+
+  privateSessionUpdateWithHandle(req: ServePrivateSessionUpdateRequest): { id: number; promise: Promise<ServePrivateSessionUpdateResult>; cancel: (msg?: string) => boolean } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -979,37 +1102,70 @@ export class KiloConnectionService {
     }
     const epochAtCall = this.privateEpoch
     const peerAtCall = this.privatePeer
-    const result = await peerAtCall.privateSessionUpdate(req)
-    if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
-      return {
-        v: 1,
-        requestId: req.requestId,
-        opId: req.opId,
-        op: "session/update",
-        idempotencyKey: req.idempotencyKey,
-        status: "ambiguous",
-        outcome: { type: "ambiguous", time: Date.now() },
-        accepted: false,
-        transportUnknown: true,
-      } as unknown as ServePrivateSessionUpdateResult
+    const handle = peerAtCall.privateSessionUpdateWithHandle(req)
+    const promise = handle.promise.then((result) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/update",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateSessionUpdateResult
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/update",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateSessionUpdateResult
+      }
+      return result
+    })
+    const cancel = (msg = "private parity timeout"): boolean => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout(`stale observer timeout opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout cancel throw opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout exact cancel miss opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      return true
     }
-    if (this.privatePeer !== peerAtCall) {
-      return {
-        v: 1,
-        requestId: req.requestId,
-        opId: req.opId,
-        op: "session/update",
-        idempotencyKey: req.idempotencyKey,
-        status: "ambiguous",
-        outcome: { type: "ambiguous", time: Date.now() },
-        accepted: false,
-        transportUnknown: true,
-      } as unknown as ServePrivateSessionUpdateResult
-    }
-    return result
+    return { id: handle.id, promise, cancel }
   }
 
-  async privateFork(req: ServePrivateForkRequest): Promise<ServePrivateForkResult> {
+  async privateSessionUpdate(req: ServePrivateSessionUpdateRequest): Promise<ServePrivateSessionUpdateResult> {
+    const handle = this.privateSessionUpdateWithHandle(req)
+    return handle.promise
+  }
+
+  privateForkWithHandle(req: ServePrivateForkRequest): { id: number; promise: Promise<ServePrivateForkResult>; cancel: (msg?: string) => boolean } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -1018,34 +1174,139 @@ export class KiloConnectionService {
     }
     const epochAtCall = this.privateEpoch
     const peerAtCall = this.privatePeer
-    const result = await peerAtCall.privateFork(req)
-    if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
-      return {
-        v: 1,
-        requestId: req.requestId,
-        opId: req.opId,
-        op: "session/fork",
-        idempotencyKey: req.idempotencyKey,
-        status: "ambiguous",
-        outcome: { type: "ambiguous", time: Date.now() },
-        accepted: false,
-        transportUnknown: true,
-      } as unknown as ServePrivateForkResult
+    const handle = peerAtCall.privateForkWithHandle(req)
+    const promise = handle.promise.then((result) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/fork",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateForkResult
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/fork",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateForkResult
+      }
+      return result
+    })
+    const cancel = (msg = "private parity timeout"): boolean => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout(`stale observer timeout opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout cancel throw opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout exact cancel miss opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      return true
     }
-    if (this.privatePeer !== peerAtCall) {
-      return {
-        v: 1,
-        requestId: req.requestId,
-        opId: req.opId,
-        op: "session/fork",
-        idempotencyKey: req.idempotencyKey,
-        status: "ambiguous",
-        outcome: { type: "ambiguous", time: Date.now() },
-        accepted: false,
-        transportUnknown: true,
-      } as unknown as ServePrivateForkResult
+    return { id: handle.id, promise, cancel }
+  }
+
+  async privateFork(req: ServePrivateForkRequest): Promise<ServePrivateForkResult> {
+    const handle = this.privateForkWithHandle(req)
+    return handle.promise
+  }
+
+  privateCreateWithHandle(req: ServePrivateCreateRequest): { id: number; promise: Promise<ServePrivateCreateResult>; cancel: (msg?: string) => boolean } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
     }
-    return result
+    if (!this.privatePeer.hasCapability("session/create")) {
+      throw new Error("Private peer missing session/create capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const handle = peerAtCall.privateCreateWithHandle(req)
+    const promise = handle.promise.then((result) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/create",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateCreateResult
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/create",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateCreateResult
+      }
+      return result
+    })
+    const cancel = (msg = "private parity timeout"): boolean => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout(`stale observer timeout opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout cancel throw opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout exact cancel miss opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      return true
+    }
+    return { id: handle.id, promise, cancel }
+  }
+
+  async privateCreate(req: ServePrivateCreateRequest): Promise<ServePrivateCreateResult> {
+    const handle = this.privateCreateWithHandle(req)
+    return handle.promise
   }
 
   /**

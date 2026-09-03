@@ -16,7 +16,8 @@ import { SessionV2 } from "@opencode-ai/core/session"
 import { NotFoundError, Storage } from "@/storage/storage"
 import { eq, and, gte, isNull, desc, like, sql, inArray, lt, or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
-import { PartTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, PartTable, SessionTable } from "@opencode-ai/core/session/sql"
+import { SandboxStore } from "@/kilocode/sandbox/store"
 import { ProjectTable } from "@opencode-ai/core/project/sql"
 import * as Artifact from "@opencode-ai/core/retention/artifact"
 import * as Retention from "@opencode-ai/core/retention/retention"
@@ -54,9 +55,33 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 import { cloneMessageDataForFork, clonePartDataForFork, filterMessagesForFork, getForkedTitle, resolveForkModelAtCheckpoint, sessionPath } from "@/kilocode/session/fork"
+import fs from "node:fs/promises"
+import { ForkSeam } from "@/kilocode/session/fork-seam"
+import { baseKey, cumulativeSessionDiff } from "@/kilocode/session-portability/cumulative-diff"
+import { isClaimedWriteError, storageFileForKey, writeExclusiveJson } from "@/storage/claimed-file"
+import { EventSequenceTable, EventTable } from "@opencode-ai/core/event/sql"
 
 const log = Log.create({ service: "session" })
 const runtime = makeRuntime(Database.Service, Database.defaultLayer)
+
+function isEnoentLocal(err: unknown): boolean {
+  const c = (err as unknown as { code?: string })?.code
+  if (c === "ENOENT") return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes("ENOENT")
+}
+function isEexistLocal(err: unknown): boolean {
+  const c = (err as unknown as { code?: string })?.code
+  if (c === "EEXIST") return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes("EEXIST")
+}
+function isUniqueViolationLocal(err: unknown): boolean {
+  const code = (err as unknown as { code?: string })?.code
+  if (code === "SQLITE_CONSTRAINT" || code === "SQLITE_CONSTRAINT_PRIMARYKEY" || code === "SQLITE_CONSTRAINT_UNIQUE") return true
+  const msg = err instanceof Error ? err.message : String(err)
+  return msg.includes("UNIQUE constraint") || msg.includes("unique constraint") || msg.includes("UNIQUE") || msg.includes("SQLITE_CONSTRAINT")
+}
 
 const parentTitlePrefix = "New session - "
 const childTitlePrefix = "Child session - "
@@ -257,6 +282,17 @@ export const CreateInput = Schema.optional(
     workspaceID: Schema.optional(WorkspaceV2.ID),
     sandboxInheritanceToken: Schema.optional(Schema.String),
     // kilocode_change end
+    // kilocode_change - P4.4-G3-B4 durable create lane (optional) — finite safe integers; HTTP handler enforces strict unknown-field rejection for OpenAPI `additionalProperties: false` parity
+    idempotencyKey: Schema.optional(Schema.String),
+    requestId: Schema.optional(Schema.String),
+    opId: Schema.optional(Schema.String),
+    context: Schema.optional(
+      Schema.Struct({
+        directory: Schema.String,
+        parentSessionId: Schema.optional(Schema.NullOr(SessionID)),
+        configVersion: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }))),
+      }),
+    ),
   }),
 )
 export type CreateInput = Types.DeepMutable<Schema.Schema.Type<typeof CreateInput>>
@@ -867,59 +903,512 @@ export const layer: Layer.Layer<
       const ctx = yield* InstanceState.context
       const original = yield* get(input.sessionID)
       const title = getForkedTitle(original.title)
-      // kilocode_change start - forks into another directory cannot read the source confinement from the new dir, so carry it over explicitly
       const sandboxFallback = yield* SandboxPolicy.peek(original.directory, input.sessionID)
-      // kilocode_change end
-      // kilocode_change start - historical forks must use the model from retained context, not a later source-session selection
       const msgs = yield* messages({ sessionID: input.sessionID })
       const model = resolveForkModelAtCheckpoint({
         sourceModel: original.model as unknown as { id: string; providerID: string; variant?: string } | null,
         checkpointId: input.messageID as unknown as string | null,
         orderedMessages: msgs.map((m) => ({ id: m.info.id, role: m.info.role, model: (m.info as unknown as { model?: unknown }).model })),
       }) as unknown as typeof original.model
-      // kilocode_change end
-      const session = yield* createNext({
-        directory: ctx.directory,
-        path: sessionPath(ctx.worktree, ctx.directory),
-        workspaceID: original.workspaceID,
-        title,
-        metadata: structuredClone(original.metadata),
-        model, // kilocode_change - preserve the model + variant active at the fork point
-        sourceID: input.sessionID, // kilocode_change - forks preserve initialized confinement
-        sandboxFallback, // kilocode_change - seed confinement from the source session's original directory
-      })
-      const idMap = new Map<string, MessageID>()
-      const filtered = filterMessagesForFork(msgs as unknown as Array<{ id: string }>, input.messageID as unknown as string | null) as unknown as typeof msgs
 
-      for (const msg of filtered) {
-        const newID = MessageID.ascending()
-        idMap.set(msg.info.id, newID)
+      // Establish target identity before any filesystem effects (strict IDs, no overwrite)
+      const newIdStr = ForkSeam.nextId ? ForkSeam.nextId : SessionID.descending()
+      if (ForkSeam.nextId) ForkSeam.nextId = undefined
+      const newId = newIdStr as unknown as SessionID
 
-        const data = cloneMessageDataForFork(msg.info as unknown as Record<string, unknown>, idMap as unknown as Map<string, string>)
-        const cloned = yield* updateMessage({
-          ...data,
-          sessionID: session.id,
-          id: newID,
-        } as unknown as typeof msg.info & { sessionID: string; id: string })
+      // Probe SessionTable occupancy before effects
+      const idOccupied = yield* db
+        .select()
+        .from(SessionTable)
+        .where(eq(SessionTable.id, newId))
+        .get()
+        .pipe(
+          Effect.map((v) => !!v),
+          Effect.orDie,
+        )
+      if (idOccupied) return yield* Effect.fail(new NotFoundError({ message: `fork target already exists ${newIdStr}` }))
 
-        for (const part of msg.parts) {
-          // kilocode_change - detach task calls + drop transient parts before copying the forked transcript
-          const prepared = KiloSession.prepareForkedPart(part)
-          if (!prepared) continue
-          const mappedPartData = clonePartDataForFork(prepared as unknown as MessageV2.Part, idMap as unknown as Map<string, string>)
-          const p: SessionV1.Part = {
-            ...(mappedPartData as unknown as SessionV1.Part),
-            id: PartID.ascending(),
-            messageID: cloned.id,
-            sessionID: session.id,
-          }
-          yield* updatePart(p)
+      // Probe filesystem artifacts before effects - fail closed on probe errors other than ENOENT
+      const existingSandbox = yield* Effect.promise(() => SandboxStore.read(ctx.directory, newId)).pipe(
+        Effect.map((v) => v !== undefined),
+        Effect.catch((e) => (isEnoentLocal(e) ? Effect.succeed(false) : Effect.fail(e))),
+        Effect.catchDefect((e) => Effect.fail(e)),
+      )
+      const baseExists = yield* Effect.promise(() =>
+        fs
+          .stat(storageFileForKey(baseKey(newIdStr), Global.Path.data))
+          .then(() => true)
+          .catch((e: unknown) => {
+            if (isEnoentLocal(e)) return false
+            throw e
+          }),
+      )
+      const diffExists = yield* Effect.promise(() =>
+        fs
+          .stat(storageFileForKey(["session_diff", newIdStr], Global.Path.data))
+          .then(() => true)
+          .catch((e: unknown) => {
+            if (isEnoentLocal(e)) return false
+            throw e
+          }),
+      )
+      // Preflight target event aggregate occupancy before effects (strict IDs, no global deletion)
+      const eventSeqExists = yield* db
+        .select()
+        .from(EventSequenceTable)
+        .where(eq(EventSequenceTable.aggregate_id, newIdStr))
+        .get()
+        .pipe(
+          Effect.map((v) => !!v),
+          Effect.orDie,
+        )
+      const eventExists = yield* db
+        .select()
+        .from(EventTable)
+        .where(eq(EventTable.aggregate_id, newIdStr))
+        .get()
+        .pipe(
+          Effect.map((v) => !!v),
+          Effect.orDie,
+        )
+      if (existingSandbox || baseExists || diffExists || eventSeqExists || eventExists)
+        return yield* Effect.fail(new NotFoundError({ message: `fork target already exists ${newIdStr}` }))
+
+      let ownedSession = false
+      let ownedSandbox = false
+      let ownedBase = false
+      let ownedDiff = false
+      let createdSession: Info | undefined
+
+      const doFork = Effect.gen(function* () {
+        // Create session with explicit ID, without automatic sandbox inherit (exclusive handling below)
+        const session = yield* createNext({
+          id: newIdStr as unknown as SessionID,
+          directory: ctx.directory,
+          path: sessionPath(ctx.worktree, ctx.directory),
+          workspaceID: original.workspaceID,
+          title,
+          metadata: structuredClone(original.metadata),
+          model,
+        }).pipe(
+          Effect.tap(() => Effect.sync(() => { ownedSession = true })),
+          Effect.catch((e) => (isUniqueViolationLocal(e) ? Effect.fail(new NotFoundError({ message: `fork target already exists ${newIdStr}` })) : Effect.fail(e as unknown as NotFoundError))),
+          Effect.catchDefect((d) => (isUniqueViolationLocal(d) ? Effect.fail(new NotFoundError({ message: `fork target already exists ${newIdStr}` })) : Effect.fail(new NotFoundError({ message: String(d) }) as unknown as NotFoundError))),
+        )
+        createdSession = session
+
+        // Sandbox exclusive inherit
+        const sourceDir = original.directory
+        let parentSnap: SandboxStore.Snapshot | undefined
+        if (sandboxFallback) {
+          parentSnap = sandboxFallback as unknown as SandboxStore.Snapshot
+        } else {
+          parentSnap = yield* Effect.promise(() => SandboxStore.read(sourceDir, input.sessionID)).pipe(
+            Effect.map((v) => v as SandboxStore.Snapshot | undefined),
+            Effect.catch((e) => (isEnoentLocal(e) ? Effect.succeed(undefined) : Effect.fail(e))),
+            Effect.catchDefect((e) => Effect.fail(e)),
+          )
         }
-      }
-      // kilocode_change - preserve imported/cumulative diffs when forking (self-contained Storage runtime keeps this shared file off the legacy Storage layer)
-      yield* carryForkDiff(input.sessionID, session.id)
-      return session
-    })
+        if (parentSnap) {
+          if (ForkSeam.failSandboxWrite) return yield* Effect.fail(new Error("injected sandbox write failure"))
+          const nextSnap: SandboxStore.Snapshot = { ...parentSnap, version: 0 }
+          try {
+            yield* Effect.promise(() => SandboxStore.writeExclusive(ctx.directory, newId, nextSnap))
+            ownedSandbox = true
+          } catch (e) {
+            if (isEexistLocal(e)) return yield* Effect.fail(new NotFoundError({ message: `fork target already exists ${newIdStr}` }))
+            return yield* Effect.fail(e as unknown as NotFoundError)
+          }
+        }
+
+        // Clone messages/parts
+        const idMap = new Map<string, MessageID>()
+        const filtered = filterMessagesForFork(msgs as unknown as Array<{ id: string }>, input.messageID as unknown as string | null) as unknown as typeof msgs
+        for (const msg of filtered) {
+          const newMID = MessageID.ascending()
+          idMap.set(msg.info.id, newMID)
+          const data = cloneMessageDataForFork(msg.info as unknown as Record<string, unknown>, idMap as unknown as Map<string, string>)
+          const cloned = yield* updateMessage({
+            ...data,
+            sessionID: session.id,
+            id: newMID,
+          } as unknown as typeof msg.info & { sessionID: string; id: string })
+          for (const part of msg.parts) {
+            const prepared = KiloSession.prepareForkedPart(part)
+            if (!prepared) continue
+            const mappedPartData = clonePartDataForFork(prepared as unknown as MessageV2.Part, idMap as unknown as Map<string, string>)
+            const p: SessionV1.Part = {
+              ...(mappedPartData as unknown as SessionV1.Part),
+              id: PartID.ascending(),
+              messageID: cloned.id,
+              sessionID: session.id,
+            }
+            yield* updatePart(p)
+          }
+        }
+
+        // Diff carry with claimed-file exclusive and ownership tracking
+        const storageRuntime = makeRuntime(Storage.Service, Storage.defaultLayer)
+        const localForDiff = yield* Effect.promise(() =>
+          storageRuntime.runPromise((s) =>
+            s.read<any>(["session_diff", String(input.sessionID)]).pipe(Effect.catchIf((err: unknown) => err instanceof NotFoundError || (err as unknown as { _tag?: string })?._tag === "NotFoundError", () => Effect.succeed([] as any))),
+          ),
+        ).pipe(
+          Effect.map((v) => v as unknown[]),
+          Effect.catch((e) => Effect.fail(e)),
+          Effect.catchDefect((e) => Effect.fail(e)),
+        )
+        const baseForDiff = yield* Effect.promise(() => storageRuntime.runPromise((s) => cumulativeSessionDiff(s, input.sessionID, localForDiff as any)))
+        const hasDiff = baseForDiff.length > 0
+        if (hasDiff) {
+          const firstKey = baseKey(newIdStr)
+          const secondKey = ["session_diff", newIdStr] as unknown as string[]
+          if (ForkSeam.failFirstDiffWrite) return yield* Effect.fail(new Error("injected first diff write failure"))
+          try {
+            yield* Effect.promise(() => writeExclusiveJson(storageFileForKey(firstKey, Global.Path.data), baseForDiff))
+            ownedBase = true
+          } catch (e) {
+            if (isClaimedWriteError(e)) {
+              const claimed = e as unknown as { handle: { cleanup: () => Promise<boolean> }; cause: unknown; target: string }
+              ownedBase = true
+              const original = claimed.cause ?? e
+              const ok = yield* Effect.promise(() => claimed.handle.cleanup()).pipe(
+                Effect.map((v) => v as boolean),
+                Effect.catch((err) => Effect.logWarning("legacy fork claimed cleanup failed", { target: claimed.target, cause: String(err) }).pipe(Effect.as(false as const))),
+                Effect.catchDefect((err) => Effect.logWarning("legacy fork claimed cleanup defect", { target: claimed.target, cause: String(err) }).pipe(Effect.as(false as const))),
+              )
+              if (ok) ownedBase = false
+              else yield* Effect.logWarning("legacy fork claimed file retained", { target: claimed.target, cause: String(original) })
+              if (isEexistLocal(original) || isUniqueViolationLocal(original)) return yield* Effect.fail(new NotFoundError({ message: `fork target already exists ${newIdStr}` }))
+              return yield* Effect.fail(original as unknown as NotFoundError)
+            }
+            if (isEexistLocal(e) || isUniqueViolationLocal(e)) return yield* Effect.fail(new NotFoundError({ message: `fork target already exists ${newIdStr}` }))
+            return yield* Effect.fail(e as unknown as NotFoundError)
+          }
+          if (ForkSeam.failSecondDiffWrite) {
+            const ok = yield* Effect.promise(() => fs.rm(storageFileForKey(firstKey, Global.Path.data), { force: true })).pipe(
+              Effect.map(() => true as const),
+              Effect.catch((err) =>
+                Effect.logWarning("legacy fork second diff cleanup failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+              ),
+              Effect.catchDefect((err) =>
+                Effect.logWarning("legacy fork second diff cleanup defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+              ),
+            )
+            if (ok) ownedBase = false
+            return yield* Effect.fail(new Error("injected second diff write failure"))
+          }
+          try {
+            yield* Effect.promise(() => writeExclusiveJson(storageFileForKey(secondKey, Global.Path.data), baseForDiff))
+            ownedDiff = true
+          } catch (e) {
+            if (isClaimedWriteError(e)) {
+              const claimed = e as unknown as { handle: { cleanup: () => Promise<boolean> }; cause: unknown; target: string }
+              ownedDiff = true
+              const original = claimed.cause ?? e
+              const ok2 = yield* Effect.promise(() => claimed.handle.cleanup()).pipe(
+                Effect.map((v) => v as boolean),
+                Effect.catch((err) => Effect.logWarning("legacy fork claimed second cleanup failed", { target: claimed.target, cause: String(err) }).pipe(Effect.as(false as const))),
+                Effect.catchDefect((err) => Effect.logWarning("legacy fork claimed second cleanup defect", { target: claimed.target, cause: String(err) }).pipe(Effect.as(false as const))),
+              )
+              if (ok2) ownedDiff = false
+              else yield* Effect.logWarning("legacy fork claimed second retained", { target: claimed.target, cause: String(original) })
+              // also clean owned first as before
+              const ok = yield* Effect.promise(() => fs.rm(storageFileForKey(firstKey, Global.Path.data), { force: true })).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork second diff partial cleanup failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork second diff partial cleanup defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              if (ok) ownedBase = false
+              if (isEexistLocal(original) || isUniqueViolationLocal(original)) return yield* Effect.fail(new NotFoundError({ message: `fork target already exists ${newIdStr}` }))
+              return yield* Effect.fail(original as unknown as NotFoundError)
+            }
+            const ok = yield* Effect.promise(() => fs.rm(storageFileForKey(firstKey, Global.Path.data), { force: true })).pipe(
+              Effect.map(() => true as const),
+              Effect.catch((err) =>
+                Effect.logWarning("legacy fork second diff partial cleanup failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+              ),
+              Effect.catchDefect((err) =>
+                Effect.logWarning("legacy fork second diff partial cleanup defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+              ),
+            )
+            if (ok) ownedBase = false
+            if (isEexistLocal(e) || isUniqueViolationLocal(e)) return yield* Effect.fail(new NotFoundError({ message: `fork target already exists ${newIdStr}` }))
+            return yield* Effect.fail(e as unknown as NotFoundError)
+          }
+        }
+
+        return session
+      })
+
+      const compensated = doFork.pipe(
+        Effect.catch((cause) =>
+          Effect.gen(function* () {
+            if (ownedBase) {
+              const okFs = yield* Effect.promise(() => fs.rm(storageFileForKey(baseKey(newIdStr), Global.Path.data), { force: true })).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup base fs failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup base fs defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              const okStorage = yield* storage.remove(baseKey(newIdStr)).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup base storage failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup base storage defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              if (okFs && okStorage) ownedBase = false
+            }
+            if (ownedDiff) {
+              const okFs = yield* Effect.promise(() => fs.rm(storageFileForKey(["session_diff", newIdStr], Global.Path.data), { force: true })).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup diff fs failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup diff fs defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              const okStorage = yield* storage.remove(["session_diff", newIdStr]).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup diff storage failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup diff storage defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              if (okFs && okStorage) ownedDiff = false
+            }
+            if (ownedSandbox) {
+              const okRemove = yield* Effect.promise(() => SandboxStore.remove(ctx.directory, newId)).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup sandbox remove failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup sandbox remove defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              const okEvict = yield* Effect.sync(() => SandboxPolicy.evict(ctx.directory, newId)).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup sandbox evict failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup sandbox evict defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              if (okRemove && okEvict) ownedSandbox = false
+            }
+            if (createdSession) {
+              yield* Effect.promise(() => KiloSession.removeSession(newIdStr)).pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup KiloSession remove failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup KiloSession remove defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              KiloSession.clearPlatformOverride(newIdStr)
+              yield* db.delete(SessionTable).where(eq(SessionTable.id, newId)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup session delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup session delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              yield* db.delete(MessageTable).where(eq(MessageTable.session_id, newId)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup message delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup message delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              yield* db.delete(PartTable).where(eq(PartTable.session_id, newId)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup part delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup part delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              // Event aggregate scoped to forked session ID only — preserves unrelated aggregates
+              yield* db.delete(EventTable).where(eq(EventTable.aggregate_id, newIdStr)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup event table delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup event table delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, newIdStr)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup event sequence delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup event sequence delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+            } else {
+              yield* Effect.promise(() => KiloSession.removeSession(newIdStr)).pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup KiloSession ghost remove failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup KiloSession ghost remove defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              KiloSession.clearPlatformOverride(newIdStr)
+            }
+            return yield* Effect.fail(cause as unknown as NotFoundError)
+          }),
+        ),
+        Effect.catchDefect((defect) =>
+          Effect.gen(function* () {
+            if (ownedBase) {
+              const okFs = yield* Effect.promise(() => fs.rm(storageFileForKey(baseKey(newIdStr), Global.Path.data), { force: true })).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup base fs failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup base fs defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              const okStorage = yield* storage.remove(baseKey(newIdStr)).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup base storage failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup base storage defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              if (okFs && okStorage) ownedBase = false
+            }
+            if (ownedDiff) {
+              const okFs = yield* Effect.promise(() => fs.rm(storageFileForKey(["session_diff", newIdStr], Global.Path.data), { force: true })).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup diff fs failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup diff fs defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              const okStorage = yield* storage.remove(["session_diff", newIdStr]).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup diff storage failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup diff storage defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              if (okFs && okStorage) ownedDiff = false
+            }
+            if (ownedSandbox) {
+              const okRemove = yield* Effect.promise(() => SandboxStore.remove(ctx.directory, newId)).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup sandbox remove failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup sandbox remove defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              const okEvict = yield* Effect.sync(() => SandboxPolicy.evict(ctx.directory, newId)).pipe(
+                Effect.map(() => true as const),
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup sandbox evict failed", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup sandbox evict defect", { target: newIdStr, cause: String(err) }).pipe(Effect.as(false as const)),
+                ),
+              )
+              if (okRemove && okEvict) ownedSandbox = false
+            }
+            if (createdSession) {
+              yield* Effect.promise(() => KiloSession.removeSession(newIdStr)).pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup KiloSession remove failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup KiloSession remove defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              KiloSession.clearPlatformOverride(newIdStr)
+              yield* db.delete(SessionTable).where(eq(SessionTable.id, newId)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup session delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup session delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              yield* db.delete(MessageTable).where(eq(MessageTable.session_id, newId)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup message delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup message delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              yield* db.delete(PartTable).where(eq(PartTable.session_id, newId)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup part delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup part delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              yield* db.delete(EventTable).where(eq(EventTable.aggregate_id, newIdStr)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup event table delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup event table delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              yield* db.delete(EventSequenceTable).where(eq(EventSequenceTable.aggregate_id, newIdStr)).run().pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup event sequence delete failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup event sequence delete defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+            } else {
+              yield* Effect.promise(() => KiloSession.removeSession(newIdStr)).pipe(
+                Effect.catch((err) =>
+                  Effect.logWarning("legacy fork cleanup KiloSession ghost remove failed", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+                Effect.catchDefect((err) =>
+                  Effect.logWarning("legacy fork cleanup KiloSession ghost remove defect", { target: newIdStr, cause: String(err) }).pipe(Effect.asVoid),
+                ),
+              )
+              KiloSession.clearPlatformOverride(newIdStr)
+            }
+            return yield* Effect.fail(new NotFoundError({ message: String(defect) }) as unknown as NotFoundError)
+          }),
+        ),
+      )
+      const result = yield* (compensated as unknown as Effect.Effect<Info, NotFoundError>)
+      return result
+    }) as unknown as Interface["fork"]
 
     const patch = (sessionID: SessionID, info: Patch) =>
       Effect.gen(function* () {

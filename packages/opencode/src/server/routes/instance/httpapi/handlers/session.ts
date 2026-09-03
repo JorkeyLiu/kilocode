@@ -6,8 +6,10 @@ import { KiloViewers } from "@/kilocode/presence/service" // kilocode_change
 import { CancelQueuedDispatchService, type CancelQueuedResult } from "@/kilocode/session/cancel-queued-dispatch" // kilocode_change - P4.4-G3-B0
 import { SessionUpdateDispatchService, type SessionUpdateResult } from "@/kilocode/session/session-update-dispatch" // kilocode_change - P4.4-G3-B2 durable title
 import { SessionForkDispatchService, type SessionForkResult } from "@/kilocode/session/session-fork-dispatch" // kilocode_change - P4.4-G3-B3 fork
+import { SessionCreateDispatchService, type SessionCreateResult } from "@/kilocode/session/session-create-dispatch" // kilocode_change - P4.4-G3-B4 create
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory" // kilocode_change - P4.4-G3 double directory contract
 import { forkTargetDirectory } from "@/kilocode/server/routes/fork-routing" // kilocode_change - P4.4-G3 double directory contract
+import { WorkspaceRouteContext } from "../middleware/workspace-routing" // kilocode_change - P4.4-G3-B4 effective directory
 import { SessionOperation } from "@opencode-ai/core/session/operation" // kilocode_change - LOCK-201 canonical opId
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -157,7 +159,91 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       )
     })
 
+    const sessionCreateDispatch = yield* SessionCreateDispatchService // kilocode_change - P4.4-G3-B4
     const create = Effect.fn("SessionHttpApi.create")(function* (ctx: { payload?: Session.CreateInput }) {
+      // durable create path: if payload contains durable identity, route to dispatch
+      const p = ctx.payload as unknown as Record<string, unknown> | undefined
+      const isDurable = p && (p.idempotencyKey !== undefined || p.requestId !== undefined || p.opId !== undefined || p.context !== undefined)
+      if (isDurable) {
+        const pp = p as Record<string, unknown>
+        const context = pp.context as Record<string, unknown> | undefined
+        // double-directory fail-closed: route directory vs body directory must canonical-equivalent
+        // Effective directory is the middleware-bound WorkspaceRouteContext (default/workspace-resolved), not just explicit query/header.
+        {
+          const routeOpt = yield* Effect.serviceOption(WorkspaceRouteContext)
+          const reqOpt = yield* Effect.serviceOption(HttpServerRequest.HttpServerRequest)
+          let effectiveDir: string | undefined
+          if (Option.isSome(routeOpt)) {
+            effectiveDir = routeOpt.value.directory
+          } else if (Option.isSome(reqOpt)) {
+            const httpReq = reqOpt.value
+            const url = new URL(httpReq.url, "http://localhost")
+            const rawRoute = url.searchParams.get("directory") || (httpReq.headers as Record<string, string | undefined>)["x-kilo-directory"]
+            if (rawRoute) {
+              const tryDecode = (v: string) => {
+                try {
+                  return v.includes("%") ? decodeURIComponent(v) : v
+                } catch {
+                  return v
+                }
+              }
+              effectiveDir = tryDecode(rawRoute)
+            } else {
+              effectiveDir = process.cwd()
+            }
+          } else {
+            effectiveDir = process.cwd()
+          }
+          if (context?.directory && effectiveDir) {
+            try {
+              const canonRoute = canonicalDirectory(effectiveDir)
+              const canonBody = canonicalDirectory(context.directory as string)
+              if (canonRoute !== canonBody) return yield* Effect.fail(new HttpApiError.BadRequest({}))
+            } catch {
+              return yield* Effect.fail(new HttpApiError.BadRequest({}))
+            }
+          } else if (context?.directory) {
+            return yield* Effect.fail(new HttpApiError.BadRequest({}))
+          }
+        }
+        const req = {
+          v: 1 as const,
+          requestId: pp.requestId as string,
+          opId: pp.opId as string,
+          op: "session/create" as const,
+          idempotencyKey: pp.idempotencyKey as string,
+          context: {
+            directory: context?.directory as string,
+            parentSessionId: (context?.parentSessionId ?? null) as string | null,
+            configVersion: context?.configVersion as number | undefined,
+          },
+          payload: {
+            title: (pp.title as string | null) ?? null,
+            parentID: (pp.parentID as string | null) ?? null,
+            agent: (pp.agent as string | null) ?? null,
+            model: (pp.model as { id: string; providerID: string; variant?: string } | null) ?? null,
+            metadata: (pp.metadata as Record<string, unknown> | null) ?? null,
+            permission: (pp.permission as unknown | null) ?? null,
+            platform: (pp.platform as string | null) ?? null,
+            workspaceID: (pp.workspaceID as string | null) ?? null,
+            sandboxInheritanceToken: (pp.sandboxInheritanceToken as string | null) ?? null,
+          },
+        }
+        const result = yield* (sessionCreateDispatch.dispatch(req).pipe(
+          Effect.catchDefect(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+          Effect.catch(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+        ) as Effect.Effect<SessionCreateResult, HttpApiError.InternalServerError>)
+        if (result.status === "succeeded") return result.data
+        if (result.status === "failed") {
+          if (result.failure.code === "validation.failed") return yield* Effect.fail(new HttpApiError.BadRequest({}))
+          if (result.failure.code === "scope_mismatch") return yield* Effect.fail(new HttpApiError.BadRequest({}))
+          if (result.failure.code === "stale" || result.failure.code === "conflict") return yield* Effect.fail(new HttpApiError.Conflict({}))
+          if (result.failure.code === "InstanceUnavailableDuringConfigRebuild") return yield* Effect.fail(new HttpApiError.Conflict({}))
+          if (result.failure.code === "internal") return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+          return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+        }
+        return yield* Effect.fail(new HttpApiError.InternalServerError({}))
+      }
       return yield* shareSvc.create(ctx.payload)
     })
 
@@ -168,16 +254,37 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       if (body.trim().length === 0) return yield* create({})
 
       const json = yield* tryParseJson(body)
-      const decoded = yield* Schema.decodeUnknownEffect(Session.CreateInput)(json).pipe(
+      // strict unknown-field rejection for OpenAPI additionalProperties:false parity
+      if (json !== null && typeof json === "object" && !Array.isArray(json)) {
+        const j = json as Record<string, unknown>
+        const hasDurable = "idempotencyKey" in j || "requestId" in j || "opId" in j || "context" in j
+        if (hasDurable) {
+          const allowedRoot = new Set(["parentID", "title", "agent", "model", "metadata", "permission", "platform", "workspaceID", "sandboxInheritanceToken", "idempotencyKey", "requestId", "opId", "context"])
+          for (const k of Object.keys(j)) if (!allowedRoot.has(k)) return yield* new HttpApiError.BadRequest({})
+          const c = j.context as unknown
+          if (c !== null && typeof c === "object" && !Array.isArray(c)) {
+            const allowedCtx = new Set(["directory", "parentSessionId", "configVersion"])
+            for (const k of Object.keys(c as Record<string, unknown>)) if (!allowedCtx.has(k)) return yield* new HttpApiError.BadRequest({})
+          }
+        }
+      }
+      const decoded = yield* Schema.decodeUnknownEffect(Session.CreateInput as unknown as Schema.Schema<unknown>)(json).pipe(
         Effect.mapError(() => new HttpApiError.BadRequest({})),
       )
+      // If durable fields present, bypass Schema strictness and pass raw with those fields (handler create will dispatch)
+      const rawObj = json as Record<string, unknown>
+      const hasDurableRaw = rawObj && (rawObj.idempotencyKey !== undefined || rawObj.requestId !== undefined || rawObj.opId !== undefined || rawObj.context !== undefined)
+      if (hasDurableRaw) {
+        const merged = { ...(decoded as unknown as Record<string, unknown>), idempotencyKey: rawObj.idempotencyKey, requestId: rawObj.requestId, opId: rawObj.opId, context: rawObj.context } as unknown as Session.CreateInput
+        return yield* create({ payload: merged })
+      }
       const payload = decoded
         ? {
             ...decoded,
-            permission: decoded.permission ? [...decoded.permission] : undefined,
+            permission: (decoded as unknown as { permission?: unknown }).permission ? [...(decoded as unknown as { permission: unknown[] }).permission] : undefined,
           }
         : decoded
-      return yield* create({ payload })
+      return yield* create({ payload: payload as unknown as Session.CreateInput })
     })
 
     const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {

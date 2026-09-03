@@ -66,7 +66,7 @@ describe("fd-carrier", () => {
     delete process.env.KILO_CLIENT
     expect(canUseFdCarrier()).toBeFalse()
     expect(tryStartFdCarrier()).toBeNull()
-    // Server.listen still works
+    // Server.listen still works (allow extra time for migration rebuild on file DB after adding create kind)
     const listener = await Server.listen({ hostname: "127.0.0.1", port: 0 })
     try {
       const res = await fetch(new URL("/doc", listener.url).toString())
@@ -76,7 +76,7 @@ describe("fd-carrier", () => {
     }
     if (origParent !== undefined) process.env.KILO_PARENT_PID = origParent
     if (origClient !== undefined) process.env.KILO_CLIENT = origClient
-  })
+  }, 30000)
 
   test("initialize returns 1.0 + capabilities and second init already initialized", async () => {
     process.env.KILO_PARENT_PID = String(process.pid)

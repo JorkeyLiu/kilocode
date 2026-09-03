@@ -17,6 +17,14 @@ export function buildSessionUpdateIdentity(sessionID: string): { opId: string; i
   return { opId, idempotencyKey, requestId }
 }
 
+export function buildSessionCreateIdentity(): { opId: string; idempotencyKey: string; requestId: string } {
+  const token = crypto.randomUUID()
+  const opId = `create:${token}`
+  const idempotencyKey = `create:${token}`
+  const requestId = crypto.randomUUID()
+  return { opId, idempotencyKey, requestId }
+}
+
 // Legacy rename: no durable identity, uses plain PATCH title-only (non-durable)
 export async function renameSession(input: {
   client: KiloClient | null

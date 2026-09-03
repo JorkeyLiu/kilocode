@@ -46,6 +46,7 @@ export class JsonRpcPeer {
     this.onNotification = opts.onNotification
     this.onClosed = opts.onClosed
     this.bindReader()
+    this.bindWriter()
     if (this.child) this.bindChild()
   }
 
@@ -57,16 +58,57 @@ export class JsonRpcPeer {
     return this.initialized
   }
 
+  /** Mark initialized internally (used by worker handler). */
+  markInitialized(): void {
+    this.initialized = true
+  }
+
   request(method: string, params?: unknown): Promise<unknown> {
-    if (this.state !== "open") return Promise.reject(makePeerError(ErrorCode.InternalError, "Peer is closed"))
-    const id = this.nextId++
+    return this.requestWithId(method, params).promise
+  }
+
+  /** Allocate id and return handle atomically; caller owns exact id for timeout cancellation. */
+  requestWithId(method: string, params?: unknown): { id: JsonRpcId; promise: Promise<unknown> } {
+    if (this.state !== "open") {
+      const err = makePeerError(ErrorCode.InternalError, "Peer is closed")
+      return { id: -1 as JsonRpcId, promise: Promise.reject(err) }
+    }
+    const id = this.nextId++ as JsonRpcId
     const payload: Record<string, unknown> = { jsonrpc: JSONRPC_VERSION, id, method }
     if (params !== undefined) payload.params = params
     const frame = encodeFrame(payload)
-    return new Promise((resolve, reject) => {
+    const promise = new Promise<unknown>((resolve, reject) => {
       this.pending.set(id, { resolve, reject })
       this.write(frame, id, reject)
     })
+    return { id, promise }
+  }
+
+  getPendingCount(): number {
+    return this.pending.size
+  }
+
+  getPendingIds(): JsonRpcId[] {
+    return [...this.pending.keys()]
+  }
+
+  peekNextId(): number {
+    return this.nextId
+  }
+
+  /**
+   * Explicit cancellation/removal API for the owned request. Removes the
+   * pending entry for `id` and rejects it with a timeout error. Returns
+   * true if an entry was removed, false if none existed. This is the
+   * natural private-peer boundary ownership for timed-out observer
+   * requests — the timed-out pending must not accumulate until peer close.
+   */
+  tryCancelPending(id: JsonRpcId, message = "private parity timeout"): boolean {
+    const entry = this.pending.get(id)
+    if (!entry) return false
+    this.pending.delete(id)
+    entry.reject(makePeerError(ErrorCode.InternalError, message))
+    return true
   }
 
   notify(method: string, params?: unknown): void {
@@ -85,18 +127,12 @@ export class JsonRpcPeer {
     this.notifyClosed()
   }
 
-  private write(frame: Buffer, id: JsonRpcId | null, reject: ((e: unknown) => void) | null): void {
+  private write(frame: Buffer, _id: JsonRpcId | null, _reject: ((e: unknown) => void) | null): void {
     try {
       const ok = (this.writer as unknown as { write: (b: Buffer) => boolean }).write(frame)
       void ok
     } catch (e) {
-      if (id !== null && reject) {
-        const entry = this.pending.get(id)
-        if (entry) {
-          this.pending.delete(id)
-          entry.reject(makePeerError(ErrorCode.InternalError, String(e)))
-        }
-      }
+      this.transitionClosed(`writer sync throw: ${String(e)}`)
     }
   }
 
@@ -119,6 +155,24 @@ export class JsonRpcPeer {
     ;(this as unknown as Record<string, unknown>)._onError = onError
   }
 
+  private bindWriter(): void {
+    const w = this.writer as unknown as { on?: (e: string, h: (err?: unknown) => void) => void }
+    if (!w.on) return
+    const onWriterError = (err: unknown) => this.transitionClosed(`writer error: ${String(err)}`)
+    const onWriterClose = () => {
+      if (this.state !== "open") return
+      this.transitionClosed("writer closed")
+    }
+    try {
+      w.on("error", onWriterError as unknown as (e: unknown) => void)
+      w.on("close", onWriterClose)
+    } catch {
+      // Platform does not support writer events — sync write throw remains the fallback
+    }
+    ;(this as unknown as Record<string, unknown>)._onWriterError = onWriterError
+    ;(this as unknown as Record<string, unknown>)._onWriterClose = onWriterClose
+  }
+
   private bindChild(): void {
     if (!this.child) return
     const onExit = () => this.transitionClosed("child exit")
@@ -134,28 +188,44 @@ export class JsonRpcPeer {
 
   private unbind(): void {
     try {
-      const onData = (this as unknown as Record<string, unknown>)._onData as ((c: unknown) => void) | undefined
-      const onEnd = (this as unknown as Record<string, unknown>)._onEnd as (() => void) | undefined
-      const onClose = (this as unknown as Record<string, unknown>)._onClose as (() => void) | undefined
-      const onError = (this as unknown as Record<string, unknown>)._onError as (() => void) | undefined
-      const r = this.reader as unknown as { removeListener: (e: string, h: unknown) => void; off?: (e: string, h: unknown) => void }
-      if (onData) (r.off ?? r.removeListener).call(r, "data", onData)
-      if (onEnd) (r.off ?? r.removeListener).call(r, "end", onEnd)
-      if (onClose) (r.off ?? r.removeListener).call(r, "close", onClose)
-      if (onError) (r.off ?? r.removeListener).call(r, "error", onError)
-      if (this.child) {
-        const cExit = (this as unknown as Record<string, unknown>)._childOnExit as (() => void) | undefined
-        const cClose = (this as unknown as Record<string, unknown>)._childOnClose as (() => void) | undefined
-        const cErr = (this as unknown as Record<string, unknown>)._childOnError as (() => void) | undefined
-        const c = this.child as unknown as { off?: (e: string, h: unknown) => void; removeListener?: (e: string, h: unknown) => void }
-        const off = c.off ?? c.removeListener
-        if (cExit) off?.call(c, "exit", cExit as never)
-        if (cClose) off?.call(c, "close", cClose as never)
-        if (cErr) off?.call(c, "error", cErr as never)
-      }
+      this.unbindReader()
+      this.unbindWriter()
+      this.unbindChild()
     } catch {
       // ignore
     }
+  }
+
+  private unbindReader(): void {
+    const onData = (this as unknown as Record<string, unknown>)._onData as ((c: unknown) => void) | undefined
+    const onEnd = (this as unknown as Record<string, unknown>)._onEnd as (() => void) | undefined
+    const onClose = (this as unknown as Record<string, unknown>)._onClose as (() => void) | undefined
+    const onError = (this as unknown as Record<string, unknown>)._onError as (() => void) | undefined
+    const r = this.reader as unknown as { removeListener: (e: string, h: unknown) => void; off?: (e: string, h: unknown) => void }
+    if (onData) (r.off ?? r.removeListener).call(r, "data", onData)
+    if (onEnd) (r.off ?? r.removeListener).call(r, "end", onEnd)
+    if (onClose) (r.off ?? r.removeListener).call(r, "close", onClose)
+    if (onError) (r.off ?? r.removeListener).call(r, "error", onError)
+  }
+
+  private unbindWriter(): void {
+    const wErr = (this as unknown as Record<string, unknown>)._onWriterError as ((e: unknown) => void) | undefined
+    const wClose = (this as unknown as Record<string, unknown>)._onWriterClose as (() => void) | undefined
+    const w = this.writer as unknown as { removeListener?: (e: string, h: unknown) => void; off?: (e: string, h: unknown) => void }
+    if (wErr) (w.off ?? w.removeListener)?.call(w, "error", wErr as never)
+    if (wClose) (w.off ?? w.removeListener)?.call(w, "close", wClose as never)
+  }
+
+  private unbindChild(): void {
+    if (!this.child) return
+    const cExit = (this as unknown as Record<string, unknown>)._childOnExit as (() => void) | undefined
+    const cClose = (this as unknown as Record<string, unknown>)._childOnClose as (() => void) | undefined
+    const cErr = (this as unknown as Record<string, unknown>)._childOnError as (() => void) | undefined
+    const c = this.child as unknown as { off?: (e: string, h: unknown) => void; removeListener?: (e: string, h: unknown) => void }
+    const off = c.off ?? c.removeListener
+    if (cExit) off?.call(c, "exit", cExit as never)
+    if (cClose) off?.call(c, "close", cClose as never)
+    if (cErr) off?.call(c, "error", cErr as never)
   }
 
   private transitionClosed(_reason: string): void {

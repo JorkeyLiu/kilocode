@@ -428,6 +428,10 @@ export function dispose<A, E, R>(sessionID: SessionID, effect: Effect.Effect<A, 
   )
 }
 
+export function evict(directory: string, sessionID: SessionID) {
+  snapshots.delete(key(directory, sessionID))
+}
+
 function execute<A, E, R>(sessionID: SessionID, effect: Effect.Effect<A, E, R>) {
   return Effect.gen(function* () {
     // Initialize before taking the execution gate so activation can safely hold the policy lock while

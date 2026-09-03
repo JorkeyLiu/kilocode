@@ -95,7 +95,7 @@ describe("sessionFork B3", () => {
     }),
   )
 
-  it.live("opId collision with different idempotencyKey fails as conflict", () =>
+  it.live("opId with different idempotencyKey fails validation (canonical identity)", () =>
     Effect.gen(function* () {
       const tmp = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
       const dir = tmp.path
@@ -109,7 +109,7 @@ describe("sessionFork B3", () => {
       const req2 = { v: 1 as const, requestId: "req-o2", opId, op: "session/fork" as const, idempotencyKey: `fork:${source.id}:${token2}`, context: { directory: dir, sessionId: source.id, parentSessionId: null }, payload: {} }
       const r2 = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionForkDispatchService; return yield* d.dispatch(req2) })))) as unknown as Effect.Effect<any, any, any>)
       expect(r2.status).toBe("failed")
-      expect(r2.failure.code).toBe("conflict")
+      expect(r2.failure.code).toBe("validation.failed")
     }),
   )
 
@@ -198,6 +198,37 @@ describe("sessionFork B3", () => {
         expect((list as unknown as any[]).filter((s: any) => s.parentID === source.id).length).toBe(1)
       } finally {
         yield* Effect.promise(() => listener.stop())
+      }
+    }),
+  )
+
+  it.live("fork rejects mismatched idempotencyKey and colon in token", () =>
+    Effect.gen(function* () {
+      const tmp = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
+      const dir = tmp.path
+      const source = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.create({ title: "source" }) })))) as unknown as Effect.Effect<any, any, any>)
+      const token = "ok-" + Math.random().toString(36).slice(2, 6)
+      const opId = SessionOperation.forkId(source.id, token)
+      const reqMismatch = { v: 1 as const, requestId: "req-m", opId, op: "session/fork" as const, idempotencyKey: `fork:${source.id}:different`, context: { directory: dir, sessionId: source.id, parentSessionId: null }, payload: {} }
+      const rMismatch = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionForkDispatchService; return yield* d.dispatch(reqMismatch) })))) as unknown as Effect.Effect<any, any, any>)
+      expect(rMismatch.status).toBe("failed")
+      expect((rMismatch as any).failure.code).toBe("validation.failed")
+      const opIdColon = `fork:${source.id}:bad:token`
+      const reqColon = { v: 1 as const, requestId: "req-c", opId: opIdColon, op: "session/fork" as const, idempotencyKey: opIdColon, context: { directory: dir, sessionId: source.id, parentSessionId: null }, payload: {} }
+      const rColon = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionForkDispatchService; return yield* d.dispatch(reqColon) })))) as unknown as Effect.Effect<any, any, any>)
+      expect(rColon.status).toBe("failed")
+      expect((rColon as any).failure.code).toBe("validation.failed")
+      const rPrivMismatch = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionForkDispatchService; return yield* (d as unknown as { dispatchPrivate: (r: unknown) => Effect.Effect<unknown> }).dispatchPrivate(reqMismatch) })))) as unknown as Effect.Effect<any, any, any>)
+      expect(rPrivMismatch.status).toBe("failed")
+      expect((rPrivMismatch as any).failure.code).toBe("validation.failed")
+      const appLayer = yield* Effect.promise(() => import("../../../src/effect/app-runtime").then((m) => (m as any).makeAppLayer())) as unknown as Effect.Effect<any, any, any>
+      const server = yield* Effect.promise(() => (import("../../../src/server/server") as any).then((m: any) => m.Server.listen({ hostname: "127.0.0.1", port: 0, appLayer }))) as unknown as Effect.Effect<any, any, any>
+      try {
+        const url = new URL(`/session/${source.id}/fork?directory=${encodeURIComponent(dir)}`, (server as any).url).toString()
+        const res = yield* Effect.promise(() => fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ idempotencyKey: `fork:${source.id}:different`, requestId: "req-http-m", opId, context: { directory: dir, sessionId: source.id, parentSessionId: null } }) }))
+        expect(res.status).toBe(400)
+      } finally {
+        yield* Effect.promise(() => (server as any).stop())
       }
     }),
   )

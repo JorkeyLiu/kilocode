@@ -12,7 +12,7 @@ import { SessionRevision } from "./revision"
 // ---------------------------------------------------------------------------
 // R12-compatible record shape (persist tier = full redacted record)
 // ---------------------------------------------------------------------------
-export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork"] as const
+export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork", "create"] as const
 export type OpKind = (typeof OP_KINDS)[number]
 
 export const OUTCOMES = ["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"] as const
@@ -209,6 +209,12 @@ export function forkId(sessionID: string, token?: string): string {
   return `fork:${sessionID}`
 }
 
+export function createId(token: string): string {
+  if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
+  assertNoColon(token, "token")
+  return `create:${token}`
+}
+
 export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
   const segments = opId.split(":")
@@ -238,6 +244,8 @@ export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   } else if (kind === "fork") {
     if (rest.length !== 1 && rest.length !== 2) throw new TypeError(`fork opId must have 1 or 2 segments: ${opId}`)
     if (rest.length === 2 && rest[1]!.length === 0) throw new TypeError(`fork token must be non-empty: ${opId}`)
+  } else if (kind === "create") {
+    if (rest.length !== 1) throw new TypeError(`create opId must have 1 segment: ${opId}`)
   }
   return { kind: kind as OpKind, parts: rest }
 }
@@ -962,11 +970,16 @@ export function getSessionForkByIdempotencyHash(
     const row = yield* db
       .select()
       .from(SessionOperationTable)
-      .where(and(eq(SessionOperationTable.session_id, sessionID), eq(SessionOperationTable.idempotency_hash, hash)))
+      .where(
+        and(
+          eq(SessionOperationTable.session_id, sessionID),
+          eq(SessionOperationTable.idempotency_hash, hash),
+          eq(SessionOperationTable.op_kind, "fork"),
+        ),
+      )
       .get()
       .pipe(Effect.orDie)
     if (!row) return undefined
-    if ((row.op_kind as string) !== "fork") return rowToSessionForkRecord(row as typeof SessionOperationTable.$inferSelect)
     return rowToSessionForkRecord(row as typeof SessionOperationTable.$inferSelect)
   }).pipe(Effect.orDie) as Effect.Effect<SessionForkRecord | undefined>
 }
@@ -980,7 +993,13 @@ export function getSessionForkByIdempotencyHashTx(
     const row = yield* tx
       .select()
       .from(SessionOperationTable)
-      .where(and(eq(SessionOperationTable.session_id, sessionID), eq(SessionOperationTable.idempotency_hash, hash)))
+      .where(
+        and(
+          eq(SessionOperationTable.session_id, sessionID),
+          eq(SessionOperationTable.idempotency_hash, hash),
+          eq(SessionOperationTable.op_kind, "fork"),
+        ),
+      )
       .get()
       .pipe(Effect.orDie)
     if (!row) return undefined
@@ -1064,5 +1083,151 @@ export function insertSessionForkSucceededTx(
       .pipe(Effect.orDie)
     if (!rowRaw) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
     return rowToSessionForkRecord(rowRaw as typeof SessionOperationTable.$inferSelect)
+  })
+}
+
+// ---------------------------------------------------------------------------
+// Create durable helpers (P4.4-G3-B4 create)
+// ---------------------------------------------------------------------------
+export interface SessionCreateMeta {
+  idempotencyHash: string
+  requestId: string
+  directory: string
+  parentSessionId?: string | null
+  configVersion?: number | null
+  title?: string | null
+  parentID?: string | null
+  createdSessionId?: string | null
+}
+
+export interface SessionCreateRecord extends FailureRecord {
+  meta: SessionCreateMeta
+  resultSnapshot?: unknown
+  revision: number
+}
+
+function rowToSessionCreateRecord(row: typeof SessionOperationTable.$inferSelect): SessionCreateRecord {
+  const base = rowToRecord(row)
+  let snapshot: unknown | undefined
+  const rawSnap = (row as unknown as Record<string, unknown>).result_snapshot as string | null | undefined
+  if (rawSnap !== null && rawSnap !== undefined) {
+    if (typeof rawSnap === "string") {
+      try {
+        snapshot = JSON.parse(rawSnap)
+      } catch {
+        snapshot = rawSnap
+      }
+    } else {
+      snapshot = rawSnap
+    }
+  }
+  return {
+    ...base,
+    revision: row.revision as number,
+    meta: {
+      idempotencyHash: row.idempotency_hash ?? "",
+      requestId: row.request_id ?? "",
+      directory: row.directory ?? "",
+      parentSessionId: row.parent_session_id ?? null,
+      configVersion: row.config_version ?? null,
+      title: row.title ?? null,
+      parentID: (row as unknown as { message_id?: string | null }).message_id ?? null,
+      createdSessionId: row.session_id as unknown as string,
+    },
+    ...(snapshot !== undefined ? { resultSnapshot: snapshot } : {}),
+  }
+}
+
+export function getSessionCreateByIdempotencyHash(
+  db: Database.Interface["db"],
+  hash: string,
+  directory: string,
+): Effect.Effect<SessionCreateRecord | undefined> {
+  return Effect.gen(function* () {
+    if (typeof hash !== "string" || hash.length === 0) yield* Effect.die(new TypeError("hash must be non-empty string"))
+    const rows = yield* db.select().from(SessionOperationTable).where(and(eq(SessionOperationTable.idempotency_hash, hash), eq(SessionOperationTable.op_kind, "create" as const))).all().pipe(Effect.orDie)
+    const row = rows.find((r) => (r as unknown as { directory: string | null }).directory === directory)
+    if (!row) return undefined
+    return rowToSessionCreateRecord(row as typeof SessionOperationTable.$inferSelect)
+  }).pipe(Effect.orDie) as Effect.Effect<SessionCreateRecord | undefined>
+}
+
+export function getSessionCreateByIdempotencyHashTx(
+  tx: DbOrTx,
+  hash: string,
+  directory: string,
+): Effect.Effect<SessionCreateRecord | undefined> {
+  return Effect.gen(function* () {
+    const rows = yield* tx.select().from(SessionOperationTable).where(and(eq(SessionOperationTable.idempotency_hash, hash), eq(SessionOperationTable.op_kind, "create" as const))).all().pipe(Effect.orDie)
+    const row = rows.find((r) => (r as unknown as { directory: string | null }).directory === directory)
+    if (!row) return undefined
+    return rowToSessionCreateRecord(row as typeof SessionOperationTable.$inferSelect)
+  }).pipe(Effect.orDie) as Effect.Effect<SessionCreateRecord | undefined>
+}
+
+export function isSessionCreateConflict(
+  prev: SessionCreateRecord,
+  next: {
+    opId: string
+    directory: string
+    parentSessionId?: string | null
+    configVersion?: number | null
+    title?: string | null
+    parentID?: string | null
+  },
+): boolean {
+  if (prev.opId !== next.opId) return true
+  if (prev.meta.directory !== next.directory) return true
+  if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
+  if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
+  if ((prev.meta.title ?? null) !== (next.title ?? null)) return true
+  if ((prev.meta.parentID ?? null) !== (next.parentID ?? null)) return true
+  return false
+}
+
+export function insertSessionCreateSucceededTx(
+  tx: DbOrTx,
+  createdSessionId: SessionSchema.ID,
+  record: FailureRecord,
+  meta: SessionCreateMeta,
+  snapshotJson: string | null,
+): Effect.Effect<SessionCreateRecord> {
+  return Effect.gen(function* () {
+    validateRecord(record)
+    if (record.outcome !== "succeeded") yield* Effect.die(new Error("insertSessionCreateSucceededTx requires succeeded outcome"))
+    if (record.opKind !== "create") yield* Effect.die(new Error("insertSessionCreateSucceededTx requires create opKind"))
+    const normalized = normalizeRecord(record)
+    const session = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, createdSessionId)).get().pipe(Effect.orDie)
+    if (!session) yield* Effect.die(new Error(`session not found ${createdSessionId}`))
+    const cur = yield* tx.select({ rev: SessionTable.revision }).from(SessionTable).where(eq(SessionTable.id, createdSessionId)).get().pipe(Effect.orDie)
+    const nextRev = cur ? (cur as unknown as { rev: number }).rev : 0
+    yield* tx
+      .insert(SessionOperationTable)
+      .values({
+        op_id: normalized.opId,
+        session_id: createdSessionId,
+        op_kind: normalized.opKind,
+        outcome: normalized.outcome,
+        code: normalized.code,
+        message: normalized.message,
+        time: normalized.time,
+        cancel: normalized.cancel?.source ?? null,
+        detail: normalized.detail ?? null,
+        stack: normalized.stack ?? null,
+        revision: nextRev,
+        idempotency_hash: meta.idempotencyHash,
+        request_id: meta.requestId,
+        directory: meta.directory,
+        parent_session_id: meta.parentSessionId ?? null,
+        config_version: meta.configVersion ?? null,
+        title: meta.title ?? null,
+        message_id: meta.parentID ?? null,
+        result_snapshot: snapshotJson,
+      } as unknown as typeof SessionOperationTable.$inferInsert)
+      .run()
+      .pipe(Effect.orDie)
+    const rowRaw = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
+    if (!rowRaw) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
+    return rowToSessionCreateRecord(rowRaw as typeof SessionOperationTable.$inferSelect)
   })
 }

@@ -23,8 +23,8 @@ import { SessionExecution } from "@opencode-ai/core/session/execution"
 import { Project } from "@opencode-ai/core/project"
 import { testInstanceStoreLayer } from "../fixture/fixture"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
-import { mkdtempSync, rmSync, existsSync } from "fs"
-import { join } from "path"
+import { mkdtempSync, rmSync, existsSync, readdirSync } from "fs"
+import { join, basename } from "path"
 import { tmpdir as osTmpdir } from "os"
 import { Global } from "@opencode-ai/core/global"
 
@@ -96,6 +96,19 @@ function safeRemoveOwned(dir: string) {
   rmSync(dir, { recursive: true, force: true })
 }
 
+function assertWatermarkConstants() {
+  expect(Retention.HIGH_BYTES).toBe(8 * 1024 * 1024 * 1024)
+  expect(Retention.LOW_BYTES).toBe(6 * 1024 * 1024 * 1024)
+  expect(Retention.HIGH_BYTES).toBeGreaterThan(Retention.LOW_BYTES)
+  expect(Retention.SEVEN_DAYS_MS).toBe(7 * 24 * 60 * 60 * 1000)
+}
+
+function assertNoOwnedLeak(dir: string) {
+  const base = basename(dir)
+  const entries = readdirSync(osTmpdir())
+  expect(entries.includes(base)).toBe(false)
+}
+
 describe("S2 live retention file-backed (G3)", () => {
   const it = testEffect(Layer.empty)
 
@@ -114,6 +127,8 @@ describe("S2 live retention file-backed (G3)", () => {
             expect(file).not.toBe(Database.path())
             expect(Database.path()).toBe(":memory:")
             assertOwned(dir, file, storageDir)
+            assertWatermarkConstants()
+            expect(Accounting.safeStat("/nonexistent-wal-xyz")).toBe(0)
             const bootDone = yield* Ref.make(false)
             const bootCalls = yield* Ref.make(0)
             const isDirect = yield* Ref.make(false)
@@ -288,12 +303,35 @@ describe("S2 live retention file-backed (G3)", () => {
               const manual =
                 Accounting.safeStat(file) + Accounting.safeStat(file + "-wal") + Accounting.artifactBytes(storageDir)
               expect(via).toBe(manual)
+              // WAL lifecycle: owned file-backed DB, WAL size-if-present, no leak under origData
+              expect(Accounting.artifactBytes(storageDir)).toBe(0)
+              expect(Accounting.artifactBytesForSession(storageDir, created.id)).toBe(0)
+              expect(Accounting.safeStat(file + "-wal")).toBeGreaterThanOrEqual(0)
+              expect(file.startsWith(dir)).toBe(true)
+              expect(storageDir.startsWith(dir)).toBe(true)
+              // session_diff dir may remain as empty directory after artifact removal — check artifact count instead of dir existence
+              expect(Accounting.artifactBytes(storageDir)).toBe(0)
+              expect(existsSync(join(origData, "storage", "session_diff", `${created.id}.json`))).toBe(false)
+              expect(Artifact.familyKinds().includes("snapshot" as unknown as Artifact.FamilyArtifactKind)).toBe(false)
+              expect(Artifact.familyArtifactsForFamily([created.id]).some((k) => k[0] === "snapshot")).toBe(false)
+              // filesystem evidence: snapshot is project-owned, not family-pruned — verify run-owned snapshot paths directly
+              const snapStoragePath = join(storageDir, "snapshot", `${created.id}.json`)
+              expect(existsSync(snapStoragePath)).toBe(false)
+              // snapshot as file artifact under storage/snapshot should not exist as directory with session file
+              const snapStorageDir = join(storageDir, "snapshot")
+              expect(existsSync(snapStorageDir) ? !existsSync(snapStoragePath) : true).toBe(true)
+              // project-owned snapshot gitdir is under Global.Path.data/snapshot, not storage — verify no session file leaked there
+              expect(existsSync(join(dir, "snapshot"))).toBe(false)
+              expect(existsSync(join(origData, "storage", "snapshot", `${created.id}.json`))).toBe(false)
+              expect(existsSync(join(origData, "snapshot"))).toBe(false)
             }).pipe(Effect.provide(base), Effect.scoped)
           } finally {
             ;(Global.Path as { data: string }).data = origData
             safeRemoveOwned(dir)
             expect(existsSync(dir)).toBe(false)
             expect(existsSync(file)).toBe(false)
+            expect(existsSync(storageDir)).toBe(false)
+            assertNoOwnedLeak(dir)
           }
         }),
       ),
@@ -311,6 +349,8 @@ describe("S2 live retention file-backed (G3)", () => {
           ;(Global.Path as { data: string }).data = dir
           try {
             assertOwned(dir, file, storageDir)
+            assertWatermarkConstants()
+            expect(Accounting.safeStat("/nonexistent-wal-xyz")).toBe(0)
             const bootDone = yield* Ref.make(false)
             const bootCalls = yield* Ref.make(0)
             const isDirect = yield* Ref.make(false)
@@ -399,11 +439,27 @@ describe("S2 live retention file-backed (G3)", () => {
               const remainingPath = join(storageDir, "session_diff", `${remaining.rootID}.json`)
               expect(existsSync(remainingPath)).toBe(true)
               expect(remainingPath.startsWith(dir)).toBe(true)
+              // WAL-inclusive accounting still holds after hysteresis
+              expect(Accounting.physicalBytesWith(file, storageDir)).toBe(
+                Accounting.safeStat(file) + Accounting.safeStat(file + "-wal") + Accounting.artifactBytes(storageDir),
+              )
+              expect(Accounting.artifactBytes(storageDir)).toBeGreaterThan(0)
+              expect(Accounting.artifactBytesForSession(storageDir, remaining.rootID)).toBeGreaterThan(0)
+              const deletedId = [a.id, b.id].find((id) => id !== remaining.rootID)!
+              expect(existsSync(join(storageDir, "session_diff", `${deletedId}.json`))).toBe(false)
+              expect(existsSync(join(origData, "storage", "session_diff", `${deletedId}.json`))).toBe(false)
+              const jMode = yield* db.get<{ journal_mode: string }>(sql`PRAGMA journal_mode`).pipe(Effect.orDie)
+              expect(jMode?.journal_mode).toBe("wal")
+              const av = yield* db.get<{ auto_vacuum: number }>(sql`PRAGMA auto_vacuum`).pipe(Effect.orDie)
+              expect(av?.auto_vacuum).toBe(2)
             }).pipe(Effect.provide(base), Effect.scoped)
           } finally {
             ;(Global.Path as { data: string }).data = origData
             safeRemoveOwned(dir)
             expect(existsSync(dir)).toBe(false)
+            expect(existsSync(file)).toBe(false)
+            expect(existsSync(storageDir)).toBe(false)
+            assertNoOwnedLeak(dir)
           }
         }),
       ),
@@ -421,6 +477,8 @@ describe("S2 live retention file-backed (G3)", () => {
           ;(Global.Path as { data: string }).data = dir
           try {
             assertOwned(dir, file, storageDir)
+            assertWatermarkConstants()
+            expect(Accounting.safeStat("/nonexistent-wal-xyz")).toBe(0)
             const bootDone = yield* Ref.make(false)
             const bootCalls = yield* Ref.make(0)
             const isDirect = yield* Ref.make(false)
@@ -529,11 +587,22 @@ describe("S2 live retention file-backed (G3)", () => {
               const famsAfter2 = yield* Retention.listFamilies(db)
               expect(famsAfter2.length).toBe(1)
               expect(famsAfter2[0].rootID).toBe(fresh.id)
+              // file-backed lifecycle: fresh artifact remains under owned root, others removed, no leak under origData
+              expect(existsSync(join(storageDir, "session_diff", `${fresh.id}.json`))).toBe(true)
+              expect(Accounting.artifactBytesForSession(storageDir, fresh.id)).toBeGreaterThan(0)
+              expect(existsSync(join(storageDir, "session_diff", `${old.id}.json`))).toBe(false)
+              expect(existsSync(join(origData, "storage", "session_diff", `${fresh.id}.json`))).toBe(false)
+              expect(Accounting.artifactBytes(storageDir)).toBe(Accounting.artifactBytesForSession(storageDir, fresh.id))
+              const jMode2 = yield* db.get<{ journal_mode: string }>(sql`PRAGMA journal_mode`).pipe(Effect.orDie)
+              expect(jMode2?.journal_mode).toBe("wal")
             }).pipe(Effect.provide(base), Effect.scoped)
           } finally {
             ;(Global.Path as { data: string }).data = origData
             safeRemoveOwned(dir)
             expect(existsSync(dir)).toBe(false)
+            expect(existsSync(file)).toBe(false)
+            expect(existsSync(storageDir)).toBe(false)
+            assertNoOwnedLeak(dir)
           }
         }),
       ),
@@ -551,6 +620,8 @@ describe("S2 live retention file-backed (G3)", () => {
           ;(Global.Path as { data: string }).data = dir
           try {
             assertOwned(dir, file, storageDir)
+            assertWatermarkConstants()
+            expect(Accounting.safeStat("/nonexistent-wal-xyz")).toBe(0)
             const dbLayer = Database.layerFromPath(file)
             const base = makeFileBaseWithoutMaintenance(dbLayer)
             yield* Effect.gen(function* () {
@@ -584,16 +655,24 @@ describe("S2 live retention file-backed (G3)", () => {
               const afterFail = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)
               expect(afterFail.length).toBe(1)
               expect(afterFail[0].attempts).toBe(1)
+              // artifact still on disk under owned root when deleter fails, not under origData
+              expect(existsSync(artPath)).toBe(true)
+              expect(existsSync(join(origData, "storage", "session_diff", `${created.id}.json`))).toBe(false)
+              expect(Accounting.artifactBytesForSession(storageDir, created.id)).toBeGreaterThan(0)
               const replayBase = makeFileBaseWithMaintenance(dbLayer)
               yield* Effect.gen(function* () {
                 const m = yield* Maintenance.Service
                 yield* m.replay()
                 const afterReplay = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)
                 expect(afterReplay.length).toBe(0)
+                expect(existsSync(artPath)).toBe(false)
+                expect(Accounting.artifactBytesForSession(storageDir, created.id)).toBe(0)
+                expect(existsSync(join(origData, "storage", "session_diff", `${created.id}.json`))).toBe(false)
               }).pipe(Effect.provide(replayBase), Effect.scoped)
               yield* Retention.replayObligations(db, () => Effect.void)
               const afterSecond = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)
               expect(afterSecond.length).toBe(0)
+              expect(existsSync(artPath)).toBe(false)
               const created2 = yield* session.create({ location })
               yield* db
                 .update(SessionTable)
@@ -612,14 +691,29 @@ describe("S2 live retention file-backed (G3)", () => {
               )
               const before2 = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)
               expect(before2.length).toBe(1)
+              const bPath2 = join(storageDir, "session_diff", `${created2.id}.json`)
+              expect(existsSync(bPath2)).toBe(true)
+              expect(existsSync(join(origData, "storage", "session_diff", `${created2.id}.json`))).toBe(false)
               yield* Retention.replayObligations(db, () => Effect.void)
               const afterOk = yield* db.select().from(RetentionObligationTable).all().pipe(Effect.orDie)
               expect(afterOk.length).toBe(0)
+              // void deleter clears obligation without touching FS artifact — file remains under owned root (proves obligation semantics, not file deletion)
+              expect(existsSync(bPath2)).toBe(true)
+              expect(Accounting.artifactBytesForSession(storageDir, created2.id)).toBeGreaterThan(0)
+              const jModeO = yield* db.get<{ journal_mode: string }>(sql`PRAGMA journal_mode`).pipe(Effect.orDie)
+              expect(jModeO?.journal_mode).toBe("wal")
+              // real file-backed cleanup via Storage.remove proves owned cleanup
+              yield* storage.remove(["session_diff", created2.id])
+              expect(existsSync(bPath2)).toBe(false)
+              expect(Accounting.artifactBytesForSession(storageDir, created2.id)).toBe(0)
             }).pipe(Effect.provide(base), Effect.scoped)
           } finally {
             ;(Global.Path as { data: string }).data = origData
             safeRemoveOwned(dir)
             expect(existsSync(dir)).toBe(false)
+            expect(existsSync(file)).toBe(false)
+            expect(existsSync(storageDir)).toBe(false)
+            assertNoOwnedLeak(dir)
           }
         }),
       ),
@@ -637,6 +731,8 @@ describe("S2 live retention file-backed (G3)", () => {
           ;(Global.Path as { data: string }).data = dir
           try {
             assertOwned(dir, file, storageDir)
+            assertWatermarkConstants()
+            expect(Accounting.safeStat("/nonexistent-wal-xyz")).toBe(0)
             const dbLayer = Database.layerFromPath(file)
             yield* Effect.gen(function* () {
               const { db } = yield* Database.Service
@@ -672,6 +768,21 @@ describe("S2 live retention file-backed (G3)", () => {
               expect(walAfter).toBeLessThanOrEqual(walStat)
               const vac = yield* db.run(sql`PRAGMA incremental_vacuum(10)`).pipe(Effect.exit)
               expect(vac._tag).toBe("Success")
+              // lifecycle: owned DB files under dir, not origData, artifactBytes reflects real FS
+              expect(file.startsWith(dir)).toBe(true)
+              expect(storageDir.startsWith(dir)).toBe(true)
+              expect(existsSync(join(origData, "storage", "session_diff", `${s1.id}.json`))).toBe(false)
+              expect(Accounting.artifactBytes(storageDir)).toBeGreaterThan(0)
+              expect(Accounting.artifactBytesForSession(storageDir, s1.id)).toBeGreaterThan(0)
+              expect(Accounting.artifactBytesForSession(storageDir, s2.id)).toBeGreaterThan(0)
+              expect(Artifact.familyKinds().includes("snapshot" as unknown as Artifact.FamilyArtifactKind)).toBe(false)
+              // filesystem evidence: snapshot project-owned, not counted in family artifact bytes — verify no snapshot file/dir under run-owned paths
+              expect(existsSync(join(storageDir, "snapshot", `${s1.id}.json`))).toBe(false)
+              expect(existsSync(join(storageDir, "snapshot", `${s2.id}.json`))).toBe(false)
+              expect(existsSync(join(storageDir, "snapshot")) ? readdirSync(join(storageDir, "snapshot")).length === 0 : true).toBe(true)
+              expect(existsSync(join(dir, "snapshot"))).toBe(false)
+              expect(existsSync(join(origData, "storage", "snapshot", `${s1.id}.json`))).toBe(false)
+              expect(Accounting.safeStat("/nonexistent-path-xyz-abc")).toBe(0)
               const accounting = Layer.effect(
                 Accounting.Service,
                 Effect.gen(function* () {
@@ -689,12 +800,20 @@ describe("S2 live retention file-backed (G3)", () => {
                 expect(
                   ["ok", "skipped-below-high", "skipped-no-delete", "skipped-not-incremental:2"].includes(diag.vacuum),
                 ).toBe(true)
+                // re-verify WAL-inclusive formula after checkpoint path
+                const viaAfter = Accounting.physicalBytesWith(file, storageDir)
+                const manualAfter =
+                  Accounting.safeStat(file) + Accounting.safeStat(file + "-wal") + Accounting.artifactBytes(storageDir)
+                expect(viaAfter).toBe(manualAfter)
               }).pipe(Effect.provide(maintBase), Effect.scoped)
             }).pipe(Effect.provide(makeFileBaseWithoutMaintenance(dbLayer)), Effect.scoped)
           } finally {
             ;(Global.Path as { data: string }).data = origData
             safeRemoveOwned(dir)
             expect(existsSync(file)).toBe(false)
+            expect(existsSync(dir)).toBe(false)
+            expect(existsSync(storageDir)).toBe(false)
+            assertNoOwnedLeak(dir)
           }
         }),
       ),
@@ -712,6 +831,8 @@ describe("S2 live retention file-backed (G3)", () => {
           ;(Global.Path as { data: string }).data = dir
           try {
             assertOwned(dir, file, storageDir)
+            assertWatermarkConstants()
+            expect(Accounting.safeStat("/nonexistent-wal-xyz")).toBe(0)
             const dbLayer = Database.layerFromPath(file)
             const base = makeFileBaseWithoutMaintenance(dbLayer)
             yield* Effect.gen(function* () {
@@ -778,11 +899,25 @@ describe("S2 live retention file-backed (G3)", () => {
               expect(dir.startsWith(osTmpdir())).toBe(true)
               expect(file.startsWith(dir)).toBe(true)
               expect(existsSync(file)).toBe(true)
+              // file-backed lifecycle: storageDir owned, not under origData, artifactBytes reflects FS
+              expect(storageDir.startsWith(dir)).toBe(true)
+              expect(existsSync(join(origData, "storage", "session_diff", `${created.id}.json`))).toBe(false)
+              expect(Accounting.safeStat(join(storageDir, "session_diff", `${created.id}.json`))).toBe(0)
+              expect(Accounting.artifactBytes(storageDir)).toBe(0)
+              expect(Accounting.artifactBytesForSession(storageDir, created.id)).toBe(0)
+              const jModeClean = yield* db.get<{ journal_mode: string }>(sql`PRAGMA journal_mode`).pipe(Effect.orDie)
+              expect(jModeClean?.journal_mode).toBe("wal")
+              expect(Accounting.physicalBytesWith(file, storageDir)).toBe(
+                Accounting.safeStat(file) + Accounting.safeStat(file + "-wal") + Accounting.artifactBytes(storageDir),
+              )
             }).pipe(Effect.provide(base), Effect.scoped)
           } finally {
             ;(Global.Path as { data: string }).data = origData
             safeRemoveOwned(dir)
             expect(existsSync(dir)).toBe(false)
+            expect(existsSync(file)).toBe(false)
+            expect(existsSync(storageDir)).toBe(false)
+            assertNoOwnedLeak(dir)
           }
         }),
       ),
@@ -790,6 +925,8 @@ describe("S2 live retention file-backed (G3)", () => {
 
   it.live("concurrency guard serializes Global.Path.data overrides (no cross-contamination)", () =>
     Effect.gen(function* () {
+      assertWatermarkConstants()
+      expect(Accounting.safeStat("/nonexistent-wal-xyz")).toBe(0)
       const orig = Global.Path.data
       const seen: string[] = []
       const runOwned = (label: string, millis: number) =>
@@ -826,6 +963,13 @@ describe("S2 live retention file-backed (G3)", () => {
         (seen[0] === "b-enter" && seen[1] === "b-exit" && seen[2] === "a-enter" && seen[3] === "a-exit")
       expect(ok).toBe(true)
       expect(Global.Path.data).toBe(orig)
+      // no owned temp leaks remain after serialized guard
+      const leaked = readdirSync(osTmpdir()).filter((n) => n.startsWith("s2-g3-guard-"))
+      expect(leaked.length).toBe(0)
+      const anyS2 = readdirSync(osTmpdir()).filter((n) => n.startsWith("s2-g3-"))
+      // current suite owns only s2-g3-*; after guard test no guard dirs should remain; other tests are serialized via guard so shouldn't leak here
+      // if any remain they belong to concurrently running unrelated suite; allow but check not guard
+      expect(anyS2.every((n) => !n.startsWith("s2-g3-guard-"))).toBe(true)
     }),
   )
 })

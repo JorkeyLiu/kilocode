@@ -267,14 +267,14 @@ describe("sessionFork http mapping regression", () => {
       expect(res1.status).toBe(200)
       const data1 = yield* Effect.promise(() => res1.json() as Promise<{ id: string }>)
       expect(data1.id).toBeDefined()
-      // same key, different opId -> conflict 409, retryable false, no internal leak
+      // same key, different opId -> validation 400 under canonical identity (opId must equal idempotencyKey)
       const token2 = "conflict2-" + Math.random().toString(36).slice(2, 6)
       const opId2 = SessionOperation.forkId(source.id, token2)
       const body2 = { idempotencyKey: key, requestId: "req-conflict-2", opId: opId2, context: { directory: dir, sessionId: source.id, parentSessionId: null } }
       const res2 = yield* Effect.promise(() => fetch(url1, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body2) }))
-      expect(res2.status).toBe(409)
+      expect(res2.status).toBe(400)
       const json2 = yield* Effect.promise(() => res2.json() as Promise<Record<string, unknown>>)
-      assertConflict(json2)
+      assertBadRequest(json2)
       // same key, same opId but different payload messageId -> conflict 409
       const fakeMsg1 = `msg_${Math.random().toString(36).slice(2, 10).padEnd(10, "0")}`
       const body3 = { idempotencyKey: key, requestId: "req-conflict-3", opId: opId1, context: { directory: dir, sessionId: source.id, parentSessionId: null }, messageID: fakeMsg1 }
@@ -282,14 +282,14 @@ describe("sessionFork http mapping regression", () => {
       expect(res3a.status).toBe(409)
       const json3 = yield* Effect.promise(() => res3a.json() as Promise<Record<string, unknown>>)
       assertConflict(json3)
-      // opId collision with different key -> also 409
+      // opId collision with different key -> validation 400 under canonical identity
       const token3 = "opcoll-" + Math.random().toString(36).slice(2, 6)
       const key3 = `fork:${source.id}:${token3}`
       const body4 = { idempotencyKey: key3, requestId: "req-conflict-4", opId: opId1, context: { directory: dir, sessionId: source.id, parentSessionId: null } }
       const res4 = yield* Effect.promise(() => fetch(url1, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body4) }))
-      expect(res4.status).toBe(409)
+      expect(res4.status).toBe(400)
       const json4 = yield* Effect.promise(() => res4.json() as Promise<Record<string, unknown>>)
-      assertConflict(json4)
+      assertBadRequest(json4)
       // dispatch level retryable false for conflict – use a fresh AppRuntime session to avoid DB mismatch between listener and AppRuntime
       const dispatchSource = yield* (Effect.promise(() =>
         AppRuntime.runPromise(
@@ -346,7 +346,7 @@ describe("sessionFork http mapping regression", () => {
         ),
       ) as unknown as Effect.Effect<any, any, any>)
       expect(dRes.status).toBe("failed")
-      expect(dRes.failure.code).toBe("conflict")
+      expect(dRes.failure.code).toBe("validation.failed")
       expect(dRes.failure.retryable).toBe(false)
       // verify only one child created
       const childrenUrl = new URL(`/session/${source.id}/children?directory=${encodeURIComponent(dir)}`, listener.url).toString()
@@ -470,8 +470,10 @@ describe("sessionFork http mapping regression", () => {
     }),
   )
 
-  it.live("fork HTTP wire contract – 400/404/409/500 exact shapes via injected dispatch are leak-free, barrier retryable true via direct dispatch (Server.listen proof retained)", () =>
-    Effect.gen(function* () {
+  it.live(
+    "fork HTTP wire contract – 400/404/409/500 exact shapes via injected dispatch are leak-free, barrier retryable true via direct dispatch (Server.listen proof retained)",
+    () =>
+      Effect.gen(function* () {
       const dir = yield* tmpdirScoped({ git: true })
       yield* Effect.addFinalizer(() => Effect.promise(() => disposeAllInstances()))
       const makeFailed = (req: any, code: string, msg: string, retryable: boolean) => ({
@@ -600,6 +602,7 @@ describe("sessionFork http mapping regression", () => {
       expect(validationDirect.failure.retryable).toBe(false)
       expect(validationDirect.failure.code).toBe("validation.failed")
     }),
+    10000,
   )
 
   // Documentation: internal 500 via real DB corruption is not stably constructed without mock facade

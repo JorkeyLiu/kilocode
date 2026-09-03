@@ -162,16 +162,16 @@ describe("fork session durable SDK payload", () => {
       context: { directory: "/repo", sessionId: "ses_src", parentSessionId: null },
       payload: {},
     }
-    const colon = { ...base, context: { directory: "/repo", sessionId: "ses:colon:id", parentSessionId: null }, opId: "fork:ses:colon:id:tok" }
+    const colon = { ...base, context: { directory: "/repo", sessionId: "ses:colon:id", parentSessionId: null }, opId: "fork:ses:colon:id:tok", idempotencyKey: "fork:ses:colon:id:tok" }
     expect(() => validateForkRequest(colon as unknown)).not.toThrow()
-    const space = { ...base, context: { directory: "/repo", sessionId: "ses with space", parentSessionId: null }, opId: "fork:ses with space:tok" }
+    const space = { ...base, context: { directory: "/repo", sessionId: "ses with space", parentSessionId: null }, opId: "fork:ses with space:tok", idempotencyKey: "fork:ses with space:tok" }
     expect(() => validateForkRequest(space as unknown)).not.toThrow()
-    const mixed = { ...base, context: { directory: "/repo", sessionId: "ses: with space", parentSessionId: null }, opId: "fork:ses: with space:tok" }
+    const mixed = { ...base, context: { directory: "/repo", sessionId: "ses: with space", parentSessionId: null }, opId: "fork:ses: with space:tok", idempotencyKey: "fork:ses: with space:tok" }
     expect(() => validateForkRequest(mixed as unknown)).not.toThrow()
     // non-ses prefix must fail
-    const bad = { ...base, context: { directory: "/repo", sessionId: "bad_ses_id", parentSessionId: null }, opId: "fork:bad_ses_id:tok" }
+    const bad = { ...base, context: { directory: "/repo", sessionId: "bad_ses_id", parentSessionId: null }, opId: "fork:bad_ses_id:tok", idempotencyKey: "fork:bad_ses_id:tok" }
     expect(() => validateForkRequest(bad as unknown)).toThrow()
-    const empty = { ...base, context: { directory: "/repo", sessionId: "", parentSessionId: null }, opId: "fork::tok" }
+    const empty = { ...base, context: { directory: "/repo", sessionId: "", parentSessionId: null }, opId: "fork::tok", idempotencyKey: "fork::tok" }
     expect(() => validateForkRequest(empty as unknown)).toThrow()
   })
 
@@ -287,7 +287,7 @@ describe("fork session durable SDK payload", () => {
     }
   })
 
-  it("timeout with unrelated concurrent pending demonstrates current fail-closed invalidation (residual)", async () => {
+  it("timeout with unrelated concurrent pending isolates exact cancel and preserves dummy (owned handle)", async () => {
     const { PassThrough } = await import("stream")
     const { JsonRpcPeer } = await import("../../src/private-worker/peer")
     const { ServePrivatePeer } = await import("../../src/services/cli-backend/serve-private-peer")
@@ -315,7 +315,7 @@ describe("fork session durable SDK payload", () => {
       expect(await peer.initialize(500)).toBeTrue()
       const rawPeer = (peer as unknown as { peer: JsonRpcPeer }).peer as JsonRpcPeer | null
       expect(rawPeer).not.toBeNull()
-      // create unrelated concurrent pending before fork timeout — proves current semantics require API change for same-peer isolation
+      // create unrelated concurrent pending before fork timeout — owned handle must isolate exact cancel
       const dummyPromise = rawPeer!.request("dummy/concurrentHang", { v: 1 }).catch(() => {})
       await new Promise((r) => setTimeout(r, 30))
       const dummyIds = rawPeer!.getPendingIds()
@@ -326,6 +326,7 @@ describe("fork session durable SDK payload", () => {
       expect(nextIdBeforeFork).not.toBe(dummyId)
       const conn = {
         isPrivateAvailable: () => peer.isAvailable(),
+        privateForkWithHandle: (req: unknown) => peer.privateForkWithHandle(req as never),
         privateFork: (req: unknown) => peer.privateFork(req as never),
         peekPrivatePeerNextId: () => peer.peekNextJsonRpcId(),
         getPrivatePeerPendingCount: () => peer.getPendingCount(),
@@ -334,18 +335,16 @@ describe("fork session durable SDK payload", () => {
       } as unknown as import("../../src/services/cli-backend").KiloConnectionService
       const sdkRes = { data: { id: "ses_forked", parentID: "ses_src", directory: "/repo" } as unknown as Session, response: { status: 200 } }
       await observeForkParity(conn, sdkRes as unknown, { sessionId: "ses_src", directory: "/repo", opId: "fork:ses_src:tok-concurrent", idempotencyKey: "fork:ses_src:tok-concurrent", requestId: "req-concurrent" })
-      // Current production checks `getPendingCount() >0` after explicit cancel, so unrelated dummy causes epoch invalidation (fail-closed until reset).
-      // This proves exact fork ID was removed (tryCancel succeeded) but remaining dummy triggers invalidate — same-peer isolation would need API change to check specific ID, not any pending.
-      // Assert fork ID removed and peer invalidated (fail-closed), which clears dummy as well.
+      // Owned handle cancels only exact fork ID; dummy must remain pending and peer stays available (fail-closed only on exact miss or stale).
       const afterIds = rawPeer!.getPendingIds()
       expect(afterIds.includes(nextIdBeforeFork as unknown as never)).toBeFalse()
-      // After invalidate the peer is disposed, so pending count is 0 and dummy cleared via dispose — this is current fail-closed behavior, not selective preservation.
-      expect(peer.isAvailable()).toBeFalse()
-      expect(peer.isDisposed()).toBeTrue()
-      expect(peer.getPendingCount()).toBe(0)
-      // dummy was cleared by dispose, not preserved — documents residual that selective isolation needs production API change
-      expect(afterIds.includes(dummyId as unknown as never)).toBeFalse()
+      expect(peer.isAvailable()).toBeTrue()
+      expect(peer.isDisposed()).toBeFalse()
+      expect(peer.getPendingCount()).toBe(1)
+      expect(afterIds.includes(dummyId as unknown as never)).toBeTrue()
       dummyPromise.catch(() => {})
+      // cleanup dummy via dispose
+      peer.invalidateOnObserverTimeout("test cleanup")
     } finally {
       try { peer.dispose() } catch {}
       try { backendPeer.dispose() } catch {}
@@ -408,6 +407,122 @@ describe("fork session durable SDK payload", () => {
       try { backendPeer.dispose() } catch {}
       try { toClient.destroy() } catch {}
       try { toBackend.destroy() } catch {}
+    }
+  })
+
+  it("replacement peer reusing numeric id is not affected by old handle timeout cleanup (owned handle isolation)", async () => {
+    const { PassThrough } = await import("stream")
+    const { JsonRpcPeer } = await import("../../src/private-worker/peer")
+    const { ServePrivatePeer } = await import("../../src/services/cli-backend/serve-private-peer")
+    // old peer epoch 78
+    const toClientOld = new PassThrough()
+    const toBackendOld = new PassThrough()
+    const backendOld = new JsonRpcPeer({
+      reader: toBackendOld,
+      writer: toClientOld,
+      onRequest: async (method) => {
+        if (method === "initialize") return { protocol: { name: "kilo-private", major: 1, minor: 0 }, serverInfo: { name: "kilo", version: "1" }, capabilities: ["session/fork"] }
+        if (method === "session/fork") {
+          await new Promise(() => {})
+          return undefined
+        }
+        throw new Error("unexpected")
+      },
+    })
+    const peerOld = new ServePrivatePeer({ reader: toClientOld, writer: toBackendOld, pid: 2000, epoch: 78, initializeTimeoutMs: 500 })
+    expect(await peerOld.initialize(500)).toBeTrue()
+    // new peer epoch 79 (replacement)
+    const toClientNew = new PassThrough()
+    const toBackendNew = new PassThrough()
+    const backendNew = new JsonRpcPeer({
+      reader: toBackendNew,
+      writer: toClientNew,
+      onRequest: async (method) => {
+        if (method === "initialize") return { protocol: { name: "kilo-private", major: 1, minor: 0 }, serverInfo: { name: "kilo", version: "1" }, capabilities: ["session/fork"] }
+        if (method === "session/fork") {
+          await new Promise(() => {})
+          return undefined
+        }
+        throw new Error("unexpected")
+      },
+    })
+    const peerNew = new ServePrivatePeer({ reader: toClientNew, writer: toBackendNew, pid: 2001, epoch: 79, initializeTimeoutMs: 500 })
+    expect(await peerNew.initialize(500)).toBeTrue()
+    // Mock connection that owns handle epoch/peer binding like KiloConnectionService
+    let currentPeer: typeof peerOld | null = peerOld
+    let currentEpoch: number | null = 78
+    const mockConn = {
+      get privatePeer() { return currentPeer },
+      get privateEpoch() { return currentEpoch },
+      tryCancelPrivatePending: (id: number, msg?: string) => currentPeer?.tryCancelPending(id, msg) ?? false,
+      invalidatePrivatePeerOnObserverTimeout: (reason: string) => {
+        const p = currentPeer
+        if (!p) return
+        try { p.invalidateOnObserverTimeout(reason) } catch {}
+        // only clear if current is the peer being invalidated (stale case should not clear replacement)
+        if (p === currentPeer) {
+          currentPeer = null
+          currentEpoch = null
+        }
+      },
+      privateForkWithHandle: (req: unknown) => {
+        const peerAtCall = currentPeer!
+        const epochAtCall = currentEpoch
+        const h = peerAtCall.privateForkWithHandle(req as never) as { id: number; promise: Promise<unknown>; cancel: (m?: string)=>boolean }
+        const origCancel = h.cancel
+        // wrap with connection-level stale check like real service
+        const wrappedCancel = (msg = "private parity timeout") => {
+          const isCurrent = currentPeer === peerAtCall && currentEpoch === epochAtCall
+          if (!isCurrent) {
+            try { peerAtCall.invalidateOnObserverTimeout(`stale observer timeout`) } catch {}
+            return false
+          }
+          return origCancel(msg)
+        }
+        return { id: h.id, promise: h.promise, cancel: wrappedCancel }
+      },
+    } as unknown as { privateForkWithHandle: (r: unknown)=> { id:number; promise:Promise<unknown>; cancel:(m?:string)=>boolean } } & { tryCancelPrivatePending: (id:number,msg?:string)=>boolean }
+    try {
+      // Create old handle (id 1 on old peer)
+      const reqOld = { v: 1 as const, requestId: "req-old", opId: "fork:ses_src:tok-old", op: "session/fork" as const, idempotencyKey: "fork:ses_src:tok-old", context: { directory: "/repo", sessionId: "ses_src", parentSessionId: null }, payload: {} }
+      const handleOld = (mockConn as unknown as { privateForkWithHandle: (r: unknown)=> { id:number; promise:Promise<unknown>; cancel:(m?:string)=>boolean } }).privateForkWithHandle(reqOld as never)
+      handleOld.promise.catch(() => {})
+      expect(handleOld.id).toBeGreaterThan(0)
+      expect(peerOld.getPendingCount()).toBe(1)
+      // Simulate replacement: new peer becomes current, old peer still holds pending 1 but is stale
+      currentPeer = peerNew
+      currentEpoch = 79
+      // New peer creates its own pending that reuses same numeric id (since fresh peer nextId after initialize)
+      const reqNew = { v: 1 as const, requestId: "req-new", opId: "fork:ses_src:tok-new", op: "session/fork" as const, idempotencyKey: "fork:ses_src:tok-new", context: { directory: "/repo", sessionId: "ses_src", parentSessionId: null }, payload: {} }
+      const handleNew = (mockConn as unknown as { privateForkWithHandle: (r: unknown)=> { id:number; promise:Promise<unknown>; cancel:(m?:string)=>boolean } }).privateForkWithHandle(reqNew as never)
+      handleNew.promise.catch(() => {})
+      expect(handleNew.id).toBe(handleOld.id)
+      expect(peerNew.getPendingCount()).toBe(1)
+      expect(peerOld.getPendingCount()).toBe(1)
+      // Timeout cleanup via old handle's owned cancel must not affect replacement peer's id 1
+      const cleanedOld = handleOld.cancel("private parity timeout")
+      expect(cleanedOld).toBeFalse()
+      expect(peerOld.isDisposed()).toBeTrue()
+      expect(peerOld.getPendingCount()).toBe(0)
+      // Replacement peer's pending must remain untouched and peer stays available
+      expect(peerNew.getPendingCount()).toBe(1)
+      expect(peerNew.isAvailable()).toBeTrue()
+      expect(peerNew.isDisposed()).toBeFalse()
+      const newPendingIds = (peerNew as unknown as { peer: JsonRpcPeer }).peer.getPendingIds()
+      expect(newPendingIds.includes(handleNew.id as unknown as never)).toBeTrue()
+      // Same-peer exact cancellation still works for new handle
+      const cleanedNew = handleNew.cancel("private parity timeout")
+      expect(cleanedNew).toBeTrue()
+      expect(peerNew.getPendingCount()).toBe(0)
+    } finally {
+      try { peerOld.dispose() } catch {}
+      try { peerNew.dispose() } catch {}
+      try { backendOld.dispose() } catch {}
+      try { backendNew.dispose() } catch {}
+      try { toClientOld.destroy() } catch {}
+      try { toBackendOld.destroy() } catch {}
+      try { toClientNew.destroy() } catch {}
+      try { toBackendNew.destroy() } catch {}
     }
   })
 })

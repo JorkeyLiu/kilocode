@@ -118,49 +118,56 @@ export async function observeForkParity(
       payload: { ...(params.messageId ? { messageId: params.messageId } : {}) },
     }
     let privRes: unknown
-    // Capture the JSON-RPC id that will be used for this private request so a
-    // timeout can explicitly release ownership at the natural private-peer
-    // boundary (JsonRpcPeer pending map) or invalidate the epoch via the
-    // owner (KiloConnectionService). This prevents accumulation of unresolved
-    // entries after repeated hangs; after invalidation private parity remains
-    // disabled until the next full backend connection/server reset, while
-    // keeping the SDK result authoritative.
-    const peekNextId = (connection as unknown as { peekPrivatePeerNextId?: () => number | null })?.peekPrivatePeerNextId?.bind(connection) ?? null
     const tryCancel = (connection as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean })?.tryCancelPrivatePending?.bind(connection) ?? null
     const invalidate = (connection as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void })?.invalidatePrivatePeerOnObserverTimeout?.bind(connection) ?? null
-    const getPending = (connection as unknown as { getPrivatePeerPendingCount?: () => number })?.getPrivatePeerPendingCount?.bind(connection) ?? null
-    const nextIdBefore = peekNextId ? peekNextId() : null
+    const handleFactory = (connection as unknown as { privateForkWithHandle?: (r: typeof privateReq) => { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } })?.privateForkWithHandle?.bind(connection) ?? null
+    const peekNextId = (connection as unknown as { peekPrivatePeerNextId?: () => number | null })?.peekPrivatePeerNextId?.bind(connection) ?? null
+    let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } | null = null
+    let exactId: number | null = null
+    let privPromise: Promise<unknown>
+    if (handleFactory) {
+      try {
+        const h = handleFactory(privateReq as unknown as never) as { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }
+        handle = h
+        exactId = h.id
+        privPromise = h.promise
+      } catch (e) {
+        privPromise = Promise.reject(e)
+      }
+    } else {
+      exactId = peekNextId ? peekNextId() : null
+      privPromise = connection.privateFork(privateReq as unknown as never) as Promise<unknown>
+    }
     try {
-      privRes = await withTimeout(connection.privateFork(privateReq as unknown as never) as Promise<unknown>, 3000).catch((e: unknown) => {
+      privRes = await withTimeout(privPromise, 3000).catch((e: unknown) => {
         const msg = String(e)
         const isTimeout = msg.includes("private parity timeout")
         if (isTimeout) {
-          // Prefer explicit pending removal at the owned JsonRpcPeer boundary.
           let cleaned = false
-          if (nextIdBefore !== null && tryCancel) {
+          if (handle?.cancel) {
             try {
-              cleaned = tryCancel(nextIdBefore, `private parity timeout opId=${params.opId}`)
+              cleaned = handle.cancel(`private parity timeout opId=${params.opId}`)
+            } catch (err) {
+              console.warn("[Kilo Fork] handle.cancel failed:", String(err).slice(0, 200), { opId: params.opId })
+            }
+          } else if (exactId !== null && tryCancel) {
+            try {
+              cleaned = tryCancel(exactId, `private parity timeout opId=${params.opId}`)
             } catch (err) {
               console.warn("[Kilo Fork] tryCancelPrivatePending failed:", String(err).slice(0, 200), { opId: params.opId })
             }
-          }
-          // Fallback: dispose/replace the private peer through its owner so
-          // the timed-out pending cannot accumulate. The SDK result stays
-          // authoritative; thereafter private parity remains disabled
-          // (fail-closed) until the next full backend connection/server reset
-          // (no automatic retry/reconnect, no detached work).
-          if (!cleaned && invalidate) {
+            if (!cleaned && invalidate) {
+              try {
+                invalidate(`fork observer timeout opId=${params.opId}`)
+              } catch (err) {
+                console.warn("[Kilo Fork] invalidatePrivatePeerOnObserverTimeout failed:", String(err).slice(0, 200), { opId: params.opId })
+              }
+            }
+          } else if (invalidate) {
             try {
               invalidate(`fork observer timeout opId=${params.opId}`)
             } catch (err) {
               console.warn("[Kilo Fork] invalidatePrivatePeerOnObserverTimeout failed:", String(err).slice(0, 200), { opId: params.opId })
-            }
-          } else if (getPending && getPending() > 0 && invalidate) {
-            // If explicit cancel did not clear (e.g. id drift), ensure epoch invalidation.
-            try {
-              invalidate(`fork observer timeout pending remaining opId=${params.opId}`)
-            } catch (err) {
-              console.warn("[Kilo Fork] invalidate pending remaining failed:", String(err).slice(0, 200), { opId: params.opId })
             }
           }
           console.warn("[Kilo Fork] private parity timeout after 3000ms:", { opId: params.opId, requestId: params.requestId })
@@ -181,18 +188,26 @@ export async function observeForkParity(
     } catch (e) {
       const msg = String(e)
       const isTimeout = msg.includes("private parity timeout")
-      if (isTimeout && nextIdBefore !== null && tryCancel) {
-        try {
-          const cleaned = tryCancel(nextIdBefore, `private parity timeout opId=${params.opId}`)
-          if (!cleaned && invalidate) invalidate(`fork observer timeout opId=${params.opId}`)
-        } catch (err) {
-          console.warn("[Kilo Fork] timeout cancel failed:", String(err).slice(0, 200), { opId: params.opId })
-        }
-      } else if (isTimeout && invalidate) {
-        try {
-          invalidate(`fork observer timeout opId=${params.opId}`)
-        } catch (err) {
-          console.warn("[Kilo Fork] timeout invalidate failed:", String(err).slice(0, 200), { opId: params.opId })
+      if (isTimeout) {
+        if (handle?.cancel) {
+          try {
+            handle.cancel(`private parity timeout opId=${params.opId}`)
+          } catch (err) {
+            console.warn("[Kilo Fork] timeout handle.cancel failed:", String(err).slice(0, 200), { opId: params.opId })
+          }
+        } else if (exactId !== null && tryCancel) {
+          try {
+            const cleaned = tryCancel(exactId, `private parity timeout opId=${params.opId}`)
+            if (!cleaned && invalidate) invalidate(`fork observer timeout opId=${params.opId}`)
+          } catch (err) {
+            console.warn("[Kilo Fork] timeout cancel failed:", String(err).slice(0, 200), { opId: params.opId })
+          }
+        } else if (invalidate) {
+          try {
+            invalidate(`fork observer timeout opId=${params.opId}`)
+          } catch (err) {
+            console.warn("[Kilo Fork] timeout invalidate failed:", String(err).slice(0, 200), { opId: params.opId })
+          }
         }
       }
       privRes = {

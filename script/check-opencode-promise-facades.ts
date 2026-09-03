@@ -111,8 +111,8 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason: "B2 EventV2 atomic propagation integration test via AppRuntime and InstanceRef (concurrent distinct, fault-injection rollback, aggregateEvents propagation, prior/future generation, same-key replay, seq monotonic, location regressions, notify isolation, deterministic aggregate rollback, present invalid resultSnapshot fail-closed, empty-string present invalid, JSON null text present invalid)",
   },
   "kilocode/session/session-fork-b3.test.ts": {
-    count: 30,
-    reason: "B3 durable fork integration test via AppRuntime and InstanceRef (success, replay, conflict, validation, private replay, HTTP, fd-carrier)",
+    count: 34,
+    reason: "B3 durable fork integration test via AppRuntime and InstanceRef (success, replay, conflict, validation, private replay, HTTP, fd-carrier, canonical identity mismatch/colon)",
   },
   "kilocode/session/session-fork-regression.test.ts": {
     count: 21,
@@ -125,6 +125,22 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   "kilocode/session/session-fork-http-mapping.test.ts": {
     count: 14,
     reason: "B3 fork HTTP mapping integration test via AppRuntime and InstanceRef (error mapping matrix 400/404/409/500, directory/sessionId/idempotencyKey/opId/barrier cases)",
+  },
+  "kilocode/session/session-create-b4.test.ts": {
+    count: 54,
+    reason: "B4 durable create integration test via AppRuntime and InstanceRef (success, replay, opId collision, private replay, validation, fd-carrier, HTTP via Server.listen, directory mismatch, parent conflict + private parent conflict, rollback ghost, payload preserve, default route mismatch, token rejection, snapshot consistency, durable no-mutation assertions for private dispatch and fd-carrier replay/no-record, canonical identity mismatch/colon)",
+  },
+  "kilocode/session/session-fork-persistence.test.ts": {
+    count: 65,
+    reason: "B3 fork persistence boundary integration test via AppRuntime and InstanceRef (success diff carry and replay, diff read failure ghost check, write cleanup, failure ghost)",
+  },
+  "kilocode/session/session-fork-ownership.test.ts": {
+    count: 88,
+    reason: "B3 fork ownership claim integration test via AppRuntime and InstanceRef (probe fail closed, first/second diff, sandbox, Tx cleanup, preexisting, ID collision, legacy ghost, late failure event aggregate + retry, deterministic cleanup fs failure with warning and retained file)",
+  },
+  "kilocode/session/session-fork-event-preflight.test.ts": {
+    count: 29,
+    reason: "B3 fork durable event aggregate preflight integration test via AppRuntime and InstanceRef (orphaned EventSequence/EventTable without SessionTable conflict, no FS/DB mutation, preserved event, full no-mutation assertions for both orphaned aggregate and sequence-only cases)",
   },
 }
 
