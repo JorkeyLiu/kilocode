@@ -82,3 +82,9 @@ jobs:
       - name: Run B4 production carrier test
         working-directory: packages/kilo-vscode
         run: bun test src/services/cli-backend/server-manager-b4-integration.test.ts
+
+      - name: Run B5 production tests
+        working-directory: packages/kilo-vscode
+        run: |
+          bun test src/services/cli-backend/server-manager-b5-integration.test.ts
+          bun test src/services/cli-backend/server-manager-b5-composition.test.ts

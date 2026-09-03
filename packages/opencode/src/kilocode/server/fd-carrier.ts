@@ -1,5 +1,5 @@
 import * as fs from "node:fs"
-import { Effect } from "effect"
+import { Effect, Schema } from "effect"
 import { ErrorCode } from "@/private-worker/json-rpc"
 import { AppRuntime } from "@/effect/app-runtime"
 import { CancelQueuedDispatchService } from "@/kilocode/session/cancel-queued-dispatch"
@@ -7,6 +7,9 @@ import { SessionUpdateDispatchService } from "@/kilocode/session/session-update-
 import { SessionForkDispatchService } from "@/kilocode/session/session-fork-dispatch"
 import { SessionCreateDispatchService } from "@/kilocode/session/session-create-dispatch"
 import { SessionStatus } from "@/session/status"
+import { Session } from "@/session/session"
+import { SessionID } from "@/session/schema"
+import { NotFoundError } from "@/storage/storage"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import { acquireDrainControl, InstanceUnavailableDuringConfigRebuildError } from "@/kilocode/server/drain-control-acquire"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -60,6 +63,21 @@ function bestEffortClose(stream: unknown, label: string): void {
 
 export const FD_STATUS_VERSION = 1 as const
 export const FD_STATUS_OP = "session/status" as const
+export const FD_GET_VERSION = 1 as const
+export const FD_GET_OP = "session/get" as const
+
+export interface FdGetRequest {
+  v: typeof FD_GET_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_GET_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    sessionId: string
+  }
+  payload: Record<string, never>
+}
 
 export interface FdStatusRequest {
   v: typeof FD_STATUS_VERSION
@@ -100,6 +118,67 @@ function statusFailed(
     accepted: false,
     failure,
   }
+}
+
+function getFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_GET_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_GET_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+const GET_MESSAGE_LIMIT = 200
+
+function boundGetMessage(msg: string): string {
+  if (msg.length > GET_MESSAGE_LIMIT) return msg.slice(0, GET_MESSAGE_LIMIT)
+  return msg
+}
+
+function validateGetRequest(raw: unknown): FdGetRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_GET_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_GET_OP) throw new Error("op must be session/get")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for get")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "sessionId"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (typeof ctx.sessionId !== "string" || !Schema.is(SessionID)(ctx.sessionId))
+    throw new Error("context.sessionId must be SessionID")
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for get")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const opId = raw.opId as string
+  const sid = ctx.sessionId as string
+  const prefix = `get:${sid}:`
+  if (!opId.startsWith(prefix))
+    throw new Error("opId must be get:<sessionId>:<token> with nonempty colon-free token")
+  const token = opId.slice(prefix.length)
+  if (token.length === 0 || token.includes(":"))
+    throw new Error("opId must be get:<sessionId>:<token> with nonempty colon-free token")
+  return raw as unknown as FdGetRequest
 }
 
 function validateStatusRequest(raw: unknown): FdStatusRequest {
@@ -289,6 +368,90 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               Effect.catchDefect((defect: unknown) => {
                 const msg = defect instanceof Error ? defect.message : String(defect)
                 return Effect.succeed(statusFailed(req, "internal", msg, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === "session/get") {
+        // B6 parity-only read-only: same-directory Session.Info via drain-control snapshot, never mutates.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdGetRequest
+            try {
+              req = validateGetRequest(params)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return getFailed(fallbackIds(params), "validation.failed", boundGetMessage(msg), false)
+            }
+            const dir = canonicalDirectory(req.context.directory)
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence
+                  ? boundGetMessage(err instanceof Error ? err.message : String(err))
+                  : "internal error"
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: getFailed(req, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({ tag: "fail" as const, result: getFailed(req, "internal", "internal error", false) })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              const svc = yield* Session.Service
+              const sid = SessionID.make(req.context.sessionId)
+              const found = yield* svc.get(sid).pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch((err: unknown) => {
+                  const missing = err instanceof NotFoundError || (err as { _tag?: string })?._tag === "NotFoundError"
+                  const code = missing ? "session.not_found" : "internal"
+                  const message = missing ? "session not found" : "internal error"
+                  return Effect.succeed({ tag: "fail" as const, code, message })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const, code: "internal", message: "internal error" })
+                }),
+              )
+              if (found.tag !== "ok") return getFailed(req, found.code, found.message, false)
+              let stored: string
+              try {
+                stored = canonicalDirectory(found.value.directory)
+              } catch {
+                return getFailed(req, "internal", "internal error", false)
+              }
+              if (stored !== dir) return getFailed(req, "scope_mismatch", "directory mismatch", false)
+              if (!Schema.is(Session.Info)(found.value))
+                return getFailed(req, "internal", "internal error", false)
+              return {
+                v: FD_GET_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_GET_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { session: found.value },
+              }
+            }).pipe(
+              Effect.provideService(InstanceRef, acquired.value.ctx),
+              Effect.ensuring(acquired.value.release),
+            )
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(getFailed(req, "internal", "internal error", false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(getFailed(req, "internal", "internal error", false))
               }),
             )
           }),

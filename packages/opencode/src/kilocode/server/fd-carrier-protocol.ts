@@ -6,7 +6,7 @@ export const FD_PROTOCOL_MINOR = 0
 export const FD_PROTOCOL_VERSION = "1.0"
 export const FD_SERVER_NAME = "kilo"
 export const FD_SERVER_VERSION = "7.4.11"
-export const FD_CAPABILITIES = ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status"] as const
+export const FD_CAPABILITIES = ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get"] as const
 
 export interface FdInitializeParams {
   protocol?: { name?: string; major?: number; minor?: number }

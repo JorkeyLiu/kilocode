@@ -58,6 +58,7 @@ import { isP0PerfEnabled, p0Stage, p0Webview } from "./perf/perf-instrument"
 import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
 import { renameSessionWithResult, buildSessionUpdateIdentity, buildSessionCreateIdentity } from "./kilo-provider/rename-session"
+import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
 import { parseSessionTitle } from "./shared/session-title"
 import { handleFileSearch } from "./kilo-provider/file-search"
 import { handleFilePicker } from "./kilo-provider/file-picker"
@@ -1602,7 +1603,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (!client) return
     const directory = this.getWorkspaceDirectory(sessionId)
     return retry(() => client.session.get({ sessionID: sessionId, directory }, { throwOnError: true }))
-      .then((result) => result.data)
+      .then((result) => {
+        // SDK-first detached parity: SDK data stays authoritative; the private
+        // `session/get` snapshot observes without mutating state or errors.
+        try {
+          observeSessionGetParityDetached(this.connectionService, result as unknown as { data?: unknown }, sessionId, directory)
+        } catch (e) {
+          console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+        }
+        return result.data
+      })
       .catch((error: unknown) => {
         console.warn("[Kilo New] KiloProvider: Failed to resolve managed session:", error)
         return undefined
@@ -2683,6 +2693,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.refreshSessionDetails(sessionID, dir, signal)
           return
         }
+        // SDK-first detached parity: applied SDK snapshot stays authoritative;
+        // the private `session/get` snapshot observes without mutating state.
+        try {
+          observeSessionGetParityDetached(this.connectionService, r as unknown as { data?: unknown }, sessionID, dir)
+        } catch (e) {
+          console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+        }
         this.setCurrentSession(r.data)
         this.contextSessionID = r.data.id
         this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(r.data) })
@@ -2761,6 +2778,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         } else {
           const meta = await this.client.session.get({ sessionID, directory: dir }, { throwOnError: true })
           if (!meta.data) throw new Error("Session metadata not found")
+          try {
+            observeSessionGetParityDetached(this.connectionService, meta as unknown as { data?: unknown }, sessionID, dir)
+          } catch (e) {
+            console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+          }
           this.setCurrentSession(meta.data as Session)
           this.contextSessionID = (meta.data as Session).id
           if (!wasTracked)
@@ -2791,6 +2813,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           } as unknown as { throwOnError: true })
           if (abort.signal.aborted) return false
           if (!meta.data) throw new Error("Session metadata not found")
+          try {
+            observeSessionGetParityDetached(this.connectionService, meta as unknown as { data?: unknown }, sessionID, dir)
+          } catch (e) {
+            console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+          }
           this.setCurrentSession(meta.data as Session)
           this.contextSessionID = (meta.data as Session).id
           if (!wasTracked)
@@ -2863,6 +2890,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         retry(() => this.client!.session.get({ sessionID, directory: workspaceDir }, { throwOnError: true })),
         retry(() => this.client!.session.messages({ sessionID, directory: workspaceDir }, { throwOnError: true })),
       ])
+      // SDK-first detached parity for the metadata read only; messages stay
+      // SDK-authoritative and the observer never mutates state or errors.
+      if (info.data) {
+        try {
+          observeSessionGetParityDetached(this.connectionService, info as unknown as { data?: unknown }, sessionID, workspaceDir)
+        } catch (e) {
+          console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+        }
+      }
       this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(info.data) })
 
       const messages = history.data.map((m) => ({
