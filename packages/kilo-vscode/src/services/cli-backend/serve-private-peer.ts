@@ -8,6 +8,17 @@ import {
   validateGetRequest,
 } from "./serve-private-get"
 import type { PrivateGetWireOutcome, ServePrivateGetRequest, ServePrivateGetResult } from "./serve-private-get"
+import {
+  makeMessagesAmbiguous,
+  normalizePrivateMessagesWire,
+  PrivateMessagesValidationError,
+  validateMessagesRequest,
+} from "./serve-private-messages"
+import type {
+  PrivateMessagesWireOutcome,
+  ServePrivateMessagesRequest,
+  ServePrivateMessagesResult,
+} from "./serve-private-messages"
 
 export {
   canonicalGetOpId,
@@ -20,6 +31,21 @@ export {
   validateGetResult,
 } from "./serve-private-get"
 export type { PrivateGetWireOutcome, ServePrivateGetRequest, ServePrivateGetResult } from "./serve-private-get"
+export {
+  canonicalMessagesOpId,
+  compareMessagesParity,
+  isPrivateMessagesValidationError,
+  makeMessagesAmbiguous,
+  normalizePrivateMessagesWire,
+  PrivateMessagesValidationError,
+  validateMessagesRequest,
+  validateMessagesResult,
+} from "./serve-private-messages"
+export type {
+  PrivateMessagesWireOutcome,
+  ServePrivateMessagesRequest,
+  ServePrivateMessagesResult,
+} from "./serve-private-messages"
 
 export interface ServePrivateCancelQueuedRequest {
   v: 1
@@ -1350,7 +1376,7 @@ export class ServePrivatePeer {
     const initPromise = peerAtStart.request("initialize", {
       protocol: { name: "kilo-private", major: 1, minor: 0 },
       clientInfo: { name: "kilo-vscode", version: "7.4.11" },
-      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get"],
+      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages"],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
 
@@ -1416,6 +1442,7 @@ export class ServePrivatePeer {
       let hasCreate = false
       let hasStatus = false
       let hasGet = false
+      let hasMessages = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
@@ -1423,6 +1450,7 @@ export class ServePrivatePeer {
         hasCreate = caps.includes("session/create")
         hasStatus = caps.includes("session/status")
         hasGet = caps.includes("session/get")
+        hasMessages = caps.includes("session/messages")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -1485,6 +1513,16 @@ export class ServePrivatePeer {
           const sess = (c as Record<string, unknown>).session as Record<string, unknown>
           if ((sess as Record<string, unknown>).get) hasGet = true
         } else if (c["session/get"] === true) hasGet = true
+        if ((c as Record<string, unknown>)["session/messages"]) hasMessages = true
+        else if (
+          Array.isArray((c as Record<string, unknown>).session) &&
+          ((c as Record<string, unknown>).session as unknown[]).includes("messages")
+        )
+          hasMessages = true
+        else if ((c as Record<string, unknown>).session && typeof (c as Record<string, unknown>).session === "object") {
+          const sess = (c as Record<string, unknown>).session as Record<string, unknown>
+          if ((sess as Record<string, unknown>).messages) hasMessages = true
+        } else if (c["session/messages"] === true) hasMessages = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
@@ -1492,10 +1530,11 @@ export class ServePrivatePeer {
           hasCreate = false
           hasStatus = false
           hasGet = false
+          hasMessages = false
         }
       }
 
-      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet) {
+      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
         if (this.peer === peerAtStart) this.peer = null
@@ -1654,6 +1693,20 @@ export class ServePrivatePeer {
     }
   }
 
+  private failedMessages(req: ServePrivateMessagesRequest, code: string, msg: string): ServePrivateMessagesResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/messages",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
   private makeHandleCancel(id: number, opId: string, peerAtCall: JsonRpcPeer, epoch: number): (msg?: string) => boolean {
     return (msg = "private parity timeout"): boolean => {
       if (this.isStaleHandle(peerAtCall, epoch)) {
@@ -1681,6 +1734,40 @@ export class ServePrivatePeer {
           this.invalidateOnObserverTimeout(`observer timeout exact cancel miss opId=${opId}`)
         } catch (err) {
           console.warn("[Kilo] observer timeout invalidate failed:", String(err).slice(0, 200), { opId })
+        }
+        return false
+      }
+      return true
+    }
+  }
+
+  private makeMessagesHandleCancel(id: number, peerAtCall: JsonRpcPeer, epoch: number): (msg?: string) => boolean {
+    return (msg = "private parity timeout"): boolean => {
+      if (this.isStaleHandle(peerAtCall, epoch)) {
+        try {
+          this.invalidateOnObserverTimeout("stale observer timeout")
+        } catch {
+          console.warn("[Kilo] stale observer cleanup failed:", { op: "session/messages", stale: true, cleanupFailed: true })
+        }
+        return false
+      }
+      let ok = false
+      try {
+        ok = this.tryCancelPending(id, msg)
+      } catch {
+        console.warn("[Kilo] observer timeout cancel failed:", { op: "session/messages", cancelFailed: true })
+        try {
+          this.invalidateOnObserverTimeout("observer timeout cancel throw")
+        } catch {
+          console.warn("[Kilo] observer timeout invalidate failed:", { op: "session/messages", invalidateFailed: true })
+        }
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidateOnObserverTimeout("observer timeout exact cancel miss")
+        } catch {
+          console.warn("[Kilo] observer timeout invalidate failed:", { op: "session/messages", invalidateFailed: true })
         }
         return false
       }
@@ -1756,6 +1843,12 @@ export class ServePrivatePeer {
       if (cap === "session/get" && typeof c.session === "object" && c.session !== null) {
         const sess = c.session as Record<string, unknown>
         if (sess.get) return true
+      }
+      if (cap === "session/messages" && c["session/messages"] === true) return true
+      if (cap === "session/messages" && Array.isArray(c.session) && (c.session as unknown[]).includes("messages")) return true
+      if (cap === "session/messages" && typeof c.session === "object" && c.session !== null) {
+        const sess = c.session as Record<string, unknown>
+        if (sess.messages) return true
       }
     }
     return false
@@ -2029,6 +2122,84 @@ export class ServePrivatePeer {
     return { id: id as unknown as number, promise, cancel }
   }
 
+  async privateMessages(req: ServePrivateMessagesRequest): Promise<ServePrivateMessagesResult> {
+    const handle = this.privateMessagesWithHandle(req)
+    return handle.promise
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid results; invalid wire rejects
+   * with PrivateMessagesValidationError and never resolves as a normal result.
+   */
+  privateMessagesWithHandle(req: ServePrivateMessagesRequest): { id: number; promise: Promise<ServePrivateMessagesResult>; cancel: (msg?: string) => boolean } {
+    validateMessagesRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/messages")) {
+      throw new Error("Private peer missing session/messages capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/messages", req)
+    const promise = (async (): Promise<ServePrivateMessagesResult> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeMessagesAmbiguous(req, true)
+        const { code, msg } = this.parseFailedInfo(e)
+        return this.failedMessages(req, code, msg)
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeMessagesAmbiguous(req, true)
+      const out = normalizePrivateMessagesWire(raw, req)
+      if (out.kind === "invalid") throw new PrivateMessagesValidationError(out.detail)
+      return out.result
+    })()
+    const cancel = this.makeMessagesHandleCancel(id as unknown as number, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  /**
+   * Internal normalized handle for the read-only messages parity observer.
+   * Resolves the discriminated wire outcome so invalid wire is an explicit
+   * `{ kind: "invalid" }` value consumed before any comparator, never a
+   * normal result. Transport/closed/epoch semantics match the public handle.
+   */
+  privateMessagesOutcomeWithHandle(req: ServePrivateMessagesRequest): {
+    id: number
+    promise: Promise<PrivateMessagesWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateMessagesRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/messages")) {
+      throw new Error("Private peer missing session/messages capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/messages", req)
+    const promise = (async (): Promise<PrivateMessagesWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return { kind: "valid", result: makeMessagesAmbiguous(req, true) }
+        const { code, msg } = this.parseFailedInfo(e)
+        return { kind: "valid", result: this.failedMessages(req, code, msg) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeMessagesAmbiguous(req, true) }
+      return normalizePrivateMessagesWire(raw, req)
+    })()
+    const cancel = this.makeMessagesHandleCancel(id as unknown as number, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -2066,6 +2237,20 @@ export class ServePrivatePeer {
    * re-negotiate only on next connect/reconnect.
    */
   invalidateOnObserverTimeout(reason: string): void {
+    const messagesSafe =
+      reason === "stale observer timeout" ||
+      reason === "observer timeout cancel throw" ||
+      reason === "observer timeout exact cancel miss" ||
+      reason === "messages observer timeout"
+    if (messagesSafe) {
+      console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch:`, { op: "session/messages", epoch: this.opts.epoch })
+      try {
+        this.dispose()
+      } catch {
+        console.warn("[Kilo PrivatePeer] invalidate dispose failed:", { op: "session/messages", invalidateFailed: true })
+      }
+      return
+    }
     console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch ${this.opts.epoch}: ${reason}`)
     try {
       this.dispose()
@@ -2109,7 +2294,7 @@ export class ServePrivatePeer {
 
   private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {
     for (const k of Object.keys(c)) {
-      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get") && c[k]) out.push(k)
+      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages") && c[k]) out.push(k)
     }
   }
 
@@ -2122,6 +2307,7 @@ export class ServePrivatePeer {
       else if (v === "create") out.push("session/create")
       else if (v === "status") out.push("session/status")
       else if (v === "get") out.push("session/get")
+      else if (v === "messages") out.push("session/messages")
     }
   }
 
@@ -2134,6 +2320,7 @@ export class ServePrivatePeer {
     if (sess.create) out.push("session/create")
     if (sess.status) out.push("session/status")
     if (sess.get) out.push("session/get")
+    if (sess.messages) out.push("session/messages")
   }
 
   private capsFromRecord(c: Record<string, unknown>): string[] {

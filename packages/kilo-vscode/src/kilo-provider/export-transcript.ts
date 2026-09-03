@@ -2,6 +2,7 @@ import * as path from "path"
 import * as vscode from "vscode"
 import type { KiloClient, Message, Part, Session } from "@kilocode/sdk/v2/client"
 import { fetchMessagePage } from "./message-page"
+import type { MessagesParityConnection } from "./session-messages-parity"
 
 type Item = {
   info: Message
@@ -14,10 +15,11 @@ export async function exportTranscript(
     sessionID: string
     dir: string
   },
+  parityConnection?: MessagesParityConnection | null,
 ) {
   const [{ data: session }, page] = await Promise.all([
     client.session.get({ sessionID: input.sessionID, directory: input.dir }, { throwOnError: true }),
-    fetchMessagePage(client, { sessionID: input.sessionID, workspaceDir: input.dir, limit: 0 }),
+    fetchMessagePage(client, { sessionID: input.sessionID, workspaceDir: input.dir, limit: 0 }, parityConnection ?? null),
   ])
   const text = formatTranscript(session, page.items)
   const uri = await vscode.window.showSaveDialog({

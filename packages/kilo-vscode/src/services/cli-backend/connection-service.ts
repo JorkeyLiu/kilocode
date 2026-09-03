@@ -19,8 +19,11 @@ import {
   type ServePrivateCreateResult,
   type PrivateStatusWireOutcome,
   type PrivateGetWireOutcome,
+  type PrivateMessagesWireOutcome,
   type ServePrivateGetRequest,
   type ServePrivateGetResult,
+  type ServePrivateMessagesRequest,
+  type ServePrivateMessagesResult,
   type ServePrivateStatusRequest,
   type ServePrivateStatusResult,
   compareUpdateParity,
@@ -163,6 +166,17 @@ export class KiloConnectionService {
    * No timers, no polling, no detached work, no new peer lifecycle.
    */
   private readonly deferredGetObservers: Map<string, () => void> = new Map()
+  /**
+   * Keyed deferred messages observers (B7): at most one deferred private
+   * messages observation per backend epoch + canonical directory + session
+   * id + exact query (limit/before). Different query combinations are
+   * different observations and never share a key. Owner-managed like get
+   * observers: wrappers live in `privateAvailableListeners`; the map only
+   * provides the dedupe key. Cleared on failed/superseded negotiation,
+   * reset, dispose, and owner invalidation. No timers, no polling, no
+   * detached work, no new peer lifecycle.
+   */
+  private readonly deferredMessagesObservers: Map<string, () => void> = new Map()
   /**
    * Definitively failed private get epoch (B6 LOCK-005/012): set only when
    * the current backend epoch's negotiation definitively fails (explicit
@@ -719,6 +733,7 @@ export class KiloConnectionService {
     this.privateAvailableListeners.clear()
     this.clearAllDeferredStatusObservers()
     this.clearAllDeferredGetObservers()
+    this.clearAllDeferredMessagesObservers()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -762,6 +777,7 @@ export class KiloConnectionService {
     this.privateAvailableListeners.clear()
     this.clearAllDeferredStatusObservers()
     this.clearAllDeferredGetObservers()
+    this.clearAllDeferredMessagesObservers()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -948,11 +964,27 @@ export class KiloConnectionService {
   invalidatePrivatePeerOnObserverTimeout(reason: string): void {
     const peer = this.privatePeer
     if (!peer) return
-    console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch ${String(this.privateEpoch)}: ${reason}`)
-    try {
-      peer.invalidateOnObserverTimeout(reason)
-    } catch (e) {
-      console.warn("[Kilo] invalidateOnObserverTimeout failed:", String(e))
+    const messagesSafe =
+      reason === "observer timeout cancel throw" ||
+      reason === "observer timeout exact cancel miss" ||
+      reason === "messages observer timeout"
+    if (messagesSafe) {
+      console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch:`, {
+        op: "session/messages",
+        epoch: this.privateEpoch,
+      })
+      try {
+        peer.invalidateOnObserverTimeout(reason)
+      } catch {
+        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "session/messages", invalidateFailed: true })
+      }
+    } else {
+      console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch ${String(this.privateEpoch)}: ${reason}`)
+      try {
+        peer.invalidateOnObserverTimeout(reason)
+      } catch (e) {
+        console.warn("[Kilo] invalidateOnObserverTimeout failed:", String(e))
+      }
     }
     this.privatePeer = null
     this.privateAvailable = false
@@ -962,6 +994,7 @@ export class KiloConnectionService {
     this.privateAvailableListeners.clear()
     this.clearAllDeferredStatusObservers()
     this.clearAllDeferredGetObservers()
+    this.clearAllDeferredMessagesObservers()
   }
 
   /**
@@ -1081,6 +1114,78 @@ export class KiloConnectionService {
     this.deferredGetObservers.clear()
   }
 
+  /**
+   * Deferred messages observer key: current backend epoch plus
+   * canonicalized directory plus session id plus exact query
+   * (limit/before). Different query combinations never share a key, hence
+   * never compare across queries. The `before` cursor value is never
+   * embedded: it is represented only by its SHA-256 digest so distinct
+   * cursor values yield distinct keys without exposing cursor material.
+   */
+  deferredMessagesObserverKey(dir: string, sessionId: string, limit?: number, before?: string): string {
+    let canonical = dir
+    try {
+      canonical = normalize(resolve(dir))
+    } catch {
+      canonical = dir
+    }
+    const limitPart = limit === undefined ? "none" : String(limit)
+    const beforePart = before === undefined ? "none" : `h-${crypto.createHash("sha256").update(before, "utf8").digest("hex")}`
+    return `messages:${this.privateEpoch ?? "none"}:${canonical}:${sessionId}:${limitPart}:${beforePart}`
+  }
+
+  /**
+   * Register a one-shot deferred messages observation for the current
+   * backend epoch + directory + session + exact query. A duplicate
+   * registration for the same key is absorbed (returns a no-op
+   * unsubscribe). Registrations are impossible when no negotiation is
+   * running (null epoch) or when the current epoch has already
+   * definitively failed: they return a no-op unsubscribe without
+   * retention, so a failed epoch never suppresses a later epoch. The
+   * entry is released when it fires, when its owner unsubscribes, or
+   * when negotiation for its epoch definitively fails / is superseded /
+   * the connection resets / disposes / invalidates.
+   */
+  addDeferredMessagesObserver(dir: string, sessionId: string, limit: number | undefined, before: string | undefined, listener: () => void): () => void {
+    if (this.privateEpoch === null) return () => {}
+    if (this.privateFailedGetEpoch !== null && this.privateEpoch === this.privateFailedGetEpoch) return () => {}
+    // Availability-aware registration (LOCK-B7-002 race closure): when the
+    // peer already completed negotiation, do not retain a deferred entry
+    // that would never fire; the caller rechecks availability synchronously
+    // after registering and observes immediately.
+    if (this.isPrivateAvailable()) return () => {}
+    const key = this.deferredMessagesObserverKey(dir, sessionId, limit, before)
+    if (this.deferredMessagesObservers.has(key)) return () => {}
+    let wrapper: () => void = () => {
+      this.removeDeferredMessagesObserver(key, wrapper)
+      listener()
+    }
+    this.deferredMessagesObservers.set(key, wrapper)
+    this.privateAvailableListeners.add(wrapper)
+    return () => {
+      this.removeDeferredMessagesObserver(key, wrapper)
+    }
+  }
+
+  private removeDeferredMessagesObserver(key: string, wrapper: () => void): void {
+    if (this.deferredMessagesObservers.get(key) === wrapper) this.deferredMessagesObservers.delete(key)
+    this.privateAvailableListeners.delete(wrapper)
+  }
+
+  private clearDeferredMessagesObserversForEpoch(epoch: number | null): void {
+    const prefix = `messages:${epoch ?? "none"}:`
+    for (const [key, wrapper] of [...this.deferredMessagesObservers]) {
+      if (!key.startsWith(prefix)) continue
+      this.deferredMessagesObservers.delete(key)
+      this.privateAvailableListeners.delete(wrapper)
+    }
+  }
+
+  private clearAllDeferredMessagesObservers(): void {
+    for (const [, wrapper] of [...this.deferredMessagesObservers]) this.privateAvailableListeners.delete(wrapper)
+    this.deferredMessagesObservers.clear()
+  }
+
   private toError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error))
   }
@@ -1139,7 +1244,10 @@ export class KiloConnectionService {
     } catch (err) {
       console.warn("[Kilo] PrivatePeer dispose superseded failed:", String(err))
     }
-    if (staleEpoch !== null) this.clearDeferredGetObserversForEpoch(staleEpoch)
+    if (staleEpoch !== null) {
+      this.clearDeferredGetObserversForEpoch(staleEpoch)
+      this.clearDeferredMessagesObserversForEpoch(staleEpoch)
+    }
     if (this.privatePeer === peer) {
       this.privatePeer = null
       this.privateAvailable = false
@@ -1158,6 +1266,7 @@ export class KiloConnectionService {
       console.warn("[Kilo] PrivatePeer stale dispose failed:", String(err))
     }
     this.clearDeferredGetObserversForEpoch(epochAtStart)
+    this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     return true
   }
 
@@ -1196,6 +1305,7 @@ export class KiloConnectionService {
     this.privateFailedGetEpoch = epochAtStart
     this.clearDeferredStatusObserversForEpoch(epochAtStart)
     this.clearDeferredGetObserversForEpoch(epochAtStart)
+    this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
 
@@ -1237,6 +1347,7 @@ export class KiloConnectionService {
       this.privateFailedGetEpoch = server.epoch
       this.clearDeferredStatusObserversForEpoch(server.epoch)
       this.clearDeferredGetObserversForEpoch(server.epoch)
+      this.clearDeferredMessagesObserversForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
     }
@@ -1956,6 +2067,213 @@ export class KiloConnectionService {
             op: "session/get",
             opId: req.opId,
             epoch: epochAtCall,
+          })
+        }
+        return false
+      }
+      return true
+    }
+    return { id: handle.id, promise, cancel }
+  }
+
+  async privateMessages(req: ServePrivateMessagesRequest): Promise<ServePrivateMessagesResult> {
+    const handle = this.privateMessagesWithHandle(req)
+    return handle.promise
+  }
+
+  privateMessagesWithHandle(req: ServePrivateMessagesRequest): { id: number; promise: Promise<ServePrivateMessagesResult>; cancel: (msg?: string) => boolean } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("session/messages")) {
+      throw new Error("Private peer missing session/messages capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const handle = peerAtCall.privateMessagesWithHandle(req)
+    const promise = handle.promise.then((result) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/messages",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateMessagesResult
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/messages",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateMessagesResult
+      }
+      return result
+    })
+    const cancel = (msg = "private parity timeout"): boolean => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout("stale observer timeout")
+        } catch {
+          console.warn("[Kilo] stale observer cleanup failed:", {
+            op: "session/messages",
+            epoch: epochAtCall,
+            cleanupFailed: true,
+          })
+        }
+        return false
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch {
+        console.warn("[Kilo] observer timeout cancel failed:", {
+          op: "session/messages",
+          epoch: epochAtCall,
+          cancelFailed: true,
+        })
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout("observer timeout cancel throw")
+        } catch {
+          console.warn("[Kilo] observer timeout invalidate failed:", {
+            op: "session/messages",
+            epoch: epochAtCall,
+            invalidateFailed: true,
+          })
+        }
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout("observer timeout exact cancel miss")
+        } catch {
+          console.warn("[Kilo] observer timeout invalidate failed:", {
+            op: "session/messages",
+            epoch: epochAtCall,
+            invalidateFailed: true,
+          })
+        }
+        return false
+      }
+      return true
+    }
+    return { id: handle.id, promise, cancel }
+  }
+
+  /**
+   * Epoch-aware production pass-through for the read-only messages parity
+   * observer. Delegates to the peer's normalized outcome handle so malformed
+   * wire resolves as `{ kind: "invalid" }` and reaches the observer before
+   * any comparator. Epoch drift or peer replacement maps to `{ kind:
+   * "valid", ambiguous transportUnknown }`; exact cancel preserves the peer
+   * while current-epoch cancel miss/throw fail-closed via owner
+   * invalidation. A stale captured handle cleans only its captured peer and
+   * returns `"stale"` so the observer never invalidates the replacement
+   * peer. The legacy valid-result handle above stays unchanged for existing
+   * callers.
+   */
+  privateMessagesOutcomeWithHandle(req: ServePrivateMessagesRequest): {
+    id: number
+    promise: Promise<PrivateMessagesWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("session/messages")) {
+      throw new Error("Private peer missing session/messages capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const handle = peerAtCall.privateMessagesOutcomeWithHandle(req)
+    const promise = handle.promise.then((outcome) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: req.requestId,
+            opId: req.opId,
+            op: "session/messages",
+            idempotencyKey: req.idempotencyKey,
+            status: "ambiguous",
+            outcome: { type: "ambiguous", time: Date.now() },
+            accepted: false,
+            transportUnknown: true,
+          },
+        } as PrivateMessagesWireOutcome
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          kind: "valid",
+          result: {
+            v: 1,
+            requestId: req.requestId,
+            opId: req.opId,
+            op: "session/messages",
+            idempotencyKey: req.idempotencyKey,
+            status: "ambiguous",
+            outcome: { type: "ambiguous", time: Date.now() },
+            accepted: false,
+            transportUnknown: true,
+          },
+        } as PrivateMessagesWireOutcome
+      }
+      return outcome
+    })
+    const cancel = (msg = "private parity timeout"): PrivateStatusObserverCancelResult => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout("stale observer timeout")
+        } catch {
+          console.warn("[Kilo] stale observer cleanup failed:", {
+            op: "session/messages",
+            epoch: epochAtCall,
+            cleanupFailed: true,
+          })
+        }
+        return "stale"
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch {
+        console.warn("[Kilo] observer timeout cancel failed:", {
+          op: "session/messages",
+          epoch: epochAtCall,
+          cancelFailed: true,
+        })
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout("observer timeout cancel throw")
+        } catch {
+          console.warn("[Kilo] observer timeout invalidate failed:", {
+            op: "session/messages",
+            epoch: epochAtCall,
+            invalidateFailed: true,
+          })
+        }
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout("observer timeout exact cancel miss")
+        } catch {
+          console.warn("[Kilo] observer timeout invalidate failed:", {
+            op: "session/messages",
+            epoch: epochAtCall,
+            invalidateFailed: true,
           })
         }
         return false

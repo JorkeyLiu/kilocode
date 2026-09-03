@@ -59,6 +59,7 @@ import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
 import { renameSessionWithResult, buildSessionUpdateIdentity, buildSessionCreateIdentity } from "./kilo-provider/rename-session"
 import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
+import { observeSessionMessagesParityDetached } from "./kilo-provider/session-messages-parity"
 import { parseSessionTitle } from "./shared/session-title"
 import { handleFileSearch } from "./kilo-provider/file-search"
 import { handleFilePicker } from "./kilo-provider/file-picker"
@@ -2835,7 +2836,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       limit: options.limit ?? MESSAGE_PAGE_LIMIT,
       before: options.before,
       signal: abort?.signal,
-    })
+    }, this.connectionService)
     if (abort?.signal.aborted) return false
     if (!this.trackedSessionIds.has(sessionID)) return false
     const messages = page.items.map((m) => ({
@@ -2886,9 +2887,28 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     try {
       const workspaceDir = this.getWorkspaceDirectory(sessionID)
+      const historyWithObserve = retry(() =>
+        this.client!.session.messages({ sessionID, directory: workspaceDir }, { throwOnError: true }),
+      ).then(
+        (result) => result,
+        (err: unknown) => {
+          try {
+            observeSessionMessagesParityDetached(
+              this.connectionService,
+              err as { data?: unknown; error?: unknown; response?: unknown },
+              sessionID,
+              workspaceDir,
+              {},
+            )
+          } catch {
+            console.warn("[Kilo Messages] private parity observation failed (fail-closed):", { op: "session/messages", observationFailed: true })
+          }
+          throw err
+        },
+      )
       const [info, history] = await Promise.all([
         retry(() => this.client!.session.get({ sessionID, directory: workspaceDir }, { throwOnError: true })),
-        retry(() => this.client!.session.messages({ sessionID, directory: workspaceDir }, { throwOnError: true })),
+        historyWithObserve,
       ])
       // SDK-first detached parity for the metadata read only; messages stay
       // SDK-authoritative and the observer never mutates state or errors.
@@ -2897,6 +2917,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           observeSessionGetParityDetached(this.connectionService, info as unknown as { data?: unknown }, sessionID, workspaceDir)
         } catch (e) {
           console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+        }
+      }
+      // SDK-first detached parity for the direct full messages read; the
+      // private `session/messages` snapshot observes without mutating state.
+      // Full load binds the exact empty query (no limit/before).
+      if (history.data) {
+        try {
+          observeSessionMessagesParityDetached(this.connectionService, history as unknown as { data?: unknown }, sessionID, workspaceDir, {})
+        } catch {
+          console.warn("[Kilo Messages] private parity observation failed (fail-closed):", { op: "session/messages", observationFailed: true })
         }
       }
       this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(info.data) })
@@ -3382,7 +3412,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       const saved = await exportTranscript(this.client, {
         sessionID,
         dir: this.getWorkspaceDirectory(sessionID),
-      })
+      }, this.connectionService)
       if (saved) void vscode.window.showInformationMessage("Session transcript exported as Markdown.")
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to export session transcript:", error)
