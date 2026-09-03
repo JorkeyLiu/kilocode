@@ -34,7 +34,7 @@ import { Config } from "../../../src/config/config"
 import { Agent } from "../../../src/agent/agent"
 import { Event } from "../../../src/server/event"
 import { GlobalBus } from "../../../src/bus/global"
-import { awaitRebuilds } from "../../../src/kilocode/server/config-rebuild"
+import { awaitRebuilds, probeRebuildRegistration } from "../../../src/kilocode/server/config-rebuild"
 import { withConfigSnapshot } from "../../../src/kilocode/session/config-snapshot"
 import { AppRuntime } from "../../../src/effect/app-runtime"
 import { provideInstance } from "../../fixture/fixture"
@@ -59,6 +59,7 @@ const tdirs: Array<Awaited<ReturnType<typeof tmpdir>>> = []
 afterEach(async () => {
   ;(Global.Path as { config: string }).config = original
   GlobalBus.removeAllListeners("event")
+  probeRebuildRegistration.uninstall()
   // Drain forked rebuilds before teardown; propagate failures instead of
   // swallowing them so a broken rebuild surfaces in the failing test.
   await Effect.runPromise(awaitRebuilds())
@@ -135,6 +136,44 @@ function captureEvents() {
     received,
     dispose: () => GlobalBus.removeListener("event", handler),
   }
+}
+
+/**
+ * P4.4-G2 deterministic cold-order probe (borrowed from
+ * config-event-ordering.test.ts:179-197). One shared append-only array is
+ * written synchronously by (a) the ConfigRebuild registration hook inside
+ * `withColdMutation`/ConfigConvergence commit and (b) the GlobalBus listener
+ * observing the ConfigUpdated publish. Both run in the handler fiber in
+ * program order, so array order is a deterministic happens-before proof.
+ * `wait` resolves through a Deferred latch when ConfigUpdated fires.
+ */
+function installOrderProbe() {
+  probeRebuildRegistration.install()
+  const order = probeRebuildRegistration.entries()
+  const latch = Deferred.makeUnsafe<void>()
+  const handler = (event: { payload: { type: string } }) => {
+    if (event.payload?.type === Event.ConfigUpdated.type) {
+      order.push({ kind: "config-updated" })
+      Deferred.doneUnsafe(latch, Effect.succeed(void 0))
+    }
+  }
+  GlobalBus.on("event", handler)
+  return {
+    order,
+    wait: () => Effect.runPromise(Deferred.await(latch)),
+    dispose: () => GlobalBus.removeListener("event", handler),
+  }
+}
+
+/** Assert exactly one registration exists and it precedes ConfigUpdated. */
+function expectOneRegistrationBeforeEvent(order: Array<{ kind: "rebuild-registered" | "config-updated" }>) {
+  const registrations = order.filter((entry) => entry.kind === "rebuild-registered")
+  const events = order.filter((entry) => entry.kind === "config-updated")
+  expect(registrations.length).toBe(1)
+  expect(events.length).toBe(1)
+  const registerIdx = order.findIndex((entry) => entry.kind === "rebuild-registered")
+  const eventIdx = order.findIndex((entry) => entry.kind === "config-updated")
+  expect(registerIdx).toBeLessThan(eventIdx)
 }
 
 // ─── LOCK-001 / LOCK-004: hot patches ────────────────────────────────
@@ -547,6 +586,89 @@ describe("config overlay lifecycle - cold patches", () => {
       expect(events.received.some((e) => e.type === Event.ConfigUpdated.type)).toBe(true)
     } finally {
       events.dispose()
+    }
+  })
+
+  /**
+   * P4.4-G2 (LOCK-006): `mcp` is cold — a valid mcp patch routes through
+   * `withColdMutation`/ConfigConvergence, which raises the convergence fence,
+   * persists canonical config, synchronously registers exactly one rebuild via
+   * the ConfigRebuild tracker, then runs the deferred ConfigUpdated publish.
+   * The shared order probe proves the registration precedes ConfigUpdated, so
+   * `mcp` cannot silently regress to a hot `dispose:false` path (persistence +
+   * ConfigUpdated alone are shared by hot/cold and prove nothing). No real MCP
+   * worker is started.
+   */
+  test.serial("mcp cold patch writes config and emits config-updated (P4.4-G2)", async () => {
+    const global = await tmpdir({ retain: true })
+    tdirs.push(global)
+    const project = await tmpdir({ retain: true })
+    tdirs.push(project)
+    await markProjectConfigReady(project.path)
+    await seedGlobalConfig(global.path)
+    ;(Global.Path as { config: string }).config = global.path
+    const probe = installOrderProbe()
+
+    try {
+      const response = request(undefined, "/config/overlay", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scope: "global",
+          set: { mcp: { "test-server": { type: "local", command: ["node", "server.js"], enabled: true } } },
+        }),
+      })
+      await Promise.all([json(await response), probe.wait()])
+
+      const saved = readGlobalConfig(global.path)
+      expect(saved.mcp).toEqual({
+        "test-server": { type: "local", command: ["node", "server.js"], enabled: true },
+      })
+      expectOneRegistrationBeforeEvent(probe.order)
+    } finally {
+      probe.dispose()
+    }
+  })
+
+  /**
+   * P4.4-G2 (LOCK-006): mixed hot (`model`) + cold (`mcp`) patch remains cold.
+   * `withColdMutation`/ConfigConvergence commits a single convergence
+   * obligation for the whole patch, so exactly one rebuild registration
+   * precedes ConfigUpdated even though one key is hot. Both keys persist.
+   * No real MCP worker is started.
+   */
+  test.serial("mixed hot+cold with mcp is treated as cold (P4.4-G2)", async () => {
+    const global = await tmpdir({ retain: true })
+    tdirs.push(global)
+    const project = await tmpdir({ retain: true })
+    tdirs.push(project)
+    await markProjectConfigReady(project.path)
+    await seedGlobalConfig(global.path)
+    ;(Global.Path as { config: string }).config = global.path
+    const probe = installOrderProbe()
+
+    try {
+      const response = request(undefined, "/config/overlay", {
+        method: "PATCH",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          scope: "global",
+          set: {
+            model: "anthropic/claude-sonnet-4-20250514", // hot
+            mcp: { "test-server": { type: "local", command: ["node", "server.js"], enabled: true } }, // cold
+          },
+        }),
+      })
+      await Promise.all([json(await response), probe.wait()])
+
+      const saved = readGlobalConfig(global.path)
+      expect(saved.model).toBe("anthropic/claude-sonnet-4-20250514")
+      expect(saved.mcp).toEqual({
+        "test-server": { type: "local", command: ["node", "server.js"], enabled: true },
+      })
+      expectOneRegistrationBeforeEvent(probe.order)
+    } finally {
+      probe.dispose()
     }
   })
 

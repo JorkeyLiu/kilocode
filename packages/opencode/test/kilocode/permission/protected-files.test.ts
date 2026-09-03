@@ -437,7 +437,11 @@ describe("protected_files explicit approvals", () => {
           yield* waitForPending(1)
           yield* saveAlwaysRules({ requestID: id, approvedAlways: ["*"] })
           yield* reply({ requestID: id, reply: "once" })
-          yield* Fiber.await(asking)
+          const mixedExit = yield* Fiber.await(asking)
+          expect(Exit.isFailure(mixedExit)).toBe(true)
+          if (Exit.isFailure(mixedExit)) {
+            expect(Cause.squash(mixedExit.cause)).toBeInstanceOf(Permission.RejectedError)
+          }
 
           // only the literal canonical identity is stored; the glob scope never broadens it
           const config = yield* Config.Service
@@ -449,6 +453,125 @@ describe("protected_files explicit approvals", () => {
           yield* expectPending(
             PermissionV1.ID.make("permission_mixed_glob_b"),
             ask(external("permission_mixed_glob_b", "code", [glob])),
+          )
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("mixed literal + glob via reply(always) persists only the literal identity", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const literal = path.join(Global.Path.config, "kilo.jsonc")
+          const glob = path.join(Global.Path.config, "*")
+          const id = PermissionV1.ID.make("permission_mixed_reply")
+          const asking = yield* ask(external("permission_mixed_reply", "code", [glob, literal])).pipe(Effect.forkScoped)
+          yield* waitForPending(1)
+          yield* reply({ requestID: id, reply: "always" })
+          const mixedExit = yield* Fiber.await(asking)
+          expect(Exit.isFailure(mixedExit)).toBe(true)
+          if (Exit.isFailure(mixedExit)) {
+            expect(Cause.squash(mixedExit.cause)).toBeInstanceOf(Permission.RejectedError)
+          }
+
+          // only the literal canonical identity is stored; the glob scope never broadens it
+          const config = yield* Config.Service
+          expect((yield* config.getGlobal()).protected_files).toBeUndefined()
+          const permission = yield* Permission.Service
+          const debug = yield* permission.debugState()
+          expect(debug.approvals.every((a) => a.patterns.every((p) => !ConfigProtection.hasGlobSyntax(p)))).toBe(true)
+          expect(debug.approvals.some((a) => a.sessionID === "ses_permission_mixed_reply" && a.patterns.some((p) => p.includes("kilo.jsonc")))).toBe(true)
+
+          // the literal path auto-resolves in the same session
+          yield* expectResolved(ask({ ...external("permission_mixed_reply_a", "code", [literal]), sessionID: SessionID.make("ses_permission_mixed_reply") }))
+          // the glob still requires approval
+          yield* expectPending(
+            PermissionV1.ID.make("permission_mixed_reply_b"),
+            ask(external("permission_mixed_reply_b", "code", [glob])),
+          )
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("exact .env reply(always) resolves same-session follow-up and stores no glob", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          yield* Effect.promise(() => fs.mkdir(path.join(dir, ".kilo"), { recursive: true }))
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(dir, ".kilo", "kilo.jsonc"), JSON.stringify({ permission: { read: { "*": "allow" } } }, null, 2)),
+          )
+          const id = PermissionV1.ID.make("permission_env_reply")
+          const asking = yield* ask({
+            id,
+            sessionID: SessionID.make("ses_permission_env_reply"),
+            permission: "read" as const,
+            patterns: ["secret.env"],
+            metadata: {},
+            trustedContext: createTrustedAgentContext("code"),
+            always: ["secret.env"],
+            ruleset: [],
+          } as any).pipe(Effect.forkScoped)
+          yield* waitForPending(1)
+          yield* reply({ requestID: id, reply: "always" })
+          yield* Fiber.await(asking)
+          const permission = yield* Permission.Service
+          const debug = yield* permission.debugState()
+          expect(debug.approvals.some((a) => a.sessionID === "ses_permission_env_reply" && a.patterns.some((p) => p.includes("secret.env")))).toBe(true)
+          expect(debug.approvals.every((a) => a.patterns.every((p) => !ConfigProtection.hasGlobSyntax(p)))).toBe(true)
+          yield* expectResolved(
+            ask({
+              id: PermissionV1.ID.make("permission_env_reply_next"),
+              sessionID: SessionID.make("ses_permission_env_reply"),
+              permission: "read" as const,
+              patterns: ["secret.env"],
+              metadata: {},
+              trustedContext: createTrustedAgentContext("code"),
+              always: [],
+              ruleset: [],
+            } as any),
+          )
+        }),
+      { git: true },
+    ),
+  )
+
+  it.live("mixed literal + glob deniedAlways denies the literal only", () =>
+    provideTmpdirInstance(
+      (dir) =>
+        Effect.gen(function* () {
+          const literal = path.join(Global.Path.config, "kilo.jsonc")
+          const glob = path.join(Global.Path.config, "*")
+          const id = PermissionV1.ID.make("permission_mixed_deny")
+          const asking = yield* ask(external("permission_mixed_deny", "code", [glob, literal])).pipe(Effect.forkScoped)
+          yield* waitForPending(1)
+          yield* saveAlwaysRules({ requestID: id, deniedAlways: ["*"] })
+          yield* reply({ requestID: id, reply: "once" })
+          const mixedExit = yield* Fiber.await(asking)
+          expect(Exit.isFailure(mixedExit)).toBe(true)
+          if (Exit.isFailure(mixedExit)) {
+            expect(Cause.squash(mixedExit.cause)).toBeInstanceOf(Permission.RejectedError)
+          }
+
+          // LOCK-002: globs are never persisted; only the literal identity is denied
+          const config = yield* Config.Service
+          expect((yield* config.getGlobal()).protected_files).toBeUndefined()
+
+          // the literal in the same session is now denied
+          const denied = yield* ask({ ...external("permission_mixed_deny_a", "code", [literal]), sessionID: SessionID.make("ses_permission_mixed_deny") }).pipe(
+            Effect.timeout("2 seconds"),
+            Effect.exit,
+          )
+          expect(Exit.isFailure(denied)).toBe(true)
+          if (Exit.isFailure(denied)) {
+            expect(Cause.squash(denied.cause)).toBeInstanceOf(Permission.DeniedError)
+          }
+          // the glob still requires approval
+          yield* expectPending(
+            PermissionV1.ID.make("permission_mixed_deny_b"),
+            ask(external("permission_mixed_deny_b", "code", [glob])),
           )
         }),
       { git: true },

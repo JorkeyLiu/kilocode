@@ -551,6 +551,9 @@ describe("R18 production-path - ceiling b and c exact approval positive and nega
       expect(prov?.decisive.ceilingId).toBe("(c)")
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_c_ceiling"), reply: "always" })
       yield* Fiber.await(fiber)
+      const debugCeiling = yield* perm.debugState()
+      expect(debugCeiling.approvals.some((a: Evaluator.Approval) => a.permission === "read" && a.sessionID === "sess_c_ceiling" && a.patterns.some((p: string) => p.includes("secret.env")))).toBe(true)
+      expect(debugCeiling.approvals.every((a: Evaluator.Approval) => a.patterns.every((p: string) => !p.includes("*") && !p.includes("?") && !p.includes("[") && !p.includes("{")))).toBe(true)
       const ok = yield* perm
         .ask({
           id: PermissionV1.ID.make("per_c_ceiling_ok"),
@@ -593,6 +596,75 @@ describe("R18 production-path - ceiling b and c exact approval positive and nega
         })
         .pipe(Effect.exit)
       expect(Exit.isSuccess(okExample)).toBe(true)
+    }), { git: true })
+
+  it.instance("ceiling c glob reply stores nothing and mixed literal+glob stays fail-closed", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const t = yield* TestInstance
+      const tmpGlobal = yield* isolatedGlobal
+      yield* Effect.promise(() => fs.mkdir(path.join(t.directory, ".kilo"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(projFile(t.directory), JSON.stringify({ permission: { read: { "*": "allow" } } }, null, 2)))
+      const before = (yield* perm.debugState()).approvals.length
+      const fiberGlob = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_c_glob_only"),
+          sessionID: SessionID.make("sess_c_glob"),
+          permission: "read",
+          patterns: ["*.env"],
+          metadata: {},
+          always: ["*.env"],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_c_glob_only"), reply: "always" })
+      yield* Fiber.await(fiberGlob).pipe(Effect.catchCause(() => Effect.void))
+      const afterGlob = yield* perm.debugState()
+      expect(afterGlob.approvals.length).toBe(before)
+      expect(afterGlob.approvals.some((a: Evaluator.Approval) => a.patterns.some((p: string) => p.includes("*")))).toBe(false)
+      const fiberMixed = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_c_mixed"),
+          sessionID: SessionID.make("sess_c_mixed"),
+          permission: "read",
+          patterns: ["secret.env", "*.env"],
+          metadata: {},
+          always: ["secret.env", "*.env"],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_c_mixed"), reply: "always" })
+      yield* Fiber.await(fiberMixed).pipe(Effect.catchCause(() => Effect.void))
+      const afterMixed = yield* perm.debugState()
+      expect(afterMixed.approvals.every((a: Evaluator.Approval) => a.patterns.every((p: string) => !p.includes("*")))).toBe(true)
+      const okLiteral = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_c_mixed_literal"),
+          sessionID: SessionID.make("sess_c_mixed"),
+          permission: "read",
+          patterns: ["secret.env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isSuccess(okLiteral)).toBe(true)
+      const fiberGlobStill = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_c_mixed_glob"),
+          sessionID: SessionID.make("sess_c_mixed"),
+          permission: "read",
+          patterns: ["*.env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_c_mixed_glob"), reply: "reject" })
+      yield* Fiber.await(fiberGlobStill).pipe(Effect.catchCause(() => Effect.void))
     }), { git: true })
 })
 
@@ -721,6 +793,191 @@ describe("R18 production-path - saveAlwaysRules ceiling c exact vs wildcard/broa
       }
       yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_broad"), reply: "reject" })
       yield* Fiber.await(fiberBroad).pipe(Effect.catchCause(() => Effect.void))
+    }), { git: true })
+})
+
+describe("R18 production-path - saveAlwaysRules ceiling c wildcard literal extraction", () => {
+  it.instance("wildcard exact .env allow persists canonical literal and resolves same-session follow-up", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const t = yield* TestInstance
+      yield* isolatedGlobal
+      yield* Effect.promise(() => fs.mkdir(path.join(t.directory, ".kilo"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(projFile(t.directory), JSON.stringify({ permission: { read: { "*": "allow" } } }, null, 2)))
+      const sess = SessionID.make("sess_save_c_wild_env_allow")
+      const fiber = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_env_allow"),
+          sessionID: sess,
+          permission: "read",
+          patterns: [".env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      const before = yield* perm.provenance("per_save_c_wild_env_allow")
+      expect(before?.decisive.result).toBe("ask-ceiling")
+      expect(before?.decisive.ceilingId).toBe("(c)")
+      yield* perm.saveAlwaysRules({ requestID: PermissionV1.ID.make("per_save_c_wild_env_allow"), approvedAlways: ["*"] })
+      const debug = yield* perm.debugState()
+      expect(debug.approvals.every((a: Evaluator.Approval) => a.patterns.every((p: string) => !p.includes("*")))).toBe(true)
+      expect(debug.approvals.some((a: Evaluator.Approval) => a.permission === "read" && a.sessionID === "sess_save_c_wild_env_allow" && a.patterns.some((p: string) => p.includes(".env")))).toBe(true)
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_wild_env_allow"), reply: "once" })
+      yield* Fiber.await(fiber)
+      const ok = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_env_allow_next"),
+          sessionID: sess,
+          permission: "read",
+          patterns: [".env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isSuccess(ok)).toBe(true)
+      expect((yield* perm.provenance("per_save_c_wild_env_allow_next"))?.decisive.result).toBe("allow")
+    }), { git: true })
+
+  it.instance("wildcard exact .env deny persists canonical literal and denies same-session follow-up", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const t = yield* TestInstance
+      yield* isolatedGlobal
+      yield* Effect.promise(() => fs.mkdir(path.join(t.directory, ".kilo"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(projFile(t.directory), JSON.stringify({ permission: { read: { "*": "allow" } } }, null, 2)))
+      const sess = SessionID.make("sess_save_c_wild_env_deny")
+      const fiber = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_env_deny"),
+          sessionID: sess,
+          permission: "read",
+          patterns: [".env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.saveAlwaysRules({ requestID: PermissionV1.ID.make("per_save_c_wild_env_deny"), deniedAlways: ["*"] })
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_wild_env_deny"), reply: "once" })
+      yield* Fiber.await(fiber).pipe(Effect.catchCause(() => Effect.void))
+      const exit = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_env_deny_next"),
+          sessionID: sess,
+          permission: "read",
+          patterns: [".env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(exit)).toBe(true)
+      if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Permission.DeniedError)
+    }), { git: true })
+
+  it.instance("mixed literal+glob wildcard persists/denies only canonical literal while glob stays pending fail-closed", () =>
+    Effect.gen(function* () {
+      const perm = yield* Permission.Service
+      const t = yield* TestInstance
+      yield* isolatedGlobal
+      yield* Effect.promise(() => fs.mkdir(path.join(t.directory, ".kilo"), { recursive: true }))
+      yield* Effect.promise(() => fs.writeFile(projFile(t.directory), JSON.stringify({ permission: { read: { "*": "allow" } } }, null, 2)))
+      const sessAllow = SessionID.make("sess_save_c_wild_mixed_allow")
+      const fiberMixed = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_mixed"),
+          sessionID: sessAllow,
+          permission: "read",
+          patterns: [".env", "*.env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.saveAlwaysRules({ requestID: PermissionV1.ID.make("per_save_c_wild_mixed"), approvedAlways: ["*"] })
+      const debugMixed = yield* perm.debugState()
+      expect(debugMixed.approvals.every((a: Evaluator.Approval) => a.patterns.every((p: string) => !p.includes("*")))).toBe(true)
+      expect(debugMixed.approvals.some((a: Evaluator.Approval) => a.sessionID === "sess_save_c_wild_mixed_allow" && a.patterns.some((p: string) => p.includes(".env")))).toBe(true)
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_wild_mixed"), reply: "reject" })
+      yield* Fiber.await(fiberMixed).pipe(Effect.catchCause(() => Effect.void))
+      const okLiteral = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_mixed_literal"),
+          sessionID: sessAllow,
+          permission: "read",
+          patterns: [".env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isSuccess(okLiteral)).toBe(true)
+      const fiberGlob = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_mixed_glob"),
+          sessionID: sessAllow,
+          permission: "read",
+          patterns: ["*.env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      const provGlob = yield* perm.provenance("per_save_c_wild_mixed_glob")
+      expect(provGlob?.decisive.result).not.toBe("allow")
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_wild_mixed_glob"), reply: "reject" })
+      yield* Fiber.await(fiberGlob).pipe(Effect.catchCause(() => Effect.void))
+      const sessDeny = SessionID.make("sess_save_c_wild_mixed_deny")
+      const fiberMixedDeny = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_mixed_deny"),
+          sessionID: sessDeny,
+          permission: "read",
+          patterns: [".env", "*.env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      yield* perm.saveAlwaysRules({ requestID: PermissionV1.ID.make("per_save_c_wild_mixed_deny"), deniedAlways: ["*"] })
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_wild_mixed_deny"), reply: "reject" })
+      yield* Fiber.await(fiberMixedDeny).pipe(Effect.catchCause(() => Effect.void))
+      const deniedLiteral = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_mixed_deny_literal"),
+          sessionID: sessDeny,
+          permission: "read",
+          patterns: [".env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.exit)
+      expect(Exit.isFailure(deniedLiteral)).toBe(true)
+      if (Exit.isFailure(deniedLiteral)) expect(Cause.squash(deniedLiteral.cause)).toBeInstanceOf(Permission.DeniedError)
+      const fiberGlobDeny = yield* perm
+        .ask({
+          id: PermissionV1.ID.make("per_save_c_wild_mixed_deny_glob"),
+          sessionID: sessDeny,
+          permission: "read",
+          patterns: ["*.env"],
+          metadata: {},
+          always: [],
+          ruleset: [],
+        })
+        .pipe(Effect.forkScoped)
+      yield* waitForPending(1)
+      const provGlobDeny = yield* perm.provenance("per_save_c_wild_mixed_deny_glob")
+      expect(provGlobDeny?.decisive.result).not.toBe("allow")
+      yield* perm.reply({ requestID: PermissionV1.ID.make("per_save_c_wild_mixed_deny_glob"), reply: "reject" })
+      yield* Fiber.await(fiberGlobDeny).pipe(Effect.catchCause(() => Effect.void))
     }), { git: true })
 })
 

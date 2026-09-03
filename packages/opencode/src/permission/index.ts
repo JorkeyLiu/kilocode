@@ -157,6 +157,19 @@ function isCeilingCEnvFile(pattern: string): boolean {
   if (Wildcard.match(pattern, "*.env.*")) return true
   return false
 }
+function ceilingLiterals(targets: readonly string[], permission: string, ws: string): string[] {
+  if (ConfigProtection.hasGlobSyntax(permission)) return []
+  const out: string[] = []
+  for (const p of targets) {
+    if (ConfigProtection.hasGlobSyntax(p)) continue
+    if (Evaluator.isProtectedForCeiling(p, ws, permission)) {
+      out.push(p)
+      continue
+    }
+    if (permission === "read" && isCeilingCEnvFile(p)) out.push(p)
+  }
+  return [...new Set(out)]
+}
 
 export const Event = {
   Asked: EventV2.define({ type: "permission.asked", schema: PermissionV1.Request.fields }),
@@ -968,14 +981,16 @@ export const layer = Layer.effect(
       )
       const isExact = canonicalTargetsAlways.every((p: string) => !ConfigProtection.hasGlobSyntax(p)) && existing.info.permission !== "*" && !ConfigProtection.hasGlobSyntax(existing.info.permission)
       const effectiveIsExact = isExact
-      if (!existing.saved && effectiveIsExact) {
-        if (isProtForR18) {
-          // Protected (ceiling b): store single session approval with exact canonical pattern set, no wildcard
+      const literalProtAlways = ceilingLiterals(canonicalTargetsAlways, existing.info.permission, ws2)
+      if (!existing.saved && isProtForR18) {
+        if (literalProtAlways.length > 0) {
+          // Protected (ceiling b/c): persist only canonical exact literal identities (LOCK-002); mixed literal+glob stores literals, glob-only stores nothing
           const agentForProt2 = existing.trustedAgent ?? resolveTrustedAgent(existing.info as any) ?? "unknown"
-          const canonSet = canonicalTargetsAlways
-          const exists = r18.approvals.some((a) => a.kind === "session" && a.sessionID === String(existing.info.sessionID) && a.agent === agentForProt2 && a.permission === existing.info.permission && a.patterns.length === canonSet.length && a.patterns.every((cp, i) => cp === canonSet[i]))
+          const canonSet = [...literalProtAlways].sort()
+          const exists = r18.approvals.some((a) => a.kind === "session" && a.sessionID === String(existing.info.sessionID) && a.agent === agentForProt2 && a.permission === existing.info.permission && a.patterns.length === canonSet.length && a.patterns.slice().sort().every((v, i) => v === canonSet[i]))
           if (!exists) r18.approvals.push({ kind: "session", patterns: canonSet, sessionID: String(existing.info.sessionID), agent: agentForProt2, permission: existing.info.permission })
-          } else {
+        }
+      } else if (!existing.saved && effectiveIsExact) {
             const skillForAlways = ConfigProtection.globalSkillPattern(existing.info)
             // Lexical wildcard and full glob rejection independent of filesystem existence — all approvals must be exact
             const hasLexicalWildcardForAlways =
@@ -1007,7 +1022,6 @@ export const layer = Layer.effect(
                 }
               }
             }
-          }
         } else if (!existing.saved && !effectiveIsExact && !isProtForR18) {
           const skillBroad = ConfigProtection.globalSkillPattern(existing.info)
           const hasLexicalWildcardBroad = [...existing.info.patterns, ...(existing.info.always ?? [])].some((p: string) =>
@@ -1082,12 +1096,12 @@ export const layer = Layer.effect(
         const agentForProt = existing.trustedAgent ?? resolveTrustedAgent(existing.info as any) ?? "unknown"
         const hasStar = approvedRaw.includes("*")
         let didApprove = false
-        const isProtExact = !ConfigProtection.hasGlobSyntax(existing.info.permission) && canonicalReq.every((cp) => !ConfigProtection.hasGlobSyntax(cp))
+        const literalProt = ceilingLiterals(canonicalTargetsSave, existing.info.permission, ws2)
         if (hasStar) {
-          if (!isProtExact || canonicalReq.length === 0) {
-            // reject - never store fallback canonical containing glob; complete approval set must be exact
+          if (literalProt.length === 0) {
+            // reject - glob-only or permission-glob: never persist glob syntax (LOCK-002); mixed persists only literals below
           } else {
-            const sorted = [...canonicalReq].sort()
+            const sorted = [...literalProt].sort()
             const exists = s.r18.approvals.some((a) => a.kind === "session" && a.sessionID === String(existing.info.sessionID) && a.agent === agentForProt && a.permission === existing.info.permission && a.patterns.length === sorted.length && a.patterns.slice().sort().every((v, i) => v === sorted[i]))
             if (!exists) s.r18.approvals.push({ kind: "session", patterns: sorted, sessionID: String(existing.info.sessionID), agent: agentForProt, permission: existing.info.permission })
             didApprove = true
@@ -1110,12 +1124,11 @@ export const layer = Layer.effect(
         const hasDeniedStar = deniedRaw.includes("*")
         const deniedFiltered: string[] = []
         if (hasDeniedStar) {
-          if (!isProtExact || canonicalReq.length === 0) {
-            // reject - never store fallback deny containing glob
+          if (literalProt.length === 0) {
+            // reject - glob-only or permission-glob: never store fallback deny containing glob
           } else {
-            for (const cp of canonicalReq) {
-              const orig = existing.info.patterns.find((p) => Evaluator.canonicalForPermission(p, existing.info.permission, ws2) === cp) ?? cp
-              deniedFiltered.push(orig)
+            for (const cp of literalProt) {
+              deniedFiltered.push(cp)
             }
           }
         } else {
