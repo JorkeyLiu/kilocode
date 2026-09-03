@@ -19,6 +19,8 @@ import type {
   ServePrivateMessagesRequest,
   ServePrivateMessagesResult,
 } from "./serve-private-messages"
+import { makeChildrenCancel, requestChildrenOutcome, validateChildrenRequest } from "./serve-private-children"
+import type { PrivateChildrenWireOutcome, ServePrivateChildrenRequest } from "./serve-private-children"
 
 export {
   canonicalGetOpId,
@@ -46,6 +48,21 @@ export type {
   ServePrivateMessagesRequest,
   ServePrivateMessagesResult,
 } from "./serve-private-messages"
+export {
+  canonicalChildrenOpId,
+  compareChildrenParity,
+  isPrivateChildrenValidationError,
+  makeChildrenAmbiguous,
+  normalizePrivateChildrenWire,
+  PrivateChildrenValidationError,
+  validateChildrenRequest,
+  validateChildrenResult,
+} from "./serve-private-children"
+export type {
+  PrivateChildrenWireOutcome,
+  ServePrivateChildrenRequest,
+  ServePrivateChildrenResult,
+} from "./serve-private-children"
 
 export interface ServePrivateCancelQueuedRequest {
   v: 1
@@ -1376,7 +1393,7 @@ export class ServePrivatePeer {
     const initPromise = peerAtStart.request("initialize", {
       protocol: { name: "kilo-private", major: 1, minor: 0 },
       clientInfo: { name: "kilo-vscode", version: "7.4.11" },
-      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages"],
+      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages", "session/children"],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
 
@@ -1443,6 +1460,7 @@ export class ServePrivatePeer {
       let hasStatus = false
       let hasGet = false
       let hasMessages = false
+      let hasChildren = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
@@ -1451,6 +1469,7 @@ export class ServePrivatePeer {
         hasStatus = caps.includes("session/status")
         hasGet = caps.includes("session/get")
         hasMessages = caps.includes("session/messages")
+        hasChildren = caps.includes("session/children")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -1523,6 +1542,13 @@ export class ServePrivatePeer {
           const sess = (c as Record<string, unknown>).session as Record<string, unknown>
           if ((sess as Record<string, unknown>).messages) hasMessages = true
         } else if (c["session/messages"] === true) hasMessages = true
+        if ((c as Record<string, unknown>)["session/children"]) hasChildren = true
+        else if (
+          Array.isArray((c as Record<string, unknown>).session) &&
+          ((c as Record<string, unknown>).session as unknown[]).includes("children")
+        )
+          hasChildren = true
+        else if (((c as Record<string, unknown>).session as Record<string, unknown> | null)?.children) hasChildren = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
@@ -1531,10 +1557,11 @@ export class ServePrivatePeer {
           hasStatus = false
           hasGet = false
           hasMessages = false
+          hasChildren = false
         }
       }
 
-      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages) {
+      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
         if (this.peer === peerAtStart) this.peer = null
@@ -1775,6 +1802,34 @@ export class ServePrivatePeer {
     }
   }
 
+  privateChildrenOutcomeWithHandle(req: ServePrivateChildrenRequest): {
+    id: number
+    promise: Promise<PrivateChildrenWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateChildrenRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    if (!this.hasCapability("session/children")) throw new Error("Private peer missing session/children capability")
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    return requestChildrenOutcome(
+      peerAtCall as unknown as import("./serve-private-children").ChildrenRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => this.parseFailedInfo(e),
+      },
+      (id) =>
+        makeChildrenCancel(id, {
+          isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+          tryCancel: (msg) => this.tryCancelPending(id, msg),
+          invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+        }),
+      req,
+    )
+  }
+
   privateCancelQueuedWithHandle(req: ServePrivateCancelQueuedRequest): { id: number; promise: Promise<ServePrivateCancelQueuedResult>; cancel: (msg?: string) => boolean } {
     validateCancelQueuedRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
@@ -1849,6 +1904,13 @@ export class ServePrivatePeer {
       if (cap === "session/messages" && typeof c.session === "object" && c.session !== null) {
         const sess = c.session as Record<string, unknown>
         if (sess.messages) return true
+      }
+      if (cap === "session/children" && c["session/children"] === true) return true
+      if (cap === "session/children" && Array.isArray(c.session) && (c.session as unknown[]).includes("children"))
+        return true
+      if (cap === "session/children" && typeof c.session === "object" && c.session !== null) {
+        const sess = c.session as Record<string, unknown>
+        if (sess.children) return true
       }
     }
     return false
@@ -2251,6 +2313,26 @@ export class ServePrivatePeer {
       }
       return
     }
+    const childrenSafe =
+      reason === "children stale observer timeout" ||
+      reason === "children observer timeout cancel throw" ||
+      reason === "children observer timeout exact cancel miss" ||
+      reason === "children observer timeout"
+    if (childrenSafe) {
+      console.warn(`[Kilo PrivatePeer] observer timeout invalidates:`, {
+        op: "session/children",
+        invalidated: true,
+      })
+      try {
+        this.dispose()
+      } catch {
+        console.warn("[Kilo PrivatePeer] invalidate dispose failed:", {
+          op: "session/children",
+          invalidateFailed: true,
+        })
+      }
+      return
+    }
     console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch ${this.opts.epoch}: ${reason}`)
     try {
       this.dispose()
@@ -2294,7 +2376,7 @@ export class ServePrivatePeer {
 
   private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {
     for (const k of Object.keys(c)) {
-      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages") && c[k]) out.push(k)
+      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children") && c[k]) out.push(k)
     }
   }
 
@@ -2308,6 +2390,7 @@ export class ServePrivatePeer {
       else if (v === "status") out.push("session/status")
       else if (v === "get") out.push("session/get")
       else if (v === "messages") out.push("session/messages")
+      else if (v === "children") out.push("session/children")
     }
   }
 
@@ -2321,6 +2404,7 @@ export class ServePrivatePeer {
     if (sess.status) out.push("session/status")
     if (sess.get) out.push("session/get")
     if (sess.messages) out.push("session/messages")
+    if (sess.children) out.push("session/children")
   }
 
   private capsFromRecord(c: Record<string, unknown>): string[] {

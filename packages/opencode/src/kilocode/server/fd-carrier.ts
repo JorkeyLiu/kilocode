@@ -1,5 +1,5 @@
 import * as fs from "node:fs"
-import { Effect, Schema } from "effect"
+import { Effect, Option, Schema } from "effect"
 import { ErrorCode } from "@/private-worker/json-rpc"
 import { AppRuntime } from "@/effect/app-runtime"
 import { CancelQueuedDispatchService } from "@/kilocode/session/cancel-queued-dispatch"
@@ -13,6 +13,8 @@ import { SessionID } from "@/session/schema"
 import { NotFoundError } from "@/storage/storage"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import { acquireDrainControl, InstanceUnavailableDuringConfigRebuildError } from "@/kilocode/server/drain-control-acquire"
+import { InstanceStore } from "@/project/instance-store"
+import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { InstanceRef } from "@/effect/instance-ref"
 import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
@@ -68,6 +70,21 @@ export const FD_GET_VERSION = 1 as const
 export const FD_GET_OP = "session/get" as const
 export const FD_MESSAGES_VERSION = 1 as const
 export const FD_MESSAGES_OP = "session/messages" as const
+export const FD_CHILDREN_VERSION = 1 as const
+export const FD_CHILDREN_OP = "session/children" as const
+
+export interface FdChildrenRequest {
+  v: typeof FD_CHILDREN_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_CHILDREN_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    parentSessionId: string
+  }
+  payload: Record<string, never>
+}
 
 export interface FdMessagesRequest {
   v: typeof FD_MESSAGES_VERSION
@@ -181,6 +198,27 @@ function messagesFailed(
   }
 }
 
+function childrenFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_CHILDREN_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_CHILDREN_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
 const GET_MESSAGE_LIMIT = 200
 
 function boundGetMessage(msg: string): string {
@@ -192,6 +230,13 @@ const MESSAGES_MESSAGE_LIMIT = 200
 
 function boundMessagesMessage(msg: string): string {
   if (msg.length > MESSAGES_MESSAGE_LIMIT) return msg.slice(0, MESSAGES_MESSAGE_LIMIT)
+  return msg
+}
+
+const CHILDREN_MESSAGE_LIMIT = 200
+
+function boundChildrenMessage(msg: string): string {
+  if (msg.length > CHILDREN_MESSAGE_LIMIT) return msg.slice(0, CHILDREN_MESSAGE_LIMIT)
   return msg
 }
 
@@ -270,6 +315,39 @@ function validateMessagesRequest(raw: unknown): FdMessagesRequest {
   if (token.length === 0 || token.includes(":"))
     throw new Error("opId must be messages:<sessionId>:<token> with nonempty colon-free token")
   return raw as unknown as FdMessagesRequest
+}
+
+function validateChildrenRequest(raw: unknown): FdChildrenRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_CHILDREN_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_CHILDREN_OP) throw new Error("op must be session/children")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for children")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "parentSessionId"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (typeof ctx.parentSessionId !== "string" || !Schema.is(SessionID)(ctx.parentSessionId))
+    throw new Error("context.parentSessionId must be SessionID")
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for children")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const opId = raw.opId as string
+  const pid = ctx.parentSessionId as string
+  const prefix = `children:${pid}:`
+  if (!opId.startsWith(prefix))
+    throw new Error("opId must be children:<parentSessionId>:<token> with nonempty colon-free token")
+  const token = opId.slice(prefix.length)
+  if (token.length === 0 || token.includes(":"))
+    throw new Error("opId must be children:<parentSessionId>:<token> with nonempty colon-free token")
+  return raw as unknown as FdChildrenRequest
 }
 
 function validateStatusRequest(raw: unknown): FdStatusRequest {
@@ -681,6 +759,152 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(messagesFailed(req, "internal", "internal error", false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === "session/children") {
+        // B8 strict read-only: parent-directory bound Session.Info[] via drain-control snapshot, never mutates.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdChildrenRequest
+            try {
+              req = validateChildrenRequest(params)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return childrenFailed(fallbackIds(params), "validation.failed", boundChildrenMessage(msg), false)
+            }
+            const dir = canonicalDirectory(req.context.directory)
+            const preStore = yield* InstanceStore.Service
+            const preGate = Option.getOrElse(
+              yield* Effect.serviceOption(GenerationGate.Service),
+              () => GenerationGate.noop,
+            )
+            const preSnap = yield* preStore.snapshot(dir).pipe(
+              Effect.catch(() => Effect.succeed(Option.none())),
+              Effect.catchDefect(() => Effect.succeed(Option.none())),
+            )
+            if (Option.isNone(preSnap) && preGate.isBarrierActive(dir)) {
+              return childrenFailed(
+                req,
+                "InstanceUnavailableDuringConfigRebuild",
+                boundChildrenMessage(
+                  "Instance is unavailable during config rebuild; no active runtime for this request",
+                ),
+                true,
+              )
+            }
+            const preSvc = yield* Session.Service
+            const prePid = SessionID.make(req.context.parentSessionId)
+            const preParent = yield* preSvc.get(prePid).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const missing = err instanceof NotFoundError || (err as { _tag?: string })?._tag === "NotFoundError"
+                const code = missing ? "session.not_found" : "internal"
+                const message = missing ? "session not found" : "internal error"
+                return Effect.succeed({ tag: "fail" as const, code, message })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({ tag: "fail" as const, code: "internal", message: "internal error" })
+              }),
+            )
+            if (preParent.tag !== "ok") return childrenFailed(req, preParent.code, preParent.message, false)
+            try {
+              const preStored = canonicalDirectory(preParent.value.directory)
+              if (preStored !== dir) return childrenFailed(req, "scope_mismatch", "directory mismatch", false)
+            } catch {
+              return childrenFailed(req, "internal", "internal error", false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence
+                  ? boundChildrenMessage(err instanceof Error ? err.message : String(err))
+                  : "internal error"
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: childrenFailed(req, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: childrenFailed(req, "internal", "internal error", false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              const svc = yield* Session.Service
+              const pid = SessionID.make(req.context.parentSessionId)
+              const parent = yield* svc.get(pid).pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch((err: unknown) => {
+                  const missing = err instanceof NotFoundError || (err as { _tag?: string })?._tag === "NotFoundError"
+                  const code = missing ? "session.not_found" : "internal"
+                  const message = missing ? "session not found" : "internal error"
+                  return Effect.succeed({ tag: "fail" as const, code, message })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const, code: "internal", message: "internal error" })
+                }),
+              )
+              if (parent.tag !== "ok") return childrenFailed(req, parent.code, parent.message, false)
+              let stored: string
+              try {
+                stored = canonicalDirectory(parent.value.directory)
+              } catch {
+                return childrenFailed(req, "internal", "internal error", false)
+              }
+              if (stored !== dir) return childrenFailed(req, "scope_mismatch", "directory mismatch", false)
+              const list = yield* svc.children(pid).pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const, code: "internal", message: "internal error" })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const, code: "internal", message: "internal error" })
+                }),
+              )
+              if (list.tag !== "ok") return childrenFailed(req, list.code, list.message, false)
+              if (!Array.isArray(list.value)) return childrenFailed(req, "internal", "internal error", false)
+              for (const item of list.value) {
+                if (!Schema.is(Session.Info)(item)) return childrenFailed(req, "internal", "internal error", false)
+                if ((item as Session.Info).parentID !== req.context.parentSessionId)
+                  return childrenFailed(req, "internal", "internal error", false)
+                try {
+                  canonicalDirectory((item as Session.Info).directory)
+                } catch {
+                  return childrenFailed(req, "internal", "internal error", false)
+                }
+              }
+              return {
+                v: FD_CHILDREN_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_CHILDREN_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { children: list.value },
+              }
+            }).pipe(
+              Effect.provideService(InstanceRef, acquired.value.ctx),
+              Effect.ensuring(acquired.value.release),
+            )
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(childrenFailed(req, "internal", "internal error", false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(childrenFailed(req, "internal", "internal error", false))
               }),
             )
           }),

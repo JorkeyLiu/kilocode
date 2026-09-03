@@ -13,6 +13,7 @@ import {
 } from "./fixture-backend"
 import type { KiloConnectionService } from "../services/cli-backend"
 import { getErrorMessage } from "../kilo-provider-utils"
+import { observeSessionChildrenParityDetached } from "../kilo-provider/session-children-parity"
 import { isAbsolutePath } from "../path-utils"
 import { GitStatsPoller, type LocalStats } from "./GitStatsPoller"
 import { GitOps } from "./GitOps"
@@ -1142,11 +1143,35 @@ export class AgentManagerProvider implements Disposable {
         .then((r) => r.data ?? [])
         .catch(() => empty(`session.messages(${s.id})`))
       messages[s.id] = rows.map(summarizeMessage)
+      // SDK-first detached warn-only children parity (B8): the SDK result
+      // below stays the sole authority for the fixture snapshot. The private
+      // observation never mutates state, never retries/replays the SDK, and
+      // never changes this output or control flow.
+      let sdkKids: { data?: unknown; error?: unknown; response?: unknown } | unknown = null
       const kids = await client.session
         .children({ sessionID: s.id, directory: root })
-        .then((r) => r.data ?? [])
-        .catch(() => empty(`session.children(${s.id})`))
+        .then((r) => {
+          sdkKids = r as { data?: unknown; error?: unknown; response?: unknown }
+          return r.data ?? []
+        })
+        .catch((e: unknown) => {
+          sdkKids = e
+          return empty(`session.children(${s.id})`)
+        })
       children[s.id] = kids.map((kid) => (kid as { id?: string }).id ?? "").filter((id) => id.length > 0)
+      try {
+        observeSessionChildrenParityDetached(
+          this.connectionService,
+          sdkKids as { data?: unknown; error?: unknown; response?: unknown },
+          s.id,
+          root,
+        )
+      } catch {
+        console.warn("[Kilo Children] private parity observation failed (fail-closed):", {
+          op: "session/children",
+          observationFailed: true,
+        })
+      }
     }
     const mcp = await client.mcp
       .status({ directory: root })

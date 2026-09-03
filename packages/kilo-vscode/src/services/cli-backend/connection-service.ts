@@ -20,6 +20,8 @@ import {
   type PrivateStatusWireOutcome,
   type PrivateGetWireOutcome,
   type PrivateMessagesWireOutcome,
+  type PrivateChildrenWireOutcome,
+  type ServePrivateChildrenRequest,
   type ServePrivateGetRequest,
   type ServePrivateGetResult,
   type ServePrivateMessagesRequest,
@@ -29,6 +31,7 @@ import {
   compareUpdateParity,
 } from "./serve-private-peer"
 import * as crypto from "crypto"
+import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
 import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-provider/rename-session"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 
@@ -177,6 +180,7 @@ export class KiloConnectionService {
    * detached work, no new peer lifecycle.
    */
   private readonly deferredMessagesObservers: Map<string, () => void> = new Map()
+  private readonly deferredChildren: DeferredChildren = new DeferredChildren(this.privateAvailableListeners)
   /**
    * Definitively failed private get epoch (B6 LOCK-005/012): set only when
    * the current backend epoch's negotiation definitively fails (explicit
@@ -734,6 +738,7 @@ export class KiloConnectionService {
     this.clearAllDeferredStatusObservers()
     this.clearAllDeferredGetObservers()
     this.clearAllDeferredMessagesObservers()
+    this.deferredChildren.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -778,6 +783,7 @@ export class KiloConnectionService {
     this.clearAllDeferredStatusObservers()
     this.clearAllDeferredGetObservers()
     this.clearAllDeferredMessagesObservers()
+    this.deferredChildren.clearAll()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -953,22 +959,20 @@ export class KiloConnectionService {
     return this.privatePeer?.tryCancelPending(id, message) ?? false
   }
 
-  /**
-   * Owner-managed invalidation after a private observer timeout. The timed-out
-   * pending request is owned by the JsonRpcPeer and must not accumulate. This
-   * invalidates the private peer epoch; thereafter private parity remains
-   * disabled (fail-closed) until the next full backend connection/server reset
-   * (no automatic retry/reconnect, no detached work). The SDK result remains
-   * authoritative.
-   */
+  /** Owner invalidation after observer timeout; fail-closed until reset. SDK stays authoritative. */
   invalidatePrivatePeerOnObserverTimeout(reason: string): void {
     const peer = this.privatePeer
     if (!peer) return
-    const messagesSafe =
-      reason === "observer timeout cancel throw" ||
-      reason === "observer timeout exact cancel miss" ||
-      reason === "messages observer timeout"
-    if (messagesSafe) {
+    const childrenSafe = reason.startsWith("children ")
+    const messagesSafe = ["observer timeout cancel throw", "observer timeout exact cancel miss", "messages observer timeout"].includes(reason)
+    if (childrenSafe) {
+      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "session/children", invalidated: true })
+      try {
+        peer.invalidateOnObserverTimeout(reason)
+      } catch {
+        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "session/children", invalidateFailed: true })
+      }
+    } else if (messagesSafe) {
       console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch:`, {
         op: "session/messages",
         epoch: this.privateEpoch,
@@ -995,6 +999,7 @@ export class KiloConnectionService {
     this.clearAllDeferredStatusObservers()
     this.clearAllDeferredGetObservers()
     this.clearAllDeferredMessagesObservers()
+    this.deferredChildren.clearAll()
   }
 
   /**
@@ -1186,6 +1191,12 @@ export class KiloConnectionService {
     this.deferredMessagesObservers.clear()
   }
 
+  /** One-shot deferred children observation; dedupe/lifecycle live in DeferredChildren. */
+  addDeferredChildrenObserver(dir: string, parent: string, listener: () => void): () => void {
+    const store = this.deferredChildren
+    return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, parent, listener)
+  }
+
   private toError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error))
   }
@@ -1247,6 +1258,7 @@ export class KiloConnectionService {
     if (staleEpoch !== null) {
       this.clearDeferredGetObserversForEpoch(staleEpoch)
       this.clearDeferredMessagesObserversForEpoch(staleEpoch)
+      this.deferredChildren.clearForEpoch(staleEpoch)
     }
     if (this.privatePeer === peer) {
       this.privatePeer = null
@@ -1267,6 +1279,7 @@ export class KiloConnectionService {
     }
     this.clearDeferredGetObserversForEpoch(epochAtStart)
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
+    this.deferredChildren.clearForEpoch(epochAtStart)
     return true
   }
 
@@ -1306,6 +1319,7 @@ export class KiloConnectionService {
     this.clearDeferredStatusObserversForEpoch(epochAtStart)
     this.clearDeferredGetObserversForEpoch(epochAtStart)
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
+    this.deferredChildren.clearForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
 
@@ -1348,6 +1362,7 @@ export class KiloConnectionService {
       this.clearDeferredStatusObserversForEpoch(server.epoch)
       this.clearDeferredGetObserversForEpoch(server.epoch)
       this.clearDeferredMessagesObserversForEpoch(server.epoch)
+      this.deferredChildren.clearForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
     }
@@ -2281,6 +2296,29 @@ export class KiloConnectionService {
       return true
     }
     return { id: handle.id, promise, cancel }
+  }
+
+  privateChildrenOutcomeWithHandle(req: ServePrivateChildrenRequest): {
+    id: number
+    promise: Promise<PrivateChildrenWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapChildrenOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("children stale observer timeout"),
+      peerAtCall.privateChildrenOutcomeWithHandle(req),
+      req,
+    )
   }
 
   /**
