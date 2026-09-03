@@ -107,6 +107,18 @@ describe("isHotPatch", () => {
     expect(isHotPatch({ model: "test", permission: { bash: "ask" } })).toBe(true)
   })
 
+  test("returns true for protected_files key (LOCK-003)", () => {
+    expect(isHotPatch({ protected_files: ["src/secret.ts"] })).toBe(true)
+  })
+
+  test("returns true for protected_files mixed with other hot keys (LOCK-003)", () => {
+    expect(isHotPatch({ model: "test", protected_files: ["src/secret.ts"] })).toBe(true)
+  })
+
+  test("returns false for protected_files mixed with a cold key (LOCK-003)", () => {
+    expect(isHotPatch({ protected_files: ["src/secret.ts"], provider: { openai: { apiKey: "sk-123" } } })).toBe(false)
+  })
+
   test("returns false for unknown key (cold)", () => {
     expect(isHotPatch({ unknown_key: "value" })).toBe(false)
   })
@@ -125,6 +137,7 @@ describe("isHotPatch", () => {
       "default_agent",
       "mode",
       "permission", // LOCK-002
+      "protected_files", // LOCK-003
     ]
     for (const key of lockedHotKeys) {
       expect(isHotPatch({ [key]: "test" })).toBe(true)
