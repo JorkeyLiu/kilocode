@@ -146,9 +146,13 @@ const CMD_RECONNECT_SERVER = "kilo-code.new.e2eFixture.reconnectServer"
 const CMD_SEED_CREDENTIAL = "kilo-code.new.e2eFixture.seedCredential"
 const CMD_LLM_REQUESTS = "kilo-code.new.e2eFixture.llmRequests"
 const CMD_LLM_RESET = "kilo-code.new.e2eFixture.llmRequestsReset"
+const CMD_ABORT_ATTEMPTS = "kilo-code.new.e2eFixture.abortAttempts"
+const CMD_ABORT_RESET = "kilo-code.new.e2eFixture.abortAttemptsReset"
 const CMD_PRIVATE_PEER_STATUS = "kilo-code.new.e2eFixture.privatePeerStatus"
 const CMD_SESSION_UPDATE = "kilo-code.new.e2eFixture.sessionUpdate"
 const CMD_PRIVATE_REPLAY = "kilo-code.new.e2eFixture.privateReplay"
+const CMD_SSE_TIMELINE_START = "kilo-code.new.e2eFixture.sseTimelineStart"
+const CMD_SSE_TIMELINE_STOP = "kilo-code.new.e2eFixture.sseTimelineStop"
 const CMD_RELOAD_AM = "kilo-code.new.e2eFixture.reloadAgentManagerWebview"
 const AM_VIEW_TYPE = "kilo-code.new.AgentManagerPanel"
 
@@ -273,6 +277,53 @@ async function resetLlmRequests(vscodeApi: typeof vscode): Promise<void> {
  * small/session per request, LOCK-008 diagnostics preserved). The harness
  * asserts the same store directly per phase; this is the durable evidence copy.
  */
+/**
+ * Fixture-only abort-attempt reset at real-session boundary entry. Issued once
+ * per run; never between Stop A and Stop B so the run-level artifact stays
+ * cumulative.
+ */
+async function resetAbortAttempts(vscodeApi: typeof vscode): Promise<void> {
+  await vscodeApi.commands.executeCommand(CMD_ABORT_RESET)
+}
+
+/**
+ * Run-level cumulative abort-attempt evidence (`<scratch>/abort-attempts.json`):
+ * the existing fixture observer records stay bounded/redacted in shape; this
+ * only wraps them in the run envelope. A missing/malformed observer command
+ * result fails the run — it is never represented as a valid empty artifact.
+ * A valid empty result (`{total:0,entries:[]}`) is preserved as-is.
+ */
+async function writeAbortAttemptsEvidence(
+  vscodeApi: typeof vscode,
+  scratch: string,
+  scenario: string,
+): Promise<void> {
+  const result = (await vscodeApi.commands.executeCommand(CMD_ABORT_ATTEMPTS)) as unknown
+  if (!result || typeof result !== "object" || Array.isArray(result)) {
+    throw new Error("probe runner: abortAttempts command result missing (expected {total, entries})")
+  }
+  const rec = result as Record<string, unknown>
+  if (typeof rec.total !== "number" || !Number.isInteger(rec.total) || rec.total < 0) {
+    throw new Error("probe runner: abortAttempts command result malformed (total must be integer >= 0)")
+  }
+  if (!Array.isArray(rec.entries)) {
+    throw new Error("probe runner: abortAttempts command result malformed (entries must be array)")
+  }
+  writeFileSync(
+    join(scratch, "abort-attempts.json"),
+    JSON.stringify(
+      {
+        scenario,
+        collectedAt: new Date().toISOString(),
+        total: rec.total,
+        entries: rec.entries,
+      },
+      null,
+      2,
+    ),
+  )
+}
+
 async function writeLlmRequestsEvidence(vscodeApi: typeof vscode, scratch: string, scenario: string): Promise<void> {
   const result = (await vscodeApi.commands.executeCommand(CMD_LLM_REQUESTS)) as {
     records: unknown[]
@@ -2086,7 +2137,13 @@ async function serviceWorktreeRemovalBoundary(
  *   1. backend truth: on each `real-snap-N-request` marker, executes the
  *      env-gated backendSnapshot fixture command against the shared served
  *      backend and writes `real-snap-N.json` (the harness asserts on it),
- *   2. panel close/reopen: on `real-reopen-request`, closes the Agent Manager
+ *   2. SSE timeline windows (LOCK-049/050/051): on each
+ *      `sse-timeline-A/B-start-request` marker, starts the fixture-only
+ *      bounded redacted timeline observer and writes
+ *      `sse-timeline-A/B-started`; on each `sse-timeline-A/B-stop-request`
+ *      marker, stops it and writes the redacted `sse-timeline-abort-A/B.json`
+ *      the harness asserts around Stop A / Stop B,
+ *   3. panel close/reopen: on `real-reopen-request`, closes the Agent Manager
  *      editor tab, reopens it, waits for the fresh webview's readiness,
  *      settles the real session list, then writes `real-reopen-ready` so the
  *      harness can assert transcript rehydration from the real backend.
@@ -2094,6 +2151,7 @@ async function serviceWorktreeRemovalBoundary(
  */
 async function serviceRealSessionBoundary(vscodeApi: typeof vscode, scratch: string, fixtureId: string): Promise<void> {
   await resetLlmRequests(vscodeApi)
+  await resetAbortAttempts(vscodeApi)
   // Canonical credential provisioning (real SecretStorage, no bypass):
   // the seeded kilo.jsonc already carries the credential ref and default model;
   // store the secret through the production storeSecret path and converge
@@ -2137,6 +2195,26 @@ async function serviceRealSessionBoundary(vscodeApi: typeof vscode, scratch: str
         writeFileSync(join(scratch, "rs-credential.json"), JSON.stringify(seeded, null, 2))
       } catch {
         failCredential(scratch, "rs-credential.json")
+      }
+    }
+    // SSE timeline windows around Stop A / Stop B: the harness brackets each
+    // Stop with start/stop markers; the observer is fixture-only, bounded, and
+    // redacted (no payloads), and stop writes the durable timeline artifact.
+    for (const tag of ["A", "B"]) {
+      const startReq = join(scratch, `sse-timeline-${tag}-start-request`)
+      if (existsSync(startReq)) {
+        rmSync(startReq)
+        const started = await vscodeApi.commands.executeCommand(CMD_SSE_TIMELINE_START)
+        writeFileSync(join(scratch, `sse-timeline-${tag}-started`), JSON.stringify(started))
+      }
+      const stopReq = join(scratch, `sse-timeline-${tag}-stop-request`)
+      if (existsSync(stopReq)) {
+        rmSync(stopReq)
+        const snapshot = await vscodeApi.commands.executeCommand(CMD_SSE_TIMELINE_STOP)
+        writeFileSync(join(scratch, `sse-timeline-abort-${tag}.json`), JSON.stringify(snapshot, null, 2))
+        if (tag === "B") {
+          await writeAbortAttemptsEvidence(vscodeApi, scratch, "real-session")
+        }
       }
     }
     const reopen = join(scratch, "real-reopen-request")

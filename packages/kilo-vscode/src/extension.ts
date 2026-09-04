@@ -30,6 +30,7 @@ import { createMementoCursorStore } from "./private-worker/observation-cursor-st
 import { PrivateObservationLifecycleTriggers } from "./private-worker/private-observation-lifecycle-triggers"
 import { resolveCanonicalDbPath } from "./private-worker/canonical-db-path"
 import { isE2EFixtureEnabled } from "./util/e2e-fixture"
+import { SseTimelineFixture, resolveTimelineSessionId } from "./services/cli-backend/sse-timeline"
 
 let agentManager: AgentManagerProvider | undefined
 let shuttingDown = false
@@ -109,6 +110,11 @@ export function activate(context: vscode.ExtensionContext) {
 
   const connectionService = new KiloConnectionService(context)
   const notebookBridge = createNotebookBridge(connectionService)
+  // Fixture-only bounded SSE timeline observer (LOCK-049/050/051): redacted
+  // arrival-order metadata of delivered events for the basic real-session Stop
+  // flow. Wired to the existing onEvent path; commands registered below under
+  // KILO_E2E_FIXTURE only.
+  const sseTimeline = new SseTimelineFixture()
 
   const canonicalConfig = new CanonicalConfigService(context, {
     roots: new Roots(vscode.workspace.workspaceFolders?.[0]?.uri.fsPath),
@@ -486,8 +492,28 @@ export function activate(context: vscode.ExtensionContext) {
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.llmRequestsReset", async () => {
         return connectionService.fixtureLlmRequestsReset()
       }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.abortAttempts", async () => {
+        const { fixtureAbortAttempts, fixtureAbortAttemptCount } = await import("./kilo-provider/abort")
+        return { entries: fixtureAbortAttempts(), total: fixtureAbortAttemptCount() }
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.abortAttemptsReset", async () => {
+        const { fixtureAbortAttemptsReset } = await import("./kilo-provider/abort")
+        return fixtureAbortAttemptsReset()
+      }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.sseReconnect", async () => {
         return connectionService.fixtureSseReconnect()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sseTimelineStart", async () => {
+        return sseTimeline.start(connectionService.onEvent.bind(connectionService), resolveTimelineSessionId)
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sseTimelineStop", async () => {
+        return sseTimeline.stop()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sseTimelineRead", async () => {
+        return sseTimeline.read()
+      }),
+      vscode.commands.registerCommand("kilo-code.new.e2eFixture.sseTimelineReset", async () => {
+        return sseTimeline.reset()
       }),
       vscode.commands.registerCommand("kilo-code.new.e2eFixture.killServer", async () => {
         return connectionService.fixtureKillServer()
@@ -690,6 +716,7 @@ export function activate(context: vscode.ExtensionContext) {
       attention.dispose()
       browserAutomationService.dispose()
       notebookBridge.dispose()
+      sseTimeline.dispose()
       connectionService.dispose()
     },
   })

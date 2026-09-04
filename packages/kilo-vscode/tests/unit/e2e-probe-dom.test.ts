@@ -6,10 +6,17 @@
  * captured (never swallowed) trigger-click errors.
  */
 
-import { describe, expect, it } from "bun:test"
+import { afterEach, beforeEach, describe, expect, it } from "bun:test"
 import { readFileSync } from "node:fs"
 import { join } from "node:path"
-import { agentOptionFailure, decideNewSessionCandidates, type ModeSwitcherSnapshot } from "../../script/e2e-probe-dom"
+import {
+  TIMELINE_CLEANUP_DIAGNOSTIC_LIMIT,
+  agentOptionFailure,
+  decideNewSessionCandidates,
+  runWithTimelineStop,
+  type ModeSwitcherSnapshot,
+  type TimelinePrimaryError,
+} from "../../script/e2e-probe-dom"
 
 const interactive = (options: string[]): ModeSwitcherSnapshot => ({
   triggerRendered: true,
@@ -338,5 +345,98 @@ describe("clickRealNewSessionAction deadline/retry + redaction contract (LOCK-re
     // with bounded retry delay, elapsed should be close to deadline, not 250+delta
     // allow generous upper bound but must not have expanded 1000ms click
     expect(elapsed).toBeLessThan(500)
+  })
+})
+
+describe("runWithTimelineStop primary-preserving cleanup (LOCK-079)", () => {
+  const logged: string[] = []
+  const original = console.error
+  beforeEach(() => {
+    logged.length = 0
+    console.error = (...args: unknown[]) => {
+      logged.push(args.map((a) => String(a)).join(" "))
+    }
+  })
+  afterEach(() => {
+    logged.length = 0
+    console.error = original
+  })
+
+  it("resolves after successful work and cleanup", async () => {
+    let stops = 0
+    await runWithTimelineStop(
+      "A",
+      async () => {},
+      async () => {
+        stops += 1
+      },
+    )
+    expect(stops).toBe(1)
+    expect(logged).toHaveLength(0)
+  })
+
+  it("rejects with the cleanup error when work succeeds but cleanup fails", async () => {
+    const cleanup = new Error("stop failed")
+    let caught: unknown
+    try {
+      await runWithTimelineStop(
+        "A",
+        async () => {},
+        async () => {
+          throw cleanup
+        },
+      )
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBe(cleanup)
+  })
+
+  it("rethrows the same primary object when cleanup succeeds", async () => {
+    const primary = new Error("primary Stop failed")
+    let stops = 0
+    let caught: unknown
+    try {
+      await runWithTimelineStop(
+        "A",
+        async () => {
+          throw primary
+        },
+        async () => {
+          stops += 1
+        },
+      )
+    } catch (err) {
+      caught = err
+    }
+    expect(stops).toBe(1)
+    expect(caught).toBe(primary)
+    expect((caught as TimelinePrimaryError).timelineCleanupError).toBeUndefined()
+  })
+
+  it("preserves primary identity and exposes bounded secondary diagnostic on dual failure", async () => {
+    const primary = Object.assign(new Error("primary asserted"), { code: "PRIMARY" })
+    const secondary = new Error(`cleanup failed ${"x".repeat(TIMELINE_CLEANUP_DIAGNOSTIC_LIMIT + 50)}`)
+    let caught: unknown
+    try {
+      await runWithTimelineStop(
+        "B",
+        async () => {
+          throw primary
+        },
+        async () => {
+          throw secondary
+        },
+      )
+    } catch (err) {
+      caught = err
+    }
+    expect(caught).toBe(primary)
+    const diag = (caught as TimelinePrimaryError).timelineCleanupError
+    expect(typeof diag).toBe("string")
+    expect(diag!.length).toBeLessThanOrEqual(TIMELINE_CLEANUP_DIAGNOSTIC_LIMIT)
+    expect(Object.keys(caught as object)).not.toContain("timelineCleanupError")
+    expect(logged.join("\n")).toContain("timeline-stop B cleanup also failed")
+    expect(logged.join("\n").length).toBeLessThan(TIMELINE_CLEANUP_DIAGNOSTIC_LIMIT + 200)
   })
 })

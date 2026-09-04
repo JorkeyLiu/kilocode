@@ -1849,3 +1849,287 @@ describe("validateLcTimeline exactly once and order", () => {
     expect(validateLcTimeline(dup)).toContain("exactly once")
   })
 })
+
+describe("collectEvidence optional SSE timeline handoff (absence allowed, presence validated)", () => {
+  const realSession = new Set(["real-session"])
+  function seededRealSession(root: string): { scratch: string; workspace: string; staging: string } {
+    const scratch = join(root, "scratch")
+    const workspace = join(root, "workspace")
+    const staging = join(root, "staging")
+    mkdirSync(scratch, { recursive: true })
+    mkdirSync(staging, { recursive: true })
+    mkdirSync(join(workspace, ".kilo"), { recursive: true })
+    writeFileSync(join(scratch, "plan.json"), JSON.stringify({ sourceId: "s-A" }))
+    writeFileSync(join(scratch, "runner-pid"), "4242")
+    writeFileSync(join(scratch, "real-dom-evidence"), JSON.stringify({ url: "vscode-webview://x" }))
+    writeFileSync(
+      join(scratch, "llm-requests.jsonl"),
+      JSON.stringify({ providerID: "e2e-local", modelID: "e2e-model", sessionID: "s" }) + "\n",
+    )
+    writeFileSync(join(scratch, "llm-requests-real-session.json"), JSON.stringify({ scenario: "real-session" }))
+    writeFileSync(join(scratch, "llm-matrix-real-session-final.json"), JSON.stringify({ phase: "final" }))
+    writeFileSync(join(scratch, "real-snap-1.json"), JSON.stringify({ requestedAt: "t" }))
+    writeFileSync(join(scratch, "canonical-gate.json"), JSON.stringify({ gate: "ok" }))
+    writeFileSync(join(scratch, "canonical-archive-before.json"), JSON.stringify({ before: true }))
+    writeFileSync(join(scratch, "canonical-archive-after.json"), JSON.stringify({ after: true }))
+    writeFileSync(join(scratch, "rs-cstate.json"), JSON.stringify({ state: "ready" }))
+    writeFileSync(join(scratch, "rs-credential.json"), JSON.stringify({ provisioned: true }))
+    writeFileSync(join(workspace, ".kilo", "kilo.json"), JSON.stringify({ provider: {} }))
+    writeFileSync(join(workspace, ".kilo", "kilo.jsonc"), JSON.stringify({ provider: {} }))
+    return { scratch, workspace, staging }
+  }
+  function validTimeline(): Record<string, unknown> {
+    return {
+      schema: "kilo-sse-timeline/1",
+      startedAt: "2026-09-04T00:00:00.000Z",
+      stoppedAt: "2026-09-04T00:00:05.000Z",
+      observing: false,
+      cap: 200,
+      count: 1,
+      dropped: 0,
+      truncated: false,
+      entries: [{ seq: 0, at: "2026-09-04T00:00:01.000Z", kind: "session.status", sessionID: "ses_A", status: "busy" }],
+    }
+  }
+  function handoff(root: string, scratch: string, workspace: string, staging: string) {
+    return collectEvidence({
+      staging,
+      scratch,
+      workspace,
+      scenarios: realSession,
+      fixtureId: "e2e-probe-1234",
+      startedAt: Date.now(),
+      probePid: 4242,
+      success: true,
+      destination: resolve(join(root, "dest")),
+    })
+  }
+  it("absence stays allowed (status complete)", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("complete")
+      expect(manifest.missing).toEqual([])
+      expect(manifest.malformed).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("present valid artifact is copied and handoff stays complete", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      writeFileSync(join(scratch, "sse-timeline-abort-A.json"), JSON.stringify(validTimeline()))
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("complete")
+      expect(manifest.malformed).toEqual([])
+      expect(manifest.files.some((f) => f.dest === "sse-timeline-abort-A.json")).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("present malformed artifact fails the handoff", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      writeFileSync(join(scratch, "sse-timeline-abort-A.json"), "{not json")
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("sse-timeline-abort-A.json")
+      expect(manifest.files.some((f) => f.dest === "sse-timeline-abort-A.json")).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("present secret-bearing artifact fails the handoff", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      const leaked = { ...validTimeline(), count: 1, entries: [{ seq: 0, at: "2026-09-04T00:00:01.000Z", kind: "session.status", sessionID: "e2e-fixture-key" }] }
+      writeFileSync(join(scratch, "sse-timeline-abort-B.json"), JSON.stringify(leaked))
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("sse-timeline-abort-B.json")
+      expect(manifest.notes.some((n) => n.includes("sse-timeline-abort-B.json"))).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe("validateAbortAttempts run-level export (fixture-only, absence allowed)", () => {
+  const realSession = new Set(["real-session"])
+  function seededRealSession(root: string): { scratch: string; workspace: string; staging: string } {
+    const scratch = join(root, "scratch")
+    const workspace = join(root, "workspace")
+    const staging = join(root, "staging")
+    mkdirSync(scratch, { recursive: true })
+    mkdirSync(staging, { recursive: true })
+    mkdirSync(join(workspace, ".kilo"), { recursive: true })
+    writeFileSync(join(scratch, "plan.json"), JSON.stringify({ sourceId: "s-A" }))
+    writeFileSync(join(scratch, "runner-pid"), "4242")
+    writeFileSync(join(scratch, "real-dom-evidence"), JSON.stringify({ url: "vscode-webview://x" }))
+    writeFileSync(
+      join(scratch, "llm-requests.jsonl"),
+      JSON.stringify({ providerID: "e2e-local", modelID: "e2e-model", sessionID: "s" }) + "\n",
+    )
+    writeFileSync(join(scratch, "llm-requests-real-session.json"), JSON.stringify({ scenario: "real-session" }))
+    writeFileSync(join(scratch, "llm-matrix-real-session-final.json"), JSON.stringify({ phase: "final" }))
+    writeFileSync(join(scratch, "real-snap-1.json"), JSON.stringify({ requestedAt: "t" }))
+    writeFileSync(join(scratch, "canonical-gate.json"), JSON.stringify({ gate: "ok" }))
+    writeFileSync(join(scratch, "canonical-archive-before.json"), JSON.stringify({ before: true }))
+    writeFileSync(join(scratch, "canonical-archive-after.json"), JSON.stringify({ after: true }))
+    writeFileSync(join(scratch, "rs-cstate.json"), JSON.stringify({ state: "ready" }))
+    writeFileSync(join(scratch, "rs-credential.json"), JSON.stringify({ provisioned: true }))
+    writeFileSync(join(workspace, ".kilo", "kilo.json"), JSON.stringify({ provider: {} }))
+    writeFileSync(join(workspace, ".kilo", "kilo.jsonc"), JSON.stringify({ provider: {} }))
+    return { scratch, workspace, staging }
+  }
+  function validAbort(): Record<string, unknown> {
+    return {
+      scenario: "real-session",
+      collectedAt: "2026-09-04T00:00:06.000Z",
+      total: 1,
+      entries: [
+        {
+          sessionID: "ses_A",
+          directory: "/tmp/ws",
+          startedAt: 1000,
+          endedAt: 1010,
+          durationMs: 10,
+          ok: true,
+          attempt: 1,
+          status: 200,
+          data: true,
+        },
+      ],
+    }
+  }
+  function handoff(root: string, scratch: string, workspace: string, staging: string) {
+    return collectEvidence({
+      staging,
+      scratch,
+      workspace,
+      scenarios: realSession,
+      fixtureId: "e2e-probe-1234",
+      startedAt: Date.now(),
+      probePid: 4242,
+      success: true,
+      destination: resolve(join(root, "dest")),
+    })
+  }
+  it("accepts the cumulative envelope and preserves the observer record shape", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    expect(validateAbortAttempts(validAbort())).toBeNull()
+  })
+  it("absence stays allowed (status complete)", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("complete")
+      expect(manifest.malformed).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("present valid artifact is copied and handoff stays complete", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      writeFileSync(join(scratch, "abort-attempts.json"), JSON.stringify(validAbort()))
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("complete")
+      expect(manifest.malformed).toEqual([])
+      expect(manifest.files.some((f) => f.dest === "abort-attempts.json")).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("present malformed artifact fails the handoff", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      writeFileSync(join(scratch, "abort-attempts.json"), "{not json")
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("abort-attempts.json")
+      expect(manifest.files.some((f) => f.dest === "abort-attempts.json")).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("rejects total/entries divergence (no receipt inference)", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    const bad = { ...validAbort(), total: 2 }
+    expect(validateAbortAttempts(bad)).toContain("total must equal entries length")
+  })
+  it("rejects forbidden record keys", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    const bad = {
+      ...validAbort(),
+      total: 1,
+      entries: [{ ...(validAbort().entries as Array<Record<string, unknown>>)[0], payload: {} }],
+    }
+    expect(validateAbortAttempts(bad)).toContain("forbidden key")
+  })
+  it("rejects non-canonical parseable collectedAt (date-only)", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    expect(validateAbortAttempts({ ...validAbort(), collectedAt: "2026-09-04" })).toContain("canonical ISO")
+  })
+  it("rejects non-canonical parseable collectedAt (missing milliseconds)", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    expect(validateAbortAttempts({ ...validAbort(), collectedAt: "2026-09-04T00:00:06Z" })).toContain("canonical ISO")
+  })
+  it("rejects non-canonical parseable collectedAt (numeric offset instead of UTC)", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    expect(validateAbortAttempts({ ...validAbort(), collectedAt: "2026-09-04T00:00:06.000+00:00" })).toContain(
+      "canonical ISO",
+    )
+  })
+  it("accepts canonical collectedAt round-trip", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    expect(validateAbortAttempts({ ...validAbort(), collectedAt: new Date(1000).toISOString() })).toBeNull()
+  })
+  it("rejects float timing values", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    const base = (validAbort().entries as Array<Record<string, unknown>>)[0]!
+    const bad = { ...validAbort(), entries: [{ ...base, durationMs: 10.5 }] }
+    expect(validateAbortAttempts(bad)).toContain("durationMs invalid")
+  })
+  it("rejects negative timing values", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    const base = (validAbort().entries as Array<Record<string, unknown>>)[0]!
+    const bad = { ...validAbort(), entries: [{ ...base, startedAt: -1, endedAt: 9, durationMs: 10 }] }
+    expect(validateAbortAttempts(bad)).toContain("startedAt invalid")
+  })
+  it("rejects endedAt before startedAt", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    const bad = {
+      ...validAbort(),
+      entries: [{ ...((validAbort().entries as Array<Record<string, unknown>>)[0]!), startedAt: 1010, endedAt: 1000, durationMs: 0 }],
+    }
+    expect(validateAbortAttempts(bad)).toContain("endedAt before startedAt")
+  })
+  it("rejects durationMs inequality (producer Date.now contract)", async () => {
+    const { validateAbortAttempts } = await import("../../script/e2e-evidence")
+    const base = (validAbort().entries as Array<Record<string, unknown>>)[0]!
+    const bad = { ...validAbort(), entries: [{ ...base, durationMs: 11 }] }
+    expect(validateAbortAttempts(bad)).toContain("durationMs must equal endedAt-startedAt")
+  })
+  it("runner fails closed on null/malformed abortAttempts result (no empty-artifact fallback)", async () => {
+    const { readFileSync } = await import("node:fs")
+    const { join } = await import("node:path")
+    const src = readFileSync(join(import.meta.dirname, "../e2e/runner.ts"), "utf8")
+    const start = src.indexOf("async function writeAbortAttemptsEvidence")
+    const end = src.indexOf("async function writeLlmRequestsEvidence", start)
+    const slice = src.slice(start, end === -1 ? start + 2000 : end)
+    expect(slice).not.toContain("?? 0")
+    expect(slice).not.toContain("?? []")
+    expect(slice).toContain("abortAttempts command result missing")
+    expect(slice).toContain("abortAttempts command result malformed")
+    expect(slice).toContain("Number.isInteger")
+    expect(slice).toContain("Array.isArray")
+  })
+})

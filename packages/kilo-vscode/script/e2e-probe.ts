@@ -235,6 +235,7 @@ import {
   validateGateEvidence,
 } from "./e2e-canonical"
 import {
+  abortRealSessionsWithTimeline,
   activeTabId,
   activeTabLabel,
   agentOptions,
@@ -1301,14 +1302,6 @@ async function clickNewSession(browser: Browser, timeoutMs: number): Promise<Fra
   return frame
 }
 
-/** Click the real Stop button (production abort path: webview → extension → SDK abort). */
-async function clickStop(frame: Frame, timeoutMs: number): Promise<void> {
-  const stop = frame.locator('button[aria-label="Stop"]').first()
-  await stop.waitFor({ state: "visible", timeout: timeoutMs })
-  await stop.click({ timeout: timeoutMs })
-  console.log("[probe] clicked Stop (production abort path)")
-}
-
 /** Concatenated user-message text of one session from the backend snapshot. */
 function userText(snap: BackendSnapshot, id: string): string {
   const user = (snap.messages[id] ?? []).find((m) => m.role === "user")
@@ -1502,30 +1495,7 @@ async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scrat
   // --- Phase 4 (H-11 abort, independent control): abort A, then B ---
   // The backend status endpoint deletes idle sessions from its map (absent
   // status == idle), so the probes below normalize `undefined` to "idle".
-  await clickTab(frame, sessionA.id, timeout)
-  await clickStop(frame, timeout)
-  await snap.waitFor(
-    (s) => {
-      const a = s.statuses[sessionA.id] ?? "idle"
-      if (a !== "idle") return `session A status=${a} expected idle after abort`
-      if (s.statuses[sessionB.id] !== "busy")
-        return `session B status=${s.statuses[sessionB.id]} expected still busy (independent control)`
-      return undefined
-    },
-    60_000,
-    "abort A leaves A idle and B busy",
-  )
-  await clickTab(frame, sessionB.id, timeout)
-  await clickStop(frame, timeout)
-  await snap.waitFor(
-    (s) => {
-      const b = s.statuses[sessionB.id] ?? "idle"
-      if (b !== "idle") return `session B status=${b} expected idle after abort`
-      return undefined
-    },
-    60_000,
-    "abort B leaves B idle",
-  )
+  await abortRealSessionsWithTimeline(frame, snap, sessionA.id, sessionB.id, scratch, timeout)
 
   // --- Phase 5 (H-11 close): close tab A; the backend session must persist ---
   await clickTab(frame, sessionA.id, timeout)

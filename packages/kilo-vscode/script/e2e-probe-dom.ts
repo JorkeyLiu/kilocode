@@ -11,6 +11,7 @@ import { join } from "node:path"
 import type { Browser, Frame, Page } from "@playwright/test"
 import type { BackendSnapshot } from "../src/agent-manager/fixture-backend"
 import { isWrongPin, withPin, type PinExpectation } from "./e2e-pin"
+import { validateAbortAttempts, validateSseTimeline } from "./e2e-evidence"
 
 const LC_SELECT_VERSION = "lc-select-v1"
 
@@ -688,6 +689,176 @@ export async function clickTab(frame: Frame, tabId: string, timeoutMs: number): 
     void err
     throw tabStageError("click", targetHash, lcBucket(remainingClick))
   }
+}
+
+/** Click the real Stop button (production abort path: webview → extension → SDK abort). */
+export async function clickStop(frame: Frame, timeoutMs: number): Promise<void> {
+  const stop = frame.locator('button[aria-label="Stop"]').first()
+  await stop.waitFor({ state: "visible", timeout: timeoutMs })
+  await stop.click({ timeout: timeoutMs })
+  console.log("[probe] clicked Stop (production abort path)")
+}
+
+/**
+ * Fixture-only bounded SSE timeline windows around Stop A / Stop B
+ * (LOCK-049/050/051): the harness brackets each Stop with scratch markers;
+ * the extension-host runner starts/stops the redacted observer and writes the
+ * durable `sse-timeline-abort-A/B.json` artifact. The artifact carries only
+ * redacted delivered-event metadata in arrival order; its timestamps are
+ * client-observed receipt times, never wire/server claims.
+ */
+export async function startSseTimelineWindow(scratch: string, tag: string): Promise<void> {
+  writeFileSync(join(scratch, `sse-timeline-${tag}-start-request`), "ok")
+  await waitForFile(join(scratch, `sse-timeline-${tag}-started`), 60_000, `sse-timeline-${tag}-started marker`)
+  console.log(`[probe] SSE timeline window ${tag} started`)
+}
+
+export async function stopSseTimelineWindow(scratch: string, tag: string): Promise<unknown> {
+  writeFileSync(join(scratch, `sse-timeline-${tag}-stop-request`), "ok")
+  const file = join(scratch, `sse-timeline-abort-${tag}.json`)
+  await waitForFile(file, 60_000, `sse-timeline-abort-${tag}.json`)
+  const raw = readFileSync(file, "utf8")
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error(`probe: sse-timeline-abort-${tag}.json malformed`)
+  }
+  const err = validateSseTimeline(parsed)
+  if (err) throw new Error(`probe: sse-timeline-abort-${tag}.json invalid: ${err}`)
+  console.log(`[probe] SSE timeline window ${tag} stopped`)
+  return parsed
+}
+
+/** Run-level abort-attempt artifact written by the runner after Stop B. */
+export const ABORT_ATTEMPTS_FILE = "abort-attempts.json"
+
+/**
+ * Marker-driven acknowledgement of the cumulative run-level abort export: waits
+ * for `abort-attempts.json` after the Stop B timeline artifact, then validates
+ * the fixture-only bounded/redacted envelope. Absence fails here (the Stop B
+ * export must exist once the timeline artifact was acknowledged); the evidence
+ * handoff separately treats absence as allowed.
+ */
+export async function waitForAbortAttempts(scratch: string, timeoutMs = 60_000): Promise<unknown> {
+  const file = join(scratch, ABORT_ATTEMPTS_FILE)
+  await waitForFile(file, timeoutMs, ABORT_ATTEMPTS_FILE)
+  const raw = readFileSync(file, "utf8")
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error("probe: abort-attempts.json malformed")
+  }
+  const err = validateAbortAttempts(parsed)
+  if (err) throw new Error(`probe: abort-attempts.json invalid: ${err}`)
+  console.log("[probe] abort attempts export acknowledged")
+  return parsed
+}
+
+/** Bound for the secondary timeline-cleanup diagnostic (same bound as timeline strings). */
+export const TIMELINE_CLEANUP_DIAGNOSTIC_LIMIT = 500
+
+/** Primary error with an optional bounded non-enumerable cleanup diagnostic. */
+export type TimelinePrimaryError = Error & { timelineCleanupError?: string }
+
+function cleanupDiagnostic(cleanup: unknown): string {
+  const msg = cleanup instanceof Error ? cleanup.message : String(cleanup)
+  return msg.length <= TIMELINE_CLEANUP_DIAGNOSTIC_LIMIT ? msg : msg.slice(0, TIMELINE_CLEANUP_DIAGNOSTIC_LIMIT)
+}
+
+/**
+ * Stop-bracketed work with primary-preserving cleanup (LOCK-079). The stop is
+ * always attempted even when the primary work fails. When both fail, the
+ * original primary object is rethrown unchanged and the bounded secondary
+ * diagnostic is logged plus attached as a non-enumerable `timelineCleanupError`
+ * without replacing the primary.
+ */
+export async function runWithTimelineStop(
+  tag: string,
+  work: () => Promise<void>,
+  stop: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await work()
+  } catch (primary) {
+    try {
+      await stop()
+    } catch (cleanup) {
+      const detail = cleanupDiagnostic(cleanup)
+      console.error(`[probe] timeline-stop ${tag} cleanup also failed: ${detail}`)
+      if (primary instanceof Error) {
+        try {
+          Object.defineProperty(primary, "timelineCleanupError", {
+            value: detail,
+            enumerable: false,
+            writable: true,
+            configurable: true,
+          })
+        } catch (attach) {
+          const msg = attach instanceof Error ? attach.message : String(attach)
+          console.error(`[probe] timeline-stop ${tag} diagnostic attach failed: ${msg}`)
+        }
+      }
+      throw primary
+    }
+    throw primary
+  }
+  await stop()
+}
+
+/**
+ * Phase 4 of the real-session lifecycle (H-11 abort, independent control):
+ * abort A (B stays busy), then abort B — with each Stop bracketed by a
+ * fixture-only bounded redacted SSE timeline window so the next real probe can
+ * read delivered-event arrival order around the abort. The stop is always
+ * attempted even when the abort assertion fails, but the primary Stop/status
+ * failure stays primary: when both fail the original primary object is
+ * rethrown with the bounded secondary diagnostic logged/attached (LOCK-079).
+ * The backend status endpoint deletes idle sessions from its map (absent
+ * status == idle), so the probes normalize `undefined` to "idle".
+ */
+export async function abortRealSessionsWithTimeline(
+  frame: Frame,
+  snap: ReturnType<typeof snapshotClient>,
+  sessionA: string,
+  sessionB: string,
+  scratch: string,
+  timeout: number,
+): Promise<void> {
+  const runWithStop = async (tag: string, work: () => Promise<void>): Promise<void> =>
+    runWithTimelineStop(tag, work, () => stopSseTimelineWindow(scratch, tag))
+  await startSseTimelineWindow(scratch, "A")
+  await runWithStop("A", async () => {
+    await clickTab(frame, sessionA, timeout)
+    await clickStop(frame, timeout)
+    await snap.waitFor(
+      (s) => {
+        const a = s.statuses[sessionA] ?? "idle"
+        if (a !== "idle") return `session A status=${a} expected idle after abort`
+        if (s.statuses[sessionB] !== "busy")
+          return `session B status=${s.statuses[sessionB]} expected still busy (independent control)`
+        return undefined
+      },
+      60_000,
+      "abort A leaves A idle and B busy",
+    )
+  })
+  await startSseTimelineWindow(scratch, "B")
+  await runWithStop("B", async () => {
+    await clickTab(frame, sessionB, timeout)
+    await clickStop(frame, timeout)
+    await snap.waitFor(
+      (s) => {
+        const b = s.statuses[sessionB] ?? "idle"
+        if (b !== "idle") return `session B status=${b} expected idle after abort`
+        return undefined
+      },
+      60_000,
+      "abort B leaves B idle",
+    )
+  })
+  await waitForAbortAttempts(scratch, 60_000)
 }
 
 export async function waitForActiveTabId(frame: Frame, expectedId: string, timeoutMs: number): Promise<void> {

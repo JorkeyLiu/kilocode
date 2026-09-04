@@ -415,6 +415,17 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
       { rel: "rs-credential.json", base: "scratch" },
       { rel: ".kilo/kilo.jsonc", base: "workspace" },
     )
+    // SSE timeline windows around Stop A / Stop B (LOCK-049/050/051):
+    // fixture-only, bounded, redacted delivered-event arrival order. Optional
+    // so a run without the abort windows still hands off; copied when present.
+    optional.push(
+      { rel: "sse-timeline-abort-A.json", base: "scratch" },
+      { rel: "sse-timeline-abort-B.json", base: "scratch" },
+      // Cumulative run-level abort-attempt export (fixture-only, bounded,
+      // redacted observer records after Stop B). Absence remains allowed;
+      // presence is validated.
+      { rel: "abort-attempts.json", base: "scratch" },
+    )
   }
   if (scenarios.has("real-session") || scenarios.has("real-overflow") || scenarios.has("worktree-removal")) {
     optional.push({ rel: ".kilo/package-lock.json", base: "workspace" })
@@ -533,6 +544,20 @@ export function parseFailure(dest: string, bytes: Buffer): string | null {
       if (/GcLifecycle Title/.test(raw)) return "lc-layout-timeline leaked raw title"
       if (/GateC Title/.test(raw)) return "lc-layout-timeline leaked raw title"
       if (/\/[a-z]+\/[^\s"]*\.kilo/.test(raw)) return "lc-layout-timeline leaked path"
+    }
+    if (dest === "sse-timeline-abort-A.json" || dest === "sse-timeline-abort-B.json") {
+      const err = validateSseTimeline(parsed)
+      if (err) return `sse-timeline abort malformed: ${err}`
+      const raw = text
+      if (raw.includes("e2e-fixture-key") || raw.includes("KILO_SERVER_PASSWORD"))
+        return "sse-timeline abort leaked secret"
+    }
+    if (dest === "abort-attempts.json") {
+      const err = validateAbortAttempts(parsed)
+      if (err) return `abort-attempts malformed: ${err}`
+      const raw = text
+      if (raw.includes("e2e-fixture-key") || raw.includes("KILO_SERVER_PASSWORD"))
+        return "abort-attempts leaked secret"
     }
   }
   return null
@@ -1697,6 +1722,171 @@ export function validateLcTimeline(parsed: unknown): string | null {
   return null
 }
 
+/**
+ * SSE timeline artifact schema (LOCK-049/050/051, fixture-only, basic
+ * real-session Stop flow). Duplicated (not imported) from
+ * `src/services/cli-backend/sse-timeline.ts` to avoid cross-boundary build
+ * coupling for this Node-only test harness; keep in sync with that source.
+ */
+export const SSE_TIMELINE_SCHEMA = "kilo-sse-timeline/1"
+export const SSE_TIMELINE_CAP = 200
+export const SSE_TIMELINE_STRING_LIMIT = 500
+
+/**
+ * Validate a redacted `sse-timeline-abort-A/B.json` artifact: exact envelope
+ * keys, schema/cap sync with the producer, count/dropped/truncation
+ * consistency, contiguous arrival-order seq, monotonic client-observed
+ * timestamps, allowlisted per-entry metadata keys only (no payload, title, or
+ * path beyond the bounded envelope directory), bounded strings, and no leaked
+ * secrets. Timestamps are client-observed receipt times by construction —
+ * this validator never claims wire/server provenance.
+ */
+// eslint-disable-next-line complexity
+export function validateSseTimeline(parsed: unknown): string | null {
+  const exactKeys = (obj: Record<string, unknown>, allowed: string[], at: string): string | null => {
+    const keys = Object.keys(obj).sort()
+    const want = [...allowed].sort()
+    if (keys.length !== want.length || !keys.every((k, i) => k === want[i])) {
+      return `${at} keys mismatch: got [${keys.join(",")}] want [${want.join(",")}]`
+    }
+    return null
+  }
+  const isIso = (v: unknown): v is string => {
+    if (typeof v !== "string") return false
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v)) return false
+    const ms = Date.parse(v)
+    if (Number.isNaN(ms)) return false
+    return new Date(ms).toISOString() === v
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "not an object"
+  const p = parsed as Record<string, unknown>
+  const top = exactKeys(
+    p,
+    ["schema", "startedAt", "stoppedAt", "observing", "cap", "count", "dropped", "truncated", "entries"],
+    "timeline",
+  )
+  if (top) return top
+  if (p.schema !== SSE_TIMELINE_SCHEMA) return `schema must be ${SSE_TIMELINE_SCHEMA}`
+  if (p.startedAt !== null && !isIso(p.startedAt))
+    return "startedAt must be canonical ISO date (toISOString with milliseconds and UTC) or null"
+  if (p.stoppedAt !== null && !isIso(p.stoppedAt))
+    return "stoppedAt must be canonical ISO date (toISOString with milliseconds and UTC) or null"
+  if (typeof p.observing !== "boolean") return "observing must be boolean"
+  if (p.cap !== SSE_TIMELINE_CAP) return `cap must be ${SSE_TIMELINE_CAP}`
+  if (typeof p.count !== "number" || !Number.isInteger(p.count) || p.count < 0) return "count invalid"
+  if (typeof p.dropped !== "number" || !Number.isInteger(p.dropped) || p.dropped < 0) return "dropped invalid"
+  if (typeof p.truncated !== "boolean") return "truncated must be boolean"
+  if (p.truncated !== (p.dropped > 0)) return "truncated must equal dropped>0"
+  if (!Array.isArray(p.entries)) return "entries must be array"
+  if (p.count !== p.entries.length) return "count must equal entries length"
+  if (p.count > SSE_TIMELINE_CAP) return "count exceeds cap"
+  const allowedEntry = ["seq", "at", "kind", "sessionID", "directory", "transaction", "status"]
+  let prevMs = -Infinity
+  for (let i = 0; i < p.entries.length; i++) {
+    const raw = p.entries[i]
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return `entry ${i} not object`
+    const rec = raw as Record<string, unknown>
+    for (const k of Object.keys(rec)) {
+      if (!allowedEntry.includes(k)) return `entry ${i}.${k} forbidden key`
+    }
+    if (typeof rec.seq !== "number" || !Number.isInteger(rec.seq) || rec.seq !== i)
+      return `entry ${i} seq must be ${i} (arrival order)`
+    if (!isIso(rec.at)) return `entry ${i} at must be canonical ISO date (toISOString with milliseconds and UTC)`
+    const ms = Date.parse(rec.at as string)
+    if (ms < prevMs) return `entry ${i} at not monotonic`
+    prevMs = ms
+    if (typeof rec.kind !== "string" || rec.kind.length === 0) return `entry ${i} kind invalid`
+    if ((rec.kind as string).length > SSE_TIMELINE_STRING_LIMIT) return `entry ${i}.kind exceeds bound`
+    for (const k of ["sessionID", "directory", "transaction", "status"] as const) {
+      const v = rec[k]
+      if (v === undefined) continue
+      if (typeof v !== "string" || v.length === 0) return `entry ${i}.${k} invalid`
+      if (v.length > SSE_TIMELINE_STRING_LIMIT) return `entry ${i}.${k} exceeds bound`
+    }
+  }
+  const text = JSON.stringify(parsed)
+  if (text.includes("e2e-fixture-key") || text.includes("KILO_SERVER_PASSWORD")) return "leaked secret string"
+  return null
+}
+
+/**
+ * Abort-attempt artifact bounds. Duplicated (not imported) from
+ * `src/kilo-provider/abort.ts` to avoid cross-boundary build coupling for
+ * this Node-only test harness; keep in sync with that source.
+ */
+export const ABORT_ATTEMPT_LIMIT = 50
+export const ABORT_STRING_LIMIT = 500
+
+/**
+ * Validate the cumulative run-level `abort-attempts.json` artifact: exact run
+ * envelope keys, scenario/collectedAt/total consistency, bounded entry count,
+ * and the existing fixture observer record shape only (bounded/redacted —
+ * never payloads, titles, or paths beyond the bounded directory field). No
+ * receipt/call-count inference: total must equal retained entries length.
+ */
+// eslint-disable-next-line complexity
+export function validateAbortAttempts(parsed: unknown): string | null {
+  const exactKeys = (obj: Record<string, unknown>, allowed: string[], at: string): string | null => {
+    const keys = Object.keys(obj).sort()
+    const want = [...allowed].sort()
+    if (keys.length !== want.length || !keys.every((k, i) => k === want[i])) {
+      return `${at} keys mismatch: got [${keys.join(",")}] want [${want.join(",")}]`
+    }
+    return null
+  }
+  const isCanonicalIso = (v: unknown): v is string => {
+    if (typeof v !== "string") return false
+    if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v)) return false
+    const ms = Date.parse(v)
+    if (Number.isNaN(ms)) return false
+    return new Date(ms).toISOString() === v
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "not an object"
+  const p = parsed as Record<string, unknown>
+  const top = exactKeys(p, ["scenario", "collectedAt", "total", "entries"], "abort-attempts")
+  if (top) return top
+  if (typeof p.scenario !== "string" || p.scenario.length === 0) return "scenario must be non-empty string"
+  if (!isCanonicalIso(p.collectedAt)) return "collectedAt must be canonical ISO date (toISOString with milliseconds and UTC)"
+  if (typeof p.total !== "number" || !Number.isInteger(p.total) || p.total < 0) return "total invalid"
+  if (!Array.isArray(p.entries)) return "entries must be array"
+  if (p.total !== p.entries.length) return "total must equal entries length"
+  if (p.entries.length > ABORT_ATTEMPT_LIMIT) return "entries exceed limit"
+  const allowedEntry = ["sessionID", "directory", "startedAt", "endedAt", "durationMs", "ok", "attempt", "error", "status", "data"]
+  for (let i = 0; i < p.entries.length; i++) {
+    const raw = p.entries[i]
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return `entry ${i} not object`
+    const rec = raw as Record<string, unknown>
+    for (const k of Object.keys(rec)) {
+      if (!allowedEntry.includes(k)) return `entry ${i}.${k} forbidden key`
+    }
+    for (const k of ["sessionID", "directory"] as const) {
+      const v = rec[k]
+      if (typeof v !== "string" || v.length === 0) return `entry ${i}.${k} invalid`
+      if (v.length > ABORT_STRING_LIMIT) return `entry ${i}.${k} exceeds bound`
+    }
+    for (const k of ["startedAt", "endedAt", "durationMs"] as const) {
+      const v = rec[k]
+      if (typeof v !== "number" || !Number.isInteger(v) || v < 0) return `entry ${i}.${k} invalid`
+    }
+    if ((rec.endedAt as number) < (rec.startedAt as number)) return `entry ${i} endedAt before startedAt`
+    if ((rec.durationMs as number) !== (rec.endedAt as number) - (rec.startedAt as number))
+      return `entry ${i} durationMs must equal endedAt-startedAt`
+    if (typeof rec.ok !== "boolean") return `entry ${i}.ok must be boolean`
+    if (typeof rec.attempt !== "number" || !Number.isInteger(rec.attempt) || rec.attempt < 1)
+      return `entry ${i}.attempt invalid`
+    if (rec.error !== undefined) {
+      if (typeof rec.error !== "string" || rec.error.length === 0) return `entry ${i}.error invalid`
+      if (rec.error.length > ABORT_STRING_LIMIT) return `entry ${i}.error exceeds bound`
+    }
+    if (rec.status !== undefined) {
+      if (typeof rec.status !== "number" || !Number.isFinite(rec.status)) return `entry ${i}.status invalid`
+    }
+    if (rec.data !== undefined && typeof rec.data !== "boolean") return `entry ${i}.data must be boolean`
+  }
+  const text = JSON.stringify(parsed)
+  if (text.includes("e2e-fixture-key") || text.includes("KILO_SERVER_PASSWORD")) return "leaked secret string"
+  return null
+}
 
 /**
  * Claim a destination for a source inside `collectEvidence`. Returns true when
@@ -1788,6 +1978,21 @@ export function collectEvidence(opts: CollectOptions): EvidenceManifest {
       if (failure !== null) {
         malformed.push(dest)
         notes.push(`malformed required artifact ${dest}: ${failure}`)
+        return
+      }
+    }
+    // Optional timeline/abort artifacts stay absent-allowed, but a present
+    // artifact must still validate: a malformed or secret-bearing
+    // sse-timeline-abort-A/B.json or abort-attempts.json fails the handoff
+    // instead of passing through unvalidated. No other optional inventory changes.
+    if (
+      !isRequired &&
+      (dest === "sse-timeline-abort-A.json" || dest === "sse-timeline-abort-B.json" || dest === "abort-attempts.json")
+    ) {
+      const failure = parseFailure(dest, bytes)
+      if (failure !== null) {
+        malformed.push(dest)
+        notes.push(`malformed optional artifact ${dest}: ${failure}`)
         return
       }
     }
