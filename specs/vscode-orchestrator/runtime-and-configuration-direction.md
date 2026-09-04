@@ -839,6 +839,8 @@ B9 是 prospective cancellation control envelope：它聚合/引用既有 R11/R1
 
 Evidence limits：busy event ordering 未证实；private carrier 缺失；volatile `200 true` 不得当作 outcome；本节不声明任何已实现行为。
 
+B9-P2 wire outcome contract closure（2026-09-04，docs-only 合同闭合，未实现）：request receipt 与 terminal convergence 是两个阶段——HTTP response（含未来 `accepted`/`accepted-unresolved` transport receipt 非终端状态；`ambiguous` 仅 runtime semantic terminal outcome，`transport-unknown` 仅 delivery uncertainty）只是 request receipt，不是取消成功证明；terminal outcome 需经 runtime/SSE/persistence convergence 另行确认。`opId`/request identity 绑定 directory + sessionID + request identity；既有 generation operation records 只作为 affected-set association，不新增 generation kind。Missing session 为 typed `session.not_found` failure（no side effect）；terminal session 为 idempotent terminal no-op（返回既有 terminal outcome，不创建新 cancellation success）；cancel miss 在 affected-set 中记为 `not_affected`，不得计为 success。Root/descendant/queued/intake/background/followup/event publication 必须分别可观察；当前 tree fan-out 无序/`discard`、race/late SSE/partial result 的顺序与聚合是实现前置证据要求（Gates C-D）。SDK response、SSE 观察、私有 detached observation 的 authority 不重叠：SDK 是 abort command 唯一 authority，private 仅 detached parity observation，不得第二次 abort/replay。本阶段不新增 abort FD capability/private carrier，不修改现有状态机。Busy HTTP→runner→persistence→SSE 时序、SDK timeout/late SSE recovery 保持 explicit dynamic unknown，不得把静态证据伪装成实证。Gate B 仍 named/open，G3 仍 Active。
+
 ### 7.3 Post-reconstruction error maturity
 
 Separately planned work after core reconstruction (2026-08-14 decision). These
