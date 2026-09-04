@@ -418,6 +418,18 @@ export function needsCanonicalStorage(value: string): boolean {
   )
 }
 
+// Fail-closed guard for KILO_E2E_PROVIDER_BASE_URL: loopback /v1 only, undefined fails closed.
+export function isLoopbackProviderBaseURL(value: string | undefined): boolean {
+  return !!value && /^https?:\/\/(127\.0\.0\.1|localhost):\d+\/v1$/.test(value)
+}
+
+// Pure URL selection for single-process launch: real-session->hang, real-lifecycle->scripted model, else undefined.
+export function selectProviderBaseURL(s: Set<string>, hangPort?: number, lifecyclePort?: number): string | undefined {
+  if (s.has("real-session") && hangPort !== undefined) return `http://127.0.0.1:${hangPort}/v1`
+  if (s.has("real-lifecycle") && lifecyclePort !== undefined) return `http://127.0.0.1:${lifecyclePort}/v1`
+  return undefined
+}
+
 // LOCK-006: macOS and Linux are first-class. Windows must fail fast with a
 // clear documented error instead of silently skipping cleanup — exact-owned
 // process termination (processesWithUserData) relies on `ps -axo pid=,args=`,
@@ -1206,11 +1218,14 @@ async function createHangServer(): Promise<{ port: number; close: () => Promise<
 }
 
 /**
- * Run-owned workspace config seed for the real-session scenario, written into
- * the scratch workspace's `.kilo/kilo.json` BEFORE VS Code launches so the
- * lazily-spawned CLI backend loads it at startup (project-config convention:
- * the CLI loads `.kilo/kilo.json` from the instance cwd, which the extension
- * pins to the first workspace folder). Seeds:
+ * Run-owned workspace legacy config seed for the real-session scenario,
+ * written into the scratch workspace's `.kilo/kilo.json` BEFORE VS Code
+ * launches. Load-path note: canonical metadata lives in `.kilo/kilo.jsonc`
+ * (paths.ts projectConfigFile, via realProjectSeed in prepareRealSession);
+ * the effective runtime URL comes from KILO_E2E_PROVIDER_BASE_URL (loopback
+ * /v1 only, run-owned hang server). This legacy file is retained as evidence
+ * (workspace:.kilo/kilo.json) — not the canonical load path, do not delete
+ * without separate verification. Seeds:
  *   - a custom provider `e2e-local` (bundled @ai-sdk/openai-compatible) whose
  *     model `e2e-model` carries three reasoning variants and whose baseURL
  *     points at the run-owned hang server — with every request-phase timeout
@@ -2402,40 +2417,45 @@ async function assertRealOverflowLifecycle(
  * the removed managed-worktree identifiers.
  */
 
-/** real-session only: create the run-owned hang server and write the config seed. */
-async function prepareRealSession(
-  workspace: string,
-  real: boolean,
-): Promise<{ port: number; close: () => Promise<void> } | undefined> {
-  if (!real) return undefined
-  const hang = await createHangServer()
+function seedRealSession(workspace: string, hang: { port: number }): { configFile: string; canonicalFile: string } {
   const configFile = writeRealSessionConfig(workspace, hang.port)
-  // Project-scope canonical seed (extension-only) mirroring writeRealRestartSeed:
-  // the backend kilo.json seed above feeds ONLY the CLI backend — the extension
-  // reads exclusively <workspace>/.kilo/kilo.jsonc (paths.ts projectConfigFile),
-  // so without this seed the canonical provider index can never serve e2e-local
-  // and waitForModelSelected(e2e-local/e2e-model) cannot pass.
+  // Canonical .kilo/kilo.jsonc metadata (without it e2e-local never serves); runtime URL via KILO_E2E_PROVIDER_BASE_URL.
   const canonicalFile = join(workspace, ".kilo", CONFIG_FILENAME)
   writeFileSync(canonicalFile, JSON.stringify(realProjectSeed(hang.port), null, 2))
-  // No-op dependency guard (same rationale as writeRealRestartSeed):
-  // prevent the detached Npm.install("@kilocode/plugin") fiber from reifying
-  // into the run-owned .kilo config dir. Required even though real-session has
-  // no user tool — the config loader fires for every writable config dir.
+  // No-op dependency guard: keep detached Npm.install("@kilocode/plugin") out of the run-owned .kilo dir.
   const kiloDir = join(workspace, ".kilo")
   mkdirSync(join(kiloDir, "node_modules"), { recursive: true })
-  writeFileSync(
-    join(kiloDir, "package-lock.json"),
-    JSON.stringify({
-      name: "kilo-e2e-workspace",
-      version: "0.0.0",
-      lockfileVersion: 3,
-      packages: { "": { dependencies: { "@kilocode/plugin": "0.0.0" } } },
-    }),
-  )
-  console.log(
-    `[probe] real-session config seed: ${configFile} + canonical ${canonicalFile} (hang server port ${hang.port})`,
-  )
-  return hang
+  const lock = { name: "kilo-e2e-workspace", version: "0.0.0", lockfileVersion: 3, packages: { "": { dependencies: { "@kilocode/plugin": "0.0.0" } } } }
+  writeFileSync(join(kiloDir, "package-lock.json"), JSON.stringify(lock))
+  return { configFile, canonicalFile }
+}
+
+export type RealSessionDeps = {
+  createHang?: () => Promise<{ port: number; close: () => Promise<void> }>
+  seed?: (workspace: string, hang: { port: number }) => { configFile: string; canonicalFile: string } | Promise<{ configFile: string; canonicalFile: string }>
+}
+
+/** real-session only: create the run-owned hang server and write the config seed. */
+export async function prepareRealSession(
+  workspace: string,
+  real: boolean,
+  deps?: RealSessionDeps,
+): Promise<{ port: number; close: () => Promise<void> } | undefined> {
+  if (!real) return undefined
+  const create = deps?.createHang ?? createHangServer
+  const seed = deps?.seed ?? seedRealSession
+  const hang = await create()
+  try {
+    const { configFile, canonicalFile } = await seed(workspace, hang)
+    console.log(
+      `[probe] real-session config seed: ${configFile} + canonical ${canonicalFile} (hang server port ${hang.port})`,
+    )
+    return hang
+  } catch (err) {
+    // Outer hang not yet assigned on seed failure, so close here; success still closes once via outer tail.
+    await hang.close().catch((closeErr) => console.error("[probe] hang server close failed:", closeErr))
+    throw err
+  }
 }
 
 /**
@@ -2709,10 +2729,9 @@ function launchVSCode(opts: {
   // Non-canonical runs inherit the existing XDG isolation without an explicit
   // KILO_DB. Predicate needsCanonicalStorage covers both gates.
   const canonicalEnv = needsCanonicalStorage(scenario) ? { KILO_DB: canonicalDbPath(scratch) } : {}
-  const e2eProviderEnv =
-    providerBaseURL && /^https?:\/\/(127\.0\.0\.1|localhost):\d+\/v1$/.test(providerBaseURL)
-      ? { KILO_E2E_PROVIDER_BASE_URL: providerBaseURL }
-      : {}
+  const e2eProviderEnv = isLoopbackProviderBaseURL(providerBaseURL)
+    ? { KILO_E2E_PROVIDER_BASE_URL: providerBaseURL }
+    : {}
   return runTests({
     ...(executable ? { vscodeExecutablePath: executable } : {}),
     extensionDevelopmentPath: root,
@@ -3027,8 +3046,7 @@ async function main() {
         console.error(`[probe] FAIL canonical archive stability: ${err instanceof Error ? err.message : String(err)}`)
       }
     } else {
-      const providerBaseURL =
-        scenarios.has("real-lifecycle") && lifecycleModel ? `http://127.0.0.1:${lifecycleModel.port}/v1` : undefined
+      const providerBaseURL = selectProviderBaseURL(scenarios, hang?.port, lifecycleModel?.port)
       vscodeRun = launchVSCode({
         executable,
         runnerOut,
