@@ -53,6 +53,23 @@ export const EVIDENCE_READY = "evidence-ready"
 
 export const MANIFEST = "manifest.json"
 
+/**
+ * Current private FD capabilities. Duplicated (not imported) from runtime
+ * `packages/opencode/src/kilocode/server/fd-carrier-protocol.ts` FD_CAPABILITIES
+ * to avoid cross-package build coupling for this Node-only test harness; keep
+ * in sync with that source. Unknown values must still fail validation.
+ */
+export const PRIVATE_FD_CAPABILITIES = [
+  "session/cancelQueued",
+  "session/update",
+  "session/fork",
+  "session/create",
+  "session/status",
+  "session/get",
+  "session/messages",
+  "session/children",
+] as const
+
 export type EvidenceBase = "scratch" | "workspace"
 
 export interface EvidenceSource {
@@ -538,7 +555,7 @@ export function validateGcProof(parsed: unknown): string | null {
     for (const k of Object.keys(r)) if (!allowed.has(k)) return false
     return true
   }
-  const ALLOWED_CAPS = new Set(["session/cancelQueued", "session/update"])
+  const ALLOWED_CAPS = new Set<string>(PRIVATE_FD_CAPABILITIES as readonly string[])
   const ALLOWED_STATE = new Set(["connecting", "connected", "disconnected", "error"])
   const forbidKeys = new Set([
     "title",
@@ -989,7 +1006,7 @@ export function validateLcProof(parsed: unknown): string | null {
     for (const k of Object.keys(r)) if (!allowed.has(k)) return false
     return true
   }
-  const ALLOWED_CAPS = new Set(["session/cancelQueued", "session/update"])
+  const ALLOWED_CAPS = new Set<string>(PRIVATE_FD_CAPABILITIES as readonly string[])
   const forbidKeys = new Set([
     "title",
     "payload",

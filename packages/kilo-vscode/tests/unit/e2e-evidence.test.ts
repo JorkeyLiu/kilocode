@@ -13,6 +13,7 @@ import {
   expandGlob,
   MANIFEST,
   parseFailure,
+  PRIVATE_FD_CAPABILITIES,
   sha256Of,
   validateEvidenceDestination,
   validateGcProof,
@@ -807,6 +808,78 @@ describe("validateGcProof auditor probes closed", () => {
   })
   it("valid proof passes", () => {
     expect(validateGcProof(makeValidProof())).toBeNull()
+  })
+})
+
+describe("private FD capabilities align with runtime contract", () => {
+  const setAllLcCaps = (p: Record<string, unknown>, caps: string[]) => {
+    ;((p.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [...caps]
+    const b = p.boundaries as Record<string, unknown>
+    for (const key of ["panelCloseReopen", "webviewReload"] as const) {
+      const node = b[key] as Record<string, unknown>
+      for (const side of ["pre", "post"] as const) {
+        ;((node[side] as Record<string, unknown>).private as Record<string, unknown>).capabilities = [...caps]
+      }
+    }
+    const sw = b.sessionSwitch as Record<string, unknown>
+    for (const side of ["pre", "post", "switched"] as const) {
+      ;((sw[side] as Record<string, unknown>).private as Record<string, unknown>).capabilities = [...caps]
+    }
+  }
+  it("accepts the full current 8-capability handoff for Gc and Lc proofs", () => {
+    expect([...PRIVATE_FD_CAPABILITIES].sort()).toEqual(
+      [
+        "session/cancelQueued",
+        "session/children",
+        "session/create",
+        "session/fork",
+        "session/get",
+        "session/messages",
+        "session/status",
+        "session/update",
+      ].sort(),
+    )
+    const full = [...PRIVATE_FD_CAPABILITIES]
+    const g = makeValidProof() as Record<string, unknown>
+    ;((g.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [...full]
+    ;(((g.postRestart as Record<string, unknown>).private as Record<string, unknown>).capabilities as string[]) = [
+      ...full,
+    ]
+    expect(validateGcProof(g)).toBeNull()
+    const l = makeValidLcProof() as Record<string, unknown>
+    setAllLcCaps(l, full)
+    expect(validateLcProof(l)).toBeNull()
+  })
+  it("accepts each current capability alongside session/update and still rejects unknown", () => {
+    for (const cap of PRIVATE_FD_CAPABILITIES) {
+      const caps = cap === "session/update" ? [cap] : ["session/update", cap]
+      const g = makeValidProof() as Record<string, unknown>
+      ;((g.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [...caps]
+      expect(validateGcProof(g)).toBeNull()
+      const l = makeValidLcProof() as Record<string, unknown>
+      setAllLcCaps(l, caps)
+      expect(validateLcProof(l)).toBeNull()
+    }
+    // Previously-failing real handoff shape: session/fork at index 2 must validate.
+    const forked = makeValidProof() as Record<string, unknown>
+    ;((forked.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [
+      "session/cancelQueued",
+      "session/update",
+      "session/fork",
+    ]
+    expect(validateGcProof(forked)).toBeNull()
+    const bad = makeValidProof() as Record<string, unknown>
+    ;((bad.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [
+      "session/update",
+      "session/nope",
+    ]
+    expect(validateGcProof(bad)).toContain("unknown capability")
+    const badLc = makeValidLcProof() as Record<string, unknown>
+    ;((badLc.pre as Record<string, unknown>).private as Record<string, unknown>).capabilities = [
+      "session/update",
+      "session/nope",
+    ]
+    expect(validateLcProof(badLc)).toContain("unknown capability")
   })
 })
 
