@@ -3,6 +3,7 @@ import { PassThrough } from "stream"
 import { JsonRpcPeer } from "../../../src/private-worker/peer"
 import { createFdCarrier } from "../../../src/kilocode/server/fd-carrier"
 import { FD_PROTOCOL_NAME } from "../../../src/kilocode/server/fd-carrier-protocol"
+import { KiloSessions } from "../../../src/kilo-sessions/kilo-sessions"
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v)
@@ -186,6 +187,32 @@ describe("fd-carrier remote/status (process-global parity)", () => {
       }
       expect(code).toBeDefined()
     } finally {
+      ext.dispose()
+      carrier.dispose()
+    }
+  })
+
+  test("owner throw maps to redacted internal failure, never false/false success", async () => {
+    const { carrier, ext } = linked()
+    const orig = KiloSessions.remoteStatus
+    ;(KiloSessions as { remoteStatus: () => unknown }).remoteStatus = () => {
+      throw new Error("boom-owner-secret-xyz")
+    }
+    try {
+      await init(ext)
+      const raw = asRecord(await ext.request("remote/status", req("/tmp", "tokFail", { requestId: "rfail" })))
+      expect(raw.status).toBe("failed")
+      expect(raw.accepted).toBeFalse()
+      expect(raw.data).toBeUndefined()
+      const failure = asRecord(raw.failure)
+      expect(failure.code).toBe("internal")
+      expect(failure.message).toBe("internal error")
+      expect(failure.retryable).toBeFalse()
+      expect(Object.keys(failure).sort()).toEqual(["code", "message", "retryable"])
+      expect(asRecord(raw.outcome).type).toBe("failed")
+      expect(JSON.stringify(raw)).not.toContain("boom-owner-secret-xyz")
+    } finally {
+      ;(KiloSessions as { remoteStatus: () => unknown }).remoteStatus = orig as unknown as () => unknown
       ext.dispose()
       carrier.dispose()
     }

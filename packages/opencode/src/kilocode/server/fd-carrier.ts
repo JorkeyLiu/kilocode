@@ -1013,14 +1013,17 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 return remoteStatusFailed(req, "validation.failed", "invalid workspace", false)
             }
             const snap = yield* Effect.sync(() => KiloSessions.remoteStatus()).pipe(
-              Effect.catch(() => Effect.succeed({ enabled: false, connected: false })),
-              Effect.catchDefect(() => Effect.succeed({ enabled: false, connected: false })),
+              Effect.map((v) => ({ ok: true as const, v })),
+              Effect.catch(() => Effect.succeed({ ok: false as const })),
+              Effect.catchDefect(() => Effect.succeed({ ok: false as const })),
             )
-            const enabled = (snap as { enabled?: unknown }).enabled === true
-            const connected = (snap as { connected?: unknown }).connected === true
-            if (typeof (snap as { enabled?: unknown }).enabled !== "boolean")
+            if (!snap.ok) return remoteStatusFailed(req, "internal", "internal error", false)
+            const raw = snap.v as { enabled?: unknown; connected?: unknown }
+            const enabled = raw.enabled === true
+            const connected = raw.connected === true
+            if (typeof raw.enabled !== "boolean")
               return remoteStatusFailed(req, "internal", "internal error", false)
-            if (typeof (snap as { connected?: unknown }).connected !== "boolean")
+            if (typeof raw.connected !== "boolean")
               return remoteStatusFailed(req, "internal", "internal error", false)
             return {
               v: FD_REMOTE_STATUS_VERSION,
