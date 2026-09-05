@@ -182,6 +182,7 @@ export function activate(context: vscode.ExtensionContext) {
   const remoteService = new RemoteStatusService()
   context.subscriptions.push(remoteService)
   connectionService.setRemoteService(remoteService)
+  remoteService.setParityConnection(connectionService)
 
   const unsubscribeStateChange = connectionService.onStateChange((state) => {
     if (state === "connected") {

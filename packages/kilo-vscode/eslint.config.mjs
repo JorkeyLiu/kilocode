@@ -42,6 +42,18 @@ export default [
     rules: { complexity: ["error", 150], "max-lines": "off" },
   },
   {
+    files: ["src/services/cli-backend/serve-private-peer.ts", "src/services/cli-backend/connection-service.ts"],
+    // Raised from the default 3000 for the remote/status private parity batch:
+    // both files sat within ~5 lines of the cap after B8, and the new
+    // `remote/status` capability/dispatch/peer/owner surface (request/result
+    // validation, exact-cancel outcome handles, epoch/dispose coherence) must
+    // live alongside the existing B5-B8 branches per the shared-carrier
+    // convention. New logic lives in serve-private-remote-status.ts and
+    // kilo-provider/remote-status-parity.ts; only the required insertion
+    // points remain inline.
+    rules: { "max-lines": ["error", 3150] },
+  },
+  {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],
     // Raised from 3100 → 3200 for the experimental terminal tabs feature.
     // ~600 lines of terminal logic were extracted to ./terminal/* and

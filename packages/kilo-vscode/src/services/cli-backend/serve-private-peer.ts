@@ -21,6 +21,17 @@ import type {
 } from "./serve-private-messages"
 import { makeChildrenCancel, requestChildrenOutcome, validateChildrenRequest } from "./serve-private-children"
 import type { PrivateChildrenWireOutcome, ServePrivateChildrenRequest } from "./serve-private-children"
+import {
+  makeRemoteStatusCancel,
+  PrivateRemoteStatusValidationError,
+  requestRemoteStatusOutcome,
+  validateRemoteStatusRequest,
+} from "./serve-private-remote-status"
+import type {
+  PrivateRemoteStatusWireOutcome,
+  ServePrivateRemoteStatusRequest,
+  ServePrivateRemoteStatusResult,
+} from "./serve-private-remote-status"
 
 export {
   canonicalGetOpId,
@@ -63,6 +74,25 @@ export type {
   ServePrivateChildrenRequest,
   ServePrivateChildrenResult,
 } from "./serve-private-children"
+export {
+  canonicalRemoteStatusOpId,
+  compareRemoteStatusParity,
+  failedRemoteStatusResult,
+  isPrivateRemoteStatusValidationError,
+  makeRemoteStatusAmbiguous,
+  makeRemoteStatusCancel,
+  normalizePrivateRemoteStatusWire,
+  PrivateRemoteStatusValidationError,
+  requestRemoteStatusOutcome,
+  validateRemoteStatusRequest,
+  validateRemoteStatusResult,
+  wrapRemoteStatusOutcomeForOwner,
+} from "./serve-private-remote-status"
+export type {
+  PrivateRemoteStatusWireOutcome,
+  ServePrivateRemoteStatusRequest,
+  ServePrivateRemoteStatusResult,
+} from "./serve-private-remote-status"
 
 export interface ServePrivateCancelQueuedRequest {
   v: 1
@@ -1393,7 +1423,7 @@ export class ServePrivatePeer {
     const initPromise = peerAtStart.request("initialize", {
       protocol: { name: "kilo-private", major: 1, minor: 0 },
       clientInfo: { name: "kilo-vscode", version: "7.4.11" },
-      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages", "session/children"],
+      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages", "session/children", "remote/status"],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
 
@@ -1461,6 +1491,7 @@ export class ServePrivatePeer {
       let hasGet = false
       let hasMessages = false
       let hasChildren = false
+      let hasRemoteStatus = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
@@ -1470,6 +1501,7 @@ export class ServePrivatePeer {
         hasGet = caps.includes("session/get")
         hasMessages = caps.includes("session/messages")
         hasChildren = caps.includes("session/children")
+        hasRemoteStatus = caps.includes("remote/status")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -1549,6 +1581,7 @@ export class ServePrivatePeer {
         )
           hasChildren = true
         else if (((c as Record<string, unknown>).session as Record<string, unknown> | null)?.children) hasChildren = true
+        if ((c as Record<string, unknown>)["remote/status"]) hasRemoteStatus = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
@@ -1558,10 +1591,11 @@ export class ServePrivatePeer {
           hasGet = false
           hasMessages = false
           hasChildren = false
+          hasRemoteStatus = false
         }
       }
 
-      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren) {
+      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren && !hasRemoteStatus) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
         if (this.peer === peerAtStart) this.peer = null
@@ -1830,6 +1864,73 @@ export class ServePrivatePeer {
     )
   }
 
+  privateRemoteStatusOutcomeWithHandle(req: ServePrivateRemoteStatusRequest): { id: number; promise: Promise<PrivateRemoteStatusWireOutcome>; cancel: (msg?: string) => boolean } {
+    validateRemoteStatusRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    if (!this.hasCapability("remote/status")) throw new Error("Private peer missing remote/status capability")
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    return requestRemoteStatusOutcome(
+      peerAtCall as unknown as import("./serve-private-remote-status").RemoteStatusRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => this.parseFailedInfo(e),
+      },
+      (id) =>
+        makeRemoteStatusCancel(id, {
+          isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+          tryCancel: (msg) => this.tryCancelPending(id, msg),
+          invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+        }),
+      req,
+    )
+  }
+
+  async privateRemoteStatus(req: ServePrivateRemoteStatusRequest): Promise<ServePrivateRemoteStatusResult> {
+    const handle = this.privateRemoteStatusWithHandle(req)
+    return handle.promise
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid results; invalid wire rejects
+   * with PrivateRemoteStatusValidationError and never resolves as a normal result.
+   */
+  privateRemoteStatusWithHandle(req: ServePrivateRemoteStatusRequest): { id: number; promise: Promise<ServePrivateRemoteStatusResult>; cancel: (msg?: string) => boolean } {
+    validateRemoteStatusRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("remote/status")) {
+      throw new Error("Private peer missing remote/status capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const outcome = requestRemoteStatusOutcome(
+      peerAtCall as unknown as import("./serve-private-remote-status").RemoteStatusRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => this.parseFailedInfo(e),
+      },
+      (id) =>
+        makeRemoteStatusCancel(id, {
+          isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+          tryCancel: (msg) => this.tryCancelPending(id, msg),
+          invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+        }),
+      req,
+    )
+    const promise = (async (): Promise<ServePrivateRemoteStatusResult> => {
+      const wire = await outcome.promise
+      if (wire.kind === "invalid") throw new PrivateRemoteStatusValidationError(wire.detail)
+      return wire.result
+    })()
+    return { id: outcome.id, promise, cancel: outcome.cancel }
+  }
+
   privateCancelQueuedWithHandle(req: ServePrivateCancelQueuedRequest): { id: number; promise: Promise<ServePrivateCancelQueuedResult>; cancel: (msg?: string) => boolean } {
     validateCancelQueuedRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
@@ -1912,6 +2013,7 @@ export class ServePrivatePeer {
         const sess = c.session as Record<string, unknown>
         if (sess.children) return true
       }
+      if (cap === "remote/status" && c["remote/status"]) return true
     }
     return false
   }
@@ -2333,6 +2435,26 @@ export class ServePrivatePeer {
       }
       return
     }
+    const remoteSafe =
+      reason === "remote-status stale observer timeout" ||
+      reason === "remote-status observer timeout cancel throw" ||
+      reason === "remote-status observer timeout exact cancel miss" ||
+      reason === "remote-status observer timeout"
+    if (remoteSafe) {
+      console.warn(`[Kilo PrivatePeer] observer timeout invalidates:`, {
+        op: "remote/status",
+        invalidated: true,
+      })
+      try {
+        this.dispose()
+      } catch {
+        console.warn("[Kilo PrivatePeer] invalidate dispose failed:", {
+          op: "remote/status",
+          invalidateFailed: true,
+        })
+      }
+      return
+    }
     console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch ${this.opts.epoch}: ${reason}`)
     try {
       this.dispose()
@@ -2376,7 +2498,7 @@ export class ServePrivatePeer {
 
   private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {
     for (const k of Object.keys(c)) {
-      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children") && c[k]) out.push(k)
+      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children" || k === "remote/status") && c[k]) out.push(k)
     }
   }
 

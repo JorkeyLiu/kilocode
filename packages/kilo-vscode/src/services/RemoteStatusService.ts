@@ -1,6 +1,8 @@
 import * as vscode from "vscode"
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { t } from "./cli-backend/i18n"
+import { observeRemoteStatusParityDetached } from "../kilo-provider/remote-status-parity"
+import type { RemoteStatusParityConnection } from "../kilo-provider/remote-status-parity"
 
 export type RemoteState = { enabled: boolean; connected: boolean }
 
@@ -16,6 +18,7 @@ export class RemoteStatusService implements vscode.Disposable {
   private bar: vscode.StatusBarItem
   private listeners = new Set<Listener>()
   private client: KiloClient | null = null
+  private parityConn: RemoteStatusParityConnection | null = null
 
   constructor() {
     this.bar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
@@ -25,6 +28,15 @@ export class RemoteStatusService implements vscode.Disposable {
 
   setClient(c: KiloClient | null): void {
     this.client = c
+  }
+
+  /**
+   * Attach the detached private `remote/status` parity boundary. SDK stays
+   * the sole authority; the observer is non-blocking, warn-only, and never
+   * mutates remote state. Null detaches.
+   */
+  setParityConnection(c: RemoteStatusParityConnection | null): void {
+    this.parityConn = c
   }
 
   /** Get current state synchronously. */
@@ -54,7 +66,9 @@ export class RemoteStatusService implements vscode.Disposable {
       return undefined
     })
     if (!res?.data) return
-    this.update({ enabled: res.data.enabled, connected: res.data.connected })
+    const next = { enabled: res.data.enabled, connected: res.data.connected }
+    this.update(next)
+    this.observeParityDetached({ data: { enabled: next.enabled, connected: next.connected } })
   }
 
   /** Toggle remote on/off based on current state. */
@@ -98,6 +112,7 @@ export class RemoteStatusService implements vscode.Disposable {
 
   dispose(): void {
     this.listeners.clear()
+    this.parityConn = null
     this.bar.dispose()
   }
 
@@ -108,6 +123,27 @@ export class RemoteStatusService implements vscode.Disposable {
     this.state = next
     this.sync()
     for (const cb of this.listeners) cb(next)
+  }
+
+  /**
+   * SDK-first detached parity observation for `remote/status`. Runs only
+   * after the authoritative SDK read settled; failures are warn-only and
+   * never mutate state, enable/disable, events, or UI. Routing directory is
+   * the workspace root; payload booleans stay process-global.
+   */
+  private observeParityDetached(sdk: { data: RemoteState }): void {
+    const conn = this.parityConn
+    if (!conn) return
+    const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (!dir) return
+    try {
+      observeRemoteStatusParityDetached(conn, sdk, dir)
+    } catch (err) {
+      console.warn("[Kilo Remote] private parity observation failed (fail-closed):", {
+        op: "remote/status",
+        observationFailed: true,
+      })
+    }
   }
 
   /** Sync status bar appearance to current state. */

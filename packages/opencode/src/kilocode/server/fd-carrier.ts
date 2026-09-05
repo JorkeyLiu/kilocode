@@ -16,6 +16,7 @@ import { acquireDrainControl, InstanceUnavailableDuringConfigRebuildError } from
 import { InstanceStore } from "@/project/instance-store"
 import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { InstanceRef } from "@/effect/instance-ref"
+import { KiloSessions } from "@/kilo-sessions/kilo-sessions"
 import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
 
@@ -72,6 +73,21 @@ export const FD_MESSAGES_VERSION = 1 as const
 export const FD_MESSAGES_OP = "session/messages" as const
 export const FD_CHILDREN_VERSION = 1 as const
 export const FD_CHILDREN_OP = "session/children" as const
+export const FD_REMOTE_STATUS_VERSION = 1 as const
+export const FD_REMOTE_STATUS_OP = "remote/status" as const
+
+export interface FdRemoteStatusRequest {
+  v: typeof FD_REMOTE_STATUS_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_REMOTE_STATUS_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: Record<string, never>
+}
 
 export interface FdChildrenRequest {
   v: typeof FD_CHILDREN_VERSION
@@ -240,6 +256,34 @@ function boundChildrenMessage(msg: string): string {
   return msg
 }
 
+const REMOTE_STATUS_MESSAGE_LIMIT = 200
+
+function boundRemoteStatusMessage(msg: string): string {
+  if (msg.length > REMOTE_STATUS_MESSAGE_LIMIT) return msg.slice(0, REMOTE_STATUS_MESSAGE_LIMIT)
+  return msg
+}
+
+function remoteStatusFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_REMOTE_STATUS_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_REMOTE_STATUS_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
 function validateGetRequest(raw: unknown): FdGetRequest {
   if (!isRecord(raw)) throw new Error("params must be object")
   if (raw.v !== FD_GET_VERSION) throw new Error("v must be 1")
@@ -348,6 +392,38 @@ function validateChildrenRequest(raw: unknown): FdChildrenRequest {
   if (token.length === 0 || token.includes(":"))
     throw new Error("opId must be children:<parentSessionId>:<token> with nonempty colon-free token")
   return raw as unknown as FdChildrenRequest
+}
+
+function validateRemoteStatusRequest(raw: unknown): FdRemoteStatusRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_REMOTE_STATUS_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_REMOTE_STATUS_OP) throw new Error("op must be remote/status")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for remote-status")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for remote-status")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "remote-status" || segs[1]!.length === 0)
+    throw new Error("opId must be remote-status:<token> with nonempty colon-free token")
+  if ((segs[1] as string).includes(":")) throw new Error("opId must be remote-status:<token> with nonempty colon-free token")
+  return raw as unknown as FdRemoteStatusRequest
 }
 
 function validateStatusRequest(raw: unknown): FdStatusRequest {
@@ -907,6 +983,56 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 return Effect.succeed(childrenFailed(req, "internal", "internal error", false))
               }),
             )
+          }),
+        )
+        return result
+      }
+      if (method === "remote/status") {
+        // Remote-status parity-only read: process-global KiloSessions snapshot.
+        // Directory/workspace are routing identity only; payload booleans are
+        // never bound to the request directory. No mutation, no pagination,
+        // no config ownership, no InstanceRef lane.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdRemoteStatusRequest
+            try {
+              req = validateRemoteStatusRequest(params)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return remoteStatusFailed(fallbackIds(params), "validation.failed", boundRemoteStatusMessage(msg), false)
+            }
+            try {
+              canonicalDirectory(req.context.directory)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return remoteStatusFailed(req, "validation.failed", boundRemoteStatusMessage(msg), false)
+            }
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return remoteStatusFailed(req, "validation.failed", "invalid workspace", false)
+            }
+            const snap = yield* Effect.sync(() => KiloSessions.remoteStatus()).pipe(
+              Effect.catch(() => Effect.succeed({ enabled: false, connected: false })),
+              Effect.catchDefect(() => Effect.succeed({ enabled: false, connected: false })),
+            )
+            const enabled = (snap as { enabled?: unknown }).enabled === true
+            const connected = (snap as { connected?: unknown }).connected === true
+            if (typeof (snap as { enabled?: unknown }).enabled !== "boolean")
+              return remoteStatusFailed(req, "internal", "internal error", false)
+            if (typeof (snap as { connected?: unknown }).connected !== "boolean")
+              return remoteStatusFailed(req, "internal", "internal error", false)
+            return {
+              v: FD_REMOTE_STATUS_VERSION,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: FD_REMOTE_STATUS_OP,
+              idempotencyKey: req.idempotencyKey,
+              status: "succeeded",
+              outcome: { type: "succeeded", time: Date.now() },
+              accepted: true,
+              data: { status: { enabled, connected } },
+            }
           }),
         )
         return result

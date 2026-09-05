@@ -26,12 +26,16 @@ import {
   type ServePrivateGetResult,
   type ServePrivateMessagesRequest,
   type ServePrivateMessagesResult,
+  type ServePrivateRemoteStatusRequest,
+  type ServePrivateRemoteStatusResult,
+  type PrivateRemoteStatusWireOutcome,
   type ServePrivateStatusRequest,
   type ServePrivateStatusResult,
   compareUpdateParity,
 } from "./serve-private-peer"
 import * as crypto from "crypto"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
+import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
 import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-provider/rename-session"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
 
@@ -181,6 +185,7 @@ export class KiloConnectionService {
    */
   private readonly deferredMessagesObservers: Map<string, () => void> = new Map()
   private readonly deferredChildren: DeferredChildren = new DeferredChildren(this.privateAvailableListeners)
+  private readonly deferredRemoteStatus: DeferredRemoteStatus = new DeferredRemoteStatus(this.privateAvailableListeners)
   /**
    * Definitively failed private get epoch (B6 LOCK-005/012): set only when
    * the current backend epoch's negotiation definitively fails (explicit
@@ -739,6 +744,7 @@ export class KiloConnectionService {
     this.clearAllDeferredGetObservers()
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
+    this.deferredRemoteStatus.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -784,6 +790,7 @@ export class KiloConnectionService {
     this.clearAllDeferredGetObservers()
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
+    this.deferredRemoteStatus.clearAll()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -964,6 +971,7 @@ export class KiloConnectionService {
     const peer = this.privatePeer
     if (!peer) return
     const childrenSafe = reason.startsWith("children ")
+    const remoteSafe = reason.startsWith("remote-status ")
     const messagesSafe = ["observer timeout cancel throw", "observer timeout exact cancel miss", "messages observer timeout"].includes(reason)
     if (childrenSafe) {
       console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "session/children", invalidated: true })
@@ -971,6 +979,13 @@ export class KiloConnectionService {
         peer.invalidateOnObserverTimeout(reason)
       } catch {
         console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "session/children", invalidateFailed: true })
+      }
+    } else if (remoteSafe) {
+      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "remote/status", invalidated: true })
+      try {
+        peer.invalidateOnObserverTimeout(reason)
+      } catch {
+        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "remote/status", invalidateFailed: true })
       }
     } else if (messagesSafe) {
       console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch:`, {
@@ -1000,6 +1015,7 @@ export class KiloConnectionService {
     this.clearAllDeferredGetObservers()
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
+    this.deferredRemoteStatus.clearAll()
   }
 
   /**
@@ -1197,6 +1213,12 @@ export class KiloConnectionService {
     return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, parent, listener)
   }
 
+  /** One-shot deferred remote-status observation; dedupe/lifecycle live in DeferredRemoteStatus. */
+  addDeferredRemoteStatusObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
+    const store = this.deferredRemoteStatus
+    return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
+  }
+
   private toError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error))
   }
@@ -1259,6 +1281,7 @@ export class KiloConnectionService {
       this.clearDeferredGetObserversForEpoch(staleEpoch)
       this.clearDeferredMessagesObserversForEpoch(staleEpoch)
       this.deferredChildren.clearForEpoch(staleEpoch)
+      this.deferredRemoteStatus.clearForEpoch(staleEpoch)
     }
     if (this.privatePeer === peer) {
       this.privatePeer = null
@@ -1280,6 +1303,7 @@ export class KiloConnectionService {
     this.clearDeferredGetObserversForEpoch(epochAtStart)
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.deferredChildren.clearForEpoch(epochAtStart)
+    this.deferredRemoteStatus.clearForEpoch(epochAtStart)
     return true
   }
 
@@ -1320,6 +1344,7 @@ export class KiloConnectionService {
     this.clearDeferredGetObserversForEpoch(epochAtStart)
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.deferredChildren.clearForEpoch(epochAtStart)
+    this.deferredRemoteStatus.clearForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
 
@@ -1363,6 +1388,7 @@ export class KiloConnectionService {
       this.clearDeferredGetObserversForEpoch(server.epoch)
       this.clearDeferredMessagesObserversForEpoch(server.epoch)
       this.deferredChildren.clearForEpoch(server.epoch)
+      this.deferredRemoteStatus.clearForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
     }
@@ -2317,6 +2343,83 @@ export class KiloConnectionService {
       (id, msg) => peerAtCall.tryCancelPending(id, msg),
       () => peerAtCall.invalidateOnObserverTimeout("children stale observer timeout"),
       peerAtCall.privateChildrenOutcomeWithHandle(req),
+      req,
+    )
+  }
+
+  async privateRemoteStatus(req: ServePrivateRemoteStatusRequest): Promise<ServePrivateRemoteStatusResult> {
+    const handle = this.privateRemoteStatusWithHandle(req)
+    return handle.promise
+  }
+
+  privateRemoteStatusWithHandle(req: ServePrivateRemoteStatusRequest): { id: number; promise: Promise<ServePrivateRemoteStatusResult>; cancel: (msg?: string) => boolean | "stale" } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("remote/status")) {
+      throw new Error("Private peer missing remote/status capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const handle = peerAtCall.privateRemoteStatusWithHandle(req)
+    const promise = handle.promise.then((result) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "remote/status",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateRemoteStatusResult
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "remote/status",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateRemoteStatusResult
+      }
+      return result
+    })
+    const wrapped = wrapRemoteStatusOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("remote-status stale observer timeout"),
+      { id: handle.id, promise: handle.promise.then((r) => ({ kind: "valid" as const, result: r })) },
+      req,
+    )
+    return { id: handle.id, promise, cancel: wrapped.cancel }
+  }
+
+  privateRemoteStatusOutcomeWithHandle(req: ServePrivateRemoteStatusRequest): { id: number; promise: Promise<PrivateRemoteStatusWireOutcome>; cancel: (msg?: string) => PrivateStatusObserverCancelResult } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapRemoteStatusOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("remote-status stale observer timeout"),
+      peerAtCall.privateRemoteStatusOutcomeWithHandle(req),
       req,
     )
   }
