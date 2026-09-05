@@ -1,11 +1,13 @@
-// Gate B deferred `experimental/session/list` read-only candidate contract evidence only.
-// Pure contract helpers with no transport, no private capability, no dispatch,
-// no runtime observation, no durable state, no pagination policy, and no
-// production parity claim.
-// `op:"experimental/session/list"` below is a contract-evidence label only; it
-// is never registered as a private capability and never sent over any peer.
-// Production listing stays SDK-only (`GET /experimental/session` via
-// `@kilocode/sdk` `client.experimental.session.list`).
+// `experimental/session/list` read-only parity candidate (detached, warn-only).
+// Strict v1 helpers for the private `experimental/session/list` capability:
+// routing-only directory/workspace identity, `filter` payload, safe
+// `{id,directory,title,updated}` summary projection with inline optional
+// numeric `nextCursor` (omitted exactly when production omits `x-next-cursor`),
+// redacted failures, and a detached parity helper comparing only the
+// shared-id projection plus cursor presence/value for the same request.
+// The private path never mutates SDK or user state and never replaces
+// `GET /experimental/session` (`@kilocode/sdk`
+// `client.experimental.session.list` remains the sole authority).
 //
 // Source facts (read-only evidence, not imported):
 // - Route: `GET /experimental/session` with `SessionListQuery`
@@ -264,7 +266,7 @@ export type SessionListResult =
       status: "succeeded"
       outcome: { type: "succeeded"; time: number }
       accepted: true
-      data: { sessions: SessionListSummary[] }
+      data: { sessions: SessionListSummary[]; nextCursor?: number }
     }
   | {
       v: 1
@@ -361,9 +363,14 @@ export function validateSessionListResult(raw: unknown, req: SessionListContract
     if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
     const data = rec.data
     if (!isRecord(data)) throw new Error("succeeded data must be object")
-    const allowedData = new Set(["sessions"])
+    const allowedData = new Set(["sessions", "nextCursor"])
     for (const k of Object.keys(data as Record<string, unknown>)) if (!allowedData.has(k)) throw new Error(`unexpected data field ${k}`)
     validateSessionListSummaries((data as Record<string, unknown>).sessions)
+    const next = (data as Record<string, unknown>).nextCursor
+    if (next !== undefined) {
+      if (typeof next !== "number" || !Number.isFinite(next) || (next as number) < 0)
+        throw new Error("succeeded data.nextCursor must be non-negative finite number when present")
+    }
     if (rec.failure !== undefined) throw new Error("succeeded must not have failure")
     if (outRec.failure !== undefined) throw new Error("succeeded outcome must not have failure")
     return raw as unknown as SessionListResult
@@ -389,13 +396,107 @@ export function validateSessionListResult(raw: unknown, req: SessionListContract
   return raw as unknown as SessionListResult
 }
 
-// Detached parity only (contract evidence, never production parity):
+// Detached parity only (never production parity):
 // compares ONLY the projected summary fields (`id`, `directory`, `title`) for
-// ids present on both sides. Order is never compared; length/membership gaps
-// are reported as explicit unknowns (`session-list-membership-unknown`) rather
-// than matches or mismatches, because pagination, freshness, and
-// deleted/archived lifecycle are unknown. `updated` is validated for shape
-// only and never compared. The request directory is never compared.
+// ids present on both sides plus cursor presence/value for the same request
+// (private `data.nextCursor` vs production `x-next-cursor` header). Order is
+// never compared; length/membership gaps are reported as explicit unknowns
+// (`session-list-membership-unknown`) rather than matches or mismatches,
+// because freshness and deleted/archived lifecycle are unknown. `updated` is
+// validated for shape only and never compared. The request directory is never
+// compared. Cursor values never leave this function; only presence booleans
+// reach details.
+type SdkSessionListCursorState =
+  | { present: false }
+  | { present: true; valid: true; value: number }
+  | { present: true; valid: false }
+
+function sdkSessionListCursorState(sdk: { response?: unknown }): SdkSessionListCursorState {
+  const resp = (sdk as { response?: { headers?: unknown } }).response
+  if (!resp || typeof resp !== "object") return { present: false }
+  const headers = (resp as { headers?: unknown }).headers as { get?: unknown } | undefined
+  if (headers && typeof headers.get === "function") {
+    let v: unknown
+    try {
+      v = (headers.get as (k: string) => unknown).call(headers, "x-next-cursor")
+    } catch {
+      return { present: true, valid: false }
+    }
+    if (v === null || v === undefined) return { present: false }
+    if (typeof v === "string") {
+      if (v.trim().length === 0) return { present: true, valid: false }
+      const n = Number(v)
+      if (Number.isFinite(n) && n >= 0) return { present: true, valid: true, value: n }
+      return { present: true, valid: false }
+    }
+    if (typeof v === "number") {
+      if (Number.isFinite(v) && v >= 0) return { present: true, valid: true, value: v }
+      return { present: true, valid: false }
+    }
+    return { present: true, valid: false }
+  }
+  return { present: false }
+}
+
+function privSessionListCursorValue(pdata: { nextCursor?: unknown }): number | null {
+  const v = (pdata as { nextCursor?: unknown }).nextCursor
+  if (typeof v === "number" && Number.isFinite(v) && v >= 0) return v
+  return null
+}
+
+type SessionListParityBase = { orderingUnknown: boolean; paginationUnknown: boolean; freshnessUnknown: boolean; lifecycleUnknown: boolean }
+
+function compareSessionListSummaries(
+  privSessions: SessionListSummary[],
+  sdkRaw: unknown[],
+  base: SessionListParityBase,
+): { divergence: string | null; details: Record<string, unknown> } | null {
+  const sdkById = new Map<string, Record<string, unknown>>()
+  for (const item of sdkRaw) {
+    if (!item || typeof item !== "object") continue
+    const rec = item as Record<string, unknown>
+    if (typeof rec.id === "string") sdkById.set(rec.id, rec)
+  }
+  for (const p of privSessions) {
+    const s = sdkById.get(p.id)
+    if (!s) {
+      return { divergence: `session-list-membership-unknown:${p.id}`, details: { ...base, id: p.id } }
+    }
+    if (typeof s.directory === "string" && s.directory !== p.directory) {
+      return { divergence: "session-list-directory-mismatch", details: { ...base, mismatch: true, field: "directory", id: p.id } }
+    }
+    if (typeof s.title === "string" && s.title !== p.title) {
+      return { divergence: "session-list-title-mismatch", details: { ...base, mismatch: true, field: "title", id: p.id } }
+    }
+  }
+  for (const [id] of sdkById) {
+    if (!privSessions.some((p) => p.id === id)) {
+      return { divergence: `session-list-membership-unknown:${id}`, details: { ...base, id } }
+    }
+  }
+  return null
+}
+
+function compareSessionListCursors(
+  pdata: { nextCursor?: unknown },
+  sdk: { response?: unknown },
+  compared: number,
+  base: SessionListParityBase,
+): { divergence: string | null; details: Record<string, unknown> } {
+  const sdkState = sdkSessionListCursorState(sdk)
+  const privCursor = privSessionListCursorValue(pdata)
+  if (sdkState.present && !sdkState.valid) {
+    return { divergence: "session-list-cursor-invalid", details: { ...base, sdkCursor: true, privCursor: privCursor !== null, invalid: true } }
+  }
+  const sdkCursor = sdkState.present && sdkState.valid ? sdkState.value : null
+  const sdkHasCursor = sdkCursor !== null
+  const privHasCursor = privCursor !== null
+  if (sdkHasCursor !== privHasCursor || (sdkHasCursor && privHasCursor && sdkCursor !== privCursor)) {
+    return { divergence: "session-list-cursor-mismatch", details: { ...base, sdkCursor: sdkHasCursor, privCursor: privHasCursor } }
+  }
+  return { divergence: null, details: { ...base, compared, sdkCursor: sdkHasCursor, privCursor: privHasCursor } }
+}
+
 export function compareSessionListParity(
   priv: SessionListResult,
   sdk: { data?: unknown; error?: unknown; response?: unknown },
@@ -415,31 +516,16 @@ export function compareSessionListParity(
     if (!Array.isArray(sdkRaw)) {
       return { divergence: "session-list-shape-mismatch", details: { ...base, mismatch: true } }
     }
-    const privSessions = (priv as Extract<SessionListResult, { status: "succeeded" }>).data.sessions
-    const sdkById = new Map<string, Record<string, unknown>>()
-    for (const item of sdkRaw as unknown[]) {
-      if (!item || typeof item !== "object") continue
-      const rec = item as Record<string, unknown>
-      if (typeof rec.id === "string") sdkById.set(rec.id, rec)
-    }
-    for (const p of privSessions) {
-      const s = sdkById.get(p.id)
-      if (!s) {
-        return { divergence: `session-list-membership-unknown:${p.id}`, details: { ...base, id: p.id } }
-      }
-      if (typeof s.directory === "string" && s.directory !== p.directory) {
-        return { divergence: "session-list-directory-mismatch", details: { ...base, mismatch: true, field: "directory", id: p.id } }
-      }
-      if (typeof s.title === "string" && s.title !== p.title) {
-        return { divergence: "session-list-title-mismatch", details: { ...base, mismatch: true, field: "title", id: p.id } }
-      }
-    }
-    for (const [id] of sdkById) {
-      if (!privSessions.some((p) => p.id === id)) {
-        return { divergence: `session-list-membership-unknown:${id}`, details: { ...base, id } }
-      }
-    }
-    return { divergence: null, details: { ...base, compared: privSessions.length } }
+    const pdata = (priv as Extract<SessionListResult, { status: "succeeded" }>).data
+    const summaries = compareSessionListSummaries(pdata.sessions, sdkRaw as unknown[], base)
+    if (summaries) return summaries
+    return compareSessionListCursors(pdata as { nextCursor?: unknown }, sdk, pdata.sessions.length, base)
   }
   return { divergence: null, details: { ...base } }
 }
+
+// Peer-facing aliases following the serve-private-* naming conventions.
+export type ServePrivateSessionListRequest = SessionListContractRequest
+export type ServePrivateSessionListResult = SessionListResult
+export type PrivateSessionListWireOutcome = SessionListWireOutcome
+export { isSessionListValidationError as isPrivateSessionListValidationError }

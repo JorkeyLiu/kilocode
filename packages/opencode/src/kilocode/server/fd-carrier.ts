@@ -75,6 +75,31 @@ export const FD_CHILDREN_VERSION = 1 as const
 export const FD_CHILDREN_OP = "session/children" as const
 export const FD_REMOTE_STATUS_VERSION = 1 as const
 export const FD_REMOTE_STATUS_OP = "remote/status" as const
+export const FD_SESSION_LIST_VERSION = 1 as const
+export const FD_SESSION_LIST_OP = "experimental/session/list" as const
+
+export interface FdSessionListRequest {
+  v: typeof FD_SESSION_LIST_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_SESSION_LIST_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: {
+    filter: {
+      projectID?: string
+      roots?: boolean
+      start?: number
+      cursor?: number
+      search?: string
+      limit?: number
+      archived?: boolean
+    }
+  }
+}
 
 export interface FdRemoteStatusRequest {
   v: typeof FD_REMOTE_STATUS_VERSION
@@ -263,6 +288,13 @@ function boundRemoteStatusMessage(msg: string): string {
   return msg
 }
 
+const SESSION_LIST_MESSAGE_LIMIT = 200
+
+function boundSessionListMessage(msg: string): string {
+  if (msg.length > SESSION_LIST_MESSAGE_LIMIT) return msg.slice(0, SESSION_LIST_MESSAGE_LIMIT)
+  return msg
+}
+
 function remoteStatusFailed(
   req: { requestId: string; opId: string; idempotencyKey: string },
   code: string,
@@ -276,6 +308,27 @@ function remoteStatusFailed(
     requestId: req.requestId,
     opId: req.opId,
     op: FD_REMOTE_STATUS_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function sessionListFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_SESSION_LIST_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_SESSION_LIST_OP,
     idempotencyKey: req.idempotencyKey,
     status: "failed",
     outcome: { type: "failed", time, failure },
@@ -424,6 +477,59 @@ function validateRemoteStatusRequest(raw: unknown): FdRemoteStatusRequest {
     throw new Error("opId must be remote-status:<token> with nonempty colon-free token")
   if ((segs[1] as string).includes(":")) throw new Error("opId must be remote-status:<token> with nonempty colon-free token")
   return raw as unknown as FdRemoteStatusRequest
+}
+
+function validateSessionListRequest(raw: unknown): FdSessionListRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_SESSION_LIST_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_SESSION_LIST_OP) throw new Error("op must be experimental/session/list")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for session-list")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  const allowedPayload = new Set(["filter"])
+  for (const k of Object.keys(payload)) if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
+  const filter = (payload as Record<string, unknown>).filter
+  if (!isRecord(filter)) throw new Error("payload.filter must be object")
+  const allowedFilter = new Set(["projectID", "roots", "start", "cursor", "search", "limit", "archived"])
+  for (const k of Object.keys(filter)) if (!allowedFilter.has(k)) throw new Error(`unexpected filter field ${k}`)
+  const rec = filter as Record<string, unknown>
+  if (rec.projectID !== undefined && !isNonEmpty(rec.projectID))
+    throw new Error("filter.projectID must be non-empty string when present")
+  if (rec.roots !== undefined && typeof rec.roots !== "boolean")
+    throw new Error("filter.roots must be boolean when present")
+  if (rec.start !== undefined && (typeof rec.start !== "number" || !Number.isFinite(rec.start)))
+    throw new Error("filter.start must be finite number when present")
+  if (rec.cursor !== undefined && (typeof rec.cursor !== "number" || !Number.isFinite(rec.cursor)))
+    throw new Error("filter.cursor must be finite number when present")
+  if (rec.search !== undefined && typeof rec.search !== "string")
+    throw new Error("filter.search must be string when present")
+  if (rec.limit !== undefined) {
+    if (typeof rec.limit !== "number" || !Number.isInteger(rec.limit) || (rec.limit as number) <= 0)
+      throw new Error("filter.limit must be positive integer when present")
+  }
+  if (rec.archived !== undefined && typeof rec.archived !== "boolean")
+    throw new Error("filter.archived must be boolean when present")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const opId = raw.opId as string
+  const parts = opId.split(":")
+  if (parts.length !== 2 || parts[0] !== "experimental-session-list" || parts[1]!.length === 0)
+    throw new Error("opId must be experimental-session-list:<token> with nonempty colon-free token")
+  return raw as unknown as FdSessionListRequest
 }
 
 function validateStatusRequest(raw: unknown): FdStatusRequest {
@@ -1036,6 +1142,127 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               accepted: true,
               data: { status: { enabled, connected } },
             }
+          }),
+        )
+        return result
+      }
+      if (method === "experimental/session/list") {
+        // Session-list parity-only read: same-directory GlobalInfo page via
+        // drain-control snapshot, projected to safe summaries with inline
+        // optional numeric nextCursor matching production x-next-cursor.
+        // Directory/workspace are routing identity; workspace never reaches
+        // the service. No mutation, no ordering claim, no lifecycle claim.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdSessionListRequest
+            try {
+              req = validateSessionListRequest(params)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return sessionListFailed(fallbackIds(params), "validation.failed", boundSessionListMessage(msg), false)
+            }
+            const dir = canonicalDirectory(req.context.directory)
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return sessionListFailed(req, "validation.failed", "invalid workspace", false)
+            }
+            const filter = req.payload.filter
+            const limit = filter.limit ?? 100
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence
+                  ? boundSessionListMessage(err instanceof Error ? err.message : String(err))
+                  : "internal error"
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: sessionListFailed(req, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: sessionListFailed(req, "internal", "internal error", false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              const svc = yield* Session.Service
+              const all = yield* svc
+                .listGlobal({
+                  projectID: filter.projectID,
+                  directory: dir,
+                  roots: filter.roots,
+                  start: filter.start,
+                  cursor: filter.cursor,
+                  search: filter.search,
+                  limit: limit + 1,
+                  archived: filter.archived,
+                })
+                .pipe(
+                  Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                  Effect.catch(() => {
+                    return Effect.succeed({ tag: "fail" as const })
+                  }),
+                  Effect.catchDefect(() => {
+                    return Effect.succeed({ tag: "fail" as const })
+                  }),
+                )
+              if (all.tag !== "ok") return sessionListFailed(req, "internal", "internal error", false)
+              const page = all.value.length > limit ? all.value.slice(0, limit) : all.value
+              const summaries: Array<{ id: string; directory: string; title: string; updated: number }> = []
+              for (const item of page) {
+                const rec = item as unknown as Record<string, unknown>
+                const id = rec.id
+                const directory = rec.directory
+                const title = rec.title
+                const time = rec.time as { updated?: unknown } | undefined
+                const updated = time?.updated
+                if (typeof id !== "string" || !id.startsWith("ses")) return sessionListFailed(req, "internal", "internal error", false)
+                if (typeof directory !== "string" || directory.length === 0)
+                  return sessionListFailed(req, "internal", "internal error", false)
+                if (typeof title !== "string") return sessionListFailed(req, "internal", "internal error", false)
+                if (typeof updated !== "number" || !Number.isFinite(updated) || updated < 0)
+                  return sessionListFailed(req, "internal", "internal error", false)
+                summaries.push({ id, directory, title, updated })
+              }
+              let next: number | undefined
+              if (all.value.length > limit && page.length > 0) {
+                const last = page[page.length - 1] as unknown as Record<string, unknown>
+                const t = (last.time as { updated?: unknown } | undefined)?.updated
+                if (typeof t !== "number" || !Number.isFinite(t) || t < 0)
+                  return sessionListFailed(req, "internal", "internal error", false)
+                next = t
+              }
+              return {
+                v: FD_SESSION_LIST_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_SESSION_LIST_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: next !== undefined ? { sessions: summaries, nextCursor: next } : { sessions: summaries },
+              }
+            }).pipe(
+              Effect.provideService(InstanceRef, acquired.value.ctx),
+              Effect.ensuring(acquired.value.release),
+            )
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(sessionListFailed(req, "internal", "internal error", false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(sessionListFailed(req, "internal", "internal error", false))
+              }),
+            )
           }),
         )
         return result

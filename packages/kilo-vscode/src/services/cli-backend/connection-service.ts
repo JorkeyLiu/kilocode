@@ -33,6 +33,11 @@ import {
   type ServePrivateStatusResult,
   compareUpdateParity,
 } from "./serve-private-peer"
+import { wrapSessionListOutcomeForOwner } from "./serve-private-session-list"
+import type {
+  PrivateSessionListWireOutcome,
+  ServePrivateSessionListRequest,
+} from "./serve-private-session-list-contract"
 import * as crypto from "crypto"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
@@ -2322,6 +2327,33 @@ export class KiloConnectionService {
       return true
     }
     return { id: handle.id, promise, cancel }
+  }
+
+  /** Epoch-aware pass-through for the read-only session-list parity observer. */
+  privateSessionListOutcomeWithHandle(req: ServePrivateSessionListRequest): {
+    id: number
+    promise: Promise<PrivateSessionListWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("experimental/session/list")) {
+      throw new Error("Private peer missing experimental/session/list capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapSessionListOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("session-list stale observer timeout"),
+      peerAtCall.privateSessionListOutcomeWithHandle(req),
+      req,
+    )
   }
 
   privateChildrenOutcomeWithHandle(req: ServePrivateChildrenRequest): {

@@ -60,6 +60,7 @@ import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-fil
 import { renameSessionWithResult, buildSessionUpdateIdentity, buildSessionCreateIdentity } from "./kilo-provider/rename-session"
 import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
 import { observeSessionMessagesParityDetached } from "./kilo-provider/session-messages-parity"
+import { observeSessionListParityDetached } from "./kilo-provider/session-list-parity"
 import { parseSessionTitle } from "./shared/session-title"
 import { handleFileSearch } from "./kilo-provider/file-search"
 import { handleFilePicker } from "./kilo-provider/file-picker"
@@ -2967,17 +2968,55 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private get sessionRefreshContext(): SessionRefreshContext {
     const client = this.client
     const directory = this.getWorkspaceDirectory()
+    const connection = this.connectionService
     return {
       pendingSessionRefresh: this.pendingSessionRefresh,
       connectionState: this.connectionState,
       listSessions: client
         ? async (input: { limit: number; cursor?: number }) => {
-            const result = await client.experimental.session.list(
-              { directory, limit: input.limit, cursor: input.cursor },
-              { throwOnError: true },
-            )
-            const next = result.response.headers.get("x-next-cursor")
-            return { sessions: result.data, cursor: next ? Number(next) : null }
+            const filter = { limit: input.limit, ...(input.cursor !== undefined ? { cursor: input.cursor } : {}) }
+            try {
+              const result = await client.experimental.session.list(
+                { directory, limit: input.limit, cursor: input.cursor },
+                { throwOnError: true },
+              )
+              const next = result.response.headers.get("x-next-cursor")
+              // Detached SDK-first session-list parity: warn-only, never
+              // blocks refresh, never mutates SDK state or the return value.
+              try {
+                observeSessionListParityDetached(
+                  connection as unknown as Parameters<typeof observeSessionListParityDetached>[0],
+                  { data: result.data, response: result.response } as Parameters<typeof observeSessionListParityDetached>[1],
+                  directory,
+                  undefined,
+                  filter,
+                )
+              } catch {
+                console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
+                  op: "experimental/session/list",
+                  observationFailed: true,
+                })
+              }
+              return { sessions: result.data, cursor: next ? Number(next) : null }
+            } catch (error) {
+              // Failure-path parity is detached and warn-only; the throw
+              // below preserves the exact SDK error semantics for refresh.
+              try {
+                observeSessionListParityDetached(
+                  connection as unknown as Parameters<typeof observeSessionListParityDetached>[0],
+                  { error, response: (error as { response?: unknown })?.response } as Parameters<typeof observeSessionListParityDetached>[1],
+                  directory,
+                  undefined,
+                  filter,
+                )
+              } catch {
+                console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
+                  op: "experimental/session/list",
+                  observationFailed: true,
+                })
+              }
+              throw error
+            }
           }
         : null,
       loadedCount: this.sessionCount,

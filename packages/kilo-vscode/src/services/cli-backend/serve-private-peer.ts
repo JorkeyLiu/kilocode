@@ -32,6 +32,9 @@ import type {
   ServePrivateRemoteStatusRequest,
   ServePrivateRemoteStatusResult,
 } from "./serve-private-remote-status"
+import { validateSessionListContractRequest as validateSessionListRequest } from "./serve-private-session-list-contract"
+import { requestSessionListOutcome } from "./serve-private-session-list"
+import type { PrivateSessionListWireOutcome, ServePrivateSessionListRequest } from "./serve-private-session-list-contract"
 
 export {
   canonicalGetOpId,
@@ -93,7 +96,6 @@ export type {
   ServePrivateRemoteStatusRequest,
   ServePrivateRemoteStatusResult,
 } from "./serve-private-remote-status"
-
 export interface ServePrivateCancelQueuedRequest {
   v: 1
   requestId: string
@@ -1423,7 +1425,7 @@ export class ServePrivatePeer {
     const initPromise = peerAtStart.request("initialize", {
       protocol: { name: "kilo-private", major: 1, minor: 0 },
       clientInfo: { name: "kilo-vscode", version: "7.4.11" },
-      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages", "session/children", "remote/status"],
+      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages", "session/children", "remote/status", "experimental/session/list"],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
 
@@ -1492,6 +1494,7 @@ export class ServePrivatePeer {
       let hasMessages = false
       let hasChildren = false
       let hasRemoteStatus = false
+      let hasSessionList = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
@@ -1502,6 +1505,7 @@ export class ServePrivatePeer {
         hasMessages = caps.includes("session/messages")
         hasChildren = caps.includes("session/children")
         hasRemoteStatus = caps.includes("remote/status")
+        hasSessionList = caps.includes("experimental/session/list")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -1582,6 +1586,7 @@ export class ServePrivatePeer {
           hasChildren = true
         else if (((c as Record<string, unknown>).session as Record<string, unknown> | null)?.children) hasChildren = true
         if ((c as Record<string, unknown>)["remote/status"]) hasRemoteStatus = true
+        if ((c as Record<string, unknown>)["experimental/session/list"]) hasSessionList = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
@@ -1592,10 +1597,11 @@ export class ServePrivatePeer {
           hasMessages = false
           hasChildren = false
           hasRemoteStatus = false
+          hasSessionList = false
         }
       }
 
-      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren && !hasRemoteStatus) {
+      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren && !hasRemoteStatus && !hasSessionList) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
         if (this.peer === peerAtStart) this.peer = null
@@ -2014,6 +2020,7 @@ export class ServePrivatePeer {
         if (sess.children) return true
       }
       if (cap === "remote/status" && c["remote/status"]) return true
+      if (cap === "experimental/session/list" && c["experimental/session/list"]) return true
     }
     return false
   }
@@ -2364,6 +2371,30 @@ export class ServePrivatePeer {
     return { id: id as unknown as number, promise, cancel }
   }
 
+  /** Normalized outcome handle for the read-only session-list parity observer. */
+  privateSessionListOutcomeWithHandle(req: ServePrivateSessionListRequest): { id: number; promise: Promise<PrivateSessionListWireOutcome>; cancel: (msg?: string) => boolean } {
+    validateSessionListRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("experimental/session/list")) {
+      throw new Error("Private peer missing experimental/session/list capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    return requestSessionListOutcome(
+      peerAtCall as unknown as import("./serve-private-session-list").SessionListRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => ({ ...this.parseFailedInfo(e), msg: "private session-list transport failed" }),
+      },
+      (id) => this.makeHandleCancel(id, req.opId, peerAtCall, currentEpoch),
+      req,
+    )
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -2498,7 +2529,7 @@ export class ServePrivatePeer {
 
   private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {
     for (const k of Object.keys(c)) {
-      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children" || k === "remote/status") && c[k]) out.push(k)
+      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children" || k === "remote/status" || k === "experimental/session/list") && c[k]) out.push(k)
     }
   }
 
