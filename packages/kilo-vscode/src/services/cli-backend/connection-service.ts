@@ -1320,6 +1320,7 @@ export class KiloConnectionService {
       this.deferredChildren.clearForEpoch(staleEpoch)
       this.deferredRemoteStatus.clearForEpoch(staleEpoch)
       this.deferredPath.clearForEpoch(staleEpoch)
+      this.deferredCommandList.clearForEpoch(staleEpoch)
     }
     if (this.privatePeer === peer) {
       this.privatePeer = null
@@ -1343,6 +1344,7 @@ export class KiloConnectionService {
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
     this.deferredPath.clearForEpoch(epochAtStart)
+    this.deferredCommandList.clearForEpoch(epochAtStart)
     return true
   }
 
@@ -1385,6 +1387,7 @@ export class KiloConnectionService {
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
     this.deferredPath.clearForEpoch(epochAtStart)
+    this.deferredCommandList.clearForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
 
@@ -1430,6 +1433,7 @@ export class KiloConnectionService {
       this.deferredChildren.clearForEpoch(server.epoch)
       this.deferredRemoteStatus.clearForEpoch(server.epoch)
       this.deferredPath.clearForEpoch(server.epoch)
+      this.deferredCommandList.clearForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
     }

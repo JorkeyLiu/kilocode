@@ -409,6 +409,62 @@ describe("fd-carrier command/list (parity-only read)", () => {
     }),
   )
 
+  it.live("F-002 malformed keys and path-bearing identities never reach the failure wire", () =>
+    Effect.gen(function* () {
+      const restoreParentPid = ownParentPid()
+      try {
+        const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const dir = tmp.path
+        const { carrier, ext } = linked()
+        try {
+          yield* Effect.promise(() => init(ext))
+          const evilKey = "/tmp/secret"
+          const evilId = "/tmp/secret-id"
+          const cases: Array<{ label: string; req: Record<string, unknown> }> = [
+            { label: "evil root key", req: listReq(dir, "tok1", { [evilKey]: 1 }) },
+            {
+              label: "evil context key",
+              req: { ...listReq(dir, "tok1"), context: { directory: dir, [evilKey]: 1 } },
+            },
+            {
+              label: "path requestId",
+              req: { ...listReq(dir, "tok1"), requestId: evilId, opId: "command-list:tok1", idempotencyKey: "command-list:tok1" },
+            },
+            {
+              label: "path opId token",
+              req: { ...listReq(dir, "tok1"), opId: "command-list:/tmp/secret", idempotencyKey: "command-list:/tmp/secret", requestId: "req-evil" },
+            },
+          ]
+          for (const c of cases) {
+            const res = asCommandListResult(yield* Effect.promise(() => ext.request("command/list", c.req)))
+            expect(res.status).toBe("failed")
+            expect(failureCodeOf(res)).toBe("validation.failed")
+            const wire = JSON.stringify(res)
+            expect(wire.includes(evilKey)).toBe(false)
+            expect(wire.includes("secret-id")).toBe(false)
+            // Fallback identities are sanitized to fixed tokens.
+            expect(res.requestId.includes("/")).toBe(false)
+            expect(res.opId.includes("/tmp")).toBe(false)
+            expect(res.idempotencyKey.includes("/tmp")).toBe(false)
+          }
+          // Legal request keeps exact correlation binding.
+          const good = asCommandListResult(
+            yield* Effect.promise(() => ext.request("command/list", listReq(dir, "good-tok", { requestId: "req-good" }))),
+          )
+          expect(good.status).toBe("succeeded")
+          expect(good.requestId).toBe("req-good")
+          expect(good.opId).toBe("command-list:good-tok")
+          expect(good.idempotencyKey).toBe("command-list:good-tok")
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        restoreParentPid()
+      }
+    }),
+  )
+
   it.live("unknown method stays MethodNotFound", () =>
     Effect.gen(function* () {
       const restoreParentPid = ownParentPid()

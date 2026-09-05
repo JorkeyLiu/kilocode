@@ -418,20 +418,37 @@ export function compareCommandListParity(
       const rec = item as Record<string, unknown>
       sdkByKey.set(entryKey(rec.name as string, rec.source), rec)
     }
+    // Membership gaps are fixed-category unknowns: counts and booleans only,
+    // never command names or payload material (audit F-001).
+    const sdkCount = sdkByKey.size
+    const privCount = privEntries.length
     for (const p of privEntries) {
       const s = sdkByKey.get(entryKey(p.name, p.source))
       if (!s) {
-        return { divergence: `command-list-membership-unknown:${p.name}`, details: { ...base, name: p.name } }
+        return {
+          divergence: "command-list-membership-unknown",
+          details: { ...base, membershipUnknown: true, privCount, sdkCount },
+        }
       }
-      if (typeof s.description === "string" && p.description !== undefined && s.description !== p.description) {
-        return { divergence: "command-list-description-mismatch", details: { ...base, mismatch: true, field: "description", name: p.name } }
+      // Optional description: presence and value are both compared (audit
+      // F-004). Both absent is equal; single-sided presence or differing
+      // values is a fixed description-mismatch with no name echo.
+      const sdkHas = s.description !== undefined
+      const privHas = p.description !== undefined
+      if (sdkHas !== privHas || (sdkHas && privHas && s.description !== p.description)) {
+        return {
+          divergence: "command-list-description-mismatch",
+          details: { ...base, descriptionMismatch: true, field: "description", compared: privCount },
+        }
       }
     }
-    for (const [key, rec] of sdkByKey) {
-      const name = rec.name as string
+    for (const key of sdkByKey.keys()) {
       const found = privEntries.some((p) => entryKey(p.name, p.source) === key)
       if (!found) {
-        return { divergence: `command-list-membership-unknown:${name}`, details: { ...base, name } }
+        return {
+          divergence: "command-list-membership-unknown",
+          details: { ...base, membershipUnknown: true, privCount, sdkCount },
+        }
       }
     }
     return { divergence: null, details: { ...base, compared: privEntries.length } }

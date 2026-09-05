@@ -234,4 +234,60 @@ describe("Gate B command/list candidate contract", () => {
     expect(compareCommandListParity(priv, { error: { message: "boom" } }).divergence?.startsWith("status-mismatch")).toBe(true)
     expect(compareCommandListParity(makeCommandListAmbiguous(req), { data: [] }).divergence).toBe("transport-unknown")
   })
+
+  test("F-001 parity diagnostics never carry command names or payload material", () => {
+    const req = validateCommandListContractRequest(makeReq())
+    const priv = validateCommandListResult(makeSucceeded(req), req)
+    const missing = compareCommandListParity(priv, { data: [] })
+    expect(missing.divergence).toBe("command-list-membership-unknown")
+    const missingWire = JSON.stringify({ divergence: missing.divergence, details: missing.details })
+    expect(missingWire.includes("init")).toBe(false)
+    expect((missing.details as Record<string, unknown>).membershipUnknown).toBe(true)
+    expect(typeof (missing.details as Record<string, unknown>).privCount).toBe("number")
+    expect(typeof (missing.details as Record<string, unknown>).sdkCount).toBe("number")
+    const desc = compareCommandListParity(priv, {
+      data: [{ name: "init", description: "other text", source: "command", hints: [] }],
+    })
+    expect(desc.divergence).toBe("command-list-description-mismatch")
+    const descWire = JSON.stringify({ divergence: desc.divergence, details: desc.details })
+    expect(descWire.includes("init")).toBe(false)
+    expect(descWire.includes("other text")).toBe(false)
+    expect(descWire.includes("guided setup")).toBe(false)
+    expect((desc.details as Record<string, unknown>).descriptionMismatch).toBe(true)
+  })
+
+  test("F-004 optional description compares presence and value without name echo", () => {
+    const req = validateCommandListContractRequest(makeReq())
+    const priv = validateCommandListResult(makeSucceeded(req), req)
+    // Both absent is equal.
+    const bareReq = validateCommandListContractRequest(makeReq())
+    const barePriv = validateCommandListResult(
+      {
+        ...makeSucceeded(bareReq),
+        data: { commands: [{ name: "init", source: "command", hints: [] }] },
+      },
+      bareReq,
+    )
+    const bothBare = compareCommandListParity(barePriv, { data: [{ name: "init", source: "command", hints: [] }] })
+    expect(bothBare.divergence).toBeNull()
+    // SDK present vs private absent is a fixed mismatch.
+    const sdkHas = compareCommandListParity(barePriv, {
+      data: [{ name: "init", description: "guided setup", source: "command", hints: [] }],
+    })
+    expect(sdkHas.divergence).toBe("command-list-description-mismatch")
+    // Private present vs SDK absent is a fixed mismatch.
+    const privHas = compareCommandListParity(priv, { data: [{ name: "init", source: "command", hints: [] }] })
+    expect(privHas.divergence).toBe("command-list-description-mismatch")
+    // Same presence with differing values is a fixed mismatch.
+    const diff = compareCommandListParity(priv, {
+      data: [{ name: "init", description: "other text", source: "command", hints: [] }],
+    })
+    expect(diff.divergence).toBe("command-list-description-mismatch")
+    for (const out of [sdkHas, privHas, diff]) {
+      const wire = JSON.stringify({ divergence: out.divergence, details: out.details })
+      expect(wire.includes("init")).toBe(false)
+      expect(wire.includes("other text")).toBe(false)
+      expect(wire.includes("guided setup")).toBe(false)
+    }
+  })
 })

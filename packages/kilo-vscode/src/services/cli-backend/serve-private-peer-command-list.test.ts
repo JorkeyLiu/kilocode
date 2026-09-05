@@ -371,6 +371,76 @@ describe("command-list private peer", () => {
     }
   })
 
+  test("F-001 membership/description logs and details never leak command names", async () => {
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const sdk = sdkSuccess([{ name: "secret-cmd", source: "command" }])
+      const conn: CommandListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateCommandListOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: "command/list",
+              idempotencyKey: req.idempotencyKey,
+              status: "succeeded",
+              outcome: { type: "succeeded", time: 1 },
+              accepted: true,
+              data: { commands: [{ name: "other-cmd", source: "command" }] },
+            },
+          }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      observeCommandListParityDetached(conn, sdk as never, "/tmp", undefined)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(warns.length).toBeGreaterThan(0)
+      const wire = JSON.stringify(warns)
+      expect(wire.includes("secret-cmd")).toBe(false)
+      expect(wire.includes("other-cmd")).toBe(false)
+      // Description presence mismatch is detected without name echo.
+      warns.length = 0
+      const sdk2 = sdkSuccess([{ name: "init", source: "command" }])
+      const conn2: CommandListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateCommandListOutcomeWithHandle: (req) => ({
+          id: 2,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: "command/list",
+              idempotencyKey: req.idempotencyKey,
+              status: "succeeded",
+              outcome: { type: "succeeded", time: 1 },
+              accepted: true,
+              data: { commands: [{ name: "init", description: "private-only", source: "command" }] },
+            },
+          }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      observeCommandListParityDetached(conn2, sdk2 as never, "/tmp", undefined)
+      await new Promise((r) => setTimeout(r, 50))
+      const flat = warns.flatMap((w) => w.map((p) => String(typeof p === "string" ? p : JSON.stringify(p))).join(" "))
+      expect(flat.some((s) => s.includes("command-list-description-mismatch"))).toBe(true)
+      expect(JSON.stringify(warns).includes("private-only")).toBe(false)
+      expect(JSON.stringify(warns).includes("init")).toBe(false)
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
   test("observer defers without work while the peer negotiates", async () => {
     const warns: unknown[][] = []
     const origWarn = console.warn

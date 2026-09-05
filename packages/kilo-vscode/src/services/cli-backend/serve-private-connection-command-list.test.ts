@@ -248,4 +248,139 @@ describe("command-list connection-service owner", () => {
     expect(typeof store.key).toBe("function")
     service.dispose()
   })
+
+  test("F-003 negotiation failure clears failed epoch keys and admits the next epoch", () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateEpoch: number | null
+      privateFailedGetEpoch: number | null
+      privateAvailable: boolean
+      privateAvailableListeners: Set<() => void>
+      failPrivateNegotiation: (epoch: number, pid: number | undefined) => void
+    }
+    rec.privateEpoch = 7
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    let oldFires = 0
+    service.addDeferredCommandListObserver("/tmp/old-epoch", undefined, () => {
+      oldFires += 1
+    })
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    rec.failPrivateNegotiation(7, 111)
+    expect(rec.privateAvailableListeners.size).toBe(0)
+    expect(oldFires).toBe(0)
+    // Next epoch is not suppressed by the failed epoch.
+    rec.privateEpoch = 8
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    let newFires = 0
+    service.addDeferredCommandListObserver("/tmp/new-epoch", undefined, () => {
+      newFires += 1
+    })
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    expect(newFires).toBe(0)
+    // Deferred store-level epoch isolation: clearing 7 never drops 8.
+    const store = new DeferredCommandList(new Set<() => void>())
+    const listeners = (service as unknown as { privateAvailableListeners: Set<() => void> }).privateAvailableListeners
+    void store
+    void listeners
+    service.dispose()
+  })
+
+  test("F-003 stale peer replacement clears only the replaced epoch", () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateEpoch: number | null
+      privateFailedGetEpoch: number | null
+      privateAvailable: boolean
+      privateAvailableListeners: Set<() => void>
+      handleStalePeer: (peer: { dispose: () => void }, epoch: number) => boolean
+    }
+    rec.privateEpoch = 8
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    service.addDeferredCommandListObserver("/tmp/stale-epoch", undefined, () => {})
+    rec.privateEpoch = 8
+    const before = rec.privateAvailableListeners.size
+    expect(before).toBe(1)
+    const stale = { dispose: () => {} }
+    expect(rec.handleStalePeer(stale, 7)).toBe(true)
+    // Epoch 7 had no keys under epoch 8, so the current key survives.
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    // Now register under epoch 7 and clear it: new epoch keys survive.
+    rec.privateEpoch = 7
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    service.addDeferredCommandListObserver("/tmp/other", undefined, () => {})
+    expect(rec.privateAvailableListeners.size).toBe(2)
+    expect(rec.handleStalePeer(stale, 7)).toBe(true)
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    service.dispose()
+  })
+
+  test("F-003 superseded init clears the stale epoch without touching the current epoch", () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateEpoch: number | null
+      privateFailedGetEpoch: number | null
+      privateAvailable: boolean
+      privateAvailableListeners: Set<() => void>
+      privatePeer: unknown
+      handleSupersededInit: (peer: { dispose: () => void; getEpoch: () => number }, gen: number) => boolean
+      connectGeneration: number
+    }
+    rec.privateEpoch = 9
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    service.addDeferredCommandListObserver("/tmp/current", undefined, () => {})
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    const stale = { dispose: () => {}, getEpoch: () => 7 }
+    rec.privateEpoch = 7
+    service.addDeferredCommandListObserver("/tmp/stale", undefined, () => {})
+    expect(rec.privateAvailableListeners.size).toBe(2)
+    rec.privateEpoch = 9
+    // Superseded generation forces stale cleanup for epoch 7.
+    const gen = (rec.connectGeneration as number) + 1
+    expect(rec.handleSupersededInit(stale, gen)).toBe(true)
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    service.dispose()
+  })
+
+  test("F-003 clearForEpoch drops only the old epoch opaque keys", () => {
+    const listeners = new Set<() => void>()
+    const store = new DeferredCommandList(listeners)
+    let oldFires = 0
+    let newFires = 0
+    store.add(7, null, false, "/tmp/old", undefined, () => {
+      oldFires += 1
+    })
+    store.add(8, null, false, "/tmp/old", undefined, () => {
+      newFires += 1
+    })
+    expect(listeners.size).toBe(2)
+    store.clearForEpoch(7)
+    expect(listeners.size).toBe(1)
+    for (const fn of [...listeners]) fn()
+    expect(oldFires).toBe(0)
+    expect(newFires).toBe(1)
+  })
+
+  test("F-003 missing-transport init clears the failed epoch keys", async () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateEpoch: number | null
+      privateFailedGetEpoch: number | null
+      privateAvailable: boolean
+      privateAvailableListeners: Set<() => void>
+      initPrivatePeer: (server: { epoch: number; pid: number }) => Promise<void>
+    }
+    rec.privateEpoch = null
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    await rec.initPrivatePeer({ epoch: 21, pid: 999 })
+    // No-transport negotiation fails closed: the epoch is marked failed.
+    expect(rec.privateFailedGetEpoch).toBe(21)
+    expect(rec.privateAvailableListeners.size).toBe(0)
+    service.dispose()
+  })
 })

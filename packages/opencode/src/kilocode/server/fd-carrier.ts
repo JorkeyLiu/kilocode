@@ -672,7 +672,9 @@ function validateCommandListRequest(raw: unknown): FdCommandListRequest {
   const ctx = raw.context
   if (!isRecord(ctx)) throw new Error("context must be object")
   const allowedCtx = new Set(["directory", "workspace"])
-  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  // Redaction (audit F-002): unknown field names are never echoed — they may
+  // carry path-bearing keys (e.g. `/tmp/secret`).
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error("unexpected context field")
   if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
     throw new Error("context.directory must be non-empty string")
   canonicalDirectory(ctx.directory)
@@ -684,10 +686,19 @@ function validateCommandListRequest(raw: unknown): FdCommandListRequest {
   if (!isRecord(payload)) throw new Error("payload must be object")
   if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for command-list")
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
-  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  // Path-bearing identities are never echoed (audit F-002): reject values
+  // carrying `/`, `\`, or NUL before they can reach the failure wire.
+  if (containsPathMaterial(raw.requestId as string))
+    throw new Error("requestId must be non-empty string without path material")
+  if (containsPathMaterial(raw.idempotencyKey as string))
+    throw new Error("idempotencyKey must be non-empty string without path material")
   const opId = raw.opId as string
   const segs = opId.split(":")
   if (segs.length !== 2 || segs[0] !== "command-list" || segs[1]!.length === 0)
+    throw new Error("opId must be command-list:<token> with nonempty colon-free token")
+  const token = segs[1] as string
+  if (token.includes(":") || containsPathMaterial(token))
     throw new Error("opId must be command-list:<token> with nonempty colon-free token")
   return raw as unknown as FdCommandListRequest
 }
@@ -754,8 +765,31 @@ function safePathIdentities(req: { requestId: string; opId: string; idempotencyK
   }
 }
 
+function fallbackCommandListIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safeCommandListIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
 const PATH_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
 const PATH_INTERNAL_MESSAGE = "internal error"
+const COMMAND_LIST_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
+const COMMAND_LIST_INTERNAL_MESSAGE = "internal error"
 
 export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.WritableStream): FdCarrierHandle {
   // Ensure streams are flowing
@@ -1573,18 +1607,19 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               req = validateCommandListRequest(params)
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e)
-              return commandListFailed(fallbackIds(params), "validation.failed", boundCommandListMessage(msg), false)
+              return commandListFailed(fallbackCommandListIds(params), "validation.failed", boundCommandListMessage(msg), false)
             }
+            const safe = safeCommandListIdentities(req)
             let dir: string
             try {
               dir = canonicalDirectory(req.context.directory)
             } catch {
-              return commandListFailed(req, "validation.failed", "invalid directory", false)
+              return commandListFailed(safe, "validation.failed", "invalid directory", false)
             }
             if (req.context.workspace !== undefined) {
               const ws = req.context.workspace
               if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
-                return commandListFailed(req, "validation.failed", "invalid workspace", false)
+                return commandListFailed(safe, "validation.failed", "invalid workspace", false)
             }
             const acquired = yield* acquireDrainControl(dir).pipe(
               Effect.map((v) => ({ tag: "ok" as const, value: v })),
@@ -1593,18 +1628,16 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                   err instanceof InstanceUnavailableDuringConfigRebuildError ||
                   (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
                 const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
-                const message = fence
-                  ? boundCommandListMessage(err instanceof Error ? err.message : String(err))
-                  : "internal error"
+                const message = fence ? COMMAND_LIST_FENCE_MESSAGE : COMMAND_LIST_INTERNAL_MESSAGE
                 return Effect.succeed({
                   tag: "fail" as const,
-                  result: commandListFailed(req, code, message, fence),
+                  result: commandListFailed(safe, code, message, fence),
                 })
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed({
                   tag: "fail" as const,
-                  result: commandListFailed(req, "internal", "internal error", false),
+                  result: commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false),
                 })
               }),
             )
@@ -1620,25 +1653,25 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                   return Effect.succeed({ tag: "fail" as const })
                 }),
               )
-              if (list.tag !== "ok") return commandListFailed(req, "internal", "internal error", false)
-              if (!Array.isArray(list.value)) return commandListFailed(req, "internal", "internal error", false)
+              if (list.tag !== "ok") return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
+              if (!Array.isArray(list.value)) return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
               const commands: Array<{ name: string; description?: string; source?: "command" | "mcp" | "skill"; hints?: string[] }> = []
               for (const item of list.value) {
                 const rec = item as unknown as Record<string, unknown>
                 const name = rec.name
                 if (typeof name !== "string" || name.length === 0)
-                  return commandListFailed(req, "internal", "internal error", false)
+                  return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
                 const description = rec.description
                 if (description !== undefined && typeof description !== "string")
-                  return commandListFailed(req, "internal", "internal error", false)
+                  return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
                 const source = rec.source
                 if (source !== undefined && source !== "command" && source !== "mcp" && source !== "skill")
-                  return commandListFailed(req, "internal", "internal error", false)
+                  return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
                 const hints = rec.hints
                 if (hints !== undefined) {
-                  if (!Array.isArray(hints)) return commandListFailed(req, "internal", "internal error", false)
+                  if (!Array.isArray(hints)) return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
                   for (const h of hints as unknown[]) {
-                    if (typeof h !== "string") return commandListFailed(req, "internal", "internal error", false)
+                    if (typeof h !== "string") return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
                   }
                 }
                 commands.push({
@@ -1665,10 +1698,10 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
             )
             return yield* inner.pipe(
               Effect.catch(() => {
-                return Effect.succeed(commandListFailed(req, "internal", "internal error", false))
+                return Effect.succeed(commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false))
               }),
               Effect.catchDefect(() => {
-                return Effect.succeed(commandListFailed(req, "internal", "internal error", false))
+                return Effect.succeed(commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false))
               }),
             )
           }),
