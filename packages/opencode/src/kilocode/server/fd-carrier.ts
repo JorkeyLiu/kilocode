@@ -18,6 +18,7 @@ import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { InstanceRef } from "@/effect/instance-ref"
 import { KiloSessions } from "@/kilo-sessions/kilo-sessions"
 import { Global } from "@opencode-ai/core/global"
+import { Command } from "@/command"
 import * as InstanceState from "@/effect/instance-state"
 import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
@@ -81,12 +82,27 @@ export const FD_SESSION_LIST_VERSION = 1 as const
 export const FD_SESSION_LIST_OP = "experimental/session/list" as const
 export const FD_PATH_VERSION = 1 as const
 export const FD_PATH_OP = "path/get" as const
+export const FD_COMMAND_LIST_VERSION = 1 as const
+export const FD_COMMAND_LIST_OP = "command/list" as const
 
 export interface FdPathRequest {
   v: typeof FD_PATH_VERSION
   requestId: string
   opId: string
   op: typeof FD_PATH_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdCommandListRequest {
+  v: typeof FD_COMMAND_LIST_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_COMMAND_LIST_OP
   idempotencyKey: string
   context: {
     directory: string
@@ -319,6 +335,13 @@ function boundPathMessage(msg: string): string {
   return msg
 }
 
+const COMMAND_LIST_MESSAGE_LIMIT = 200
+
+function boundCommandListMessage(msg: string): string {
+  if (msg.length > COMMAND_LIST_MESSAGE_LIMIT) return msg.slice(0, COMMAND_LIST_MESSAGE_LIMIT)
+  return msg
+}
+
 function remoteStatusFailed(
   req: { requestId: string; opId: string; idempotencyKey: string },
   code: string,
@@ -374,6 +397,27 @@ function sessionListFailed(
     requestId: req.requestId,
     opId: req.opId,
     op: FD_SESSION_LIST_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function commandListFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_COMMAND_LIST_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_COMMAND_LIST_OP,
     idempotencyKey: req.idempotencyKey,
     status: "failed",
     outcome: { type: "failed", time, failure },
@@ -615,6 +659,37 @@ function validatePathRequest(raw: unknown): FdPathRequest {
   if (token.includes(":") || containsPathMaterial(token))
     throw new Error("opId must be path:<token> with nonempty colon-free token")
   return raw as unknown as FdPathRequest
+}
+
+function validateCommandListRequest(raw: unknown): FdCommandListRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_COMMAND_LIST_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_COMMAND_LIST_OP) throw new Error("op must be command/list")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for command-list")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for command-list")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "command-list" || segs[1]!.length === 0)
+    throw new Error("opId must be command-list:<token> with nonempty colon-free token")
+  return raw as unknown as FdCommandListRequest
 }
 
 function validateStatusRequest(raw: unknown): FdStatusRequest {
@@ -1474,6 +1549,126 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(pathFailed(safe, "internal", PATH_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === "command/list") {
+        // Command-list parity-only read: same-directory Command.Service.list()
+        // via the existing drain-control + InstanceRef lane (same lane as
+        // session/list and path/get, no new lifecycle lane), projected to the
+        // safe consumer subset ({name, description?, source?, hints?}).
+        // `template` (lazy promise content), `agent`, `model`, and `subtask`
+        // are never read, resolved, or projected. Duplicate names are legal:
+        // production list() keeps one skill/non-skill same-name pair as two
+        // entries, so no name-uniqueness is enforced. Directory/workspace are
+        // routing identity; workspace never reaches the service. No mutation,
+        // no ordering claim, no freshness/snapshot claim.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdCommandListRequest
+            try {
+              req = validateCommandListRequest(params)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return commandListFailed(fallbackIds(params), "validation.failed", boundCommandListMessage(msg), false)
+            }
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return commandListFailed(req, "validation.failed", "invalid directory", false)
+            }
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return commandListFailed(req, "validation.failed", "invalid workspace", false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence
+                  ? boundCommandListMessage(err instanceof Error ? err.message : String(err))
+                  : "internal error"
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: commandListFailed(req, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: commandListFailed(req, "internal", "internal error", false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              const svc = yield* Command.Service
+              const list = yield* svc.list().pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+              )
+              if (list.tag !== "ok") return commandListFailed(req, "internal", "internal error", false)
+              if (!Array.isArray(list.value)) return commandListFailed(req, "internal", "internal error", false)
+              const commands: Array<{ name: string; description?: string; source?: "command" | "mcp" | "skill"; hints?: string[] }> = []
+              for (const item of list.value) {
+                const rec = item as unknown as Record<string, unknown>
+                const name = rec.name
+                if (typeof name !== "string" || name.length === 0)
+                  return commandListFailed(req, "internal", "internal error", false)
+                const description = rec.description
+                if (description !== undefined && typeof description !== "string")
+                  return commandListFailed(req, "internal", "internal error", false)
+                const source = rec.source
+                if (source !== undefined && source !== "command" && source !== "mcp" && source !== "skill")
+                  return commandListFailed(req, "internal", "internal error", false)
+                const hints = rec.hints
+                if (hints !== undefined) {
+                  if (!Array.isArray(hints)) return commandListFailed(req, "internal", "internal error", false)
+                  for (const h of hints as unknown[]) {
+                    if (typeof h !== "string") return commandListFailed(req, "internal", "internal error", false)
+                  }
+                }
+                commands.push({
+                  name,
+                  ...(description !== undefined ? { description } : {}),
+                  ...(source !== undefined ? { source } : {}),
+                  ...(hints !== undefined ? { hints: hints as string[] } : {}),
+                })
+              }
+              return {
+                v: FD_COMMAND_LIST_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_COMMAND_LIST_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { commands },
+              }
+            }).pipe(
+              Effect.provideService(InstanceRef, acquired.value.ctx),
+              Effect.ensuring(acquired.value.release),
+            )
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(commandListFailed(req, "internal", "internal error", false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(commandListFailed(req, "internal", "internal error", false))
               }),
             )
           }),

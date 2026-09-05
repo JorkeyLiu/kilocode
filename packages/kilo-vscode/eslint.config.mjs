@@ -59,7 +59,14 @@ export default [
     // inline (plus a shared invalidation-branch helper that lowers peer
     // complexity instead of raising the complexity cap). Both capped files
     // measure 3180/3197 lines, so 3200 is the smallest cap with headroom.
-    rules: { "max-lines": ["error", 3200] },
+    // Raised 3200 → 3240 for the `command/list` single-operation batch: the
+    // new `command/list` capability/peer/owner surface (outcome handle,
+    // epoch/dispose coherence, deferred observer) must live alongside the
+    // existing branches per the same convention. New logic lives in
+    // serve-private-command-list.ts and kilo-provider/command-list-parity.ts;
+    // only the required insertion points remain inline. Both capped files
+    // measure 3220/3236 lines, so 3240 is the smallest cap with headroom.
+    rules: { "max-lines": ["error", 3240] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],

@@ -35,6 +35,10 @@ import type {
 import { validateSessionListContractRequest as validateSessionListRequest } from "./serve-private-session-list-contract"
 import { requestSessionListOutcome } from "./serve-private-session-list"
 import type { PrivateSessionListWireOutcome, ServePrivateSessionListRequest } from "./serve-private-session-list-contract"
+import { validateCommandListContractRequest as validateCommandListRequest } from "./serve-private-command-list-contract"
+import { CommandListValidationError } from "./serve-private-command-list-contract"
+import { requestCommandListOutcome } from "./serve-private-command-list"
+import type { CommandListContractRequest, CommandListResult, CommandListWireOutcome } from "./serve-private-command-list-contract"
 import {
   canonicalPathOpId,
   comparePathParity,
@@ -1520,6 +1524,7 @@ export class ServePrivatePeer {
       let hasRemoteStatus = false
       let hasSessionList = false
       let hasPath = false
+      let hasCommandList = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
@@ -1532,6 +1537,7 @@ export class ServePrivatePeer {
         hasRemoteStatus = caps.includes("remote/status")
         hasSessionList = caps.includes("experimental/session/list")
         hasPath = caps.includes("path/get")
+        hasCommandList = caps.includes("command/list")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -1614,6 +1620,7 @@ export class ServePrivatePeer {
         if ((c as Record<string, unknown>)["remote/status"]) hasRemoteStatus = true
         if ((c as Record<string, unknown>)["experimental/session/list"]) hasSessionList = true
         if ((c as Record<string, unknown>)["path/get"]) hasPath = true
+        if ((c as Record<string, unknown>)["command/list"]) hasCommandList = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
@@ -1626,10 +1633,11 @@ export class ServePrivatePeer {
           hasRemoteStatus = false
           hasSessionList = false
           hasPath = false
+          hasCommandList = false
         }
       }
 
-      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren && !hasRemoteStatus && !hasSessionList && !hasPath) {
+      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren && !hasRemoteStatus && !hasSessionList && !hasPath && !hasCommandList) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
         if (this.peer === peerAtStart) this.peer = null
@@ -2054,6 +2062,7 @@ export class ServePrivatePeer {
       if (cap === "remote/status" && c["remote/status"]) return true
       if (cap === "experimental/session/list" && c["experimental/session/list"]) return true
       if (cap === "path/get" && c["path/get"]) return true
+      if (cap === "command/list" && c["command/list"]) return true
     }
     return false
   }
@@ -2459,6 +2468,37 @@ export class ServePrivatePeer {
     )
   }
 
+  async privateCommandList(req: CommandListContractRequest): Promise<CommandListResult> {
+    const handle = this.privateCommandListOutcomeWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new CommandListValidationError(outcome.detail)
+    return outcome.result
+  }
+
+  /** Normalized outcome handle for the read-only command-list parity observer. */
+  privateCommandListOutcomeWithHandle(req: CommandListContractRequest): { id: number; promise: Promise<CommandListWireOutcome>; cancel: (msg?: string) => boolean } {
+    validateCommandListRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("command/list")) {
+      throw new Error("Private peer missing command/list capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    return requestCommandListOutcome(
+      peerAtCall as unknown as import("./serve-private-command-list").CommandListRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => ({ ...this.parseFailedInfo(e), msg: "private command-list transport failed" }),
+      },
+      (id) => this.makeHandleCancel(id, req.opId, peerAtCall, currentEpoch),
+      req,
+    )
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -2559,7 +2599,7 @@ export class ServePrivatePeer {
 
   private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {
     for (const k of Object.keys(c)) {
-      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children" || k === "remote/status" || k === "experimental/session/list" || k === "path/get") && c[k]) out.push(k)
+      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children" || k === "remote/status" || k === "experimental/session/list" || k === "path/get" || k === "command/list") && c[k]) out.push(k)
     }
   }
 

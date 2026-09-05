@@ -40,6 +40,8 @@ import type {
 } from "./serve-private-session-list-contract"
 import { DeferredPath, wrapPathOutcomeForOwner } from "./serve-private-path"
 import type { PathContractRequest, PathWireOutcome } from "./serve-private-path-contract"
+import { DeferredCommandList, wrapCommandListOutcomeForOwner } from "./serve-private-command-list"
+import type { CommandListContractRequest, CommandListWireOutcome } from "./serve-private-command-list-contract"
 import * as crypto from "crypto"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
@@ -194,6 +196,7 @@ export class KiloConnectionService {
   private readonly deferredChildren: DeferredChildren = new DeferredChildren(this.privateAvailableListeners)
   private readonly deferredRemoteStatus: DeferredRemoteStatus = new DeferredRemoteStatus(this.privateAvailableListeners)
   private readonly deferredPath: DeferredPath = new DeferredPath(this.privateAvailableListeners)
+  private readonly deferredCommandList: DeferredCommandList = new DeferredCommandList(this.privateAvailableListeners)
   /**
    * Definitively failed private get epoch (B6 LOCK-005/012): set only when
    * the current backend epoch's negotiation definitively fails (explicit
@@ -754,6 +757,7 @@ export class KiloConnectionService {
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
     this.deferredPath.clearAll()
+    this.deferredCommandList.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -801,6 +805,7 @@ export class KiloConnectionService {
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
     this.deferredPath.clearAll()
+    this.deferredCommandList.clearAll()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -1035,6 +1040,7 @@ export class KiloConnectionService {
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
     this.deferredPath.clearAll()
+    this.deferredCommandList.clearAll()
   }
 
   /**
@@ -1241,6 +1247,12 @@ export class KiloConnectionService {
   /** One-shot deferred path observation; dedupe/lifecycle live in DeferredPath. */
   addDeferredPathObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
     const store = this.deferredPath
+    return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
+  }
+
+  /** One-shot deferred command-list observation; dedupe/lifecycle live in DeferredCommandList. */
+  addDeferredCommandListObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
+    const store = this.deferredCommandList
     return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
   }
 
@@ -2419,6 +2431,33 @@ export class KiloConnectionService {
       (id, msg) => peerAtCall.tryCancelPending(id, msg),
       () => peerAtCall.invalidateOnObserverTimeout("path stale observer timeout"),
       peerAtCall.privatePathOutcomeWithHandle(req),
+      req,
+    )
+  }
+
+  /** Epoch-aware pass-through for the read-only command-list parity observer. */
+  privateCommandListOutcomeWithHandle(req: CommandListContractRequest): {
+    id: number
+    promise: Promise<CommandListWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("command/list")) {
+      throw new Error("Private peer missing command/list capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapCommandListOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("command-list stale observer timeout"),
+      peerAtCall.privateCommandListOutcomeWithHandle(req),
       req,
     )
   }

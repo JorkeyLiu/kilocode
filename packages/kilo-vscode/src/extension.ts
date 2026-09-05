@@ -19,6 +19,7 @@ import { registerToggleAutoApprove } from "./commands/toggle-auto-approve"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
 import { setPathParityConnection } from "./kilo-provider/model-state"
+import { setCommandListParityConnection } from "./kilo-provider/commands"
 import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
@@ -188,6 +189,10 @@ export function activate(context: vscode.ExtensionContext) {
   // SDK consumer (`model-state.ts` resolve). SDK stays the sole authority;
   // the observer is non-blocking, warn-only, and never mutates SDK state.
   setPathParityConnection(connectionService)
+  // Detached SDK-first `command/list` parity boundary for the narrowest
+  // existing SDK consumer (`kilo-provider/commands.ts` loadCommands). Same
+  // authority/observer contract as the path boundary.
+  setCommandListParityConnection(connectionService)
 
   const unsubscribeStateChange = connectionService.onStateChange((state) => {
     if (state === "connected") {
@@ -733,6 +738,7 @@ export function activate(context: vscode.ExtensionContext) {
 export async function deactivate() {
   shuttingDown = true
   setPathParityConnection(null)
+  setCommandListParityConnection(null)
   await agentManager?.shutdown()
   TelemetryProxy.getInstance().shutdown()
 }

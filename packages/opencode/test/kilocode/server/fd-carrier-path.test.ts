@@ -397,7 +397,7 @@ describe("fd-carrier path/get (parity-only read)", () => {
         try {
           yield* Effect.promise(() => init(ext))
           const err = yield* Effect.promise(() =>
-            ext.request("command/list", pathReq(dir)).then(
+            ext.request("session/abort", pathReq(dir)).then(
               () => undefined,
               (e: unknown) => e,
             ),
