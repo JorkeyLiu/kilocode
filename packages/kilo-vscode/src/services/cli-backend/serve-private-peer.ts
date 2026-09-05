@@ -35,6 +35,18 @@ import type {
 import { validateSessionListContractRequest as validateSessionListRequest } from "./serve-private-session-list-contract"
 import { requestSessionListOutcome } from "./serve-private-session-list"
 import type { PrivateSessionListWireOutcome, ServePrivateSessionListRequest } from "./serve-private-session-list-contract"
+import {
+  canonicalPathOpId,
+  comparePathParity,
+  isPathValidationError,
+  makePathAmbiguous,
+  normalizePrivatePathWire,
+  PathValidationError,
+  validatePathContractRequest,
+  validatePathResult,
+} from "./serve-private-path-contract"
+import type { PathContractRequest, PathResult, PathWireOutcome } from "./serve-private-path-contract"
+import { failedPathResult, pathObserverTimeoutBranch, requestPathOutcome } from "./serve-private-path"
 
 export {
   canonicalGetOpId,
@@ -96,6 +108,18 @@ export type {
   ServePrivateRemoteStatusRequest,
   ServePrivateRemoteStatusResult,
 } from "./serve-private-remote-status"
+export {
+  canonicalPathOpId,
+  comparePathParity,
+  isPathValidationError,
+  makePathAmbiguous,
+  normalizePrivatePathWire,
+  PathValidationError,
+  validatePathContractRequest,
+  validatePathResult,
+} from "./serve-private-path-contract"
+export type { PathContractRequest, PathResult, PathWireOutcome } from "./serve-private-path-contract"
+export { failedPathResult, PATH_TRANSPORT_FAILURE_MESSAGE, pathObserverTimeoutBranch, requestPathOutcome } from "./serve-private-path"
 export interface ServePrivateCancelQueuedRequest {
   v: 1
   requestId: string
@@ -1425,7 +1449,7 @@ export class ServePrivatePeer {
     const initPromise = peerAtStart.request("initialize", {
       protocol: { name: "kilo-private", major: 1, minor: 0 },
       clientInfo: { name: "kilo-vscode", version: "7.4.11" },
-      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages", "session/children", "remote/status", "experimental/session/list"],
+      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages", "session/children", "remote/status", "experimental/session/list", "path/get"],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
 
@@ -1495,6 +1519,7 @@ export class ServePrivatePeer {
       let hasChildren = false
       let hasRemoteStatus = false
       let hasSessionList = false
+      let hasPath = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
@@ -1506,6 +1531,7 @@ export class ServePrivatePeer {
         hasChildren = caps.includes("session/children")
         hasRemoteStatus = caps.includes("remote/status")
         hasSessionList = caps.includes("experimental/session/list")
+        hasPath = caps.includes("path/get")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -1587,6 +1613,7 @@ export class ServePrivatePeer {
         else if (((c as Record<string, unknown>).session as Record<string, unknown> | null)?.children) hasChildren = true
         if ((c as Record<string, unknown>)["remote/status"]) hasRemoteStatus = true
         if ((c as Record<string, unknown>)["experimental/session/list"]) hasSessionList = true
+        if ((c as Record<string, unknown>)["path/get"]) hasPath = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
@@ -1598,10 +1625,11 @@ export class ServePrivatePeer {
           hasChildren = false
           hasRemoteStatus = false
           hasSessionList = false
+          hasPath = false
         }
       }
 
-      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren && !hasRemoteStatus && !hasSessionList) {
+      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren && !hasRemoteStatus && !hasSessionList && !hasPath) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
         if (this.peer === peerAtStart) this.peer = null
@@ -1730,6 +1758,10 @@ export class ServePrivatePeer {
       accepted: false,
       failure: { code, message: msg, retryable: false },
     }
+  }
+
+  private failedPath(req: PathContractRequest, code: string, msg: string): PathResult {
+    return failedPathResult(req, code, msg)
   }
 
   private failedStatus(req: ServePrivateStatusRequest, code: string, msg: string): ServePrivateStatusResult {
@@ -2021,6 +2053,7 @@ export class ServePrivatePeer {
       }
       if (cap === "remote/status" && c["remote/status"]) return true
       if (cap === "experimental/session/list" && c["experimental/session/list"]) return true
+      if (cap === "path/get" && c["path/get"]) return true
     }
     return false
   }
@@ -2395,6 +2428,37 @@ export class ServePrivatePeer {
     )
   }
 
+  async privatePath(req: PathContractRequest): Promise<PathResult> {
+    const handle = this.privatePathOutcomeWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new PathValidationError(outcome.detail)
+    return outcome.result
+  }
+
+  /** Normalized outcome handle for the read-only path parity observer. */
+  privatePathOutcomeWithHandle(req: PathContractRequest): { id: number; promise: Promise<PathWireOutcome>; cancel: (msg?: string) => boolean } {
+    validatePathContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("path/get")) {
+      throw new Error("Private peer missing path/get capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    return requestPathOutcome(
+      peerAtCall as unknown as import("./serve-private-path").PathRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: (e) => ({ ...this.parseFailedInfo(e), msg: "private path transport failed" }),
+      },
+      (id) => this.makeHandleCancel(id, req.opId, peerAtCall, currentEpoch),
+      req,
+    )
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -2431,61 +2495,27 @@ export class ServePrivatePeer {
    * The owner (KiloConnectionService) disposes and nulls this peer and will
    * re-negotiate only on next connect/reconnect.
    */
+  private invalidateSafeBranch(reason: string): boolean {
+    const branch = pathObserverTimeoutBranch(reason)
+    if (!branch) return false
+    if (branch.op === "session/messages") {
+      console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch:`, { op: branch.op, epoch: this.opts.epoch })
+    } else {
+      console.warn(`[Kilo PrivatePeer] observer timeout invalidates:`, {
+        op: branch.op,
+        invalidated: true,
+      })
+    }
+    try {
+      this.dispose()
+    } catch {
+      console.warn("[Kilo PrivatePeer] invalidate dispose failed:", { op: branch.op, invalidateFailed: true })
+    }
+    return true
+  }
+
   invalidateOnObserverTimeout(reason: string): void {
-    const messagesSafe =
-      reason === "stale observer timeout" ||
-      reason === "observer timeout cancel throw" ||
-      reason === "observer timeout exact cancel miss" ||
-      reason === "messages observer timeout"
-    if (messagesSafe) {
-      console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch:`, { op: "session/messages", epoch: this.opts.epoch })
-      try {
-        this.dispose()
-      } catch {
-        console.warn("[Kilo PrivatePeer] invalidate dispose failed:", { op: "session/messages", invalidateFailed: true })
-      }
-      return
-    }
-    const childrenSafe =
-      reason === "children stale observer timeout" ||
-      reason === "children observer timeout cancel throw" ||
-      reason === "children observer timeout exact cancel miss" ||
-      reason === "children observer timeout"
-    if (childrenSafe) {
-      console.warn(`[Kilo PrivatePeer] observer timeout invalidates:`, {
-        op: "session/children",
-        invalidated: true,
-      })
-      try {
-        this.dispose()
-      } catch {
-        console.warn("[Kilo PrivatePeer] invalidate dispose failed:", {
-          op: "session/children",
-          invalidateFailed: true,
-        })
-      }
-      return
-    }
-    const remoteSafe =
-      reason === "remote-status stale observer timeout" ||
-      reason === "remote-status observer timeout cancel throw" ||
-      reason === "remote-status observer timeout exact cancel miss" ||
-      reason === "remote-status observer timeout"
-    if (remoteSafe) {
-      console.warn(`[Kilo PrivatePeer] observer timeout invalidates:`, {
-        op: "remote/status",
-        invalidated: true,
-      })
-      try {
-        this.dispose()
-      } catch {
-        console.warn("[Kilo PrivatePeer] invalidate dispose failed:", {
-          op: "remote/status",
-          invalidateFailed: true,
-        })
-      }
-      return
-    }
+    if (this.invalidateSafeBranch(reason)) return
     console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch ${this.opts.epoch}: ${reason}`)
     try {
       this.dispose()
@@ -2529,7 +2559,7 @@ export class ServePrivatePeer {
 
   private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {
     for (const k of Object.keys(c)) {
-      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children" || k === "remote/status" || k === "experimental/session/list") && c[k]) out.push(k)
+      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children" || k === "remote/status" || k === "experimental/session/list" || k === "path/get") && c[k]) out.push(k)
     }
   }
 

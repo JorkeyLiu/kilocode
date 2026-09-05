@@ -18,6 +18,7 @@ import { resolveChatTarget as resolveSharedChatTarget } from "./services/code-ac
 import { registerToggleAutoApprove } from "./commands/toggle-auto-approve"
 import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
+import { setPathParityConnection } from "./kilo-provider/model-state"
 import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
@@ -183,6 +184,10 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(remoteService)
   connectionService.setRemoteService(remoteService)
   remoteService.setParityConnection(connectionService)
+  // Detached SDK-first `path/get` parity boundary for the narrowest existing
+  // SDK consumer (`model-state.ts` resolve). SDK stays the sole authority;
+  // the observer is non-blocking, warn-only, and never mutates SDK state.
+  setPathParityConnection(connectionService)
 
   const unsubscribeStateChange = connectionService.onStateChange((state) => {
     if (state === "connected") {
@@ -727,6 +732,7 @@ export function activate(context: vscode.ExtensionContext) {
 
 export async function deactivate() {
   shuttingDown = true
+  setPathParityConnection(null)
   await agentManager?.shutdown()
   TelemetryProxy.getInstance().shutdown()
 }

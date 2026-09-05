@@ -22,6 +22,7 @@ export interface ServerInstance {
   privateWriter: NodeJS.WritableStream | null
   pid: number | undefined
   epoch: number
+  spawnCwd: string
 }
 
 const STARTUP_TIMEOUT_SECONDS = 30
@@ -401,7 +402,7 @@ export class ServerManager {
               return
             }
           })
-          resolve({ port, password, process: serverProcess, privateReader, privateWriter, pid, epoch })
+          resolve({ port, password, process: serverProcess, privateReader, privateWriter, pid, epoch, spawnCwd })
         }
       })
 
@@ -462,6 +463,21 @@ export class ServerManager {
       }, STARTUP_TIMEOUT_SECONDS * 1000)
       ;(startupTimeout as unknown as { unref?: () => void })?.unref?.()
     })
+  }
+
+  /**
+   * Exact spawn-time backend working directory of the CURRENT active server
+   * instance (the `spawnCwd` passed to the child spawn). Read-only; returns
+   * null when no live instance exists (never started, dead, exited, or
+   * disposed). The sole `path/get` routing identity — callers fail closed
+   * when null instead of guessing a mutable directory.
+   */
+  public getActiveSpawnCwd(): string | null {
+    const inst = this.instance
+    if (!inst) return null
+    if (this.disposed) return null
+    if (inst.process.exitCode !== null) return null
+    return typeof inst.spawnCwd === "string" && inst.spawnCwd.length > 0 ? inst.spawnCwd : null
   }
 
   /**

@@ -9,6 +9,9 @@ import {
   makePathAmbiguous,
   normalizePrivatePathWire,
   parsePathOpId,
+  PATH_FAILED_CODE,
+  PATH_FAILED_MESSAGE,
+  PATH_INVALID_DETAIL,
   PathValidationError,
   validatePathContractRequest,
   validatePathFailure,
@@ -198,6 +201,103 @@ describe("Gate B path.get candidate contract", () => {
     expect(amb.status).toBe("ambiguous")
     expect(() => validatePathResult(amb, req)).not.toThrow()
     expect(() => validatePathResult({ ...amb, accepted: true }, req)).toThrow()
+  })
+
+  test("path-bearing failure code/message never reaches consumers; diagnostics stay fixed", () => {
+    const req = validatePathContractRequest(makeReq())
+    const evilDir = "/tmp/secret-evil"
+    const evilCode = `${evilDir}/code`
+    const evilMsg = `failed at ${evilDir}/file`
+    // Structurally valid failed envelope carrying path material must not validate.
+    const evilFailed = {
+      v: 1 as const,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "path/get" as const,
+      idempotencyKey: req.idempotencyKey,
+      status: "failed" as const,
+      outcome: { type: "failed" as const, time: 1, failure: { code: evilCode, message: evilMsg, retryable: false } },
+      accepted: false as const,
+      failure: { code: evilCode, message: evilMsg, retryable: false },
+    }
+    let evilErr = ""
+    try {
+      validatePathResult(evilFailed, req)
+    } catch (e) {
+      evilErr = e instanceof Error ? e.message : String(e)
+    }
+    expect(evilErr.length).toBeGreaterThan(0)
+    expect(evilErr).not.toContain(evilDir)
+    expect(evilErr).not.toContain("secret-evil")
+    // Normalization maps it to fixed invalid detail, never echoing path material.
+    const evilWire = normalizePrivatePathWire(evilFailed, req)
+    expect(evilWire.kind).toBe("invalid")
+    if (evilWire.kind === "invalid") {
+      expect(evilWire.detail).toBe(PATH_INVALID_DETAIL)
+      expect(evilWire.detail).not.toContain(evilDir)
+      const thrown = new PathValidationError(evilWire.detail)
+      expect(thrown.message).not.toContain(evilDir)
+      expect(thrown.detail).not.toContain(evilDir)
+      expect(isPathValidationError(thrown)).toBeTrue()
+    }
+    // Safe failed envelope normalizes to fixed operation-specific code/message, preserving retryable.
+    const safeFailed = {
+      v: 1 as const,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "path/get" as const,
+      idempotencyKey: req.idempotencyKey,
+      status: "failed" as const,
+      outcome: { type: "failed" as const, time: 1, failure: { code: "validation.failed", message: "bad", retryable: true } },
+      accepted: false as const,
+      failure: { code: "validation.failed", message: "bad", retryable: true },
+    }
+    expect(() => validatePathResult(safeFailed, req)).not.toThrow()
+    const safeWire = normalizePrivatePathWire(safeFailed, req)
+    expect(safeWire.kind).toBe("valid")
+    if (safeWire.kind === "valid" && safeWire.result.status === "failed") {
+      expect(safeWire.result.failure.code).toBe(PATH_FAILED_CODE)
+      expect(safeWire.result.failure.message).toBe(PATH_FAILED_MESSAGE)
+      expect(safeWire.result.failure.retryable).toBeTrue()
+      expect(JSON.stringify(safeWire.result)).not.toContain(evilDir)
+    }
+    // Malformed keys containing path-like names never echo in diagnostics.
+    const evilKey = `${evilDir}/evil-key`
+    const cases: unknown[] = [
+      { ...makeSucceeded(req), [evilKey]: 1 },
+      {
+        ...makeSucceeded(req),
+        data: { path: { ...makePayload(), [evilKey]: "x" } },
+      },
+      {
+        v: 1,
+        requestId: req.requestId,
+        opId: req.opId,
+        op: "path/get",
+        idempotencyKey: req.idempotencyKey,
+        status: "failed",
+        outcome: { type: "failed", time: 1, failure: { code: "x", message: "m", retryable: false, [evilKey]: "raw" } },
+        accepted: false,
+        failure: { code: "x", message: "m", retryable: false },
+      },
+    ]
+    for (const raw of cases) {
+      let msg = ""
+      try {
+        validatePathResult(raw, req)
+      } catch (e) {
+        msg = e instanceof Error ? e.message : String(e)
+      }
+      expect(msg.length).toBeGreaterThan(0)
+      expect(msg).not.toContain(evilDir)
+      expect(msg).not.toContain("evil-key")
+      const wire = normalizePrivatePathWire(raw, req)
+      expect(wire.kind).toBe("invalid")
+      if (wire.kind === "invalid") {
+        expect(wire.detail).toBe(PATH_INVALID_DETAIL)
+        expect(wire.detail).not.toContain(evilDir)
+      }
+    }
   })
 
   test("parity compares only directory-derived fields and explicitly excludes globals", () => {

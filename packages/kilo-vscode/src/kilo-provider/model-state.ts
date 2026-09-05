@@ -29,6 +29,7 @@ import * as fs from "fs"
 import * as path from "path"
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { validateModelSelections } from "../provider-actions"
+import { observePathParityDetached, type PathParityConnection } from "./path-parity"
 
 type PostMessage = (msg: unknown) => void
 
@@ -46,6 +47,52 @@ export interface VariantCache {
 let cached: string | undefined
 let queue: Promise<void> = Promise.resolve()
 
+/**
+ * Detached SDK-first `path/get` parity boundary. SDK stays the sole
+ * authority; the observer is non-blocking, warn-only, and never mutates the
+ * SDK return or cached model.json path. Null detaches. Set by the owner that
+ * holds the current `KiloConnectionService`.
+ */
+let parityConn: PathParityConnection | null = null
+
+export function setPathParityConnection(c: PathParityConnection | null): void {
+  parityConn = c
+}
+
+function observePathParity(sdk: { data?: unknown; error?: unknown; response?: unknown }, dir: string | undefined): void {
+  const conn = parityConn
+  if (!conn) return
+  // Same authoritative routing identity as the SDK read (existing owner
+  // context via `getPathRoutingDirectory`). No `process.cwd()` fallback:
+  // absent/empty stays detached-fail-closed without touching the transport.
+  if (typeof dir !== "string" || dir.length === 0) return
+  try {
+    observePathParityDetached(conn, sdk, dir)
+  } catch {
+    console.warn("[Kilo Path] private parity observation failed (fail-closed):", {
+      op: "path/get",
+      observationFailed: true,
+    })
+  }
+}
+
+/**
+ * Authoritative routing directory for the `path/get` pair: the exact active
+ * backend spawn identity from the existing owner
+ * (`ServerManager.getActiveSpawnCwd`). Never a mutable tracked directory or
+ * `process.cwd()` — the extension host cwd and the backend cwd are
+ * separately resolved and must not route the two reads to different
+ * instances. Absent stays fail-closed.
+ */
+function routingDir(): string | undefined {
+  try {
+    const dir = parityConn?.getPathRoutingDirectory?.()
+    return typeof dir === "string" && dir.length > 0 ? dir : undefined
+  } catch {
+    return undefined
+  }
+}
+
 /** Serialize all model-state operations in one module-level critical section. */
 function enqueue<T>(op: () => Promise<T>): Promise<T> {
   const run = queue.then(op)
@@ -58,12 +105,28 @@ function enqueue<T>(op: () => Promise<T>): Promise<T> {
 
 async function resolve(client: KiloClient | null): Promise<string | undefined> {
   if (cached) return cached
+  // Bind SDK and private reads to the same authoritative routing identity.
+  const dir = routingDir()
   try {
-    const resp = await client?.path.get()
+    const resp = dir ? await client?.path.get({ directory: dir }) : await client?.path.get()
+    // SDK-first detached parity: observes after the authoritative SDK read
+    // settles without touching the SDK return or cache. Warn-only,
+    // non-blocking, fail-closed. Terminal SDK error/response pass through
+    // so terminal failures gate the observer; SDK state/returns unchanged.
+    if (resp)
+      observePathParity(
+        {
+          data: (resp as { data?: unknown }).data,
+          error: (resp as { error?: unknown }).error,
+          response: (resp as { response?: unknown }).response,
+        },
+        dir,
+      )
     if (!resp?.data?.state) return undefined
     cached = path.join(resp.data.state, "model.json")
     return cached
-  } catch {
+  } catch (err) {
+    observePathParity({ error: err }, dir)
     return undefined
   }
 }

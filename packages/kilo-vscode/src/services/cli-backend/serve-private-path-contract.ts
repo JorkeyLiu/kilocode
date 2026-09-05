@@ -1,10 +1,12 @@
-// Gate B deferred `path.get` read-only candidate contract evidence only.
-// Pure contract helpers with no transport, no private capability, no dispatch,
-// no runtime observation, no durable state, and no production parity claim.
-// `op:"path/get"` below is a contract-evidence label only; it is never
-// registered as a private capability and never sent over any peer. Production
-// `path.get` stays SDK-only (`GET /path` via `@kilocode/sdk`
-// `client.path.get`).
+// `path/get` Active single-operation private read (SDK-first, diagnostics-only).
+// Strict v1 helpers for the private `path/get` capability: routing-only
+// directory/workspace identity, empty payload, safe five-field Path
+// projection, redacted failures, and a detached parity helper comparing only
+// directory-derived `worktree`/`directory`. The private path never mutates SDK
+// or user state and never replaces `GET /path` (`@kilocode/sdk`
+// `client.path.get` remains the sole authority). Gate B open, G3 Active,
+// Gates C/D unchanged; worktree derivation/freshness/transport remain
+// explicit unknowns.
 //
 // Source facts (read-only evidence, not imported):
 // - Route: `GET /path` with `WorkspaceRoutingQuery` (`directory?`,
@@ -75,8 +77,12 @@ function canonicalDir(dir: string): string {
   return normalize(resolve(dir))
 }
 
+function containsPathMaterialValue(v: string): boolean {
+  return v.includes("/") || v.includes("\\") || v.includes("\0")
+}
+
 function assertAllowedKeys(rec: Record<string, unknown>, allowed: Set<string>, label: string): void {
-  for (const k of Object.keys(rec)) if (!allowed.has(k)) throw new Error(`unexpected ${label} field ${k}`)
+  for (const k of Object.keys(rec)) if (!allowed.has(k)) throw new Error(`unexpected ${label} field`)
 }
 
 export const PATH_GLOBAL_FIELDS = ["home", "state", "config"] as const
@@ -93,19 +99,27 @@ export function isPathDirectoryField(v: unknown): v is PathDirectoryField {
   return v === "worktree" || v === "directory"
 }
 
+function pathTokenHasMaterial(token: string): boolean {
+  return token.includes("/") || token.includes("\\") || token.includes("\0")
+}
+
 export function canonicalPathOpId(token: string): string {
   if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
   if (token.includes(":")) throw new TypeError("token must not contain ':'")
+  if (pathTokenHasMaterial(token)) throw new TypeError("token must not contain path material")
   return `path:${token}`
 }
 
 export function parsePathOpId(opId: string): { token: string } {
   if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
+  if (opId.includes("/") || opId.includes("\\") || opId.includes("\0"))
+    throw new TypeError("opId must not contain path material")
   const segs = opId.split(":")
-  if (segs.length !== 2) throw new TypeError(`path opId must have 1 segment: ${opId}`)
-  if (segs[0] !== "path") throw new TypeError(`opId kind must be path: ${opId}`)
+  if (segs.length !== 2) throw new TypeError("path opId must have 1 segment")
+  if (segs[0] !== "path") throw new TypeError("opId kind must be path")
   const token = segs[1]!
-  if (token.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
+  if (token.length === 0) throw new TypeError("opId segment must be non-empty")
+  if (pathTokenHasMaterial(token)) throw new TypeError("opId token must not contain path material")
   return { token }
 }
 
@@ -131,11 +145,15 @@ export function validatePathContractRequest(raw: unknown): PathContractRequest {
   if (raw.op !== "path/get") throw new Error("op must be path/get")
   if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
   if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for path contract")
+  if (typeof raw.requestId === "string" && ((raw.requestId as string).includes("/") || (raw.requestId as string).includes("\\") || (raw.requestId as string).includes("\0")))
+    throw new Error("requestId must be non-empty string without path material")
+  if (typeof raw.idempotencyKey === "string" && ((raw.idempotencyKey as string).includes("/") || (raw.idempotencyKey as string).includes("\\") || (raw.idempotencyKey as string).includes("\0")))
+    throw new Error("idempotencyKey must be non-empty string without path material")
   const ctx = raw.context
   if (!isRecord(ctx)) throw new Error("context must be object")
   const allowedCtx = new Set(["directory", "workspace"])
   for (const k of Object.keys(ctx as Record<string, unknown>))
-    if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+    if (!allowedCtx.has(k)) throw new Error("unexpected context field")
   if (typeof ctx.directory !== "string" || !isAbsolute(ctx.directory) || ctx.directory.includes("\0"))
     throw new Error("context.directory must be absolute path")
   if (ctx.workspace !== undefined) {
@@ -148,7 +166,7 @@ export function validatePathContractRequest(raw: unknown): PathContractRequest {
     throw new Error("payload must be empty object for path contract")
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
   for (const k of Object.keys(raw as Record<string, unknown>))
-    if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+    if (!allowedRoot.has(k)) throw new Error("unexpected field")
   parsePathOpId(raw.opId as string)
   const idem = parsePathOpId(raw.idempotencyKey as string)
   if (idem.token !== parsePathOpId(raw.opId as string).token)
@@ -211,7 +229,7 @@ export function validatePathPayload(raw: unknown): PathPayload {
   const rec = raw as Record<string, unknown>
   for (const field of PATH_PAYLOAD_FIELDS) {
     const val = rec[field]
-    if (!isNonEmpty(val) || (val as string).includes("\0")) throw new Error(`path.${field} must be non-empty string`)
+    if (!isNonEmpty(val) || (val as string).includes("\0")) throw new Error("path field must be non-empty string")
   }
   return raw as unknown as PathPayload
 }
@@ -295,27 +313,34 @@ const PATH_FAILURE_FORBIDDEN = new Set([
 
 const PATH_FAILURE_FIELDS = new Set(["code", "message", "retryable"])
 
+export const PATH_FAILED_CODE = "path.failed"
+export const PATH_FAILED_MESSAGE = "private path failed"
+
 export function validatePathFailure(raw: unknown): PathFailure {
   if (!isRecord(raw)) throw new Error("failure must be object")
   for (const k of Object.keys(raw)) {
-    if (PATH_FAILURE_FORBIDDEN.has(k)) throw new Error(`failure must not carry ${k}`)
+    if (PATH_FAILURE_FORBIDDEN.has(k)) throw new Error("failure must not carry raw field")
   }
   assertAllowedKeys(raw as Record<string, unknown>, PATH_FAILURE_FIELDS, "failure")
   if (!isNonEmpty(raw.code)) throw new Error("failure code must be non-empty string")
   if (!isNonEmpty(raw.message)) throw new Error("failure message must be non-empty string")
   if (typeof raw.retryable !== "boolean") throw new Error("failure retryable must be boolean")
+  if (containsPathMaterialValue(raw.code as string) || containsPathMaterialValue(raw.message as string))
+    throw new Error("failure must not carry path material")
   return raw as unknown as PathFailure
 }
 
 export type PathWireOutcome = { kind: "valid"; result: PathResult } | { kind: "invalid"; detail: string }
 
+export const PATH_INVALID_DETAIL = "invalid private response shape"
+
 export class PathValidationError extends Error {
   readonly kind = "private-path-validation" as const
   readonly detail: string
-  constructor(detail: string) {
-    super(`invalid private response shape: ${detail}`)
+  constructor(_detail: string) {
+    super(PATH_INVALID_DETAIL)
     this.name = "PathValidationError"
-    this.detail = detail
+    this.detail = PATH_INVALID_DETAIL
   }
 }
 
@@ -326,10 +351,19 @@ export function isPathValidationError(v: unknown): v is PathValidationError {
 export function normalizePrivatePathWire(raw: unknown, req: PathContractRequest): PathWireOutcome {
   try {
     const result = validatePathResult(raw, req)
+    if (result.status === "failed") {
+      const retryable = result.failure.retryable
+      const fixed = { code: PATH_FAILED_CODE, message: PATH_FAILED_MESSAGE, retryable }
+      const redacted: PathResult = {
+        ...result,
+        failure: fixed,
+        outcome: { ...result.outcome, failure: fixed },
+      }
+      return { kind: "valid", result: redacted }
+    }
     return { kind: "valid", result }
-  } catch (e) {
-    const detail = String(e instanceof Error ? e.message : e).slice(0, 200)
-    return { kind: "invalid", detail }
+  } catch {
+    return { kind: "invalid", detail: PATH_INVALID_DETAIL }
   }
 }
 
@@ -396,7 +430,7 @@ export function validatePathResult(raw: unknown, req: PathContractRequest): Path
     if (!isRecord(data)) throw new Error("succeeded data must be object")
     const allowedData = new Set(["path"])
     for (const k of Object.keys(data as Record<string, unknown>))
-      if (!allowedData.has(k)) throw new Error(`unexpected data field ${k}`)
+      if (!allowedData.has(k)) throw new Error("unexpected data field")
     // Full five-field projection validated for shape only. No directory
     // binding is asserted here by design: globals stay process-global and the
     // request directory is routing-only.

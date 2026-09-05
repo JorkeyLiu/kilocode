@@ -121,6 +121,46 @@ describe("ServerManager fd3/fd4", () => {
     }
   })
 
+  test("active spawn identity is exact and clears on dead/dispose", () => {
+    const storage = fs.mkdtempSync(path.join(os.tmpdir(), "kilo-storage-spawn-"))
+    const ctx = {
+      extensionPath: os.tmpdir(),
+      globalStorageUri: { fsPath: storage },
+      extensionMode: 1,
+      extension: { packageJSON: { version: "7.4.11" } },
+    } as unknown as import("vscode").ExtensionContext
+    const mgr = new ServerManager(ctx as unknown as import("vscode").ExtensionContext)
+    try {
+      const rec = mgr as unknown as Record<string, unknown>
+      expect(mgr.getActiveSpawnCwd()).toBeNull()
+      const live = {
+        process: { exitCode: null, pid: 1, on: () => {}, kill: () => true },
+        spawnCwd: "/exact/spawn-cwd",
+        privateReader: null,
+        privateWriter: null,
+      }
+      rec.instance = live
+      expect(mgr.getActiveSpawnCwd()).toBe("/exact/spawn-cwd")
+      const dead = {
+        process: { exitCode: 1, pid: 1, on: () => {}, kill: () => true },
+        spawnCwd: "/exact/spawn-cwd",
+        privateReader: null,
+        privateWriter: null,
+      }
+      rec.instance = dead
+      expect(mgr.getActiveSpawnCwd()).toBeNull()
+      rec.instance = null
+      expect(mgr.getActiveSpawnCwd()).toBeNull()
+    } finally {
+      mgr.dispose()
+      try {
+        fs.rmSync(storage, { recursive: true })
+      } catch (err) {
+        note("storage", err)
+      }
+    }
+  })
+
   test("exact PID cleanup kills only owned process", async () => {
     const port = 41822
     const script = makeFakeCliScript(port)

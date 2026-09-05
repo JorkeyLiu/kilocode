@@ -51,7 +51,15 @@ export default [
     // convention. New logic lives in serve-private-remote-status.ts and
     // kilo-provider/remote-status-parity.ts; only the required insertion
     // points remain inline.
-    rules: { "max-lines": ["error", 3150] },
+    // Raised 3150 → 3200 for the `path/get` single-operation batch: the new
+    // `path/get` capability/peer/owner surface (outcome handle, epoch/dispose
+    // coherence, deferred observer) must live alongside the existing branches
+    // per the same convention. New logic lives in serve-private-path.ts and
+    // kilo-provider/path-parity.ts; only the required insertion points remain
+    // inline (plus a shared invalidation-branch helper that lowers peer
+    // complexity instead of raising the complexity cap). Both capped files
+    // measure 3180/3197 lines, so 3200 is the smallest cap with headroom.
+    rules: { "max-lines": ["error", 3200] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],

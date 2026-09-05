@@ -17,6 +17,8 @@ import { InstanceStore } from "@/project/instance-store"
 import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { InstanceRef } from "@/effect/instance-ref"
 import { KiloSessions } from "@/kilo-sessions/kilo-sessions"
+import { Global } from "@opencode-ai/core/global"
+import * as InstanceState from "@/effect/instance-state"
 import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
 
@@ -77,6 +79,21 @@ export const FD_REMOTE_STATUS_VERSION = 1 as const
 export const FD_REMOTE_STATUS_OP = "remote/status" as const
 export const FD_SESSION_LIST_VERSION = 1 as const
 export const FD_SESSION_LIST_OP = "experimental/session/list" as const
+export const FD_PATH_VERSION = 1 as const
+export const FD_PATH_OP = "path/get" as const
+
+export interface FdPathRequest {
+  v: typeof FD_PATH_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_PATH_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: Record<string, never>
+}
 
 export interface FdSessionListRequest {
   v: typeof FD_SESSION_LIST_VERSION
@@ -295,6 +312,13 @@ function boundSessionListMessage(msg: string): string {
   return msg
 }
 
+const PATH_MESSAGE_LIMIT = 200
+
+function boundPathMessage(msg: string): string {
+  if (msg.length > PATH_MESSAGE_LIMIT) return msg.slice(0, PATH_MESSAGE_LIMIT)
+  return msg
+}
+
 function remoteStatusFailed(
   req: { requestId: string; opId: string; idempotencyKey: string },
   code: string,
@@ -308,6 +332,27 @@ function remoteStatusFailed(
     requestId: req.requestId,
     opId: req.opId,
     op: FD_REMOTE_STATUS_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function pathFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_PATH_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_PATH_OP,
     idempotencyKey: req.idempotencyKey,
     status: "failed",
     outcome: { type: "failed", time, failure },
@@ -532,6 +577,46 @@ function validateSessionListRequest(raw: unknown): FdSessionListRequest {
   return raw as unknown as FdSessionListRequest
 }
 
+function validatePathRequest(raw: unknown): FdPathRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_PATH_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_PATH_OP) throw new Error("op must be path/get")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for path")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  // Path redaction: unknown field names are never echoed — they may carry
+  // path-bearing keys (audit: arbitrary keys reached the private failure).
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error("unexpected context field")
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for path")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  if (containsPathMaterial(raw.requestId as string))
+    throw new Error("requestId must be non-empty string without path material")
+  if (containsPathMaterial(raw.idempotencyKey as string))
+    throw new Error("idempotencyKey must be non-empty string without path material")
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "path" || segs[1]!.length === 0)
+    throw new Error("opId must be path:<token> with nonempty colon-free token")
+  const token = segs[1] as string
+  if (token.includes(":") || containsPathMaterial(token))
+    throw new Error("opId must be path:<token> with nonempty colon-free token")
+  return raw as unknown as FdPathRequest
+}
+
 function validateStatusRequest(raw: unknown): FdStatusRequest {
   if (!isRecord(raw)) throw new Error("params must be object")
   if (raw.v !== FD_STATUS_VERSION) throw new Error("v must be 1")
@@ -562,6 +647,40 @@ function fallbackIds(raw: unknown): { requestId: string; opId: string; idempoten
   const idempotencyKey = isNonEmpty(o.idempotencyKey) ? (o.idempotencyKey as string) : "unknown"
   return { requestId, opId, idempotencyKey }
 }
+
+function containsPathMaterial(v: string): boolean {
+  return v.includes("/") || v.includes("\\") || v.includes("\0")
+}
+
+function sanitizePathId(v: unknown): string {
+  if (typeof v !== "string" || v.length === 0) return "unknown"
+  if (containsPathMaterial(v)) return "unknown"
+  return v
+}
+
+function fallbackPathIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safePathIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
+const PATH_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
+const PATH_INTERNAL_MESSAGE = "internal error"
 
 export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.WritableStream): FdCarrierHandle {
   // Ensure streams are flowing
@@ -1261,6 +1380,100 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(sessionListFailed(req, "internal", "internal error", false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === "path/get") {
+        // Path parity-only read: routing directory/workspace identity via the
+        // existing drain-control lane (same lane as session/list), then the
+        // real production source — process-global Global.Path plus
+        // directory-routed InstanceState context (worktree/directory) — read
+        // synchronously as the production getPath handler does. Globals stay
+        // process-global and are never bound to the request directory; only
+        // the five safe Path fields are returned. No mutation, no config
+        // ownership, no worktree-derivation claim. Evidence: production
+        // handler yields InstanceState.context (handlers/instance.ts getPath),
+        // which requires InstanceRef; acquireDrainControl + InstanceRef is the
+        // existing lane, not a new lifecycle lane (no fence/convergence added).
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdPathRequest
+            try {
+              req = validatePathRequest(params)
+            } catch (e) {
+              const msg = e instanceof Error ? e.message : String(e)
+              return pathFailed(fallbackPathIds(params), "validation.failed", boundPathMessage(msg), false)
+            }
+            const safe = safePathIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return pathFailed(safe, "validation.failed", "invalid directory", false)
+            }
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return pathFailed(safe, "validation.failed", "invalid workspace", false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? PATH_FENCE_MESSAGE : PATH_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: pathFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: pathFailed(safe, "internal", PATH_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              const ctx = yield* InstanceState.context
+              const path = {
+                home: Global.Path.home,
+                state: Global.Path.state,
+                config: Global.Path.config,
+                worktree: ctx.worktree,
+                directory: ctx.directory,
+              }
+              for (const v of [path.home, path.state, path.config, path.worktree, path.directory]) {
+                if (typeof v !== "string" || v.length === 0 || v.includes("\0"))
+                  return pathFailed(safe, "internal", PATH_INTERNAL_MESSAGE, false)
+              }
+              return {
+                v: FD_PATH_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_PATH_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { path },
+              }
+            }).pipe(
+              Effect.provideService(InstanceRef, acquired.value.ctx),
+              Effect.ensuring(acquired.value.release),
+            )
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(pathFailed(safe, "internal", PATH_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(pathFailed(safe, "internal", PATH_INTERNAL_MESSAGE, false))
               }),
             )
           }),

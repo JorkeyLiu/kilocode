@@ -38,6 +38,8 @@ import type {
   PrivateSessionListWireOutcome,
   ServePrivateSessionListRequest,
 } from "./serve-private-session-list-contract"
+import { DeferredPath, wrapPathOutcomeForOwner } from "./serve-private-path"
+import type { PathContractRequest, PathWireOutcome } from "./serve-private-path-contract"
 import * as crypto from "crypto"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
@@ -191,6 +193,7 @@ export class KiloConnectionService {
   private readonly deferredMessagesObservers: Map<string, () => void> = new Map()
   private readonly deferredChildren: DeferredChildren = new DeferredChildren(this.privateAvailableListeners)
   private readonly deferredRemoteStatus: DeferredRemoteStatus = new DeferredRemoteStatus(this.privateAvailableListeners)
+  private readonly deferredPath: DeferredPath = new DeferredPath(this.privateAvailableListeners)
   /**
    * Definitively failed private get epoch (B6 LOCK-005/012): set only when
    * the current backend epoch's negotiation definitively fails (explicit
@@ -750,6 +753,7 @@ export class KiloConnectionService {
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
+    this.deferredPath.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -796,6 +800,7 @@ export class KiloConnectionService {
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
+    this.deferredPath.clearAll()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -977,6 +982,7 @@ export class KiloConnectionService {
     if (!peer) return
     const childrenSafe = reason.startsWith("children ")
     const remoteSafe = reason.startsWith("remote-status ")
+    const pathSafe = reason.startsWith("path ")
     const messagesSafe = ["observer timeout cancel throw", "observer timeout exact cancel miss", "messages observer timeout"].includes(reason)
     if (childrenSafe) {
       console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "session/children", invalidated: true })
@@ -991,6 +997,13 @@ export class KiloConnectionService {
         peer.invalidateOnObserverTimeout(reason)
       } catch {
         console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "remote/status", invalidateFailed: true })
+      }
+    } else if (pathSafe) {
+      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "path/get", invalidated: true })
+      try {
+        peer.invalidateOnObserverTimeout(reason)
+      } catch {
+        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "path/get", invalidateFailed: true })
       }
     } else if (messagesSafe) {
       console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch:`, {
@@ -1021,6 +1034,7 @@ export class KiloConnectionService {
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
+    this.deferredPath.clearAll()
   }
 
   /**
@@ -1224,6 +1238,12 @@ export class KiloConnectionService {
     return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
   }
 
+  /** One-shot deferred path observation; dedupe/lifecycle live in DeferredPath. */
+  addDeferredPathObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
+    const store = this.deferredPath
+    return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
+  }
+
   private toError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error))
   }
@@ -1287,6 +1307,7 @@ export class KiloConnectionService {
       this.clearDeferredMessagesObserversForEpoch(staleEpoch)
       this.deferredChildren.clearForEpoch(staleEpoch)
       this.deferredRemoteStatus.clearForEpoch(staleEpoch)
+      this.deferredPath.clearForEpoch(staleEpoch)
     }
     if (this.privatePeer === peer) {
       this.privatePeer = null
@@ -1309,6 +1330,7 @@ export class KiloConnectionService {
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
+    this.deferredPath.clearForEpoch(epochAtStart)
     return true
   }
 
@@ -1350,6 +1372,7 @@ export class KiloConnectionService {
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
+    this.deferredPath.clearForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
 
@@ -1394,6 +1417,7 @@ export class KiloConnectionService {
       this.clearDeferredMessagesObserversForEpoch(server.epoch)
       this.deferredChildren.clearForEpoch(server.epoch)
       this.deferredRemoteStatus.clearForEpoch(server.epoch)
+      this.deferredPath.clearForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
     }
@@ -1417,6 +1441,22 @@ export class KiloConnectionService {
 
   getPrivateEpoch(): number | null {
     return this.privateEpoch
+  }
+
+  /**
+   * Authoritative `path/get` routing directory shared by the SDK read and
+   * the private read: the exact active backend spawn identity from the
+   * existing `ServerManager` owner (`getActiveSpawnCwd`). No mutable
+   * `currentDirectory`/`rootDirectory`/workspace-folder/`process.cwd()`
+   * substitute: absent/dead/disposed stays fail-closed (undefined).
+   */
+  getPathRoutingDirectory(): string | undefined {
+    try {
+      const dir = this.serverManager.getActiveSpawnCwd()
+      return typeof dir === "string" && dir.length > 0 ? dir : undefined
+    } catch {
+      return undefined
+    }
   }
 
   getPrivatePid(): number | undefined {
@@ -2352,6 +2392,33 @@ export class KiloConnectionService {
       (id, msg) => peerAtCall.tryCancelPending(id, msg),
       () => peerAtCall.invalidateOnObserverTimeout("session-list stale observer timeout"),
       peerAtCall.privateSessionListOutcomeWithHandle(req),
+      req,
+    )
+  }
+
+  /** Epoch-aware pass-through for the read-only path parity observer. */
+  privatePathOutcomeWithHandle(req: PathContractRequest): {
+    id: number
+    promise: Promise<PathWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("path/get")) {
+      throw new Error("Private peer missing path/get capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapPathOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("path stale observer timeout"),
+      peerAtCall.privatePathOutcomeWithHandle(req),
       req,
     )
   }
