@@ -41,6 +41,7 @@ import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs"
 import { dirname, isAbsolute, join, resolve } from "node:path"
 import { parse as jsoncParse, type ParseError as JsoncParseError } from "jsonc-parser"
+import { validateQueuedObservation } from "../src/agent-manager/fixture-backend"
 
 /** Manifest schema version. The launcher's finalize step shares this literal. */
 export const EVIDENCE_SCHEMA = "kilo-e2e-evidence/1"
@@ -425,6 +426,12 @@ export function evidenceInventory(scenarios: Set<string>): { required: EvidenceS
       // redacted observer records after Stop B). Absence remains allowed;
       // presence is validated.
       { rel: "abort-attempts.json", base: "scratch" },
+      // G3/B9 investigation-only queued observation (fixture-only, bounded,
+      // redacted SDK-visible message/status shape for the DOM follow-up on
+      // the busy session, recorded before Stop — not backend queue truth).
+      // Absence remains allowed; presence is validated. Never a
+      // terminal/durable abort outcome, never active-generation interruption.
+      { rel: "queued-observation.json", base: "scratch" },
     )
   }
   if (scenarios.has("real-session") || scenarios.has("real-overflow") || scenarios.has("worktree-removal")) {
@@ -480,6 +487,37 @@ export function expandGlob(base: string, rel: string): string[] {
 /** True when the file must be parseable as evidence (JSON/JSONC or the raw JSONL store). */
 function needsParse(dest: string): boolean {
   return dest === "llm-requests.jsonl" || dest.endsWith(".json") || dest.endsWith(".jsonc")
+}
+
+/**
+ * Fixture-only bounded/redacted envelope checks for the present-when-copied
+ * timeline/abort/queued artifacts. Extracted so parseFailure stays under its
+ * complexity cap; each branch validates one artifact's shape plus secret
+ * redaction and returns the failure or null.
+ */
+function optionalArtifactFailure(dest: string, parsed: unknown, text: string): string | null {
+  if (dest === "sse-timeline-abort-A.json" || dest === "sse-timeline-abort-B.json") {
+    const err = validateSseTimeline(parsed)
+    if (err) return `sse-timeline abort malformed: ${err}`
+    if (text.includes("e2e-fixture-key") || text.includes("KILO_SERVER_PASSWORD"))
+      return "sse-timeline abort leaked secret"
+    return null
+  }
+  if (dest === "abort-attempts.json") {
+    const err = validateAbortAttempts(parsed)
+    if (err) return `abort-attempts malformed: ${err}`
+    if (text.includes("e2e-fixture-key") || text.includes("KILO_SERVER_PASSWORD"))
+      return "abort-attempts leaked secret"
+    return null
+  }
+  if (dest === "queued-observation.json") {
+    const err = validateQueuedObservation(parsed)
+    if (err) return `queued-observation malformed: ${err}`
+    if (text.includes("e2e-fixture-key") || text.includes("KILO_SERVER_PASSWORD"))
+      return "queued-observation leaked secret"
+    return null
+  }
+  return null
 }
 
 /** Validate the file parses (JSON/JSONC whole-file, or every JSONL line). Returns the failure or null. */
@@ -545,20 +583,8 @@ export function parseFailure(dest: string, bytes: Buffer): string | null {
       if (/GateC Title/.test(raw)) return "lc-layout-timeline leaked raw title"
       if (/\/[a-z]+\/[^\s"]*\.kilo/.test(raw)) return "lc-layout-timeline leaked path"
     }
-    if (dest === "sse-timeline-abort-A.json" || dest === "sse-timeline-abort-B.json") {
-      const err = validateSseTimeline(parsed)
-      if (err) return `sse-timeline abort malformed: ${err}`
-      const raw = text
-      if (raw.includes("e2e-fixture-key") || raw.includes("KILO_SERVER_PASSWORD"))
-        return "sse-timeline abort leaked secret"
-    }
-    if (dest === "abort-attempts.json") {
-      const err = validateAbortAttempts(parsed)
-      if (err) return `abort-attempts malformed: ${err}`
-      const raw = text
-      if (raw.includes("e2e-fixture-key") || raw.includes("KILO_SERVER_PASSWORD"))
-        return "abort-attempts leaked secret"
-    }
+    const optionalFailure = optionalArtifactFailure(dest, parsed, text)
+    if (optionalFailure) return optionalFailure
   }
   return null
 }
@@ -1981,13 +2007,17 @@ export function collectEvidence(opts: CollectOptions): EvidenceManifest {
         return
       }
     }
-    // Optional timeline/abort artifacts stay absent-allowed, but a present
+    // Optional timeline/abort/queued artifacts stay absent-allowed, but a present
     // artifact must still validate: a malformed or secret-bearing
-    // sse-timeline-abort-A/B.json or abort-attempts.json fails the handoff
-    // instead of passing through unvalidated. No other optional inventory changes.
+    // sse-timeline-abort-A/B.json, abort-attempts.json, or queued-observation.json
+    // fails the handoff instead of passing through unvalidated. No other optional
+    // inventory changes.
     if (
       !isRequired &&
-      (dest === "sse-timeline-abort-A.json" || dest === "sse-timeline-abort-B.json" || dest === "abort-attempts.json")
+      (dest === "sse-timeline-abort-A.json" ||
+        dest === "sse-timeline-abort-B.json" ||
+        dest === "abort-attempts.json" ||
+        dest === "queued-observation.json")
     ) {
       const failure = parseFailure(dest, bytes)
       if (failure !== null) {

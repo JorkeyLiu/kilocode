@@ -9,7 +9,14 @@ import { createHash } from "node:crypto"
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import type { Browser, Frame, Page } from "@playwright/test"
-import type { BackendSnapshot } from "../src/agent-manager/fixture-backend"
+import type { BackendSnapshot, QueuedObservation } from "../src/agent-manager/fixture-backend"
+import {
+  classifyQueuedObservation,
+  countQueuedUserMessages,
+  queuedStatusForSession,
+  summarizeQueuedObservation,
+  validateQueuedObservation,
+} from "../src/agent-manager/fixture-backend"
 import { isWrongPin, withPin, type PinExpectation } from "./e2e-pin"
 import { validateAbortAttempts, validateSseTimeline } from "./e2e-evidence"
 
@@ -291,6 +298,119 @@ async function typePromptAndSend(frame: Frame, text: string, timeoutMs: number):
   }
   await send.click({ timeout: timeoutMs })
   console.log(`[probe] sent prompt via real prompt input: ${text}`)
+}
+
+/**
+ * Send a follow-up prompt to the CURRENTLY OPEN busy session through the real
+ * prompt input (G3/B9 queued probe). Unlike sendWithRetry, this expects NO new
+ * tab: the busy session stays open, the typed text keeps the Send button
+ * visible (PromptInput shows Send while busy+typed, Stop only while
+ * busy+empty), and the served backend enqueues the second prompt_async behind
+ * the busy turn's per-session FIFO. Production Stop/abort behavior untouched.
+ */
+export async function sendFollowupToBusySession(frame: Frame, text: string, timeoutMs: number): Promise<void> {
+  const ta = frame.locator("textarea.prompt-input").first()
+  await ta.waitFor({ state: "visible", timeout: timeoutMs })
+  await ta.fill("")
+  await ta.pressSequentially(text, { delay: 5 })
+  const send = frame.locator('button[aria-label="Send"]').first()
+  const deadline = Date.now() + timeoutMs
+  for (;;) {
+    const present = await send.count().then((n) => n > 0)
+    const disabled = present ? await send.getAttribute("aria-disabled").catch(() => "true") : "true"
+    if (present && disabled !== "true") break
+    if (Date.now() > deadline) throw new Error("probe: Send button never became enabled for busy-session follow-up")
+    await sleep(250)
+  }
+  await send.click({ timeout: timeoutMs })
+  console.log("[probe] sent busy-session follow-up via real prompt input (queued probe, no new tab expected)")
+}
+
+/**
+ * G3/B9 investigation-only queued observation (fixture-only, SDK-visible shape
+ * only — not backend queue truth, not an abort outcome). While the given
+ * session is busy, sends `prompt` to the SAME session through the real prompt
+ * input (no new tab), polls only the SDK-visible message/status shape, and
+ * writes the bounded/redacted `queued-observation.json` artifact. Never fatal
+ * to the A/B lifecycle: a failed tab select, failed Send click, or
+ * unconverged wait records the last SDK-visible shape with
+ * `sendClickAccepted:false` and the run continues to Stop. An artifact
+ * build/validate/write failure skips the artifact file and returns. No abort semantics
+ * change; no terminal/durable outcome is claimed; no queue-clear/idle inference.
+ */
+export async function observeQueuedFollowup(
+  frame: Frame,
+  snap: ReturnType<typeof snapshotClient>,
+  sessionID: string,
+  scratch: string,
+  marker: string,
+  prompt: string,
+  timeoutMs: number,
+): Promise<void> {
+  let baseline: BackendSnapshot
+  try {
+    baseline = await snap.request()
+  } catch {
+    console.log("[probe] queued baseline snapshot unavailable, skipping queued observation (Stop continues)")
+    return
+  }
+  const baselineCount = countQueuedUserMessages(baseline, sessionID) ?? 0
+  const baselineStatus = queuedStatusForSession(baseline, sessionID)
+  let sendClickAccepted = false
+  try {
+    await clickTab(frame, sessionID, timeoutMs)
+    await sendFollowupToBusySession(frame, prompt, timeoutMs)
+    sendClickAccepted = true
+  } catch (err) {
+    console.log(
+      `[probe] queued follow-up not accepted (tab select or DOM Send click), recording last SDK shape: ${err instanceof Error ? err.message : String(err)}`,
+    )
+    sendClickAccepted = false
+  }
+  let observed: BackendSnapshot | undefined
+  if (sendClickAccepted) {
+    try {
+      observed = await snap.waitFor(
+        (s) => {
+          const c = classifyQueuedObservation(s, sessionID, marker)
+          if (c === "marker-visible-busy-no-assistant" || c === "marker-visible-nonbusy-or-assistant") return undefined
+          return `queued SDK-visible shape=${c} (waiting for marker-visible shape, not backend queue truth)`
+        },
+        30_000,
+        "queued second prompt SDK-visible shape observed on busy session",
+      )
+    } catch (err) {
+      console.log(
+        `[probe] queued SDK-visible wait did not converge, recording last SDK shape (not backend queue truth): ${err instanceof Error ? err.message : String(err)}`,
+      )
+      observed = await snap.request().catch(() => baseline)
+    }
+  } else {
+    observed = await snap.request().catch(() => baseline)
+  }
+  try {
+    const artifact: QueuedObservation = summarizeQueuedObservation({
+      scenario: "real-session",
+      observedAt: new Date().toISOString(),
+      sessionID,
+      baselineUserCount: baselineCount,
+      baselineStatus,
+      snap: observed ?? baseline,
+      marker,
+      sendClickAccepted,
+    })
+    const verr = validateQueuedObservation(artifact)
+    if (verr) throw new Error(`probe: queued observation invalid: ${verr}`)
+    writeFileSync(join(scratch, "queued-observation.json"), JSON.stringify(artifact, null, 2))
+    console.log(`[probe] QUEUED OBSERVATION: ${JSON.stringify(artifact)}`)
+  } catch (err) {
+    const kind = err instanceof Error ? err.name : typeof err
+    const msg = (err instanceof Error ? err.message : String(err)).slice(0, 200).replace(/\s+/g, " ")
+    console.log(
+      `[probe] queued observation artifact unavailable, skipping artifact (Stop continues): ${kind}: ${msg}`,
+    )
+    return
+  }
 }
 
 /**

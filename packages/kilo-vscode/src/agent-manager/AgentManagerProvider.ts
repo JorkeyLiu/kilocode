@@ -1120,11 +1120,13 @@ export class AgentManagerProvider implements Disposable {
         this.log("fixture backendSnapshot: session.list failed:", err)
         return empty("session.list")
       })
+    let statusReadable = true
     const statuses = await client.session
       .status({ directory: root })
       .then((r) => r.data ?? {})
       .catch((err) => {
         this.log("fixture backendSnapshot: session.status failed:", err)
+        statusReadable = false
         return {}
       })
     const agents = await client.app
@@ -1137,11 +1139,17 @@ export class AgentManagerProvider implements Disposable {
       .catch(() => empty("provider.list"))
     const messages: Record<string, ReturnType<typeof summarizeMessage>[]> = {}
     const children: Record<string, string[]> = {}
+    const unreadableMessages: Record<string, boolean> = {}
     for (const s of sessions) {
+      let messagesOk = true
       const rows = await client.session
         .messages({ sessionID: s.id, directory: root })
         .then((r) => r.data ?? [])
-        .catch(() => empty(`session.messages(${s.id})`))
+        .catch(() => {
+          messagesOk = false
+          return empty(`session.messages(${s.id})`)
+        })
+      if (!messagesOk) unreadableMessages[s.id] = false
       messages[s.id] = rows.map(summarizeMessage)
       // SDK-first detached warn-only children parity (B8): the SDK result
       // below stays the sole authority for the fixture snapshot. The private
@@ -1201,6 +1209,8 @@ export class AgentManagerProvider implements Disposable {
       sessions: sessions.map(summarizeSession),
       messages,
       statuses: summarizeStatuses(statuses),
+      ...(statusReadable ? {} : { statusReadable: false as const }),
+      ...(Object.keys(unreadableMessages).length > 0 ? { messagesReadable: unreadableMessages } : {}),
       agents: agents.map((agent) => (agent as { name?: string }).name ?? "").filter((name) => name.length > 0),
       connectedProviders: connected,
       ...(mcp ? { mcp } : {}),

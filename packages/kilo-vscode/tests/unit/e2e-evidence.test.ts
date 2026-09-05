@@ -2133,3 +2133,137 @@ describe("validateAbortAttempts run-level export (fixture-only, absence allowed)
     expect(slice).toContain("Array.isArray")
   })
 })
+
+describe("collectEvidence queued observation handoff (SDK-visible shape, optional, absence allowed)", () => {
+  const realSession = new Set(["real-session"])
+  function seededRealSession(root: string): { scratch: string; workspace: string; staging: string } {
+    const scratch = join(root, "scratch")
+    const workspace = join(root, "workspace")
+    const staging = join(root, "staging")
+    mkdirSync(scratch, { recursive: true })
+    mkdirSync(staging, { recursive: true })
+    mkdirSync(join(workspace, ".kilo"), { recursive: true })
+    writeFileSync(join(scratch, "plan.json"), JSON.stringify({ sourceId: "s-A" }))
+    writeFileSync(join(scratch, "runner-pid"), "4242")
+    writeFileSync(join(scratch, "real-dom-evidence"), JSON.stringify({ url: "vscode-webview://x" }))
+    writeFileSync(
+      join(scratch, "llm-requests.jsonl"),
+      JSON.stringify({ providerID: "e2e-local", modelID: "e2e-model", sessionID: "s" }) + "\n",
+    )
+    writeFileSync(join(scratch, "llm-requests-real-session.json"), JSON.stringify({ scenario: "real-session" }))
+    writeFileSync(join(scratch, "llm-matrix-real-session-final.json"), JSON.stringify({ phase: "final" }))
+    writeFileSync(join(scratch, "real-snap-1.json"), JSON.stringify({ requestedAt: "t" }))
+    writeFileSync(join(scratch, "canonical-gate.json"), JSON.stringify({ gate: "ok" }))
+    writeFileSync(join(scratch, "canonical-archive-before.json"), JSON.stringify({ before: true }))
+    writeFileSync(join(scratch, "canonical-archive-after.json"), JSON.stringify({ after: true }))
+    writeFileSync(join(scratch, "rs-cstate.json"), JSON.stringify({ state: "ready" }))
+    writeFileSync(join(scratch, "rs-credential.json"), JSON.stringify({ provisioned: true }))
+    writeFileSync(join(workspace, ".kilo", "kilo.json"), JSON.stringify({ provider: {} }))
+    writeFileSync(join(workspace, ".kilo", "kilo.jsonc"), JSON.stringify({ provider: {} }))
+    return { scratch, workspace, staging }
+  }
+  function validQueued(): Record<string, unknown> {
+    return {
+      scenario: "real-session",
+      observedAt: "2026-09-04T00:00:06.000Z",
+      sessionID: "ses_A",
+      baselineStatus: "busy",
+      status: "busy",
+      baselineUserCount: 1,
+      currentUserCount: 2,
+      secondTextPresent: true,
+      hasAssistant: false,
+      backendHintAvailable: false,
+      sendClickAccepted: true,
+      classification: "marker-visible-busy-no-assistant",
+    }
+  }
+  function handoff(root: string, scratch: string, workspace: string, staging: string) {
+    return collectEvidence({
+      staging,
+      scratch,
+      workspace,
+      scenarios: realSession,
+      fixtureId: "e2e-probe-1234",
+      startedAt: Date.now(),
+      probePid: 4242,
+      success: true,
+      destination: resolve(join(root, "dest")),
+    })
+  }
+  it("absence stays allowed (status complete, never required)", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      const { required } = evidenceInventory(realSession)
+      expect(required.map((s) => s.rel)).not.toContain("queued-observation.json")
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("complete")
+      expect(manifest.missing).toEqual([])
+      expect(manifest.malformed).toEqual([])
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("present valid SDK-shape artifact is copied and appears in the manifest", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      writeFileSync(join(scratch, "queued-observation.json"), JSON.stringify(validQueued()))
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("complete")
+      expect(manifest.malformed).toEqual([])
+      const entry = manifest.files.find((f) => f.dest === "queued-observation.json")
+      expect(entry).toBeDefined()
+      expect(entry!.sourceRel).toBe("scratch/queued-observation.json")
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("present malformed artifact fails the handoff and is excluded from files", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      writeFileSync(join(scratch, "queued-observation.json"), "{not json")
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("queued-observation.json")
+      expect(manifest.files.some((f) => f.dest === "queued-observation.json")).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("present secret-bearing artifact fails the handoff and is excluded from files", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      writeFileSync(
+        join(scratch, "queued-observation.json"),
+        JSON.stringify({ ...validQueued(), sessionID: "ses_e2e-fixture-key" }),
+      )
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("queued-observation.json")
+      expect(manifest.files.some((f) => f.dest === "queued-observation.json")).toBe(false)
+      expect(manifest.notes.some((n) => n.includes("queued-observation.json"))).toBe(true)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+  it("present old overclaim enum fails the handoff (backward-incompatible narrowing)", () => {
+    const root = tempRoot()
+    try {
+      const { scratch, workspace, staging } = seededRealSession(root)
+      writeFileSync(
+        join(scratch, "queued-observation.json"),
+        JSON.stringify({ ...validQueued(), classification: "pending" }),
+      )
+      const manifest = handoff(root, scratch, workspace, staging)
+      expect(manifest.status).toBe("malformed")
+      expect(manifest.malformed).toContain("queued-observation.json")
+      expect(manifest.files.some((f) => f.dest === "queued-observation.json")).toBe(false)
+    } finally {
+      rmSync(root, { recursive: true, force: true })
+    }
+  })
+})

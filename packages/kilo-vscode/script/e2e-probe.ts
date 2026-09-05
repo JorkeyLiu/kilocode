@@ -265,6 +265,7 @@ import {
   realTabStates,
   requestRsCanonicalState,
   requestRsSeedCredential,
+  observeQueuedFollowup,
   sendTurnWithPin,
   sendWithRetry,
   sidebarTopicStates,
@@ -1177,6 +1178,16 @@ async function assertTopicNavigation(browser: Browser, plan: E2EPlan, scratch: s
 /** Prompt texts typed into the real Agent Manager prompt input. */
 const REAL_PROMPT_A = "E2E parity prompt A: custom agent plus low variant"
 const REAL_PROMPT_B = "E2E parity prompt B: custom agent B plus high variant"
+/**
+ * G3/B9 investigation-only queued marker (fixture-only, SDK-visible shape
+ * only — not backend queue truth). The harness sends this as a second DOM
+ * follow-up to the SAME busy session before Stop; the snapshot classifier keys
+ * on this marker substring (never stored in the artifact beyond a boolean) so
+ * the observation rests on SDK-visible marker presence + status + assistant
+ * shape, not on messages length alone and never as backend queue truth.
+ */
+const REAL_QUEUED_MARKER = "E2E queued follow-up"
+const REAL_QUEUED_PROMPT = `${REAL_QUEUED_MARKER}: while busy, queue a second prompt on the same session`
 
 /**
  * A run-owned TCP listener that accepts connections and never responds. The
@@ -1491,6 +1502,15 @@ async function assertRealSessionLifecycle(browser: Browser, plan: E2EPlan, scrat
   )
   const sessionB = snapB.sessions.find((x) => x.id !== sessionA.id)!
   console.log(`[probe] session B: ${sessionB.id}`)
+
+  // --- Phase 3b (G3/B9 investigation-only queued probe, fixture-only, SDK-visible shape only) ---
+  // While session A is still busy behind the hang backend, send a SECOND DOM
+  // follow-up to the SAME busy session (busy+typed keeps Send visible; no new
+  // tab expected) and record the bounded SDK-visible-shape observation before
+  // Stop (not backend queue truth, not an abort outcome). Never fatal to the
+  // A/B lifecycle; no abort semantics change and no terminal/durable outcome
+  // is claimed here.
+  await observeQueuedFollowup(frame, snap, sessionA.id, scratch, REAL_QUEUED_MARKER, REAL_QUEUED_PROMPT, timeout)
 
   // --- Phase 4 (H-11 abort, independent control): abort A, then B ---
   // The backend status endpoint deletes idle sessions from its map (absent
