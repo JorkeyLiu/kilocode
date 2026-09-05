@@ -1,14 +1,26 @@
 import { describe, expect, test } from "bun:test"
 import {
+  ABORT_TARGET_KINDS,
+  assertAbortSuccessExcludesNotAffected,
   assertGenerationNotRequestIdentity,
   canonicalAbortOpId,
   checkAbortScope,
+  countAbortCancelled,
+  isAbortCancellationSuccess,
+  isAbortNotFoundTerminal,
   isAbortReceipt,
   isAbortTerminal,
+  makeAbortDispositionTerminal,
+  makeAbortNotFoundFixture,
   makeAbortReceipt,
   makeAbortTerminalFixture,
   parseAbortOpId,
+  reobserveAbortTerminal,
   validateAbortContractRequest,
+  validateAbortDiagnostic,
+  validateAbortDispositionEntry,
+  validateAbortDispositionTerminal,
+  validateAbortNotFoundTerminal,
   validateAffectedGeneration,
 } from "./serve-private-abort-contract"
 
@@ -132,5 +144,114 @@ describe("B9 abort cancellation-request identity envelope contract", () => {
     expect(terminal.affected.length).toBe(1)
     expect(terminal.opId).toBe(req.opId)
     expect(receipt.opId).toBe(req.opId)
+  })
+})
+
+describe("B9-P2.3 outcome disposition and terminal idempotency fixtures", () => {
+  test("closed per-target kind vocabulary matches the locked set", () => {
+    expect([...ABORT_TARGET_KINDS].sort()).toEqual(
+      ["background", "descendant", "event-publication", "followup", "intake", "queued", "root"].sort(),
+    )
+    const req = validateAbortContractRequest(makeReq())
+    for (const kind of ABORT_TARGET_KINDS) {
+      const terminal = makeAbortDispositionTerminal(req, [
+        { kind, disposition: "cancelled", generationId: "gen_001", sessionId: SID },
+      ])
+      expect(() => validateAbortDispositionTerminal(terminal)).not.toThrow()
+    }
+    expect(() =>
+      validateAbortDispositionEntry({
+        kind: "generation",
+        disposition: "cancelled",
+        generationId: "gen_001",
+        sessionId: SID,
+      }),
+    ).toThrow()
+  })
+
+  test("dispositions distinguish cancelled, succeeded, and not_affected", () => {
+    const req = validateAbortContractRequest(makeReq())
+    const terminal = makeAbortDispositionTerminal(req, [
+      { kind: "root", disposition: "cancelled", generationId: "gen_001", sessionId: SID },
+      { kind: "queued", disposition: "succeeded", generationId: "gen_002", sessionId: SID },
+      { kind: "descendant", disposition: "not_affected", generationId: "gen_003", sessionId: SID },
+    ])
+    const out = validateAbortDispositionTerminal(terminal)
+    expect(out.affected.map((entry) => entry.disposition)).toEqual(["cancelled", "succeeded", "not_affected"])
+    expect(isAbortCancellationSuccess(out.affected[0]!)).toBeTrue()
+    expect(isAbortCancellationSuccess(out.affected[1]!)).toBeFalse()
+    expect(isAbortCancellationSuccess(out.affected[2]!)).toBeFalse()
+    expect(countAbortCancelled(out.affected)).toBe(1)
+    expect(() =>
+      validateAbortDispositionEntry({
+        kind: "root",
+        disposition: "unknown",
+        generationId: "gen_001",
+        sessionId: SID,
+      }),
+    ).toThrow()
+  })
+
+  test("not_affected cannot be counted as cancellation success", () => {
+    const req = validateAbortContractRequest(makeReq())
+    const terminal = makeAbortDispositionTerminal(req, [
+      { kind: "root", disposition: "cancelled", generationId: "gen_001", sessionId: SID },
+      { kind: "descendant", disposition: "not_affected", generationId: "gen_002", sessionId: SID },
+      { kind: "queued", disposition: "succeeded", generationId: "gen_003", sessionId: SID },
+    ])
+    expect(() => assertAbortSuccessExcludesNotAffected(terminal.affected, [terminal.affected[0]!])).not.toThrow()
+    expect(() => assertAbortSuccessExcludesNotAffected(terminal.affected, [terminal.affected[1]!])).toThrow(
+      "not_affected must not be counted as cancellation success",
+    )
+    expect(() => assertAbortSuccessExcludesNotAffected(terminal.affected, [terminal.affected[2]!])).toThrow()
+    expect(countAbortCancelled(terminal.affected)).toBe(1)
+  })
+
+  test("session.not_found terminal fixture is redacted and side-effect-free", () => {
+    const req = validateAbortContractRequest(makeReq())
+    const fixture = makeAbortNotFoundFixture(req, { code: "session.not_found", retryable: false, time: 1 })
+    expect(isAbortNotFoundTerminal(fixture)).toBeTrue()
+    expect(isAbortTerminal(fixture)).toBeFalse()
+    expect(fixture.sideEffect).toBeFalse()
+    expect(fixture.accepted).toBeFalse()
+    expect(fixture.terminal).toBeTrue()
+    expect(() => validateAbortNotFoundTerminal(fixture)).not.toThrow()
+    expect(() => makeAbortNotFoundFixture(req, { code: "stale", retryable: false, time: 1 })).toThrow()
+    expect("sessionId" in fixture).toBeFalse()
+    expect("prompt" in fixture).toBeFalse()
+  })
+
+  test("terminal re-observation returns deep-equal facts and rejects mismatched identity", () => {
+    const req = validateAbortContractRequest(makeReq())
+    const terminal = makeAbortDispositionTerminal(
+      req,
+      [{ kind: "root", disposition: "cancelled", generationId: "gen_001", sessionId: SID }],
+      { code: "cancelled", retryable: false, time: 7 },
+    )
+    const again = reobserveAbortTerminal(terminal, { opId: req.opId, idempotencyKey: req.idempotencyKey })
+    expect(again).toEqual(terminal)
+    expect(again).not.toBe(terminal)
+    expect(again.affected).not.toBe(terminal.affected)
+    // Stored fixture is not mutated by re-observation.
+    expect(terminal.affected.length).toBe(1)
+    expect(() =>
+      reobserveAbortTerminal(terminal, {
+        opId: canonicalAbortOpId(SID, "other"),
+        idempotencyKey: canonicalAbortOpId(SID, "other"),
+      }),
+    ).toThrow("re-observation opId mismatch")
+    expect(() =>
+      reobserveAbortTerminal(terminal, { opId: req.opId, idempotencyKey: canonicalAbortOpId(SID, "other") }),
+    ).toThrow("re-observation idempotencyKey mismatch")
+  })
+
+  test("diagnostics allow code, retryable, and time but reject raw echo", () => {
+    expect(() =>
+      validateAbortDiagnostic({ code: "cancelled", retryable: false, time: 1, message: "redacted" }),
+    ).not.toThrow()
+    for (const key of ["session", "sessionId", "prompt", "tool", "error", "output"]) {
+      expect(() => validateAbortDiagnostic({ code: "x", retryable: false, time: 1, [key]: "raw" })).toThrow()
+    }
+    expect(() => validateAbortDiagnostic({ code: "x", retryable: false, time: 1, extra: 1 })).toThrow()
   })
 })
