@@ -46,6 +46,8 @@ import { DeferredConfigWarnings, wrapConfigWarningsOutcomeForOwner } from "./ser
 import type { ConfigWarningsContractRequest, ConfigWarningsWireOutcome } from "./serve-private-config-warnings-contract"
 import { DeferredProjectCurrent, wrapProjectCurrentOutcomeForOwner } from "./serve-private-project-current"
 import type { ProjectCurrentContractRequest, ProjectCurrentWireOutcome } from "./serve-private-project-current-contract"
+import { DeferredFindFiles, wrapFindFilesOutcomeForOwner } from "./serve-private-find-files"
+import type { FindFilesContractRequest, FindFilesWireOutcome } from "./serve-private-find-files-contract"
 import * as crypto from "crypto"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
@@ -207,6 +209,7 @@ export class KiloConnectionService {
   private readonly deferredProjectCurrent: DeferredProjectCurrent = new DeferredProjectCurrent(
     this.privateAvailableListeners,
   )
+  private readonly deferredFindFiles: DeferredFindFiles = new DeferredFindFiles(this.privateAvailableListeners)
   /**
    * Definitively failed private get epoch (B6 LOCK-005/012): set only when
    * the current backend epoch's negotiation definitively fails (explicit
@@ -770,6 +773,7 @@ export class KiloConnectionService {
     this.deferredCommandList.clearAll()
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
+    this.deferredFindFiles.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -820,6 +824,7 @@ export class KiloConnectionService {
     this.deferredCommandList.clearAll()
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
+    this.deferredFindFiles.clearAll()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -1012,6 +1017,7 @@ export class KiloConnectionService {
     const pathSafe = reason.startsWith("path ")
     const warningsSafe = reason.startsWith("config-warnings ")
     const projectSafe = reason.startsWith("project-current ")
+    const findSafe = reason.startsWith("find-files ")
     const messagesSafe = [
       "observer timeout cancel throw",
       "observer timeout exact cancel miss",
@@ -1052,6 +1058,13 @@ export class KiloConnectionService {
       } catch {
         console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "project/current", invalidateFailed: true })
       }
+    } else if (findSafe) {
+      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "find/files", invalidated: true })
+      try {
+        peer.invalidateOnObserverTimeout(reason)
+      } catch {
+        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "find/files", invalidateFailed: true })
+      }
     } else if (messagesSafe) {
       console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch:`, {
         op: "session/messages",
@@ -1085,6 +1098,7 @@ export class KiloConnectionService {
     this.deferredCommandList.clearAll()
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
+    this.deferredFindFiles.clearAll()
   }
 
   /**
@@ -1319,6 +1333,29 @@ export class KiloConnectionService {
     return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
   }
 
+  /** One-shot deferred find/files observation; dedupe/lifecycle live in DeferredFindFiles. */
+  addDeferredFindFilesObserver(
+    dir: string,
+    workspace: string | undefined,
+    query: string,
+    type: string,
+    limit: number | undefined,
+    listener: () => void,
+  ): () => void {
+    const store = this.deferredFindFiles
+    return store.add(
+      this.privateEpoch,
+      this.privateFailedGetEpoch,
+      this.isPrivateAvailable(),
+      dir,
+      workspace,
+      query,
+      type,
+      limit,
+      listener,
+    )
+  }
+
   private toError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error))
   }
@@ -1386,6 +1423,7 @@ export class KiloConnectionService {
       this.deferredCommandList.clearForEpoch(staleEpoch)
       this.deferredConfigWarnings.clearForEpoch(staleEpoch)
       this.deferredProjectCurrent.clearForEpoch(staleEpoch)
+      this.deferredFindFiles.clearForEpoch(staleEpoch)
     }
     if (this.privatePeer === peer) {
       this.privatePeer = null
@@ -1412,6 +1450,7 @@ export class KiloConnectionService {
     this.deferredCommandList.clearForEpoch(epochAtStart)
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     this.deferredProjectCurrent.clearForEpoch(epochAtStart)
+    this.deferredFindFiles.clearForEpoch(epochAtStart)
     return true
   }
 
@@ -1457,6 +1496,7 @@ export class KiloConnectionService {
     this.deferredCommandList.clearForEpoch(epochAtStart)
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     this.deferredProjectCurrent.clearForEpoch(epochAtStart)
+    this.deferredFindFiles.clearForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
 
@@ -1505,6 +1545,7 @@ export class KiloConnectionService {
       this.deferredCommandList.clearForEpoch(server.epoch)
       this.deferredConfigWarnings.clearForEpoch(server.epoch)
       this.deferredProjectCurrent.clearForEpoch(server.epoch)
+      this.deferredFindFiles.clearForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
     }
@@ -2615,6 +2656,33 @@ export class KiloConnectionService {
       (id, msg) => peerAtCall.tryCancelPending(id, msg),
       () => peerAtCall.invalidateOnObserverTimeout("project-current stale observer timeout"),
       peerAtCall.privateProjectCurrentOutcomeWithHandle(req),
+      req,
+    )
+  }
+
+  /** Epoch-aware pass-through for the read-only find/files parity observer. */
+  privateFindFilesOutcomeWithHandle(req: FindFilesContractRequest): {
+    id: number
+    promise: Promise<FindFilesWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("find/files")) {
+      throw new Error("Private peer missing find/files capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapFindFilesOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("find-files stale observer timeout"),
+      peerAtCall.privateFindFilesOutcomeWithHandle(req),
       req,
     )
   }

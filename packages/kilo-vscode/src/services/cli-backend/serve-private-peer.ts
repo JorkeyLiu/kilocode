@@ -60,6 +60,14 @@ import {
   projectCurrentObserverTimeoutBranch,
   requestProjectCurrentOutcome,
 } from "./serve-private-project-current"
+import { validateFindFilesContractRequest as validateFindFilesRequest } from "./serve-private-find-files-contract"
+import type { FindFilesContractRequest, FindFilesWireOutcome } from "./serve-private-find-files-contract"
+import { FindFilesValidationError } from "./serve-private-find-files-contract"
+import {
+  findFilesObserverTimeoutBranch,
+  makeFindFilesCancel,
+  requestFindFilesOutcome,
+} from "./serve-private-find-files"
 import {
   canonicalPathOpId,
   comparePathParity,
@@ -1568,6 +1576,7 @@ export class ServePrivatePeer {
         "remote/status",
         "experimental/session/list",
         "path/get",
+        "find/files",
       ],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
@@ -1640,6 +1649,7 @@ export class ServePrivatePeer {
       let hasSessionList = false
       let hasPath = false
       let hasCommandList = false
+      let hasFindFiles = false
       if (Array.isArray(caps)) {
         hasCancelQueued = caps.includes("session/cancelQueued")
         hasSessionUpdate = caps.includes("session/update")
@@ -1653,6 +1663,7 @@ export class ServePrivatePeer {
         hasSessionList = caps.includes("experimental/session/list")
         hasPath = caps.includes("path/get")
         hasCommandList = caps.includes("command/list")
+        hasFindFiles = caps.includes("find/files")
       } else if (caps && typeof caps === "object") {
         const c = caps as Record<string, unknown>
         if ((c as Record<string, unknown>)["session/cancelQueued"]) hasCancelQueued = true
@@ -1737,6 +1748,7 @@ export class ServePrivatePeer {
         if ((c as Record<string, unknown>)["experimental/session/list"]) hasSessionList = true
         if ((c as Record<string, unknown>)["path/get"]) hasPath = true
         if ((c as Record<string, unknown>)["command/list"]) hasCommandList = true
+        if ((c as Record<string, unknown>)["find/files"]) hasFindFiles = true
         if (Object.keys(c).length === 0) {
           hasCancelQueued = false
           hasSessionUpdate = false
@@ -1750,6 +1762,7 @@ export class ServePrivatePeer {
           hasSessionList = false
           hasPath = false
           hasCommandList = false
+          hasFindFiles = false
         }
       }
 
@@ -1765,7 +1778,8 @@ export class ServePrivatePeer {
         !hasRemoteStatus &&
         !hasSessionList &&
         !hasPath &&
-        !hasCommandList
+        !hasCommandList &&
+        !hasFindFiles
       ) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
@@ -2224,6 +2238,7 @@ export class ServePrivatePeer {
       if (cap === "experimental/session/list" && c["experimental/session/list"]) return true
       if (cap === "path/get" && c["path/get"]) return true
       if (cap === "command/list" && c["command/list"]) return true
+      if (cap === "find/files" && c["find/files"]) return true
     }
     return false
   }
@@ -2763,6 +2778,48 @@ export class ServePrivatePeer {
     )
   }
 
+  async privateFindFiles(
+    req: FindFilesContractRequest,
+  ): Promise<import("./serve-private-find-files-contract").FindFilesResult> {
+    const handle = this.privateFindFilesOutcomeWithHandle(req)
+    const outcome = await handle.promise
+    if (outcome.kind === "invalid") throw new FindFilesValidationError(outcome.detail)
+    return outcome.result
+  }
+
+  /** Normalized outcome handle for the read-only find/files parity observer. */
+  privateFindFilesOutcomeWithHandle(req: FindFilesContractRequest): {
+    id: number
+    promise: Promise<FindFilesWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateFindFilesRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("find/files")) {
+      throw new Error("Private peer missing find/files capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    return requestFindFilesOutcome(
+      peerAtCall as unknown as import("./serve-private-find-files").FindFilesRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: () => ({ code: "transport", msg: "private find failed" }),
+      },
+      (id) =>
+        makeFindFilesCancel(id, {
+          isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+          tryCancel: (msg) => this.tryCancelPending(id, msg),
+          invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+        }),
+      req,
+    )
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -2803,7 +2860,8 @@ export class ServePrivatePeer {
     const branch =
       pathObserverTimeoutBranch(reason) ??
       configWarningsObserverTimeoutBranch(reason) ??
-      projectCurrentObserverTimeoutBranch(reason)
+      projectCurrentObserverTimeoutBranch(reason) ??
+      findFilesObserverTimeoutBranch(reason)
     if (!branch) return false
     if (branch.op === "session/messages") {
       console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch:`, { op: branch.op, epoch: this.opts.epoch })
@@ -2880,7 +2938,8 @@ export class ServePrivatePeer {
           k === "path/get" ||
           k === "command/list" ||
           k === "config/warnings" ||
-          k === "project/current") &&
+          k === "project/current" ||
+          k === "find/files") &&
         c[k]
       )
         out.push(k)
