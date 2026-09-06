@@ -75,7 +75,15 @@ export default [
     // points remain inline (plus a peer invalidation-branch chain that lowers
     // complexity instead of raising the complexity cap). Both capped files
     // measure 3252/3291 lines, so 3300 is the smallest cap with headroom.
-    rules: { "max-lines": ["error", 3300] },
+    // Raised 3300 → 3600 for the `project/current` vcs-only single-operation
+    // batch: the new `project/current` capability/peer/owner surface (outcome
+    // handle, epoch/dispose coherence, deferred observer) must live alongside
+    // the existing branches per the same convention. New logic lives in
+    // serve-private-project-current.ts and
+    // kilo-provider/project-current-parity.ts; only the required insertion
+    // points remain inline. Both capped files measure 3573/3396 lines, so
+    // 3600 is the smallest cap with headroom.
+    rules: { "max-lines": ["error", 3600] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],

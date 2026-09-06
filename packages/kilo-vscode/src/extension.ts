@@ -21,6 +21,7 @@ import { RemoteStatusService } from "./services/RemoteStatusService"
 import { setPathParityConnection } from "./kilo-provider/model-state"
 import { setCommandListParityConnection } from "./kilo-provider/commands"
 import { setConfigWarningsParityConnection } from "./kilo-provider/config-warnings"
+import { setProjectCurrentParityConnection } from "./kilo-provider/git-status"
 import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
@@ -199,6 +200,11 @@ export function activate(context: vscode.ExtensionContext) {
   // authority/observer contract: SDK stays the sole user-visible authority
   // and the private path is warn-only observation of safe categories.
   setConfigWarningsParityConnection(connectionService)
+  // Detached SDK-first `project/current` vcs-only parity boundary for the
+  // narrowest existing SDK consumer (`kilo-provider/git-status.ts` hasGit).
+  // Same authority/observer contract: SDK stays the sole user-visible
+  // authority and the private path is warn-only observation of `vcs`.
+  setProjectCurrentParityConnection(connectionService)
 
   const unsubscribeStateChange = connectionService.onStateChange((state) => {
     if (state === "connected") {
@@ -746,6 +752,7 @@ export async function deactivate() {
   setPathParityConnection(null)
   setCommandListParityConnection(null)
   setConfigWarningsParityConnection(null)
+  setProjectCurrentParityConnection(null)
   await agentManager?.shutdown()
   TelemetryProxy.getInstance().shutdown()
 }

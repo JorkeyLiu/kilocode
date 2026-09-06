@@ -53,6 +53,13 @@ import {
   makeConfigWarningsCancel,
   requestConfigWarningsOutcome,
 } from "./serve-private-config-warnings"
+import { validateProjectCurrentContractRequest as validateProjectCurrentRequest } from "./serve-private-project-current-contract"
+import type { ProjectCurrentContractRequest, ProjectCurrentWireOutcome } from "./serve-private-project-current-contract"
+import {
+  makeProjectCurrentCancel,
+  projectCurrentObserverTimeoutBranch,
+  requestProjectCurrentOutcome,
+} from "./serve-private-project-current"
 import {
   canonicalPathOpId,
   comparePathParity,
@@ -2723,6 +2730,39 @@ export class ServePrivatePeer {
     )
   }
 
+  /** Normalized outcome handle for the read-only project-current vcs-only parity observer. */
+  privateProjectCurrentOutcomeWithHandle(req: ProjectCurrentContractRequest): {
+    id: number
+    promise: Promise<ProjectCurrentWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateProjectCurrentRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("project/current")) {
+      throw new Error("Private peer missing project/current capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    return requestProjectCurrentOutcome(
+      peerAtCall as unknown as import("./serve-private-project-current").ProjectCurrentRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: () => ({ code: "transport", msg: "private project-current transport failed" }),
+      },
+      (id) =>
+        makeProjectCurrentCancel(id, {
+          isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+          tryCancel: (msg) => this.tryCancelPending(id, msg),
+          invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+        }),
+      req,
+    )
+  }
+
   dispose(): void {
     if (this.disposed) return
     this.disposed = true
@@ -2760,7 +2800,10 @@ export class ServePrivatePeer {
    * re-negotiate only on next connect/reconnect.
    */
   private invalidateSafeBranch(reason: string): boolean {
-    const branch = pathObserverTimeoutBranch(reason) ?? configWarningsObserverTimeoutBranch(reason)
+    const branch =
+      pathObserverTimeoutBranch(reason) ??
+      configWarningsObserverTimeoutBranch(reason) ??
+      projectCurrentObserverTimeoutBranch(reason)
     if (!branch) return false
     if (branch.op === "session/messages") {
       console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch:`, { op: branch.op, epoch: this.opts.epoch })
@@ -2835,7 +2878,9 @@ export class ServePrivatePeer {
           k === "remote/status" ||
           k === "experimental/session/list" ||
           k === "path/get" ||
-          k === "command/list") &&
+          k === "command/list" ||
+          k === "config/warnings" ||
+          k === "project/current") &&
         c[k]
       )
         out.push(k)

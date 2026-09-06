@@ -44,6 +44,8 @@ import { DeferredCommandList, wrapCommandListOutcomeForOwner } from "./serve-pri
 import type { CommandListContractRequest, CommandListWireOutcome } from "./serve-private-command-list-contract"
 import { DeferredConfigWarnings, wrapConfigWarningsOutcomeForOwner } from "./serve-private-config-warnings"
 import type { ConfigWarningsContractRequest, ConfigWarningsWireOutcome } from "./serve-private-config-warnings-contract"
+import { DeferredProjectCurrent, wrapProjectCurrentOutcomeForOwner } from "./serve-private-project-current"
+import type { ProjectCurrentContractRequest, ProjectCurrentWireOutcome } from "./serve-private-project-current-contract"
 import * as crypto from "crypto"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
@@ -200,6 +202,9 @@ export class KiloConnectionService {
   private readonly deferredPath: DeferredPath = new DeferredPath(this.privateAvailableListeners)
   private readonly deferredCommandList: DeferredCommandList = new DeferredCommandList(this.privateAvailableListeners)
   private readonly deferredConfigWarnings: DeferredConfigWarnings = new DeferredConfigWarnings(
+    this.privateAvailableListeners,
+  )
+  private readonly deferredProjectCurrent: DeferredProjectCurrent = new DeferredProjectCurrent(
     this.privateAvailableListeners,
   )
   /**
@@ -764,6 +769,7 @@ export class KiloConnectionService {
     this.deferredPath.clearAll()
     this.deferredCommandList.clearAll()
     this.deferredConfigWarnings.clearAll()
+    this.deferredProjectCurrent.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -813,6 +819,7 @@ export class KiloConnectionService {
     this.deferredPath.clearAll()
     this.deferredCommandList.clearAll()
     this.deferredConfigWarnings.clearAll()
+    this.deferredProjectCurrent.clearAll()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -1004,6 +1011,7 @@ export class KiloConnectionService {
     const remoteSafe = reason.startsWith("remote-status ")
     const pathSafe = reason.startsWith("path ")
     const warningsSafe = reason.startsWith("config-warnings ")
+    const projectSafe = reason.startsWith("project-current ")
     const messagesSafe = [
       "observer timeout cancel throw",
       "observer timeout exact cancel miss",
@@ -1037,6 +1045,13 @@ export class KiloConnectionService {
       } catch {
         console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "config/warnings", invalidateFailed: true })
       }
+    } else if (projectSafe) {
+      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "project/current", invalidated: true })
+      try {
+        peer.invalidateOnObserverTimeout(reason)
+      } catch {
+        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "project/current", invalidateFailed: true })
+      }
     } else if (messagesSafe) {
       console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch:`, {
         op: "session/messages",
@@ -1069,6 +1084,7 @@ export class KiloConnectionService {
     this.deferredPath.clearAll()
     this.deferredCommandList.clearAll()
     this.deferredConfigWarnings.clearAll()
+    this.deferredProjectCurrent.clearAll()
   }
 
   /**
@@ -1297,6 +1313,12 @@ export class KiloConnectionService {
     return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
   }
 
+  /** One-shot deferred project-current observation; dedupe/lifecycle live in DeferredProjectCurrent. */
+  addDeferredProjectCurrentObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
+    const store = this.deferredProjectCurrent
+    return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
+  }
+
   private toError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error))
   }
@@ -1363,6 +1385,7 @@ export class KiloConnectionService {
       this.deferredPath.clearForEpoch(staleEpoch)
       this.deferredCommandList.clearForEpoch(staleEpoch)
       this.deferredConfigWarnings.clearForEpoch(staleEpoch)
+      this.deferredProjectCurrent.clearForEpoch(staleEpoch)
     }
     if (this.privatePeer === peer) {
       this.privatePeer = null
@@ -1388,6 +1411,7 @@ export class KiloConnectionService {
     this.deferredPath.clearForEpoch(epochAtStart)
     this.deferredCommandList.clearForEpoch(epochAtStart)
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
+    this.deferredProjectCurrent.clearForEpoch(epochAtStart)
     return true
   }
 
@@ -1432,6 +1456,7 @@ export class KiloConnectionService {
     this.deferredPath.clearForEpoch(epochAtStart)
     this.deferredCommandList.clearForEpoch(epochAtStart)
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
+    this.deferredProjectCurrent.clearForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
 
@@ -1479,6 +1504,7 @@ export class KiloConnectionService {
       this.deferredPath.clearForEpoch(server.epoch)
       this.deferredCommandList.clearForEpoch(server.epoch)
       this.deferredConfigWarnings.clearForEpoch(server.epoch)
+      this.deferredProjectCurrent.clearForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
     }
@@ -2562,6 +2588,33 @@ export class KiloConnectionService {
       (id, msg) => peerAtCall.tryCancelPending(id, msg),
       () => peerAtCall.invalidateOnObserverTimeout("config-warnings stale observer timeout"),
       peerAtCall.privateConfigWarningsOutcomeWithHandle(req),
+      req,
+    )
+  }
+
+  /** Epoch-aware pass-through for the read-only project-current vcs-only parity observer. */
+  privateProjectCurrentOutcomeWithHandle(req: ProjectCurrentContractRequest): {
+    id: number
+    promise: Promise<ProjectCurrentWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("project/current")) {
+      throw new Error("Private peer missing project/current capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapProjectCurrentOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("project-current stale observer timeout"),
+      peerAtCall.privateProjectCurrentOutcomeWithHandle(req),
       req,
     )
   }

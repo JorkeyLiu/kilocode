@@ -90,6 +90,8 @@ export const FD_COMMAND_LIST_VERSION = 1 as const
 export const FD_COMMAND_LIST_OP = "command/list" as const
 export const FD_CONFIG_WARNINGS_VERSION = 1 as const
 export const FD_CONFIG_WARNINGS_OP = "config/warnings" as const
+export const FD_PROJECT_CURRENT_VERSION = 1 as const
+export const FD_PROJECT_CURRENT_OP = "project/current" as const
 
 export interface FdPathRequest {
   v: typeof FD_PATH_VERSION
@@ -122,6 +124,19 @@ export interface FdConfigWarningsRequest {
   requestId: string
   opId: string
   op: typeof FD_CONFIG_WARNINGS_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdProjectCurrentRequest {
+  v: typeof FD_PROJECT_CURRENT_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_PROJECT_CURRENT_OP
   idempotencyKey: string
   context: {
     directory: string
@@ -458,6 +473,27 @@ function configWarningsFailed(
     requestId: req.requestId,
     opId: req.opId,
     op: FD_CONFIG_WARNINGS_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function projectCurrentFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_PROJECT_CURRENT_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_PROJECT_CURRENT_OP,
     idempotencyKey: req.idempotencyKey,
     status: "failed",
     outcome: { type: "failed", time, failure },
@@ -827,6 +863,44 @@ export function projectConfigWarningForCarrier(item: unknown): ConfigWarningsSaf
   return { pathCategory: configWarningsPathCategory(p), messageCategory: configWarningsMessageCategory(m) }
 }
 
+function validateProjectCurrentRequest(raw: unknown): FdProjectCurrentRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_PROJECT_CURRENT_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_PROJECT_CURRENT_OP) throw new Error("op must be project/current")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for project-current")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error("unexpected context field")
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for project-current")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  if (containsPathMaterial(raw.requestId as string))
+    throw new Error("requestId must be non-empty string without path material")
+  if (containsPathMaterial(raw.idempotencyKey as string))
+    throw new Error("idempotencyKey must be non-empty string without path material")
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "project-current" || segs[1]!.length === 0)
+    throw new Error("opId must be project-current:<token> with nonempty colon-free token")
+  const token = segs[1] as string
+  if (token.includes(":") || containsPathMaterial(token))
+    throw new Error("opId must be project-current:<token> with nonempty colon-free token")
+  return raw as unknown as FdProjectCurrentRequest
+}
+
 function validateStatusRequest(raw: unknown): FdStatusRequest {
   if (!isRecord(raw)) throw new Error("params must be object")
   if (raw.v !== FD_STATUS_VERSION) throw new Error("v must be 1")
@@ -939,6 +1013,32 @@ const CONFIG_WARNINGS_FENCE_MESSAGE =
   "Instance is unavailable during config rebuild; no active runtime for this request"
 const CONFIG_WARNINGS_INTERNAL_MESSAGE = "internal error"
 const CONFIG_WARNINGS_VALIDATION_MESSAGE = "invalid config-warnings request"
+
+function fallbackProjectCurrentIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safeProjectCurrentIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
+const PROJECT_CURRENT_FENCE_MESSAGE =
+  "Instance is unavailable during config rebuild; no active runtime for this request"
+const PROJECT_CURRENT_INTERNAL_MESSAGE = "internal error"
+const PROJECT_CURRENT_VALIDATION_MESSAGE = "invalid project-current request"
 
 export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.WritableStream): FdCarrierHandle {
   // Ensure streams are flowing
@@ -1943,6 +2043,94 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(configWarningsFailed(safe, "internal", CONFIG_WARNINGS_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === "project/current") {
+        // Project-current vcs-only parity read: same-directory InstanceState
+        // context project via the existing drain-control + InstanceRef lane
+        // (same lane as path/get, command/list, config/warnings — no new
+        // lifecycle lane, no fence, no convergence). Narrow projection is
+        // `{vcs?: "git"}` only: `vcs === "git"` or absent/undefined are the
+        // sole accepted values; any other value or extra envelope field maps
+        // to redacted `internal`. Path-bearing fields (`worktree`,
+        // `sandboxes`, `id`, `name`, `icon`, `commands`, `time`) never cross
+        // the boundary. Directory/workspace are routing identity; workspace
+        // never reaches the read. Covers the deferred `project/git-status`
+        // `hasGit` consumer (`vcs === "git"`). No mutation, no ordering or
+        // freshness claim.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdProjectCurrentRequest
+            try {
+              req = validateProjectCurrentRequest(params)
+            } catch {
+              return projectCurrentFailed(
+                fallbackProjectCurrentIds(params),
+                "validation.failed",
+                PROJECT_CURRENT_VALIDATION_MESSAGE,
+                false,
+              )
+            }
+            const safe = safeProjectCurrentIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return projectCurrentFailed(safe, "validation.failed", PROJECT_CURRENT_VALIDATION_MESSAGE, false)
+            }
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return projectCurrentFailed(safe, "validation.failed", PROJECT_CURRENT_VALIDATION_MESSAGE, false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? PROJECT_CURRENT_FENCE_MESSAGE : PROJECT_CURRENT_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: projectCurrentFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: projectCurrentFailed(safe, "internal", PROJECT_CURRENT_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              const ctx = yield* InstanceState.context
+              const vcs = (ctx.project as { vcs?: unknown }).vcs
+              if (vcs !== undefined && vcs !== "git")
+                return projectCurrentFailed(safe, "internal", PROJECT_CURRENT_INTERNAL_MESSAGE, false)
+              return {
+                v: FD_PROJECT_CURRENT_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_PROJECT_CURRENT_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: vcs === "git" ? { vcs: "git" as const } : {},
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(projectCurrentFailed(safe, "internal", PROJECT_CURRENT_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(projectCurrentFailed(safe, "internal", PROJECT_CURRENT_INTERNAL_MESSAGE, false))
               }),
             )
           }),

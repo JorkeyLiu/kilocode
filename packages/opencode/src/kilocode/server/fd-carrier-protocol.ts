@@ -20,6 +20,7 @@ export const FD_CAPABILITIES = [
   "path/get",
   "command/list",
   "config/warnings",
+  "project/current",
 ] as const
 
 export interface FdInitializeParams {
