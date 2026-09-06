@@ -181,6 +181,7 @@ The extension host pages `GET /experimental/session` through `KiloProvider.listS
 | Host paging | `listSessions({limit, cursor})` calls `client.experimental.session.list({directory, limit, cursor})` and gates the `x-next-cursor` response header through `normalizeSessionListNextCursor` — malformed or legacy-numeric headers become `null` (exhausted) and never enter `sessionCursor` state. Full refresh re-fetches everything loaded so far; load-more appends one page. |
 | Webview contract | `loadSessions` carries an opaque `cursor` (omitted for full refresh); `sessionsLoaded` returns opaque `nextCursor` plus `hasMore`. |
 | Private parity | `observeSessionListParityDetached` compares only the shared-id `{id,directory,title}` projection plus cursor presence/value for the same request; `updated` is shape-only. |
+| Residual contract | Stable pages paginate without omission or duplication; inter-page mutations are live-query drift (absent inserts, moved future rows, retained deleted rows, changed archive membership) with no snapshot or revision token. SDK data stays authoritative; private observation stays detached and warn-only. |
 
 ## Private `remote/status` carrier (Gate C/D batch 1) — diagnostics-only, process-global
 

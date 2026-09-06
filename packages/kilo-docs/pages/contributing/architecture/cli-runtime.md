@@ -397,7 +397,7 @@ G3 remains **Active** and SDK authoritative. No cutover, no Gates B/C/D/P4.4 clo
 | Numeric rejection | Legacy numeric/timestamp-only cursors fail closed as `validation.failed` and are never interpreted as continuation. |
 | Private operation version | Private session-list envelope is operation v2 (`FD_SESSION_LIST_VERSION = 2`); the global `kilo-private` major is unchanged. |
 | SDK-first parity boundary | The private carrier reads the same-directory `listGlobal` page through the drain-control/`InstanceRef` lane, projects safe `{id,directory,title,updated}` summaries, and compares only shared-id projection plus cursor presence/value for the same request; order is never compared and membership gaps are `session-list-membership-unknown`. |
-| Scope | Concurrent-mutation interleaving and snapshot consistency are outside this phase. |
+| Residual contract | No omission or duplication holds only while the underlying filtered dataset is unchanged. Inter-page creates, updates, deletes, or archive changes are live-query drift: new rows may be absent from the old-cursor continuation, touched future rows may move before the cursor and leave the continuation, already-returned deleted rows may stay visible in the loaded page, and archive changes may alter membership. No snapshot or revision token is offered. |
 
 ### Private `remote/status` carrier over `kilo serve` fd3/fd4 (Gate C/D runtime batch 1) — diagnostics-only, process-global
 
