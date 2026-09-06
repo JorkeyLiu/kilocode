@@ -488,6 +488,66 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
     }),
   )
 
+  it.live("default excludes archived sessions while archived:true includes them", () =>
+    Effect.gen(function* () {
+      const restoreParentPid = ownParentPid()
+      try {
+        const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const dir = tmp.path
+        const store = yield* InstanceStore.Service
+        const ctx = yield* store.load({ directory: dir })
+        const captured = yield* Effect.context()
+        const run = scoped(ctx, captured)
+        const plain = yield* run(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-list-plain" })
+          }),
+        )
+        yield* sleep(15)
+        const archived = yield* run(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-list-archived" })
+          }),
+        )
+        yield* run(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.setArchived({ sessionID: archived.id, time: Date.now() })
+          }),
+        )
+        const { carrier, ext } = linked()
+        try {
+          yield* Effect.promise(() => init(ext))
+          const def = asListResult(
+            yield* Effect.promise(() => ext.request("experimental/session/list", listReq(dir, "arch-def", { requestId: "req-arch-def" }))),
+          )
+          expect(def.status).toBe("succeeded")
+          const defIds = (def.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
+          expect(defIds.includes(plain.id)).toBeTrue()
+          expect(defIds.includes(archived.id)).toBeFalse()
+          const exp = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dir, "arch-exp", { requestId: "req-arch-exp", payload: { filter: { archived: true } } }),
+              ),
+            ),
+          )
+          expect(exp.status).toBe("succeeded")
+          const expIds = (exp.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
+          expect(expIds.includes(archived.id)).toBeTrue()
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        restoreParentPid()
+      }
+    }),
+  )
+
   it.live("cross-directory queries stay isolated to the request directory", () =>
     Effect.gen(function* () {
       const restoreParentPid = ownParentPid()
