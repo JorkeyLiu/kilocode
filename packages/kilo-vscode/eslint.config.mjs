@@ -66,7 +66,16 @@ export default [
     // serve-private-command-list.ts and kilo-provider/command-list-parity.ts;
     // only the required insertion points remain inline. Both capped files
     // measure 3220/3236 lines, so 3240 is the smallest cap with headroom.
-    rules: { "max-lines": ["error", 3240] },
+    // Raised 3240 → 3300 for the `config/warnings` single-operation batch:
+    // the new `config/warnings` capability/peer/owner surface (outcome
+    // handle, epoch/dispose coherence, deferred observer) must live alongside
+    // the existing branches per the same convention. New logic lives in
+    // serve-private-config-warnings.ts and
+    // kilo-provider/config-warnings-parity.ts; only the required insertion
+    // points remain inline (plus a peer invalidation-branch chain that lowers
+    // complexity instead of raising the complexity cap). Both capped files
+    // measure 3252/3291 lines, so 3300 is the smallest cap with headroom.
+    rules: { "max-lines": ["error", 3300] },
   },
   {
     files: ["webview-ui/agent-manager/AgentManagerApp.tsx"],

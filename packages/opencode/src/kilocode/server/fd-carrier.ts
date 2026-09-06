@@ -12,13 +12,17 @@ import { MessageV2 } from "@/session/message-v2"
 import { SessionID } from "@/session/schema"
 import { NotFoundError } from "@/storage/storage"
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
-import { acquireDrainControl, InstanceUnavailableDuringConfigRebuildError } from "@/kilocode/server/drain-control-acquire"
+import {
+  acquireDrainControl,
+  InstanceUnavailableDuringConfigRebuildError,
+} from "@/kilocode/server/drain-control-acquire"
 import { InstanceStore } from "@/project/instance-store"
 import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { InstanceRef } from "@/effect/instance-ref"
 import { KiloSessions } from "@/kilo-sessions/kilo-sessions"
 import { Global } from "@opencode-ai/core/global"
 import { Command } from "@/command"
+import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
 import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
@@ -84,6 +88,8 @@ export const FD_PATH_VERSION = 1 as const
 export const FD_PATH_OP = "path/get" as const
 export const FD_COMMAND_LIST_VERSION = 1 as const
 export const FD_COMMAND_LIST_OP = "command/list" as const
+export const FD_CONFIG_WARNINGS_VERSION = 1 as const
+export const FD_CONFIG_WARNINGS_OP = "config/warnings" as const
 
 export interface FdPathRequest {
   v: typeof FD_PATH_VERSION
@@ -103,6 +109,19 @@ export interface FdCommandListRequest {
   requestId: string
   opId: string
   op: typeof FD_COMMAND_LIST_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: Record<string, never>
+}
+
+export interface FdConfigWarningsRequest {
+  v: typeof FD_CONFIG_WARNINGS_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_CONFIG_WARNINGS_OP
   idempotencyKey: string
   context: {
     directory: string
@@ -426,6 +445,27 @@ function commandListFailed(
   }
 }
 
+function configWarningsFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_CONFIG_WARNINGS_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_CONFIG_WARNINGS_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
 function validateGetRequest(raw: unknown): FdGetRequest {
   if (!isRecord(raw)) throw new Error("params must be object")
   if (raw.v !== FD_GET_VERSION) throw new Error("v must be 1")
@@ -451,8 +491,7 @@ function validateGetRequest(raw: unknown): FdGetRequest {
   const opId = raw.opId as string
   const sid = ctx.sessionId as string
   const prefix = `get:${sid}:`
-  if (!opId.startsWith(prefix))
-    throw new Error("opId must be get:<sessionId>:<token> with nonempty colon-free token")
+  if (!opId.startsWith(prefix)) throw new Error("opId must be get:<sessionId>:<token> with nonempty colon-free token")
   const token = opId.slice(prefix.length)
   if (token.length === 0 || token.includes(":"))
     throw new Error("opId must be get:<sessionId>:<token> with nonempty colon-free token")
@@ -564,7 +603,8 @@ function validateRemoteStatusRequest(raw: unknown): FdRemoteStatusRequest {
   const segs = opId.split(":")
   if (segs.length !== 2 || segs[0] !== "remote-status" || segs[1]!.length === 0)
     throw new Error("opId must be remote-status:<token> with nonempty colon-free token")
-  if ((segs[1] as string).includes(":")) throw new Error("opId must be remote-status:<token> with nonempty colon-free token")
+  if ((segs[1] as string).includes(":"))
+    throw new Error("opId must be remote-status:<token> with nonempty colon-free token")
   return raw as unknown as FdRemoteStatusRequest
 }
 
@@ -703,6 +743,90 @@ function validateCommandListRequest(raw: unknown): FdCommandListRequest {
   return raw as unknown as FdCommandListRequest
 }
 
+function validateConfigWarningsRequest(raw: unknown): FdConfigWarningsRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_CONFIG_WARNINGS_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_CONFIG_WARNINGS_OP) throw new Error("op must be config/warnings")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for config-warnings")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  // Redaction: unknown field names are never echoed — they may carry
+  // path-bearing keys.
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error("unexpected context field")
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload).length !== 0) throw new Error("payload must be empty object for config-warnings")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  // Path-bearing identities are never echoed: reject values carrying `/`,
+  // `\`, or NUL before they can reach the failure wire.
+  if (containsPathMaterial(raw.requestId as string))
+    throw new Error("requestId must be non-empty string without path material")
+  if (containsPathMaterial(raw.idempotencyKey as string))
+    throw new Error("idempotencyKey must be non-empty string without path material")
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "config-warnings" || segs[1]!.length === 0)
+    throw new Error("opId must be config-warnings:<token> with nonempty colon-free token")
+  const token = segs[1] as string
+  if (token.includes(":") || containsPathMaterial(token))
+    throw new Error("opId must be config-warnings:<token> with nonempty colon-free token")
+  return raw as unknown as FdConfigWarningsRequest
+}
+
+export type ConfigWarningsPathCategory = "config-file" | "agent-file" | "command-file" | "other"
+export type ConfigWarningsMessageCategory =
+  | "invalid-json"
+  | "invalid-config"
+  | "invalid-file"
+  | "parse-agent"
+  | "parse-command"
+  | "substitute-agent"
+  | "unknown"
+
+export interface ConfigWarningsSafeEntry {
+  pathCategory: ConfigWarningsPathCategory
+  messageCategory: ConfigWarningsMessageCategory
+}
+
+export function configWarningsPathCategory(p: string): ConfigWarningsPathCategory {
+  const lower = p.toLowerCase()
+  if (lower.includes("agent")) return "agent-file"
+  if (lower.includes("command")) return "command-file"
+  if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "config-file"
+  return "other"
+}
+
+export function configWarningsMessageCategory(m: string): ConfigWarningsMessageCategory {
+  if (m.startsWith("Config file at") && m.includes("is not valid JSON")) return "invalid-json"
+  if (m.startsWith("Configuration is invalid at")) return "invalid-config"
+  if (m.startsWith("Config file at") && m.includes("is invalid")) return "invalid-file"
+  if (m.startsWith("Failed to parse agent")) return "parse-agent"
+  if (m.startsWith("Failed to parse command")) return "parse-command"
+  if (m.startsWith("Failed to substitute variables in agent")) return "substitute-agent"
+  return "unknown"
+}
+
+export function projectConfigWarningForCarrier(item: unknown): ConfigWarningsSafeEntry | null {
+  if (!isRecord(item)) return null
+  const p = (item as Record<string, unknown>).path
+  const m = (item as Record<string, unknown>).message
+  if (typeof p !== "string" || p.length === 0) return null
+  if (typeof m !== "string" || m.length === 0) return null
+  return { pathCategory: configWarningsPathCategory(p), messageCategory: configWarningsMessageCategory(m) }
+}
+
 function validateStatusRequest(raw: unknown): FdStatusRequest {
   if (!isRecord(raw)) throw new Error("params must be object")
   if (raw.v !== FD_STATUS_VERSION) throw new Error("v must be 1")
@@ -786,10 +910,35 @@ function safeCommandListIdentities(req: { requestId: string; opId: string; idemp
   }
 }
 
+function fallbackConfigWarningsIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safeConfigWarningsIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
 const PATH_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
 const PATH_INTERNAL_MESSAGE = "internal error"
 const COMMAND_LIST_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
 const COMMAND_LIST_INTERNAL_MESSAGE = "internal error"
+const CONFIG_WARNINGS_FENCE_MESSAGE =
+  "Instance is unavailable during config rebuild; no active runtime for this request"
+const CONFIG_WARNINGS_INTERNAL_MESSAGE = "internal error"
+const CONFIG_WARNINGS_VALIDATION_MESSAGE = "invalid config-warnings request"
 
 export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.WritableStream): FdCarrierHandle {
   // Ensure streams are flowing
@@ -935,10 +1084,7 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 accepted: true,
                 data: { statuses: Object.fromEntries(map) },
               }
-            }).pipe(
-              Effect.provideService(InstanceRef, acquired.value.ctx),
-              Effect.ensuring(acquired.value.release),
-            )
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner.pipe(
               Effect.catch((err: unknown) => {
                 const msg = err instanceof Error ? err.message : String(err)
@@ -981,7 +1127,10 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 })
               }),
               Effect.catchDefect(() => {
-                return Effect.succeed({ tag: "fail" as const, result: getFailed(req, "internal", "internal error", false) })
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: getFailed(req, "internal", "internal error", false),
+                })
               }),
             )
             if (acquired.tag !== "ok") return acquired.result
@@ -1008,8 +1157,7 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 return getFailed(req, "internal", "internal error", false)
               }
               if (stored !== dir) return getFailed(req, "scope_mismatch", "directory mismatch", false)
-              if (!Schema.is(Session.Info)(found.value))
-                return getFailed(req, "internal", "internal error", false)
+              if (!Schema.is(Session.Info)(found.value)) return getFailed(req, "internal", "internal error", false)
               return {
                 v: FD_GET_VERSION,
                 requestId: req.requestId,
@@ -1021,10 +1169,7 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 accepted: true,
                 data: { session: found.value },
               }
-            }).pipe(
-              Effect.provideService(InstanceRef, acquired.value.ctx),
-              Effect.ensuring(acquired.value.release),
-            )
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner.pipe(
               Effect.catch(() => {
                 return Effect.succeed(getFailed(req, "internal", "internal error", false))
@@ -1145,8 +1290,7 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 }),
               )
               if (page.tag !== "ok") return messagesFailed(req, page.code, page.message, false)
-              if (!Array.isArray(page.value.items))
-                return messagesFailed(req, "internal", "internal error", false)
+              if (!Array.isArray(page.value.items)) return messagesFailed(req, "internal", "internal error", false)
               const next = page.value.more && page.value.cursor ? page.value.cursor : undefined
               return {
                 v: FD_MESSAGES_VERSION,
@@ -1159,10 +1303,7 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 accepted: true,
                 data: next ? { messages: page.value.items, nextCursor: next } : { messages: page.value.items },
               }
-            }).pipe(
-              Effect.provideService(InstanceRef, acquired.value.ctx),
-              Effect.ensuring(acquired.value.release),
-            )
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner.pipe(
               Effect.catch(() => {
                 return Effect.succeed(messagesFailed(req, "internal", "internal error", false))
@@ -1305,10 +1446,7 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 accepted: true,
                 data: { children: list.value },
               }
-            }).pipe(
-              Effect.provideService(InstanceRef, acquired.value.ctx),
-              Effect.ensuring(acquired.value.release),
-            )
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner.pipe(
               Effect.catch(() => {
                 return Effect.succeed(childrenFailed(req, "internal", "internal error", false))
@@ -1355,10 +1493,8 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
             const raw = snap.v as { enabled?: unknown; connected?: unknown }
             const enabled = raw.enabled === true
             const connected = raw.connected === true
-            if (typeof raw.enabled !== "boolean")
-              return remoteStatusFailed(req, "internal", "internal error", false)
-            if (typeof raw.connected !== "boolean")
-              return remoteStatusFailed(req, "internal", "internal error", false)
+            if (typeof raw.enabled !== "boolean") return remoteStatusFailed(req, "internal", "internal error", false)
+            if (typeof raw.connected !== "boolean") return remoteStatusFailed(req, "internal", "internal error", false)
             return {
               v: FD_REMOTE_STATUS_VERSION,
               requestId: req.requestId,
@@ -1452,7 +1588,8 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 const title = rec.title
                 const time = rec.time as { updated?: unknown } | undefined
                 const updated = time?.updated
-                if (typeof id !== "string" || !id.startsWith("ses")) return sessionListFailed(req, "internal", "internal error", false)
+                if (typeof id !== "string" || !id.startsWith("ses"))
+                  return sessionListFailed(req, "internal", "internal error", false)
                 if (typeof directory !== "string" || directory.length === 0)
                   return sessionListFailed(req, "internal", "internal error", false)
                 if (typeof title !== "string") return sessionListFailed(req, "internal", "internal error", false)
@@ -1479,10 +1616,7 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 accepted: true,
                 data: next !== undefined ? { sessions: summaries, nextCursor: next } : { sessions: summaries },
               }
-            }).pipe(
-              Effect.provideService(InstanceRef, acquired.value.ctx),
-              Effect.ensuring(acquired.value.release),
-            )
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner.pipe(
               Effect.catch(() => {
                 return Effect.succeed(sessionListFailed(req, "internal", "internal error", false))
@@ -1573,10 +1707,7 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 accepted: true,
                 data: { path },
               }
-            }).pipe(
-              Effect.provideService(InstanceRef, acquired.value.ctx),
-              Effect.ensuring(acquired.value.release),
-            )
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner.pipe(
               Effect.catch(() => {
                 return Effect.succeed(pathFailed(safe, "internal", PATH_INTERNAL_MESSAGE, false))
@@ -1607,7 +1738,12 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               req = validateCommandListRequest(params)
             } catch (e) {
               const msg = e instanceof Error ? e.message : String(e)
-              return commandListFailed(fallbackCommandListIds(params), "validation.failed", boundCommandListMessage(msg), false)
+              return commandListFailed(
+                fallbackCommandListIds(params),
+                "validation.failed",
+                boundCommandListMessage(msg),
+                false,
+              )
             }
             const safe = safeCommandListIdentities(req)
             let dir: string
@@ -1654,8 +1790,14 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 }),
               )
               if (list.tag !== "ok") return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
-              if (!Array.isArray(list.value)) return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
-              const commands: Array<{ name: string; description?: string; source?: "command" | "mcp" | "skill"; hints?: string[] }> = []
+              if (!Array.isArray(list.value))
+                return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
+              const commands: Array<{
+                name: string
+                description?: string
+                source?: "command" | "mcp" | "skill"
+                hints?: string[]
+              }> = []
               for (const item of list.value) {
                 const rec = item as unknown as Record<string, unknown>
                 const name = rec.name
@@ -1669,9 +1811,11 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                   return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
                 const hints = rec.hints
                 if (hints !== undefined) {
-                  if (!Array.isArray(hints)) return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
+                  if (!Array.isArray(hints))
+                    return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
                   for (const h of hints as unknown[]) {
-                    if (typeof h !== "string") return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
+                    if (typeof h !== "string")
+                      return commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false)
                   }
                 }
                 commands.push({
@@ -1692,16 +1836,113 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                 accepted: true,
                 data: { commands },
               }
-            }).pipe(
-              Effect.provideService(InstanceRef, acquired.value.ctx),
-              Effect.ensuring(acquired.value.release),
-            )
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
             return yield* inner.pipe(
               Effect.catch(() => {
                 return Effect.succeed(commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false))
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(commandListFailed(safe, "internal", COMMAND_LIST_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === "config/warnings") {
+        // Config-warnings parity-only read: same-directory Config.Service
+        // warnings via the existing drain-control + InstanceRef lane (same
+        // lane as session/list, path/get, and command/list — no new
+        // lifecycle lane, no fence, no convergence), projected to the locked
+        // safe subset ({pathCategory, messageCategory}). Raw paths, raw
+        // diagnostic text, and detail never cross the boundary. Directory and
+        // workspace are routing identity; workspace never reaches the
+        // service. No mutation, no ordering claim, no freshness claim.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdConfigWarningsRequest
+            try {
+              req = validateConfigWarningsRequest(params)
+            } catch {
+              return configWarningsFailed(
+                fallbackConfigWarningsIds(params),
+                "validation.failed",
+                CONFIG_WARNINGS_VALIDATION_MESSAGE,
+                false,
+              )
+            }
+            const safe = safeConfigWarningsIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return configWarningsFailed(safe, "validation.failed", CONFIG_WARNINGS_VALIDATION_MESSAGE, false)
+            }
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return configWarningsFailed(safe, "validation.failed", CONFIG_WARNINGS_VALIDATION_MESSAGE, false)
+            }
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? CONFIG_WARNINGS_FENCE_MESSAGE : CONFIG_WARNINGS_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: configWarningsFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: configWarningsFailed(safe, "internal", CONFIG_WARNINGS_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              const svc = yield* Config.Service
+              const list = yield* svc.warnings().pipe(
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+              )
+              if (list.tag !== "ok")
+                return configWarningsFailed(safe, "internal", CONFIG_WARNINGS_INTERNAL_MESSAGE, false)
+              if (!Array.isArray(list.value))
+                return configWarningsFailed(safe, "internal", CONFIG_WARNINGS_INTERNAL_MESSAGE, false)
+              const warnings: ConfigWarningsSafeEntry[] = []
+              for (const item of list.value) {
+                const proj = projectConfigWarningForCarrier(item)
+                if (!proj) return configWarningsFailed(safe, "internal", CONFIG_WARNINGS_INTERNAL_MESSAGE, false)
+                warnings.push(proj)
+              }
+              return {
+                v: FD_CONFIG_WARNINGS_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_CONFIG_WARNINGS_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { warnings },
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(configWarningsFailed(safe, "internal", CONFIG_WARNINGS_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(configWarningsFailed(safe, "internal", CONFIG_WARNINGS_INTERNAL_MESSAGE, false))
               }),
             )
           }),
@@ -1727,10 +1968,16 @@ export function tryStartFdCarrierWithDeps(deps: FdCarrierDeps): FdCarrierHandle 
   let reader: NodeJS.ReadableStream | null = null
   try {
     if (!hasFdWithDeps(3, deps) || !hasFdWithDeps(4, deps)) return null
-    reader = deps.createReadStream(null as unknown as string, { fd: 3, autoClose: false } as unknown as Record<string, unknown>) as unknown as NodeJS.ReadableStream
+    reader = deps.createReadStream(
+      null as unknown as string,
+      { fd: 3, autoClose: false } as unknown as Record<string, unknown>,
+    ) as unknown as NodeJS.ReadableStream
     let writer: NodeJS.WritableStream
     try {
-      writer = deps.createWriteStream(null as unknown as string, { fd: 4, autoClose: false } as unknown as Record<string, unknown>) as unknown as NodeJS.WritableStream
+      writer = deps.createWriteStream(
+        null as unknown as string,
+        { fd: 4, autoClose: false } as unknown as Record<string, unknown>,
+      ) as unknown as NodeJS.WritableStream
     } catch (err) {
       console.warn("[kilo fd-carrier] writer creation failed, releasing reader:", String(err))
       if (reader) bestEffortClose(reader, "reader-partial-cleanup")

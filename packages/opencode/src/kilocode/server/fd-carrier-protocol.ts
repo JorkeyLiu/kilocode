@@ -6,7 +6,21 @@ export const FD_PROTOCOL_MINOR = 0
 export const FD_PROTOCOL_VERSION = "1.0"
 export const FD_SERVER_NAME = "kilo"
 export const FD_SERVER_VERSION = "7.4.11"
-export const FD_CAPABILITIES = ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages", "session/children", "remote/status", "experimental/session/list", "path/get", "command/list"] as const
+export const FD_CAPABILITIES = [
+  "session/cancelQueued",
+  "session/update",
+  "session/fork",
+  "session/create",
+  "session/status",
+  "session/get",
+  "session/messages",
+  "session/children",
+  "remote/status",
+  "experimental/session/list",
+  "path/get",
+  "command/list",
+  "config/warnings",
+] as const
 
 export interface FdInitializeParams {
   protocol?: { name?: string; major?: number; minor?: number }
@@ -47,11 +61,17 @@ export function validateProtocolVersion(params: unknown): void {
   }
   const name = proto.name
   if (name !== FD_PROTOCOL_NAME) {
-    throw makeCarrierError(ErrorCode.InvalidParams, `Unsupported protocol name ${String(name)}, expected ${FD_PROTOCOL_NAME}`)
+    throw makeCarrierError(
+      ErrorCode.InvalidParams,
+      `Unsupported protocol name ${String(name)}, expected ${FD_PROTOCOL_NAME}`,
+    )
   }
   const major = proto.major
   if (typeof major !== "number" || major !== FD_PROTOCOL_MAJOR) {
-    throw makeCarrierError(ErrorCode.InvalidParams, `Unsupported protocol major ${String(major)}, expected ${FD_PROTOCOL_MAJOR}`)
+    throw makeCarrierError(
+      ErrorCode.InvalidParams,
+      `Unsupported protocol major ${String(major)}, expected ${FD_PROTOCOL_MAJOR}`,
+    )
   }
 }
 

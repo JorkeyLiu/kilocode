@@ -34,11 +34,25 @@ import type {
 } from "./serve-private-remote-status"
 import { validateSessionListContractRequest as validateSessionListRequest } from "./serve-private-session-list-contract"
 import { requestSessionListOutcome } from "./serve-private-session-list"
-import type { PrivateSessionListWireOutcome, ServePrivateSessionListRequest } from "./serve-private-session-list-contract"
+import type {
+  PrivateSessionListWireOutcome,
+  ServePrivateSessionListRequest,
+} from "./serve-private-session-list-contract"
 import { validateCommandListContractRequest as validateCommandListRequest } from "./serve-private-command-list-contract"
 import { CommandListValidationError } from "./serve-private-command-list-contract"
 import { requestCommandListOutcome } from "./serve-private-command-list"
-import type { CommandListContractRequest, CommandListResult, CommandListWireOutcome } from "./serve-private-command-list-contract"
+import type {
+  CommandListContractRequest,
+  CommandListResult,
+  CommandListWireOutcome,
+} from "./serve-private-command-list-contract"
+import { validateConfigWarningsContractRequest as validateConfigWarningsRequest } from "./serve-private-config-warnings-contract"
+import type { ConfigWarningsContractRequest, ConfigWarningsWireOutcome } from "./serve-private-config-warnings-contract"
+import {
+  configWarningsObserverTimeoutBranch,
+  makeConfigWarningsCancel,
+  requestConfigWarningsOutcome,
+} from "./serve-private-config-warnings"
 import {
   canonicalPathOpId,
   comparePathParity,
@@ -123,7 +137,12 @@ export {
   validatePathResult,
 } from "./serve-private-path-contract"
 export type { PathContractRequest, PathResult, PathWireOutcome } from "./serve-private-path-contract"
-export { failedPathResult, PATH_TRANSPORT_FAILURE_MESSAGE, pathObserverTimeoutBranch, requestPathOutcome } from "./serve-private-path"
+export {
+  failedPathResult,
+  PATH_TRANSPORT_FAILURE_MESSAGE,
+  pathObserverTimeoutBranch,
+  requestPathOutcome,
+} from "./serve-private-path"
 export interface ServePrivateCancelQueuedRequest {
   v: 1
   requestId: string
@@ -295,14 +314,21 @@ export function validateStatusRequest(raw: unknown): ServePrivateStatusRequest {
   const ctx = raw.context
   if (!isRecord(ctx)) throw new Error("context must be object")
   const allowedCtx = new Set(["directory"])
-  for (const k of Object.keys(ctx as Record<string, unknown>)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
-  if (typeof ctx.directory !== "string" || !isAbsolute(ctx.directory as string) || (ctx.directory as string).includes("\0"))
+  for (const k of Object.keys(ctx as Record<string, unknown>))
+    if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (
+    typeof ctx.directory !== "string" ||
+    !isAbsolute(ctx.directory as string) ||
+    (ctx.directory as string).includes("\0")
+  )
     throw new Error("context.directory must be absolute path")
   const payload = raw.payload
   if (!isRecord(payload)) throw new Error("payload must be object")
-  if (Object.keys(payload as Record<string, unknown>).length !== 0) throw new Error("payload must be empty object for status")
+  if (Object.keys(payload as Record<string, unknown>).length !== 0)
+    throw new Error("payload must be empty object for status")
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
-  for (const k of Object.keys(raw as Record<string, unknown>)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  for (const k of Object.keys(raw as Record<string, unknown>))
+    if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
   return raw as unknown as ServePrivateStatusRequest
 }
 
@@ -445,7 +471,8 @@ function validateStatusFailureShape(v: unknown, label: string): Record<string, u
   const rec = v as Record<string, unknown>
   if (typeof rec.code !== "string" || typeof rec.message !== "string" || typeof rec.retryable !== "boolean")
     throw new Error(`${label} invalid`)
-  if (rec.detail !== undefined && typeof rec.detail !== "string") throw new Error(`${label}.detail must be string if present`)
+  if (rec.detail !== undefined && typeof rec.detail !== "string")
+    throw new Error(`${label}.detail must be string if present`)
   return rec
 }
 
@@ -458,10 +485,12 @@ export function validateStatusResult(raw: unknown, req: ServePrivateStatusReques
   if (raw.op !== "session/status") throw new Error("op mismatch")
   if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
   const status = raw.status
-  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous") throw new Error("status must be succeeded/failed/ambiguous")
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous")
+    throw new Error("status must be succeeded/failed/ambiguous")
   if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
   const outcome = raw.outcome
-  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number") throw new Error("outcome invalid")
+  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number")
+    throw new Error("outcome invalid")
   if (outcome.type !== status) throw new Error("outcome.type must match status")
   if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
   const rec = raw as Record<string, unknown>
@@ -475,7 +504,8 @@ export function validateStatusResult(raw: unknown, req: ServePrivateStatusReques
     const data = rec.data
     if (!isRecord(data)) throw new Error("succeeded data must be object")
     const allowedData = new Set(["statuses"])
-    for (const k of Object.keys(data as Record<string, unknown>)) if (!allowedData.has(k)) throw new Error(`unexpected data field ${k}`)
+    for (const k of Object.keys(data as Record<string, unknown>))
+      if (!allowedData.has(k)) throw new Error(`unexpected data field ${k}`)
     const statuses = (data as Record<string, unknown>).statuses
     if (!isRecord(statuses)) throw new Error("succeeded data.statuses must be object")
     for (const [sid, entry] of Object.entries(statuses as Record<string, unknown>)) validateStatusEntry(sid, entry)
@@ -752,7 +782,11 @@ function makeForkAmbiguous(req: ServePrivateForkRequest, transportUnknown = true
   return out
 }
 
-function makeForkFailedInternal(req: ServePrivateForkRequest, message: string, code = "internal"): ServePrivateForkResult {
+function makeForkFailedInternal(
+  req: ServePrivateForkRequest,
+  message: string,
+  code = "internal",
+): ServePrivateForkResult {
   return {
     v: 1,
     requestId: req.requestId,
@@ -840,7 +874,11 @@ function makeCreateAmbiguous(req: ServePrivateCreateRequest, transportUnknown = 
   return out
 }
 
-function makeCreateFailedInternal(req: ServePrivateCreateRequest, message: string, code = "internal"): ServePrivateCreateResult {
+function makeCreateFailedInternal(
+  req: ServePrivateCreateRequest,
+  message: string,
+  code = "internal",
+): ServePrivateCreateResult {
   return {
     v: 1,
     requestId: req.requestId,
@@ -1163,7 +1201,11 @@ export function validateForkRequest(raw: unknown): ServePrivateForkRequest {
   if (!isNonEmptyString(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
   const ctx = raw.context
   if (!isRecord(ctx)) throw new Error("context must be object")
-  if (typeof ctx.directory !== "string" || !isAbsolute(ctx.directory as string) || (ctx.directory as string).includes("\0"))
+  if (
+    typeof ctx.directory !== "string" ||
+    !isAbsolute(ctx.directory as string) ||
+    (ctx.directory as string).includes("\0")
+  )
     throw new Error("context.directory must be absolute path")
   if (!isSessionId(ctx.sessionId)) throw new Error("context.sessionId must be SessionID")
   if ("parentSessionId" in ctx && ctx.parentSessionId !== null && ctx.parentSessionId !== undefined)
@@ -1178,11 +1220,14 @@ export function validateForkRequest(raw: unknown): ServePrivateForkRequest {
     if (!isMessageId(payload.messageId)) throw new Error("payload.messageId must be MessageID")
   }
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
-  for (const k of Object.keys(raw as Record<string, unknown>)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  for (const k of Object.keys(raw as Record<string, unknown>))
+    if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
   const allowedCtx = new Set(["directory", "sessionId", "parentSessionId", "configVersion", "sessionRevision"])
-  for (const k of Object.keys(ctx as Record<string, unknown>)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  for (const k of Object.keys(ctx as Record<string, unknown>))
+    if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
   const allowedPayload = new Set(["messageId"])
-  for (const k of Object.keys(payload as Record<string, unknown>)) if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
+  for (const k of Object.keys(payload as Record<string, unknown>))
+    if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
   const opId = raw.opId as string
   // Backend authoritative SessionID predicate allows colon/space; opId must be exactly `fork:<sessionId>` or `fork:<sessionId>:<token>` with token non-empty no colon.
   if (opId === `fork:${ctx.sessionId as string}`) {
@@ -1205,7 +1250,8 @@ export function validateForkRequest(raw: unknown): ServePrivateForkRequest {
     if (token.includes(":")) throw new TypeError(`idempotencyKey token must not contain ':'`)
   } else {
     const parsed = parseForkOpId(idem)
-    if (parsed.parts[0] !== ctx.sessionId) throw new Error(`idempotencyKey session binding mismatch: ${idem} vs ${ctx.sessionId}`)
+    if (parsed.parts[0] !== ctx.sessionId)
+      throw new Error(`idempotencyKey session binding mismatch: ${idem} vs ${ctx.sessionId}`)
   }
   return raw as unknown as ServePrivateForkRequest
 }
@@ -1219,15 +1265,23 @@ export function validateForkResult(raw: unknown, req: ServePrivateForkRequest): 
   if (raw.op !== "session/fork") throw new Error("op mismatch")
   if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
   const status = raw.status
-  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous") throw new Error("status must be succeeded/failed/ambiguous")
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous")
+    throw new Error("status must be succeeded/failed/ambiguous")
   if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
   const outcome = raw.outcome
-  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number") throw new Error("outcome invalid")
+  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number")
+    throw new Error("outcome invalid")
   if (outcome.type !== status) throw new Error("outcome.type must match status")
   if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
   if ("revision" in raw && raw.revision !== undefined) {
     const rev = raw.revision as unknown
-    if (!isRecord(rev) || typeof rev.session !== "number" || typeof rev.config !== "number" || !isSafeInt(rev.session) || !isSafeInt(rev.config))
+    if (
+      !isRecord(rev) ||
+      typeof rev.session !== "number" ||
+      typeof rev.config !== "number" ||
+      !isSafeInt(rev.session) ||
+      !isSafeInt(rev.config)
+    )
       throw new Error("revision must be {session,config} integers")
   }
   if ("transportUnknown" in raw && raw.transportUnknown !== undefined && typeof raw.transportUnknown !== "boolean")
@@ -1235,28 +1289,42 @@ export function validateForkResult(raw: unknown, req: ServePrivateForkRequest): 
   if (status === "succeeded") {
     if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
     const data = (raw as Record<string, unknown>).data
-    if (!isRecord(data) || !isRecord((data as Record<string, unknown>).session)) throw new Error("succeeded data.session must be object")
+    if (!isRecord(data) || !isRecord((data as Record<string, unknown>).session))
+      throw new Error("succeeded data.session must be object")
     if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
-    if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("succeeded outcome must not have failure")
+    if ((outcome as Record<string, unknown>).failure !== undefined)
+      throw new Error("succeeded outcome must not have failure")
     return raw as unknown as ServePrivateForkResult
   }
   if (status === "failed") {
     const failure = (raw as Record<string, unknown>).failure
     const outFailure = (outcome as Record<string, unknown>).failure
-    if (!isRecord(failure) || typeof failure.code !== "string" || typeof failure.message !== "string" || typeof failure.retryable !== "boolean")
+    if (
+      !isRecord(failure) ||
+      typeof failure.code !== "string" ||
+      typeof failure.message !== "string" ||
+      typeof failure.retryable !== "boolean"
+    )
       throw new Error("failed failure invalid")
-    if (!isRecord(outFailure) || typeof outFailure.code !== "string" || typeof outFailure.message !== "string" || typeof outFailure.retryable !== "boolean")
+    if (
+      !isRecord(outFailure) ||
+      typeof outFailure.code !== "string" ||
+      typeof outFailure.message !== "string" ||
+      typeof outFailure.retryable !== "boolean"
+    )
       throw new Error("failed outcome.failure invalid")
     if (failure.code !== (outFailure as Record<string, unknown>).code) throw new Error("failure code mismatch")
     if (failure.message !== (outFailure as Record<string, unknown>).message) throw new Error("failure message mismatch")
-    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable) throw new Error("failure retryable mismatch")
+    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable)
+      throw new Error("failure retryable mismatch")
     if ((raw as Record<string, unknown>).data !== undefined) throw new Error("failed must not have data")
     return raw as unknown as ServePrivateForkResult
   }
   if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
   if ((raw as Record<string, unknown>).data !== undefined) throw new Error("ambiguous must not have data")
   if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous must not have failure")
-  if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous outcome must not have failure")
+  if ((outcome as Record<string, unknown>).failure !== undefined)
+    throw new Error("ambiguous outcome must not have failure")
   if ((outcome as Record<string, unknown>).data !== undefined) throw new Error("ambiguous outcome must not have data")
   return raw as unknown as ServePrivateForkResult
 }
@@ -1283,7 +1351,11 @@ export function validateCreateRequest(raw: unknown): ServePrivateCreateRequest {
   if (!isNonEmptyString(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
   const ctx = raw.context
   if (!isRecord(ctx)) throw new Error("context must be object")
-  if (typeof ctx.directory !== "string" || !isAbsolute(ctx.directory as string) || (ctx.directory as string).includes("\0"))
+  if (
+    typeof ctx.directory !== "string" ||
+    !isAbsolute(ctx.directory as string) ||
+    (ctx.directory as string).includes("\0")
+  )
     throw new Error("context.directory must be absolute path")
   if ("parentSessionId" in ctx && ctx.parentSessionId !== null && ctx.parentSessionId !== undefined)
     throw new Error("context.parentSessionId must be null")
@@ -1299,11 +1371,14 @@ export function validateCreateRequest(raw: unknown): ServePrivateCreateRequest {
     if (!isSessionId(payload.parentID)) throw new Error("payload.parentID must be SessionID")
   }
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
-  for (const k of Object.keys(raw as Record<string, unknown>)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  for (const k of Object.keys(raw as Record<string, unknown>))
+    if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
   const allowedCtx = new Set(["directory", "parentSessionId", "configVersion"])
-  for (const k of Object.keys(ctx as Record<string, unknown>)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  for (const k of Object.keys(ctx as Record<string, unknown>))
+    if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
   const allowedPayload = new Set(["title", "parentID"])
-  for (const k of Object.keys(payload as Record<string, unknown>)) if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
+  for (const k of Object.keys(payload as Record<string, unknown>))
+    if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
   const opId = raw.opId as string
   parseCreateOpId(opId)
   if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for create")
@@ -1320,15 +1395,23 @@ export function validateCreateResult(raw: unknown, req: ServePrivateCreateReques
   if (raw.op !== "session/create") throw new Error("op mismatch")
   if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
   const status = raw.status
-  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous") throw new Error("status must be succeeded/failed/ambiguous")
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous")
+    throw new Error("status must be succeeded/failed/ambiguous")
   if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
   const outcome = raw.outcome
-  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number") throw new Error("outcome invalid")
+  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number")
+    throw new Error("outcome invalid")
   if (outcome.type !== status) throw new Error("outcome.type must match status")
   if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
   if ("revision" in raw && raw.revision !== undefined) {
     const rev = raw.revision as unknown
-    if (!isRecord(rev) || typeof rev.session !== "number" || typeof rev.config !== "number" || !isSafeInt(rev.session) || !isSafeInt(rev.config))
+    if (
+      !isRecord(rev) ||
+      typeof rev.session !== "number" ||
+      typeof rev.config !== "number" ||
+      !isSafeInt(rev.session) ||
+      !isSafeInt(rev.config)
+    )
       throw new Error("revision must be {session,config} integers")
   }
   if ("transportUnknown" in raw && raw.transportUnknown !== undefined && typeof raw.transportUnknown !== "boolean")
@@ -1339,26 +1422,39 @@ export function validateCreateResult(raw: unknown, req: ServePrivateCreateReques
     if (!isRecord(data)) throw new Error("succeeded data must be object")
     if (!isRecord((data as Record<string, unknown>).session)) throw new Error("succeeded data.session must be object")
     if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
-    if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("succeeded outcome must not have failure")
+    if ((outcome as Record<string, unknown>).failure !== undefined)
+      throw new Error("succeeded outcome must not have failure")
     return raw as unknown as ServePrivateCreateResult
   }
   if (status === "failed") {
     const failure = (raw as Record<string, unknown>).failure
     const outFailure = (outcome as Record<string, unknown>).failure
-    if (!isRecord(failure) || typeof failure.code !== "string" || typeof failure.message !== "string" || typeof failure.retryable !== "boolean")
+    if (
+      !isRecord(failure) ||
+      typeof failure.code !== "string" ||
+      typeof failure.message !== "string" ||
+      typeof failure.retryable !== "boolean"
+    )
       throw new Error("failed failure invalid")
-    if (!isRecord(outFailure) || typeof outFailure.code !== "string" || typeof outFailure.message !== "string" || typeof outFailure.retryable !== "boolean")
+    if (
+      !isRecord(outFailure) ||
+      typeof outFailure.code !== "string" ||
+      typeof outFailure.message !== "string" ||
+      typeof outFailure.retryable !== "boolean"
+    )
       throw new Error("failed outcome.failure invalid")
     if (failure.code !== (outFailure as Record<string, unknown>).code) throw new Error("failure code mismatch")
     if (failure.message !== (outFailure as Record<string, unknown>).message) throw new Error("failure message mismatch")
-    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable) throw new Error("failure retryable mismatch")
+    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable)
+      throw new Error("failure retryable mismatch")
     if ((raw as Record<string, unknown>).data !== undefined) throw new Error("failed must not have data")
     return raw as unknown as ServePrivateCreateResult
   }
   if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
   if ((raw as Record<string, unknown>).data !== undefined) throw new Error("ambiguous must not have data")
   if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous must not have failure")
-  if ((outcome as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous outcome must not have failure")
+  if ((outcome as Record<string, unknown>).failure !== undefined)
+    throw new Error("ambiguous outcome must not have failure")
   if ((outcome as Record<string, unknown>).data !== undefined) throw new Error("ambiguous outcome must not have data")
   return raw as unknown as ServePrivateCreateResult
 }
@@ -1453,7 +1549,19 @@ export class ServePrivatePeer {
     const initPromise = peerAtStart.request("initialize", {
       protocol: { name: "kilo-private", major: 1, minor: 0 },
       clientInfo: { name: "kilo-vscode", version: "7.4.11" },
-      capabilities: ["session/cancelQueued", "session/update", "session/fork", "session/create", "session/status", "session/get", "session/messages", "session/children", "remote/status", "experimental/session/list", "path/get"],
+      capabilities: [
+        "session/cancelQueued",
+        "session/update",
+        "session/fork",
+        "session/create",
+        "session/status",
+        "session/get",
+        "session/messages",
+        "session/children",
+        "remote/status",
+        "experimental/session/list",
+        "path/get",
+      ],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
 
@@ -1616,7 +1724,8 @@ export class ServePrivatePeer {
           ((c as Record<string, unknown>).session as unknown[]).includes("children")
         )
           hasChildren = true
-        else if (((c as Record<string, unknown>).session as Record<string, unknown> | null)?.children) hasChildren = true
+        else if (((c as Record<string, unknown>).session as Record<string, unknown> | null)?.children)
+          hasChildren = true
         if ((c as Record<string, unknown>)["remote/status"]) hasRemoteStatus = true
         if ((c as Record<string, unknown>)["experimental/session/list"]) hasSessionList = true
         if ((c as Record<string, unknown>)["path/get"]) hasPath = true
@@ -1637,7 +1746,20 @@ export class ServePrivatePeer {
         }
       }
 
-      if (!hasCancelQueued && !hasSessionUpdate && !hasFork && !hasCreate && !hasStatus && !hasGet && !hasMessages && !hasChildren && !hasRemoteStatus && !hasSessionList && !hasPath && !hasCommandList) {
+      if (
+        !hasCancelQueued &&
+        !hasSessionUpdate &&
+        !hasFork &&
+        !hasCreate &&
+        !hasStatus &&
+        !hasGet &&
+        !hasMessages &&
+        !hasChildren &&
+        !hasRemoteStatus &&
+        !hasSessionList &&
+        !hasPath &&
+        !hasCommandList
+      ) {
         this.available = false
         bestEffortDispose(peerAtStart, "missing-capability")
         if (this.peer === peerAtStart) this.peer = null
@@ -1712,7 +1834,11 @@ export class ServePrivatePeer {
     return { code, msg }
   }
 
-  private failedCancelQueued(req: ServePrivateCancelQueuedRequest, code: string, msg: string): ServePrivateCancelQueuedResult {
+  private failedCancelQueued(
+    req: ServePrivateCancelQueuedRequest,
+    code: string,
+    msg: string,
+  ): ServePrivateCancelQueuedResult {
     return {
       v: 1,
       requestId: req.requestId,
@@ -1726,7 +1852,11 @@ export class ServePrivatePeer {
     }
   }
 
-  private failedUpdate(req: ServePrivateSessionUpdateRequest, code: string, msg: string): ServePrivateSessionUpdateResult {
+  private failedUpdate(
+    req: ServePrivateSessionUpdateRequest,
+    code: string,
+    msg: string,
+  ): ServePrivateSessionUpdateResult {
     return {
       v: 1,
       requestId: req.requestId,
@@ -1814,7 +1944,12 @@ export class ServePrivatePeer {
     }
   }
 
-  private makeHandleCancel(id: number, opId: string, peerAtCall: JsonRpcPeer, epoch: number): (msg?: string) => boolean {
+  private makeHandleCancel(
+    id: number,
+    opId: string,
+    peerAtCall: JsonRpcPeer,
+    epoch: number,
+  ): (msg?: string) => boolean {
     return (msg = "private parity timeout"): boolean => {
       if (this.isStaleHandle(peerAtCall, epoch)) {
         try {
@@ -1854,7 +1989,11 @@ export class ServePrivatePeer {
         try {
           this.invalidateOnObserverTimeout("stale observer timeout")
         } catch {
-          console.warn("[Kilo] stale observer cleanup failed:", { op: "session/messages", stale: true, cleanupFailed: true })
+          console.warn("[Kilo] stale observer cleanup failed:", {
+            op: "session/messages",
+            stale: true,
+            cleanupFailed: true,
+          })
         }
         return false
       }
@@ -1910,7 +2049,11 @@ export class ServePrivatePeer {
     )
   }
 
-  privateRemoteStatusOutcomeWithHandle(req: ServePrivateRemoteStatusRequest): { id: number; promise: Promise<PrivateRemoteStatusWireOutcome>; cancel: (msg?: string) => boolean } {
+  privateRemoteStatusOutcomeWithHandle(req: ServePrivateRemoteStatusRequest): {
+    id: number
+    promise: Promise<PrivateRemoteStatusWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
     validateRemoteStatusRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
@@ -1943,7 +2086,11 @@ export class ServePrivatePeer {
    * Resolved values are always strictly valid results; invalid wire rejects
    * with PrivateRemoteStatusValidationError and never resolves as a normal result.
    */
-  privateRemoteStatusWithHandle(req: ServePrivateRemoteStatusRequest): { id: number; promise: Promise<ServePrivateRemoteStatusResult>; cancel: (msg?: string) => boolean } {
+  privateRemoteStatusWithHandle(req: ServePrivateRemoteStatusRequest): {
+    id: number
+    promise: Promise<ServePrivateRemoteStatusResult>
+    cancel: (msg?: string) => boolean
+  } {
     validateRemoteStatusRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -1977,7 +2124,11 @@ export class ServePrivatePeer {
     return { id: outcome.id, promise, cancel: outcome.cancel }
   }
 
-  privateCancelQueuedWithHandle(req: ServePrivateCancelQueuedRequest): { id: number; promise: Promise<ServePrivateCancelQueuedResult>; cancel: (msg?: string) => boolean } {
+  privateCancelQueuedWithHandle(req: ServePrivateCancelQueuedRequest): {
+    id: number
+    promise: Promise<ServePrivateCancelQueuedResult>
+    cancel: (msg?: string) => boolean
+  } {
     validateCancelQueuedRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2029,13 +2180,15 @@ export class ServePrivatePeer {
         if (sess.fork) return true
       }
       if (cap === "session/create" && c["session/create"] === true) return true
-      if (cap === "session/create" && Array.isArray(c.session) && (c.session as unknown[]).includes("create")) return true
+      if (cap === "session/create" && Array.isArray(c.session) && (c.session as unknown[]).includes("create"))
+        return true
       if (cap === "session/create" && typeof c.session === "object" && c.session !== null) {
         const sess = c.session as Record<string, unknown>
         if (sess.create) return true
       }
       if (cap === "session/status" && c["session/status"] === true) return true
-      if (cap === "session/status" && Array.isArray(c.session) && (c.session as unknown[]).includes("status")) return true
+      if (cap === "session/status" && Array.isArray(c.session) && (c.session as unknown[]).includes("status"))
+        return true
       if (cap === "session/status" && typeof c.session === "object" && c.session !== null) {
         const sess = c.session as Record<string, unknown>
         if (sess.status) return true
@@ -2047,7 +2200,8 @@ export class ServePrivatePeer {
         if (sess.get) return true
       }
       if (cap === "session/messages" && c["session/messages"] === true) return true
-      if (cap === "session/messages" && Array.isArray(c.session) && (c.session as unknown[]).includes("messages")) return true
+      if (cap === "session/messages" && Array.isArray(c.session) && (c.session as unknown[]).includes("messages"))
+        return true
       if (cap === "session/messages" && typeof c.session === "object" && c.session !== null) {
         const sess = c.session as Record<string, unknown>
         if (sess.messages) return true
@@ -2072,7 +2226,11 @@ export class ServePrivatePeer {
     return handle.promise
   }
 
-  privateSessionUpdateWithHandle(req: ServePrivateSessionUpdateRequest): { id: number; promise: Promise<ServePrivateSessionUpdateResult>; cancel: (msg?: string) => boolean } {
+  privateSessionUpdateWithHandle(req: ServePrivateSessionUpdateRequest): {
+    id: number
+    promise: Promise<ServePrivateSessionUpdateResult>
+    cancel: (msg?: string) => boolean
+  } {
     validateSessionUpdateRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2109,7 +2267,11 @@ export class ServePrivatePeer {
     return handle.promise
   }
 
-  privateForkWithHandle(req: ServePrivateForkRequest): { id: number; promise: Promise<ServePrivateForkResult>; cancel: (msg?: string) => boolean } {
+  privateForkWithHandle(req: ServePrivateForkRequest): {
+    id: number
+    promise: Promise<ServePrivateForkResult>
+    cancel: (msg?: string) => boolean
+  } {
     validateForkRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2147,7 +2309,11 @@ export class ServePrivatePeer {
   }
 
   /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership. */
-  privateCreateWithHandle(req: ServePrivateCreateRequest): { id: number; promise: Promise<ServePrivateCreateResult>; cancel: (msg?: string) => boolean } {
+  privateCreateWithHandle(req: ServePrivateCreateRequest): {
+    id: number
+    promise: Promise<ServePrivateCreateResult>
+    cancel: (msg?: string) => boolean
+  } {
     validateCreateRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2188,7 +2354,11 @@ export class ServePrivatePeer {
    * Resolved values are always strictly valid results; invalid wire rejects
    * with PrivateStatusValidationError and never resolves as a normal result.
    */
-  privateStatusWithHandle(req: ServePrivateStatusRequest): { id: number; promise: Promise<ServePrivateStatusResult>; cancel: (msg?: string) => boolean } {
+  privateStatusWithHandle(req: ServePrivateStatusRequest): {
+    id: number
+    promise: Promise<ServePrivateStatusResult>
+    cancel: (msg?: string) => boolean
+  } {
     validateStatusRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2245,12 +2415,12 @@ export class ServePrivatePeer {
       try {
         raw = (await rawPromise) as unknown
       } catch (e: unknown) {
-        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return { kind: "valid", result: makeStatusAmbiguous(req, true) }
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeStatusAmbiguous(req, true) }
         const { code, msg } = this.parseFailedInfo(e)
         return { kind: "valid", result: this.failedStatus(req, code, msg) }
       }
-      if (this.isStaleHandle(peerAtCall, currentEpoch))
-        return { kind: "valid", result: makeStatusAmbiguous(req, true) }
+      if (this.isStaleHandle(peerAtCall, currentEpoch)) return { kind: "valid", result: makeStatusAmbiguous(req, true) }
       return normalizePrivateStatusWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
@@ -2266,7 +2436,11 @@ export class ServePrivatePeer {
    * Resolved values are always strictly valid results; invalid wire rejects
    * with PrivateGetValidationError and never resolves as a normal result.
    */
-  privateGetWithHandle(req: ServePrivateGetRequest): { id: number; promise: Promise<ServePrivateGetResult>; cancel: (msg?: string) => boolean } {
+  privateGetWithHandle(req: ServePrivateGetRequest): {
+    id: number
+    promise: Promise<ServePrivateGetResult>
+    cancel: (msg?: string) => boolean
+  } {
     validateGetRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2323,12 +2497,12 @@ export class ServePrivatePeer {
       try {
         raw = (await rawPromise) as unknown
       } catch (e: unknown) {
-        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return { kind: "valid", result: makeGetAmbiguous(req, true) }
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeGetAmbiguous(req, true) }
         const { code, msg } = this.parseFailedInfo(e)
         return { kind: "valid", result: this.failedGet(req, code, msg) }
       }
-      if (this.isStaleHandle(peerAtCall, currentEpoch))
-        return { kind: "valid", result: makeGetAmbiguous(req, true) }
+      if (this.isStaleHandle(peerAtCall, currentEpoch)) return { kind: "valid", result: makeGetAmbiguous(req, true) }
       return normalizePrivateGetWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
@@ -2344,7 +2518,11 @@ export class ServePrivatePeer {
    * Resolved values are always strictly valid results; invalid wire rejects
    * with PrivateMessagesValidationError and never resolves as a normal result.
    */
-  privateMessagesWithHandle(req: ServePrivateMessagesRequest): { id: number; promise: Promise<ServePrivateMessagesResult>; cancel: (msg?: string) => boolean } {
+  privateMessagesWithHandle(req: ServePrivateMessagesRequest): {
+    id: number
+    promise: Promise<ServePrivateMessagesResult>
+    cancel: (msg?: string) => boolean
+  } {
     validateMessagesRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2401,7 +2579,8 @@ export class ServePrivatePeer {
       try {
         raw = (await rawPromise) as unknown
       } catch (e: unknown) {
-        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return { kind: "valid", result: makeMessagesAmbiguous(req, true) }
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeMessagesAmbiguous(req, true) }
         const { code, msg } = this.parseFailedInfo(e)
         return { kind: "valid", result: this.failedMessages(req, code, msg) }
       }
@@ -2414,7 +2593,11 @@ export class ServePrivatePeer {
   }
 
   /** Normalized outcome handle for the read-only session-list parity observer. */
-  privateSessionListOutcomeWithHandle(req: ServePrivateSessionListRequest): { id: number; promise: Promise<PrivateSessionListWireOutcome>; cancel: (msg?: string) => boolean } {
+  privateSessionListOutcomeWithHandle(req: ServePrivateSessionListRequest): {
+    id: number
+    promise: Promise<PrivateSessionListWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
     validateSessionListRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2445,7 +2628,11 @@ export class ServePrivatePeer {
   }
 
   /** Normalized outcome handle for the read-only path parity observer. */
-  privatePathOutcomeWithHandle(req: PathContractRequest): { id: number; promise: Promise<PathWireOutcome>; cancel: (msg?: string) => boolean } {
+  privatePathOutcomeWithHandle(req: PathContractRequest): {
+    id: number
+    promise: Promise<PathWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
     validatePathContractRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2476,7 +2663,11 @@ export class ServePrivatePeer {
   }
 
   /** Normalized outcome handle for the read-only command-list parity observer. */
-  privateCommandListOutcomeWithHandle(req: CommandListContractRequest): { id: number; promise: Promise<CommandListWireOutcome>; cancel: (msg?: string) => boolean } {
+  privateCommandListOutcomeWithHandle(req: CommandListContractRequest): {
+    id: number
+    promise: Promise<CommandListWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
     validateCommandListRequest(req)
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") {
@@ -2495,6 +2686,39 @@ export class ServePrivatePeer {
         failInfo: (e) => ({ ...this.parseFailedInfo(e), msg: "private command-list transport failed" }),
       },
       (id) => this.makeHandleCancel(id, req.opId, peerAtCall, currentEpoch),
+      req,
+    )
+  }
+
+  /** Normalized outcome handle for the read-only config-warnings parity observer. */
+  privateConfigWarningsOutcomeWithHandle(req: ConfigWarningsContractRequest): {
+    id: number
+    promise: Promise<ConfigWarningsWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateConfigWarningsRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("config/warnings")) {
+      throw new Error("Private peer missing config/warnings capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    return requestConfigWarningsOutcome(
+      peerAtCall as unknown as import("./serve-private-config-warnings").ConfigWarningsRawTransport,
+      {
+        isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+        isClosed: (e) => this.isClosedHandle(peerAtCall, currentEpoch, e),
+        failInfo: () => ({ code: "transport", msg: "private config-warnings transport failed" }),
+      },
+      (id) =>
+        makeConfigWarningsCancel(id, {
+          isStale: () => this.isStaleHandle(peerAtCall, currentEpoch),
+          tryCancel: (msg) => this.tryCancelPending(id, msg),
+          invalidate: (reason) => this.invalidateOnObserverTimeout(reason),
+        }),
       req,
     )
   }
@@ -2536,7 +2760,7 @@ export class ServePrivatePeer {
    * re-negotiate only on next connect/reconnect.
    */
   private invalidateSafeBranch(reason: string): boolean {
-    const branch = pathObserverTimeoutBranch(reason)
+    const branch = pathObserverTimeoutBranch(reason) ?? configWarningsObserverTimeoutBranch(reason)
     if (!branch) return false
     if (branch.op === "session/messages") {
       console.warn(`[Kilo PrivatePeer] observer timeout invalidates epoch:`, { op: branch.op, epoch: this.opts.epoch })
@@ -2599,7 +2823,22 @@ export class ServePrivatePeer {
 
   private collectKnownKeys(c: Record<string, unknown>, out: string[]): void {
     for (const k of Object.keys(c)) {
-      if ((k === "session/cancelQueued" || k === "session/update" || k === "session/fork" || k === "session/create" || k === "session/status" || k === "session/get" || k === "session/messages" || k === "session/children" || k === "remote/status" || k === "experimental/session/list" || k === "path/get" || k === "command/list") && c[k]) out.push(k)
+      if (
+        (k === "session/cancelQueued" ||
+          k === "session/update" ||
+          k === "session/fork" ||
+          k === "session/create" ||
+          k === "session/status" ||
+          k === "session/get" ||
+          k === "session/messages" ||
+          k === "session/children" ||
+          k === "remote/status" ||
+          k === "experimental/session/list" ||
+          k === "path/get" ||
+          k === "command/list") &&
+        c[k]
+      )
+        out.push(k)
     }
   }
 
@@ -2908,18 +3147,34 @@ export function compareForkParity(
   }
   if (sdkStatus === "succeeded" && privStatus === "succeeded") {
     const sdkData = sdk.data as Record<string, unknown> | undefined
-    const sdkSess = (sdkData as Record<string, unknown> | undefined) ?? (sdk.data as Record<string, unknown> | undefined)
+    const sdkSess =
+      (sdkData as Record<string, unknown> | undefined) ?? (sdk.data as Record<string, unknown> | undefined)
     const sdkId: unknown = (sdkSess as Record<string, unknown> | undefined)?.id ?? sdk.data
     const pdata = (priv as Extract<ServePrivateForkResult, { status: "succeeded" }>).data as Record<string, unknown>
     const privSess = (pdata.session as Record<string, unknown> | undefined) ?? (pdata as Record<string, unknown>)
     const privId: unknown = (privSess as Record<string, unknown>)?.id ?? pdata.id
     if (String(sdkId) !== String(privId)) {
-      return { divergence: `fork-id-mismatch`, details: { mismatch: true, field: "id", sdkId: String(sdkId), privId: String(privId) } }
+      return {
+        divergence: `fork-id-mismatch`,
+        details: { mismatch: true, field: "id", sdkId: String(sdkId), privId: String(privId) },
+      }
     }
-    const sdkParent: unknown = (sdkSess as Record<string, unknown> | undefined)?.parentID ?? (sdkSess as Record<string, unknown> | undefined)?.parent_id
-    const privParent: unknown = (privSess as Record<string, unknown> | undefined)?.parentID ?? (privSess as Record<string, unknown> | undefined)?.parent_id
+    const sdkParent: unknown =
+      (sdkSess as Record<string, unknown> | undefined)?.parentID ??
+      (sdkSess as Record<string, unknown> | undefined)?.parent_id
+    const privParent: unknown =
+      (privSess as Record<string, unknown> | undefined)?.parentID ??
+      (privSess as Record<string, unknown> | undefined)?.parent_id
     if (String(sdkParent ?? "") !== String(privParent ?? "")) {
-      return { divergence: `fork-parent-mismatch`, details: { mismatch: true, field: "parentID", sdkParent: String(sdkParent ?? ""), privParent: String(privParent ?? "") } }
+      return {
+        divergence: `fork-parent-mismatch`,
+        details: {
+          mismatch: true,
+          field: "parentID",
+          sdkParent: String(sdkParent ?? ""),
+          privParent: String(privParent ?? ""),
+        },
+      }
     }
     const sdkDirRaw: unknown = (sdkSess as Record<string, unknown> | undefined)?.directory
     const privDirRaw: unknown = (privSess as Record<string, unknown> | undefined)?.directory
@@ -2933,15 +3188,27 @@ export function compareForkParity(
         privDir = canonicalDir(privDirRaw)
       } catch {}
       if (sdkDir !== privDir) {
-        return { divergence: `fork-directory-mismatch`, details: { mismatch: true, field: "directory", sdkDir, privDir } }
+        return {
+          divergence: `fork-directory-mismatch`,
+          details: { mismatch: true, field: "directory", sdkDir, privDir },
+        }
       }
     } else if (String(sdkDirRaw ?? "") !== String(privDirRaw ?? "")) {
-      return { divergence: `fork-directory-mismatch`, details: { mismatch: true, field: "directory", sdkDir: String(sdkDirRaw ?? ""), privDir: String(privDirRaw ?? "") } }
+      return {
+        divergence: `fork-directory-mismatch`,
+        details: {
+          mismatch: true,
+          field: "directory",
+          sdkDir: String(sdkDirRaw ?? ""),
+          privDir: String(privDirRaw ?? ""),
+        },
+      }
     }
     return { divergence: null, details: {} }
   }
   if (sdkStatus === "failed" && privStatus === "failed") {
-    const privCode: string = ((priv as Extract<ServePrivateForkResult, { status: "failed" }>).failure?.code ?? "unknown") as string
+    const privCode: string = ((priv as Extract<ServePrivateForkResult, { status: "failed" }>).failure?.code ??
+      "unknown") as string
     const http = sdkHttpStatus(sdk)
     const cls = sdkStatusClass(http)
     const allowed = (() => {
@@ -3074,13 +3341,22 @@ export function compareStatusParity(
     if (missing.length > 0 || extra.length > 0 || typeMismatch.length > 0 || fieldMismatch.length > 0) {
       return {
         divergence: `status-map-mismatch:missing=${missing.length} extra=${extra.length} typeMismatch=${typeMismatch.length} fieldMismatch=${fieldMismatch.length}`,
-        details: { sdkSize: sdkKeys.size, privSize: privKeys.size, missing, extra, typeMismatch, fieldMismatch, fields: fieldDetails },
+        details: {
+          sdkSize: sdkKeys.size,
+          privSize: privKeys.size,
+          missing,
+          extra,
+          typeMismatch,
+          fieldMismatch,
+          fields: fieldDetails,
+        },
       }
     }
     return { divergence: null, details: { sdkSize: sdkKeys.size, privSize: privKeys.size } }
   }
   if (sdkStatus === "failed" && privStatus === "failed") {
-    const privCode: string = ((priv as Extract<ServePrivateStatusResult, { status: "failed" }>).failure?.code ?? "unknown") as string
+    const privCode: string = ((priv as Extract<ServePrivateStatusResult, { status: "failed" }>).failure?.code ??
+      "unknown") as string
     const http = sdkHttpStatus(sdk)
     const cls = sdkStatusClass(http)
     const allowed = (() => {
@@ -3146,13 +3422,17 @@ export function compareCreateParity(
   }
   if (sdkStatus === "succeeded" && privStatus === "succeeded") {
     const sdkData = sdk.data as Record<string, unknown> | undefined
-    const sdkSess = (sdkData as Record<string, unknown> | undefined) ?? (sdk.data as Record<string, unknown> | undefined)
+    const sdkSess =
+      (sdkData as Record<string, unknown> | undefined) ?? (sdk.data as Record<string, unknown> | undefined)
     const sdkId: unknown = (sdkSess as Record<string, unknown> | undefined)?.id ?? sdk.data
     const pdata = (priv as Extract<ServePrivateCreateResult, { status: "succeeded" }>).data as Record<string, unknown>
     const privSess = pdata.session as Record<string, unknown> | undefined
     const privId: unknown = (privSess as Record<string, unknown>)?.id
     if (String(sdkId) !== String(privId)) {
-      return { divergence: `create-id-mismatch`, details: { mismatch: true, field: "id", sdkId: String(sdkId), privId: String(privId) } }
+      return {
+        divergence: `create-id-mismatch`,
+        details: { mismatch: true, field: "id", sdkId: String(sdkId), privId: String(privId) },
+      }
     }
     const sdkDirRaw: unknown = (sdkSess as Record<string, unknown> | undefined)?.directory
     const privDirRaw: unknown = (privSess as Record<string, unknown> | undefined)?.directory
@@ -3166,24 +3446,47 @@ export function compareCreateParity(
         privDir = canonicalDir(privDirRaw)
       } catch {}
       if (sdkDir !== privDir) {
-        return { divergence: `create-directory-mismatch`, details: { mismatch: true, field: "directory", sdkDir, privDir } }
+        return {
+          divergence: `create-directory-mismatch`,
+          details: { mismatch: true, field: "directory", sdkDir, privDir },
+        }
       }
     } else if (String(sdkDirRaw ?? "") !== String(privDirRaw ?? "")) {
-      return { divergence: `create-directory-mismatch`, details: { mismatch: true, field: "directory", sdkDir: String(sdkDirRaw ?? ""), privDir: String(privDirRaw ?? "") } }
+      return {
+        divergence: `create-directory-mismatch`,
+        details: {
+          mismatch: true,
+          field: "directory",
+          sdkDir: String(sdkDirRaw ?? ""),
+          privDir: String(privDirRaw ?? ""),
+        },
+      }
     }
     const sdkTitleRaw: unknown = (sdkSess as Record<string, unknown> | undefined)?.title
     const privTitleRaw: unknown = (privSess as Record<string, unknown> | undefined)?.title
     if (String(sdkTitleRaw ?? "") !== String(privTitleRaw ?? "")) {
-      return { divergence: `create-title-mismatch`, details: { mismatch: true, field: "title", sdkTitle: String(sdkTitleRaw ?? ""), privTitle: String(privTitleRaw ?? "") } }
+      return {
+        divergence: `create-title-mismatch`,
+        details: {
+          mismatch: true,
+          field: "title",
+          sdkTitle: String(sdkTitleRaw ?? ""),
+          privTitle: String(privTitleRaw ?? ""),
+        },
+      }
     }
     // canonical requires priv session object; missing is divergence
     if (!privSess || typeof (privSess as Record<string, unknown>).id !== "string") {
-      return { divergence: `create-id-mismatch`, details: { mismatch: true, field: "id", sdkId: String(sdkId), privId: String(privId) } }
+      return {
+        divergence: `create-id-mismatch`,
+        details: { mismatch: true, field: "id", sdkId: String(sdkId), privId: String(privId) },
+      }
     }
     return { divergence: null, details: {} }
   }
   if (sdkStatus === "failed" && privStatus === "failed") {
-    const privCode: string = ((priv as Extract<ServePrivateCreateResult, { status: "failed" }>).failure?.code ?? "unknown") as string
+    const privCode: string = ((priv as Extract<ServePrivateCreateResult, { status: "failed" }>).failure?.code ??
+      "unknown") as string
     const http = sdkHttpStatus(sdk)
     const cls = sdkStatusClass(http)
     const allowed = (() => {

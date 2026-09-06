@@ -1,11 +1,14 @@
-// Gate B deferred `config/warnings` read-only candidate contract evidence only.
-// Pure contract helpers with no transport, no private capability, no dispatch,
-// no runtime observation, no durable state, no config write, no fence, no
-// cache, no redaction implementation, and no production parity claim.
-// `op:"config/warnings"` below is a contract-evidence label only; it is never
-// registered as a private capability and never sent over any peer. Production
-// `config/warnings` stays SDK-only (`GET /config/warnings` via
-// `@kilocode/sdk` `client.config.warnings`).
+// `config/warnings` read-only private carrier contract (Active, parity-only).
+// Strict v1 envelope helpers plus the locked safe warning projection. The
+// private path never transmits raw paths, raw diagnostic text, or detail:
+// success data is `{warnings: [{pathCategory, messageCategory}]}` with finite
+// categories only. Production `config/warnings` stays SDK-only (`GET
+// /config/warnings` via `@kilocode/sdk` `client.config.warnings`), which
+// remains the sole user-visible authority; the private path is detached
+// warn-only observation of the current directory instance snapshot with no
+// freshness claim. Read-only diagnostics only; out of scope are `config.get`,
+// `config.update`, `config.providers`, any config write/fence/convergence
+// behavior, and any transport/wiring/cache.
 //
 // Source facts (read-only evidence, not imported):
 // - Route: `GET /config/warnings` with `WorkspaceRoutingQuery`
@@ -20,6 +23,10 @@
 //   `InstanceState`, populated once by `loadInstanceState(ctx)`).
 // - Shape: `packages/opencode/src/config/config.ts` `Warning = z.object({`
 //   `path: z.string(), message: z.string(), detail: z.string().optional() })`.
+// - Carrier: `packages/opencode/src/kilocode/server/fd-carrier.ts`
+//   `config/warnings` reads `Config.Service.warnings()` through the existing
+//   `acquireDrainControl(directory)` + `InstanceRef` lane and projects each
+//   entry with the same category mapping below.
 // - SDK: v2 `client.config.warnings({directory?, workspace?})` issues
 //   `GET /config/warnings`; v2 generated `ConfigWarningsResponses[200]` is
 //   exactly `Array<{path,message,detail?}>`.
@@ -30,52 +37,29 @@
 //   reads `svc.warnings()`; CLI `config` command prints count via same service.
 //
 // Producer notes (read-only evidence, warning origins accumulated into the
-// same `warnings: Warning[]` array in `loadInstanceState`):
+// same `warnings: Warning[]` array in `loadInstanceState`; the message
+// categories below map these exact templates, anything else is `unknown`):
 // - `KilocodeConfig.caught(warnings, source, err)` (`toWarning` in
-//   `packages/opencode/src/kilocode/config/config.ts`): converts known errors
-//   only; unknown errors are re-thrown, never converted.
-//   Exact templates: `ConfigError.JsonError` ->
-//   `{path: err.data.path, message: `Config file at ${path} is not valid JSON(C)`,
-//   detail: err.data.message || undefined}`; `ConfigError.InvalidError` ->
-//   `{path: err.data.path, message: `Configuration is invalid at ${path}: ${text}``
-//   or `Configuration is invalid at ${path}`}` where `text` is
-//   `formatIssues(err.data.issues) ?? err.data.message` (no `detail` field).
-//   Covers global-config and project-file `loadFile` defects.
-// - `KilocodeConfig.handleInvalid("agent"|"command", item, issues, cause, warnings)`:
-//   exact templates: `` `Config file at ${item} is invalid: ${text}` `` or
-//   `` `Config file at ${item} is invalid` `` where `text` is
-//   `formatIssues(issues)`, pushed as
-//   `{path: item, message, detail: text || undefined}` for schema failures
-//   after markdown parse/substitution succeeded.
-// - Direct pushes (no `toWarning`/`handleInvalid`): `ConfigAgent.load` and
-//   `ConfigCommand.load` push `{path: item, message}` (no `detail`) with exact
-//   templates `` `Failed to parse agent ${item}` `` /
-//   `` `Failed to parse command ${item}` `` when `err` is not a
-//   `FrontmatterError` (otherwise `FrontmatterError` `err.data.message` is used
-//   verbatim); `ConfigAgent.load` prompt-substitution failures push
-//   `{path: item, message}` (no `detail`) with the exact template
-//   `` `Failed to substitute variables in agent ${item}` `` unless
-//   `ConfigError.InvalidError` `err.data.message` is present (used verbatim).
-//   There is no `Failed to substitute variables in command ...` template.
-// - Trust scoping (`trusted`, `fileScope`, `sourceScope` per global vs project
-//   directory) affects parse/substitution inputs, not the warning envelope.
+//   `packages/opencode/src/kilocode/config/config.ts`): exact templates
+//   `Config file at ${path} is not valid JSON(C)` (`invalid-json`) and
+//   `Configuration is invalid at ${path}...` (`invalid-config`).
+// - `KilocodeConfig.handleInvalid("agent"|"command", ...)`: exact templates
+//   `` `Config file at ${item} is invalid...` `` (`invalid-file`).
+// - Direct pushes: `` `Failed to parse agent ${item}` `` (`parse-agent`),
+//   `` `Failed to parse command ${item}` `` (`parse-command`),
+//   `` `Failed to substitute variables in agent ${item}` ``
+//   (`substitute-agent`); verbatim `FrontmatterError`/`InvalidError` text is
+//   `unknown` by design (never transmitted, never compared).
 //
 // EXPLICIT UNKNOWNS (no inference without evidence):
-// - Ownership: whether `warnings` is directory-isolated per `InstanceState`
-//   context or shares entries across directories is UNKNOWN. Validation asserts
-//   no directory binding; parity never compares the request directory.
 // - Freshness: staleness/invalidation of `warnings` after config writes,
 //   reloads, or convergence rebuilds is UNKNOWN; parity never claims freshness.
-// - Content redaction: warning `path`/`message`/`detail` content is NOT claimed
-//   sanitized. `path` may be an absolute filesystem path and `detail` may carry
-//   schema-issue text. This contract validates shape only and implements no
-//   redaction. Failure fixtures must stay redacted; warning payloads are
-//   observed values, never redaction claims.
 // - Ordering: warning array order is UNKNOWN; parity is membership-based and
 //   never compares order.
 // - `directory`/`workspace` in the request context are ROUTING-ONLY labels.
-//   Scope checks guard request-routing identity only; a scope match says
-//   nothing about payload ownership.
+//   Scope checks guard request-routing identity only. The payload is the
+//   current directory instance snapshot read through the target directory's
+//   `InstanceRef` lane (no global cache, no cross-directory aggregation).
 // - Out of scope: `config.get`, `config.update`, `config.providers`, any config
 //   write/fence/convergence behavior, and any transport/wiring/cache.
 
@@ -126,16 +110,26 @@ export interface ConfigWarningsContractRequest {
   payload: Record<string, never>
 }
 
+function containsConfigWarningsPathMaterial(v: string): boolean {
+  return v.includes("/") || v.includes("\\") || v.includes("\0")
+}
+
+function assertNoConfigWarningsPathMaterial(v: string, label: string): void {
+  if (containsConfigWarningsPathMaterial(v)) throw new Error(`${label} must not carry path material`)
+}
+
 // eslint-disable-next-line complexity
 export function validateConfigWarningsContractRequest(raw: unknown): ConfigWarningsContractRequest {
   if (!isRecord(raw)) throw new Error("request must be object")
   if (raw.v !== 1) throw new Error("v must be 1")
   if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
   if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  assertNoConfigWarningsPathMaterial(raw.requestId as string, "requestId")
+  assertNoConfigWarningsPathMaterial(raw.opId as string, "opId")
   if (raw.op !== "config/warnings") throw new Error("op must be config/warnings")
   if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
-  if (raw.idempotencyKey !== raw.opId)
-    throw new Error("idempotencyKey must equal opId for config-warnings contract")
+  assertNoConfigWarningsPathMaterial(raw.idempotencyKey as string, "idempotencyKey")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for config-warnings contract")
   const ctx = raw.context
   if (!isRecord(ctx)) throw new Error("context must be object")
   const allowedCtx = new Set(["directory", "workspace"])
@@ -158,6 +152,8 @@ export function validateConfigWarningsContractRequest(raw: unknown): ConfigWarni
   const idem = parseConfigWarningsOpId(raw.idempotencyKey as string)
   if (idem.token !== parseConfigWarningsOpId(raw.opId as string).token)
     throw new Error("idempotencyKey token must equal opId token")
+  assertNoConfigWarningsPathMaterial(idem.token, "opId token")
+  assertNoConfigWarningsPathMaterial(parseConfigWarningsOpId(raw.opId as string).token, "opId token")
   return raw as unknown as ConfigWarningsContractRequest
 }
 
@@ -186,41 +182,89 @@ export function checkConfigWarningsScope(
   if (got !== want) return { ok: false, code: "scope_mismatch", which: "directory" }
   const wantWs = expected.workspace
   const gotWs = req.context.workspace
-  if ((wantWs === undefined) !== (gotWs === undefined))
-    return { ok: false, code: "scope_mismatch", which: "workspace" }
-  if (wantWs !== undefined && gotWs !== wantWs)
-    return { ok: false, code: "scope_mismatch", which: "workspace" }
+  if ((wantWs === undefined) !== (gotWs === undefined)) return { ok: false, code: "scope_mismatch", which: "workspace" }
+  if (wantWs !== undefined && gotWs !== wantWs) return { ok: false, code: "scope_mismatch", which: "workspace" }
   const parsed = parseConfigWarningsOpId(req.opId)
   if (parsed.token !== expected.token) return { ok: false, code: "scope_mismatch", which: "request" }
   const bound = canonicalConfigWarningsOpId(expected.token)
-  if (req.opId !== bound || req.idempotencyKey !== bound)
-    return { ok: false, code: "scope_mismatch", which: "request" }
+  if (req.opId !== bound || req.idempotencyKey !== bound) return { ok: false, code: "scope_mismatch", which: "request" }
   return { ok: true }
 }
 
-// Bounded warning projection: exactly production `{path,message,detail?}`.
-// Shape-only: `path`/`message` are non-empty strings, `detail` when present is
-// a string. Content is NOT claimed sanitized (see unknowns above); validation
-// never asserts redaction, ownership, or freshness.
+// Locked safe warning projection: finite categories only. Raw paths, raw
+// diagnostic text, and detail never cross the private boundary: `path` maps
+// to a coarse file kind, `message` maps to the stable producer template, and
+// `detail` is omitted entirely. The carrier (`fd-carrier.ts`
+// `projectConfigWarningForCarrier`) applies the same mapping; parity projects
+// the SDK raw entries with `projectConfigWarningToSafe` so both sides compare
+// the identical safe multiset. Verbatim `FrontmatterError`/`InvalidError`
+// text and any future template fall into `unknown` by design.
+export type ConfigWarningsPathCategory = "config-file" | "agent-file" | "command-file" | "other"
+export type ConfigWarningsMessageCategory =
+  | "invalid-json"
+  | "invalid-config"
+  | "invalid-file"
+  | "parse-agent"
+  | "parse-command"
+  | "substitute-agent"
+  | "unknown"
+
 export interface ConfigWarning {
-  path: string
-  message: string
-  detail?: string
+  pathCategory: ConfigWarningsPathCategory
+  messageCategory: ConfigWarningsMessageCategory
 }
 
-const CONFIG_WARNING_FIELDS = new Set(["path", "message", "detail"])
+const CONFIG_WARNING_PATH_CATEGORIES = new Set(["config-file", "agent-file", "command-file", "other"])
+const CONFIG_WARNING_MESSAGE_CATEGORIES = new Set([
+  "invalid-json",
+  "invalid-config",
+  "invalid-file",
+  "parse-agent",
+  "parse-command",
+  "substitute-agent",
+  "unknown",
+])
+const CONFIG_WARNING_FIELDS = new Set(["pathCategory", "messageCategory"])
+
+export function configWarningsPathCategory(p: string): ConfigWarningsPathCategory {
+  const lower = p.toLowerCase()
+  if (lower.includes("agent")) return "agent-file"
+  if (lower.includes("command")) return "command-file"
+  if (lower.endsWith(".json") || lower.endsWith(".jsonc")) return "config-file"
+  return "other"
+}
+
+export function configWarningsMessageCategory(m: string): ConfigWarningsMessageCategory {
+  if (m.startsWith("Config file at") && m.includes("is not valid JSON")) return "invalid-json"
+  if (m.startsWith("Configuration is invalid at")) return "invalid-config"
+  if (m.startsWith("Config file at") && m.includes("is invalid")) return "invalid-file"
+  if (m.startsWith("Failed to parse agent")) return "parse-agent"
+  if (m.startsWith("Failed to parse command")) return "parse-command"
+  if (m.startsWith("Failed to substitute variables in agent")) return "substitute-agent"
+  return "unknown"
+}
+
+export function projectConfigWarningToSafe(path: string, message: string): ConfigWarning {
+  return { pathCategory: configWarningsPathCategory(path), messageCategory: configWarningsMessageCategory(message) }
+}
+
+function isRawSdkWarning(raw: unknown): raw is { path: string; message: string } {
+  if (!isRecord(raw)) return false
+  const rec = raw as Record<string, unknown>
+  if (!isNonEmpty(rec.path) || (rec.path as string).includes("\0")) return false
+  if (!isNonEmpty(rec.message) || (rec.message as string).includes("\0")) return false
+  if (rec.detail !== undefined && (typeof rec.detail !== "string" || (rec.detail as string).includes("\0")))
+    return false
+  return true
+}
 
 export function validateConfigWarning(raw: unknown): ConfigWarning {
   if (!isRecord(raw)) throw new Error("warning must be object")
   assertAllowedKeys(raw as Record<string, unknown>, CONFIG_WARNING_FIELDS, "warning")
-  if (!isNonEmpty(raw.path) || (raw.path as string).includes("\0"))
-    throw new Error("warning.path must be non-empty string")
-  if (!isNonEmpty(raw.message) || (raw.message as string).includes("\0"))
-    throw new Error("warning.message must be non-empty string")
-  if (raw.detail !== undefined) {
-    if (typeof raw.detail !== "string" || (raw.detail as string).includes("\0"))
-      throw new Error("warning.detail must be string when present")
-  }
+  if (typeof raw.pathCategory !== "string" || !CONFIG_WARNING_PATH_CATEGORIES.has(raw.pathCategory as string))
+    throw new Error("warning.pathCategory must be config-file/agent-file/command-file/other")
+  if (typeof raw.messageCategory !== "string" || !CONFIG_WARNING_MESSAGE_CATEGORIES.has(raw.messageCategory as string))
+    throw new Error("warning.messageCategory must be a known category")
   return raw as unknown as ConfigWarning
 }
 
@@ -230,10 +274,9 @@ export function validateConfigWarnings(raw: unknown): ConfigWarning[] {
 }
 
 export function configWarningKey(w: ConfigWarning): string {
-  // Delimited JSON-tuple encoding so field boundaries cannot collide:
-  // ("ab","c") and ("a","bc") produce distinct keys. `detail` absent maps to
-  // null so missing vs empty-string detail stay distinct.
-  return JSON.stringify([w.path, w.message, w.detail ?? null])
+  // Delimited JSON-tuple encoding so category boundaries cannot collide.
+  // Categories are a finite fixed set, so keys carry no path or text material.
+  return JSON.stringify([w.pathCategory, w.messageCategory])
 }
 
 export type ConfigWarningsResult =
@@ -294,6 +337,36 @@ export function makeConfigWarningsAmbiguous(
 // `detail`, `warnings`) and routing keys are rejected so fixtures cannot carry
 // host path or warning content material. `message`/`code`/`retryable` are the
 // allowed failure keys and are never forbidden.
+//
+// Finite failure taxonomy (LOCK-005): only fixed categories and fixed messages
+// cross the private wire. Arbitrary backend codes/text are rejected as invalid
+// wire; local transport maps to `transport` with its fixed message and never
+// copies host codes or raw error strings.
+export const CONFIG_WARNINGS_FAILURE_CODES = new Set([
+  "validation.failed",
+  "InstanceUnavailableDuringConfigRebuild",
+  "internal",
+  "transport",
+] as const)
+export type ConfigWarningsFailureCode =
+  | "validation.failed"
+  | "InstanceUnavailableDuringConfigRebuild"
+  | "internal"
+  | "transport"
+export const CONFIG_WARNINGS_TRANSPORT_FAILURE_CODE: ConfigWarningsFailureCode = "transport"
+export const CONFIG_WARNINGS_FAILURE_MESSAGES: Record<ConfigWarningsFailureCode, string> = {
+  "validation.failed": "invalid config-warnings request",
+  InstanceUnavailableDuringConfigRebuild:
+    "Instance is unavailable during config rebuild; no active runtime for this request",
+  internal: "internal error",
+  transport: "private config-warnings transport failed",
+}
+export const CONFIG_WARNINGS_FAILURE_RETRYABLE: Record<ConfigWarningsFailureCode, boolean> = {
+  "validation.failed": false,
+  InstanceUnavailableDuringConfigRebuild: true,
+  internal: false,
+  transport: false,
+}
 export interface ConfigWarningsFailure {
   code: string
   message: string
@@ -325,9 +398,13 @@ export function validateConfigWarningsFailure(raw: unknown): ConfigWarningsFailu
     if (CONFIG_WARNINGS_FAILURE_FORBIDDEN.has(k)) throw new Error(`failure must not carry ${k}`)
   }
   assertAllowedKeys(raw as Record<string, unknown>, CONFIG_WARNINGS_FAILURE_FIELDS, "failure")
-  if (!isNonEmpty(raw.code)) throw new Error("failure code must be non-empty string")
-  if (!isNonEmpty(raw.message)) throw new Error("failure message must be non-empty string")
-  if (typeof raw.retryable !== "boolean") throw new Error("failure retryable must be boolean")
+  if (typeof raw.code !== "string" || !CONFIG_WARNINGS_FAILURE_CODES.has(raw.code as ConfigWarningsFailureCode))
+    throw new Error("failure code must be a known config-warnings category")
+  const code = raw.code as ConfigWarningsFailureCode
+  if (raw.message !== CONFIG_WARNINGS_FAILURE_MESSAGES[code])
+    throw new Error("failure message must be the fixed message for its code")
+  if (raw.retryable !== CONFIG_WARNINGS_FAILURE_RETRYABLE[code])
+    throw new Error("failure retryable must match its code")
   return raw as unknown as ConfigWarningsFailure
 }
 
@@ -399,10 +476,7 @@ const CONFIG_WARNINGS_OUTCOME_PLAIN = new Set(["type", "time"])
 const CONFIG_WARNINGS_OUTCOME_FAILED = new Set(["type", "time", "failure"])
 
 // eslint-disable-next-line complexity
-export function validateConfigWarningsResult(
-  raw: unknown,
-  req: ConfigWarningsContractRequest,
-): ConfigWarningsResult {
+export function validateConfigWarningsResult(raw: unknown, req: ConfigWarningsContractRequest): ConfigWarningsResult {
   if (!isRecord(raw)) throw new Error("result must be object")
   if (raw.v !== 1) throw new Error("result v must be 1")
   if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
@@ -429,8 +503,8 @@ export function validateConfigWarningsResult(
     const allowedData = new Set(["warnings"])
     for (const k of Object.keys(data as Record<string, unknown>))
       if (!allowedData.has(k)) throw new Error(`unexpected data field ${k}`)
-    // Shape-only projection. No directory binding, ordering, freshness, or
-    // redaction is asserted here by design.
+    // Safe projection: finite `{pathCategory,messageCategory}` entries only.
+    // Raw paths, raw text, and detail are never accepted here by design.
     validateConfigWarnings((data as Record<string, unknown>).warnings)
     if (rec.failure !== undefined) throw new Error("succeeded must not have failure")
     if (outRec.failure !== undefined) throw new Error("succeeded outcome must not have failure")
@@ -439,6 +513,7 @@ export function validateConfigWarningsResult(
   if (status === "failed") {
     assertAllowedKeys(rec, CONFIG_WARNINGS_RESULT_FAILED, "result")
     assertAllowedKeys(outRec, CONFIG_WARNINGS_OUTCOME_FAILED, "outcome")
+    if (raw.accepted !== false) throw new Error("failed accepted must be false")
     const failure = validateConfigWarningsFailure(rec.failure)
     const outFailure = validateConfigWarningsFailure(outRec.failure)
     if (failure.code !== outFailure.code) throw new Error("failure code mismatch")
@@ -458,20 +533,22 @@ export function validateConfigWarningsResult(
   return raw as unknown as ConfigWarningsResult
 }
 
-// Detached parity only (contract evidence, never production parity):
-// membership-based multiset comparison of the bounded `{path,message,detail?}`
-// projection. Order is never compared; length/membership/duplicate-count gaps
-// on either side are reported as explicit unknowns
-// (`config-warnings-membership-unknown`) because ownership, freshness, and
-// lifecycle are unknown. Malformed SDK entries are reported as
-// `config-warnings-shape-mismatch`, never skipped silently. The request
-// directory is never compared; failed-vs-failed status agreement holds with
-// no content comparison.
+// Detached parity only (never production parity): the SDK raw entries are
+// projected with the same `projectConfigWarningToSafe` mapping the carrier
+// applies, then both sides compare as a multiset of safe category tuples.
+// Order is never compared; length/membership/duplicate-count gaps on either
+// side are reported as explicit unknowns
+// (`config-warnings-membership-unknown`) because freshness is unknown.
+// Malformed SDK entries are reported as `config-warnings-shape-mismatch`,
+// never skipped silently. The request directory is never compared; the
+// private payload is the current directory instance snapshot with no
+// freshness claim. Failed-vs-failed status agreement holds with no content
+// comparison. Details carry fixed categories, counts, and booleans only.
 export function compareConfigWarningsParity(
   priv: ConfigWarningsResult,
   sdk: { data?: unknown; error?: unknown; response?: unknown },
 ): { divergence: string | null; details: Record<string, unknown> } {
-  const base = { ownerUnknown: true, freshnessUnknown: true, redactionUnknown: true, orderingUnknown: true }
+  const base = { directorySnapshot: true, freshnessUnknown: true, orderingUnknown: true }
   const privStatus: string = priv.status
   if (!!(priv as Record<string, unknown>).transportUnknown) {
     return { divergence: "transport-unknown", details: { privStatus, transportUnknown: true, ...base } }
@@ -492,11 +569,10 @@ export function compareConfigWarningsParity(
     const privWarnings = (priv as Extract<ConfigWarningsResult, { status: "succeeded" }>).data.warnings
     const sdkKeys: string[] = []
     for (const item of sdkRaw as unknown[]) {
-      try {
-        sdkKeys.push(configWarningKey(validateConfigWarning(item)))
-      } catch {
+      if (!isRawSdkWarning(item)) {
         return { divergence: "config-warnings-shape-mismatch", details: { ...base, mismatch: true } }
       }
+      sdkKeys.push(configWarningKey(projectConfigWarningToSafe(item.path, item.message)))
     }
     const privKeys = privWarnings.map((w) => configWarningKey(w))
     const privCounts = new Map<string, number>()
@@ -504,16 +580,16 @@ export function compareConfigWarningsParity(
     const sdkCounts = new Map<string, number>()
     for (const key of sdkKeys) sdkCounts.set(key, (sdkCounts.get(key) ?? 0) + 1)
     // Multiset comparison: membership AND duplicate-count gaps on either side
-    // are membership-unknowns (ownership/freshness unknown), never order.
+    // are membership-unknowns (freshness unknown), never order.
     for (const [key, privCount] of privCounts) {
       const sdkCount = sdkCounts.get(key) ?? 0
       if (sdkCount !== privCount) {
-        return { divergence: `config-warnings-membership-unknown:${key}`, details: { ...base, key, privCount, sdkCount } }
+        return { divergence: "config-warnings-membership-unknown", details: { ...base, privCount, sdkCount } }
       }
     }
     for (const [key, sdkCount] of sdkCounts) {
       if (!privCounts.has(key)) {
-        return { divergence: `config-warnings-membership-unknown:${key}`, details: { ...base, key, privCount: 0, sdkCount } }
+        return { divergence: "config-warnings-membership-unknown", details: { ...base, privCount: 0, sdkCount } }
       }
     }
     return { divergence: null, details: { ...base, compared: privWarnings.length } }

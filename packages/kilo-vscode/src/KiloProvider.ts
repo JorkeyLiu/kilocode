@@ -57,7 +57,11 @@ import { normalize, type SSEPayload, type SyncPayload, type WirePayload } from "
 import { isP0PerfEnabled, p0Stage, p0Webview } from "./perf/perf-instrument"
 import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
-import { renameSessionWithResult, buildSessionUpdateIdentity, buildSessionCreateIdentity } from "./kilo-provider/rename-session"
+import {
+  renameSessionWithResult,
+  buildSessionUpdateIdentity,
+  buildSessionCreateIdentity,
+} from "./kilo-provider/rename-session"
 import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
 import { observeSessionMessagesParityDetached } from "./kilo-provider/session-messages-parity"
 import { observeSessionListParityDetached } from "./kilo-provider/session-list-parity"
@@ -70,6 +74,7 @@ import { disposeGitChangesTarget } from "./kilo-provider/git-changes-target"
 import { interceptMessage } from "./kilo-provider/git-changes-request"
 import { matchFollowup, recordFollowup, type Followup } from "./kilo-provider/followup-session"
 import { clearCommandsCache, loadCommands } from "./kilo-provider/commands"
+import { observeConfigWarningsParity } from "./kilo-provider/config-warnings"
 import { fetchMessagePage, MESSAGE_PAGE_LIMIT } from "./kilo-provider/message-page"
 import { childID } from "./kilo-provider/task-session"
 import { VisibleTaskStreams } from "./kilo-provider/visible-task-streams"
@@ -1609,7 +1614,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         // SDK-first detached parity: SDK data stays authoritative; the private
         // `session/get` snapshot observes without mutating state or errors.
         try {
-          observeSessionGetParityDetached(this.connectionService, result as unknown as { data?: unknown }, sessionId, directory)
+          observeSessionGetParityDetached(
+            this.connectionService,
+            result as unknown as { data?: unknown },
+            sessionId,
+            directory,
+          )
         } catch (e) {
           console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
         }
@@ -2505,7 +2515,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         metadata = undefined
       }
       const res = (await this.client!.session.create(
-        { directory: workspaceDir, platform: this.opts.platform, metadata, opId, idempotencyKey, requestId, context: durableContext } as unknown as Record<string, unknown>,
+        {
+          directory: workspaceDir,
+          platform: this.opts.platform,
+          metadata,
+          opId,
+          idempotencyKey,
+          requestId,
+          context: durableContext,
+        } as unknown as Record<string, unknown>,
         { throwOnError: false } as unknown as { throwOnError: false },
       )) as unknown as { data?: Session; error?: unknown; response?: unknown }
       sdkResult = res
@@ -2531,7 +2549,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // SDK-first parity observation (fail-closed)
     try {
       if (!sdkResult) return
-      const isPrivateAvailable = (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
+      const isPrivateAvailable =
+        (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
       if (!isPrivateAvailable) return
       const hasTerminal = (() => {
         const resp = (sdkResult as unknown as { response?: { status?: unknown } })?.response
@@ -2557,8 +2576,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         }
         if (typeof err.message === "string" && /\b(400|404|409|500)\b/.test(err.message)) return true
         const tag = typeof err._tag === "string" ? String(err._tag).toLowerCase() : ""
-        if (tag.includes("badrequest") || tag.includes("notfound") || tag.includes("conflict") || tag.includes("internal")) return true
-        if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined") return false
+        if (
+          tag.includes("badrequest") ||
+          tag.includes("notfound") ||
+          tag.includes("conflict") ||
+          tag.includes("internal")
+        )
+          return true
+        if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined")
+          return false
         return false
       })()
       if (!hasTerminal) return
@@ -2583,17 +2609,39 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           if (timer) clearTimeout(timer)
         }) as Promise<T>
       }
-      const tryCancel = (this.connectionService as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean })?.tryCancelPrivatePending?.bind(this.connectionService) ?? null
-      const invalidate = (this.connectionService as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void })?.invalidatePrivatePeerOnObserverTimeout?.bind(this.connectionService) ?? null
-      const handleFactory = (this.connectionService as unknown as { privateCreateWithHandle?: (r: typeof privateReq) => { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } })?.privateCreateWithHandle?.bind(this.connectionService) ?? null
-      const peekNextId = (this.connectionService as unknown as { peekPrivatePeerNextId?: () => number | null })?.peekPrivatePeerNextId?.bind(this.connectionService) ?? null
+      const tryCancel =
+        (
+          this.connectionService as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean }
+        )?.tryCancelPrivatePending?.bind(this.connectionService) ?? null
+      const invalidate =
+        (
+          this.connectionService as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void }
+        )?.invalidatePrivatePeerOnObserverTimeout?.bind(this.connectionService) ?? null
+      const handleFactory =
+        (
+          this.connectionService as unknown as {
+            privateCreateWithHandle?: (r: typeof privateReq) => {
+              id: number
+              promise: Promise<unknown>
+              cancel?: (msg?: string) => boolean
+            }
+          }
+        )?.privateCreateWithHandle?.bind(this.connectionService) ?? null
+      const peekNextId =
+        (
+          this.connectionService as unknown as { peekPrivatePeerNextId?: () => number | null }
+        )?.peekPrivatePeerNextId?.bind(this.connectionService) ?? null
       // Atomic ownership: handle-allocated id eliminates peek-before-request race; fallback to peek for legacy mocks.
       let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } | null = null
       let exactId: number | null = null
       let privPromise: Promise<unknown>
       if (handleFactory) {
         try {
-          const h = handleFactory(privateReq as unknown as never) as { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }
+          const h = handleFactory(privateReq as unknown as never) as {
+            id: number
+            promise: Promise<unknown>
+            cancel?: (msg?: string) => boolean
+          }
           handle = h
           exactId = h.id
           privPromise = h.promise
@@ -2663,7 +2711,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       }
       try {
         const { compareCreateParity } = await import("./services/cli-backend/serve-private-peer")
-        const res = compareCreateParity(priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateCreateResult, sdkResult as unknown as { data?: unknown; error?: unknown; response?: unknown })
+        const res = compareCreateParity(
+          priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateCreateResult,
+          sdkResult as unknown as { data?: unknown; error?: unknown; response?: unknown },
+        )
         if (res.divergence) {
           console.warn("[Kilo Create] parity divergence", { opId, divergence: res.divergence, details: res.details })
         } else if ((priv as Record<string, unknown>).transportUnknown) {
@@ -2781,7 +2832,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           const meta = await this.client.session.get({ sessionID, directory: dir }, { throwOnError: true })
           if (!meta.data) throw new Error("Session metadata not found")
           try {
-            observeSessionGetParityDetached(this.connectionService, meta as unknown as { data?: unknown }, sessionID, dir)
+            observeSessionGetParityDetached(
+              this.connectionService,
+              meta as unknown as { data?: unknown },
+              sessionID,
+              dir,
+            )
           } catch (e) {
             console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
           }
@@ -2816,7 +2872,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           if (abort.signal.aborted) return false
           if (!meta.data) throw new Error("Session metadata not found")
           try {
-            observeSessionGetParityDetached(this.connectionService, meta as unknown as { data?: unknown }, sessionID, dir)
+            observeSessionGetParityDetached(
+              this.connectionService,
+              meta as unknown as { data?: unknown },
+              sessionID,
+              dir,
+            )
           } catch (e) {
             console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
           }
@@ -2831,13 +2892,17 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       }
     }
     const since = mode === "reconcile" ? Date.now() : undefined
-    const page = await fetchMessagePage(this.client, {
-      sessionID,
-      workspaceDir: dir,
-      limit: options.limit ?? MESSAGE_PAGE_LIMIT,
-      before: options.before,
-      signal: abort?.signal,
-    }, this.connectionService)
+    const page = await fetchMessagePage(
+      this.client,
+      {
+        sessionID,
+        workspaceDir: dir,
+        limit: options.limit ?? MESSAGE_PAGE_LIMIT,
+        before: options.before,
+        signal: abort?.signal,
+      },
+      this.connectionService,
+    )
     if (abort?.signal.aborted) return false
     if (!this.trackedSessionIds.has(sessionID)) return false
     const messages = page.items.map((m) => ({
@@ -2902,7 +2967,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               {},
             )
           } catch {
-            console.warn("[Kilo Messages] private parity observation failed (fail-closed):", { op: "session/messages", observationFailed: true })
+            console.warn("[Kilo Messages] private parity observation failed (fail-closed):", {
+              op: "session/messages",
+              observationFailed: true,
+            })
           }
           throw err
         },
@@ -2915,7 +2983,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       // SDK-authoritative and the observer never mutates state or errors.
       if (info.data) {
         try {
-          observeSessionGetParityDetached(this.connectionService, info as unknown as { data?: unknown }, sessionID, workspaceDir)
+          observeSessionGetParityDetached(
+            this.connectionService,
+            info as unknown as { data?: unknown },
+            sessionID,
+            workspaceDir,
+          )
         } catch (e) {
           console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
         }
@@ -2925,9 +2998,18 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       // Full load binds the exact empty query (no limit/before).
       if (history.data) {
         try {
-          observeSessionMessagesParityDetached(this.connectionService, history as unknown as { data?: unknown }, sessionID, workspaceDir, {})
+          observeSessionMessagesParityDetached(
+            this.connectionService,
+            history as unknown as { data?: unknown },
+            sessionID,
+            workspaceDir,
+            {},
+          )
         } catch {
-          console.warn("[Kilo Messages] private parity observation failed (fail-closed):", { op: "session/messages", observationFailed: true })
+          console.warn("[Kilo Messages] private parity observation failed (fail-closed):", {
+            op: "session/messages",
+            observationFailed: true,
+          })
         }
       }
       this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(info.data) })
@@ -2986,7 +3068,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               try {
                 observeSessionListParityDetached(
                   connection as unknown as Parameters<typeof observeSessionListParityDetached>[0],
-                  { data: result.data, response: result.response } as Parameters<typeof observeSessionListParityDetached>[1],
+                  { data: result.data, response: result.response } as Parameters<
+                    typeof observeSessionListParityDetached
+                  >[1],
                   directory,
                   undefined,
                   filter,
@@ -3004,7 +3088,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               try {
                 observeSessionListParityDetached(
                   connection as unknown as Parameters<typeof observeSessionListParityDetached>[0],
-                  { error, response: (error as { response?: unknown })?.response } as Parameters<typeof observeSessionListParityDetached>[1],
+                  { error, response: (error as { response?: unknown })?.response } as Parameters<
+                    typeof observeSessionListParityDetached
+                  >[1],
                   directory,
                   undefined,
                   filter,
@@ -3290,9 +3376,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     const svc = this.connectionService as unknown as {
       privateSessionUpdate: (req: typeof privateReq) => Promise<unknown>
-      privateSessionUpdateWithHandle?: (req: typeof privateReq) => { id: number; promise: Promise<unknown>; cancel: (msg?: string) => boolean }
+      privateSessionUpdateWithHandle?: (req: typeof privateReq) => {
+        id: number
+        promise: Promise<unknown>
+        cancel: (msg?: string) => boolean
+      }
     }
-    if (typeof svc.privateSessionUpdate !== "function" && typeof svc.privateSessionUpdateWithHandle !== "function") return
+    if (typeof svc.privateSessionUpdate !== "function" && typeof svc.privateSessionUpdateWithHandle !== "function")
+      return
     let priv: unknown
     try {
       const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
@@ -3305,16 +3396,38 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           if (timer) clearTimeout(timer)
         }) as Promise<T>
       }
-      const tryCancel = (this.connectionService as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean })?.tryCancelPrivatePending?.bind(this.connectionService) ?? null
-      const invalidate = (this.connectionService as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void })?.invalidatePrivatePeerOnObserverTimeout?.bind(this.connectionService) ?? null
-      const handleFactory = (this.connectionService as unknown as { privateSessionUpdateWithHandle?: (r: typeof privateReq) => { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } })?.privateSessionUpdateWithHandle?.bind(this.connectionService) ?? null
-      const peekNextId = (this.connectionService as unknown as { peekPrivatePeerNextId?: () => number | null })?.peekPrivatePeerNextId?.bind(this.connectionService) ?? null
+      const tryCancel =
+        (
+          this.connectionService as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean }
+        )?.tryCancelPrivatePending?.bind(this.connectionService) ?? null
+      const invalidate =
+        (
+          this.connectionService as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void }
+        )?.invalidatePrivatePeerOnObserverTimeout?.bind(this.connectionService) ?? null
+      const handleFactory =
+        (
+          this.connectionService as unknown as {
+            privateSessionUpdateWithHandle?: (r: typeof privateReq) => {
+              id: number
+              promise: Promise<unknown>
+              cancel?: (msg?: string) => boolean
+            }
+          }
+        )?.privateSessionUpdateWithHandle?.bind(this.connectionService) ?? null
+      const peekNextId =
+        (
+          this.connectionService as unknown as { peekPrivatePeerNextId?: () => number | null }
+        )?.peekPrivatePeerNextId?.bind(this.connectionService) ?? null
       let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } | null = null
       let exactId: number | null = null
       let privPromise: Promise<unknown>
       if (handleFactory) {
         try {
-          const h = handleFactory(privateReq as unknown as never) as { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }
+          const h = handleFactory(privateReq as unknown as never) as {
+            id: number
+            promise: Promise<unknown>
+            cancel?: (msg?: string) => boolean
+          }
           handle = h
           exactId = h.id
           privPromise = h.promise
@@ -3334,30 +3447,41 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               try {
                 handle.cancel(`private parity timeout opId=${privateReq.opId}`)
               } catch (err) {
-                console.warn("[Kilo PrivateParity] session/update handle.cancel failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+                console.warn("[Kilo PrivateParity] session/update handle.cancel failed:", String(err).slice(0, 200), {
+                  opId: privateReq.opId,
+                })
               }
             } else if (exactId !== null && tryCancel) {
               let cleaned = false
               try {
                 cleaned = tryCancel(exactId, `private parity timeout opId=${privateReq.opId}`)
               } catch (err) {
-                console.warn("[Kilo PrivateParity] session/update tryCancel failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+                console.warn("[Kilo PrivateParity] session/update tryCancel failed:", String(err).slice(0, 200), {
+                  opId: privateReq.opId,
+                })
               }
               if (!cleaned && invalidate) {
                 try {
                   invalidate(`session/update observer timeout opId=${privateReq.opId}`)
                 } catch (err) {
-                  console.warn("[Kilo PrivateParity] session/update invalidate failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+                  console.warn("[Kilo PrivateParity] session/update invalidate failed:", String(err).slice(0, 200), {
+                    opId: privateReq.opId,
+                  })
                 }
               }
             } else if (invalidate) {
               try {
                 invalidate(`session/update observer timeout opId=${privateReq.opId}`)
               } catch (err) {
-                console.warn("[Kilo PrivateParity] session/update invalidate failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+                console.warn("[Kilo PrivateParity] session/update invalidate failed:", String(err).slice(0, 200), {
+                  opId: privateReq.opId,
+                })
               }
             }
-            console.warn("[Kilo PrivateParity] session/update private parity timeout after 3000ms:", { opId: privateReq.opId, requestId: privateReq.requestId })
+            console.warn("[Kilo PrivateParity] session/update private parity timeout after 3000ms:", {
+              opId: privateReq.opId,
+              requestId: privateReq.requestId,
+            })
           }
           return {
             v: 1,
@@ -3380,20 +3504,28 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             try {
               handle.cancel(`private parity timeout opId=${privateReq.opId}`)
             } catch (err) {
-              console.warn("[Kilo PrivateParity] session/update handle.cancel failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+              console.warn("[Kilo PrivateParity] session/update handle.cancel failed:", String(err).slice(0, 200), {
+                opId: privateReq.opId,
+              })
             }
           } else if (exactId !== null && tryCancel) {
             try {
               const cleaned = tryCancel(exactId, `private parity timeout opId=${privateReq.opId}`)
               if (!cleaned && invalidate) invalidate(`session/update observer timeout opId=${privateReq.opId}`)
             } catch (err) {
-              console.warn("[Kilo PrivateParity] session/update timeout cancel failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+              console.warn("[Kilo PrivateParity] session/update timeout cancel failed:", String(err).slice(0, 200), {
+                opId: privateReq.opId,
+              })
             }
           } else if (invalidate) {
             try {
               invalidate(`session/update observer timeout opId=${privateReq.opId}`)
             } catch (err) {
-              console.warn("[Kilo PrivateParity] session/update timeout invalidate failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+              console.warn(
+                "[Kilo PrivateParity] session/update timeout invalidate failed:",
+                String(err).slice(0, 200),
+                { opId: privateReq.opId },
+              )
             }
           }
         }
@@ -3448,10 +3580,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
 
     try {
-      const saved = await exportTranscript(this.client, {
-        sessionID,
-        dir: this.getWorkspaceDirectory(sessionID),
-      }, this.connectionService)
+      const saved = await exportTranscript(
+        this.client,
+        {
+          sessionID,
+          dir: this.getWorkspaceDirectory(sessionID),
+        },
+        this.connectionService,
+      )
       if (saved) void vscode.window.showInformationMessage("Session transcript exported as Markdown.")
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to export session transcript:", error)
@@ -4304,16 +4440,29 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     try {
       const dir = this.getWorkspaceDirectory()
-      console.log("[Kilo New] KiloProvider: checking config warnings", { from, dir })
+      console.log("[Kilo New] KiloProvider: checking config warnings", { from })
       const result = await this.client.config.warnings({ directory: dir })
       const list = result?.data ?? []
       console.log("[Kilo New] KiloProvider: config warnings fetched", { from, count: list.length })
+      // Detached SDK-first private parity: SDK stays the sole authority.
+      // The observer is non-blocking and warn-only; it never touches the
+      // warning UI, the once-per-lifecycle flag, or error handling.
+      // The settled SDK error (if any) is forwarded so failed-vs-failed
+      // agreement holds; list stays `result.data ?? []` with UI unchanged.
+      observeConfigWarningsParity(
+        {
+          data: list,
+          error: (result as unknown as { error?: unknown })?.error,
+          response: (result as unknown as { response?: unknown })?.response,
+        },
+        dir,
+      )
       if (list.length === 0) return
       this.configWarningsShown = true
 
       const first = list[0]!
       const summary = list.length === 1 ? first.message : `${first.message} (and ${list.length - 1} more)`
-      console.warn("[Kilo New] KiloProvider: showing config warnings", { from, count: list.length, path: first.path })
+      console.warn("[Kilo New] KiloProvider: showing config warnings", { from, count: list.length })
 
       const action = await vscode.window.showWarningMessage(`Config: ${summary}`, "Show Details")
       if (action === "Show Details") {
@@ -4327,7 +4476,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         channel.show()
       }
     } catch (err) {
-      console.warn("[Kilo New] KiloProvider: checkConfigWarnings failed:", { from, err })
+      // Fail-closed redaction: the thrown SDK error may carry warning
+      // payload content, so only fixed fields are logged.
+      observeConfigWarningsParity({ error: err }, this.getWorkspaceDirectory())
+      console.warn("[Kilo New] KiloProvider: checkConfigWarnings failed:", { from, failed: true })
     }
   }
 
@@ -5458,7 +5610,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     const svc = this.connectionService as unknown as {
       privateCancelQueued: (req: typeof privateReq) => Promise<unknown>
-      privateCancelQueuedWithHandle?: (req: typeof privateReq) => { id: number; promise: Promise<unknown>; cancel: (msg?: string) => boolean }
+      privateCancelQueuedWithHandle?: (req: typeof privateReq) => {
+        id: number
+        promise: Promise<unknown>
+        cancel: (msg?: string) => boolean
+      }
     }
     if (typeof svc.privateCancelQueued !== "function" && typeof svc.privateCancelQueuedWithHandle !== "function") return
     let priv: unknown
@@ -5473,16 +5629,38 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           if (timer) clearTimeout(timer)
         }) as Promise<T>
       }
-      const tryCancel = (this.connectionService as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean })?.tryCancelPrivatePending?.bind(this.connectionService) ?? null
-      const invalidate = (this.connectionService as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void })?.invalidatePrivatePeerOnObserverTimeout?.bind(this.connectionService) ?? null
-      const handleFactory = (this.connectionService as unknown as { privateCancelQueuedWithHandle?: (r: typeof privateReq) => { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } })?.privateCancelQueuedWithHandle?.bind(this.connectionService) ?? null
-      const peekNextId = (this.connectionService as unknown as { peekPrivatePeerNextId?: () => number | null })?.peekPrivatePeerNextId?.bind(this.connectionService) ?? null
+      const tryCancel =
+        (
+          this.connectionService as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean }
+        )?.tryCancelPrivatePending?.bind(this.connectionService) ?? null
+      const invalidate =
+        (
+          this.connectionService as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void }
+        )?.invalidatePrivatePeerOnObserverTimeout?.bind(this.connectionService) ?? null
+      const handleFactory =
+        (
+          this.connectionService as unknown as {
+            privateCancelQueuedWithHandle?: (r: typeof privateReq) => {
+              id: number
+              promise: Promise<unknown>
+              cancel?: (msg?: string) => boolean
+            }
+          }
+        )?.privateCancelQueuedWithHandle?.bind(this.connectionService) ?? null
+      const peekNextId =
+        (
+          this.connectionService as unknown as { peekPrivatePeerNextId?: () => number | null }
+        )?.peekPrivatePeerNextId?.bind(this.connectionService) ?? null
       let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } | null = null
       let exactId: number | null = null
       let privPromise: Promise<unknown>
       if (handleFactory) {
         try {
-          const h = handleFactory(privateReq as unknown as never) as { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }
+          const h = handleFactory(privateReq as unknown as never) as {
+            id: number
+            promise: Promise<unknown>
+            cancel?: (msg?: string) => boolean
+          }
           handle = h
           exactId = h.id
           privPromise = h.promise
@@ -5502,30 +5680,41 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               try {
                 handle.cancel(`private parity timeout opId=${privateReq.opId}`)
               } catch (err) {
-                console.warn("[Kilo PrivateParity] cancelQueued handle.cancel failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+                console.warn("[Kilo PrivateParity] cancelQueued handle.cancel failed:", String(err).slice(0, 200), {
+                  opId: privateReq.opId,
+                })
               }
             } else if (exactId !== null && tryCancel) {
               let cleaned = false
               try {
                 cleaned = tryCancel(exactId, `private parity timeout opId=${privateReq.opId}`)
               } catch (err) {
-                console.warn("[Kilo PrivateParity] cancelQueued tryCancel failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+                console.warn("[Kilo PrivateParity] cancelQueued tryCancel failed:", String(err).slice(0, 200), {
+                  opId: privateReq.opId,
+                })
               }
               if (!cleaned && invalidate) {
                 try {
                   invalidate(`cancelQueued observer timeout opId=${privateReq.opId}`)
                 } catch (err) {
-                  console.warn("[Kilo PrivateParity] cancelQueued invalidate failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+                  console.warn("[Kilo PrivateParity] cancelQueued invalidate failed:", String(err).slice(0, 200), {
+                    opId: privateReq.opId,
+                  })
                 }
               }
             } else if (invalidate) {
               try {
                 invalidate(`cancelQueued observer timeout opId=${privateReq.opId}`)
               } catch (err) {
-                console.warn("[Kilo PrivateParity] cancelQueued invalidate failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+                console.warn("[Kilo PrivateParity] cancelQueued invalidate failed:", String(err).slice(0, 200), {
+                  opId: privateReq.opId,
+                })
               }
             }
-            console.warn("[Kilo PrivateParity] cancelQueued private parity timeout after 3000ms:", { opId: privateReq.opId, requestId: privateReq.requestId })
+            console.warn("[Kilo PrivateParity] cancelQueued private parity timeout after 3000ms:", {
+              opId: privateReq.opId,
+              requestId: privateReq.requestId,
+            })
           }
           return {
             v: 1,
@@ -5548,20 +5737,26 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             try {
               handle.cancel(`private parity timeout opId=${privateReq.opId}`)
             } catch (err) {
-              console.warn("[Kilo PrivateParity] cancelQueued handle.cancel failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+              console.warn("[Kilo PrivateParity] cancelQueued handle.cancel failed:", String(err).slice(0, 200), {
+                opId: privateReq.opId,
+              })
             }
           } else if (exactId !== null && tryCancel) {
             try {
               const cleaned = tryCancel(exactId, `private parity timeout opId=${privateReq.opId}`)
               if (!cleaned && invalidate) invalidate(`cancelQueued observer timeout opId=${privateReq.opId}`)
             } catch (err) {
-              console.warn("[Kilo PrivateParity] cancelQueued timeout cancel failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+              console.warn("[Kilo PrivateParity] cancelQueued timeout cancel failed:", String(err).slice(0, 200), {
+                opId: privateReq.opId,
+              })
             }
           } else if (invalidate) {
             try {
               invalidate(`cancelQueued observer timeout opId=${privateReq.opId}`)
             } catch (err) {
-              console.warn("[Kilo PrivateParity] cancelQueued timeout invalidate failed:", String(err).slice(0, 200), { opId: privateReq.opId })
+              console.warn("[Kilo PrivateParity] cancelQueued timeout invalidate failed:", String(err).slice(0, 200), {
+                opId: privateReq.opId,
+              })
             }
           }
         }

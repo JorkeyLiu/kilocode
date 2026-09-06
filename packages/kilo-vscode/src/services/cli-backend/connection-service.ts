@@ -42,6 +42,8 @@ import { DeferredPath, wrapPathOutcomeForOwner } from "./serve-private-path"
 import type { PathContractRequest, PathWireOutcome } from "./serve-private-path-contract"
 import { DeferredCommandList, wrapCommandListOutcomeForOwner } from "./serve-private-command-list"
 import type { CommandListContractRequest, CommandListWireOutcome } from "./serve-private-command-list-contract"
+import { DeferredConfigWarnings, wrapConfigWarningsOutcomeForOwner } from "./serve-private-config-warnings"
+import type { ConfigWarningsContractRequest, ConfigWarningsWireOutcome } from "./serve-private-config-warnings-contract"
 import * as crypto from "crypto"
 import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-children"
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
@@ -197,6 +199,9 @@ export class KiloConnectionService {
   private readonly deferredRemoteStatus: DeferredRemoteStatus = new DeferredRemoteStatus(this.privateAvailableListeners)
   private readonly deferredPath: DeferredPath = new DeferredPath(this.privateAvailableListeners)
   private readonly deferredCommandList: DeferredCommandList = new DeferredCommandList(this.privateAvailableListeners)
+  private readonly deferredConfigWarnings: DeferredConfigWarnings = new DeferredConfigWarnings(
+    this.privateAvailableListeners,
+  )
   /**
    * Definitively failed private get epoch (B6 LOCK-005/012): set only when
    * the current backend epoch's negotiation definitively fails (explicit
@@ -758,6 +763,7 @@ export class KiloConnectionService {
     this.deferredRemoteStatus.clearAll()
     this.deferredPath.clearAll()
     this.deferredCommandList.clearAll()
+    this.deferredConfigWarnings.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -806,6 +812,7 @@ export class KiloConnectionService {
     this.deferredRemoteStatus.clearAll()
     this.deferredPath.clearAll()
     this.deferredCommandList.clearAll()
+    this.deferredConfigWarnings.clearAll()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -839,7 +846,9 @@ export class KiloConnectionService {
     const server = await this.serverManager.getServer()
     if (this.isDisposed || this.connectGeneration !== generation) {
       // Prevent post-dispose installation; clean up freshly acquired server resources
-      try { server.process.exitCode === null ? this.serverManager.dispose() : null } catch {}
+      try {
+        server.process.exitCode === null ? this.serverManager.dispose() : null
+      } catch {}
       throw new Error("connect superseded after getServer")
     }
     this.info = { port: server.port }
@@ -861,7 +870,9 @@ export class KiloConnectionService {
     })
     const sse = new SdkSSEAdapter(client)
     if (this.isDisposed || this.connectGeneration !== generation) {
-      try { sse.dispose() } catch {}
+      try {
+        sse.dispose()
+      } catch {}
       throw new Error("connect superseded before client install")
     }
     this.client = client
@@ -922,7 +933,9 @@ export class KiloConnectionService {
 
     await connectedPromise
     if (this.isDisposed || this.connectGeneration !== generation) {
-      try { sse.dispose() } catch {}
+      try {
+        sse.dispose()
+      } catch {}
       if (this.sseClient === sse) this.sseClient = null
       if (this.client === client) this.client = null
       this.info = null
@@ -930,7 +943,9 @@ export class KiloConnectionService {
       throw new Error("connect superseded before private peer init")
     }
 
-    void this.initPrivatePeer(server, generation).catch((err) => console.warn("[Kilo] PrivatePeer init failed:", String(err)))
+    void this.initPrivatePeer(server, generation).catch((err) =>
+      console.warn("[Kilo] PrivatePeer init failed:", String(err)),
+    )
 
     if (this.isDisposed || this.connectGeneration !== generation) return
     this.startCheckin()
@@ -988,7 +1003,12 @@ export class KiloConnectionService {
     const childrenSafe = reason.startsWith("children ")
     const remoteSafe = reason.startsWith("remote-status ")
     const pathSafe = reason.startsWith("path ")
-    const messagesSafe = ["observer timeout cancel throw", "observer timeout exact cancel miss", "messages observer timeout"].includes(reason)
+    const warningsSafe = reason.startsWith("config-warnings ")
+    const messagesSafe = [
+      "observer timeout cancel throw",
+      "observer timeout exact cancel miss",
+      "messages observer timeout",
+    ].includes(reason)
     if (childrenSafe) {
       console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "session/children", invalidated: true })
       try {
@@ -1009,6 +1029,13 @@ export class KiloConnectionService {
         peer.invalidateOnObserverTimeout(reason)
       } catch {
         console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "path/get", invalidateFailed: true })
+      }
+    } else if (warningsSafe) {
+      console.warn(`[Kilo] PrivatePeer observer timeout invalidates:`, { op: "config/warnings", invalidated: true })
+      try {
+        peer.invalidateOnObserverTimeout(reason)
+      } catch {
+        console.warn("[Kilo] invalidateOnObserverTimeout failed:", { op: "config/warnings", invalidateFailed: true })
       }
     } else if (messagesSafe) {
       console.warn(`[Kilo] PrivatePeer observer timeout invalidates epoch:`, {
@@ -1041,6 +1068,7 @@ export class KiloConnectionService {
     this.deferredRemoteStatus.clearAll()
     this.deferredPath.clearAll()
     this.deferredCommandList.clearAll()
+    this.deferredConfigWarnings.clearAll()
   }
 
   /**
@@ -1176,7 +1204,8 @@ export class KiloConnectionService {
       canonical = dir
     }
     const limitPart = limit === undefined ? "none" : String(limit)
-    const beforePart = before === undefined ? "none" : `h-${crypto.createHash("sha256").update(before, "utf8").digest("hex")}`
+    const beforePart =
+      before === undefined ? "none" : `h-${crypto.createHash("sha256").update(before, "utf8").digest("hex")}`
     return `messages:${this.privateEpoch ?? "none"}:${canonical}:${sessionId}:${limitPart}:${beforePart}`
   }
 
@@ -1192,7 +1221,13 @@ export class KiloConnectionService {
    * when negotiation for its epoch definitively fails / is superseded /
    * the connection resets / disposes / invalidates.
    */
-  addDeferredMessagesObserver(dir: string, sessionId: string, limit: number | undefined, before: string | undefined, listener: () => void): () => void {
+  addDeferredMessagesObserver(
+    dir: string,
+    sessionId: string,
+    limit: number | undefined,
+    before: string | undefined,
+    listener: () => void,
+  ): () => void {
     if (this.privateEpoch === null) return () => {}
     if (this.privateFailedGetEpoch !== null && this.privateEpoch === this.privateFailedGetEpoch) return () => {}
     // Availability-aware registration (LOCK-B7-002 race closure): when the
@@ -1253,6 +1288,12 @@ export class KiloConnectionService {
   /** One-shot deferred command-list observation; dedupe/lifecycle live in DeferredCommandList. */
   addDeferredCommandListObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
     const store = this.deferredCommandList
+    return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
+  }
+
+  /** One-shot deferred config-warnings observation; dedupe/lifecycle live in DeferredConfigWarnings. */
+  addDeferredConfigWarningsObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
+    const store = this.deferredConfigWarnings
     return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
   }
 
@@ -1321,6 +1362,7 @@ export class KiloConnectionService {
       this.deferredRemoteStatus.clearForEpoch(staleEpoch)
       this.deferredPath.clearForEpoch(staleEpoch)
       this.deferredCommandList.clearForEpoch(staleEpoch)
+      this.deferredConfigWarnings.clearForEpoch(staleEpoch)
     }
     if (this.privatePeer === peer) {
       this.privatePeer = null
@@ -1345,6 +1387,7 @@ export class KiloConnectionService {
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
     this.deferredPath.clearForEpoch(epochAtStart)
     this.deferredCommandList.clearForEpoch(epochAtStart)
+    this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     return true
   }
 
@@ -1388,6 +1431,7 @@ export class KiloConnectionService {
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
     this.deferredPath.clearForEpoch(epochAtStart)
     this.deferredCommandList.clearForEpoch(epochAtStart)
+    this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
 
@@ -1434,6 +1478,7 @@ export class KiloConnectionService {
       this.deferredRemoteStatus.clearForEpoch(server.epoch)
       this.deferredPath.clearForEpoch(server.epoch)
       this.deferredCommandList.clearForEpoch(server.epoch)
+      this.deferredConfigWarnings.clearForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
     }
@@ -1479,7 +1524,11 @@ export class KiloConnectionService {
     return this.privatePid
   }
 
-  privateCancelQueuedWithHandle(req: ServePrivateCancelQueuedRequest): { id: number; promise: Promise<ServePrivateCancelQueuedResult>; cancel: (msg?: string) => boolean } {
+  privateCancelQueuedWithHandle(req: ServePrivateCancelQueuedRequest): {
+    id: number
+    promise: Promise<ServePrivateCancelQueuedResult>
+    cancel: (msg?: string) => boolean
+  } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -1548,7 +1597,11 @@ export class KiloConnectionService {
     return handle.promise
   }
 
-  privateSessionUpdateWithHandle(req: ServePrivateSessionUpdateRequest): { id: number; promise: Promise<ServePrivateSessionUpdateResult>; cancel: (msg?: string) => boolean } {
+  privateSessionUpdateWithHandle(req: ServePrivateSessionUpdateRequest): {
+    id: number
+    promise: Promise<ServePrivateSessionUpdateResult>
+    cancel: (msg?: string) => boolean
+  } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -1620,7 +1673,11 @@ export class KiloConnectionService {
     return handle.promise
   }
 
-  privateForkWithHandle(req: ServePrivateForkRequest): { id: number; promise: Promise<ServePrivateForkResult>; cancel: (msg?: string) => boolean } {
+  privateForkWithHandle(req: ServePrivateForkRequest): {
+    id: number
+    promise: Promise<ServePrivateForkResult>
+    cancel: (msg?: string) => boolean
+  } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -1692,7 +1749,11 @@ export class KiloConnectionService {
     return handle.promise
   }
 
-  privateCreateWithHandle(req: ServePrivateCreateRequest): { id: number; promise: Promise<ServePrivateCreateResult>; cancel: (msg?: string) => boolean } {
+  privateCreateWithHandle(req: ServePrivateCreateRequest): {
+    id: number
+    promise: Promise<ServePrivateCreateResult>
+    cancel: (msg?: string) => boolean
+  } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -1764,7 +1825,11 @@ export class KiloConnectionService {
     return handle.promise
   }
 
-  privateStatusWithHandle(req: ServePrivateStatusRequest): { id: number; promise: Promise<ServePrivateStatusResult>; cancel: (msg?: string) => boolean } {
+  privateStatusWithHandle(req: ServePrivateStatusRequest): {
+    id: number
+    promise: Promise<ServePrivateStatusResult>
+    cancel: (msg?: string) => boolean
+  } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -1976,7 +2041,11 @@ export class KiloConnectionService {
     return handle.promise
   }
 
-  privateGetWithHandle(req: ServePrivateGetRequest): { id: number; promise: Promise<ServePrivateGetResult>; cancel: (msg?: string) => boolean } {
+  privateGetWithHandle(req: ServePrivateGetRequest): {
+    id: number
+    promise: Promise<ServePrivateGetResult>
+    cancel: (msg?: string) => boolean
+  } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -2183,7 +2252,11 @@ export class KiloConnectionService {
     return handle.promise
   }
 
-  privateMessagesWithHandle(req: ServePrivateMessagesRequest): { id: number; promise: Promise<ServePrivateMessagesResult>; cancel: (msg?: string) => boolean } {
+  privateMessagesWithHandle(req: ServePrivateMessagesRequest): {
+    id: number
+    promise: Promise<ServePrivateMessagesResult>
+    cancel: (msg?: string) => boolean
+  } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -2466,6 +2539,33 @@ export class KiloConnectionService {
     )
   }
 
+  /** Epoch-aware pass-through for the read-only config-warnings parity observer. */
+  privateConfigWarningsOutcomeWithHandle(req: ConfigWarningsContractRequest): {
+    id: number
+    promise: Promise<ConfigWarningsWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("config/warnings")) {
+      throw new Error("Private peer missing config/warnings capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    return wrapConfigWarningsOutcomeForOwner(
+      {
+        epochAtCall,
+        isCurrent: () => this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      (id, msg) => peerAtCall.tryCancelPending(id, msg),
+      () => peerAtCall.invalidateOnObserverTimeout("config-warnings stale observer timeout"),
+      peerAtCall.privateConfigWarningsOutcomeWithHandle(req),
+      req,
+    )
+  }
+
   privateChildrenOutcomeWithHandle(req: ServePrivateChildrenRequest): {
     id: number
     promise: Promise<PrivateChildrenWireOutcome>
@@ -2494,7 +2594,11 @@ export class KiloConnectionService {
     return handle.promise
   }
 
-  privateRemoteStatusWithHandle(req: ServePrivateRemoteStatusRequest): { id: number; promise: Promise<ServePrivateRemoteStatusResult>; cancel: (msg?: string) => boolean | "stale" } {
+  privateRemoteStatusWithHandle(req: ServePrivateRemoteStatusRequest): {
+    id: number
+    promise: Promise<ServePrivateRemoteStatusResult>
+    cancel: (msg?: string) => boolean | "stale"
+  } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }
@@ -2547,7 +2651,11 @@ export class KiloConnectionService {
     return { id: handle.id, promise, cancel: wrapped.cancel }
   }
 
-  privateRemoteStatusOutcomeWithHandle(req: ServePrivateRemoteStatusRequest): { id: number; promise: Promise<PrivateRemoteStatusWireOutcome>; cancel: (msg?: string) => PrivateStatusObserverCancelResult } {
+  privateRemoteStatusOutcomeWithHandle(req: ServePrivateRemoteStatusRequest): {
+    id: number
+    promise: Promise<PrivateRemoteStatusWireOutcome>
+    cancel: (msg?: string) => PrivateStatusObserverCancelResult
+  } {
     if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
       throw new Error("Private peer unavailable")
     }

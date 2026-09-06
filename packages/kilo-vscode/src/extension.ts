@@ -20,6 +20,7 @@ import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
 import { setPathParityConnection } from "./kilo-provider/model-state"
 import { setCommandListParityConnection } from "./kilo-provider/commands"
+import { setConfigWarningsParityConnection } from "./kilo-provider/config-warnings"
 import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
@@ -193,6 +194,11 @@ export function activate(context: vscode.ExtensionContext) {
   // existing SDK consumer (`kilo-provider/commands.ts` loadCommands). Same
   // authority/observer contract as the path boundary.
   setCommandListParityConnection(connectionService)
+  // Detached SDK-first `config/warnings` parity boundary for the narrowest
+  // existing SDK consumer (`KiloProvider.checkConfigWarnings`). Same
+  // authority/observer contract: SDK stays the sole user-visible authority
+  // and the private path is warn-only observation of safe categories.
+  setConfigWarningsParityConnection(connectionService)
 
   const unsubscribeStateChange = connectionService.onStateChange((state) => {
     if (state === "connected") {
@@ -739,6 +745,7 @@ export async function deactivate() {
   shuttingDown = true
   setPathParityConnection(null)
   setCommandListParityConnection(null)
+  setConfigWarningsParityConnection(null)
   await agentManager?.shutdown()
   TelemetryProxy.getInstance().shutdown()
 }
