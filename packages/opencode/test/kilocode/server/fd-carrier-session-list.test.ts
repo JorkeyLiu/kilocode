@@ -600,6 +600,101 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
     }),
   )
 
+  it.live("archived:true stays isolated across directories", () =>
+    Effect.gen(function* () {
+      const restoreParentPid = ownParentPid()
+      try {
+        const tmpA = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const tmpB = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const dirA = tmpA.path
+        const dirB = tmpB.path
+        const canonA = canonicalDirectory(dirA)
+        const canonB = canonicalDirectory(dirB)
+        const store = yield* InstanceStore.Service
+        const ctxA = yield* store.load({ directory: dirA })
+        const ctxB = yield* store.load({ directory: dirB })
+        const captured = yield* Effect.context()
+        const runA = scoped(ctxA, captured)
+        const runB = scoped(ctxB, captured)
+        const plainA = yield* runA(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-arch-iso-plainA" })
+          }),
+        )
+        const archivedA = yield* runA(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-arch-iso-archivedA" })
+          }),
+        )
+        yield* runA(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.setArchived({ sessionID: archivedA.id, time: Date.now() })
+          }),
+        )
+        const plainB = yield* runB(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-arch-iso-plainB" })
+          }),
+        )
+        const archivedB = yield* runB(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-arch-iso-archivedB" })
+          }),
+        )
+        yield* runB(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.setArchived({ sessionID: archivedB.id, time: Date.now() })
+          }),
+        )
+        const { carrier, ext } = linked()
+        try {
+          yield* Effect.promise(() => init(ext))
+          const resA = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dirA, "arch-iso-a", { requestId: "req-arch-iso-a", payload: { filter: { archived: true } } }),
+              ),
+            ),
+          )
+          expect(resA.status).toBe("succeeded")
+          const idsA = (resA.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
+          expect(idsA.includes(archivedA.id)).toBeTrue()
+          expect(idsA.includes(plainA.id)).toBeTrue()
+          expect(idsA.includes(archivedB.id)).toBeFalse()
+          expect(idsA.includes(plainB.id)).toBeFalse()
+          for (const s of (resA.data?.sessions ?? []).map(summaryOf)) expect(s.directory).toBe(canonA)
+          const resB = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dirB, "arch-iso-b", { requestId: "req-arch-iso-b", payload: { filter: { archived: true } } }),
+              ),
+            ),
+          )
+          expect(resB.status).toBe("succeeded")
+          const idsB = (resB.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
+          expect(idsB.includes(archivedB.id)).toBeTrue()
+          expect(idsB.includes(plainB.id)).toBeTrue()
+          expect(idsB.includes(archivedA.id)).toBeFalse()
+          expect(idsB.includes(plainA.id)).toBeFalse()
+          for (const s of (resB.data?.sessions ?? []).map(summaryOf)) expect(s.directory).toBe(canonB)
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        restoreParentPid()
+      }
+    }),
+  )
+
   it.live("filter search and roots stay isolated across directories", () =>
     Effect.gen(function* () {
       const restoreParentPid = ownParentPid()
