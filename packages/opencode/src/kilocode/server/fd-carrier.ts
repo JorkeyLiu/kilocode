@@ -21,6 +21,9 @@ import { GenerationGate } from "@/kilocode/server/generation-gate"
 import { InstanceRef } from "@/effect/instance-ref"
 import { KiloSessions } from "@/kilo-sessions/kilo-sessions"
 import { Global } from "@opencode-ai/core/global"
+import { FileSystem } from "@opencode-ai/core/filesystem"
+import { LocationServiceMap } from "@opencode-ai/core/location-layer"
+import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Command } from "@/command"
 import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
@@ -92,6 +95,8 @@ export const FD_CONFIG_WARNINGS_VERSION = 1 as const
 export const FD_CONFIG_WARNINGS_OP = "config/warnings" as const
 export const FD_PROJECT_CURRENT_VERSION = 1 as const
 export const FD_PROJECT_CURRENT_OP = "project/current" as const
+export const FD_FIND_FILES_VERSION = 1 as const
+export const FD_FIND_FILES_OP = "find/files" as const
 
 export interface FdPathRequest {
   v: typeof FD_PATH_VERSION
@@ -143,6 +148,23 @@ export interface FdProjectCurrentRequest {
     workspace?: string
   }
   payload: Record<string, never>
+}
+
+export interface FdFindFilesRequest {
+  v: typeof FD_FIND_FILES_VERSION
+  requestId: string
+  opId: string
+  op: typeof FD_FIND_FILES_OP
+  idempotencyKey: string
+  context: {
+    directory: string
+    workspace?: string
+  }
+  payload: {
+    query: string
+    type: "file" | "directory"
+    limit?: number
+  }
 }
 
 export interface FdSessionListRequest {
@@ -1039,6 +1061,142 @@ const PROJECT_CURRENT_FENCE_MESSAGE =
   "Instance is unavailable during config rebuild; no active runtime for this request"
 const PROJECT_CURRENT_INTERNAL_MESSAGE = "internal error"
 const PROJECT_CURRENT_VALIDATION_MESSAGE = "invalid project-current request"
+
+function findFilesFailed(
+  req: { requestId: string; opId: string; idempotencyKey: string },
+  code: string,
+  message: string,
+  retryable: boolean,
+): Record<string, unknown> {
+  const time = Date.now()
+  const failure = { code, message, retryable }
+  return {
+    v: FD_FIND_FILES_VERSION,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: FD_FIND_FILES_OP,
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time, failure },
+    accepted: false,
+    failure,
+  }
+}
+
+function fallbackFindFilesIds(raw: unknown): { requestId: string; opId: string; idempotencyKey: string } {
+  const o = (isRecord(raw) ? raw : {}) as Record<string, unknown>
+  return {
+    requestId: sanitizePathId(o.requestId),
+    opId: sanitizePathId(o.opId),
+    idempotencyKey: sanitizePathId(o.idempotencyKey),
+  }
+}
+
+function safeFindFilesIdentities(req: { requestId: string; opId: string; idempotencyKey: string }): {
+  requestId: string
+  opId: string
+  idempotencyKey: string
+} {
+  return {
+    requestId: sanitizePathId(req.requestId),
+    opId: sanitizePathId(req.opId),
+    idempotencyKey: sanitizePathId(req.idempotencyKey),
+  }
+}
+
+const FIND_FILES_QUERY_MAX = 256
+const FIND_FILES_LIMIT_MIN = 1
+const FIND_FILES_LIMIT_MAX = 50
+const FIND_FILES_RESULTS_MAX = 50
+const FIND_FILES_FENCE_MESSAGE = "Instance is unavailable during config rebuild; no active runtime for this request"
+const FIND_FILES_INTERNAL_MESSAGE = "internal error"
+const FIND_FILES_VALIDATION_MESSAGE = "invalid find-files request"
+const FIND_FILES_SCOPE_MESSAGE = "directory mismatch"
+
+const FIND_FILES_SENSITIVE_SEGMENTS = new Set([".ssh", ".aws", "secret", "secrets"])
+const FIND_FILES_SENSITIVE_EXTENSIONS = new Set(["pem", "key", "p12", "pfx", "cer", "crt", "der", "jks"])
+
+export function isSensitiveFindFilesPath(rel: string): boolean {
+  const lower = rel.toLowerCase()
+  const segs = lower.split("/")
+  for (const seg of segs) {
+    if (FIND_FILES_SENSITIVE_SEGMENTS.has(seg)) return true
+  }
+  const base = segs[segs.length - 1]!
+  if (base === ".env") return true
+  if (base.startsWith(".env.") && base !== ".env.example") return true
+  const dot = base.lastIndexOf(".")
+  if (dot >= 0 && dot < base.length - 1) {
+    const ext = base.slice(dot + 1)
+    if (FIND_FILES_SENSITIVE_EXTENSIONS.has(ext)) return true
+  }
+  return false
+}
+
+export function validateFindFilesRelPath(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0) throw new Error("find-files path must be non-empty string")
+  if (raw.includes("\0")) throw new Error("find-files path must not contain NUL")
+  if (raw.includes("\\")) throw new Error("find-files path must be POSIX-normalized")
+  if (raw.includes(":")) throw new Error("find-files path must not carry URI or drive material")
+  if (raw.startsWith("/")) throw new Error("find-files path must be relative")
+  if (raw.includes("://")) throw new Error("find-files path must not carry URI material")
+  const segs = raw.split("/")
+  for (const seg of segs) {
+    if (seg.length === 0) throw new Error("find-files path must be normalized")
+    if (seg === "." || seg === "..") throw new Error("find-files path must not escape")
+  }
+  if (isSensitiveFindFilesPath(raw)) throw new Error("find-files path is sensitive")
+  return raw
+}
+
+function validateFindFilesRequest(raw: unknown): FdFindFilesRequest {
+  if (!isRecord(raw)) throw new Error("params must be object")
+  if (raw.v !== FD_FIND_FILES_VERSION) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== FD_FIND_FILES_OP) throw new Error("op must be find/files")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for find-files")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  const allowedCtx = new Set(["directory", "workspace"])
+  for (const k of Object.keys(ctx)) if (!allowedCtx.has(k)) throw new Error("unexpected context field")
+  if (typeof ctx.directory !== "string" || ctx.directory.length === 0)
+    throw new Error("context.directory must be non-empty string")
+  canonicalDirectory(ctx.directory)
+  if (ctx.workspace !== undefined) {
+    if (typeof ctx.workspace !== "string" || ctx.workspace.length === 0 || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
+  }
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  const allowedPayload = new Set(["query", "type", "limit"])
+  for (const k of Object.keys(payload)) if (!allowedPayload.has(k)) throw new Error("unexpected payload field")
+  const rec = payload as Record<string, unknown>
+  if (typeof rec.query !== "string" || rec.query.length === 0) throw new Error("payload.query must be non-empty string")
+  if (rec.query.length > FIND_FILES_QUERY_MAX) throw new Error("payload.query must be at most 256 characters")
+  if ((rec.query as string).includes("\0")) throw new Error("payload.query must not contain NUL")
+  if (rec.type !== "file" && rec.type !== "directory") throw new Error("payload.type must be file or directory")
+  if (rec.limit !== undefined) {
+    if (typeof rec.limit !== "number" || !Number.isInteger(rec.limit)) throw new Error("payload.limit must be integer")
+    if ((rec.limit as number) < FIND_FILES_LIMIT_MIN || (rec.limit as number) > FIND_FILES_LIMIT_MAX)
+      throw new Error("payload.limit must be 1..50")
+  }
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw)) if (!allowedRoot.has(k)) throw new Error("unexpected field")
+  if (containsPathMaterial(raw.requestId as string))
+    throw new Error("requestId must be non-empty string without path material")
+  if (containsPathMaterial(raw.idempotencyKey as string))
+    throw new Error("idempotencyKey must be non-empty string without path material")
+  const opId = raw.opId as string
+  const segs = opId.split(":")
+  if (segs.length !== 2 || segs[0] !== "find-files" || segs[1]!.length === 0)
+    throw new Error("opId must be find-files:<token> with nonempty colon-free token")
+  const token = segs[1] as string
+  if (token.includes(":") || containsPathMaterial(token))
+    throw new Error("opId must be find-files:<token> with nonempty colon-free token")
+  return raw as unknown as FdFindFilesRequest
+}
 
 export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.WritableStream): FdCarrierHandle {
   // Ensure streams are flowing
@@ -2131,6 +2289,130 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               }),
               Effect.catchDefect(() => {
                 return Effect.succeed(projectCurrentFailed(safe, "internal", PROJECT_CURRENT_INTERNAL_MESSAGE, false))
+              }),
+            )
+          }),
+        )
+        return result
+      }
+      if (method === "find/files") {
+        // Find-files bounded read: routing directory/workspace identity via the
+        // existing drain-control + InstanceRef lane (same lane as path/get,
+        // command/list, config/warnings, project/current — no new lifecycle
+        // lane, fence, transport, or timeout), then the natural production
+        // source FileSystem.Service.find with explicit type and bounded limit
+        // through its location scope. Success projects only relative POSIX
+        // {path,type} entries: invalid or sensitive names are dropped silently
+        // without logging, rejection, refetch, or fill; output caps at 50.
+        // Failures are fixed and redacted with sanitized identities.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            let req: FdFindFilesRequest
+            try {
+              req = validateFindFilesRequest(params)
+            } catch {
+              return findFilesFailed(
+                fallbackFindFilesIds(params),
+                "validation.failed",
+                FIND_FILES_VALIDATION_MESSAGE,
+                false,
+              )
+            }
+            const safe = safeFindFilesIdentities(req)
+            let dir: string
+            try {
+              dir = canonicalDirectory(req.context.directory)
+            } catch {
+              return findFilesFailed(safe, "validation.failed", FIND_FILES_VALIDATION_MESSAGE, false)
+            }
+            if (req.context.workspace !== undefined) {
+              const ws = req.context.workspace
+              if (typeof ws !== "string" || ws.length === 0 || ws.includes("\0"))
+                return findFilesFailed(safe, "validation.failed", FIND_FILES_VALIDATION_MESSAGE, false)
+            }
+            const query = req.payload.query
+            const type = req.payload.type
+            const limit = req.payload.limit ?? FIND_FILES_RESULTS_MAX
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => {
+                const fence =
+                  err instanceof InstanceUnavailableDuringConfigRebuildError ||
+                  (err as { _tag?: string })?._tag === "InstanceUnavailableDuringConfigRebuild"
+                const code = fence ? "InstanceUnavailableDuringConfigRebuild" : "internal"
+                const message = fence ? FIND_FILES_FENCE_MESSAGE : FIND_FILES_INTERNAL_MESSAGE
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: findFilesFailed(safe, code, message, fence),
+                })
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed({
+                  tag: "fail" as const,
+                  result: findFilesFailed(safe, "internal", FIND_FILES_INTERNAL_MESSAGE, false),
+                })
+              }),
+            )
+            if (acquired.tag !== "ok") return acquired.result
+            const inner = Effect.gen(function* () {
+              let stored: string
+              try {
+                stored = canonicalDirectory(acquired.value.ctx.directory)
+              } catch {
+                return findFilesFailed(safe, "internal", FIND_FILES_INTERNAL_MESSAGE, false)
+              }
+              if (stored !== dir) return findFilesFailed(safe, "scope_mismatch", FIND_FILES_SCOPE_MESSAGE, false)
+              const found = yield* Effect.gen(function* () {
+                const locations = yield* LocationServiceMap
+                const layer = locations.get({ directory: AbsolutePath.make(dir) })
+                return yield* FileSystem.Service.use((svc) => svc.find({ query, type, limit })).pipe(
+                  Effect.provide(layer),
+                )
+              }).pipe(
+                Effect.provide(LocationServiceMap.layer),
+                Effect.map((v) => ({ tag: "ok" as const, value: v })),
+                Effect.catch(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+                Effect.catchDefect(() => {
+                  return Effect.succeed({ tag: "fail" as const })
+                }),
+              )
+              if (found.tag !== "ok") return findFilesFailed(safe, "internal", FIND_FILES_INTERNAL_MESSAGE, false)
+              const raw = found.value
+              if (!Array.isArray(raw)) return findFilesFailed(safe, "internal", FIND_FILES_INTERNAL_MESSAGE, false)
+              const files: Array<{ path: string; type: "file" | "directory" }> = []
+              for (const item of raw) {
+                if (files.length >= FIND_FILES_RESULTS_MAX) break
+                const p = (item as { path?: unknown }).path
+                const t = (item as { type?: unknown }).type
+                if (typeof p !== "string" || (t !== "file" && t !== "directory")) continue
+                if (t !== type) continue
+                try {
+                  validateFindFilesRelPath(p)
+                } catch {
+                  continue
+                }
+                files.push({ path: p, type: t })
+              }
+              return {
+                v: FD_FIND_FILES_VERSION,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: FD_FIND_FILES_OP,
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: Date.now() },
+                accepted: true,
+                data: { files: files.slice(0, FIND_FILES_RESULTS_MAX) },
+              }
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner.pipe(
+              Effect.catch(() => {
+                return Effect.succeed(findFilesFailed(safe, "internal", FIND_FILES_INTERNAL_MESSAGE, false))
+              }),
+              Effect.catchDefect(() => {
+                return Effect.succeed(findFilesFailed(safe, "internal", FIND_FILES_INTERNAL_MESSAGE, false))
               }),
             )
           }),

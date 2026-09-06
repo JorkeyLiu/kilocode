@@ -21,6 +21,7 @@ export const FD_CAPABILITIES = [
   "command/list",
   "config/warnings",
   "project/current",
+  "find/files",
 ] as const
 
 export interface FdInitializeParams {
