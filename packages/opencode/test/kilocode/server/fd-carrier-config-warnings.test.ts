@@ -16,6 +16,7 @@ import { canonicalDirectory } from "../../../src/kilocode/session/canonical-dire
 import { InstanceStore } from "../../../src/project/instance-store"
 import { InstanceRef } from "../../../src/effect/instance-ref"
 import type { InstanceContext } from "../../../src/project/instance-context"
+import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
 import { runInInstance } from "../../../src/kilocode/effect/als-bridge"
 import { testEffectShared } from "../../lib/effect"
 import { tmpdir, disposeAllInstances } from "../../fixture/fixture"
@@ -154,6 +155,12 @@ function capabilitiesOf(v: unknown): string[] {
 function failureCodeOf(v: ConfigWarningsResult): string | undefined {
   if (typeof v.failure?.code === "string") return v.failure.code
   if (typeof v.outcome?.failure?.code === "string") return v.outcome.failure.code
+  return undefined
+}
+
+function retryableOf(v: ConfigWarningsResult): boolean | undefined {
+  if (typeof v.failure?.retryable === "boolean") return v.failure.retryable
+  if (typeof v.outcome?.failure?.retryable === "boolean") return v.outcome.failure.retryable
   return undefined
 }
 
@@ -644,6 +651,61 @@ describe("fd-carrier config/warnings (parity-only read)", () => {
           const wire = JSON.stringify(second)
           expect(wire.includes(dir)).toBeFalse()
           expect(wire.includes("broken2.md")).toBeFalse()
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        restoreParentPid()
+      }
+    }),
+  )
+
+  it.live("active fence maps to retryable InstanceUnavailableDuringConfigRebuild then recovers after release", () =>
+    Effect.gen(function* () {
+      const restoreParentPid = ownParentPid()
+      try {
+        const fenceTmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const fenceDir = fenceTmp.path
+        const gate = yield* GenerationGate.Service
+        const ticket = yield* gate.beginFence(fenceDir)
+        try {
+          const { carrier, ext } = linked()
+          try {
+            yield* Effect.promise(() => init(ext))
+            const res = asConfigWarningsResult(
+              yield* Effect.promise(() =>
+                ext.request("config/warnings", warningsReq(fenceDir, "fence-tok", { requestId: "req-fence" })),
+              ),
+            )
+            expect(res.status).toBe("failed")
+            expect(res.accepted).toBeFalse()
+            expect(failureCodeOf(res)).toBe("InstanceUnavailableDuringConfigRebuild")
+            expect(retryableOf(res)).toBeTrue()
+            expect(res.data).toBeUndefined()
+            expect(messageOf(res).length).toBeLessThanOrEqual(200)
+            const wire = JSON.stringify(res)
+            expect(wire.includes(fenceDir)).toBeFalse()
+          } finally {
+            carrier.dispose()
+            ext.dispose()
+          }
+        } finally {
+          yield* ticket.release.pipe(Effect.ignore)
+        }
+        const { carrier, ext } = linked()
+        try {
+          yield* Effect.promise(() => init(ext))
+          const second = asConfigWarningsResult(
+            yield* Effect.promise(() =>
+              ext.request("config/warnings", warningsReq(fenceDir, "fence-after", { requestId: "req-fence-after" })),
+            ),
+          )
+          expect(second.status).toBe("succeeded")
+          expect(second.accepted).toBeTrue()
+          expect(second.opId).toBe("config-warnings:fence-after")
+          expect(second.idempotencyKey).toBe("config-warnings:fence-after")
+          for (const e of second.data?.warnings ?? []) safeKeyOf(e)
         } finally {
           carrier.dispose()
           ext.dispose()
