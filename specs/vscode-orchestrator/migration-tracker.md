@@ -401,6 +401,16 @@ This subsection applies only to this VS Code orchestrator migration (future P4.4
 - Create a migration commit when the batch produces a recognizable behavior change, materially advances a row/gate, or completes a cohesive residual package.
 - Existing tracker write rules, evidence requirements, and architecture/quality gates remain authoritative.
 
+### 9.2 Adaptive development, live state, and commit boundary (migration-scoped working convention, not repository-wide Git policy)
+
+- This migration follows `adaptive-development`: intended outcome is anchor; current evidence and remaining gap choose next step; implementation, tests, evidence, generated artifacts, validation co-evolve.
+- Tracker is mutable live-state index recording current capability, blocking gap, constraints, open irreversible decisions, next increment; not chronological activity log, not durable target semantics/spec owner.
+- Default commit boundary is one cohesive behavior/residual boundary; related production implementation, focused tests, generated artifacts, required evidence, tracker state normally evolve in same implementation batch.
+- Investigation/audit/validation do not automatically produce independent commit; working tree may remain uncommitted until cohesive batch completes.
+- A specialist session, single test, or isolated investigation, audit, or validation result is not an automatic commit boundary.
+- Independent decision record, rollback boundary, safety fix, independent residual boundary may commit separately; this is migration-specific working convention, not repository-wide Git policy.
+- Document responsibility boundary: direction docs own target semantics/constraints; evidence docs own detailed proof; tracker owns current state/pointers; Git commits own review/rollback boundary.
+
 ## 10. Archive Map
 
 What moved to [archive/migration-tracker-history-2026-08-28.md](archive/migration-tracker-history-2026-08-28.md) (verbatim, 1,879 lines):
