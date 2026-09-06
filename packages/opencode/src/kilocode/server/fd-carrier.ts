@@ -37,25 +37,42 @@ export interface FdCarrierHandle {
   dispose: () => void
 }
 
-function hasFd(fd: number): boolean {
+export function isSocketStat(stat: unknown): boolean {
   try {
-    fs.fstatSync(fd)
-    return true
-  } catch (err) {
-    console.warn("[kilo fd-carrier] hasFd check failed for", fd, String(err))
+    const s = stat as { isSocket?: unknown }
+    if (typeof s?.isSocket !== "function") return false
+    return (s.isSocket as () => unknown)() === true
+  } catch {
     return false
   }
+}
+
+export function isFdCarrierSocketEligible(stat3: unknown, stat4: unknown, platform: string): boolean {
+  if (platform === "win32") return true
+  if (platform === "darwin" || platform === "linux") return isSocketStat(stat3) && isSocketStat(stat4)
+  console.warn("[kilo fd-carrier] unsupported platform, failing closed:", String(platform))
+  return false
+}
+
+function carrierPlatform(deps?: { platform?: unknown }): string {
+  const p = deps?.platform
+  if (typeof p === "string" && p.length > 0) return p
+  return process.platform
 }
 
 export function canUseFdCarrier(): boolean {
   const envOk = !!process.env.KILO_PARENT_PID || process.env.KILO_CLIENT === "vscode"
   if (!envOk) return false
-  // Bun keeps fd 3 open as FIFO even without extra pipes — guard by requiring both 3 and 4
-  // and that they are not the internal Bun FIFO without peer fd4.
-  // Detection: require fstat 3 and 4 both succeed.
+  // Darwin/Linux: Bun keeps fd 3 open as FIFO and fd 4 as socket even
+  // without ServerManager pipes — require both fds to be sockets.
+  // Windows: retain existence gate until real Windows fd evidence exists.
   try {
-    fs.fstatSync(3)
-    fs.fstatSync(4)
+    const s3 = fs.fstatSync(3)
+    const s4 = fs.fstatSync(4)
+    if (!isFdCarrierSocketEligible(s3, s4, process.platform)) {
+      console.warn("[kilo fd-carrier] canUse check failed: fd3/fd4 are not both sockets")
+      return false
+    }
     return true
   } catch (err) {
     console.warn("[kilo fd-carrier] canUse check failed:", String(err))
@@ -2483,18 +2500,19 @@ export interface FdCarrierDeps {
   fstatSync: (fd: number) => unknown
   createReadStream: (path: unknown, opts: unknown) => NodeJS.ReadableStream
   createWriteStream: (path: unknown, opts: unknown) => NodeJS.WritableStream
+  platform?: string
 }
 
 export function tryStartFdCarrierWithDeps(deps: FdCarrierDeps): FdCarrierHandle | null {
   if (!canUseFdCarrierWithDeps(deps)) return null
   let reader: NodeJS.ReadableStream | null = null
+  let writer: NodeJS.WritableStream | null = null
   try {
     if (!hasFdWithDeps(3, deps) || !hasFdWithDeps(4, deps)) return null
     reader = deps.createReadStream(
       null as unknown as string,
       { fd: 3, autoClose: false } as unknown as Record<string, unknown>,
     ) as unknown as NodeJS.ReadableStream
-    let writer: NodeJS.WritableStream
     try {
       writer = deps.createWriteStream(
         null as unknown as string,
@@ -2514,14 +2532,25 @@ export function tryStartFdCarrierWithDeps(deps: FdCarrierDeps): FdCarrierHandle 
   } catch (err) {
     console.warn("[kilo fd-carrier] tryStart failed:", String(err))
     if (reader) bestEffortClose(reader, "reader-startup-cleanup")
+    if (writer) bestEffortClose(writer, "writer-startup-cleanup")
     return null
   }
 }
 
 function hasFdWithDeps(fd: number, deps: FdCarrierDeps): boolean {
   try {
-    deps.fstatSync(fd)
-    return true
+    const stat = deps.fstatSync(fd)
+    const p = carrierPlatform(deps)
+    if (p === "win32") return true
+    if (p === "darwin" || p === "linux") {
+      if (!isSocketStat(stat)) {
+        console.warn("[kilo fd-carrier] hasFd check failed for", fd, "not a socket")
+        return false
+      }
+      return true
+    }
+    console.warn("[kilo fd-carrier] hasFd check failed for", fd, "unsupported platform", String(p))
+    return false
   } catch (err) {
     console.warn("[kilo fd-carrier] hasFd check failed for", fd, String(err))
     return false
@@ -2532,8 +2561,12 @@ function canUseFdCarrierWithDeps(deps: FdCarrierDeps): boolean {
   const envOk = !!process.env.KILO_PARENT_PID || process.env.KILO_CLIENT === "vscode"
   if (!envOk) return false
   try {
-    deps.fstatSync(3)
-    deps.fstatSync(4)
+    const s3 = deps.fstatSync(3)
+    const s4 = deps.fstatSync(4)
+    if (!isFdCarrierSocketEligible(s3, s4, carrierPlatform(deps))) {
+      console.warn("[kilo fd-carrier] canUse check failed: fd3/fd4 are not both sockets")
+      return false
+    }
     return true
   } catch (err) {
     console.warn("[kilo fd-carrier] canUse check failed:", String(err))
