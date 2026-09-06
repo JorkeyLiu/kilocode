@@ -2,6 +2,9 @@ import { afterEach, describe, expect } from "bun:test"
 import path from "path"
 import { PassThrough } from "stream"
 import { Context, Effect } from "effect"
+import { eq } from "drizzle-orm"
+import { Database } from "@opencode-ai/core/database/database"
+import { SessionTable } from "@opencode-ai/core/session/sql"
 import { JsonRpcPeer } from "../../../src/private-worker/peer"
 import { ErrorCode } from "../../../src/private-worker/json-rpc"
 import { createFdCarrier } from "../../../src/kilocode/server/fd-carrier"
@@ -427,6 +430,93 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
           expect(created.sort()).toEqual([...page1summaries, ...page2summaries].map((s) => s.id).sort())
           // Exhausted: no further cursor.
           expect(page2.data?.nextCursor).toBeUndefined()
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        restoreParentPid()
+      }
+    }),
+  )
+
+  it.live("timestamp tie group with timestamp-only cursor records current observed continuation (characterization only)", () =>
+    Effect.gen(function* () {
+      // Characterization-only: records the currently observable continuation when
+      // every row in one tie group shares the same time.updated and the carrier
+      // emits a timestamp-only nextCursor. This is not a desired ordering or
+      // pagination contract, and it does not assert that any observed skip is
+      // correct or incorrect.
+      const restoreParentPid = ownParentPid()
+      try {
+        const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const dir = tmp.path
+        const canon = canonicalDirectory(dir)
+        const store = yield* InstanceStore.Service
+        const ctx = yield* store.load({ directory: dir })
+        const captured = yield* Effect.context()
+        const run = scoped(ctx, captured)
+        const created: string[] = []
+        for (const title of ["carrier-list-tie-1", "carrier-list-tie-2", "carrier-list-tie-3"]) {
+          const info = yield* run(
+            Effect.gen(function* () {
+              const svc = yield* Session.Service
+              return yield* svc.create({ title })
+            }),
+          )
+          created.push(info.id)
+        }
+        const pinned = 1700000000000
+        yield* run(
+          Effect.gen(function* () {
+            const { db } = yield* Database.Service
+            for (const id of created) {
+              yield* db.update(SessionTable).set({ time_updated: pinned }).where(eq(SessionTable.id, id)).run().pipe(Effect.orDie)
+            }
+          }),
+        )
+        const { carrier, ext } = linked()
+        try {
+          yield* Effect.promise(() => init(ext))
+          const page1 = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dir, "tie-p1", { requestId: "req-tie-p1", payload: { filter: { limit: 2 } } }),
+              ),
+            ),
+          )
+          expect(page1.status).toBe("succeeded")
+          expect(page1.data?.sessions.length).toBe(2)
+          const cursor = page1.data?.nextCursor
+          expect(typeof cursor).toBe("number")
+          expect(cursor).toBe(pinned)
+          const page1summaries = (page1.data?.sessions ?? []).map(summaryOf)
+          for (const s of page1summaries) {
+            expect(s.directory).toBe(canon)
+            expect(s.updated).toBe(pinned)
+          }
+          const page1ids = page1summaries.map((s) => s.id)
+          const page2 = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dir, "tie-p2", { requestId: "req-tie-p2", payload: { filter: { limit: 2, cursor } } }),
+              ),
+            ),
+          )
+          expect(page2.status).toBe("succeeded")
+          const page2summaries = (page2.data?.sessions ?? []).map(summaryOf)
+          // Currently observed: the timestamp-only cursor filters with
+          // time_updated < cursor, so no tie-group remainder is returned.
+          // Recorded as observed behavior only, not as a correctness claim.
+          expect(page2summaries.length).toBe(0)
+          expect(page2.data?.nextCursor).toBeUndefined()
+          const page1set = new Set(page1ids)
+          for (const s of page2summaries) {
+            expect(page1set.has(s.id)).toBeFalse()
+            expect(s.directory).toBe(canon)
+          }
         } finally {
           carrier.dispose()
           ext.dispose()
