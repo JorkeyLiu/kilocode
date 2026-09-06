@@ -152,6 +152,29 @@ describe("session-list connection-service owner", () => {
     service.dispose()
   })
 
+  test("current-epoch cancel throw fail-closed invalidates the owner peer", () => {
+    const service = makeService()
+    const req = sessionListReq()
+    let invalidated: string[] = []
+    const origInvalidate = service.invalidatePrivatePeerOnObserverTimeout.bind(service)
+    ;(service as unknown as Record<string, unknown>).invalidatePrivatePeerOnObserverTimeout = (r: string) => {
+      invalidated.push(r)
+      origInvalidate(r)
+    }
+    const peer = {
+      ...fakePeer(null),
+      tryCancelPending: () => {
+        throw new Error("cancel boom")
+      },
+    }
+    installPeer(service, peer, { epoch: 7 })
+    const handle = service.privateSessionListOutcomeWithHandle(req as never)
+    expect(handle.cancel()).toBeFalse()
+    expect(invalidated).toHaveLength(1)
+    expect((service as unknown as Record<string, unknown>).privatePeer).toBeNull()
+    service.dispose()
+  })
+
   test("dispose clears the owner peer without retaining observers", () => {
     const service = makeService()
     installPeer(service, fakePeer(null), { epoch: 7 })
