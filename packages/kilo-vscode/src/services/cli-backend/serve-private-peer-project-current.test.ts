@@ -19,6 +19,8 @@ import {
   PROJECT_CURRENT_TRANSPORT_FAILURE_MESSAGE,
   requestProjectCurrentOutcome,
 } from "./serve-private-project-current"
+import { hasGit, setProjectCurrentParityConnection } from "../../kilo-provider/git-status"
+import { KiloConnectionService } from "./connection-service"
 
 function createLinkedChannel(handler: (method: string, params: unknown) => unknown | Promise<unknown>) {
   const toClient = new PassThrough()
@@ -463,6 +465,207 @@ describe("project-current vcs-only private peer", () => {
       expect(wire.includes("/tmp")).toBe(false)
     } finally {
       console.warn = origWarn
+    }
+  })
+
+  test("elapsed observer timeout cancels the exact pending with epoch isolation and warn-only SDK preservation", async () => {
+    const warns: unknown[][] = []
+    const orig = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    const { clientReader, clientWriter, backendPeer } = createLinkedChannel(() => new Promise<unknown>(() => {}))
+    const peer = new ServePrivatePeer({ reader: clientReader, writer: clientWriter, epoch: 5 })
+    ;(peer as unknown as Record<string, unknown>).available = true
+    ;(peer as unknown as Record<string, unknown>).peer = new JsonRpcPeer({ reader: clientReader, writer: clientWriter })
+    ;(peer as unknown as Record<string, unknown>).capabilities = ["project/current"]
+    const unrelatedReq = makeReq({
+      requestId: "r-unrelated",
+      opId: canonicalProjectCurrentOpId("tok2"),
+      idempotencyKey: canonicalProjectCurrentOpId("tok2"),
+    })
+    const unrelated = peer.privateProjectCurrentOutcomeWithHandle(unrelatedReq as never)
+    const unrelatedId = unrelated.id
+    const seen: number[] = []
+    const ids: number[] = []
+    let at = 0
+    const conn: ProjectCurrentParityConnection = {
+      isPrivateAvailable: () => peer.isAvailable(),
+      privateProjectCurrentOutcomeWithHandle: (req) => {
+        const handle = peer.privateProjectCurrentOutcomeWithHandle(req as never)
+        seen.push(handle.id)
+        const origCancel = handle.cancel
+        return {
+          id: handle.id,
+          promise: handle.promise,
+          cancel: (msg?: string) => {
+            at = performance.now()
+            ids.push(handle.id)
+            return origCancel(msg)
+          },
+        }
+      },
+      getPrivateEpoch: () => peer.getEpoch(),
+    }
+    const sdk = sdkSuccess({ vcs: "git" })
+    const before = JSON.stringify(sdk)
+    const timeout = 60
+    const start = performance.now()
+    try {
+      const ret = observeProjectCurrentParityDetached(conn, sdk as never, "/tmp", undefined, timeout)
+      expect(ret).toBeUndefined()
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(peer.getPendingCount()).toBe(2)
+      expect(seen).toHaveLength(1)
+      const observedId = seen[0]
+      expect(observedId).not.toBe(unrelatedId)
+      await new Promise((r) => setTimeout(r, 350))
+      const elapsed = at - start
+      expect(ids).toHaveLength(1)
+      expect(ids[0]).toBe(observedId)
+      expect(ids[0]).not.toBe(unrelatedId)
+      expect(elapsed).toBeGreaterThanOrEqual(timeout)
+      expect(elapsed).toBeLessThan(2000)
+      expect(peer.getPendingCount()).toBe(1)
+      expect(peer.isAvailable()).toBeTrue()
+      expect(JSON.stringify(sdk)).toBe(before)
+      const wire = JSON.stringify(warns)
+      expect(wire.includes(`private parity timeout after ${timeout}ms`)).toBeTrue()
+      expect(wire.includes("/tmp")).toBeFalse()
+      expect(wire.includes("vcs")).toBeFalse()
+      setProjectCurrentParityConnection(conn)
+      const git = { project: { current: async () => ({ data: { vcs: "git" } }) } }
+      const gitStart = performance.now()
+      expect(await hasGit(git as never, "/tmp")).toBeTrue()
+      expect(performance.now() - gitStart).toBeLessThan(1000)
+      expect(peer.getPendingCount()).toBe(2)
+      expect(seen).toHaveLength(2)
+      const nogit = { project: { current: async () => ({ data: {} }) } }
+      expect(await hasGit(nogit as never, "/tmp")).toBeFalse()
+      const failing = {
+        project: {
+          current: async () => {
+            throw new Error("boom")
+          },
+        },
+      }
+      expect(await hasGit(failing as never, "/tmp")).toBeFalse()
+      expect(ids).toHaveLength(1)
+      expect(ids[0]).toBe(observedId)
+      expect(peer.isAvailable()).toBeTrue()
+      expect(unrelated.cancel()).toBeTrue()
+      expect(peer.getPendingCount()).toBe(2)
+    } finally {
+      setProjectCurrentParityConnection(null)
+      console.warn = orig
+      peer.dispose()
+      backendPeer.dispose()
+      clientReader.destroy()
+      clientWriter.destroy()
+    }
+  })
+
+  test("project-current owner cancel miss/throw and stale isolation run through production owner/peer seam", async () => {
+    const warns: unknown[][] = []
+    const orig = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    const install = (svc: KiloConnectionService, peer: ServePrivatePeer, epoch: number) => {
+      ;(svc as unknown as Record<string, unknown>).privatePeer = peer
+      ;(svc as unknown as Record<string, unknown>).privateAvailable = true
+      ;(svc as unknown as Record<string, unknown>).privateEpoch = epoch
+      ;(svc as unknown as Record<string, unknown>).privateFailedGetEpoch = null
+    }
+    const setupPeer = (epoch: number) => {
+      const chan = createLinkedChannel(() => new Promise<unknown>(() => {}))
+      const peer = new ServePrivatePeer({ reader: chan.clientReader, writer: chan.clientWriter, epoch })
+      ;(peer as unknown as Record<string, unknown>).available = true
+      ;(peer as unknown as Record<string, unknown>).peer = new JsonRpcPeer({
+        reader: chan.clientReader,
+        writer: chan.clientWriter,
+      })
+      ;(peer as unknown as Record<string, unknown>).capabilities = ["project/current"]
+      return { chan, peer }
+    }
+    const missChan = createLinkedChannel(() => new Promise<unknown>(() => {}))
+    const missPeer = new ServePrivatePeer({ reader: missChan.clientReader, writer: missChan.clientWriter, epoch: 7 })
+    ;(missPeer as unknown as Record<string, unknown>).available = true
+    ;(missPeer as unknown as Record<string, unknown>).peer = new JsonRpcPeer({
+      reader: missChan.clientReader,
+      writer: missChan.clientWriter,
+    })
+    ;(missPeer as unknown as Record<string, unknown>).capabilities = ["project/current"]
+    const missSvc = new KiloConnectionService({} as never)
+    const throwSetup = setupPeer(7)
+    const throwSvc = new KiloConnectionService({} as never)
+    const staleSetup = setupPeer(7)
+    const replacementSetup = setupPeer(8)
+    const staleSvc = new KiloConnectionService({} as never)
+    try {
+      install(missSvc, missPeer, 7)
+      const missHandle = missSvc.privateProjectCurrentOutcomeWithHandle(makeReq() as never)
+      expect(missHandle.cancel()).toBe(true)
+      expect((missSvc as unknown as Record<string, unknown>).privatePeer).not.toBeNull()
+      expect(missPeer.isAvailable()).toBeTrue()
+      expect(missHandle.cancel()).toBe(false)
+      expect((missSvc as unknown as Record<string, unknown>).privatePeer).toBeNull()
+      expect((missSvc as unknown as Record<string, unknown>).privateAvailable).toBeFalse()
+      expect((missSvc as unknown as Record<string, unknown>).privateEpoch).toBeNull()
+      expect(missPeer.isAvailable()).toBeFalse()
+
+      install(throwSvc, throwSetup.peer, 7)
+      ;(throwSetup.peer as unknown as Record<string, (id: number, msg?: string) => boolean>).tryCancelPending = () => {
+        throw new Error("cancel boom")
+      }
+      const throwHandle = throwSvc.privateProjectCurrentOutcomeWithHandle(makeReq() as never)
+      expect(throwHandle.cancel()).toBe(false)
+      expect((throwSvc as unknown as Record<string, unknown>).privatePeer).toBeNull()
+      expect((throwSvc as unknown as Record<string, unknown>).privateAvailable).toBeFalse()
+      expect((throwSvc as unknown as Record<string, unknown>).privateEpoch).toBeNull()
+      expect(throwSetup.peer.isAvailable()).toBeFalse()
+
+      install(staleSvc, staleSetup.peer, 7)
+      const staleHandle = staleSvc.privateProjectCurrentOutcomeWithHandle(makeReq() as never)
+      install(staleSvc, replacementSetup.peer, 8)
+      const keepReq = makeReq({
+        requestId: "r-keep",
+        opId: canonicalProjectCurrentOpId("tok3"),
+        idempotencyKey: canonicalProjectCurrentOpId("tok3"),
+      })
+      const keepHandle = staleSvc.privateProjectCurrentOutcomeWithHandle(keepReq as never)
+      expect(staleHandle.cancel()).toBe("stale")
+      expect(staleSetup.peer.isAvailable()).toBeFalse()
+      expect((staleSvc as unknown as Record<string, unknown>).privatePeer).toBe(replacementSetup.peer)
+      expect((staleSvc as unknown as Record<string, unknown>).privateEpoch).toBe(8)
+      expect(replacementSetup.peer.isAvailable()).toBeTrue()
+      expect(replacementSetup.peer.getPendingCount()).toBe(1)
+      expect(keepHandle.cancel()).toBeTrue()
+      expect(replacementSetup.peer.getPendingCount()).toBe(0)
+      const wire = JSON.stringify(warns)
+      expect(wire.includes("project/current")).toBeTrue()
+      expect(wire.includes("/tmp")).toBeFalse()
+    } finally {
+      console.warn = orig
+      missSvc.dispose()
+      throwSvc.dispose()
+      staleSvc.dispose()
+      missPeer.dispose()
+      throwSetup.peer.dispose()
+      staleSetup.peer.dispose()
+      replacementSetup.peer.dispose()
+      missChan.backendPeer.dispose()
+      missChan.clientReader.destroy()
+      missChan.clientWriter.destroy()
+      throwSetup.chan.backendPeer.dispose()
+      throwSetup.chan.clientReader.destroy()
+      throwSetup.chan.clientWriter.destroy()
+      staleSetup.chan.backendPeer.dispose()
+      staleSetup.chan.clientReader.destroy()
+      staleSetup.chan.clientWriter.destroy()
+      replacementSetup.chan.backendPeer.dispose()
+      replacementSetup.chan.clientReader.destroy()
+      replacementSetup.chan.clientWriter.destroy()
     }
   })
 
