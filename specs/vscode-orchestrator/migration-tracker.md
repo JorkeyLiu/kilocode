@@ -4,6 +4,8 @@
 
 Purpose and maintenance rules:
 
+> Guiding principle — this migration follows `adaptive-development`: keep the intended outcome as the anchor, let the current evidence and remaining gap determine the next step, and evolve implementation, tests, evidence, generated artifacts, and validation together.
+
 - This tracker is the mutable current-state index; linked evidence/ADRs/specs are the durable sources of truth.
 - No phase, row, or decision is marked `Complete` without objective evidence recorded as an explicit pointer (`issue: #NNN`, `PR: #NNN`, `test: <path>`, `doc: <path>`). A checkbox without a pointer is not evidence.
 - No technical narrative duplication: this index links to evidence; it does not retell it. Performance claims require objective evidence.
@@ -401,15 +403,12 @@ This subsection applies only to this VS Code orchestrator migration (future P4.4
 - Create a migration commit when the batch produces a recognizable behavior change, materially advances a row/gate, or completes a cohesive residual package.
 - Existing tracker write rules, evidence requirements, and architecture/quality gates remain authoritative.
 
-### 9.2 Adaptive development, live state, and commit boundary (migration-scoped working convention, not repository-wide Git policy)
+### 9.2 Migration-scoped commit boundary (not repository-wide Git policy)
 
-- This migration follows `adaptive-development`: intended outcome is anchor; current evidence and remaining gap choose next step; implementation, tests, evidence, generated artifacts, validation co-evolve.
-- Tracker is mutable live-state index recording current capability, blocking gap, constraints, open irreversible decisions, next increment; not chronological activity log, not durable target semantics/spec owner.
-- Default commit boundary is one cohesive behavior/residual boundary; related production implementation, focused tests, generated artifacts, required evidence, tracker state normally evolve in same implementation batch.
-- Investigation/audit/validation do not automatically produce independent commit; working tree may remain uncommitted until cohesive batch completes.
-- A specialist session, single test, or isolated investigation, audit, or validation result is not an automatic commit boundary.
-- Independent decision record, rollback boundary, safety fix, independent residual boundary may commit separately; this is migration-specific working convention, not repository-wide Git policy.
-- Document responsibility boundary: direction docs own target semantics/constraints; evidence docs own detailed proof; tracker owns current state/pointers; Git commits own review/rollback boundary.
+- Default commit boundary is one cohesive behavior/residual boundary; related implementation, focused tests, generated artifacts, required evidence, and tracker state normally evolve in the same batch.
+- Investigation, audit, validation, a specialist session, a single test, or an isolated result does not automatically form a commit boundary; the working tree may remain uncommitted until the cohesive batch completes.
+- An independent decision record, rollback boundary, safety fix, or independent residual boundary may commit separately.
+- This is a migration-scoped working convention, not repository-wide Git policy.
 
 ## 10. Archive Map
 
