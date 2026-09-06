@@ -5,20 +5,19 @@ import { ServePrivatePeer } from "./serve-private-peer"
 import {
   canonicalSessionListOpId,
   compareSessionListParity,
+  encodeSessionListCursor,
   normalizePrivateSessionListWire,
   validateSessionListContractRequest as validateSessionListRequest,
   validateSessionListResult,
 } from "./serve-private-session-list-contract"
+const OPAQUE = (updated = 7, id = "ses_abc"): string => encodeSessionListCursor(updated, id)
 import {
   buildSessionListIdentity,
   observeSessionListParityDetached,
   sdkSessionListHasTerminal,
   type SessionListParityConnection,
 } from "../../kilo-provider/session-list-parity"
-import {
-  requestSessionListOutcome,
-  SESSION_LIST_TRANSPORT_FAILURE_MESSAGE,
-} from "./serve-private-session-list"
+import { requestSessionListOutcome, SESSION_LIST_TRANSPORT_FAILURE_MESSAGE } from "./serve-private-session-list"
 
 function createLinkedChannel(handler: (method: string, params: unknown) => unknown | Promise<unknown>) {
   const toClient = new PassThrough()
@@ -34,7 +33,7 @@ function createLinkedChannel(handler: (method: string, params: unknown) => unkno
 function makeReq(over: Record<string, unknown> = {}) {
   const opId = canonicalSessionListOpId("tok1")
   return {
-    v: 1 as const,
+    v: 2 as const,
     requestId: "r1",
     opId,
     op: "experimental/session/list" as const,
@@ -45,9 +44,9 @@ function makeReq(over: Record<string, unknown> = {}) {
   }
 }
 
-function makeSuccess(req: ReturnType<typeof makeReq>, sessions: unknown[] = [], nextCursor?: number) {
+function makeSuccess(req: ReturnType<typeof makeReq>, sessions: unknown[] = [], nextCursor?: string) {
   return {
-    v: 1,
+    v: 2,
     requestId: req.requestId,
     opId: req.opId,
     op: "experimental/session/list",
@@ -61,7 +60,7 @@ function makeSuccess(req: ReturnType<typeof makeReq>, sessions: unknown[] = [], 
 
 function makeFailed(req: ReturnType<typeof makeReq>, code: string) {
   return {
-    v: 1,
+    v: 2,
     requestId: req.requestId,
     opId: req.opId,
     op: "experimental/session/list",
@@ -98,14 +97,18 @@ describe("session-list private peer", () => {
   test("validateSessionListRequest accepts strict shape and rejects violations", () => {
     const req = makeReq()
     expect(() => validateSessionListRequest(req)).not.toThrow()
-    expect(() => validateSessionListRequest(makeReq({ payload: { filter: { limit: 10, cursor: 3 } } }))).not.toThrow()
+    expect(() =>
+      validateSessionListRequest(makeReq({ payload: { filter: { limit: 10, cursor: OPAQUE(3, "ses_xyz") } } })),
+    ).not.toThrow()
     expect(() => validateSessionListRequest(makeReq({ context: { directory: "/tmp", workspace: "w" } }))).not.toThrow()
+    expect(() => validateSessionListRequest({ ...req, v: 1 })).toThrow()
     expect(() => validateSessionListRequest({ ...req, opId: "experimental-session-list:a:b" })).toThrow()
     expect(() => validateSessionListRequest({ ...req, idempotencyKey: "experimental-session-list:other" })).toThrow()
     expect(() => validateSessionListRequest({ ...req, context: { directory: "relative" } })).toThrow()
     expect(() => validateSessionListRequest(makeReq({ payload: {} }))).toThrow()
     expect(() => validateSessionListRequest(makeReq({ payload: { filter: { limit: 0 } } }))).toThrow()
     expect(() => validateSessionListRequest(makeReq({ payload: { filter: { cursor: "x" } } }))).toThrow()
+    expect(() => validateSessionListRequest(makeReq({ payload: { filter: { cursor: 3 } } }))).toThrow()
     expect(() => validateSessionListRequest(makeReq({ payload: { filter: { limit: 2, bogus: 1 } } }))).toThrow()
     expect(() => validateSessionListRequest({ ...req, context: { directory: "/tmp", extra: 1 } })).toThrow()
     expect(() => validateSessionListRequest({ ...req, extra: 1 })).toThrow()
@@ -115,21 +118,27 @@ describe("session-list private peer", () => {
   test("validateSessionListResult enforces per-status shape with strict nextCursor", () => {
     const req = makeReq()
     expect(() => validateSessionListResult(makeSuccess(req, [sessionItem("ses_a")]), req)).not.toThrow()
-    expect(() => validateSessionListResult(makeSuccess(req, [sessionItem("ses_a")], 42), req)).not.toThrow()
-    expect(() => validateSessionListResult(makeSuccess(req, [], 0), req)).not.toThrow()
-    expect(() => validateSessionListResult(makeSuccess(req, [], null as unknown as number), req)).toThrow()
-    expect(() => validateSessionListResult(makeSuccess(req, [], "42" as unknown as number), req)).toThrow()
-    expect(() => validateSessionListResult(makeSuccess(req, [], Number.NaN), req)).toThrow()
-    expect(() => validateSessionListResult(makeSuccess(req, [], -1), req)).toThrow()
-    expect(() => validateSessionListResult(makeSuccess(req, [], Number.POSITIVE_INFINITY), req)).toThrow()
+    expect(() =>
+      validateSessionListResult(makeSuccess(req, [sessionItem("ses_a")], OPAQUE(42, "ses_a")), req),
+    ).not.toThrow()
+    expect(() => validateSessionListResult(makeSuccess(req, [], OPAQUE(0, "ses_a")), req)).not.toThrow()
+    expect(() => validateSessionListResult(makeSuccess(req, [], null as unknown as string), req)).toThrow()
+    expect(() => validateSessionListResult(makeSuccess(req, [], 42 as unknown as string), req)).toThrow()
+    expect(() => validateSessionListResult(makeSuccess(req, [], "42"), req)).toThrow()
+    expect(() => validateSessionListResult(makeSuccess(req, [], "x"), req)).toThrow()
+    expect(() => validateSessionListResult(makeSuccess(req, [], -1 as unknown as string), req)).toThrow()
     expect(() => validateSessionListResult({ ...makeSuccess(req, []), requestId: "r2" }, req)).toThrow()
     expect(() => validateSessionListResult({ ...makeSuccess(req, []), data: { sessions: {} } }, req)).toThrow()
-    expect(() => validateSessionListResult({ ...makeSuccess(req, []), data: { sessions: [], extra: 1 } }, req)).toThrow()
-    expect(() => validateSessionListResult({ ...makeSuccess(req, [{ id: "x", directory: "/tmp", title: "t", updated: 1 }]) }, req)).toThrow()
+    expect(() =>
+      validateSessionListResult({ ...makeSuccess(req, []), data: { sessions: [], extra: 1 } }, req),
+    ).toThrow()
+    expect(() =>
+      validateSessionListResult({ ...makeSuccess(req, [{ id: "x", directory: "/tmp", title: "t", updated: 1 }]) }, req),
+    ).toThrow()
     const failed = makeFailed(req, "validation.failed")
     expect(() => validateSessionListResult(failed, req)).not.toThrow()
     const ambiguous = {
-      v: 1,
+      v: 2,
       requestId: req.requestId,
       opId: req.opId,
       op: "experimental/session/list",
@@ -145,22 +154,50 @@ describe("session-list private peer", () => {
   test("compareSessionListParity matches projection plus cursor and stays order-free", () => {
     const req = makeReq()
     const priv = makeSuccess(req, [sessionItem("ses_abc")]) as unknown as Parameters<typeof compareSessionListParity>[0]
-    expect(compareSessionListParity(priv, sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null)).divergence).toBeNull()
-    const cursorPriv = makeSuccess(req, [sessionItem("ses_abc")], 7) as unknown as Parameters<typeof compareSessionListParity>[0]
-    expect(compareSessionListParity(cursorPriv, sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], "7")).divergence).toBeNull()
-    const presence = compareSessionListParity(cursorPriv, sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null))
+    expect(
+      compareSessionListParity(priv, sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null)).divergence,
+    ).toBeNull()
+    const cursorPriv = makeSuccess(req, [sessionItem("ses_abc")], OPAQUE(7, "ses_abc")) as unknown as Parameters<
+      typeof compareSessionListParity
+    >[0]
+    expect(
+      compareSessionListParity(
+        cursorPriv,
+        sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], OPAQUE(7, "ses_abc")),
+      ).divergence,
+    ).toBeNull()
+    const presence = compareSessionListParity(
+      cursorPriv,
+      sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null),
+    )
     expect(presence.divergence).toBe("session-list-cursor-mismatch")
-    expect(JSON.stringify(presence.details).includes("7")).toBeFalse()
-    const value = compareSessionListParity(cursorPriv, sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], "8"))
+    expect(JSON.stringify(presence.details).includes(OPAQUE(7, "ses_abc"))).toBeFalse()
+    const value = compareSessionListParity(
+      cursorPriv,
+      sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], OPAQUE(8, "ses_abc")),
+    )
     expect(value.divergence).toBe("session-list-cursor-mismatch")
     // Order-insensitive, updated never compared.
-    const priv2 = makeSuccess(req, [sessionItem("ses_a"), sessionItem("ses_b")]) as unknown as Parameters<typeof compareSessionListParity>[0]
+    const priv2 = makeSuccess(req, [sessionItem("ses_a"), sessionItem("ses_b")]) as unknown as Parameters<
+      typeof compareSessionListParity
+    >[0]
     expect(
-      compareSessionListParity(priv2, sdkSuccess([{ id: "ses_b", directory: "/tmp", title: "t" }, { id: "ses_a", directory: "/tmp", title: "t" }], null)).divergence,
+      compareSessionListParity(
+        priv2,
+        sdkSuccess(
+          [
+            { id: "ses_b", directory: "/tmp", title: "t" },
+            { id: "ses_a", directory: "/tmp", title: "t" },
+          ],
+          null,
+        ),
+      ).divergence,
     ).toBeNull()
     const missing = compareSessionListParity(priv, sdkSuccess([], null))
     expect(missing.divergence?.startsWith("session-list-membership-unknown")).toBeTrue()
-    const sdk404 = { error: { status: 404 }, response: { status: 404 } } as unknown as Parameters<typeof compareSessionListParity>[1]
+    const sdk404 = { error: { status: 404 }, response: { status: 404 } } as unknown as Parameters<
+      typeof compareSessionListParity
+    >[1]
     const privFailed = makeFailed(req, "internal") as unknown as Parameters<typeof compareSessionListParity>[0]
     expect(compareSessionListParity(privFailed, sdk404).divergence).toBeNull()
   })
@@ -195,7 +232,7 @@ describe("session-list private peer", () => {
 
   test("peer outcome handle resolves normalized wire and excludes invalid wire", async () => {
     const req = makeReq({ payload: { filter: { limit: 2 } } })
-    const success = makeSuccess(req, [sessionItem("ses_a")], 9)
+    const success = makeSuccess(req, [sessionItem("ses_a")], OPAQUE(9, "ses_a"))
     const { clientReader, clientWriter, backendPeer } = createLinkedChannel((method) => {
       expect(method).toBe("experimental/session/list")
       return success
@@ -215,13 +252,13 @@ describe("session-list private peer", () => {
     clientReader.destroy()
     clientWriter.destroy()
 
-    const bad = { ...success, data: { sessions: [], nextCursor: "9" } }
+    const bad = { ...success, data: { sessions: [], nextCursor: 9 } }
     expect(normalizePrivateSessionListWire(bad, req as never).kind).toBe("invalid")
   })
 
   test("peer outcome handle excludes invalid wire before any comparator", async () => {
     const req = makeReq()
-    const bad = { ...makeSuccess(req, []), data: { sessions: [], nextCursor: "9" } }
+    const bad = { ...makeSuccess(req, []), data: { sessions: [], nextCursor: 9 } }
     const { clientReader, clientWriter, backendPeer } = createLinkedChannel(() => bad)
     const peer = new ServePrivatePeer({ reader: clientReader, writer: clientWriter, epoch: 5 })
     ;(peer as unknown as Record<string, unknown>).available = true
@@ -229,7 +266,7 @@ describe("session-list private peer", () => {
     ;(peer as unknown as Record<string, unknown>).capabilities = ["experimental/session/list"]
     const outcome = await peer.privateSessionListOutcomeWithHandle(req as never).promise
     expect(outcome.kind).toBe("invalid")
-    if (outcome.kind !== "invalid") throw new Error("expected invalid wire outcome for string nextCursor")
+    if (outcome.kind !== "invalid") throw new Error("expected invalid wire outcome for numeric nextCursor")
     expect(outcome.detail.length).toBeGreaterThan(0)
     peer.dispose()
     backendPeer.dispose()
@@ -277,9 +314,14 @@ describe("session-list private peer", () => {
     // to HTTP 400 in the generated operation signatures and openapi.json, and
     // 400 is a member of the observer TERMINAL_HTTP set. Classification is
     // gating-only for the detached observer; it never asserts parity success.
-    expect(sdkSessionListHasTerminal({ error: { _tag: "InvalidRequestError", message: "bad cursor" } } as never)).toBeTrue()
     expect(
-      sdkSessionListHasTerminal({ error: { _tag: "InvalidRequestError", message: "bad" }, response: { status: 400 } } as never),
+      sdkSessionListHasTerminal({ error: { _tag: "InvalidRequestError", message: "bad cursor" } } as never),
+    ).toBeTrue()
+    expect(
+      sdkSessionListHasTerminal({
+        error: { _tag: "InvalidRequestError", message: "bad" },
+        response: { status: 400 },
+      } as never),
     ).toBeTrue()
     const thrown = Object.assign(new Error("bad request"), { _tag: "InvalidRequestError" })
     expect(sdkSessionListHasTerminal(thrown as never)).toBeTrue()
@@ -287,7 +329,9 @@ describe("session-list private peer", () => {
     expect(sdkSessionListHasTerminal(wrapped as never)).toBeTrue()
     // Near-miss tags and transport errors stay non-terminal.
     expect(sdkSessionListHasTerminal({ error: { _tag: "SomethingElse", message: "bad cursor" } } as never)).toBeFalse()
-    expect(sdkSessionListHasTerminal({ error: { _tag: "invalidrequesterror", message: "lowercase" } } as never)).toBeFalse()
+    expect(
+      sdkSessionListHasTerminal({ error: { _tag: "invalidrequesterror", message: "lowercase" } } as never),
+    ).toBeFalse()
     expect(sdkSessionListHasTerminal({ error: { code: "ECONNRESET" } } as never)).toBeFalse()
   })
 
@@ -337,7 +381,7 @@ describe("session-list private peer", () => {
           promise: Promise.resolve({
             kind: "valid",
             result: {
-              v: 1,
+              v: 2,
               requestId: req.requestId,
               opId: req.opId,
               op: "experimental/session/list",

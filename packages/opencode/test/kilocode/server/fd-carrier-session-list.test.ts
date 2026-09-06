@@ -65,7 +65,7 @@ function failureOf(v: unknown, p: string): { code: string; message?: string; ret
 
 function asListResult(v: unknown): ListResult {
   const record = asRecord(v)
-  if (record.v !== 1) throw new Error("expected response.v to be 1")
+  if (record.v !== 2) throw new Error("expected response.v to be 2")
   const requestId = str(record, "requestId")
   if (requestId.length === 0) throw new Error("expected non-empty response.requestId")
   const opId = str(record, "opId")
@@ -95,18 +95,25 @@ function asListResult(v: unknown): ListResult {
   if (record.data !== undefined) {
     if (!isRecord(record.data)) throw new Error("expected record response.data")
     const keys = Object.keys(record.data)
-    for (const k of keys) if (k !== "sessions" && k !== "nextCursor") throw new Error(`unexpected response.data field ${k}`)
+    for (const k of keys)
+      if (k !== "sessions" && k !== "nextCursor") throw new Error(`unexpected response.data field ${k}`)
     const sessions = (record.data as Record<string, unknown>).sessions
     if (!Array.isArray(sessions)) throw new Error("expected array response.data.sessions")
     const next = (record.data as Record<string, unknown>).nextCursor
-    if (next !== undefined && (typeof next !== "number" || !Number.isFinite(next) || next < 0))
-      throw new Error("expected non-negative finite response.data.nextCursor")
+    if (next !== undefined) {
+      if (typeof next !== "string" || next.length === 0 || !/^[A-Za-z0-9_-]+$/.test(next))
+        throw new Error("expected opaque response.data.nextCursor")
+      const parsed = JSON.parse(Buffer.from(next, "base64url").toString("utf8")) as Record<string, unknown>
+      if (parsed.v !== 1 || typeof parsed.updated !== "number" || typeof parsed.id !== "string")
+        throw new Error("expected composite response.data.nextCursor")
+    }
     data = next !== undefined ? { sessions, nextCursor: next } : { sessions }
   }
   let failure: ListResult["failure"]
   if (record.failure !== undefined) failure = failureOf(record.failure, "response.failure")
   if (status === "succeeded") {
-    if (opId !== idempotencyKey) throw new Error("expected response.opId to equal response.idempotencyKey for succeeded")
+    if (opId !== idempotencyKey)
+      throw new Error("expected response.opId to equal response.idempotencyKey for succeeded")
     if (data === undefined) throw new Error("expected response.data for succeeded")
     if (failure !== undefined) throw new Error("expected no response.failure for succeeded")
     if (outcome.failure !== undefined) throw new Error("expected no response.outcome.failure for succeeded")
@@ -114,10 +121,23 @@ function asListResult(v: unknown): ListResult {
     if (data !== undefined) throw new Error("expected no response.data for failed")
     if (failure === undefined) throw new Error("expected response.failure for failed")
     if (outcome.failure === undefined) throw new Error("expected response.outcome.failure for failed")
-    if (failure.code !== outcome.failure.code) throw new Error("expected response.failure.code to equal response.outcome.failure.code")
-    if (typeof failure.message === "string" && failure.message.length > 200) throw new Error("expected bounded response.failure.message")
+    if (failure.code !== outcome.failure.code)
+      throw new Error("expected response.failure.code to equal response.outcome.failure.code")
+    if (typeof failure.message === "string" && failure.message.length > 200)
+      throw new Error("expected bounded response.failure.message")
   }
-  return { v: 1, requestId, opId, op, idempotencyKey, status, outcome, accepted, ...(data !== undefined ? { data } : {}), ...(failure !== undefined ? { failure } : {}) }
+  return {
+    v: 2,
+    requestId,
+    opId,
+    op,
+    idempotencyKey,
+    status,
+    outcome,
+    accepted,
+    ...(data !== undefined ? { data } : {}),
+    ...(failure !== undefined ? { failure } : {}),
+  }
 }
 
 function messageOf(v: ListResult): string {
@@ -201,7 +221,7 @@ function linked() {
 function listReq(dir: string, token = "tok1", overrides: Record<string, unknown> = {}): Record<string, unknown> {
   const opId = `experimental-session-list:${token}`
   return {
-    v: 1,
+    v: 2,
     requestId: "req-list-1",
     opId,
     op: "experimental/session/list",
@@ -235,10 +255,7 @@ function scoped(ctx: InstanceContext, captured: Context.Context<never>) {
   return <A, E, R>(work: Effect.Effect<A, E, R>): Effect.Effect<A, E, never> =>
     runInInstance(
       ctx,
-      work.pipe(
-        Effect.provide(captured as unknown as Context.Context<R>),
-        Effect.provideService(InstanceRef, ctx),
-      ),
+      work.pipe(Effect.provide(captured as unknown as Context.Context<R>), Effect.provideService(InstanceRef, ctx)),
     )
 }
 
@@ -248,9 +265,12 @@ function summaryOf(item: unknown): { id: string; directory: string; title: strin
   if (typeof id !== "string" || !id.startsWith("ses")) throw new Error("expected SessionID summary.id")
   if (typeof directory !== "string" || directory.length === 0) throw new Error("expected non-empty summary.directory")
   if (typeof title !== "string") throw new Error("expected string summary.title")
-  if (typeof updated !== "number" || !Number.isFinite(updated) || updated < 0) throw new Error("expected non-negative finite summary.updated")
+  if (typeof updated !== "number" || !Number.isFinite(updated) || updated < 0)
+    throw new Error("expected non-negative finite summary.updated")
   const keys = Object.keys(item as Record<string, unknown>)
-  for (const k of keys) if (k !== "id" && k !== "directory" && k !== "title" && k !== "updated") throw new Error(`unexpected summary field ${k}`)
+  for (const k of keys)
+    if (k !== "id" && k !== "directory" && k !== "title" && k !== "updated")
+      throw new Error(`unexpected summary field ${k}`)
   return { id, directory, title, updated }
 }
 
@@ -330,7 +350,9 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
         const { carrier, ext } = linked()
         try {
           yield* Effect.promise(() => init(ext))
-          const raw = yield* Effect.promise(() => ext.request("experimental/session/list", listReq(dir, "same-tok", { requestId: "req-same" })))
+          const raw = yield* Effect.promise(() =>
+            ext.request("experimental/session/list", listReq(dir, "same-tok", { requestId: "req-same" })),
+          )
           const res = asListResult(raw)
           expect(res.status).toBe("succeeded")
           expect(res.accepted).toBeTrue()
@@ -363,7 +385,7 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
     }),
   )
 
-  it.live("limit truncation emits numeric nextCursor with cursor continuation", () =>
+  it.live("limit truncation emits opaque composite nextCursor with cursor continuation", () =>
     Effect.gen(function* () {
       const restoreParentPid = ownParentPid()
       try {
@@ -397,22 +419,14 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
           )
           expect(page1.status).toBe("succeeded")
           expect(page1.data?.sessions.length).toBe(2)
-          const cursor = page1.data?.nextCursor
-          expect(typeof cursor).toBe("number")
-          expect(Number.isFinite(cursor as number)).toBeTrue()
-          expect((cursor as number) >= 0).toBeTrue()
+          const cursor = page1.data?.nextCursor as string
+          expect(typeof cursor).toBe("string")
+          const decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>
+          expect(decoded.v).toBe(1)
           const page1summaries = (page1.data?.sessions ?? []).map(summaryOf)
-          const lastUpdated = page1summaries[page1summaries.length - 1]!.updated
-          expect(cursor).toBe(lastUpdated)
-          // Production header equivalence: direct truncated list ends at the same updated.
-          const direct = yield* run(
-            Effect.gen(function* () {
-              const svc = yield* Session.Service
-              return yield* svc.listGlobal({ directory: dir, limit: 3 })
-            }),
-          )
-          expect(direct.length).toBe(3)
-          expect(cursor).toBe(direct[1]!.time.updated)
+          const last = page1summaries[page1summaries.length - 1]!
+          expect(decoded.updated).toBe(last.updated)
+          expect(decoded.id).toBe(last.id)
           const page2 = asListResult(
             yield* Effect.promise(() =>
               ext.request(
@@ -424,7 +438,6 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
           expect(page2.status).toBe("succeeded")
           const page2summaries = (page2.data?.sessions ?? []).map(summaryOf)
           expect(page2summaries.length).toBe(1)
-          for (const s of page2summaries) expect(s.updated).toBeLessThan(cursor as number)
           const page1ids = new Set(page1summaries.map((s) => s.id))
           for (const s of page2summaries) expect(page1ids.has(s.id)).toBeFalse()
           expect(created.sort()).toEqual([...page1summaries, ...page2summaries].map((s) => s.id).sort())
@@ -440,13 +453,8 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
     }),
   )
 
-  it.live("timestamp tie group with timestamp-only cursor records current observed continuation (characterization only)", () =>
+  it.live("timestamp tie group paginates without omission or duplication via composite cursor", () =>
     Effect.gen(function* () {
-      // Characterization-only: records the currently observable continuation when
-      // every row in one tie group shares the same time.updated and the carrier
-      // emits a timestamp-only nextCursor. This is not a desired ordering or
-      // pagination contract, and it does not assert that any observed skip is
-      // correct or incorrect.
       const restoreParentPid = ownParentPid()
       try {
         const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
@@ -471,7 +479,12 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
           Effect.gen(function* () {
             const { db } = yield* Database.Service
             for (const id of created) {
-              yield* db.update(SessionTable).set({ time_updated: pinned }).where(eq(SessionTable.id, id)).run().pipe(Effect.orDie)
+              yield* db
+                .update(SessionTable)
+                .set({ time_updated: pinned })
+                .where(eq(SessionTable.id, id))
+                .run()
+                .pipe(Effect.orDie)
             }
           }),
         )
@@ -488,15 +501,20 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
           )
           expect(page1.status).toBe("succeeded")
           expect(page1.data?.sessions.length).toBe(2)
-          const cursor = page1.data?.nextCursor
-          expect(typeof cursor).toBe("number")
-          expect(cursor).toBe(pinned)
+          const cursor = page1.data?.nextCursor as string
+          expect(typeof cursor).toBe("string")
+          const decoded = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8")) as Record<string, unknown>
+          expect(decoded.v).toBe(1)
+          expect(decoded.updated).toBe(pinned)
           const page1summaries = (page1.data?.sessions ?? []).map(summaryOf)
           for (const s of page1summaries) {
             expect(s.directory).toBe(canon)
             expect(s.updated).toBe(pinned)
           }
           const page1ids = page1summaries.map((s) => s.id)
+          expect(decoded.id).toBe(page1summaries[page1summaries.length - 1]!.id)
+          // Exact LOCK-001 ordering: updated DESC, id DESC.
+          expect(page1ids).toEqual([...created].sort().reverse().slice(0, 2))
           const page2 = asListResult(
             yield* Effect.promise(() =>
               ext.request(
@@ -507,16 +525,17 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
           )
           expect(page2.status).toBe("succeeded")
           const page2summaries = (page2.data?.sessions ?? []).map(summaryOf)
-          // Currently observed: the timestamp-only cursor filters with
-          // time_updated < cursor, so no tie-group remainder is returned.
-          // Recorded as observed behavior only, not as a correctness claim.
-          expect(page2summaries.length).toBe(0)
+          expect(page2summaries.length).toBe(1)
           expect(page2.data?.nextCursor).toBeUndefined()
           const page1set = new Set(page1ids)
           for (const s of page2summaries) {
             expect(page1set.has(s.id)).toBeFalse()
             expect(s.directory).toBe(canon)
+            expect(s.updated).toBe(pinned)
           }
+          expect(created.sort()).toEqual([...page1summaries, ...page2summaries].map((s) => s.id).sort())
+          // Exact continuation in the same canonical order.
+          expect([...page1ids, ...page2summaries.map((s) => s.id)]).toEqual([...created].sort().reverse())
         } finally {
           carrier.dispose()
           ext.dispose()
@@ -544,15 +563,87 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
             { label: "limit zero", req: listReq(dir, "tok1", { payload: { filter: { limit: 0 } } }) },
             { label: "limit negative", req: listReq(dir, "tok1", { payload: { filter: { limit: -2 } } }) },
             { label: "limit string", req: listReq(dir, "tok1", { payload: { filter: { limit: "2" } } }) },
-            { label: "unknown filter field", req: listReq(dir, "tok1", { payload: { filter: { limit: 2, bogus: 1 } } }) },
-            { label: "cursor string", req: listReq(dir, "tok1", { payload: { filter: { cursor: "x" } } }) },
+            {
+              label: "unknown filter field",
+              req: listReq(dir, "tok1", { payload: { filter: { limit: 2, bogus: 1 } } }),
+            },
+            { label: "cursor opaque invalid", req: listReq(dir, "tok1", { payload: { filter: { cursor: "x" } } }) },
+            { label: "cursor numeric rejected", req: listReq(dir, "tok1", { payload: { filter: { cursor: 42 } } }) },
+            { label: "cursor null rejected", req: listReq(dir, "tok1", { payload: { filter: { cursor: null } } }) },
+            {
+              label: "cursor extra field rejected",
+              req: listReq(dir, "tok1", {
+                payload: {
+                  filter: {
+                    cursor: Buffer.from(JSON.stringify({ v: 1, updated: 7, id: "ses_abc", extra: 1 }), "utf8").toString(
+                      "base64url",
+                    ),
+                  },
+                },
+              }),
+            },
+            {
+              label: "cursor version rejected",
+              req: listReq(dir, "tok1", {
+                payload: {
+                  filter: {
+                    cursor: Buffer.from(JSON.stringify({ v: 2, updated: 7, id: "ses_abc" }), "utf8").toString(
+                      "base64url",
+                    ),
+                  },
+                },
+              }),
+            },
+            {
+              label: "cursor nul id rejected",
+              req: listReq(dir, "tok1", {
+                payload: {
+                  filter: {
+                    cursor: Buffer.from(JSON.stringify({ v: 1, updated: 7, id: "ses_ab\0c" }), "utf8").toString(
+                      "base64url",
+                    ),
+                  },
+                },
+              }),
+            },
+            {
+              label: "cursor negative updated rejected",
+              req: listReq(dir, "tok1", {
+                payload: {
+                  filter: {
+                    cursor: Buffer.from(JSON.stringify({ v: 1, updated: -1, id: "ses_abc" }), "utf8").toString(
+                      "base64url",
+                    ),
+                  },
+                },
+              }),
+            },
+            { label: "v1 rejected", req: listReq(dir, "tok1", { v: 1 }) },
             { label: "roots string", req: listReq(dir, "tok1", { payload: { filter: { roots: "yes" } } }) },
-            { label: "idempotency mismatch", req: listReq(dir, "tok1", { idempotencyKey: "experimental-session-list:other" }) },
+            {
+              label: "idempotency mismatch",
+              req: listReq(dir, "tok1", { idempotencyKey: "experimental-session-list:other" }),
+            },
             { label: "extra root field", req: listReq(dir, "tok1", { sessionRevision: 1 }) },
-            { label: "extra context field", req: { ...listReq(dir, "tok1"), context: { directory: dir, sessionId: "ses_x" } } },
+            {
+              label: "extra context field",
+              req: { ...listReq(dir, "tok1"), context: { directory: dir, sessionId: "ses_x" } },
+            },
             { label: "empty opId", req: listReq(dir, "tok1", { opId: "", idempotencyKey: "" }) },
-            { label: "opId missing token", req: listReq(dir, "tok1", { opId: "experimental-session-list", idempotencyKey: "experimental-session-list" }) },
-            { label: "opId token with colon", req: listReq(dir, "tok1", { opId: "experimental-session-list:a:b", idempotencyKey: "experimental-session-list:a:b" }) },
+            {
+              label: "opId missing token",
+              req: listReq(dir, "tok1", {
+                opId: "experimental-session-list",
+                idempotencyKey: "experimental-session-list",
+              }),
+            },
+            {
+              label: "opId token with colon",
+              req: listReq(dir, "tok1", {
+                opId: "experimental-session-list:a:b",
+                idempotencyKey: "experimental-session-list:a:b",
+              }),
+            },
             { label: "wrong op", req: listReq(dir, "tok1", { op: "session/get" }) },
           ]
           for (const c of cases) {
@@ -611,7 +702,9 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
         try {
           yield* Effect.promise(() => init(ext))
           const def = asListResult(
-            yield* Effect.promise(() => ext.request("experimental/session/list", listReq(dir, "arch-def", { requestId: "req-arch-def" }))),
+            yield* Effect.promise(() =>
+              ext.request("experimental/session/list", listReq(dir, "arch-def", { requestId: "req-arch-def" })),
+            ),
           )
           expect(def.status).toBe("succeeded")
           const defIds = (def.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
@@ -669,13 +762,21 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
         const { carrier, ext } = linked()
         try {
           yield* Effect.promise(() => init(ext))
-          const resA = asListResult(yield* Effect.promise(() => ext.request("experimental/session/list", listReq(dirA, "iso-a", { requestId: "req-iso-a" }))))
+          const resA = asListResult(
+            yield* Effect.promise(() =>
+              ext.request("experimental/session/list", listReq(dirA, "iso-a", { requestId: "req-iso-a" })),
+            ),
+          )
           expect(resA.status).toBe("succeeded")
           const idsA = (resA.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
           expect(idsA.includes(inA.id)).toBeTrue()
           expect(idsA.includes(inB.id)).toBeFalse()
           for (const s of (resA.data?.sessions ?? []).map(summaryOf)) expect(s.directory).toBe(canonA)
-          const resB = asListResult(yield* Effect.promise(() => ext.request("experimental/session/list", listReq(dirB, "iso-b", { requestId: "req-iso-b" }))))
+          const resB = asListResult(
+            yield* Effect.promise(() =>
+              ext.request("experimental/session/list", listReq(dirB, "iso-b", { requestId: "req-iso-b" })),
+            ),
+          )
           expect(resB.status).toBe("succeeded")
           const idsB = (resB.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
           expect(idsB.includes(inB.id)).toBeTrue()
@@ -829,7 +930,10 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
             yield* Effect.promise(() =>
               ext.request(
                 "experimental/session/list",
-                listReq(dirA, "search-iso-a", { requestId: "req-search-iso-a", payload: { filter: { search: token } } }),
+                listReq(dirA, "search-iso-a", {
+                  requestId: "req-search-iso-a",
+                  payload: { filter: { search: token } },
+                }),
               ),
             ),
           )
@@ -843,7 +947,10 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
             yield* Effect.promise(() =>
               ext.request(
                 "experimental/session/list",
-                listReq(dirB, "search-iso-b", { requestId: "req-search-iso-b", payload: { filter: { search: token } } }),
+                listReq(dirB, "search-iso-b", {
+                  requestId: "req-search-iso-b",
+                  payload: { filter: { search: token } },
+                }),
               ),
             ),
           )
@@ -891,6 +998,126 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
     }),
   )
 
+  it.live("deep cursor beyond old 5000-row cap paginates without omission", () =>
+    Effect.gen(function* () {
+      const restoreParentPid = ownParentPid()
+      try {
+        const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const dir = tmp.path
+        const canon = canonicalDirectory(dir)
+        const store = yield* InstanceStore.Service
+        const ctx = yield* store.load({ directory: dir })
+        const captured = yield* Effect.context()
+        const run = scoped(ctx, captured)
+        const template = yield* run(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-list-deep-template" })
+          }),
+        )
+        const projectID = ctx.project.id
+        const directory = template.directory
+        const version = template.version
+        const base = template.time.updated
+        const extra = 5100
+        yield* run(
+          Effect.gen(function* () {
+            const { db } = yield* Database.Service
+            const batch = 500
+            for (let start = 0; start < extra; start += batch) {
+              const end = Math.min(extra, start + batch)
+              const rows: Array<Record<string, unknown>> = []
+              for (let i = start; i < end; i++) {
+                const updated = base - 1000 - i
+                rows.push({
+                  id: `ses_deep_${String(i).padStart(6, "0")}`,
+                  project_id: projectID,
+                  slug: `deep-${i}`,
+                  directory,
+                  title: `carrier-list-deep-${i}`,
+                  version,
+                  time_created: updated,
+                  time_updated: updated,
+                })
+              }
+              yield* db
+                .insert(SessionTable)
+                .values(rows as never)
+                .run()
+                .pipe(Effect.orDie)
+            }
+          }),
+        )
+        const expected = yield* run(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.listGlobal({ directory: dir, limit: 7000 })
+          }),
+        )
+        expect(expected.length).toBe(extra + 1)
+        const { carrier, ext } = linked()
+        try {
+          yield* Effect.promise(() => init(ext))
+          const at = expected[5000] as unknown as { id: string; time: { updated: number } }
+          const deepCursor = Buffer.from(
+            JSON.stringify({ v: 1, updated: at.time.updated, id: at.id }),
+            "utf8",
+          ).toString("base64url")
+          const deepPage = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dir, "deep-single", {
+                  requestId: "req-deep-single",
+                  payload: { filter: { limit: 50, cursor: deepCursor } },
+                }),
+              ),
+            ),
+          )
+          expect(deepPage.status).toBe("succeeded")
+          const deepSummaries = (deepPage.data?.sessions ?? []).map(summaryOf)
+          expect(deepSummaries.length).toBe(50)
+          expect(deepPage.data?.nextCursor).toBeDefined()
+          const want5001 = expected[5001] as unknown as { id: string }
+          expect(deepSummaries[0]!.id).toBe(want5001.id)
+          const seen: string[] = []
+          let cur: string | undefined = undefined
+          for (let n = 0; n < 10; n++) {
+            const res = asListResult(
+              yield* Effect.promise(() =>
+                ext.request(
+                  "experimental/session/list",
+                  listReq(dir, `deep-walk-${n}`, {
+                    requestId: `req-deep-walk-${n}`,
+                    payload: { filter: cur ? { limit: 1000, cursor: cur } : { limit: 1000 } },
+                  }),
+                ),
+              ),
+            )
+            expect(res.status).toBe("succeeded")
+            const sums = (res.data?.sessions ?? []).map(summaryOf)
+            for (const s of sums) {
+              expect(s.directory).toBe(canon)
+              seen.push(s.id)
+            }
+            const nxt = res.data?.nextCursor as string | undefined
+            if (!nxt) break
+            cur = nxt
+          }
+          expect(seen.length).toBe(expected.length)
+          expect(seen.length).toBeGreaterThan(5000)
+          expect(new Set(seen).size).toBe(expected.length)
+          expect(seen).toEqual(expected.map((e) => (e as unknown as { id: string }).id))
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        restoreParentPid()
+      }
+    }),
+  )
+
   it.live("completed remove omits victim while retaining sibling control", () =>
     Effect.gen(function* () {
       const restoreParentPid = ownParentPid()
@@ -924,7 +1151,9 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
         try {
           yield* Effect.promise(() => init(ext))
           const res = asListResult(
-            yield* Effect.promise(() => ext.request("experimental/session/list", listReq(dir, "remove-omit", { requestId: "req-remove-omit" }))),
+            yield* Effect.promise(() =>
+              ext.request("experimental/session/list", listReq(dir, "remove-omit", { requestId: "req-remove-omit" })),
+            ),
           )
           expect(res.status).toBe("succeeded")
           const summaries = (res.data?.sessions ?? []).map(summaryOf)

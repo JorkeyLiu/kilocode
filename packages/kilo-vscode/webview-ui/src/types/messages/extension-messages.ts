@@ -200,8 +200,8 @@ export interface SessionsLoadedMessage {
   preserveSessionIds?: string[]
   /** True when sessions are a load-more page to append; false/absent for a full refresh. */
   append?: boolean
-  /** Cursor for the next page, or null when there are no more sessions. */
-  nextCursor?: number | null
+  /** Opaque cursor for the next page, or null when there are no more sessions. */
+  nextCursor?: string | null
   /** True when another page can be requested via loadSessions cursor. */
   hasMore?: boolean
 }

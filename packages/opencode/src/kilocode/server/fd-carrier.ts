@@ -85,8 +85,46 @@ export const FD_CHILDREN_VERSION = 1 as const
 export const FD_CHILDREN_OP = "session/children" as const
 export const FD_REMOTE_STATUS_VERSION = 1 as const
 export const FD_REMOTE_STATUS_OP = "remote/status" as const
-export const FD_SESSION_LIST_VERSION = 1 as const
+export const FD_SESSION_LIST_VERSION = 2 as const
 export const FD_SESSION_LIST_OP = "experimental/session/list" as const
+export const SESSION_LIST_CURSOR_VERSION = 1 as const
+export const SESSION_LIST_CURSOR_MAX_LENGTH = 512 as const
+export interface SessionListCursor {
+  v: typeof SESSION_LIST_CURSOR_VERSION
+  updated: number
+  id: string
+}
+export function encodeSessionListCursor(updated: number, id: string): string {
+  return Buffer.from(JSON.stringify({ v: SESSION_LIST_CURSOR_VERSION, updated, id }), "utf8").toString("base64url")
+}
+export function decodeSessionListCursor(raw: unknown): SessionListCursor {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > SESSION_LIST_CURSOR_MAX_LENGTH)
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  if (!/^[A-Za-z0-9_-]+$/.test(raw)) throw new Error("filter.cursor must be opaque session-list cursor string")
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"))
+  } catch {
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  const rec = parsed as Record<string, unknown>
+  const keys = Object.keys(rec)
+  if (keys.length !== 3 || !keys.includes("v") || !keys.includes("updated") || !keys.includes("id"))
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  if (rec.v !== SESSION_LIST_CURSOR_VERSION) throw new Error("filter.cursor must be opaque session-list cursor string")
+  if (typeof rec.updated !== "number" || !Number.isInteger(rec.updated) || (rec.updated as number) < 0)
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  if (typeof rec.id !== "string" || !(rec.id as string).startsWith("ses") || (rec.id as string).includes("\0"))
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  return { v: SESSION_LIST_CURSOR_VERSION, updated: rec.updated as number, id: rec.id as string }
+}
+export function isAfterSessionListCursor(row: { updated: number; id: string }, cursor: SessionListCursor): boolean {
+  if (row.updated < cursor.updated) return true
+  if (row.updated > cursor.updated) return false
+  return row.id < cursor.id
+}
 export const FD_PATH_VERSION = 1 as const
 export const FD_PATH_OP = "path/get" as const
 export const FD_COMMAND_LIST_VERSION = 1 as const
@@ -182,7 +220,7 @@ export interface FdSessionListRequest {
       projectID?: string
       roots?: boolean
       start?: number
-      cursor?: number
+      cursor?: string
       search?: string
       limit?: number
       archived?: boolean
@@ -668,7 +706,7 @@ function validateRemoteStatusRequest(raw: unknown): FdRemoteStatusRequest {
 
 function validateSessionListRequest(raw: unknown): FdSessionListRequest {
   if (!isRecord(raw)) throw new Error("params must be object")
-  if (raw.v !== FD_SESSION_LIST_VERSION) throw new Error("v must be 1")
+  if (raw.v !== FD_SESSION_LIST_VERSION) throw new Error("v must be 2")
   if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
   if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
   if (raw.op !== FD_SESSION_LIST_OP) throw new Error("op must be experimental/session/list")
@@ -700,8 +738,7 @@ function validateSessionListRequest(raw: unknown): FdSessionListRequest {
     throw new Error("filter.roots must be boolean when present")
   if (rec.start !== undefined && (typeof rec.start !== "number" || !Number.isFinite(rec.start)))
     throw new Error("filter.start must be finite number when present")
-  if (rec.cursor !== undefined && (typeof rec.cursor !== "number" || !Number.isFinite(rec.cursor)))
-    throw new Error("filter.cursor must be finite number when present")
+  if (rec.cursor !== undefined) decodeSessionListCursor(rec.cursor)
   if (rec.search !== undefined && typeof rec.search !== "string")
     throw new Error("filter.search must be string when present")
   if (rec.limit !== undefined) {
@@ -1771,9 +1808,10 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
       if (method === "experimental/session/list") {
         // Session-list parity-only read: same-directory GlobalInfo page via
         // drain-control snapshot, projected to safe summaries with inline
-        // optional numeric nextCursor matching production x-next-cursor.
-        // Directory/workspace are routing identity; workspace never reaches
-        // the service. No mutation, no ordering claim, no lifecycle claim.
+        // optional opaque composite nextCursor matching production
+        // x-next-cursor grammar ({v,updated,id} JSON/base64url, updated DESC,
+        // id DESC). Directory/workspace are routing identity; workspace never
+        // reaches the service. No mutation, no lifecycle claim.
         const result = await AppRuntime.runPromise(
           Effect.gen(function* () {
             let req: FdSessionListRequest
@@ -1791,6 +1829,13 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
             }
             const filter = req.payload.filter
             const limit = filter.limit ?? 100
+            if (filter.cursor !== undefined) {
+              try {
+                decodeSessionListCursor(filter.cursor)
+              } catch {
+                return sessionListFailed(req, "validation.failed", "invalid cursor", false)
+              }
+            }
             const acquired = yield* acquireDrainControl(dir).pipe(
               Effect.map((v) => ({ tag: "ok" as const, value: v })),
               Effect.catch((err: unknown) => {
@@ -1816,18 +1861,19 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
             if (acquired.tag !== "ok") return acquired.result
             const inner = Effect.gen(function* () {
               const svc = yield* Session.Service
-              const all = yield* svc
-                .listGlobal({
-                  projectID: filter.projectID,
-                  directory: dir,
-                  roots: filter.roots,
-                  start: filter.start,
-                  cursor: filter.cursor,
-                  search: filter.search,
-                  limit: limit + 1,
-                  archived: filter.archived,
-                })
-                .pipe(
+              const base = {
+                projectID: filter.projectID,
+                directory: dir,
+                roots: filter.roots,
+                start: filter.start,
+                search: filter.search,
+                archived: filter.archived,
+              }
+              // Stable pagination without omission: push the opaque composite
+              // cursor to the store (updated DESC, id DESC) and fetch limit+1.
+              // No capped prefix; exhaustion is decided only by the store page.
+              const readPage = (cursorValue: string | undefined, fetchLimit: number) =>
+                svc.listGlobal({ ...base, cursor: cursorValue, limit: fetchLimit }).pipe(
                   Effect.map((v) => ({ tag: "ok" as const, value: v })),
                   Effect.catch(() => {
                     return Effect.succeed({ tag: "fail" as const })
@@ -1836,8 +1882,11 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                     return Effect.succeed({ tag: "fail" as const })
                   }),
                 )
-              if (all.tag !== "ok") return sessionListFailed(req, "internal", "internal error", false)
-              const page = all.value.length > limit ? all.value.slice(0, limit) : all.value
+              const paged = yield* readPage(filter.cursor, limit + 1)
+              if (paged.tag !== "ok") return sessionListFailed(req, "internal", "internal error", false)
+              const window: unknown[] = paged.value
+              const page = window.length > limit ? window.slice(0, limit) : window
+              const isTruncated = window.length > limit
               const summaries: Array<{ id: string; directory: string; title: string; updated: number }> = []
               for (const item of page) {
                 const rec = item as unknown as Record<string, unknown>
@@ -1855,13 +1904,16 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
                   return sessionListFailed(req, "internal", "internal error", false)
                 summaries.push({ id, directory, title, updated })
               }
-              let next: number | undefined
-              if (all.value.length > limit && page.length > 0) {
+              let next: string | undefined
+              if (isTruncated && page.length > 0) {
                 const last = page[page.length - 1] as unknown as Record<string, unknown>
                 const t = (last.time as { updated?: unknown } | undefined)?.updated
-                if (typeof t !== "number" || !Number.isFinite(t) || t < 0)
+                const lid = last.id
+                if (typeof t !== "number" || !Number.isInteger(t) || t < 0)
                   return sessionListFailed(req, "internal", "internal error", false)
-                next = t
+                if (typeof lid !== "string" || !lid.startsWith("ses"))
+                  return sessionListFailed(req, "internal", "internal error", false)
+                next = encodeSessionListCursor(t, lid)
               }
               return {
                 v: FD_SESSION_LIST_VERSION,

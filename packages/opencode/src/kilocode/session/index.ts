@@ -17,6 +17,7 @@ import type { ProviderMetadata, Usage } from "@opencode-ai/llm"
 import type { Provider } from "@/provider/provider"
 import { ENV_FEATURE } from "@kilocode/kilo-gateway"
 import { KiloSessionEvent, type KiloSessionCloseReason } from "./event"
+import { decodeGlobalListCursor } from "@/session/global-cursor"
 
 export namespace KiloSession {
   const log = Log.create({ service: "session.kilo" })
@@ -285,7 +286,7 @@ export namespace KiloSession {
     directory?: string
     roots?: boolean
     start?: number
-    cursor?: number
+    cursor?: string
     search?: string
     limit?: number
     archived?: boolean
@@ -298,7 +299,16 @@ export namespace KiloSession {
       if (input.directory) conditions.push(eq(SessionTable.directory, Filesystem.resolve(input.directory)))
       if (input.roots) conditions.push(isNull(SessionTable.parent_id))
       if (input.start) conditions.push(gte(SessionTable.time_updated, input.start))
-      if (input.cursor) conditions.push(lt(SessionTable.time_updated, input.cursor))
+      if (input.cursor !== undefined) {
+        const decoded = decodeGlobalListCursor(input.cursor)
+        const anchor = SessionID.make(decoded.id)
+        conditions.push(
+          or(
+            lt(SessionTable.time_updated, decoded.updated),
+            and(eq(SessionTable.time_updated, decoded.updated), lt(SessionTable.id, anchor)),
+          )!,
+        )
+      }
       if (input.search) conditions.push(like(SessionTable.title, `%${input.search}%`))
       if (!input.archived) conditions.push(isNull(SessionTable.time_archived))
 

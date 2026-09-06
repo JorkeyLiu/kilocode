@@ -1,7 +1,4 @@
-import {
-  makeSessionListAmbiguous,
-  normalizePrivateSessionListWire,
-} from "./serve-private-session-list-contract"
+import { makeSessionListAmbiguous, normalizePrivateSessionListWire } from "./serve-private-session-list-contract"
 import type {
   PrivateSessionListWireOutcome,
   ServePrivateSessionListRequest,
@@ -10,7 +7,7 @@ import type {
 
 // `experimental/session/list` read-only parity mechanics (detached, warn-only).
 // Success data is `{sessions, nextCursor?}`; `nextCursor` is the inline
-// numeric production `x-next-cursor` equivalent, omitted exactly when
+// opaque composite production `x-next-cursor` equivalent, omitted exactly when
 // production omits the header. Diagnostics never expose ids, directories,
 // titles, summaries, cursors, op/request ids, backend codes, or raw error
 // strings: only fixed categories, counts, booleans, and the constant op.
@@ -23,7 +20,7 @@ export function failedSessionListResult(
   msg: string,
 ): ServePrivateSessionListResult {
   return {
-    v: 1,
+    v: 2,
     requestId: req.requestId,
     opId: req.opId,
     op: "experimental/session/list",

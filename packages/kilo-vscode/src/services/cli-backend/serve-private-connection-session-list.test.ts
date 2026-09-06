@@ -8,7 +8,7 @@ function makeService(): KiloConnectionService {
 function sessionListReq(token = "tok1", filter: Record<string, unknown> = {}) {
   const opId = `experimental-session-list:${token}`
   return {
-    v: 1 as const,
+    v: 2 as const,
     requestId: "r1",
     opId,
     op: "experimental/session/list" as const,
@@ -20,7 +20,7 @@ function sessionListReq(token = "tok1", filter: Record<string, unknown> = {}) {
 
 function succeededResult(req: ReturnType<typeof sessionListReq>) {
   return {
-    v: 1,
+    v: 2,
     requestId: req.requestId,
     opId: req.opId,
     op: "experimental/session/list",

@@ -44,7 +44,7 @@ export interface SessionListParityFilter {
   projectID?: string
   roots?: boolean
   start?: number
-  cursor?: number
+  cursor?: string
   search?: string
   limit?: number
   archived?: boolean
@@ -62,6 +62,33 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v)
 }
 
+// Canonical session-list cursor grammar duplicate (LOCK-002):
+// the extension cannot import the opencode decoder, so this mirrors it
+// exactly ({v:1,updated:non-negative-int,id:ses* without NUL}, strict
+// 3-key JSON/base64url) rather than inventing a second grammar.
+function isOpaqueCursor(v: unknown): boolean {
+  if (typeof v !== "string" || v.length === 0 || v.length > 512) return false
+  if (!/^[A-Za-z0-9_-]+$/.test(v)) return false
+  try {
+    const parsed = JSON.parse(Buffer.from(v, "base64url").toString("utf8")) as Record<string, unknown>
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false
+    const keys = Object.keys(parsed)
+    if (keys.length !== 3 || !keys.includes("v") || !keys.includes("updated") || !keys.includes("id")) return false
+    if (parsed.v !== 1) return false
+    if (typeof parsed.updated !== "number" || !Number.isInteger(parsed.updated) || (parsed.updated as number) < 0)
+      return false
+    if (
+      typeof parsed.id !== "string" ||
+      !(parsed.id as string).startsWith("ses") ||
+      (parsed.id as string).includes("\0")
+    )
+      return false
+    return true
+  } catch {
+    return false
+  }
+}
+
 function isValidLimit(v: unknown): boolean {
   return typeof v === "number" && Number.isInteger(v) && v > 0
 }
@@ -73,7 +100,7 @@ function isValidSessionListFilter(filter: SessionListParityFilter): boolean {
   if (rec.projectID !== undefined && !isNonEmptyString(rec.projectID)) return false
   if (rec.roots !== undefined && typeof rec.roots !== "boolean") return false
   if (rec.start !== undefined && !isFiniteNumber(rec.start)) return false
-  if (rec.cursor !== undefined && !isFiniteNumber(rec.cursor)) return false
+  if (rec.cursor !== undefined && !isOpaqueCursor(rec.cursor)) return false
   if (rec.search !== undefined && typeof rec.search !== "string") return false
   if (rec.limit !== undefined && !isValidLimit(rec.limit)) return false
   if (rec.archived !== undefined && typeof rec.archived !== "boolean") return false
@@ -151,7 +178,11 @@ function thrownStatusFromRecord(rec: Record<string, unknown>): number | null {
   }
   const nested = rec.error as Record<string, unknown> | undefined
   if (nested && typeof nested === "object") {
-    for (const c of [(nested as Record<string, unknown>).status, (nested as Record<string, unknown>).statusCode, (nested as Record<string, unknown>).code]) {
+    for (const c of [
+      (nested as Record<string, unknown>).status,
+      (nested as Record<string, unknown>).statusCode,
+      (nested as Record<string, unknown>).code,
+    ]) {
       const s = numericHttpStatus(c)
       if (s !== null) return s
     }
@@ -189,7 +220,9 @@ function terminalResponseStatus(sdk: { response?: unknown }): number | null {
   return null
 }
 
-export function sdkSessionListHasTerminal(sdk: { data?: unknown; error?: unknown; response?: unknown } | Error | unknown): boolean {
+export function sdkSessionListHasTerminal(
+  sdk: { data?: unknown; error?: unknown; response?: unknown } | Error | unknown,
+): boolean {
   if (sdk instanceof Error) return thrownErrorHasTerminal(sdk as unknown as Record<string, unknown>)
   if (!sdk || typeof sdk !== "object") return false
   const typed = sdk as { data?: unknown; error?: unknown; response?: unknown }
@@ -234,14 +267,15 @@ function deferredSessionListKey(
   } catch {
     canonical = dir
   }
-  const ws = workspace === undefined ? "none" : `h-${crypto.createHash("sha256").update(workspace, "utf8").digest("hex")}`
+  const ws =
+    workspace === undefined ? "none" : `h-${crypto.createHash("sha256").update(workspace, "utf8").digest("hex")}`
   const f = `h-${crypto.createHash("sha256").update(stableFilterString(filter), "utf8").digest("hex")}`
   return `session-list:${epoch ?? "none"}:${canonical}:${ws}:${f}`
 }
 
 function ambiguousSessionListResult(req: ServePrivateSessionListRequest): ServePrivateSessionListResult {
   return {
-    v: 1,
+    v: 2,
     requestId: req.requestId,
     opId: req.opId,
     op: "experimental/session/list",
@@ -274,7 +308,10 @@ function cancelObserverTimeout(
     try {
       result = tryCancel(exactId, "private parity timeout")
     } catch {
-      console.warn("[Kilo SessionList] tryCancelPrivatePending failed:", { op: "experimental/session/list", cancelFailed: true })
+      console.warn("[Kilo SessionList] tryCancelPrivatePending failed:", {
+        op: "experimental/session/list",
+        cancelFailed: true,
+      })
       result = false
     }
   }
@@ -378,13 +415,23 @@ async function observeSessionListParity(
   timeoutMs: number,
 ): Promise<void> {
   if (!connection.isPrivateAvailable()) {
-    deferSessionListParityAfterNegotiation(connection, sdk, dir, workspace, filter, opId, idempotencyKey, requestId, timeoutMs)
+    deferSessionListParityAfterNegotiation(
+      connection,
+      sdk,
+      dir,
+      workspace,
+      filter,
+      opId,
+      idempotencyKey,
+      requestId,
+      timeoutMs,
+    )
     return
   }
   if (!isAbsolute(dir)) return
   try {
     const req: ServePrivateSessionListRequest = {
-      v: 1,
+      v: 2,
       requestId,
       opId,
       op: "experimental/session/list",
@@ -433,7 +480,17 @@ function deferSessionListParityAfterNegotiation(
   timeoutMs: number,
 ): void {
   const observe = (): void => {
-    void observeSessionListParity(connection, sdk, dir, workspace, filter, opId, idempotencyKey, requestId, timeoutMs).catch(() =>
+    void observeSessionListParity(
+      connection,
+      sdk,
+      dir,
+      workspace,
+      filter,
+      opId,
+      idempotencyKey,
+      requestId,
+      timeoutMs,
+    ).catch(() =>
       console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
         op: "experimental/session/list",
         observationFailed: true,
@@ -554,7 +611,17 @@ function launchSessionListParity(
   timeoutMs: number,
 ): void {
   try {
-    const pending = observeSessionListParity(connection, sdk, dir, workspace, filter, opId, idempotencyKey, requestId, timeoutMs)
+    const pending = observeSessionListParity(
+      connection,
+      sdk,
+      dir,
+      workspace,
+      filter,
+      opId,
+      idempotencyKey,
+      requestId,
+      timeoutMs,
+    )
     void pending.catch(() =>
       console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
         op: "experimental/session/list",

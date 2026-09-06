@@ -6302,7 +6302,7 @@ export type ExperimentalSessionListData = {
     projectID?: string
     roots?: boolean | "true" | "false"
     start?: number
-    cursor?: number
+    cursor?: string
     search?: string
     limit?: number
     archived?: boolean | "true" | "false"

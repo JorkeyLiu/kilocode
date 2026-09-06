@@ -38,6 +38,7 @@ import {
   runWithMessageConfirmation,
   loadSessions as loadSessionsUtil,
   flushPendingSessionRefresh as flushPendingSessionRefreshUtil,
+  normalizeSessionListNextCursor,
   resolveContextDirectory,
   resolveNewSessionDirectory,
   resolveWorkspaceDirectory,
@@ -430,7 +431,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private loadMessagesAbort: AbortController | null = null // Current load request cancellation.
   private lastReconciledAt = new Map<string, number>() // Per-session focus-mode reconcile timestamp.
   private pendingSessionRefresh = false // Refresh requested before the client is ready.
-  private sessionCursor: number | null = null // Next-page cursor for session list pagination.
+  private sessionCursor: string | null = null // Next-page opaque composite cursor for session list pagination.
   private sessionCount = 0 // Sessions loaded so far; sizes the re-fetch on full refresh.
   private readonly streams = new SessionStreamScheduler((msg) => this.postMessage(msg))
   private readonly visibleTaskStreams = new VisibleTaskStreams((id, visible) => this.streams.setVisible(id, visible))
@@ -3056,14 +3057,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       pendingSessionRefresh: this.pendingSessionRefresh,
       connectionState: this.connectionState,
       listSessions: client
-        ? async (input: { limit: number; cursor?: number }) => {
+        ? async (input: { limit: number; cursor?: string }) => {
             const filter = { limit: input.limit, ...(input.cursor !== undefined ? { cursor: input.cursor } : {}) }
             try {
               const result = await client.experimental.session.list(
                 { directory, limit: input.limit, cursor: input.cursor },
                 { throwOnError: true },
               )
-              const next = result.response.headers.get("x-next-cursor")
+              const raw = result.response.headers.get("x-next-cursor")
+              // Canonical gate: malformed/legacy headers never become paging state.
+              const next = normalizeSessionListNextCursor(raw)
               // Detached SDK-first session-list parity: warn-only, never
               // blocks refresh, never mutates SDK state or the return value.
               try {
@@ -3082,7 +3085,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
                   observationFailed: true,
                 })
               }
-              return { sessions: result.data, cursor: next ? Number(next) : null }
+              return { sessions: result.data, cursor: next }
             } catch (error) {
               // Failure-path parity is detached and warn-only; the throw
               // below preserves the exact SDK error semantics for refresh.
@@ -3137,11 +3140,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
    * Handle loading sessions. Without a cursor this is a full refresh;
    * with a cursor it appends the next page ("load more").
    */
-  private handleLoadSessions(cursor?: number): Promise<void> {
+  private handleLoadSessions(cursor?: string): Promise<void> {
     return this.enqueueSessionLoad(() => this.runLoadSessions(cursor))
   }
 
-  private async runLoadSessions(cursor?: number): Promise<void> {
+  private async runLoadSessions(cursor?: string): Promise<void> {
     const ctx = this.sessionRefreshContext
     try {
       const resolved = await loadSessionsUtil(ctx, cursor)

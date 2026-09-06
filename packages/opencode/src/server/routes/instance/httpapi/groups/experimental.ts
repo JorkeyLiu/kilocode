@@ -1,3 +1,4 @@
+import { decodeGlobalListCursor } from "@/session/global-cursor"
 import { AccountID, OrgID } from "@/account/schema"
 import { MCP } from "@/mcp"
 
@@ -55,12 +56,23 @@ export const ToolListQuery = Schema.Struct({
   model: ModelV2.ID,
 })
 
+const SessionListCursor = Schema.String.pipe(
+  Schema.refine((value: string): value is string => {
+    try {
+      decodeGlobalListCursor(value)
+      return true
+    } catch {
+      return false
+    }
+  }),
+)
+
 export const SessionListQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   projectID: Schema.optional(Schema.String),
   roots: Schema.optional(QueryBoolean),
   start: Schema.optional(Schema.NumberFromString),
-  cursor: Schema.optional(Schema.NumberFromString),
+  cursor: Schema.optional(SessionListCursor),
   search: Schema.optional(Schema.String),
   limit: Schema.optional(Schema.NumberFromString),
   archived: Schema.optional(QueryBoolean),

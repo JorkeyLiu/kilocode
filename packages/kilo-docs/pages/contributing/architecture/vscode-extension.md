@@ -172,6 +172,16 @@ B8 adds a bounded private path for `session/children` (read-only unordered child
 
 G3 remains **Active** and SDK authoritative. No cutover, no Gates B/C/D/P4.4 closure, no Linux/Windows/live Extension Host production proof. B8 is Gate C/D preparation, not closure, per Phase invariants. B8 is Active, not Complete.
 
+### Session-list pagination in the host and webview — opaque composite cursor
+
+The extension host pages `GET /experimental/session` through `KiloProvider.listSessions` with the same canonical cursor grammar documented in [CLI Runtime](/docs/contributing/architecture/cli-runtime). SDK data is the sole authority; private observation is detached and warn-only.
+
+| Area | Behavior |
+|---|---|
+| Host paging | `listSessions({limit, cursor})` calls `client.experimental.session.list({directory, limit, cursor})` and gates the `x-next-cursor` response header through `normalizeSessionListNextCursor` — malformed or legacy-numeric headers become `null` (exhausted) and never enter `sessionCursor` state. Full refresh re-fetches everything loaded so far; load-more appends one page. |
+| Webview contract | `loadSessions` carries an opaque `cursor` (omitted for full refresh); `sessionsLoaded` returns opaque `nextCursor` plus `hasMore`. |
+| Private parity | `observeSessionListParityDetached` compares only the shared-id `{id,directory,title}` projection plus cursor presence/value for the same request; `updated` is shape-only. |
+
 ## Private `remote/status` carrier (Gate C/D batch 1) — diagnostics-only, process-global
 
 The first single-operation Gate C/D runtime batch adds a bounded private path for `remote/status` (read-only process-global snapshot parity) over the same `kilo serve` fd3/fd4 into the same `KiloSessions` closure the `GET /remote/status` handler reads. Generated SDK `client.remote.status` remains the sole authority; the private path is detached warn-only observation via `observeRemoteStatusParityDetached` attached to `RemoteStatusService.refresh()`. No Unix socket, no second TCP listener, no SDK hand-edit, no second remote state store, no enable/disable, no event-stream parity, no mutation/pagination/config ownership.

@@ -57,9 +57,12 @@ const openApiDriftRoutes = [
   { method: "get", path: "/api/session/:sessionID/message", query: V2MessagesQuery },
 ] satisfies Array<{ method: Method; path: string; query: QuerySchema }>
 
+const stringSdkQueryParams = [
+  { method: "get", path: ExperimentalPaths.session, name: "cursor", schema: { type: "string" } },
+] satisfies Array<{ method: Method; path: string; name: string; schema: OpenApiSchema }>
+
 const numericSdkQueryParams = [
   { method: "get", path: ExperimentalPaths.session, name: "start", schema: { type: "number" } },
-  { method: "get", path: ExperimentalPaths.session, name: "cursor", schema: { type: "number" } },
   { method: "get", path: ExperimentalPaths.session, name: "limit", schema: { type: "number" } },
   { method: "get", path: FilePaths.findFile, name: "limit", schema: { type: "integer", minimum: 1, maximum: 200 } },
   { method: "get", path: SessionPaths.list, name: "start", schema: { type: "number" } },
@@ -197,6 +200,12 @@ describe("httpapi query schema drift", () => {
     Effect.sync(() => {
       const spec = OpenApi.fromApi(PublicApi)
       for (const expected of numericSdkQueryParams) {
+        expect(
+          queryParameter(spec.paths[openApiPath(expected.path)]?.[expected.method], expected.name)?.schema,
+          `${expected.method.toUpperCase()} ${expected.path} ${expected.name}`,
+        ).toEqual(expected.schema)
+      }
+      for (const expected of stringSdkQueryParams) {
         expect(
           queryParameter(spec.paths[openApiPath(expected.path)]?.[expected.method], expected.name)?.schema,
           `${expected.method.toUpperCase()} ${expected.path} ${expected.name}`,

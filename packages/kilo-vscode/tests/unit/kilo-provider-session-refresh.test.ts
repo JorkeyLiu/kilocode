@@ -18,7 +18,7 @@ type ProviderInternals = {
   pendingSessionRefresh: boolean
   webview: { postMessage: (message: unknown) => Promise<unknown> } | null
   initializeConnection: () => Promise<void>
-  handleLoadSessions: (cursor?: number) => Promise<void>
+  handleLoadSessions: (cursor?: string) => Promise<void>
   sessionDirectories: Map<string, string>
 }
 
@@ -36,7 +36,10 @@ function createContext(overrides?: Partial<SessionRefreshContext>): SessionRefre
   }
 }
 
-type ListInput = { limit: number; cursor?: number }
+type ListInput = { limit: number; cursor?: string }
+function opaqueCursor(updated = 7, id = "ses_abc"): string {
+  return Buffer.from(JSON.stringify({ v: 1, updated, id }), "utf8").toString("base64url")
+}
 
 /**
  * Build a `listSessions` stub matching the new cursor-based contract and record
@@ -44,7 +47,7 @@ type ListInput = { limit: number; cursor?: number }
  * endpoint returns the same page regardless of input — the util is responsible
  * for paging bookkeeping, not the fixture.
  */
-function recordingList(sessions: unknown[], cursor: number | null = null) {
+function recordingList(sessions: unknown[], cursor: string | null = null) {
   const calls: ListInput[] = []
   const fn = async (input: ListInput) => {
     calls.push(input)
@@ -162,7 +165,7 @@ describe("KiloProvider pending session refresh", () => {
 
     expect(project).toBeUndefined()
     expect(ctx.sent).toHaveLength(1)
-    const msg = ctx.sent[0] as { sessions: unknown[]; hasMore: boolean; nextCursor: number | null }
+    const msg = ctx.sent[0] as { sessions: unknown[]; hasMore: boolean; nextCursor: string | null }
     expect(msg.sessions).toEqual([])
     expect(msg.hasMore).toBe(false)
     expect(msg.nextCursor).toBeNull()
@@ -173,14 +176,19 @@ describe("KiloProvider pending session refresh", () => {
     // cursor) must request at least everything already shown so nothing drops
     // out of the list, and must reset paging state from the fresh page.
     const { calls, fn } = recordingList([session("ses_root", "project", "/repo", 1)], null)
-    const ctx = createContext({ connectionState: "connected", listSessions: fn, loadedCount: 50, cursor: 99 })
+    const ctx = createContext({
+      connectionState: "connected",
+      listSessions: fn,
+      loadedCount: 50,
+      cursor: opaqueCursor(99, "ses_old"),
+    })
 
     await loadSessions(ctx)
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.limit).toBe(500) // max(SESSION_INITIAL_LIMIT, loadedCount) — initial limit wins
     expect(calls[0]!.cursor).toBeUndefined()
-    const msg = ctx.sent[0] as { append: boolean; nextCursor: number | null; hasMore: boolean }
+    const msg = ctx.sent[0] as { append: boolean; nextCursor: string | null; hasMore: boolean }
     expect(msg.append).toBe(false)
     expect(msg.nextCursor).toBeNull()
     expect(msg.hasMore).toBe(false)
@@ -192,26 +200,28 @@ describe("KiloProvider pending session refresh", () => {
     // Replaces the "omits preserveSessionIds when all directories succeed" case.
     // The new analogue is the paging append path: a cursor request uses
     // SESSION_LOAD_MORE_LIMIT, appends, and surfaces the next cursor.
-    const { calls, fn } = recordingList([session("ses_page2", "project", "/repo", 3)], 40)
-    const ctx = createContext({ connectionState: "connected", listSessions: fn, loadedCount: 20, cursor: 20 })
+    const next = opaqueCursor(40, "ses_next")
+    const prev = opaqueCursor(20, "ses_prev")
+    const { calls, fn } = recordingList([session("ses_page2", "project", "/repo", 3)], next)
+    const ctx = createContext({ connectionState: "connected", listSessions: fn, loadedCount: 20, cursor: prev })
 
-    await loadSessions(ctx, 20)
+    await loadSessions(ctx, prev)
 
     expect(calls).toHaveLength(1)
     expect(calls[0]!.limit).toBe(SESSION_LOAD_MORE_LIMIT)
-    expect(calls[0]!.cursor).toBe(20)
+    expect(calls[0]!.cursor).toBe(prev)
     const msg = ctx.sent[0] as {
       append: boolean
-      nextCursor: number | null
+      nextCursor: string | null
       hasMore: boolean
       sessions: { id: string }[]
     }
     expect(msg.append).toBe(true)
-    expect(msg.nextCursor).toBe(40)
+    expect(msg.nextCursor).toBe(next)
     expect(msg.hasMore).toBe(true)
     expect(msg.sessions.map((s) => s.id)).toEqual(["ses_page2"])
     expect(ctx.loadedCount).toBe(21) // previous 20 + this page's 1
-    expect(ctx.cursor).toBe(40)
+    expect(ctx.cursor).toBe(next)
   })
 
   it("never emits preserveSessionIds on the sessionsLoaded message", async () => {
@@ -222,13 +232,15 @@ describe("KiloProvider pending session refresh", () => {
       listSessions: recordingList([session("ses_root", "project", "/repo", 1)]).fn,
     })
     await loadSessions(refresh)
+    const moreCursor = opaqueCursor(20, "ses_prev")
+    const moreNext = opaqueCursor(40, "ses_next")
     const more = createContext({
       connectionState: "connected",
       loadedCount: 20,
-      cursor: 20,
-      listSessions: recordingList([session("ses_page2", "project", "/repo", 2)], 40).fn,
+      cursor: moreCursor,
+      listSessions: recordingList([session("ses_page2", "project", "/repo", 2)], moreNext).fn,
     })
-    await loadSessions(more, 20)
+    await loadSessions(more, moreCursor)
 
     for (const ctx of [refresh, more]) {
       expect(ctx.sent).toHaveLength(1)
@@ -311,14 +323,18 @@ describe("KiloProvider catalog forwarding", () => {
       postMessage: (msg: unknown) => void
     }
     // Ensure postMessage has a webview so it actually posts and also notifies catalog
-    internal.webview = { postMessage: async () => ({}) } as unknown as { postMessage: (message: unknown) => Promise<unknown> }
+    internal.webview = { postMessage: async () => ({}) } as unknown as {
+      postMessage: (message: unknown) => Promise<unknown>
+    }
     return { provider, internal }
   }
 
   it("forwards every sessionsLoaded to onCatalog including empty append final page", () => {
     const { provider, internal } = catalogProvider()
     const seen: CatalogUpdate[] = []
-    const sub = (provider as unknown as { onCatalog: (cb: (u: CatalogUpdate) => void) => { dispose(): void } }).onCatalog((u) => seen.push(u))
+    const sub = (
+      provider as unknown as { onCatalog: (cb: (u: CatalogUpdate) => void) => { dispose(): void } }
+    ).onCatalog((u) => seen.push(u))
 
     // First page full refresh
     internal.postMessage({ type: "sessionsLoaded", sessions: [{ id: "ses_a" }], append: false, hasMore: true })
@@ -348,7 +364,9 @@ describe("KiloProvider catalog forwarding", () => {
   it("uses CatalogUpdate shape without broad cast", () => {
     const { internal } = catalogProvider()
     const seen: CatalogUpdate[] = []
-    ;(internal as unknown as { onCatalog: (cb: (u: CatalogUpdate) => void) => { dispose(): void } }).onCatalog((u: CatalogUpdate) => seen.push(u))
+    ;(internal as unknown as { onCatalog: (cb: (u: CatalogUpdate) => void) => { dispose(): void } }).onCatalog(
+      (u: CatalogUpdate) => seen.push(u),
+    )
     internal.postMessage({ type: "sessionsLoaded", sessions: [{ id: "ses_x" }], append: false, hasMore: false })
     const first = seen[0] as CatalogUpdate
     // Type shape must be CatalogUpdate, not a bare string[] cast

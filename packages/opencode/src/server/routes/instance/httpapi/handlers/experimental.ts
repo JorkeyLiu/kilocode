@@ -8,6 +8,7 @@ import { Provider } from "@/provider/provider" // kilocode_change
 import { ModelV2 } from "@opencode-ai/core/model" // kilocode_change
 import { Session } from "@/session/session"
 import type { SessionID } from "@/session/schema"
+import { encodeGlobalListCursor } from "@/session/global-cursor"
 import { ToolJsonSchema } from "@/tool/json-schema"
 import { ToolRegistry } from "@/tool/registry"
 import { Effect, Option } from "effect"
@@ -114,11 +115,10 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
         archived: ctx.query.archived,
       })
       const list = all.length > limit ? all.slice(0, limit) : all
+      const last = list.length > 0 ? list[list.length - 1] : undefined
+      const next = all.length > limit && last ? encodeGlobalListCursor(last.time.updated, last.id) : undefined
       return HttpServerResponse.jsonUnsafe(list, {
-        headers:
-          all.length > limit && list.length > 0
-            ? { "x-next-cursor": String(list[list.length - 1].time.updated) }
-            : undefined,
+        headers: next ? { "x-next-cursor": next } : undefined,
       })
     })
 
@@ -141,16 +141,14 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return yield* mcp.resources()
     })
 
-    return (
-      handlers
-        .handle("console", getConsole)
-        .handle("consoleOrgs", listConsoleOrgs)
-        .handle("consoleSwitch", switchConsole)
-        .handle("tool", tool)
-        .handle("toolIDs", toolIDs)
-        .handle("session", session)
-        .handle("sessionBackground", sessionBackground)
-        .handle("resource", resource)
-    )
+    return handlers
+      .handle("console", getConsole)
+      .handle("consoleOrgs", listConsoleOrgs)
+      .handle("consoleSwitch", switchConsole)
+      .handle("tool", tool)
+      .handle("toolIDs", toolIDs)
+      .handle("session", session)
+      .handle("sessionBackground", sessionBackground)
+      .handle("resource", resource)
   }),
 )

@@ -385,6 +385,20 @@ B8 adds one private transport narrowly for `session/children` over the existing 
 
 G3 remains **Active** and SDK authoritative. No cutover, no Gates B/C/D/P4.4 closure, no P4.4-G3 closure. B8 evidence is Darwin-local nonempty production composition only; no Linux/Windows/live Extension Host production proof. B8 is Active, not Complete.
 
+### Session-list stable pagination (`GET /experimental/session`) — committed v2 contract
+
+`GET /experimental/session` lists sessions across projects with stable pagination. SDK `client.experimental.session.list` is the sole authority; the private `experimental/session/list` path is detached warn-only parity observation. No cutover, no G3/Gate closure.
+
+| Aspect | Behavior |
+|---|---|
+| Query and header grammar | `cursor` is an opaque string query parameter (`public.ts` normalizes it to `{type:"string"}`); directory/workspace route via the standard directory routing (`directory` query, `x-kilo-directory` header, or server cwd). A truncated page returns `x-next-cursor`; exhaustion omits it. `start`/`limit` remain numeric; `cursor` is never numeric. |
+| Seek ordering | `KiloSession.listGlobal` orders by `updated DESC, id DESC` and continues with `(time_updated < updated) OR (time_updated = updated AND id < anchor)`, so equal-timestamp rows stay reachable. Both the HTTP handler and the private carrier fetch `limit + 1`, slice to `limit`, and emit the cursor from the last row only when truncated. |
+| Cursor grammar | `{v:1,updated,id}` JSON/base64url, URL-safe `^[A-Za-z0-9_-]+$`, max 512 chars (`session/global-cursor.ts`). HTTP, private envelope, and host gate share this exact grammar. |
+| Numeric rejection | Legacy numeric/timestamp-only cursors fail closed as `validation.failed` and are never interpreted as continuation. |
+| Private operation version | Private session-list envelope is operation v2 (`FD_SESSION_LIST_VERSION = 2`); the global `kilo-private` major is unchanged. |
+| SDK-first parity boundary | The private carrier reads the same-directory `listGlobal` page through the drain-control/`InstanceRef` lane, projects safe `{id,directory,title,updated}` summaries, and compares only shared-id projection plus cursor presence/value for the same request; order is never compared and membership gaps are `session-list-membership-unknown`. |
+| Scope | Concurrent-mutation interleaving and snapshot consistency are outside this phase. |
+
 ### Private `remote/status` carrier over `kilo serve` fd3/fd4 (Gate C/D runtime batch 1) — diagnostics-only, process-global
 
 The first single-operation Gate C/D runtime batch carries `remote/status` over the existing `kilo serve` process extra fds, terminating at the process-global `KiloSessions.remoteStatus()` snapshot (the same closure the `GET /remote/status` handler reads). Generated SDK `client.remote.status` remains the sole authority; the private path is detached warn-only parity observation with no enable/disable, no event-stream parity, no mutation, pagination, or config ownership. No new TCP listener, no Unix socket, no second runtime, no second remote state store, no SDK regeneration.

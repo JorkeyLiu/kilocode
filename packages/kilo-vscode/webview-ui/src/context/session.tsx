@@ -417,7 +417,7 @@ export const SessionProvider: ParentComponent = (props) => {
   // Cursor-based "load more" pagination for the session list. Pages append to
   // the store instead of replacing it; hasMore/cursor come from sessionsLoaded.
   const [sessionsHasMore, setSessionsHasMore] = createSignal(false)
-  const [sessionsCursor, setSessionsCursor] = createSignal<number | null>(null)
+  const [sessionsCursor, setSessionsCursor] = createSignal<string | null>(null)
   // In-flight guard: a load-more request does not update the cursor until its
   // response arrives, so a rapid double-click would post the same cursor twice.
   const [loadingMore, setLoadingMore] = createSignal(false)
@@ -2230,7 +2230,7 @@ export const SessionProvider: ParentComponent = (props) => {
     loaded: SessionInfo[],
     preserve?: string[],
     append?: boolean,
-    cursor?: number | null,
+    cursor?: string | null,
     more?: boolean,
   ) {
     // Belt-and-suspenders: any sessionsLoaded (full refresh or append) clears

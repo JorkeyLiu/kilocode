@@ -264,6 +264,36 @@ export const SESSION_INITIAL_LIMIT = 500
 export const SESSION_LOAD_MORE_LIMIT = 300
 
 /**
+ * Canonical `x-next-cursor` response-header gate (LOCK-002).
+ * Reuses the private contract's canonical cursor grammar (which mirrors the
+ * production decoder exactly) so malformed/legacy headers never become usable
+ * paging state. Returns the header only when it is a valid opaque composite
+ * cursor, otherwise null (exhausted). Never logs or echoes the raw value.
+ */
+export function normalizeSessionListNextCursor(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length === 0) return null
+  if (!/^[A-Za-z0-9_-]+$/.test(raw) || raw.length > 512) return null
+  try {
+    const parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8")) as Record<string, unknown>
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null
+    const keys = Object.keys(parsed)
+    if (keys.length !== 3 || !keys.includes("v") || !keys.includes("updated") || !keys.includes("id")) return null
+    if (parsed.v !== 1) return null
+    if (typeof parsed.updated !== "number" || !Number.isInteger(parsed.updated) || (parsed.updated as number) < 0)
+      return null
+    if (
+      typeof parsed.id !== "string" ||
+      !(parsed.id as string).startsWith("ses") ||
+      (parsed.id as string).includes("\0")
+    )
+      return null
+    return raw
+  } catch {
+    return null
+  }
+}
+
+/**
  * Shared interface for the subset of KiloProvider state needed by session-refresh helpers.
  * Extracted here so the logic can be tested without importing KiloProvider (and vscode).
  */
@@ -271,12 +301,12 @@ export interface SessionRefreshContext {
   pendingSessionRefresh: boolean
   connectionState: "connecting" | "connected" | "disconnected" | "error"
   listSessions:
-    | ((input: { limit: number; cursor?: number }) => Promise<{ sessions: Session[]; cursor: number | null }>)
+    | ((input: { limit: number; cursor?: string }) => Promise<{ sessions: Session[]; cursor: string | null }>)
     | null
   /** Number of sessions currently loaded in the webview list. Updated by loadSessions. */
   loadedCount: number
-  /** Next-page cursor from the last load, or null when exhausted. Updated by loadSessions. */
-  cursor: number | null
+  /** Next-page opaque composite cursor from the last load, or null when exhausted. Updated by loadSessions. */
+  cursor: string | null
   /** Workspace root directory; used to pin the canonical projectID to the root session. */
   root?: string
   postMessage(message: unknown): void
@@ -289,7 +319,7 @@ export interface SessionRefreshContext {
  * Sets pendingSessionRefresh when the HTTP client isn't ready yet.
  * Returns the resolved projectID (if any) so the caller can update its own state.
  */
-export async function loadSessions(ctx: SessionRefreshContext, cursor?: number): Promise<string | undefined> {
+export async function loadSessions(ctx: SessionRefreshContext, cursor?: string): Promise<string | undefined> {
   const list = ctx.listSessions
   if (!list) {
     ctx.pendingSessionRefresh = true

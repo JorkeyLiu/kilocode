@@ -1,10 +1,10 @@
 // `experimental/session/list` read-only parity candidate (detached, warn-only).
-// Strict v1 helpers for the private `experimental/session/list` capability:
+// Strict v2 helpers for the private `experimental/session/list` capability:
 // routing-only directory/workspace identity, `filter` payload, safe
 // `{id,directory,title,updated}` summary projection with inline optional
-// numeric `nextCursor` (omitted exactly when production omits `x-next-cursor`),
-// redacted failures, and a detached parity helper comparing only the
-// shared-id projection plus cursor presence/value for the same request.
+// opaque composite `nextCursor` (omitted exactly when production omits
+// `x-next-cursor`), redacted failures, and a detached parity helper comparing
+// only the shared-id projection plus cursor presence/value for the same request.
 // The private path never mutates SDK or user state and never replaces
 // `GET /experimental/session` (`@kilocode/sdk`
 // `client.experimental.session.list` remains the sole authority).
@@ -18,8 +18,8 @@
 //   `Array(Session.GlobalInfo)` = `Session.Info` + `project: ProjectInfo|null`).
 // - Handler: `packages/opencode/src/server/routes/instance/httpapi/handlers/experimental.ts`
 //   `session` defaults `limit ?? 100`, calls `sessions.listGlobal` with
-//   `limit + 1`, slices to `limit`, and emits `x-next-cursor` =
-//   `last.time.updated` only when truncated.
+//   `limit + 1`, slices to `limit`, and emits composite `x-next-cursor`
+//   (`{v,updated,id}` JSON/base64url, updated DESC id DESC) only when truncated.
 // - Service: `Session.Service.listGlobal` (`GlobalInfo[]`).
 // - SDK: v2 `client.experimental.session.list({directory?, workspace?,
 //   projectID?, roots?, start?, cursor?, search?, limit?, archived?})` issues
@@ -75,18 +75,62 @@ export function canonicalSessionListOpId(token: string): string {
 export function parseSessionListOpId(opId: string): { token: string } {
   if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
   const segs = opId.split(":")
-  if (segs.length !== 2) throw new TypeError(`experimental-session-list opId must be experimental-session-list:<token>: ${opId}`)
-  if (segs[0] !== "experimental-session-list") throw new TypeError(`opId kind must be experimental-session-list: ${opId}`)
+  if (segs.length !== 2)
+    throw new TypeError(`experimental-session-list opId must be experimental-session-list:<token>: ${opId}`)
+  if (segs[0] !== "experimental-session-list")
+    throw new TypeError(`opId kind must be experimental-session-list: ${opId}`)
   const token = segs[1]!
   if (token.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
   return { token }
 }
 
+export const SESSION_LIST_OPERATION_VERSION = 2 as const
+export const SESSION_LIST_CURSOR_VERSION = 1 as const
+export const SESSION_LIST_CURSOR_MAX_LENGTH = 512 as const
+export interface SessionListCursor {
+  v: typeof SESSION_LIST_CURSOR_VERSION
+  updated: number
+  id: string
+}
+export function encodeSessionListCursor(updated: number, id: string): string {
+  return Buffer.from(JSON.stringify({ v: SESSION_LIST_CURSOR_VERSION, updated, id }), "utf8").toString("base64url")
+}
+export function decodeSessionListCursor(raw: unknown): SessionListCursor {
+  if (typeof raw !== "string" || raw.length === 0 || raw.length > SESSION_LIST_CURSOR_MAX_LENGTH)
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  if (!/^[A-Za-z0-9_-]+$/.test(raw)) throw new Error("filter.cursor must be opaque session-list cursor string")
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(Buffer.from(raw, "base64url").toString("utf8"))
+  } catch {
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed))
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  const rec = parsed as Record<string, unknown>
+  const keys = Object.keys(rec)
+  if (keys.length !== 3 || !keys.includes("v") || !keys.includes("updated") || !keys.includes("id"))
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  if (rec.v !== SESSION_LIST_CURSOR_VERSION) throw new Error("filter.cursor must be opaque session-list cursor string")
+  if (typeof rec.updated !== "number" || !Number.isInteger(rec.updated) || (rec.updated as number) < 0)
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  if (typeof rec.id !== "string" || !(rec.id as string).startsWith("ses") || (rec.id as string).includes("\0"))
+    throw new Error("filter.cursor must be opaque session-list cursor string")
+  return { v: SESSION_LIST_CURSOR_VERSION, updated: rec.updated as number, id: rec.id as string }
+}
+export function isValidSessionListCursor(raw: unknown): boolean {
+  try {
+    decodeSessionListCursor(raw)
+    return true
+  } catch {
+    return false
+  }
+}
 export interface SessionListFilter {
   projectID?: string
   roots?: boolean
   start?: number
-  cursor?: number
+  cursor?: string
   search?: string
   limit?: number
   archived?: boolean
@@ -98,20 +142,26 @@ function validateSessionListFilter(raw: unknown): SessionListFilter {
   if (!isRecord(raw)) throw new Error("payload.filter must be object")
   assertAllowedKeys(raw as Record<string, unknown>, SESSION_LIST_FILTER_FIELDS, "filter")
   const rec = raw as Record<string, unknown>
-  if (rec.projectID !== undefined && !isNonEmpty(rec.projectID)) throw new Error("filter.projectID must be non-empty string when present")
-  if (rec.roots !== undefined && typeof rec.roots !== "boolean") throw new Error("filter.roots must be boolean when present")
-  if (rec.start !== undefined && (typeof rec.start !== "number" || !Number.isFinite(rec.start))) throw new Error("filter.start must be finite number when present")
-  if (rec.cursor !== undefined && (typeof rec.cursor !== "number" || !Number.isFinite(rec.cursor))) throw new Error("filter.cursor must be finite number when present")
-  if (rec.search !== undefined && typeof rec.search !== "string") throw new Error("filter.search must be string when present")
+  if (rec.projectID !== undefined && !isNonEmpty(rec.projectID))
+    throw new Error("filter.projectID must be non-empty string when present")
+  if (rec.roots !== undefined && typeof rec.roots !== "boolean")
+    throw new Error("filter.roots must be boolean when present")
+  if (rec.start !== undefined && (typeof rec.start !== "number" || !Number.isFinite(rec.start)))
+    throw new Error("filter.start must be finite number when present")
+  if (rec.cursor !== undefined) decodeSessionListCursor(rec.cursor)
+  if (rec.search !== undefined && typeof rec.search !== "string")
+    throw new Error("filter.search must be string when present")
   if (rec.limit !== undefined) {
-    if (typeof rec.limit !== "number" || !Number.isInteger(rec.limit) || rec.limit <= 0) throw new Error("filter.limit must be positive integer when present")
+    if (typeof rec.limit !== "number" || !Number.isInteger(rec.limit) || rec.limit <= 0)
+      throw new Error("filter.limit must be positive integer when present")
   }
-  if (rec.archived !== undefined && typeof rec.archived !== "boolean") throw new Error("filter.archived must be boolean when present")
+  if (rec.archived !== undefined && typeof rec.archived !== "boolean")
+    throw new Error("filter.archived must be boolean when present")
   return raw as unknown as SessionListFilter
 }
 
 export interface SessionListContractRequest {
-  v: 1
+  v: typeof SESSION_LIST_OPERATION_VERSION
   requestId: string
   opId: string
   op: "experimental/session/list"
@@ -128,7 +178,7 @@ export interface SessionListContractRequest {
 // eslint-disable-next-line complexity
 export function validateSessionListContractRequest(raw: unknown): SessionListContractRequest {
   if (!isRecord(raw)) throw new Error("request must be object")
-  if (raw.v !== 1) throw new Error("v must be 1")
+  if (raw.v !== SESSION_LIST_OPERATION_VERSION) throw new Error("v must be 2")
   if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
   if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
   if (raw.op !== "experimental/session/list") throw new Error("op must be experimental/session/list")
@@ -137,29 +187,33 @@ export function validateSessionListContractRequest(raw: unknown): SessionListCon
   const ctx = raw.context
   if (!isRecord(ctx)) throw new Error("context must be object")
   const allowedCtx = new Set(["directory", "workspace"])
-  for (const k of Object.keys(ctx as Record<string, unknown>)) if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
-  if (typeof ctx.directory !== "string" || !isAbsolute(ctx.directory) || ctx.directory.includes("\0")) throw new Error("context.directory must be absolute path")
+  for (const k of Object.keys(ctx as Record<string, unknown>))
+    if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  if (typeof ctx.directory !== "string" || !isAbsolute(ctx.directory) || ctx.directory.includes("\0"))
+    throw new Error("context.directory must be absolute path")
   if (ctx.workspace !== undefined) {
-    if (!isNonEmpty(ctx.workspace) || (ctx.workspace as string).includes("\0")) throw new Error("context.workspace must be non-empty string when present")
+    if (!isNonEmpty(ctx.workspace) || (ctx.workspace as string).includes("\0"))
+      throw new Error("context.workspace must be non-empty string when present")
   }
   const payload = raw.payload
   if (!isRecord(payload)) throw new Error("payload must be object")
   const allowedPayload = new Set(["filter"])
-  for (const k of Object.keys(payload as Record<string, unknown>)) if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
+  for (const k of Object.keys(payload as Record<string, unknown>))
+    if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
   validateSessionListFilter((payload as Record<string, unknown>).filter)
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
-  for (const k of Object.keys(raw as Record<string, unknown>)) if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  for (const k of Object.keys(raw as Record<string, unknown>))
+    if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
   parseSessionListOpId(raw.opId as string)
   const idem = parseSessionListOpId(raw.idempotencyKey as string)
-  if (idem.token !== parseSessionListOpId(raw.opId as string).token) throw new Error("idempotencyKey token must equal opId token")
+  if (idem.token !== parseSessionListOpId(raw.opId as string).token)
+    throw new Error("idempotencyKey token must equal opId token")
   return raw as unknown as SessionListContractRequest
 }
 
 export type SessionListScopeWhich = "directory" | "workspace" | "request"
 
-export type SessionListScopeCheck =
-  | { ok: true }
-  | { ok: false; code: "scope_mismatch"; which: SessionListScopeWhich }
+export type SessionListScopeCheck = { ok: true } | { ok: false; code: "scope_mismatch"; which: SessionListScopeWhich }
 
 export function checkSessionListScope(
   req: SessionListContractRequest,
@@ -210,9 +264,11 @@ export function validateSessionListSummary(raw: unknown): SessionListSummary {
   if (!isRecord(raw)) throw new Error("session summary must be object")
   assertAllowedKeys(raw as Record<string, unknown>, SESSION_LIST_SUMMARY_FIELDS, "session-summary")
   if (!isSessionId(raw.id)) throw new Error("session-summary.id must be SessionID")
-  if (typeof raw.directory !== "string" || (raw.directory as string).length === 0) throw new Error("session-summary.directory must be non-empty string")
+  if (typeof raw.directory !== "string" || (raw.directory as string).length === 0)
+    throw new Error("session-summary.directory must be non-empty string")
   if (typeof raw.title !== "string") throw new Error("session-summary.title must be string")
-  if (typeof raw.updated !== "number" || !Number.isFinite(raw.updated) || (raw.updated as number) < 0) throw new Error("session-summary.updated must be non-negative finite number")
+  if (typeof raw.updated !== "number" || !Number.isFinite(raw.updated) || (raw.updated as number) < 0)
+    throw new Error("session-summary.updated must be non-negative finite number")
   return raw as unknown as SessionListSummary
 }
 
@@ -240,6 +296,7 @@ const SESSION_LIST_FAILURE_FORBIDDEN = new Set([
   "directory",
   "workspace",
   "cursor",
+  "nextCursor",
 ])
 
 const SESSION_LIST_FAILURE_FIELDS = new Set(["code", "message", "retryable"])
@@ -258,7 +315,7 @@ export function validateSessionListFailure(raw: unknown): SessionListFailure {
 
 export type SessionListResult =
   | {
-      v: 1
+      v: typeof SESSION_LIST_OPERATION_VERSION
       requestId: string
       opId: string
       op: "experimental/session/list"
@@ -266,10 +323,10 @@ export type SessionListResult =
       status: "succeeded"
       outcome: { type: "succeeded"; time: number }
       accepted: true
-      data: { sessions: SessionListSummary[]; nextCursor?: number }
+      data: { sessions: SessionListSummary[]; nextCursor?: string }
     }
   | {
-      v: 1
+      v: typeof SESSION_LIST_OPERATION_VERSION
       requestId: string
       opId: string
       op: "experimental/session/list"
@@ -280,7 +337,7 @@ export type SessionListResult =
       failure: SessionListFailure
     }
   | {
-      v: 1
+      v: typeof SESSION_LIST_OPERATION_VERSION
       requestId: string
       opId: string
       op: "experimental/session/list"
@@ -293,7 +350,7 @@ export type SessionListResult =
 
 export function makeSessionListAmbiguous(req: SessionListContractRequest, transportUnknown = true): SessionListResult {
   const out: SessionListResult = {
-    v: 1,
+    v: SESSION_LIST_OPERATION_VERSION,
     requestId: req.requestId,
     opId: req.opId,
     op: "experimental/session/list",
@@ -306,9 +363,7 @@ export function makeSessionListAmbiguous(req: SessionListContractRequest, transp
   return out
 }
 
-export type SessionListWireOutcome =
-  | { kind: "valid"; result: SessionListResult }
-  | { kind: "invalid"; detail: string }
+export type SessionListWireOutcome = { kind: "valid"; result: SessionListResult } | { kind: "invalid"; detail: string }
 
 export class SessionListValidationError extends Error {
   readonly kind = "private-session-list-validation" as const
@@ -334,25 +389,57 @@ export function normalizePrivateSessionListWire(raw: unknown, req: SessionListCo
   }
 }
 
-const SESSION_LIST_RESULT_SUCCEEDED = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "status", "outcome", "accepted", "data"])
-const SESSION_LIST_RESULT_FAILED = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "status", "outcome", "accepted", "failure"])
-const SESSION_LIST_RESULT_AMBIGUOUS = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "status", "outcome", "accepted", "transportUnknown"])
+const SESSION_LIST_RESULT_SUCCEEDED = new Set([
+  "v",
+  "requestId",
+  "opId",
+  "op",
+  "idempotencyKey",
+  "status",
+  "outcome",
+  "accepted",
+  "data",
+])
+const SESSION_LIST_RESULT_FAILED = new Set([
+  "v",
+  "requestId",
+  "opId",
+  "op",
+  "idempotencyKey",
+  "status",
+  "outcome",
+  "accepted",
+  "failure",
+])
+const SESSION_LIST_RESULT_AMBIGUOUS = new Set([
+  "v",
+  "requestId",
+  "opId",
+  "op",
+  "idempotencyKey",
+  "status",
+  "outcome",
+  "accepted",
+  "transportUnknown",
+])
 const SESSION_LIST_OUTCOME_PLAIN = new Set(["type", "time"])
 const SESSION_LIST_OUTCOME_FAILED = new Set(["type", "time", "failure"])
 
 // eslint-disable-next-line complexity
 export function validateSessionListResult(raw: unknown, req: SessionListContractRequest): SessionListResult {
   if (!isRecord(raw)) throw new Error("result must be object")
-  if (raw.v !== 1) throw new Error("result v must be 1")
+  if (raw.v !== SESSION_LIST_OPERATION_VERSION) throw new Error("result v must be 2")
   if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
   if (raw.opId !== req.opId) throw new Error("opId mismatch")
   if (raw.op !== "experimental/session/list") throw new Error("op mismatch")
   if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
   const status = raw.status
-  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous") throw new Error("status must be succeeded/failed/ambiguous")
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous")
+    throw new Error("status must be succeeded/failed/ambiguous")
   if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
   const outcome = raw.outcome
-  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number") throw new Error("outcome invalid")
+  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number")
+    throw new Error("outcome invalid")
   if (outcome.type !== status) throw new Error("outcome.type must match status")
   if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
   const rec = raw as Record<string, unknown>
@@ -364,13 +451,11 @@ export function validateSessionListResult(raw: unknown, req: SessionListContract
     const data = rec.data
     if (!isRecord(data)) throw new Error("succeeded data must be object")
     const allowedData = new Set(["sessions", "nextCursor"])
-    for (const k of Object.keys(data as Record<string, unknown>)) if (!allowedData.has(k)) throw new Error(`unexpected data field ${k}`)
+    for (const k of Object.keys(data as Record<string, unknown>))
+      if (!allowedData.has(k)) throw new Error(`unexpected data field ${k}`)
     validateSessionListSummaries((data as Record<string, unknown>).sessions)
     const next = (data as Record<string, unknown>).nextCursor
-    if (next !== undefined) {
-      if (typeof next !== "number" || !Number.isFinite(next) || (next as number) < 0)
-        throw new Error("succeeded data.nextCursor must be non-negative finite number when present")
-    }
+    if (next !== undefined) decodeSessionListCursor(next)
     if (rec.failure !== undefined) throw new Error("succeeded must not have failure")
     if (outRec.failure !== undefined) throw new Error("succeeded outcome must not have failure")
     return raw as unknown as SessionListResult
@@ -389,7 +474,8 @@ export function validateSessionListResult(raw: unknown, req: SessionListContract
   assertAllowedKeys(rec, SESSION_LIST_RESULT_AMBIGUOUS, "result")
   assertAllowedKeys(outRec, SESSION_LIST_OUTCOME_PLAIN, "outcome")
   if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
-  if (rec.transportUnknown !== undefined && typeof rec.transportUnknown !== "boolean") throw new Error("transportUnknown must be boolean")
+  if (rec.transportUnknown !== undefined && typeof rec.transportUnknown !== "boolean")
+    throw new Error("transportUnknown must be boolean")
   if (rec.data !== undefined) throw new Error("ambiguous must not have data")
   if (rec.failure !== undefined) throw new Error("ambiguous must not have failure")
   if (outRec.failure !== undefined) throw new Error("ambiguous outcome must not have failure")
@@ -408,7 +494,7 @@ export function validateSessionListResult(raw: unknown, req: SessionListContract
 // reach details.
 type SdkSessionListCursorState =
   | { present: false }
-  | { present: true; valid: true; value: number }
+  | { present: true; valid: true; value: string }
   | { present: true; valid: false }
 
 function sdkSessionListCursorState(sdk: { response?: unknown }): SdkSessionListCursorState {
@@ -424,13 +510,8 @@ function sdkSessionListCursorState(sdk: { response?: unknown }): SdkSessionListC
     }
     if (v === null || v === undefined) return { present: false }
     if (typeof v === "string") {
-      if (v.trim().length === 0) return { present: true, valid: false }
-      const n = Number(v)
-      if (Number.isFinite(n) && n >= 0) return { present: true, valid: true, value: n }
-      return { present: true, valid: false }
-    }
-    if (typeof v === "number") {
-      if (Number.isFinite(v) && v >= 0) return { present: true, valid: true, value: v }
+      if (v.length === 0) return { present: true, valid: false }
+      if (isValidSessionListCursor(v)) return { present: true, valid: true, value: v }
       return { present: true, valid: false }
     }
     return { present: true, valid: false }
@@ -438,13 +519,18 @@ function sdkSessionListCursorState(sdk: { response?: unknown }): SdkSessionListC
   return { present: false }
 }
 
-function privSessionListCursorValue(pdata: { nextCursor?: unknown }): number | null {
+function privSessionListCursorValue(pdata: { nextCursor?: unknown }): string | null {
   const v = (pdata as { nextCursor?: unknown }).nextCursor
-  if (typeof v === "number" && Number.isFinite(v) && v >= 0) return v
+  if (typeof v === "string" && isValidSessionListCursor(v)) return v
   return null
 }
 
-type SessionListParityBase = { orderingUnknown: boolean; paginationUnknown: boolean; freshnessUnknown: boolean; lifecycleUnknown: boolean }
+type SessionListParityBase = {
+  orderingUnknown: boolean
+  paginationUnknown: boolean
+  freshnessUnknown: boolean
+  lifecycleUnknown: boolean
+}
 
 function compareSessionListSummaries(
   privSessions: SessionListSummary[],
@@ -463,10 +549,16 @@ function compareSessionListSummaries(
       return { divergence: `session-list-membership-unknown:${p.id}`, details: { ...base, id: p.id } }
     }
     if (typeof s.directory === "string" && s.directory !== p.directory) {
-      return { divergence: "session-list-directory-mismatch", details: { ...base, mismatch: true, field: "directory", id: p.id } }
+      return {
+        divergence: "session-list-directory-mismatch",
+        details: { ...base, mismatch: true, field: "directory", id: p.id },
+      }
     }
     if (typeof s.title === "string" && s.title !== p.title) {
-      return { divergence: "session-list-title-mismatch", details: { ...base, mismatch: true, field: "title", id: p.id } }
+      return {
+        divergence: "session-list-title-mismatch",
+        details: { ...base, mismatch: true, field: "title", id: p.id },
+      }
     }
   }
   for (const [id] of sdkById) {
@@ -486,13 +578,19 @@ function compareSessionListCursors(
   const sdkState = sdkSessionListCursorState(sdk)
   const privCursor = privSessionListCursorValue(pdata)
   if (sdkState.present && !sdkState.valid) {
-    return { divergence: "session-list-cursor-invalid", details: { ...base, sdkCursor: true, privCursor: privCursor !== null, invalid: true } }
+    return {
+      divergence: "session-list-cursor-invalid",
+      details: { ...base, sdkCursor: true, privCursor: privCursor !== null, invalid: true },
+    }
   }
   const sdkCursor = sdkState.present && sdkState.valid ? sdkState.value : null
   const sdkHasCursor = sdkCursor !== null
   const privHasCursor = privCursor !== null
   if (sdkHasCursor !== privHasCursor || (sdkHasCursor && privHasCursor && sdkCursor !== privCursor)) {
-    return { divergence: "session-list-cursor-mismatch", details: { ...base, sdkCursor: sdkHasCursor, privCursor: privHasCursor } }
+    return {
+      divergence: "session-list-cursor-mismatch",
+      details: { ...base, sdkCursor: sdkHasCursor, privCursor: privHasCursor },
+    }
   }
   return { divergence: null, details: { ...base, compared, sdkCursor: sdkHasCursor, privCursor: privHasCursor } }
 }
@@ -509,7 +607,10 @@ export function compareSessionListParity(
   const sdkError = sdk.error !== undefined && sdk.error !== null
   const sdkStatus: string = sdkError ? "failed" : "succeeded"
   if (sdkStatus !== privStatus) {
-    return { divergence: `status-mismatch:sdk=${sdkStatus} priv=${privStatus}`, details: { sdkStatus, privStatus, ...base } }
+    return {
+      divergence: `status-mismatch:sdk=${sdkStatus} priv=${privStatus}`,
+      details: { sdkStatus, privStatus, ...base },
+    }
   }
   if (sdkStatus === "succeeded" && privStatus === "succeeded") {
     const sdkRaw = sdk.data

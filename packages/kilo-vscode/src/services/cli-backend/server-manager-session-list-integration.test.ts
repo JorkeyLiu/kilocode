@@ -76,7 +76,7 @@ function isRecord(v: unknown): v is Record<string, unknown> {
 function listReq(dir: string, filter: Record<string, unknown>, token: string, requestId: string) {
   const opId = canonicalSessionListOpId(token)
   return {
-    v: 1 as const,
+    v: 2 as const,
     requestId,
     opId,
     op: "experimental/session/list" as const,
@@ -197,7 +197,9 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
         const sdkFullItems = (sdkFull as unknown as { data: unknown[] }).data
         expect(Array.isArray(sdkFullItems)).toBeTrue()
         expect(sdkFullItems.length).toBe(3)
-        const sdkFullCursor = (sdkFull as unknown as { response: { headers: { get: (k: string) => string | null } } }).response.headers.get("x-next-cursor")
+        const sdkFullCursor = (
+          sdkFull as unknown as { response: { headers: { get: (k: string) => string | null } } }
+        ).response.headers.get("x-next-cursor")
         expect(sdkFullCursor).toBeNull()
 
         // 5. Private same-directory full read over fd3/fd4; explicit valid outcome.
@@ -206,7 +208,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
         expect(fullOutcome.kind).toBe("valid")
         if (fullOutcome.kind !== "valid") throw new Error(`expected valid wire outcome, got ${fullOutcome.kind}`)
         const fullPriv = fullOutcome.result
-        expect(fullPriv.v).toBe(1)
+        expect(fullPriv.v).toBe(2)
         expect(fullPriv.requestId).toBe(fullReq.requestId)
         expect(fullPriv.opId).toBe(fullReq.opId)
         expect(fullPriv.op).toBe("experimental/session/list")
@@ -231,26 +233,35 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
         const fullParity = compareSessionListParity(fullPriv, sdkFull as unknown as never)
         expect(fullParity.divergence).toBeNull()
 
-        // 7. Limit truncation: SDK page (limit 2) carries x-next-cursor; private
-        // page carries the equal inline numeric nextCursor.
+        // 7. Limit truncation: SDK page (limit 2) carries opaque x-next-cursor; private
+        // page carries the equal inline opaque nextCursor.
         const sdkPage = await client.experimental.session.list({ directory: workspace, limit: 2 })
         expect((sdkPage as unknown as { error?: unknown }).error).toBeUndefined()
         const sdkPageItems = (sdkPage as unknown as { data: unknown[] }).data
         expect(sdkPageItems.length).toBe(2)
-        const sdkCursorRaw = (sdkPage as unknown as { response: { headers: { get: (k: string) => string | null } } }).response.headers.get("x-next-cursor")
+        const sdkCursorRaw = (
+          sdkPage as unknown as { response: { headers: { get: (k: string) => string | null } } }
+        ).response.headers.get("x-next-cursor")
         expect(typeof sdkCursorRaw).toBe("string")
-        const sdkCursor = Number(sdkCursorRaw)
-        expect(Number.isFinite(sdkCursor)).toBeTrue()
-        const pageReq = listReq(workspace, { limit: 2 }, crypto.randomUUID().replace(/-/g, "").slice(0, 8), crypto.randomUUID())
+        const sdkCursor = sdkCursorRaw as unknown as string
+        expect(sdkCursor.length).toBeGreaterThan(0)
+        const pageReq = listReq(
+          workspace,
+          { limit: 2 },
+          crypto.randomUUID().replace(/-/g, "").slice(0, 8),
+          crypto.randomUUID(),
+        )
         const pageOutcome = await peer.privateSessionListOutcomeWithHandle(pageReq as unknown as never).promise
         expect(pageOutcome.kind).toBe("valid")
         if (pageOutcome.kind !== "valid") throw new Error("expected valid paged wire outcome")
         expect(pageOutcome.result.status).toBe("succeeded")
         if (pageOutcome.result.status === "succeeded") {
           expect(pageOutcome.result.data.sessions.length).toBe(2)
-          expect(() => validateSessionListResult(pageOutcome.result as unknown, pageReq as unknown as never)).not.toThrow()
+          expect(() =>
+            validateSessionListResult(pageOutcome.result as unknown, pageReq as unknown as never),
+          ).not.toThrow()
           const privCursor = (pageOutcome.result.data as { nextCursor?: unknown }).nextCursor
-          expect(typeof privCursor).toBe("number")
+          expect(typeof privCursor).toBe("string")
           expect(privCursor).toBe(sdkCursor)
           const pageParity = compareSessionListParity(pageOutcome.result, sdkPage as unknown as never)
           expect(pageParity.divergence).toBeNull()
@@ -274,7 +285,9 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
         if (page2Outcome.result.status === "succeeded") {
           expect(page2Outcome.result.data.sessions.length).toBe(1)
           expect((page2Outcome.result.data as { nextCursor?: unknown }).nextCursor).toBeUndefined()
-          expect(() => validateSessionListResult(page2Outcome.result as unknown, page2Req as unknown as never)).not.toThrow()
+          expect(() =>
+            validateSessionListResult(page2Outcome.result as unknown, page2Req as unknown as never),
+          ).not.toThrow()
           const contParity = compareSessionListParity(page2Outcome.result, sdkPage2 as unknown as never)
           expect(contParity.divergence).toBeNull()
         }
@@ -305,7 +318,12 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
         // server-side `validation.failed` redaction is proven over real
         // dispatch in `fd-carrier-session-list.test.ts`). Redacted failure
         // shape is asserted at helper level below.
-        const badReq = listReq(workspace, { limit: 0 }, crypto.randomUUID().replace(/-/g, "").slice(0, 8), crypto.randomUUID())
+        const badReq = listReq(
+          workspace,
+          { limit: 0 },
+          crypto.randomUUID().replace(/-/g, "").slice(0, 8),
+          crypto.randomUUID(),
+        )
         const pendingBefore = peer.getPendingCount()
         let badThrew = false
         try {
@@ -317,7 +335,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
         expect(badThrew).toBeTrue()
         expect(peer.getPendingCount()).toBe(pendingBefore)
         const failedShape = {
-          v: 1,
+          v: 2,
           requestId: badReq.requestId,
           opId: badReq.opId,
           op: "experimental/session/list",
@@ -337,7 +355,8 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
         const xReq = listReq(peerDir!, {}, crypto.randomUUID().replace(/-/g, "").slice(0, 8), crypto.randomUUID())
         const xOutcome = await peer.privateSessionListOutcomeWithHandle(xReq as unknown as never).promise
         expect(xOutcome.kind).toBe("valid")
-        if (xOutcome.kind !== "valid") throw new Error(`expected valid wire outcome for cross-directory list, got ${xOutcome.kind}`)
+        if (xOutcome.kind !== "valid")
+          throw new Error(`expected valid wire outcome for cross-directory list, got ${xOutcome.kind}`)
         expect(xOutcome.result.status).toBe("succeeded")
         if (xOutcome.result.status === "succeeded") {
           const ids = (xOutcome.result.data.sessions as Array<{ id: string }>).map((s) => s.id)
@@ -349,7 +368,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
         // reports explicit invalid without entering comparator logic. This is a
         // helper-level assertion, not live invalid wire over fd3/fd4.
         const malformed = {
-          v: 1,
+          v: 2,
           requestId: fullReq.requestId,
           opId: fullReq.opId,
           op: "experimental/session/list",
@@ -357,11 +376,11 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
           status: "succeeded",
           outcome: { type: "succeeded", time: Date.now() },
           accepted: true,
-          data: { sessions: [], nextCursor: "not-a-number" },
+          data: { sessions: [], nextCursor: 42 },
         }
         const wire = normalizePrivateSessionListWire(malformed, fullReq as unknown as never)
         expect(wire.kind).toBe("invalid")
-        if (wire.kind !== "invalid") throw new Error("expected invalid wire outcome for string nextCursor")
+        if (wire.kind !== "invalid") throw new Error("expected invalid wire outcome for numeric nextCursor")
 
         // 13. Private unavailable fallback while SDK stays authoritative.
         peer.dispose()
@@ -410,7 +429,9 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
                   break
                 }
                 cleanupErrors.push(
-                  new Error(`cleanup probe unknown for pid ${pidBeforeDispose}: ${code ?? (err instanceof Error ? err.message : String(err))}`),
+                  new Error(
+                    `cleanup probe unknown for pid ${pidBeforeDispose}: ${code ?? (err instanceof Error ? err.message : String(err))}`,
+                  ),
                 )
                 break
               }
@@ -424,7 +445,9 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
                 if (code === "ESRCH") alive = false
                 else
                   cleanupErrors.push(
-                    new Error(`cleanup probe unknown for pid ${pidBeforeDispose}: ${code ?? (err instanceof Error ? err.message : String(err))}`),
+                    new Error(
+                      `cleanup probe unknown for pid ${pidBeforeDispose}: ${code ?? (err instanceof Error ? err.message : String(err))}`,
+                    ),
                   )
               }
             }
@@ -507,7 +530,9 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionList parity-o
           if (storage) expect(storageRemoved).toBeTrue()
           if (xdgData) expect(xdgRemoved).toBeTrue()
           if (cleanupErrors.length) {
-            throw new Error(`cleanup failed: ${cleanupErrors.map((e) => (e instanceof Error ? e.message : String(e))).join("; ")}`)
+            throw new Error(
+              `cleanup failed: ${cleanupErrors.map((e) => (e instanceof Error ? e.message : String(e))).join("; ")}`,
+            )
           }
         } finally {
           await release()

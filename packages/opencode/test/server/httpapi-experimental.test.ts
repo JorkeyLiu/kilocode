@@ -177,7 +177,8 @@ describe("experimental HttpApi", () => {
           `${ExperimentalPaths.session}?${new URLSearchParams({
             directory: tmp.directory,
             limit: "10",
-            cursor: body[0].time.updated.toString(),
+            // LOCK-003: legacy numeric cursors are rejected; continue with the opaque header.
+            cursor: page.headers["x-next-cursor"] as string,
           })}`,
           tmp.directory,
         )
