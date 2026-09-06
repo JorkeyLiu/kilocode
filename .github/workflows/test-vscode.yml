@@ -88,3 +88,7 @@ jobs:
         run: |
           bun test src/services/cli-backend/server-manager-b5-integration.test.ts
           bun test src/services/cli-backend/server-manager-b5-composition.test.ts
+
+      - name: Run config/warnings production test
+        working-directory: packages/kilo-vscode
+        run: bun test src/services/cli-backend/server-manager-config-warnings-integration.test.ts
