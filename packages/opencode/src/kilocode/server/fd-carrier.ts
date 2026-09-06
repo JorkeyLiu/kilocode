@@ -1857,7 +1857,7 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
         // safe subset ({pathCategory, messageCategory}). Raw paths, raw
         // diagnostic text, and detail never cross the boundary. Directory and
         // workspace are routing identity; workspace never reaches the
-        // service. No mutation, no ordering claim, no freshness claim.
+        // service. No mutation, no ordering claim, no general freshness claim.
         const result = await AppRuntime.runPromise(
           Effect.gen(function* () {
             let req: FdConfigWarningsRequest

@@ -4,8 +4,8 @@
 // SDK HTTP (`client.config.warnings`) remains the sole authority; the private
 // path is non-blocking parity diagnostics only (no state/event/error impact,
 // no mutation/durable operation, no warnings authority change, no freshness
-// claim). Darwin-only per task scope; other platforms skip. No Linux/Windows/
-// live Extension Host evidence is claimed. Process-global VS Code/env mutation
+// claim). Darwin + Linux run; other platforms skip per B4 convention. Windows/
+// live Extension Host evidence is not claimed. Process-global VS Code/env mutation
 // is serialized with the B5 tests via server-manager-b5-global-serialization
 // (reuse only, no B5 test edits). Cross-directory coverage asserts
 // per-directory routing isolation (broken agent marker visible only under the
@@ -91,7 +91,7 @@ function safeKeyOf(item: unknown): string {
 }
 
 describe("ServerManager → real kilo serve → fd3/fd4 → ConfigWarnings parity-only production", () => {
-  test.skipIf(process.platform !== "darwin")(
+  test.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
     "covers initialize config/warnings capability + same-directory safe projection vs SDK authoritative + invalid redaction + cross-directory routing isolation + invalid-wire exclusion + fail-closed cleanup",
     async () => {
       const extensionPath = path.resolve(import.meta.dir, "../../..")

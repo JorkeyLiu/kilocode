@@ -602,4 +602,55 @@ describe("fd-carrier config/warnings (parity-only read)", () => {
       }
     }),
   )
+
+  it.live("reload freshness surfaces added warning through the same carrier lane", () =>
+    Effect.gen(function* () {
+      const restoreParentPid = ownParentPid()
+      try {
+        const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const dir = tmp.path
+        yield* Effect.promise(() =>
+          Bun.write(path.join(dir, ".kilo", "agent", "broken.md"), `---\nmode: "banana"\n---\nBroken agent`),
+        )
+        const store = yield* InstanceStore.Service
+        const { carrier, ext } = linked()
+        try {
+          yield* Effect.promise(() => init(ext))
+          const first = asConfigWarningsResult(
+            yield* Effect.promise(() =>
+              ext.request("config/warnings", warningsReq(dir, "fresh-a", { requestId: "req-fresh-a" })),
+            ),
+          )
+          expect(first.status).toBe("succeeded")
+          const firstKeys = (first.data?.warnings ?? []).map(safeKeyOf)
+          const marker = JSON.stringify(["agent-file", "invalid-file"])
+          expect(firstKeys.includes(marker)).toBeTrue()
+          const firstCount = firstKeys.filter((k) => k === marker).length
+          yield* Effect.promise(() =>
+            Bun.write(path.join(dir, ".kilo", "agent", "broken2.md"), `---\nmode: "banana"\n---\nBroken agent 2`),
+          )
+          yield* store.reload({ directory: dir })
+          const second = asConfigWarningsResult(
+            yield* Effect.promise(() =>
+              ext.request("config/warnings", warningsReq(dir, "fresh-b", { requestId: "req-fresh-b" })),
+            ),
+          )
+          expect(second.status).toBe("succeeded")
+          const secondKeys = (second.data?.warnings ?? []).map(safeKeyOf)
+          const secondCount = secondKeys.filter((k) => k === marker).length
+          expect(secondCount).toBe(firstCount + 1)
+          expect(secondKeys.length).toBe(firstKeys.length + 1)
+          expect([...secondKeys].sort()).not.toEqual([...firstKeys].sort())
+          const wire = JSON.stringify(second)
+          expect(wire.includes(dir)).toBeFalse()
+          expect(wire.includes("broken2.md")).toBeFalse()
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        restoreParentPid()
+      }
+    }),
+  )
 })
