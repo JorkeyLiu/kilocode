@@ -800,4 +800,55 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
       }
     }),
   )
+
+  it.live("completed remove omits victim while retaining sibling control", () =>
+    Effect.gen(function* () {
+      const restoreParentPid = ownParentPid()
+      try {
+        const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const dir = tmp.path
+        const canon = canonicalDirectory(dir)
+        const store = yield* InstanceStore.Service
+        const ctx = yield* store.load({ directory: dir })
+        const captured = yield* Effect.context()
+        const run = scoped(ctx, captured)
+        const victim = yield* run(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-list-remove-victim" })
+          }),
+        )
+        const control = yield* run(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-list-remove-control" })
+          }),
+        )
+        yield* run(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.remove(victim.id)
+          }),
+        )
+        const { carrier, ext } = linked()
+        try {
+          yield* Effect.promise(() => init(ext))
+          const res = asListResult(
+            yield* Effect.promise(() => ext.request("experimental/session/list", listReq(dir, "remove-omit", { requestId: "req-remove-omit" }))),
+          )
+          expect(res.status).toBe("succeeded")
+          const summaries = (res.data?.sessions ?? []).map(summaryOf)
+          const ids = summaries.map((s) => s.id)
+          expect(ids.includes(victim.id)).toBeFalse()
+          expect(ids.includes(control.id)).toBeTrue()
+          for (const s of summaries) expect(s.directory).toBe(canon)
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        restoreParentPid()
+      }
+    }),
+  )
 })
