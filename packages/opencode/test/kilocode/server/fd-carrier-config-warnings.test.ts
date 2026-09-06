@@ -1,7 +1,10 @@
 import { afterEach, describe, expect, test } from "bun:test"
 import path from "path"
 import { PassThrough } from "stream"
-import { Context, Effect } from "effect"
+import { Context, Deferred, Effect } from "effect"
+import { Server } from "../../../src/server/server"
+import { GlobalBus } from "../../../src/bus/global"
+import { awaitRebuilds } from "../../../src/kilocode/server/config-rebuild"
 import { JsonRpcPeer } from "../../../src/private-worker/peer"
 import { ErrorCode } from "../../../src/private-worker/json-rpc"
 import {
@@ -18,8 +21,9 @@ import { InstanceRef } from "../../../src/effect/instance-ref"
 import type { InstanceContext } from "../../../src/project/instance-context"
 import { GenerationGate } from "../../../src/kilocode/server/generation-gate"
 import { runInInstance } from "../../../src/kilocode/effect/als-bridge"
-import { testEffectShared } from "../../lib/effect"
+import { awaitWithTimeout, testEffectShared } from "../../lib/effect"
 import { tmpdir, disposeAllInstances } from "../../fixture/fixture"
+import { markProjectConfigReady } from "../../fixture/plugin"
 import { resetDatabase } from "../../fixture/db"
 
 const it = testEffectShared(AppLayer)
@@ -203,6 +207,20 @@ function ownParentPid(): () => void {
     if (prior === undefined) delete process.env.KILO_PARENT_PID
     else process.env.KILO_PARENT_PID = prior
   }
+}
+
+const web = () => Server.Default().app
+
+function http(dir: string | undefined, input: string, opts?: RequestInit): Promise<Response> {
+  return Promise.resolve(
+    web().request(input, {
+      ...opts,
+      headers: {
+        ...(dir ? { "x-kilo-directory": dir } : {}),
+        ...opts?.headers,
+      },
+    }),
+  )
 }
 
 function scoped(ctx: InstanceContext, captured: Context.Context<never>) {
@@ -714,5 +732,89 @@ describe("fd-carrier config/warnings (parity-only read)", () => {
         restoreParentPid()
       }
     }),
+  )
+
+  it.live(
+    "existing warning preserved across real project cold save rebuild via same carrier",
+    () =>
+      Effect.gen(function* () {
+        const restoreParentPid = ownParentPid()
+        try {
+          const tmp = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+          const dir = tmp.path
+          yield* Effect.promise(() => markProjectConfigReady(dir))
+          yield* Effect.promise(() =>
+            Bun.write(path.join(dir, ".kilo", "agent", "broken.md"), `---\nmode: "banana"\n---\nBroken agent`),
+          )
+          const boot = yield* Effect.promise(() => http(dir, "/config/overlay?scope=project"))
+          expect(boot.status).toBe(200)
+          const { carrier, ext } = linked()
+          try {
+            yield* Effect.promise(() => init(ext))
+            const baseRaw = yield* Effect.promise(() =>
+              ext.request("config/warnings", warningsReq(dir, "cold-base", { requestId: "req-cold-base" })),
+            )
+            const base = asConfigWarningsResult(baseRaw)
+            expect(base.status).toBe("succeeded")
+            expect(base.accepted).toBeTrue()
+            expect(base.opId).toBe("config-warnings:cold-base")
+            const baseKeys = (base.data?.warnings ?? []).map(safeKeyOf).sort()
+            expect(baseKeys.length).toBeGreaterThan(0)
+            expect(baseKeys.includes(JSON.stringify(["agent-file", "invalid-file"]))).toBeTrue()
+            expect(JSON.stringify(base).includes(dir)).toBeFalse()
+            const gate = yield* Deferred.make<void>()
+            const onEvent = (evt: { directory?: string; payload: { type: string } }) => {
+              if (evt.payload.type !== "server.instance.disposed") return
+              if (evt.directory !== dir) return
+              void Effect.runFork(Deferred.succeed(gate, void 0))
+            }
+            GlobalBus.on("event", onEvent)
+            try {
+              const patched = yield* Effect.promise(() =>
+                http(dir, "/config/overlay", {
+                  method: "PATCH",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({ scope: "project", set: { username: "cold-user" } }),
+                }),
+              )
+              expect(patched.status).toBe(200)
+              const overlay = (yield* Effect.promise(async () => {
+                const res = await http(dir, "/config/overlay?scope=project")
+                expect(res.status).toBe(200)
+                return (await res.json()) as { effective: Record<string, unknown> }
+              })) as { effective: Record<string, unknown> }
+              expect(overlay.effective["username"]).toBe("cold-user")
+              yield* awaitWithTimeout(Deferred.await(gate), "project disposal did not arrive after cold save")
+              yield* awaitWithTimeout(awaitRebuilds(), "rebuild did not settle after cold save", "20 seconds")
+              const nextRaw = yield* Effect.promise(() =>
+                ext.request("config/warnings", warningsReq(dir, "cold-next", { requestId: "req-cold-next" })),
+              )
+              const next = asConfigWarningsResult(nextRaw)
+              expect(next.status).toBe("succeeded")
+              expect(next.accepted).toBeTrue()
+              expect(next.opId).toBe("config-warnings:cold-next")
+              expect(next.idempotencyKey).toBe("config-warnings:cold-next")
+              const nextKeys = (next.data?.warnings ?? []).map(safeKeyOf).sort()
+              expect([...nextKeys].sort()).toEqual([...baseKeys].sort())
+              const wire = JSON.stringify(next)
+              expect(wire.includes(dir)).toBeFalse()
+              expect(wire.includes("broken.md")).toBeFalse()
+              expect(wire.includes("banana")).toBeFalse()
+              expect(wire.includes("detail")).toBeFalse()
+            } finally {
+              GlobalBus.removeListener("event", onEvent)
+              yield* awaitWithTimeout(awaitRebuilds(), "cold-save teardown did not settle", "5 seconds").pipe(
+                Effect.ignore,
+              )
+            }
+          } finally {
+            carrier.dispose()
+            ext.dispose()
+          }
+        } finally {
+          restoreParentPid()
+        }
+      }),
+    30_000,
   )
 })
