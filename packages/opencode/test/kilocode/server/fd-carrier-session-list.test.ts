@@ -599,4 +599,110 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
       }
     }),
   )
+
+  it.live("filter search and roots stay isolated across directories", () =>
+    Effect.gen(function* () {
+      const restoreParentPid = ownParentPid()
+      try {
+        const tmpA = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const tmpB = yield* Effect.promise(() => tmpdir({ git: true, retain: true }))
+        const dirA = tmpA.path
+        const dirB = tmpB.path
+        const canonA = canonicalDirectory(dirA)
+        const canonB = canonicalDirectory(dirB)
+        const store = yield* InstanceStore.Service
+        const ctxA = yield* store.load({ directory: dirA })
+        const ctxB = yield* store.load({ directory: dirB })
+        const captured = yield* Effect.context()
+        const runA = scoped(ctxA, captured)
+        const runB = scoped(ctxB, captured)
+        const token = "Qz7Tk9Xm2A4B8"
+        const rootA = yield* runA(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: `carrier-search-${token}-root` })
+          }),
+        )
+        yield* sleep(15)
+        const childA = yield* runA(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-search-child-plain", parentID: rootA.id })
+          }),
+        )
+        yield* sleep(15)
+        const inB = yield* runB(
+          Effect.gen(function* () {
+            const svc = yield* Session.Service
+            return yield* svc.create({ title: "carrier-list-dirB-plain" })
+          }),
+        )
+        const { carrier, ext } = linked()
+        try {
+          yield* Effect.promise(() => init(ext))
+          const searchA = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dirA, "search-iso-a", { requestId: "req-search-iso-a", payload: { filter: { search: token } } }),
+              ),
+            ),
+          )
+          expect(searchA.status).toBe("succeeded")
+          const searchAIds = (searchA.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
+          expect(searchAIds.includes(rootA.id)).toBeTrue()
+          expect(searchAIds.includes(childA.id)).toBeFalse()
+          expect(searchAIds.includes(inB.id)).toBeFalse()
+          for (const s of (searchA.data?.sessions ?? []).map(summaryOf)) expect(s.directory).toBe(canonA)
+          const searchB = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dirB, "search-iso-b", { requestId: "req-search-iso-b", payload: { filter: { search: token } } }),
+              ),
+            ),
+          )
+          expect(searchB.status).toBe("succeeded")
+          const searchBIds = (searchB.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
+          expect(searchBIds.includes(rootA.id)).toBeFalse()
+          expect(searchBIds.includes(childA.id)).toBeFalse()
+          expect(searchBIds.includes(inB.id)).toBeFalse()
+          expect(searchBIds.length).toBe(0)
+          const rootsA = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dirA, "roots-iso-a", { requestId: "req-roots-iso-a", payload: { filter: { roots: true } } }),
+              ),
+            ),
+          )
+          expect(rootsA.status).toBe("succeeded")
+          const rootsAIds = (rootsA.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
+          expect(rootsAIds.includes(rootA.id)).toBeTrue()
+          expect(rootsAIds.includes(childA.id)).toBeFalse()
+          expect(rootsAIds.includes(inB.id)).toBeFalse()
+          for (const s of (rootsA.data?.sessions ?? []).map(summaryOf)) expect(s.directory).toBe(canonA)
+          const rootsB = asListResult(
+            yield* Effect.promise(() =>
+              ext.request(
+                "experimental/session/list",
+                listReq(dirB, "roots-iso-b", { requestId: "req-roots-iso-b", payload: { filter: { roots: true } } }),
+              ),
+            ),
+          )
+          expect(rootsB.status).toBe("succeeded")
+          const rootsBIds = (rootsB.data?.sessions ?? []).map(summaryOf).map((s) => s.id)
+          expect(rootsBIds.includes(inB.id)).toBeTrue()
+          expect(rootsBIds.includes(rootA.id)).toBeFalse()
+          expect(rootsBIds.includes(childA.id)).toBeFalse()
+          for (const s of (rootsB.data?.sessions ?? []).map(summaryOf)) expect(s.directory).toBe(canonB)
+        } finally {
+          carrier.dispose()
+          ext.dispose()
+        }
+      } finally {
+        restoreParentPid()
+      }
+    }),
+  )
 })
