@@ -3,6 +3,7 @@ import * as vscode from "vscode"
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { mergeFileSearchResults } from "./file-search-results"
 import { mergeFileSearchItems } from "./file-search-items"
+import { observeFindFilesParityFromSdkPromises, type FindFilesParityConnection } from "./find-files-parity"
 
 type Message = {
   query: string
@@ -18,6 +19,9 @@ type Input = {
   dir: (id?: string) => string
   open: (dir: string) => Promise<Set<string>>
   post: (message: unknown) => void
+  parity?: FindFilesParityConnection | null
+  workspace?: string
+  parityTimeoutMs?: number
 }
 
 export async function handleFileSearch(input: Input): Promise<void> {
@@ -32,10 +36,20 @@ export async function handleFileSearch(input: Input): Promise<void> {
   const open = dir ? await input.open(dir) : new Set<string>()
 
   const query = input.message.query
-  void Promise.allSettled([
-    client.find.files({ query, directory: dir, type: "file", limit: 50 }, { throwOnError: true }),
-    client.find.files({ query, directory: dir, type: "directory", limit: 50 }, { throwOnError: true }),
-  ]).then(([fileRes, folderRes]) => {
+  const fileReq = client.find.files({ query, directory: dir, type: "file", limit: 50 }, { throwOnError: true })
+  const folderReq = client.find.files({ query, directory: dir, type: "directory", limit: 50 }, { throwOnError: true })
+  if (input.parity) {
+    observeFindFilesParityFromSdkPromises(
+      input.parity,
+      fileReq,
+      folderReq,
+      dir,
+      query,
+      input.workspace,
+      input.parityTimeoutMs,
+    )
+  }
+  void Promise.allSettled([fileReq, folderReq]).then(([fileRes, folderRes]) => {
     const files = settled(fileRes, "file")
     const folders = settled(folderRes, "folder")
     const uri = vscode.window.activeTextEditor?.document.uri
