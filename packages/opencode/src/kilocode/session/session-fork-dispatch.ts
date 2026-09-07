@@ -18,6 +18,7 @@ import { Session } from "@/session/session"
 import { eq, asc } from "drizzle-orm"
 import { Slug } from "@opencode-ai/core/util/slug"
 import { InstallationVersion } from "@opencode-ai/core/installation/version"
+import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 import { Log } from "@opencode-ai/core/util/log"
 import { KiloSession } from "@/kilocode/session"
 import * as SandboxPolicy from "@/kilocode/sandbox/policy"
@@ -983,6 +984,12 @@ export const layer = Layer.effect(
                   .pipe(Effect.orDie)
 
                 yield* tx.insert(SessionTable).values(newRow as unknown as typeof SessionTable.$inferInsert).run().pipe(Effect.orDie)
+                yield* Changefeed.appendTx(tx as unknown as typeof db, {
+                  session_id: newId,
+                  revision: 0,
+                  kind: "changed",
+                  time: now,
+                })
 
                 // Copy messages and parts with checkpoint — uses shared kernel for transcript mapping
                 const idMap = new Map<string, MessageID>()

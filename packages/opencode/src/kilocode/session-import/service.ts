@@ -8,11 +8,10 @@ import { WorkspaceV2 } from "@opencode-ai/core/workspace"
 import { SessionImportType } from "./types"
 import { Project } from "../../project/project"
 import { AppRuntime } from "../../effect/app-runtime"
-import { eq, sql } from "drizzle-orm"
+import { eq } from "drizzle-orm"
 import { Effect } from "effect"
 import { isDeepStrictEqual } from "node:util"
 
-const key = (input: unknown) => [input] as never
 const target = (input: unknown) => input as never
 
 export namespace SessionImportService {
@@ -32,83 +31,86 @@ export namespace SessionImportService {
       Effect.gen(function* () {
         const { db } = yield* Database.Service
 
-        // One atomic semantic mutation: read, conditionally delete, insert/upsert
-        // with a single revision advance. Force replacement preserves monotonicity
-        // by deriving new revision from the prior row.
         const result = yield* db
-          .transaction((tx) =>
-            Effect.gen(function* () {
-              // Validate parent exists and belongs to the same project BEFORE any
-              // early-return or mutation. An invalid parent is an atomic rejection
-              // with no state or revision change.
-              if (input.parentID) {
-                const parent = yield* tx
+          .transaction(
+            (tx) =>
+              Effect.gen(function* () {
+                if (input.parentID) {
+                  const parent = yield* tx
+                    .select()
+                    .from(SessionTable)
+                    .where(eq(target(SessionTable.id), input.parentID))
+                    .get()
+                  if (!parent) {
+                    throw new SessionImportType.ValidationError(`Parent session ${input.parentID} not found`)
+                  }
+                  if (parent.project_id !== input.projectID) {
+                    throw new SessionImportType.ValidationError(
+                      `Parent session ${input.parentID} belongs to a different project`,
+                    )
+                  }
+                }
+
+                const row = yield* tx
                   .select()
                   .from(SessionTable)
-                  .where(eq(target(SessionTable.id), input.parentID))
+                  .where(eq(target(SessionTable.id), input.id))
                   .get()
-                if (!parent) {
-                  throw new SessionImportType.ValidationError(`Parent session ${input.parentID} not found`)
+
+                if (row && !input.force) return { ok: true, id: input.id, skipped: true as const }
+
+                const revert = input.revert
+                  ? {
+                      ...input.revert,
+                      messageID: MessageID.make(input.revert.messageID),
+                      partID: input.revert.partID ? PartID.make(input.revert.partID) : undefined,
+                    }
+                  : undefined
+
+                if (!row) {
+                  const inserted = yield* tx
+                    .insert(SessionTable)
+                    .values({
+                      id: SessionID.make(input.id),
+                      project_id: ProjectV2.ID.make(input.projectID),
+                      workspace_id: input.workspaceID ? WorkspaceV2.ID.make(input.workspaceID) : undefined,
+                      parent_id: input.parentID ? SessionID.make(input.parentID) : undefined,
+                      slug: input.slug,
+                      directory: input.directory,
+                      title: input.title,
+                      version: input.version,
+                      share_url: input.shareURL,
+                      summary_additions: input.summary?.additions,
+                      summary_deletions: input.summary?.deletions,
+                      summary_files: input.summary?.files,
+                      summary_diffs: input.summary?.diffs as never,
+                      revert,
+                      permission: input.permission as never,
+                      time_created: input.timeCreated,
+                      time_updated: input.timeUpdated,
+                      time_compacting: input.timeCompacting,
+                      time_archived: input.timeArchived,
+                      revision: 0,
+                    })
+                    .onConflictDoNothing()
+                    .returning({ id: SessionTable.id })
+                    .get()
+                    .pipe(Effect.orDie)
+                  if (!inserted) return { ok: true, id: input.id, skipped: true as const }
+                  yield* Changefeed.appendTx(tx, { session_id: input.id, revision: 0, kind: "changed", time: Date.now() })
+                  return { ok: true, id: input.id } as SessionImportType.Result
                 }
-                if (parent.project_id !== input.projectID) {
-                  throw new SessionImportType.ValidationError(
-                    `Parent session ${input.parentID} belongs to a different project`,
-                  )
-                }
-              }
 
-              const row = yield* tx
-                .select()
-                .from(SessionTable)
-                .where(eq(target(SessionTable.id), input.id))
-                .get()
-
-              if (row && !input.force) return { ok: true, id: input.id, skipped: true as const }
-
-              if (row && input.force) {
                 yield* tx
                   .delete(SessionTable)
                   .where(eq(target(SessionTable.id), input.id))
                   .run()
-              }
-
-              const revert = input.revert
-                ? {
-                    ...input.revert,
-                    messageID: MessageID.make(input.revert.messageID),
-                    partID: input.revert.partID ? PartID.make(input.revert.partID) : undefined,
-                  }
-                : undefined
-
-              const revision = row ? row.revision + 1 : 0
-
-              const inserted = yield* tx
-                .insert(SessionTable)
-                .values({
-                  id: SessionID.make(input.id),
-                  project_id: ProjectV2.ID.make(input.projectID),
-                  workspace_id: input.workspaceID ? WorkspaceV2.ID.make(input.workspaceID) : undefined,
-                  parent_id: input.parentID ? SessionID.make(input.parentID) : undefined,
-                  slug: input.slug,
-                  directory: input.directory,
-                  title: input.title,
-                  version: input.version,
-                  share_url: input.shareURL,
-                  summary_additions: input.summary?.additions,
-                  summary_deletions: input.summary?.deletions,
-                  summary_files: input.summary?.files,
-                  summary_diffs: input.summary?.diffs as never,
-                  revert,
-                  permission: input.permission as never,
-                  time_created: input.timeCreated,
-                  time_updated: input.timeUpdated,
-                  time_compacting: input.timeCompacting,
-                  time_archived: input.timeArchived,
-                  revision,
-                })
-                .onConflictDoUpdate({
-                  target: key(SessionTable.id),
-                  set: {
+                  .pipe(Effect.orDie)
+                const newRev = row.revision + 1
+                const inserted = yield* tx
+                  .insert(SessionTable)
+                  .values({
+                    id: SessionID.make(input.id),
                     project_id: ProjectV2.ID.make(input.projectID),
                     workspace_id: input.workspaceID ? WorkspaceV2.ID.make(input.workspaceID) : undefined,
                     parent_id: input.parentID ? SessionID.make(input.parentID) : undefined,
@@ -127,26 +129,16 @@ export namespace SessionImportService {
                     time_updated: input.timeUpdated,
                     time_compacting: input.timeCompacting,
                     time_archived: input.timeArchived,
-                    revision: sql`${SessionTable.revision} + 1`,
-                  },
-                })
-                .returning({ id: SessionTable.id })
-                .all()
-                .pipe(Effect.orDie)
-
-              if (inserted.length !== 1) {
-                throw new SessionImportType.ValidationError(
-                  `Session write affected ${inserted.length} rows, expected exactly 1 for session ${input.id}`,
-                )
-              }
-
-              if (row) {
-                const newRev = row.revision + 1
+                    revision: newRev,
+                  })
+                  .returning({ id: SessionTable.id })
+                  .get()
+                  .pipe(Effect.orDie)
+                if (!inserted) throw new SessionImportType.ValidationError(`Session ${input.id} missing after forced insert`)
                 yield* Changefeed.appendTx(tx, { session_id: input.id, revision: newRev, kind: "changed", time: Date.now() })
-              }
-
-              return { ok: true, id: input.id } as SessionImportType.Result
-            }),
+                return { ok: true, id: input.id } as SessionImportType.Result
+              }),
+            { behavior: "immediate" },
           )
           .pipe(Effect.orDie)
 

@@ -24,6 +24,7 @@ import { Log } from "@opencode-ai/core/util/log"
 import { KiloSession } from "@/kilocode/session"
 import * as SandboxPolicy from "@/kilocode/sandbox/policy"
 import { sessionPath } from "@/kilocode/session/fork"
+import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 
 export const VERSION = 1 as const
 export const OP = "session/create" as const
@@ -556,6 +557,12 @@ export const layer = Layer.effect(
                   .run()
                   .pipe(Effect.orDie)
                 yield* tx.insert(SessionTable).values(newRow as unknown as typeof SessionTable.$inferInsert).run().pipe(Effect.orDie)
+                yield* Changefeed.appendTx(tx as unknown as typeof db, {
+                  session_id: newId,
+                  revision: 0,
+                  kind: "changed",
+                  time: now,
+                })
                 const inserted = yield* tx.select().from(SessionTable).where(eq(SessionTable.id, newId)).get().pipe(Effect.orDie)
                 if (!inserted) yield* Effect.die(new Error("created session missing after insert"))
                 const insertedNonNull = inserted as typeof inserted & { workspace_id: string | null; directory: string }

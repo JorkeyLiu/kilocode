@@ -67,17 +67,19 @@ describe("S4 bounded changefeed/outbox", () => {
       yield* ev.publish(SessionEvent.Synthetic, { sessionID: a.id, messageID: SessionMessage.ID.create(), timestamp: DateTime.makeUnsafe(12), text: "a2" })
       yield* ev.publish(SessionEvent.Synthetic, { sessionID: b.id, messageID: SessionMessage.ID.create(), timestamp: DateTime.makeUnsafe(13), text: "b2" })
       const rows = yield* db.select().from(SessionChangefeedTable).orderBy(sql`${SessionChangefeedTable.seq} ASC`).all().pipe(Effect.orDie)
-      expect(rows.length).toBe(4)
+      expect(rows.length).toBe(6)
       for (let i = 1; i < rows.length; i++) expect(rows[i]!.seq).toBeGreaterThan(rows[i - 1]!.seq)
-      // kinds are all changed, revisions per session are 1,1,2,2 but seq global monotonic
+      // kinds are all changed, revisions per session are 0,1,2,0,1,2 but seq global monotonic; creation emits 0
       const aRows = rows.filter((r) => r.session_id === a.id)
       const bRows = rows.filter((r) => r.session_id === b.id)
-      expect(aRows.length).toBe(2)
-      expect(bRows.length).toBe(2)
-      expect(aRows[0]!.revision).toBe(1)
-      expect(aRows[1]!.revision).toBe(2)
-      expect(bRows[0]!.revision).toBe(1)
-      expect(bRows[1]!.revision).toBe(2)
+      expect(aRows.length).toBe(3)
+      expect(bRows.length).toBe(3)
+      expect(aRows[0]!.revision).toBe(0)
+      expect(aRows[1]!.revision).toBe(1)
+      expect(aRows[2]!.revision).toBe(2)
+      expect(bRows[0]!.revision).toBe(0)
+      expect(bRows[1]!.revision).toBe(1)
+      expect(bRows[2]!.revision).toBe(2)
     }),
   )
 
@@ -90,14 +92,14 @@ describe("S4 bounded changefeed/outbox", () => {
       const s = yield* svc.create({ location })
       yield* ev.publish(SessionEvent.Synthetic, { sessionID: s.id, messageID: SessionMessage.ID.create(), timestamp: DateTime.makeUnsafe(20), text: "x" })
       let rows = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, s.id)).all().pipe(Effect.orDie)
-      expect(rows.length).toBe(1)
-      expect(rows[0]!.kind).toBe("changed")
-      expect(rows[0]!.revision).toBe(1)
+      expect(rows.length).toBe(2)
+      expect(rows.find((r) => r.revision === 0)!.kind).toBe("changed")
+      expect(rows.find((r) => r.revision === 1)!.kind).toBe("changed")
       yield* ev.publish(SessionEvent.Synthetic, { sessionID: s.id, messageID: SessionMessage.ID.create(), timestamp: DateTime.makeUnsafe(21), text: "y" })
       rows = yield* db.select().from(SessionChangefeedTable).where(eq(SessionChangefeedTable.session_id, s.id)).all().pipe(Effect.orDie)
-      expect(rows.length).toBe(2)
+      expect(rows.length).toBe(3)
       const revs = rows.map((r) => r.revision).sort((a, b) => a - b)
-      expect(revs).toEqual([1, 2])
+      expect(revs).toEqual([0, 1, 2])
       // verify payload-free: only session_id/revision/kind/time/seq columns exist
       for (const r of rows) {
         expect(typeof r.session_id).toBe("string")
@@ -327,8 +329,8 @@ describe("S4 bounded changefeed/outbox", () => {
       const fam = { rootID: root.id, sessionIDs: [root.id, child.id], activity: 0 }
       yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, () => false)
       const feed = yield* db.select().from(SessionChangefeedTable).orderBy(sql`${SessionChangefeedTable.seq} ASC`).all().pipe(Effect.orDie)
-      // should have: 2 changed (one per synthetic each) + 2 deleted tombstones
-      expect(feed.length).toBe(4)
+      // should have: 2 creations (0) + 2 changed (one per synthetic each) + 2 deleted tombstones
+      expect(feed.length).toBe(6)
       const dels = feed.filter((r) => r.kind === "deleted")
       expect(dels.length).toBe(2)
       for (const d of dels) {
@@ -358,7 +360,7 @@ describe("S4 bounded changefeed/outbox", () => {
       const ev = yield* EventV2.Service
       yield* ev.publish(SessionEvent.Synthetic, { sessionID: s.id, messageID: SessionMessage.ID.create(), timestamp: DateTime.makeUnsafe(40), text: "hello" })
       const beforeFeed = yield* db.select().from(SessionChangefeedTable).all().pipe(Effect.orDie)
-      expect(beforeFeed.length).toBe(1)
+      expect(beforeFeed.length).toBe(2)
       const stBefore = yield* Changefeed.getState(db)
       // truncate feed via ack
       yield* Changefeed.ack(db, stBefore.latest_seq)
@@ -424,12 +426,14 @@ describe("S4 bounded changefeed/outbox", () => {
       yield* db.update(SessionTable).set({ time_updated: 0 }).where(eq(SessionTable.id, s.id)).run().pipe(Effect.orDie)
       const fam = { rootID: s.id, sessionIDs: [s.id], activity: 0 }
       yield* Retention.deleteFamilyTransaction(db, fam, Date.now(), () => false, () => false)
-      const rows = yield* db.select().from(SessionChangefeedTable).all().pipe(Effect.orDie)
-      expect(rows.length).toBe(1)
+      const rows = yield* db.select().from(SessionChangefeedTable).orderBy(sql`${SessionChangefeedTable.seq} ASC`).all().pipe(Effect.orDie)
+      expect(rows.length).toBe(2)
       const st = yield* Changefeed.getState(db)
-      expect(st.retained_rows).toBe(1)
-      expect(st.latest_seq).toBe(rows[0]!.seq)
-      expect(st.retained_bytes).toBe(Changefeed.byteSize(rows[0]!.session_id, rows[0]!.kind))
+      expect(st.retained_rows).toBe(2)
+      expect(st.latest_seq).toBe(rows[1]!.seq)
+      expect(st.retained_bytes).toBe(
+        Changefeed.byteSize(rows[0]!.session_id, rows[0]!.kind) + Changefeed.byteSize(rows[1]!.session_id, rows[1]!.kind),
+      )
       const before = st.latest_seq
       const st2 = yield* Changefeed.getState(db)
       expect(st2.latest_seq).toBe(before)

@@ -142,6 +142,10 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     count: 29,
     reason: "B3 fork durable event aggregate preflight integration test via AppRuntime and InstanceRef (orphaned EventSequence/EventTable without SessionTable conflict, no FS/DB mutation, preserved event, full no-mutation assertions for both orphaned aggregate and sequence-only cases)",
   },
+  "kilocode/session/changefeed-creation.test.ts": {
+    count: 50,
+    reason: "creation changefeed integration test via AppRuntime and InstanceRef (ordinary projector + durable create/fork + fresh import service + CLI aggregate success/rollback/replay)",
+  },
 }
 
 const owned = (file: string) => file.startsWith("kilocode/") || file.startsWith("kilo-sessions/")

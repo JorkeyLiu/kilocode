@@ -5,6 +5,7 @@ import { CliError, effectCmd } from "../effect-cmd"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable, MessageTable, PartTable } from "@opencode-ai/core/session/sql"
 import { SessionRevision } from "@opencode-ai/core/session/revision"
+import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 import { InstanceRef } from "@/effect/instance-ref"
 import { EOL } from "os"
 import path from "path"
@@ -76,6 +77,7 @@ export function applyImportAggregate(opts: {
               revision: 0,
             })
             .run()
+          yield* Changefeed.appendTx(tx, { session_id: opts.session.id, revision: 0, kind: "changed", time: Date.now() })
         }
 
         for (const msg of opts.messages) {

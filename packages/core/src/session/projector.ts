@@ -15,6 +15,7 @@ import { WorkspaceV2 } from "../workspace"
 import { SessionContextEpoch } from "./context-epoch"
 import { MessageTable, PartTable, SessionMessageTable, SessionTable } from "./sql"
 import { SessionRevision } from "./revision"
+import * as Changefeed from "../retention/changefeed"
 import { SessionChangefeedTable, RetentionObligationTable } from "../retention/sql"
 import type { DeepMutable } from "../schema"
 
@@ -250,27 +251,33 @@ export const layer = Layer.effectDiscard(
     const events = yield* EventV2.Service
     const { db } = yield* Database.Service
     yield* events.beforeCommit((event) => SessionInput.guardReservedID(db, event))
-    yield* events.project(SessionV1.Event.Created, (event) =>
-      Effect.gen(function* () {
-        const row = sessionRow(event.data.info)
-        const stored = yield* db
-          .insert(SessionTable)
-          .values({ ...row, revision: 0 })
-          .onConflictDoNothing()
-          .returning({ sessionID: SessionTable.id })
-          .get()
-          .pipe(Effect.orDie)
-        if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
-        if (event.data.info.workspaceID) {
-          yield* db
-            .update(WorkspaceTable)
-            .set({ time_used: Date.now() })
-            .where(eq(WorkspaceTable.id, event.data.info.workspaceID))
-            .run()
+      yield* events.project(SessionV1.Event.Created, (event) =>
+        Effect.gen(function* () {
+          const row = sessionRow(event.data.info)
+          const stored = yield* db
+            .insert(SessionTable)
+            .values({ ...row, revision: 0 })
+            .onConflictDoNothing()
+            .returning({ sessionID: SessionTable.id })
+            .get()
             .pipe(Effect.orDie)
-        }
-      }),
-    )
+          if (!stored) return yield* Effect.die(new SessionAlreadyProjected())
+          yield* Changefeed.appendTx(db, {
+            session_id: event.data.sessionID,
+            revision: 0,
+            kind: "changed",
+            time: Date.now(),
+          })
+          if (event.data.info.workspaceID) {
+            yield* db
+              .update(WorkspaceTable)
+              .set({ time_used: Date.now() })
+              .where(eq(WorkspaceTable.id, event.data.info.workspaceID))
+              .run()
+              .pipe(Effect.orDie)
+          }
+        }),
+      )
     yield* events.project(SessionV1.Event.Updated, (event) =>
       Effect.gen(function* () {
         yield* db
