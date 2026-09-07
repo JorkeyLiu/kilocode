@@ -91,8 +91,7 @@ implementation and not formal external approval.
   no silent orphaning. The runtime
   records aggregate rows/bytes reclaimed and failures diagnostically.
 - I-7 (LOCK-016): session-owned sidecars/artifacts are registered in a
-  field/owner/retention registry analogous to the config field registry
-  (runtime spec section 3.2); unregistered session-owned artifacts block the
+  field/owner/retention registry analogous to the config field registry; unregistered session-owned artifacts block the
   storage phase exit (R16).
 - I-8 (LOCK-017): the P4.2 storage cutover is offline: stop the sole runtime,
   verify and archive the legacy DB plus session-owned sidecars as an opaque
@@ -168,23 +167,16 @@ Negative:
 
 - Technical spec: `../storage/session-storage-rewriting.md` - owns the
   implementation source of truth: current state, operational containment,
-  target model, cutover, storage work units S0..S5 under orchestrator P4.2,
-  gates/tests, and open decisions.
-- Runtime spec: `../vscode-orchestrator/runtime-and-configuration-direction.md`
-  - owns P4.2 ordering/gates, the R9 changefeed and R11 storage interaction
-  (sections 7.1-7.2), R15-R17 (section 9), maintenance performance guardrails
-  (section 10), and the legacy storage reader/writer removal inventory
-  (section 8.2).
-- Migration tracker: `../vscode-orchestrator/migration-tracker.md` - owns
-  P4.2a/P4.2b status, storage metrics, DB-exhaustion and containment risk rows,
-  and storage removal evidence.
+  target model, cutover, and open decisions.
+- Target semantics: `../vscode-orchestrator/direction.md` - owns the approved
+  orchestrator target this storage foundation serves.
 - Related decisions: ADR-0004 (architecture-first direct reconstruction)
   governs the just-in-time treatment of the legacy event-log sync/warp
   surfaces; this ADR supersedes ADR-0001's checkpoint + resync / multi-client
   transport target for the final product while retaining its still-valid
   principles.
-- Canonical architecture docs: none yet. The implemented system is unchanged
-  until implementation lands (LOCK-013).
+- Canonical architecture docs: updated separately when implementation changes
+  reality.
 
 ## Supersession
 

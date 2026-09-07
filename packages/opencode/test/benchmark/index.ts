@@ -9,20 +9,17 @@
  *   --scenarios <list|all>  scenario ids to run (6,7,8,9,11,12,13 or all)
  *   --samples <n>           measured samples per scenario (default 5, >= 1)
  *   --warmup <n>            warmup samples per scenario (default 1, >= 0)
- *   --out <path>            JSONL output path (default: repo-relative durable
- *                           evidence dir, see below)
+ *   --out <path>            JSONL output path (default: a run-owned temp file
+ *                           outside the repo, e.g. $TMPDIR/kilo-p0-backend-XXXXXX/backend.jsonl;
+ *                           pass --out explicitly to keep results in a chosen location)
  *   -h, --help              show this help and exit before any benchmark runs
  *
- * Durable output convention: when `--out` is omitted the JSONL lands at
- *   <repo>/specs/vscode-orchestrator/evidence/p0-baseline/<ts>/backend.jsonl
- * (repo-relative, one timestamped run dir per campaign — the extension
- * harness writes benchmark.jsonl + logs/ into the same convention). The
- * machine-readable JSONL and run metadata are durable, VERSIONABLE tracker
- * evidence and are NOT gitignored; only bulky per-run raw logs under the
- * run dir's `logs/` may remain local/ignored (the root `logs/` pattern).
- * Git provenance (commit/head/dirty) is captured BEFORE the output artifact
- * is created and reused frozen for the whole campaign, so creating evidence
- * inside the repo never flips the recorded dirty state.
+ * Run output convention: when `--out` is omitted the JSONL lands at a
+ * run-owned temp path outside the repo (one timestamped dir per campaign).
+ * Pass --out explicitly to persist results elsewhere. Only bulky per-run raw
+ * logs under the run dir's `logs/` are local by nature (the root `logs/`
+ * pattern). Git provenance (commit/head/dirty) is captured BEFORE the output
+ * artifact is created and reused frozen for the whole campaign.
  *
  * Stats note: with the default n=5, nearest-rank p95 equals max — descriptive
  * only, not a tail-latency SLA (LOCK-PERF-7 thresholds remain Open).
@@ -34,18 +31,16 @@
 
 import "./environment"
 import * as Log from "@opencode-ai/core/util/log"
+import { tmpdir } from "node:os"
 import path from "node:path"
 import fs from "node:fs"
 import { cleanupRunRoot } from "./environment"
 import { runCampaign } from "./runner"
-import { resolveRepoRoot } from "./repo-root"
 import { SCENARIOS } from "./scenarios"
 
 await Log.init({ print: true })
 
 const ALL = SCENARIOS.map((scenario) => scenario.id)
-
-const repoRoot = resolveRepoRoot()
 
 const help = `Backend P0 benchmark (scenarios ${ALL.join(",")})
 
@@ -54,15 +49,16 @@ Usage: bun run script/p0-benchmark.ts [flags]
   --scenarios <ids|all>  scenario ids to run, comma-separated or "all"
   --samples <n>          measured samples per scenario (default 5, >= 1)
   --warmup <n>           warmup samples per scenario (default 1, >= 0)
-  --out <path>           JSONL output path (default: repo-relative durable
-                         evidence dir:
-                         specs/vscode-orchestrator/evidence/p0-baseline/<ts>/backend.jsonl)
+  --out <path>           JSONL output path (default: a run-owned temp file
+                          outside the repo, e.g.
+                          $TMPDIR/kilo-p0-backend-XXXXXX/backend.jsonl; pass
+                          --out explicitly to keep results)
   -h, --help             show this help and exit before any benchmark runs
 
-Durable evidence: the JSONL is versionable tracker evidence and is NOT
-gitignored; only bulky raw logs under the run dir's logs/ may remain
-local/ignored (the root logs/ pattern). Git provenance is captured before
-the output artifact is created and frozen for the campaign.
+Run output is run-owned and lives outside the repo by default; pass --out
+explicitly to persist results elsewhere. Only bulky raw logs under the run
+dir's logs/ are local by nature (the root logs/ pattern). Git provenance is
+captured before the output artifact is created and frozen for the campaign.
 
 Stats note: n=5 default means nearest-rank p95 equals max — descriptive
 sample statistics only, not a tail-latency SLA.
@@ -110,18 +106,11 @@ function main(): void {
     cleanupRunRoot()
     return
   }
-  const ts = new Date().toISOString().replace(/[:.]/g, "-")
-  const out =
-    rawOut ??
-    path.join(
-      repoRoot,
-      "specs",
-      "vscode-orchestrator",
-      "evidence",
-      "p0-baseline",
-      ts,
-      "backend.jsonl",
-    )
+  // Default output is a run-owned temp dir created here via `mkdtemp` (each
+  // run gets a unique dir). An explicit `--out` is used as-is; only its
+  // parent is ensured, and no user-provided path is ever deleted here. The
+  // default dir is owned by this campaign run.
+  const out = rawOut ?? path.join(fs.mkdtempSync(path.join(tmpdir(), "kilo-p0-backend-")), "backend.jsonl")
   fs.mkdirSync(path.dirname(out), { recursive: true })
 
   console.log(`[p0-bench] scenarios=${scenarios.join(",")} samples=${samples} warmup=${warmup} out=${out}`)

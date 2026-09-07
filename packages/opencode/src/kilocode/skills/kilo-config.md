@@ -1,8 +1,8 @@
-# Kilo CLI Configuration Reference (Canonical, P4.3)
+# Kilo CLI Configuration Reference (Canonical)
 
 All effective config is the deterministic merge of exactly two authored JSONC scopes plus retained legal inputs. Later scopes override earlier scalars. Objects deep-merge; arrays generally replace, except `instructions` arrays are concatenated and deduplicated and `plugin` entries are deduplicated by identity. Canonical loader reads are side-effect free; all writes use shared discovery locks and `KilocodeAtomicWrite` (temp-file + rename).
 
-### Canonical sources (P4.3, low → high precedence)
+### Canonical sources (low → high precedence)
 
 | Order | Scope | File / assets | Semantics |
 |---|---|---|---|
@@ -287,7 +287,7 @@ Notification settings are managed through `attention` in `tui.json` / `tui.jsonc
 
 No other filenames are read in retained paths. In particular: `kilo.json`, `opencode.json`, `opencode.jsonc`, `config.json`, and any file outside the canonical roots is not a retained source. The project canonical directory `canonicalRoot/.kilo/` may contain `command/`, `commands/`, `agent/`, `agents/`, `skill/`, `skills/`, `rules/` typed assets; the global canonical directory `${Global.Path.config}/` may contain the same typed asset directories directly under the global root (e.g., `${Global.Path.config}/agent/`, `${Global.Path.config}/command/`). Do not create `${Global.Path.config}/.kilo/` — implementation does not read it.
 
-> **Rules — canonical registered asset class, deferred materialization (P4.3 LOCK-006):** `rules` is a normative canonical typed-asset class in the extension registry/spec (`ASSET_DIRECTORIES` includes `rules`, R10) and is therefore a legal canonical file location as above. However, the current opencode effective-snapshot / materialization path does **not** yet consume `rules` assets into its effective config — no `rules` loader participates in `Config.Service`/`overlay`. This is a recorded contract gap, not a P4.3 reader to invent. See `specs/vscode-orchestrator/evidence/p4.3-rules-contract-gap.md`; no new rules loader/composition is created here.
+> **Rules — canonical registered asset class, deferred materialization:** `rules` is a canonical typed-asset class and is therefore a legal canonical file location as above. However, the current opencode effective-snapshot / materialization path does **not** yet consume `rules` assets into its effective config — no `rules` loader participates in `Config.Service`/`overlay`. This is a recorded contract gap, not a reader to invent; no new rules loader/composition is created here.
 
 ### Config directories (canonical only)
 
@@ -315,10 +315,10 @@ No ancestor walk, no `.kilocode`/`.opencode` fallback, no `KILO_CONFIG_DIR`, no 
 
 ## Retired sources — historical context only (not active)
 
-The following were active before the P4.3 atomic legacy-reader cutover and are now retired. They are listed here so older docs and configs can be understood, but they must not be used for current instructions and no retained loader/mutation reads them.
+The following were active before the legacy-reader retirement and are now retired. They are listed here so older docs and configs can be understood, but they must not be used for current instructions and no retained loader/mutation reads them.
 
 - Legacy Kilo migrations (`.opencode` → `.kilo` conversions of modes, workflows→commands, rules/instructions, MCP servers, `.kilocodeignore` patterns)
-- `mode`/`modes` typed assets (`{mode,modes}/*.md` and `{mode,modes}/**/*.md`) — legacy agent mode presets; not retained canonical assets in P4.3 and not scanned by the retained overlay/effective config
+- `mode`/`modes` typed assets (`{mode,modes}/*.md` and `{mode,modes}/**/*.md`) — legacy agent mode presets; not retained canonical assets and not scanned by the retained overlay/effective config
 - Organization agent modes and Active Kilo Cloud organization config (fetched via OAuth / `<url>/api/config`)
 - Auth-record `.well-known/opencode` remote config and optional `remote_config` URL
 - Explicit env overrides: `KILO_CONFIG` (file), `KILO_CONFIG_DIR` (directory), `KILO_CONFIG_CONTENT` (inline JSON), `KILO_PERMISSION` (permission-only overlay), `KILO_DISABLE_PROJECT_CONFIG`
@@ -326,15 +326,14 @@ The following were active before the P4.3 atomic legacy-reader cutover and are n
 - Legacy filenames: `kilo.json`, `opencode.json`/`opencode.jsonc`, `config.json` (including global legacy TOML `config` auto-migration)
 - Managed config dir (`/etc/kilo/`, `/Library/Application Support/kilo/`, `%ProgramData%\kilo\`) and macOS managed preferences (`ai.opencode.managed.plist` under `/Library/Managed Preferences/`)
 
-The residual `.opencode` synthetic notification (`kilo.local.opencode-config-detected` via `KilocodeConfig.detectOpencodeConfig`, never effective config) was itself deleted in a bounded P4.4 removal (2026-08-28 — `packages/opencode/src/kilocode/config/config.ts` no longer contains `detectOpencodeConfig`/`opencodeConfigNotification`/`OPENCODE_NOTIFICATION_ID`/`CONFIG_DOCS_URL`, `packages/opencode/src/kilocode/server/httpapi/handlers/kilo-gateway.ts` no longer synthesizes it; cloud `fetchKilocodeNotifications` remains). The legacy source-inventory/Console reporting reader that listed the retired sources above was physically removed (P4.4); no diagnostic source-listing reader or reporting endpoint remains. This bounded removal does not close P4.4, P4.5, P5, or unrelated source/storage rows.
+The legacy source-inventory/Console reporting reader that listed the retired sources above was removed; no diagnostic source-listing reader or reporting endpoint remains.
 
-## Rules contract gap (P4.3 deferred — LOCK-006)
+## Rules contract gap (deferred)
 
-`rules` is a normative canonical typed-asset class in the extension registry/spec (R10, `ASSET_DIRECTORIES` includes `rules`), but the current opencode effective snapshot does not consume it. The class is preserved as the canonical registered definition; its opencode materialization (loader/composition/snapshot participation) is deferred follow-up. No new rules runtime was created in P4.3. See `specs/vscode-orchestrator/evidence/p4.3-rules-contract-gap.md`.
+`rules` is a canonical typed-asset class, but the current opencode effective snapshot does not consume it. The class is preserved as the canonical registered definition; its opencode materialization (loader/composition/snapshot participation) is deferred follow-up. No new rules runtime was created for it.
 
 ## Deferred boundaries
 
-- **P4.4 open:** per-row inactive/removal evidence for the 13 retired removal classes and transport narrowing. The legacy source-inventory reader and its reporting endpoint are removed; the unreachable `config/managed.ts` helper is deleted (P4.4-T3); the orphaned `primary-worktree` helper is deleted (P4.4-T2); remaining inventory-adjacent residues (TUI/instruction/`ConfigPaths`, sandbox policy, SDK wrapper forwarding) and provider/catalog (LOCK-006) work stay open. Do not assume row-level evidence is complete.
-- **P4.5 open:** deletion of old CLI/TUI/Console surfaces (`packages/opencode/src/cli`, `src/kilocode/tui`, and TUI handlers). Those surfaces remain in the repository during P4.3 and must not be edited as part of a P4.3 config change.
+- Transport narrowing and old CLI/TUI/Console surface deletion remain separate concerns and are not covered by this reference.
 
-Configuration behavior described above is canonical-only as of P4.3 (LOCK-002). For runtime hot/cold classification and convergence, see `packages/opencode/src/kilocode/config/hot-keys.ts` and `packages/kilo-docs/pages/contributing/architecture/cli-runtime.md#config-update-lifecycle`.
+Configuration behavior described above is canonical-only. For runtime hot/cold classification and convergence, see `packages/opencode/src/kilocode/config/hot-keys.ts` and `packages/kilo-docs/pages/contributing/architecture/cli-runtime.md#config-update-lifecycle`.

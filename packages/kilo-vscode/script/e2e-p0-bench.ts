@@ -38,16 +38,11 @@
  *   {v:1, kind:"summary", scenario, metric, n, min, median, p95, max, mean}
  * Per-sample raw capture logs land in <out>/logs/.
  *
- * Durable output convention: the default `--out` is the repo-relative,
- * durable evidence dir
- *   <repo>/specs/vscode-orchestrator/evidence/p0-baseline/<ts>/
- * (the backend CLI uses the same convention with backend.jsonl). The
- * machine-readable JSONL and run metadata are durable, VERSIONABLE tracker
- * evidence and are NOT gitignored; only bulky per-run raw capture logs under
- * <out>/logs/ may remain local/ignored (the root `logs/` pattern). Git
+ * Output convention: the default `--out` is a run-owned temp dir outside the
+ * repo (see script/p0-bench/args.ts); pass --out explicitly to persist
+ * results in a chosen location. Git
  * provenance (commit/head/dirty) is derived ONCE at campaign start — BEFORE
- * the output artifact is created — and propagated frozen into every record,
- * so creating evidence inside the repo never flips the recorded dirty state.
+ * the output artifact is created — and propagated frozen into every record.
  *
  * Stats note: with the default n=5, nearest-rank p95 equals max — descriptive
  * sample statistics only, not a tail-latency SLA (LOCK-PERF-7 thresholds
@@ -346,7 +341,7 @@ async function runCampaign(args: BenchArgs, outFile: string): Promise<CampaignRe
     process.exit(1)
   }
   // Immutable per-campaign CLI snapshot: copy bin/kilo to a run-owned temp path
-  // (os.tmpdir — never the versioned evidence dir) and pin that exact path
+  // (os.tmpdir) and pin that exact path
   // through the benchmark-only KILO_P0_BACKEND_CLI override. The non-owned dev
   // watcher (script/watch-cli.ts) may keep rebuilding bin/kilo, but it can no
   // longer change the binary this campaign measures. The snapshot is deleted
@@ -359,9 +354,8 @@ async function runCampaign(args: BenchArgs, outFile: string): Promise<CampaignRe
       `sha256=${(snapshot.info.snapshotSha256 ?? "unreadable").slice(0, 12)}…`,
   )
   try {
-    // Freeze provenance BEFORE the output artifact is created: the evidence dir
-    // is not gitignored, so creating benchmark.jsonl must never flip the
-    // recorded dirty state. This frozen value is reused on every record.
+    // Freeze provenance BEFORE the output artifact is created. This frozen
+    // value is reused on every record.
     const envInfo = benchEnvInfo(snapshot)
     const writer = new JsonlWriter(outFile)
     const startRecord: RunRecord = {

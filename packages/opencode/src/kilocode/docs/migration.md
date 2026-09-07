@@ -1,6 +1,6 @@
 # Kilo CLI Migration Reference
 
-This page records retired migration surfaces for historical reference. The retained P4.3 configuration path is canonical-only and does not run compatibility readers or import tools.
+This page records retired migration surfaces for historical reference. The retained configuration path is canonical-only and does not run compatibility readers or import tools.
 
 ## Retired sources
 
@@ -21,7 +21,7 @@ Convert retained user intent manually into canonical files when needed:
 - MCP: the canonical `mcp` config field
 - permissions: the canonical `permission` config field
 
-The VS Code extension retains its separately owned legacy migration flow for old extension data. That flow is not a CLI reader and is outside the P4.3 CLI effective-config boundary.
+The VS Code extension retains its separately owned legacy migration flow for old extension data. That flow is not a CLI reader and is outside the CLI effective-config boundary.
 
 ## Retained discovery
 
@@ -68,8 +68,8 @@ Display conditions: notifications appear only when connected to Kilo Gateway and
 
 ## Rules contract gap
 
-`rules` remains a normative registered typed-asset class. The current opencode effective snapshot does not materialize it, and this page does not define a rules runtime or loader. The contract gap is recorded in `specs/vscode-orchestrator/evidence/p4.3-rules-contract-gap.md` and remains deferred.
+`rules` remains a registered typed-asset class. The current opencode effective snapshot does not materialize it, and this page does not define a rules runtime or loader. The contract gap remains deferred.
 
 ## Deferred boundaries
 
-P4.4 per-row evidence and transport narrowing remain open. P4.5 deletion of old CLI, TUI, and Console surfaces remains open and is not covered by this cleanup.
+Transport narrowing and deletion of old CLI, TUI, and Console surfaces remain separate concerns and are not covered by this cleanup.

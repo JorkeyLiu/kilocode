@@ -1,5 +1,6 @@
 import { describe, expect, it } from "bun:test"
-import { join, resolve } from "node:path"
+import { rmSync } from "node:fs"
+import { resolve } from "node:path"
 import { MERGE_USAGE, parseMergeArgs, wantsMergeHelp } from "../../script/p0-bench/merge-args"
 
 const REPO = "/ws/kilocode"
@@ -18,7 +19,7 @@ describe("p0 segment merger: help handling", () => {
     expect(MERGE_USAGE).toContain("--out")
     expect(MERGE_USAGE).toContain("--required-samples")
     expect(MERGE_USAGE).toContain("no live launch")
-    expect(MERGE_USAGE).toContain("many-agent-mcp-merged")
+    expect(MERGE_USAGE).toContain("run-owned")
     expect(MERGE_USAGE).toContain("Interrupted runs")
     expect(MERGE_USAGE).toContain("baselineComplete")
     expect(MERGE_USAGE).toContain("not a tail-latency SLA")
@@ -26,11 +27,26 @@ describe("p0 segment merger: help handling", () => {
 })
 
 describe("p0 segment merger: argument parsing", () => {
-  it("defaults the output root to the repo evidence convention with the merged dir name", () => {
+  it("defaults the output to a run-owned temp dir outside the repo", () => {
     const args = parseMergeArgs(["--segments", "a.jsonl"], REPO)
-    const base = join(REPO, "specs", "vscode-orchestrator", "evidence", "p0-baseline", "many-agent-mcp-merged-")
-    expect(args.outDir.startsWith(base)).toBe(true)
-    expect(args.requiredSamples).toBe(5)
+    try {
+      expect(args.outDir).not.toContain(REPO)
+      expect(args.outDir).toContain("kilo-p0-bench-merged-")
+      expect(args.requiredSamples).toBe(5)
+    } finally {
+      rmSync(args.outDir, { recursive: true, force: true })
+    }
+  })
+
+  it("consecutive default parses get different dirs", () => {
+    const first = parseMergeArgs(["--segments", "a.jsonl"], REPO)
+    const second = parseMergeArgs(["--segments", "a.jsonl"], REPO)
+    try {
+      expect(second.outDir).not.toBe(first.outDir)
+    } finally {
+      rmSync(first.outDir, { recursive: true, force: true })
+      rmSync(second.outDir, { recursive: true, force: true })
+    }
   })
 
   it("accepts repeated --segments occurrences", () => {

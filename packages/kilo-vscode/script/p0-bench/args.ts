@@ -7,6 +7,8 @@
  * launch and exit with the usage text only.
  */
 
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { ScenarioID } from "./types"
 import { SCENARIO_NUMBERS, SCENARIOS } from "./types"
@@ -30,17 +32,19 @@ Usage: bun run test:p0-bench -- [flags]
   --warmup <n>             warmup samples per scenario (default 1, >= 0)
   --switch-sessions <n>    seeded sessions for session-switch (default 5)
   --mcp-agents <n>         seeded agents for many-agent-mcp (default 20)
-  --out <dir>              JSONL output directory (default: repo-relative
-                           durable evidence dir:
-                           specs/vscode-orchestrator/evidence/p0-baseline/<ts>)
+  --out <dir>              JSONL output directory (default: a run-owned temp
+                            dir outside the repo, e.g.
+                            $TMPDIR/kilo-p0-bench-XXXXXX; pass --out explicitly
+                            to keep results in a chosen location)
   --no-build               skip the extension/webview esbuild
   -h, --help               show this help and exit before any build/launch
 
-Durable evidence: the machine-readable JSONL (benchmark.jsonl) plus run
-metadata under the evidence dir are VERSIONABLE tracker evidence and are NOT
-gitignored. Only bulky per-run raw capture logs under <out>/logs/ may remain
-local/ignored (the root logs/ pattern). Git provenance is captured before
-the output artifact is created and frozen for the campaign.
+Run output: the machine-readable JSONL (benchmark.jsonl) plus run metadata
+under the output dir are run-owned and live outside the repo by default.
+Pass --out explicitly to persist results elsewhere. Only bulky per-run raw
+capture logs under <out>/logs/ are local by nature (the root logs/ pattern).
+Git provenance is captured before the output artifact is created and frozen
+for the campaign.
 
 Stats note: n=5 default means nearest-rank p95 equals max — descriptive
 sample statistics only, not a tail-latency SLA.
@@ -74,11 +78,15 @@ function parseScenarios(value: string): ScenarioID[] {
 }
 
 /**
- * Parse benchmark flags. `repoRoot` is the deterministic repo root for the
- * durable-evidence default; `KILO_P0_*` env vars are fallbacks for every
- * numeric/selection flag. Throws on invalid values (the harness exits 1).
+ * Parse benchmark flags. `repoRoot` is retained for callers that resolve git
+ * provenance from the checkout; the default output dir is a run-owned temp
+ * dir created here via `mkdtemp` (each parse gets a unique dir). An explicit
+ * `--out` is used as-is and never created or deleted here; only the default
+ * dir is created by this parse and owned by the calling campaign run.
+ * `KILO_P0_*` env vars are fallbacks for every numeric/selection flag. Throws
+ * on invalid values (the harness exits 1).
  */
-export function parseArgs(argv: string[], repoRoot: string): BenchArgs {
+export function parseArgs(argv: string[], _repoRoot: string): BenchArgs {
   const get = (name: string): string | undefined => {
     const idx = argv.indexOf(name)
     return idx >= 0 && idx + 1 < argv.length ? argv[idx + 1] : undefined
@@ -88,9 +96,8 @@ export function parseArgs(argv: string[], repoRoot: string): BenchArgs {
   const rawWarmup = get("--warmup") ?? process.env.KILO_P0_WARMUP ?? "1"
   const samples = Number(rawSamples)
   const warmup = Number(rawWarmup)
-  const outDir =
-    get("--out") ??
-    join(repoRoot, "specs", "vscode-orchestrator", "evidence", "p0-baseline", new Date().toISOString().replace(/[:.]/g, "-"))
+  const rawOut = get("--out")
+  const outDir = rawOut ?? mkdtempSync(join(tmpdir(), "kilo-p0-bench-"))
   const switchSessions = Number(get("--switch-sessions") ?? process.env.KILO_P0_SWITCH_SESSIONS ?? "5")
   const mcpAgents = Number(get("--mcp-agents") ?? process.env.KILO_P0_MCP_AGENTS ?? "20")
   if (!Number.isInteger(samples) || samples < 1) throw new Error(`[p0-bench] --samples must be an integer >= 1 (got "${rawSamples}")`)

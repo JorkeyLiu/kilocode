@@ -82,19 +82,17 @@ implementation and not formal external approval.
   context-overflow reliability. Worktrees are not a harness invariant.
 - I-9 (LOCK-013): canonical architecture docs describe implemented reality and are
   updated only as implementation lands; this work creates decision/spec artifacts
-  only, and the migration tracker records current evidence truthfully.
-- I-10: progress tracking is separate from this ADR; the migration tracker is the
-  mutable source of truth for phase status, evidence, blockers, and next actions,
-  and no phase is complete without objective exit evidence recorded there.
+  only, and the present capability and gap are recorded truthfully in
+  `../vscode-orchestrator/current-state.md`.
+- I-10: progress tracking is separate from this ADR; `../vscode-orchestrator/current-state.md`
+  records only the present capability, gap, unknown, and open decision that
+  changes the next judgment, and running code and observed behavior outrank
+  status prose.
 
-The detailed invariant set with per-capability acceptance criteria lives in the
-technical spec (`../vscode-orchestrator/agent-orchestration-direction.md`,
-section 6), and the parity gates that operationalize those criteria live in
-section 11. Runtime/config ownership decisions (LOCK-009..012) and their
-acceptance criteria live in ADR-0003 and its technical spec
-(`../vscode-orchestrator/runtime-and-configuration-direction.md`). Mutable phase
-status and exit evidence are tracked in the migration tracker
-(`../vscode-orchestrator/migration-tracker.md`), not in this ADR.
+Target semantics live in `../vscode-orchestrator/direction.md`.
+Runtime/config ownership decisions live in ADR-0003. Implemented reality lives
+in the canonical architecture docs; the present capability and gap live in
+`../vscode-orchestrator/current-state.md`, not in this ADR.
 
 ## Alternatives considered
 
@@ -107,7 +105,7 @@ status and exit evidence are tracked in the migration tracker
 | Keep user-visible context management/compaction | Rejected: removed (LOCK-004); only a minimal internal context-overflow safeguard remains (LOCK-005). |
 | Keep preset provider identities/catalogs | Rejected: only user-defined/custom providers are retained (LOCK-006); runtime detail is owned by ADR-0003. |
 | Rewrite the extension or replace the shared backend now | Rejected for now: runtime/config migration is owned by ADR-0003 and its technical spec; no premature rewrite is mandated. |
-| Define 'topic' as a new persisted domain model | Rejected for now: 'topic' is provisional navigation language pending specification (open question 1). |
+| Define 'topic' as a new persisted domain model | Rejected: 'topic' is deterministic derived navigation defined in `../vscode-orchestrator/direction.md` — root session ID identity, root title label, parentID membership, max member updatedAt with ID tie-break ordering, orphan/missing-parent/cycle degradation to independent Topics — with no independent persistence, API, config, schema, or operational fact. |
 
 ## Consequences
 
@@ -124,13 +122,11 @@ Positive:
 
 Negative:
 
-- Removed surfaces remain in the repository as residual implementation until the
-  removal phases land; removal is gated work, not this ADR.
-- Directional deprecation keeps the sidebar maintained until removal completes.
+- Removed surfaces leave the tree where implementation lands; remaining work
+  proceeds directly against the target, not through a separate removal gate.
 - Migration cost is real: navigation, session picker, and multi-panel UX must
   replace sidebar habits.
-- 'topic' semantics are intentionally undefined; product and UX decisions are
-  deferred and may churn.
+- 'topic' target semantics are fixed as deterministic derived navigation in `../vscode-orchestrator/direction.md`; remaining product and UX presentation decisions may still churn.
 
 ## Follow-up artifacts
 
@@ -138,23 +134,11 @@ Negative:
   records the durable runtime/config ownership decision (private headless worker,
   GUI-owned configuration, immutable generation snapshots, immediate selector
   state) and complements this ADR.
-- Technical spec: `../vscode-orchestrator/agent-orchestration-direction.md` - owns
-  product thesis, user journey, terminology boundaries, target surfaces, harness
-  capability matrix (H-1..H-13), ownership principles, bounded target
-  architecture, removal inventory, product migration phases, acceptance
-  gates/complexity budgets, compatibility policy, risks, and open questions.
-- Technical spec: `../vscode-orchestrator/runtime-and-configuration-direction.md` -
-  owns the runtime/config migration: current root causes with repository evidence,
-  target ownership domains, provider target, config update semantics, startup
-  acceptance, migration strategy, and removal checklist.
-- Migration tracker: `../vscode-orchestrator/migration-tracker.md` - owns mutable
-  phase status, exit evidence, capability parity evidence, removal inventory
-  evidence, baseline/complexity metrics, decisions/open questions, risk/blocker
-  log, and next actions. It is the source of truth for progress; no phase is
-  complete without objective exit evidence recorded there (I-10).
-- Canonical architecture docs: none yet. The implemented system is unchanged until
-  implementation lands; when implementation changes reality, the architecture
-  pages are updated separately (LOCK-013).
+- Target semantics: `../vscode-orchestrator/direction.md` - owns the approved
+  product target; the canonical architecture docs own implemented reality and
+  `../vscode-orchestrator/current-state.md` owns the present capability and gap.
+- Canonical architecture docs: updated separately when implementation changes
+  reality.
 
 ## Supersession
 

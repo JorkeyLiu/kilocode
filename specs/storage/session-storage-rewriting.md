@@ -67,7 +67,7 @@ sync/warp replay protocol.
 | R16 | Canonical aggregate schema/revision model and bounded outbox/changefeed disposition; artifact ownership/retention registry | P4.2 (P4.2a). Not a P1-P3 blocker | Resolved 2026-08-20 — normalized session/message/part/todo/share + registered operation/outcome/failure aggregates; `SessionTable.revision` monotonic; payload-free tombstone on delete; bounded changefeed 50,000 rows/64 MiB; closed artifact registry; S2 materializes, S3 closes/audits |
 | R17 | Offline archive format/location/integrity/checksum; fresh-DB cutover identity; rollback and archive-deletion authority | P4.2 (P4.2a). Not a P1-P3 blocker | Resolved 2026-08-20 — offline versioned dir `<data-basename>-archive/p4.2/<UTC>-<uuid>/` under same-filesystem sibling; manifest v1 with SHA-256; fixed member set with `session-export.db` included/absent recorded and `snapshot` excluded; singleton storage identity; offline rollback; deletion requires separate maintainer authorization |
 
-R15-R17 are recorded in the runtime spec (section 9) and the migration tracker (section 9).
+R15-R17 are recorded in this spec (sections 5-6) under ADR-0005.
 
 ### 1.5 Relationship to orchestrator phases
 
@@ -75,14 +75,14 @@ R15-R17 are recorded in the runtime spec (section 9) and the migration tracker (
   (section 4); P1-P3 may proceed on the legacy store.
 - Within P4.2, the storage foundation and cutover is the first sub-boundary:
   **P4.2a storage** (this spec, work units S0..S5 in section 7) lands before
-  the **P4.2b** private-wire/schema freeze for R9 and R11-R14 (runtime spec
-  sections 7.1-7.2, 9). The S0..S5 labels are namespaced under orchestrator
+  the **P4.2b** private-wire/schema freeze for the observation and
+  Failure/Outcome target in `../vscode-orchestrator/direction.md`. The S0..S5 labels are namespaced under orchestrator
   P4.2 and collide with no orchestrator phase.
 - P4.2 cannot exit until the canonical schema/revision model, automatic
   retention, artifact registry, R15-R17, clean-DB cutover, and H-10/H-11
   persistence/lifecycle evidence pass (section 8).
 - P4.4/P4.5 remove old sync/warp/event replay/public server surfaces and
-  legacy storage writers/readers (runtime spec section 8.2).
+  legacy storage writers/readers.
 
 ## 2. Current State And Measured Evidence
 
@@ -271,7 +271,7 @@ on this machine is expected retained content, not orphans.
 ### 3.4 Consumers that depend on the event log (legacy surfaces)
 
 These surfaces exist today and depend on the event log. In the target they are
-removed (ADR-0005 I-4; runtime spec section 8.2; P4.4/P4.5), not preserved:
+removed (ADR-0005 I-4; P4.4/P4.5), not preserved:
 the final product is one private runtime with no multi-client sync/warp, no
 old-peer capability negotiation, and no released-client compatibility.
 
@@ -340,13 +340,12 @@ runtime (section 6.2).
   archived legacy set, which is not migrated into or read by the new runtime.
 - **R11 Failure/Outcome durable fields** live in the canonical aggregate
   storage / registered artifact model; diagnostic and panel projections are
-  derived and never create competing stores (ADR-0005 I-5; runtime spec
-  sections 7.2, 9).
+  derived and never create competing stores (ADR-0005 I-5; sections 5.1 and 5.4).
 - Rationale: payload-free bounded deltas avoid recreating full-object event growth while allowing reconnect efficiency; hard-cap gaps safe because canonical snapshot hydration is authoritative.
 
 ### 5.2 Bounded changefeed/outbox (R9/R16)
 
-- A **bounded derived payload-free changefeed/outbox** serves reconnect deltas for the runtime observation and hydration contract (runtime spec 7.1, R9; R16 resolved 2026-08-20). It has global monotonic sequence, session ID, session revision, kind, runtime-owned occurrence time; uniqueness/idempotency is `(session_id, revision, kind)`.
+- A **bounded derived payload-free changefeed/outbox** serves reconnect deltas for the runtime observation and hydration contract in `../vscode-orchestrator/direction.md` (R16 resolved 2026-08-20). It has global monotonic sequence, session ID, session revision, kind, runtime-owned occurrence time; uniqueness/idempotency is `(session_id, revision, kind)`.
 - It is **not authoritative history**, is **not required for reconstruction** (reconstruction reads the canonical aggregates), and is **eligible for automatic truncation** after the consumer holds an authoritative hydration state (an observation snapshot, section 9 terminology). It is derived, never reconstruction authority. Canonical snapshot hydration establishes a sequence cursor; acknowledged rows are truncatable.
 - Hard cap is both 50,000 rows and 64 MiB; exceeding either may evict oldest rows even if unacknowledged. Any cursor gap forces full rehydration. Exact wire handshake remains R9/P4.2b. Rationale: payload-free bounded deltas avoid recreating full-object event growth while allowing reconnect efficiency; hard-cap gaps safe because canonical snapshot hydration is authoritative.
 - Deletion writes a payload-free tombstone atomically before hard-delete in the same transaction (section 5.1); feed rows have no FK cascade to session.
@@ -363,13 +362,13 @@ runtime (section 6.2).
 - **Eligibility and ordering**: protect every root family whose maximum runtime-owned activity across root+descendants is within 7 days; additionally requires all members terminal/idle and no active/in-flight operation or maintenance/read lease. Revalidate protections in the deletion transaction. Order eligible roots by activity ascending then root ID. Active/in-flight and maintenance-leased/read families cannot be pruned. No partial transcript/tool/output truncation, no logical loss inside runtime-retained sessions, no deletion inline with a user-visible request, and no silent orphaning (ADR-0001's complete-session/family deletion and no-silent-lossy-compaction retained).
 - **Maintenance timing and crash safety**: maintenance is coalesced after boot and canonical commits, runs only off the generation hot path when idle and high is exceeded. Canonical DB deletion is one immediate transaction; filesystem artifact cleanup uses a durable idempotent cleanup obligation so crash recovery cannot expose a partially retained canonical family.
 - **Reclamation**: fresh canonical DB is created with incremental auto-vacuum. After pruning, checkpoint/reclaim incrementally off hot path. If floor/protections prevent low, stop safely and emit pressure diagnostics.
-- **Diagnostics**: per-run diagnostic facts: trigger, before/after physical bytes, selected/deleted/skipped family counts with reasons, canonical rows and artifact bytes reclaimed, checkpoint/vacuum result, failures. These are descriptive maintenance facts, never a user-facing surface and never a numeric performance gate (runtime spec section 10).
+- **Diagnostics**: per-run diagnostic facts: trigger, before/after physical bytes, selected/deleted/skipped family counts with reasons, canonical rows and artifact bytes reclaimed, checkpoint/vacuum result, failures. These are descriptive maintenance facts, never a user-facing surface and never a numeric performance gate.
 - Rationale: 8/6 separates normal operation from measured ~24.56 GiB legacy emergency; 7 days preserves recent continuity while bounding growth.
 
 ### 5.4 Artifact field/owner/retention registry (R16 resolved 2026-08-20)
 
 - Closed registry entries: canonical DB aggregate rows (including SessionShare/todo/message/part/context and future registered outcome/failure rows) are schema-owned and cascade/transaction governed, not file artifacts; `session_diff`, `session_diff_base`, `session_share` are session-family-owned file artifacts, retained/deleted with family; `snapshot` is project-owned and collected only by project reachability/refcount, never family pruning; `session-export.db` is legacy cutover material under R17, not canonical artifact. New runtime artifact writes require a registry entry before landing.
-- Every session-owned sidecar/artifact has a registry entry with owner and retention disposition, analogous to the config field registry (runtime spec 3.2); session-family deletion removes exactly the session-owned artifacts of the deleted family, nothing else. Project-scoped/shared revert snapshot storage (`~/.local/share/kilo/snapshot/`, section 3.3) is registered with project-level ownership via reachability/refcount, separate from session-family deletion, with no silent orphaning.
+- Every session-owned sidecar/artifact has a registry entry with owner and retention disposition; session-family deletion removes exactly the session-owned artifacts of the deleted family, nothing else. Project-scoped/shared revert snapshot storage (`~/.local/share/kilo/snapshot/`, section 3.3) is registered with project-level ownership via reachability/refcount, separate from session-family deletion, with no silent orphaning.
 - Unregistered session-owned artifacts **block the storage phase exit** (R16; section 8 gate).
 - The registry covers artifacts that survive the cutover (section 6) and the canonical model's new artifact surface.
 - Sequencing: R16 registry definition is available to S2; S2 materializes/consumes the registry for deletion. S3 is registry closure/audit: verify every writer/class is registered, project snapshot ownership is correct, and zero unregistered artifacts remain. Thus S2→S3 is preserved.
@@ -417,19 +416,18 @@ are namespaced storage work units and collide with no orchestrator phase.
 
 | Unit | Scope | Exit criteria | Test / verification |
 |---|---|---|---|
-| S0 Baseline and fixtures | Freeze the read-only aggregate measurement queries (section 10) as reproducible commands; build lossless-family fixtures (retained family; active/in-flight family; maintenance-leased/read family); record storage baseline metrics in the tracker (section 8) | Reproducible commands + fixture tests pass; baseline recorded (2026-08-14 values, section 2.2) | Measurement queries from section 10; fixture tests in `packages/opencode` |
+| S0 Baseline and fixtures | Freeze the read-only aggregate measurement queries (section 10) as reproducible commands; build lossless-family fixtures (retained family; active/in-flight family; maintenance-leased/read family); record storage baseline metrics in section 8 | Reproducible commands + fixture tests pass; baseline recorded (2026-08-14 values, section 2.2) | Measurement queries from section 10; fixture tests in `packages/opencode` |
 | S1 Canonical aggregate schema and revision commit model | Define the canonical aggregate/read-model schema and the atomic monotonic aggregate/session revision commit (section 5.1); crash-safe maintenance transactions | Every mutation commits canonical state + revision atomically; crash injection leaves no torn state; no unbounded replay log is written | Round-trip and crash-injection tests |
 | S2 Automatic retention engine | Byte-budget high 8 GiB/low 6 GiB with hysteresis, 7-day floor, family eligibility/ordering, atomic family pruning with cleanup obligation, protections, incremental vacuum/checkpoint, diagnostics (section 5.3; R15 resolved 2026-08-20) | Retention engine passes with normative values; protects 7-day families and active/leased families, ordering activity asc then root ID, complete-family deletion only, WAL-inclusive accounting, pressure diagnostics when floor prevents low | Retention engine tests; family-protection tests |
 | S3 Artifact field/owner/retention registry | Register every session-owned sidecar/artifact with owner and retention; S2 materializes/consumes registry, S3 closes/audits (section 5.4; R16 resolved 2026-08-20) | Registry definition available to S2; S2 materializes for deletion; S3 verifies every writer/class registered, snapshot ownership correct, zero unregistered; unregistered blocks exit; S2→S3 preserved | Registry audit test |
-| S4 Bounded changefeed/outbox | Bounded payload-free feed for reconnect deltas with global seq, `(session_id, revision, kind)` idempotency, 50,000 rows/64 MiB caps, cursor-gap full rehydration (section 5.2; R16 resolved 2026-08-20) | Storage-side feed verified: bounded ordering, hard-cap eviction, truncation, idempotency, gap→rehydration; payload-free tombstone on delete; feed never affects reconstruction | Storage-side feed tests (ordering/truncation/idempotency/caps); wire-level R9 convergence at P4.2b (runtime spec 7.1) |
+| S4 Bounded changefeed/outbox | Bounded payload-free feed for reconnect deltas with global seq, `(session_id, revision, kind)` idempotency, 50,000 rows/64 MiB caps, cursor-gap full rehydration (section 5.2; R16 resolved 2026-08-20) | Storage-side feed verified: bounded ordering, hard-cap eviction, truncation, idempotency, gap→rehydration; payload-free tombstone on delete; feed never affects reconstruction | Storage-side feed tests (ordering/truncation/idempotency/caps); wire-level convergence at P4.2b under the direction target |
 | S5 Offline cutover | Stop sole runtime, checkpoint/integrity, archive fixed members with manifest v1+SHA-256 under `<data-basename>-archive/p4.2/<UTC>-<uuid>/`, boot fresh DB with singleton identity, retain rollback authority (section 6; R17 resolved 2026-08-20) | Archive integrity verified with manifest+aggregate SHA-256 and atomic rename; fresh DB boots clean with identity gate and zero sessions/artifacts; offline rollback rehearsed; deletion requires separate authorization | Cutover rehearsal; archive integrity check |
 
 ## 8. Gates And Tests
 
 ### 8.1 P4.2 storage gates
 
-P4.2 cannot exit until all of the following pass (ADR-0005 I-11; runtime spec
-section 9):
+P4.2 cannot exit until all of the following pass (ADR-0005 I-11):
 
 - Canonical schema/revision model (S1, R16) — mutations commit canonical state
   and a monotonic revision atomically.
@@ -437,21 +435,19 @@ section 9):
   hysteresis, family protections, complete-family deletion, diagnostics.
 - Artifact field/owner/retention registry (S3, R16) — no unregistered
   session-owned artifact remains.
-- R15-R17 resolved and recorded in the runtime spec and tracker (both section
-  9).
+- R15-R17 resolved and recorded in this spec (sections 5-6).
 - Clean-DB cutover (S5, R17) — offline archive with integrity evidence, fresh
   canonical DB boot, rollback authority retained.
 - H-10/H-11 persistence and lifecycle evidence passes against the canonical
-  storage foundation (direction spec section 6; runtime spec section 7.1).
+  storage foundation in this spec.
 
 ### 8.2 Tests
 
 - Storage unit tests in `packages/opencode` (S0-S5 scope in section 7).
 - Storage-side bounded changefeed tests (S4: ordering/truncation/idempotency);
-  wire-level R9 convergence is a P4.2b gate under the runtime observation
-  contract (runtime spec sections 7.1-7.2), not an S4 exit.
-- H-10/H-11 evidence from the target surface recorded in the tracker capability
-  table (tracker section 6).
+  wire-level convergence is a P4.2b gate under the direction target, not an S4 exit.
+- H-10/H-11 evidence from the target surface recorded against the canonical
+  storage foundation.
 - No cross-client or released-client storage tests exist or are planned
   (ADR-0005 I-4).
 
@@ -462,9 +458,9 @@ section 9):
 | Canonical aggregate | The normalized session aggregate/read-model state that is canonical durable truth, plus its explicitly registered artifacts | The private runtime's canonical store (section 5.1); not a replay log |
 | Bounded changefeed | A bounded derived feed of deltas for reconnect hydration (R9) | Not authoritative history; truncatable after authoritative hydration state (section 5.2) |
 | Offline archive | The opaque archived legacy DB + session-owned sidecars with checksum/integrity evidence from the P4.2 cutover | No runtime archive reader; rollback authority until deletion is separately authorized (section 6) |
-| Revert snapshot | Filesystem snapshot storage used by SessionRevert + Snapshot semantics (direction spec LOCK-007) | Distinct from canonical aggregates; part of the artifact registry scope (section 5.4) |
-| Config generation snapshot | The immutable versioned config/runtime snapshot a generation consumes (runtime spec section 5) | Derived versioned value, not a second persisted store; distinct from storage artifacts |
-| Observation snapshot | An observation of runtime operational facts under the observation contract (runtime spec section 7.1) | Distinct from the config generation snapshot; delivered over the R9 bounded changefeed/outbox |
+| Revert snapshot | Filesystem snapshot storage used by SessionRevert + Snapshot semantics | Distinct from canonical aggregates; part of the artifact registry scope (section 5.4) |
+| Config generation snapshot | The immutable versioned config/runtime snapshot a generation consumes | Derived versioned value, not a second persisted store; distinct from storage artifacts |
+| Observation snapshot | An observation of runtime operational facts under the observation contract | Distinct from the config generation snapshot; delivered over the bounded changefeed/outbox |
 
 ## 10. Verification Commands
 
@@ -477,7 +473,7 @@ Measurement (read-only, against a local install):
 Markdown/table check for this file and the storage-related docs (must pass
 without modifying anything):
 
-- `bun run script/check-md-table-padding.ts specs/adr/0001-lossless-session-storage-rewriting.md specs/adr/0004-architecture-first-direct-reconstruction.md specs/adr/0005-bounded-private-runtime-storage.md specs/storage/session-storage-rewriting.md specs/vscode-orchestrator/agent-orchestration-direction.md specs/vscode-orchestrator/runtime-and-configuration-direction.md specs/vscode-orchestrator/migration-tracker.md`
+- `bun run script/check-md-table-padding.ts specs/adr/0001-lossless-session-storage-rewriting.md specs/adr/0004-architecture-first-direct-reconstruction.md specs/adr/0005-bounded-private-runtime-storage.md specs/storage/session-storage-rewriting.md`
 
 Test/typecheck guidance (from root AGENTS.md; run only the smallest relevant
 layer when a storage work unit touches code):

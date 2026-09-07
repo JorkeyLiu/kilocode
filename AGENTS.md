@@ -29,7 +29,7 @@ This repository is independently governed. There is no upstream merge stream and
 - **Source links**: After adding or changing URLs in `packages/kilo-vscode/`, `packages/kilo-vscode/webview-ui/`, or `packages/opencode/src/`, run `bun run script/extract-source-links.ts` from the repo root and commit the updated `packages/kilo-docs/source-links.md`. CI runs this check — the build fails if the file is stale.
 - **Effect facade ratchet**: Do not add runtime-backed Promise facades to shared `packages/opencode/src` Effect services; use service dependencies, `AppRuntime`, or Kilo-owned boundaries. Run `bun run script/check-opencode-promise-facades.ts` when touching service adapters.
 - **workflow allowlist**: `bun run script/check-workflows.ts` from repo root. CI runs this in the repository-guards workflow — any `.yml` / `.yaml` file added to or removed from `.github/workflows/` must be reflected in the hardcoded list in `script/check-workflows.ts`. Prevents unvetted workflows from silently running with repository privileges in CI.
-- **Architecture docs impact**: Changing system boundaries, state ownership, lifecycle, persistence, concurrency, public protocol, config application semantics, a cross-client contract, or a guard/workflow model requires reviewing the [canonical architecture docs](packages/kilo-docs/pages/contributing/architecture/index.md) and, for high-impact changes, a `## Documentation Impact` declaration in the PR body. Before claiming completion or committing, run `bun run script/check-architecture-impact.ts --worktree` from the repo root and apply the Architecture documentation completion gate under Quality Checks — the PR declaration persists that same local decision and CI validates it. See [Documentation impact governance](packages/kilo-docs/pages/contributing/architecture/index.md#documentation-impact-governance).
+- **Architecture docs impact**: Changing system boundaries, state ownership, lifecycle, persistence, concurrency, public protocol, config application semantics, a cross-client contract, or a guard/workflow model requires assessing the [canonical architecture docs](packages/kilo-docs/pages/contributing/architecture/index.md) and, for high-impact changes with a PR, a `## Documentation Impact` declaration in the PR body. When a change may touch those areas, or when preparing a commit, inspect the relevant diff and run `bun run script/check-architecture-impact.ts --worktree` from the repo root as guidance — see [Documentation impact governance](packages/kilo-docs/pages/contributing/architecture/index.md#documentation-impact-governance). Pure investigation and ordinary no-impact tasks need no check and no report.
 - **Backend/SDK programmatic testing**: see [TESTING.md](./TESTING.md) for spawning the local main-branch backend (`bun dev serve`) and driving it via `curl` — use this instead of `kilo serve` (prod binary) when testing backend fixes.
 
 ## Runtime Conventions
@@ -90,20 +90,18 @@ Copy, CSS, isolated components, and faithfully reproducible Storybook UI do not 
 | VS Code extension | From `packages/kilo-vscode/`: `bun run typecheck`, `bun run lint`, `bun run test:unit` or `bun run test` |
 | Extension build/package | From `packages/kilo-vscode/`: `bun run compile` or `bun run package` when touching build, packaging, SDK, or webview integration paths |
 | CI-only guards | Run affected guards documented above, such as `bun run knip` or source link extraction |
-| Architecture docs governance | From repo root: run `bun run script/check-architecture-impact.ts --worktree` before claiming completion or committing — see the Architecture documentation completion gate below; CI validates the PR body `## Documentation Impact` declaration — evidence only, reviewers own semantic accuracy |
+| Architecture docs governance | When the change may have architecture impact, or when preparing a commit: assess the relevant diff against the canonical docs, update them when the architecture meaning changed, and let CI validate the PR body `## Documentation Impact` declaration — evidence only, reviewers own semantic accuracy |
 
 Never run root `bun test`; the root script prints `do not run tests from root` and exits with code 1. Use package-level tests instead.
 
 ### Architecture documentation completion gate
 
-Architecture documentation impact is a mandatory local completion gate, not a PR-only concern. Before claiming an implementation is complete or ready, and before creating a commit, do all of the following — even when no PR will be opened:
-
-1. **Inspect the complete intended diff** — staged, unstaged, and untracked changes (`git status`, `git diff`, and review of untracked files).
-2. **Run the checker** — `bun run script/check-architecture-impact.ts --worktree` from the repo root. Checker output is evidence, not a semantic substitute; apply your own judgment on top of it.
-3. **High signal** — read the mapped canonical docs under the [canonical architecture docs](packages/kilo-docs/pages/contributing/architecture/index.md). If the architecture meaning changed, update the docs in the same local work unit before claiming completion or committing. If not, record a concrete no-update rationale in the completion/commit-preparation report.
-4. **Medium or no signal** — still report the outcome concisely in the completion/commit-preparation report.
-
-The gate does not block commit creation (code, tests, and docs may land as separate edits) and requires no commit trailer or PR, but following it is a mandatory Agent instruction. When a PR exists, the same decision is persisted in the PR body `## Documentation Impact` declaration and CI validates it.
+When a change may have architecture impact, or when preparing a commit, assess
+the relevant diff against the canonical docs, update them when the architecture
+meaning changed, and run `bun run script/check-architecture-impact.ts --worktree`
+from the repo root as guidance. When a PR exists, persist the decision in the PR
+body `## Documentation Impact` declaration and CI validates it. Pure
+investigation and ordinary no-impact tasks need no check and no report.
 
 ## Products
 
@@ -112,11 +110,11 @@ All products are clients of the **CLI** (`packages/opencode/`), which contains t
 | Product | Package | Description |
 |---|---|---|
 | Kilo CLI | `packages/opencode/` | Core engine. TUI, `kilo run`, `kilo serve`. Originated from OpenCode; independently governed. |
-| Kilo VS Code Extension | `packages/kilo-vscode/` | VS Code extension with Agent Manager (only chat UI; `kilo-code.new.TabPanel`/`kilo-code.new.openInTab` deleted in working tree P3.5 Complete 2026-09-01). Bundles the CLI binary, spawns `kilo serve` as a child process. Ordinary webview bundle may still serve settings/profile surfaces (not chat). Includes the **Agent Manager** — a multi-session orchestration panel running concurrent root-local sessions. |
+| Kilo VS Code Extension | `packages/kilo-vscode/` | VS Code extension with Agent Manager (only chat UI). Bundles the CLI binary, spawns `kilo serve` as a child process. Ordinary webview bundle may still serve settings/profile surfaces (not chat). Includes the **Agent Manager** — a multi-session orchestration panel running concurrent root-local sessions. |
 
-**Agent Manager** refers to a feature inside `packages/kilo-vscode/` (extension code in `src/agent-manager/`, webview in `webview-ui/agent-manager/`). It is the only chat UI (host in Primary/Secondary Sidebar or editor group does not change judgment; internal session sidebar/tabs/terminals/navigation/persistence/hydration retained; P3.5 Complete 2026-09-01). See the extension's `AGENTS.md` for details.
+**Agent Manager** refers to a feature inside `packages/kilo-vscode/` (extension code in `src/agent-manager/`, webview in `webview-ui/agent-manager/`). It is the only chat UI; internal session sidebar/tabs/terminals/navigation/persistence/hydration retained. See the extension's `AGENTS.md` for details.
 
-In each VS Code extension host, one `KiloConnectionService` is created for Agent Manager (only chat UI; no editor-tab chat since P3.5 working tree) and lazily reuses one current `kilo serve` backend at a time (historical /1 editor-tab providers deleted, no longer a consumer). Agent Manager sessions run concurrently at the workspace root and share that backend — there is no per-session worktree isolation. State captured by the active service layer, such as Snapshot `trackState`, is shared across those requests; only directory-keyed `InstanceState` data is isolated.
+In each VS Code extension host, one `KiloConnectionService` is created for Agent Manager (only chat UI) and lazily reuses one current `kilo serve` backend at a time. Agent Manager sessions run concurrently at the workspace root and share that backend — there is no per-session worktree isolation. State captured by the active service layer, such as Snapshot `trackState`, is shared across those requests; only directory-keyed `InstanceState` data is isolated.
 
 Extension-specific settings should live in the Kilo extension settings, not default VS Code settings, unless they are intentionally VS Code-wide. Experimental flags should follow existing flag patterns, not VS Code settings; they usually belong in the Kilo Experimental settings section.
 

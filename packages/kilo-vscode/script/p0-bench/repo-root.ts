@@ -1,10 +1,9 @@
 /**
  * Deterministic repository-root resolution for the P0 extension benchmark.
  *
- * The default output convention requires the evidence dir to land under the
- * exact checkout that produced it:
- *
- *   <repo>/specs/vscode-orchestrator/evidence/p0-baseline/<run-id>/
+ * The checkout root is used for git provenance (commit/head/dirty state).
+ * Benchmark output itself defaults to a run-owned temp dir outside the repo
+ * (see ./args.ts); pass --out explicitly to persist results elsewhere.
  *
  * Git-first: `git rev-parse --show-toplevel` returns the checkout root from
  * any directory, including linked worktrees. When git is unavailable the

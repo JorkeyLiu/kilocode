@@ -101,9 +101,8 @@ export function runMergeCli(argv: string[], cwd: string): number {
       return 1
     }
   }
-  // Freeze merge-time git state BEFORE the output artifact is created: the
-  // evidence dir is not gitignored, so creating it must never flip the
-  // recorded dirty state (same rule as the live harness).
+  // Freeze merge-time git state BEFORE the output artifact is created
+  // (same rule as the live harness).
   const git = gitState(root)
   const mergedAt = Date.now()
   let merged: MergeOutput

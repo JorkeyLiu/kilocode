@@ -1,18 +1,13 @@
 /**
  * Focused tests for the backend benchmark repo-root resolution and the
- * durable-evidence convention.
+ * run-owned output convention.
  *
- * The audit blocker was `path.resolve(import.meta.dir, "../../..")` resolving
- * to `<repo>/packages` instead of the repo root, which moved the default
- * evidence dir out of the intended
- * `<repo>/specs/vscode-orchestrator/evidence/p0-baseline/<run-id>/` location
- * and pointed git provenance at the wrong directory. These tests pin:
+ * These tests pin:
  *   - `resolveRepoRoot()` returns the git checkout toplevel (worktree-safe),
  *   - `repoRootFrom()` prefers git over the layout fallback,
  *   - the layout fallback arithmetic is correct at the benchmark depth,
- *   - the evidence convention: with only the narrow `logs/` ignore, JSONL is
- *     untracked/trackable while raw logs under the run dir's logs/ stay
- *     ignored (durable versionable evidence + separately ignorable raw logs).
+ *   - benchmark output defaults outside the repo: nothing from a run-owned
+ *     output dir leaks into the repo's git status.
  *
  * Pure Node/git tests — no kilo modules, no env override needed.
  */
@@ -29,12 +24,11 @@ const gitToplevel = (dir: string): string | null => {
 }
 
 describe("benchmark repo-root resolution", () => {
-  it("resolveRepoRoot returns the git checkout toplevel with the expected layout", () => {
+  it("resolveRepoRoot returns the git checkout toplevel", () => {
     const root = resolveRepoRoot()
     // The resolved root IS a git toplevel (worktree-safe by construction).
     expect(gitToplevel(root)).toBe(root)
-    // The repo layout exists below it — the evidence convention lands here.
-    expect(fs.existsSync(path.join(root, "specs", "vscode-orchestrator"))).toBe(true)
+    // The benchmark layout exists below it.
     expect(fs.existsSync(path.join(root, "packages", "opencode", "test", "benchmark"))).toBe(true)
   })
 
@@ -57,32 +51,26 @@ describe("benchmark repo-root resolution", () => {
   })
 })
 
-describe("benchmark durable-evidence convention", () => {
-  it("JSONL is trackable and only the run dir's raw logs/ are ignored", async () => {
+describe("benchmark run-owned output convention", () => {
+  it("run output lives outside the repo while only the run dir's raw logs/ are ignored", async () => {
     await using repo = await tmpdir({ git: true })
-    // The narrow raw-log ignore only (the broad evidence-dir ignore was
-    // removed): machine-readable JSONL must surface as untracked/trackable.
+    // Benchmark output defaults to a run-owned temp dir outside the repo, so
+    // the repo tree stays clean; only bulky raw logs under the run dir's
+    // logs/ are local by nature (the narrow `logs/` ignore).
     await Bun.write(path.join(repo.path, ".gitignore"), "logs/\n")
-    const runDir = path.join(
-      repo.path,
-      "specs",
-      "vscode-orchestrator",
-      "evidence",
-      "p0-baseline",
-      "run-1",
-    )
-    await fs.promises.mkdir(path.join(runDir, "logs"), { recursive: true })
-    await Bun.write(path.join(runDir, "backend.jsonl"), "{}\n")
-    await Bun.write(path.join(runDir, "logs", "sample-1.log"), "raw capture\n")
+    const out = path.join(fs.realpathSync(await fs.promises.mkdtemp(path.join(fs.realpathSync("/tmp"), "kilo-bench-convention-"))), "run-1")
+    await fs.promises.mkdir(path.join(out, "logs"), { recursive: true })
+    await Bun.write(path.join(out, "backend.jsonl"), "{}\n")
+    await Bun.write(path.join(out, "logs", "sample-1.log"), "raw capture\n")
 
     const proc = Bun.spawnSync(["git", "-C", repo.path, "status", "--porcelain", "--untracked-files=all"], {
       stdout: "pipe",
       stderr: "pipe",
     })
     const porcelain = proc.stdout.toString()
-    // The JSONL evidence is visible to git (trackable/versionable), while the
-    // raw log under logs/ is ignored and never appears.
-    expect(porcelain).toContain("specs/vscode-orchestrator/evidence/p0-baseline/run-1/backend.jsonl")
-    expect(porcelain).not.toContain("logs/")
+    // Nothing from the run-owned output dir leaks into the repo status.
+    expect(porcelain).not.toContain("backend.jsonl")
+    expect(porcelain).not.toContain("run-1")
+    await fs.promises.rm(path.dirname(out), { recursive: true, force: true })
   })
 })

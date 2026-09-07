@@ -149,7 +149,7 @@ describe("p0 extension record field contract", () => {
       scenarios: [...SCENARIOS],
       samples: 5,
       warmup: 1,
-      outDir: "/ws/specs/vscode-orchestrator/evidence/p0-baseline/ts",
+      outDir: "/tmp/kilo-p0-bench-ts",
       env: runEnv,
     }
     const finish: RunRecord = {
@@ -162,7 +162,7 @@ describe("p0 extension record field contract", () => {
       samples: 5,
       warmup: 1,
       status: "ok",
-      outDir: "/ws/specs/vscode-orchestrator/evidence/p0-baseline/ts",
+      outDir: "/tmp/kilo-p0-bench-ts",
       env: runEnv,
     }
     for (const record of [start, finish]) {

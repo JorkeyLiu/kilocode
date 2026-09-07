@@ -2,7 +2,7 @@
 
 `rules` remains a normative registered typed-asset class in the Kilo configuration contract. The current opencode effective snapshot does not materialize `rules` assets into `instructions` or another runtime input.
 
-This is an explicit deferred contract gap, not a retained compatibility reader. P4.3 does not add a rules loader, migration function, composition rule, or rules runtime.
+This is an explicit deferred contract gap, not a retained compatibility reader.
 
 ## Canonical registration
 
@@ -15,6 +15,4 @@ The registered location must not be interpreted as evidence that the current ope
 
 ## Deferred implementation
 
-Rules materialization remains unresolved and is deferred beyond P4.3. Any future implementation must define the effective snapshot contract, source precedence, file-read trust boundary, and transport evidence before adding a loader.
-
-See `specs/vscode-orchestrator/evidence/p4.3-rules-contract-gap.md` for the bounded evidence record.
+Rules materialization remains unresolved and is deferred. Any future implementation must define the effective snapshot contract, source precedence, file-read trust boundary, and transport evidence before adding a loader.

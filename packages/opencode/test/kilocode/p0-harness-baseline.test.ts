@@ -5,7 +5,7 @@
  * production harness wiring with real fixtures. It is NOT a target-surface
  * parity suite: every entry carries `parity: "unproven"` and the CLI tests
  * never claim parity for the orchestration panel target surface
- * (specs/vscode-orchestrator §6).
+ * (specs/vscode-orchestrator/direction.md).
  *
  * Locks respected (no challenge):
  * - LOCK-005: the internal context-overflow safeguard is exercised as an
@@ -1717,7 +1717,7 @@ afterAll(() => {
   const report = {
     kind: "p0-harness-baseline",
     version: 1,
-    scope: "CLI harness baseline fixture — NOT target-surface parity (specs/vscode-orchestrator §6)",
+    scope: "CLI harness baseline fixture — NOT target-surface parity (specs/vscode-orchestrator/direction.md)",
     outcome,
     failedChecks: failedChecks.map((c) => ({ name: c.name, error: c.error ?? null })),
     locks: [

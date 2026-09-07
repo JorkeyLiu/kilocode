@@ -206,7 +206,7 @@ After system-boundary pages, continue with Development Patterns for implementati
 
 ## Documentation impact governance
 
-Canonical architecture docs are the truth source for system boundaries and contributor-wide contracts. Source code remains the reference for feature-level implementation detail. The local work unit or completion is the required semantic boundary: assess the full diff against the canonical docs and update them or record a concrete rationale. When a PR is opened, the `## Documentation Impact` section in the PR body records the contributor's decision; CI checks the evidence, and local assessment and reviewers judge the semantics.
+Canonical architecture docs are the truth source for system boundaries and contributor-wide contracts. Source code remains the reference for feature-level implementation detail. When a change may touch the areas below, or when preparing a commit, assess the relevant diff against the canonical docs and update them or record a concrete rationale in that result. When a PR is opened, the `## Documentation Impact` section in the PR body records the contributor's decision; CI checks the evidence, and local assessment and reviewers judge the semantics. Pure investigation and ordinary no-impact tasks need no check and no report.
 
 ### When architecture docs must be synchronized
 
@@ -219,7 +219,7 @@ Changes to these areas must be assessed locally against the canonical docs, and 
 - Cross-client contracts shared by editor clients, TUI, and hosted services
 - Guard or workflow models (CI guards, workflow inventory)
 
-Local assessment is the primary standard: inspect the full diff, read the mapped canonical docs for high-impact changes, and update them or record a concrete rationale in the completion or commit-preparation result. The PR is the durable declaration/CI boundary when used — the persistent surface, not the only boundary.
+Local assessment is the primary standard: when a change may touch the areas below, or when preparing a commit, inspect the relevant diff, read the mapped canonical docs for high-impact changes, and update them or record a concrete rationale in that result. The PR is the durable declaration/CI boundary when used — the persistent surface, not the only boundary.
 
 ### Declaration, CI, and reviewer judgment
 
@@ -232,7 +232,7 @@ Exactly one status may be checked in the `## Documentation Impact` section:
 
 CI validates the decision evidence — the declaration exists, is well-formed, and matches the changed canonical docs — and never judges semantic correctness. Local assessment and reviewers own semantic accuracy. The pre-commit hook is advisory only; it never substitutes for local assessment or the declaration.
 
-Local outcomes follow two short forms: for high impact, `Docs updated: <paths>` or `No doc update: <rationale>`; for medium or no impact, a concise statement suffices. These are guidance, not a required markdown format.
+Local outcomes follow two short forms: for high impact, `Docs updated: <paths>` or `No doc update: <rationale>`; for medium or no impact, a concise statement suffices, and pure investigation or ordinary no-impact work needs no report. These are guidance, not a required markdown format.
 
 ### Gate trust and recovery boundaries
 
@@ -240,7 +240,7 @@ The gate executes the checker revision the base commit already contains, never t
 
 The gate fails closed when base or head commit objects cannot be obtained. A base SHA orphaned by a force-push is resolved by updating or rebasing the PR onto the current base, or by rerunning after the base stabilizes; the gate never silently falls back to a different diff. Checker bootstrap runs the PR's checker for one run only when the base does not yet contain the checker, and it emits a visible warning.
 
-The checker implementation and signal taxonomy live in `script/check-architecture-impact.ts`; run `bun run script/check-architecture-impact.ts --worktree` locally to preview detected signals as local assessment guidance: inspect the full diff, read the mapped canonical docs for high signals, and update them or record a concrete rationale in the completion result.
+The checker implementation and signal taxonomy live in `script/check-architecture-impact.ts`; when a change may have architecture impact, or when preparing a commit, run `bun run script/check-architecture-impact.ts --worktree` locally to preview detected signals as local assessment guidance: inspect the relevant diff, read the mapped canonical docs for high signals, and update them or record a concrete rationale in that result.
 
 ## Related pages
 

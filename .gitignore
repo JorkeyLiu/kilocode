@@ -42,11 +42,6 @@ target
 opencode-dev
 .kilo-dev/
 
-# P0 benchmark evidence: the machine-readable JSONL and run metadata under
-# specs/vscode-orchestrator/evidence/p0-baseline/ are durable, VERSIONABLE
-# tracker evidence and are NOT ignored. Only bulky per-run raw capture logs
-# are ignored, via the narrow `logs/` pattern below (e.g.
-# specs/vscode-orchestrator/evidence/p0-baseline/<run-id>/logs/).
 UPCOMING_CHANGELOG.md
 logs/
 *.bun-build

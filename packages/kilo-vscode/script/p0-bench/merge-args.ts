@@ -14,6 +14,8 @@
  * Values are resolved to absolute paths before anything is read.
  */
 
+import { mkdtempSync } from "node:fs"
+import { tmpdir } from "node:os"
 import { join, resolve } from "node:path"
 
 export interface MergeArgs {
@@ -39,8 +41,9 @@ Usage: bun run test:p0-bench:merge -- [flags]
   --segments <paths>        segment benchmark.jsonl paths, repeated and/or
                             space-separated (at least one required)
   --out <dir>               merged output directory (absolute path; default:
-                            <repo>/specs/vscode-orchestrator/evidence/
-                            p0-baseline/many-agent-mcp-merged-<ts>)
+                            a run-owned temp dir outside the repo, e.g.
+                            $TMPDIR/kilo-p0-bench-merged-XXXXXX; pass --out
+                            explicitly to keep results in a chosen location)
   --required-samples <n>    required measured samples for baselineComplete
                             (default 5, >= 1)
   -h, --help                show this help and exit before any read/write
@@ -52,8 +55,9 @@ Exit codes:
   1  validation error or failure (no artifact emitted)
 
 Durable evidence: the merged benchmark.jsonl and merge-manifest.json are
-VERSIONABLE tracker evidence and are NOT gitignored. Only copied raw logs
-under <out>/logs/ may remain local/ignored (the root logs/ pattern). Git
+run-owned output and live outside the repo by default; pass --out explicitly
+to persist them elsewhere. Only copied raw logs
+under <out>/logs/ are local by nature (the root logs/ pattern). Git
 provenance is frozen BEFORE the output artifact is created. Segment inputs are
 never written to.
 
@@ -72,10 +76,14 @@ function isFlag(token: string): boolean {
 }
 
 /**
- * Parse merge flags. `repoRoot` is the deterministic repo root for the
- * durable-evidence default. Throws on invalid values (the CLI exits 1).
+ * Parse merge flags. `repoRoot` is retained for callers that resolve git
+ * provenance from the checkout; the default output dir is a run-owned temp
+ * dir created here via `mkdtemp` (each parse gets a unique dir). An explicit
+ * `--out` is resolved as-is and never created or deleted here; only the
+ * default dir is created by this parse and owned by the calling merge run.
+ * Throws on invalid values (the CLI exits 1).
  */
-export function parseMergeArgs(argv: string[], repoRoot: string): MergeArgs {
+export function parseMergeArgs(argv: string[], _repoRoot: string): MergeArgs {
   const rawSegments: string[] = []
   let outDir: string | undefined
   let requiredSamples = 5
@@ -119,16 +127,6 @@ export function parseMergeArgs(argv: string[], repoRoot: string): MergeArgs {
     throw new Error(`[p0-bench-merge] unknown argument "${arg}"`)
   }
   if (rawSegments.length === 0) throw new Error("[p0-bench-merge] at least one --segments path is required")
-  const out =
-    outDir !== undefined
-      ? resolve(outDir)
-      : join(
-          repoRoot,
-          "specs",
-          "vscode-orchestrator",
-          "evidence",
-          "p0-baseline",
-          `many-agent-mcp-merged-${new Date().toISOString().replace(/[:.]/g, "-")}`,
-        )
+  const out = outDir !== undefined ? resolve(outDir) : mkdtempSync(join(tmpdir(), "kilo-p0-bench-merged-"))
   return { segments: rawSegments.map((s) => resolve(s)), outDir: out, requiredSamples }
 }

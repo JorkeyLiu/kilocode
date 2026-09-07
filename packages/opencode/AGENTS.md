@@ -8,7 +8,7 @@
 
 ## Architecture documentation
 
-The root AGENTS.md **Architecture documentation completion gate** is mandatory before claiming implementation complete/ready or creating a commit: inspect the full intended diff, run `bun run script/check-architecture-impact.ts --worktree` from the repo root, and read mapped canonical docs for high signals. This package owns most high-signal surfaces — runtime lifecycle, provider lifecycle, hot/cold config classification, executable config schema, HTTP API contract, Effect runtime boundary. Canonical governance lives in `packages/kilo-docs/pages/contributing/architecture/`; follow the root rule, do not restate it here.
+When the change may have architecture impact, or when preparing a commit: inspect the relevant diff, run `bun run script/check-architecture-impact.ts --worktree` from the repo root as guidance, and assess the mapped canonical docs. This package owns most high-signal surfaces — runtime lifecycle, provider lifecycle, hot/cold config classification, executable config schema, HTTP API contract, Effect runtime boundary. Canonical governance lives in `packages/kilo-docs/pages/contributing/architecture/`.
 
 ## Import Aliases
 
@@ -37,7 +37,7 @@ const state = Instance.state(async () => {
 // later: (await state()).someValue
 ```
 
-**Service-closure state vs. directory state** -- A value created in a service-layer closure, outside `InstanceState`, is shared by that service instance rather than keyed by request directory. The shared VS Code session paths use one active Snapshot service for the sidebar, Kilo tabs, and Agent Manager root-local requests, so Snapshot `trackState` and its slow-track `asked` guard span those directories. Choosing **Continue with snapshots** resets the guard only when continued tracking returns a snapshot hash.
+**Service-closure state vs. directory state** -- A value created in a service-layer closure, outside `InstanceState`, is shared by that service instance rather than keyed by request directory. The shared VS Code session paths use one active Snapshot service for Agent Manager root-local requests, so Snapshot `trackState` and its slow-track `asked` guard span those directories. Choosing **Continue with snapshots** resets the guard only when continued tracking returns a snapshot hash.
 
 **`fn(schema, callback)`** -- Wraps functions with Zod input validation. Used for most exported functions:
 
@@ -79,4 +79,4 @@ Config saves are classified hot or cold at field introduction; hot saves converg
 
 ## Providers and Models
 
-Uses the **Vercel AI SDK** as the abstraction layer. Providers are defined explicitly in `kilo.jsonc` `provider.<id>` records with `name`, `npm`, `api`, and `models` (LOCK-006 custom-provider-only). `BUNDLED_PROVIDERS` generic SDK loaders (`@ai-sdk/*`, `@openrouter/ai-sdk-provider`, etc.) and `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchConfigModel` helpers remain. Preset catalog (`models-api.json`, `core/models-dev.ts`, `provider/models.ts`, snapshot refresh/build embedding, `KILO_MODELS_DEV`, `ModelsDev` service) was removed in P4.4-G2; `bun run refresh:models` and `MODELS_DEV_API_JSON` override no longer exist. Old CLI/TUI/server/generated-SDK surfaces remain until P4.5 per LOCK-009.
+Uses the **Vercel AI SDK** as the abstraction layer. Providers are defined explicitly in `kilo.jsonc` `provider.<id>` records with `name`, `npm`, `api`, and `models`. `BUNDLED_PROVIDERS` generic SDK loaders (`@ai-sdk/*`, `@openrouter/ai-sdk-provider`, etc.) and `KILO_MODEL_SCHEMA_EXTENSIONS` / `patchConfigModel` helpers remain.
