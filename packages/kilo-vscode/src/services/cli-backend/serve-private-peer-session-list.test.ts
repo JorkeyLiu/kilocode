@@ -464,6 +464,168 @@ describe("session-list private peer", () => {
       console.warn = origWarn
     }
   })
+
+  test("fallback dedupes same epoch+directory+workspace+filter and fires once with one-shot unsubscribe", async () => {
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const sdk = sdkSuccess([], null)
+      const before = JSON.stringify(sdk)
+      let available = false
+      let epoch = 3
+      let subs = 0
+      let unsubs = 0
+      let calls = 0
+      const listeners: (() => void)[] = []
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => available,
+        privateSessionListOutcomeWithHandle: (req) => {
+          calls += 1
+          return {
+            id: 1,
+            promise: Promise.resolve({
+              kind: "valid",
+              result: {
+                v: 2,
+                requestId: req.requestId,
+                opId: req.opId,
+                op: "experimental/session/list",
+                idempotencyKey: req.idempotencyKey,
+                status: "succeeded",
+                outcome: { type: "succeeded", time: 1 },
+                accepted: true,
+                data: { sessions: [] },
+              },
+            }),
+          }
+        },
+        getPrivateEpoch: () => epoch,
+        onPrivateAvailable: (fn) => {
+          subs += 1
+          listeners.push(fn)
+          return () => {
+            unsubs += 1
+            const idx = listeners.indexOf(fn)
+            if (idx >= 0) {
+              listeners.splice(idx, 1)
+            }
+          }
+        },
+      }
+      const first = observeSessionListParityDetached(conn, sdk as never, "/tmp", "ws1", { limit: 2 }, 200)
+      expect(first).toBeUndefined()
+      const second = observeSessionListParityDetached(conn, sdk as never, "/tmp", "ws1", { limit: 2 }, 200)
+      expect(second).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(subs).toBe(1)
+      expect(listeners).toHaveLength(1)
+      expect(calls).toBe(0)
+      available = true
+      const pending = [...listeners]
+      for (const fn of pending) {
+        fn()
+      }
+      await new Promise((r) => setTimeout(r, 50))
+      expect(calls).toBe(1)
+      expect(unsubs).toBe(1)
+      expect(listeners).toHaveLength(0)
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({
+        comparedNoDivergence: 1,
+        divergence: 0,
+        transportUnknown: 0,
+        validationDivergence: 0,
+        timeout: 0,
+        staleSkipped: 0,
+        failClosed: 0,
+      })
+      expect(warns.filter((w) => String(w[0]).includes("divergence"))).toHaveLength(0)
+      const again = [...listeners]
+      for (const fn of again) {
+        fn()
+      }
+      await new Promise((r) => setTimeout(r, 20))
+      expect(calls).toBe(1)
+      available = false
+      const third = observeSessionListParityDetached(conn, sdk as never, "/tmp", "ws1", { limit: 2 }, 200)
+      expect(third).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(subs).toBe(2)
+      expect(listeners).toHaveLength(1)
+      expect(epoch).toBe(3)
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("fallback stale epoch skips observation without private work", async () => {
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const sdk = sdkSuccess([], null)
+      const before = JSON.stringify(sdk)
+      let available = false
+      let epoch = 3
+      let subs = 0
+      let unsubs = 0
+      let calls = 0
+      const listeners: (() => void)[] = []
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => available,
+        privateSessionListOutcomeWithHandle: () => {
+          calls += 1
+          throw new Error("stale fallback must not observe")
+        },
+        getPrivateEpoch: () => epoch,
+        onPrivateAvailable: (fn) => {
+          subs += 1
+          listeners.push(fn)
+          return () => {
+            unsubs += 1
+            const idx = listeners.indexOf(fn)
+            if (idx >= 0) {
+              listeners.splice(idx, 1)
+            }
+          }
+        },
+      }
+      const ret = observeSessionListParityDetached(conn, sdk as never, "/tmp", "ws1", { limit: 2 }, 200)
+      expect(ret).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 20))
+      expect(subs).toBe(1)
+      expect(listeners).toHaveLength(1)
+      expect(calls).toBe(0)
+      epoch = 4
+      available = true
+      const pending = [...listeners]
+      for (const fn of pending) {
+        fn()
+      }
+      await new Promise((r) => setTimeout(r, 30))
+      expect(calls).toBe(0)
+      expect(unsubs).toBe(1)
+      expect(listeners).toHaveLength(0)
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(warns.some((w) => String(w[0]).includes("stale deferred parity skipped"))).toBeTrue()
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({
+        comparedNoDivergence: 0,
+        divergence: 0,
+        transportUnknown: 0,
+        validationDivergence: 0,
+        timeout: 0,
+        staleSkipped: 1,
+        failClosed: 0,
+      })
+    } finally {
+      console.warn = origWarn
+    }
+  })
 })
 
 describe("session-list parity diagnostics (bounded)", () => {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { KiloConnectionService } from "./connection-service"
+import { DeferredSessionList } from "./serve-private-session-list"
 
 function makeService(): KiloConnectionService {
   return new KiloConnectionService({} as never)
@@ -181,5 +182,300 @@ describe("session-list connection-service owner", () => {
     service.dispose()
     expect((service as unknown as Record<string, unknown>).privatePeer).toBeNull()
     expect(() => service.privateSessionListOutcomeWithHandle(sessionListReq() as never)).toThrow()
+  })
+
+  test("deferred session-list observer respects epoch/failed-epoch/available guards without retention", () => {
+    const service = makeService()
+    ;(service as unknown as Record<string, unknown>).privateEpoch = null
+    ;(service as unknown as Record<string, unknown>).privateFailedGetEpoch = null
+    let fires = 0
+    const noop1 = service.addDeferredSessionListObserver("/tmp", undefined, { limit: 10 }, () => {
+      fires += 1
+    })
+    expect(typeof noop1).toBe("function")
+    noop1()
+    ;(service as unknown as Record<string, unknown>).privateEpoch = 7
+    ;(service as unknown as Record<string, unknown>).privateFailedGetEpoch = 7
+    const noop2 = service.addDeferredSessionListObserver("/tmp", undefined, { limit: 10 }, () => {
+      fires += 1
+    })
+    expect(typeof noop2).toBe("function")
+    noop2()
+    ;(service as unknown as Record<string, unknown>).privateFailedGetEpoch = null
+    ;(service as unknown as Record<string, unknown>).privateAvailable = true
+    const noop3 = service.addDeferredSessionListObserver("/tmp", undefined, { limit: 10 }, () => {
+      fires += 1
+    })
+    expect(typeof noop3).toBe("function")
+    noop3()
+    expect(fires).toBe(0)
+    service.dispose()
+  })
+
+  test("deferred session-list observer dedupes per epoch+directory+workspace+filter and one-shot removes", () => {
+    const service = makeService()
+    ;(service as unknown as Record<string, unknown>).privateEpoch = 7
+    ;(service as unknown as Record<string, unknown>).privateFailedGetEpoch = null
+    ;(service as unknown as Record<string, unknown>).privateAvailable = false
+    const rec = service as unknown as Record<string, unknown> & {
+      privateAvailableListeners: Set<() => void>
+    }
+    let fires = 0
+    const unsub1 = service.addDeferredSessionListObserver("/tmp", undefined, { limit: 10 }, () => {
+      fires += 1
+    })
+    const unsub2 = service.addDeferredSessionListObserver("/tmp", undefined, { limit: 10 }, () => {
+      fires += 1
+    })
+    const unsub3 = service.addDeferredSessionListObserver("/tmp", undefined, { limit: 5 }, () => {
+      fires += 1
+    })
+    expect(typeof unsub1).toBe("function")
+    expect(typeof unsub2).toBe("function")
+    expect(typeof unsub3).toBe("function")
+    expect(rec.privateAvailableListeners.size).toBe(2)
+    for (const fn of [...rec.privateAvailableListeners]) fn()
+    expect(fires).toBe(2)
+    expect(rec.privateAvailableListeners.size).toBe(0)
+    unsub1()
+    unsub2()
+    unsub3()
+    expect(fires).toBe(2)
+    service.dispose()
+  })
+
+  test("deferred session-list owner key is opaque and collision-safe across tuples", () => {
+    const store = new DeferredSessionList(new Set<() => void>())
+    const a = store.key(7, "/tmp/alpha", undefined, { limit: 10 })
+    const b = store.key(7, "/tmp/beta", undefined, { limit: 10 })
+    const c = store.key(7, "/tmp/alpha", "ws-one", { limit: 10 })
+    const d = store.key(7, "/tmp/alpha", undefined, { limit: 5 })
+    const cursorA =
+      "eyJ2IjoxLCJ1cGRhdGVkIjo3LCJpZCI6InNlc19hYmMifQ"
+    const e = store.key(7, "/tmp/alpha", undefined, { limit: 10, cursor: cursorA })
+    const f = store.key(7, "/tmp/alpha", undefined, { limit: 10, cursor: cursorA })
+    const g = store.key(8, "/tmp/alpha", undefined, { limit: 10 })
+    expect(new Set([a, b, c, d, e, g]).size).toBe(6)
+    expect(e).toBe(f)
+    for (const k of [a, b, c, d, e, g]) {
+      expect(k.startsWith("session-list:")).toBeTrue()
+      expect(k).not.toContain("/tmp/alpha")
+      expect(k).not.toContain("/tmp/beta")
+      expect(k).not.toContain("ws-one")
+      expect(k).not.toContain("ses_abc")
+      expect(k).not.toContain(cursorA)
+    }
+    const tricky = store.key(7, "/tmp:alpha", undefined, { limit: 10 })
+    const nearby = store.key(7, "/tmp", "alpha", { limit: 10 })
+    expect(tricky).not.toBe(nearby)
+  })
+
+  test("dispose clears deferred session-list observers", () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateAvailableListeners: Set<() => void>
+      deferredSessionList: DeferredSessionList
+    }
+    ;(service as unknown as Record<string, unknown>).privateEpoch = 7
+    ;(service as unknown as Record<string, unknown>).privateFailedGetEpoch = null
+    ;(service as unknown as Record<string, unknown>).privateAvailable = false
+    let fires = 0
+    service.addDeferredSessionListObserver("/tmp", undefined, { limit: 10 }, () => {
+      fires += 1
+    })
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    const store = rec.deferredSessionList
+    expect(store.size).toBe(1)
+    service.dispose()
+    expect(rec.privateAvailableListeners.size).toBe(0)
+    expect(store.size).toBe(0)
+    expect(fires).toBe(0)
+  })
+
+  test("negotiation failure clears failed epoch keys and admits the next epoch", () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateEpoch: number | null
+      privateFailedGetEpoch: number | null
+      privateAvailable: boolean
+      privateAvailableListeners: Set<() => void>
+      failPrivateNegotiation: (epoch: number, pid: number | undefined) => void
+    }
+    rec.privateEpoch = 7
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    let oldFires = 0
+    service.addDeferredSessionListObserver("/tmp/old-epoch", undefined, { limit: 10 }, () => {
+      oldFires += 1
+    })
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    rec.failPrivateNegotiation(7, 111)
+    expect(rec.privateAvailableListeners.size).toBe(0)
+    expect(oldFires).toBe(0)
+    expect(rec.privateFailedGetEpoch).toBe(7)
+    let failedFires = 0
+    service.addDeferredSessionListObserver("/tmp/old-epoch", undefined, { limit: 10 }, () => {
+      failedFires += 1
+    })
+    expect(rec.privateAvailableListeners.size).toBe(0)
+    expect(failedFires).toBe(0)
+    rec.privateEpoch = 8
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    let newFires = 0
+    service.addDeferredSessionListObserver("/tmp/new-epoch", undefined, { limit: 10 }, () => {
+      newFires += 1
+    })
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    expect(newFires).toBe(0)
+    service.dispose()
+  })
+
+  test("stale epoch replacement clears only the replaced epoch and never fires old parity", () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateEpoch: number | null
+      privateFailedGetEpoch: number | null
+      privateAvailable: boolean
+      privateAvailableListeners: Set<() => void>
+      handleStalePeer: (peer: { dispose: () => void }, epoch: number) => boolean
+    }
+    rec.privateEpoch = 7
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    let oldFires = 0
+    service.addDeferredSessionListObserver("/tmp/old", undefined, { limit: 10 }, () => {
+      oldFires += 1
+    })
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    const stale = { dispose: () => {} }
+    expect(rec.handleStalePeer(stale, 7)).toBe(true)
+    expect(rec.privateAvailableListeners.size).toBe(0)
+    for (const fn of [...rec.privateAvailableListeners]) fn()
+    expect(oldFires).toBe(0)
+    rec.privateEpoch = 8
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    let newFires = 0
+    service.addDeferredSessionListObserver("/tmp/new", undefined, { limit: 10 }, () => {
+      newFires += 1
+    })
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    expect(rec.handleStalePeer(stale, 7)).toBe(true)
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    for (const fn of [...rec.privateAvailableListeners]) fn()
+    expect(newFires).toBe(1)
+    expect(oldFires).toBe(0)
+    service.dispose()
+  })
+
+  test("superseded init clears the stale epoch without touching the current epoch", () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateEpoch: number | null
+      privateFailedGetEpoch: number | null
+      privateAvailable: boolean
+      privateAvailableListeners: Set<() => void>
+      handleSupersededInit: (peer: { dispose: () => void; getEpoch: () => number }, gen: number) => boolean
+      connectGeneration: number
+    }
+    rec.privateEpoch = 9
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    service.addDeferredSessionListObserver("/tmp/current", undefined, { limit: 10 }, () => {})
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    const stale = { dispose: () => {}, getEpoch: () => 7 }
+    rec.privateEpoch = 7
+    service.addDeferredSessionListObserver("/tmp/stale", undefined, { limit: 10 }, () => {})
+    expect(rec.privateAvailableListeners.size).toBe(2)
+    rec.privateEpoch = 9
+    const gen = (rec.connectGeneration as number) + 1
+    expect(rec.handleSupersededInit(stale, gen)).toBe(true)
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    service.dispose()
+  })
+
+  test("session-list invalidation branch clears deferred session-list without retaining old epoch", () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateEpoch: number | null
+      privateFailedGetEpoch: number | null
+      privateAvailable: boolean
+      privateAvailableListeners: Set<() => void>
+      privatePeer: unknown
+    }
+    rec.privateEpoch = 7
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    rec.privatePeer = fakePeer(null)
+    service.addDeferredSessionListObserver("/tmp", undefined, { limit: 10 }, () => {})
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    service.invalidatePrivatePeerOnObserverTimeout("session-list observer timeout")
+    expect(rec.privatePeer).toBeNull()
+    expect(rec.privateAvailable).toBeFalse()
+    expect(rec.privateEpoch).toBeNull()
+    expect(rec.privateAvailableListeners.size).toBe(0)
+    service.dispose()
+  })
+
+  test("missing-transport init clears the failed epoch session-list keys", async () => {
+    const service = makeService()
+    const rec = service as unknown as Record<string, unknown> & {
+      privateEpoch: number | null
+      privateFailedGetEpoch: number | null
+      privateAvailable: boolean
+      privateAvailableListeners: Set<() => void>
+      initPrivatePeer: (server: { epoch: number; pid: number }) => Promise<void>
+    }
+    rec.privateEpoch = null
+    rec.privateFailedGetEpoch = null
+    rec.privateAvailable = false
+    await rec.initPrivatePeer({ epoch: 21, pid: 999 })
+    expect(rec.privateFailedGetEpoch).toBe(21)
+    expect(rec.privateAvailableListeners.size).toBe(0)
+    service.dispose()
+  })
+
+  test("clearForEpoch drops only the old epoch opaque keys", () => {
+    const listeners = new Set<() => void>()
+    const store = new DeferredSessionList(listeners)
+    let oldFires = 0
+    let newFires = 0
+    store.add(7, null, false, "/tmp/old", undefined, { limit: 10 }, () => {
+      oldFires += 1
+    })
+    store.add(8, null, false, "/tmp/old", undefined, { limit: 10 }, () => {
+      newFires += 1
+    })
+    expect(listeners.size).toBe(2)
+    store.clearForEpoch(7)
+    expect(listeners.size).toBe(1)
+    for (const fn of [...listeners]) fn()
+    expect(oldFires).toBe(0)
+    expect(newFires).toBe(1)
+  })
+
+  test("parity prefers the owner registry over the legacy fallback subscription", async () => {
+    const { observeSessionListParityDetached } = await import("../../kilo-provider/session-list-parity")
+    const service = makeService()
+    ;(service as unknown as Record<string, unknown>).privateEpoch = 7
+    ;(service as unknown as Record<string, unknown>).privateFailedGetEpoch = null
+    ;(service as unknown as Record<string, unknown>).privateAvailable = false
+    const rec = service as unknown as Record<string, unknown> & {
+      privateAvailableListeners: Set<() => void>
+    }
+    let fallbackSubs = 0
+    const conn = service as unknown as Record<string, unknown>
+    const origOnPrivateAvailable = service.onPrivateAvailable.bind(service)
+    conn.onPrivateAvailable = (fn: () => void) => {
+      fallbackSubs += 1
+      return origOnPrivateAvailable(fn)
+    }
+    const sdk = { data: [], error: undefined, response: { status: 200 } }
+    observeSessionListParityDetached(conn as never, sdk as never, "/tmp", undefined, { limit: 10 }, 50)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(fallbackSubs).toBe(0)
+    expect(rec.privateAvailableListeners.size).toBe(1)
+    service.dispose()
   })
 })

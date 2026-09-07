@@ -1,3 +1,5 @@
+import { normalize, resolve } from "path"
+import * as crypto from "crypto"
 import { makeSessionListAmbiguous, normalizePrivateSessionListWire } from "./serve-private-session-list-contract"
 import type {
   PrivateSessionListWireOutcome,
@@ -146,4 +148,114 @@ export function wrapSessionListOutcomeForOwner(
     return true
   }
   return { id: handle.id, promise, cancel }
+}
+
+/** Filter identity the deferred session-list observer binds; structurally matches the parity filter. */
+export interface DeferredSessionListFilter {
+  projectID?: string
+  roots?: boolean
+  start?: number
+  cursor?: string
+  search?: string
+  limit?: number
+  archived?: boolean
+}
+
+function stableSessionListFilterString(filter: DeferredSessionListFilter): string {
+  const rec = filter as Record<string, unknown>
+  const keys = Object.keys(rec).sort()
+  const parts: string[] = []
+  for (const k of keys) parts.push(`${k}=${JSON.stringify(rec[k])}`)
+  return parts.join("&")
+}
+
+/**
+ * Keyed deferred session-list observers: at most one deferred private
+ * session-list observation per backend epoch + canonical directory +
+ * workspace identity + exact filter. Every component is opaque and
+ * domain-separated (`e-`/`d-`/`w-`/`f-` SHA-256 digests with
+ * `session-list/epoch`, `session-list/dir`, `session-list/workspace`,
+ * `session-list/filter` domains): serialized keys never carry raw
+ * directory/workspace/filter material and `:` inside a raw value cannot
+ * collide across tuples. Exact `dir`/`workspace`/`filter` closure values
+ * stay with the caller for request construction; only the digest key is
+ * stored here. Owner-managed: wrappers live in the owner's one-shot
+ * listener set; this store only provides the dedupe key. No timers, no
+ * polling, no detached work, no new peer lifecycle.
+ */
+export class DeferredSessionList {
+  private readonly keys = new Map<string, () => void>()
+  constructor(private readonly listeners: Set<() => void>) {}
+
+  key(epoch: number | null, dir: string, workspace: string | undefined, filter: DeferredSessionListFilter): string {
+    let canonical = dir
+    try {
+      canonical = normalize(resolve(dir))
+    } catch {
+      canonical = dir
+    }
+    const epochPart =
+      epoch === null
+        ? "none"
+        : `e-${crypto.createHash("sha256").update(`session-list/epoch\x00${epoch}`, "utf8").digest("hex")}`
+    const dirPart = `d-${crypto.createHash("sha256").update(`session-list/dir\x00${canonical}`, "utf8").digest("hex")}`
+    const wsPart =
+      workspace === undefined
+        ? "none"
+        : `w-${crypto.createHash("sha256").update(`session-list/workspace\x00${workspace}`, "utf8").digest("hex")}`
+    const filterPart = `f-${crypto.createHash("sha256").update(`session-list/filter\x00${stableSessionListFilterString(filter)}`, "utf8").digest("hex")}`
+    return `session-list:${epochPart}:${dirPart}:${wsPart}:${filterPart}`
+  }
+
+  add(
+    epoch: number | null,
+    failedEpoch: number | null,
+    available: boolean,
+    dir: string,
+    workspace: string | undefined,
+    filter: DeferredSessionListFilter,
+    listener: () => void,
+  ): () => void {
+    if (epoch === null) return () => {}
+    if (failedEpoch !== null && epoch === failedEpoch) return () => {}
+    if (available) return () => {}
+    const key = this.key(epoch, dir, workspace, filter)
+    if (this.keys.has(key)) return () => {}
+    let wrapper: () => void = () => {
+      this.remove(key, wrapper)
+      listener()
+    }
+    this.keys.set(key, wrapper)
+    this.listeners.add(wrapper)
+    return () => {
+      this.remove(key, wrapper)
+    }
+  }
+
+  clearForEpoch(epoch: number | null): void {
+    const epochPart =
+      epoch === null
+        ? "none"
+        : `e-${crypto.createHash("sha256").update(`session-list/epoch\x00${epoch}`, "utf8").digest("hex")}`
+    const prefix = `session-list:${epochPart}:`
+    for (const [key, wrapper] of [...this.keys]) {
+      if (!key.startsWith(prefix)) continue
+      this.keys.delete(key)
+      this.listeners.delete(wrapper)
+    }
+  }
+
+  clearAll(): void {
+    for (const [, wrapper] of [...this.keys]) this.listeners.delete(wrapper)
+    this.keys.clear()
+  }
+
+  get size(): number {
+    return this.keys.size
+  }
+
+  private remove(key: string, wrapper: () => void): void {
+    if (this.keys.get(key) === wrapper) this.keys.delete(key)
+    this.listeners.delete(wrapper)
+  }
 }

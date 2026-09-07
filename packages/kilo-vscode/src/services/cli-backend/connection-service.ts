@@ -33,11 +33,12 @@ import {
   type ServePrivateStatusResult,
   compareUpdateParity,
 } from "./serve-private-peer"
-import { wrapSessionListOutcomeForOwner } from "./serve-private-session-list"
+import { DeferredSessionList, wrapSessionListOutcomeForOwner } from "./serve-private-session-list"
 import type {
   PrivateSessionListWireOutcome,
   ServePrivateSessionListRequest,
 } from "./serve-private-session-list-contract"
+import type { DeferredSessionListFilter } from "./serve-private-session-list"
 import { DeferredPath, wrapPathOutcomeForOwner } from "./serve-private-path"
 import type { PathContractRequest, PathWireOutcome } from "./serve-private-path-contract"
 import { DeferredCommandList, wrapCommandListOutcomeForOwner } from "./serve-private-command-list"
@@ -210,6 +211,7 @@ export class KiloConnectionService {
     this.privateAvailableListeners,
   )
   private readonly deferredFindFiles: DeferredFindFiles = new DeferredFindFiles(this.privateAvailableListeners)
+  private readonly deferredSessionList: DeferredSessionList = new DeferredSessionList(this.privateAvailableListeners)
   /**
    * Definitively failed private get epoch (B6 LOCK-005/012): set only when
    * the current backend epoch's negotiation definitively fails (explicit
@@ -774,6 +776,7 @@ export class KiloConnectionService {
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
     this.deferredFindFiles.clearAll()
+    this.deferredSessionList.clearAll()
     this.lastSessionUpdateIdentities?.clear()
     if (this.client?.session?.viewed) {
       void this.client.session
@@ -825,6 +828,7 @@ export class KiloConnectionService {
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
     this.deferredFindFiles.clearAll()
+    this.deferredSessionList.clearAll()
     const sse = this.sseClient
     this.sseClient = null
     sse?.disconnect()
@@ -1099,6 +1103,7 @@ export class KiloConnectionService {
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
     this.deferredFindFiles.clearAll()
+    this.deferredSessionList.clearAll()
   }
 
   /**
@@ -1356,6 +1361,25 @@ export class KiloConnectionService {
     )
   }
 
+  /** One-shot deferred session-list observation; dedupe/lifecycle live in DeferredSessionList. */
+  addDeferredSessionListObserver(
+    dir: string,
+    workspace: string | undefined,
+    filter: DeferredSessionListFilter,
+    listener: () => void,
+  ): () => void {
+    const store = this.deferredSessionList
+    return store.add(
+      this.privateEpoch,
+      this.privateFailedGetEpoch,
+      this.isPrivateAvailable(),
+      dir,
+      workspace,
+      filter,
+      listener,
+    )
+  }
+
   private toError(error: unknown): Error {
     return error instanceof Error ? error : new Error(String(error))
   }
@@ -1424,6 +1448,7 @@ export class KiloConnectionService {
       this.deferredConfigWarnings.clearForEpoch(staleEpoch)
       this.deferredProjectCurrent.clearForEpoch(staleEpoch)
       this.deferredFindFiles.clearForEpoch(staleEpoch)
+      this.deferredSessionList.clearForEpoch(staleEpoch)
     }
     if (this.privatePeer === peer) {
       this.privatePeer = null
@@ -1451,6 +1476,7 @@ export class KiloConnectionService {
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     this.deferredProjectCurrent.clearForEpoch(epochAtStart)
     this.deferredFindFiles.clearForEpoch(epochAtStart)
+    this.deferredSessionList.clearForEpoch(epochAtStart)
     return true
   }
 
@@ -1497,6 +1523,7 @@ export class KiloConnectionService {
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     this.deferredProjectCurrent.clearForEpoch(epochAtStart)
     this.deferredFindFiles.clearForEpoch(epochAtStart)
+    this.deferredSessionList.clearForEpoch(epochAtStart)
     this.privateAvailableListeners.clear()
   }
 
@@ -1546,6 +1573,7 @@ export class KiloConnectionService {
       this.deferredConfigWarnings.clearForEpoch(server.epoch)
       this.deferredProjectCurrent.clearForEpoch(server.epoch)
       this.deferredFindFiles.clearForEpoch(server.epoch)
+      this.deferredSessionList.clearForEpoch(server.epoch)
       this.privateAvailableListeners.clear()
       return
     }
