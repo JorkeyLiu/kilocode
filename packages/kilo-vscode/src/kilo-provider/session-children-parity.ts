@@ -156,6 +156,80 @@ const deferredChildrenKeysByConnection = new WeakMap<
   { epoch: number | null; keys: Set<string>; unsubs: Map<string, () => void> }
 >()
 
+/**
+ * Bounded per-connection counters for detached `session/children` parity.
+ * Fixed categories only — no arrays, no timers, no cross-process state.
+ * Keyed by connection instance so entries end with the instance lifecycle
+ * via `WeakMap`; `resetSessionChildrenParityDiagnostics` clears one entry.
+ * Counters are write-only: production paths only `tally` next to the
+ * existing `warn` and never read diagnostics to change behavior.
+ *
+ * `comparedNoDivergence` is comparator-scoped only: the children comparator
+ * returned `divergence: null` for the fields it compares
+ * (`id`/`parentID`/canonical `directory`/`title` plus in-memory full-payload
+ * equality). It is not a full-parity/health claim — concurrent
+ * create/fork/list shifts stay warn-only observation divergence and
+ * transport/validation/timeout/stale outcomes remain separately counted.
+ */
+export type SessionChildrenParityDiagnostics = {
+  readonly comparedNoDivergence: number
+  readonly divergence: number
+  readonly transportUnknown: number
+  readonly validationDivergence: number
+  readonly timeout: number
+  readonly staleSkipped: number
+  readonly failClosed: number
+}
+
+type ParityTally = {
+  comparedNoDivergence: number
+  divergence: number
+  transportUnknown: number
+  validationDivergence: number
+  timeout: number
+  staleSkipped: number
+  failClosed: number
+}
+
+const parityDiagnosticsByConnection = new WeakMap<object, ParityTally>()
+
+function tally(connection: ChildrenParityConnection, key: keyof ParityTally): void {
+  if ((typeof connection !== "object" && typeof connection !== "function") || connection === null) return
+  let cur = parityDiagnosticsByConnection.get(connection)
+  if (!cur) {
+    cur = { comparedNoDivergence: 0, divergence: 0, transportUnknown: 0, validationDivergence: 0, timeout: 0, staleSkipped: 0, failClosed: 0 }
+    parityDiagnosticsByConnection.set(connection, cur)
+  }
+  cur[key] += 1
+}
+
+/**
+ * Snapshot copy of the fixed-category parity counters for one connection.
+ * Returns zeros when nothing was observed. The copy is frozen so callers
+ * cannot mutate stored state; reading never affects parity behavior.
+ * `comparedNoDivergence` counts only comparator `divergence: null` outcomes
+ * and does not claim full parity/health.
+ */
+export function getSessionChildrenParityDiagnostics(
+  connection: ChildrenParityConnection,
+): SessionChildrenParityDiagnostics {
+  const cur = parityDiagnosticsByConnection.get(connection as object)
+  return Object.freeze({
+    comparedNoDivergence: cur?.comparedNoDivergence ?? 0,
+    divergence: cur?.divergence ?? 0,
+    transportUnknown: cur?.transportUnknown ?? 0,
+    validationDivergence: cur?.validationDivergence ?? 0,
+    timeout: cur?.timeout ?? 0,
+    staleSkipped: cur?.staleSkipped ?? 0,
+    failClosed: cur?.failClosed ?? 0,
+  })
+}
+
+/** Clears the stored counters for one connection. Instance GC clears the rest. */
+export function resetSessionChildrenParityDiagnostics(connection: ChildrenParityConnection): void {
+  parityDiagnosticsByConnection.delete(connection as object)
+}
+
 function deferredChildrenKey(epoch: number | null, dir: string, parentSessionId: string): string {
   let canonical = dir
   try {
@@ -194,6 +268,7 @@ function cancelObserverTimeout(
     try {
       result = handle.cancel("private parity timeout")
     } catch {
+      tally(connection, "failClosed")
       console.warn("[Kilo Children] handle.cancel failed:", { op: "session/children", cancelFailed: true })
       result = false
     }
@@ -201,11 +276,13 @@ function cancelObserverTimeout(
     try {
       result = tryCancel(exactId, "private parity timeout")
     } catch {
+      tally(connection, "failClosed")
       console.warn("[Kilo Children] tryCancelPrivatePending failed:", { op: "session/children", cancelFailed: true })
       result = false
     }
   }
   if (result === "stale") {
+    tally(connection, "staleSkipped")
     console.warn(`[Kilo Children] stale observer timeout skipped invalidation (epoch changed):`, {
       op: "session/children",
       stale: true,
@@ -213,11 +290,13 @@ function cancelObserverTimeout(
     return
   }
   if (result === true) {
+    tally(connection, "timeout")
     console.warn(`[Kilo Children] private parity timeout:`, { op: "session/children", timeout: true })
     return
   }
   const epochNow = connection.getPrivateEpoch?.() ?? null
   if (epochAtStart !== null && epochNow !== null && epochNow !== epochAtStart) {
+    tally(connection, "staleSkipped")
     console.warn(`[Kilo Children] stale observer timeout skipped invalidation (epoch changed):`, {
       op: "session/children",
       stale: true,
@@ -228,27 +307,40 @@ function cancelObserverTimeout(
     try {
       invalidate("children observer timeout")
     } catch {
+      tally(connection, "failClosed")
       console.warn("[Kilo Children] invalidatePrivatePeerOnObserverTimeout failed:", {
         op: "session/children",
         invalidateFailed: true,
       })
     }
   }
+  tally(connection, "timeout")
   console.warn(`[Kilo Children] private parity timeout:`, { op: "session/children", timeout: true })
 }
 
 function reportChildrenValid(
+  connection: ChildrenParityConnection,
   result: ServePrivateChildrenResult,
   sdk: { data?: unknown; error?: unknown; response?: unknown },
   parentSessionId: string,
 ): void {
   const parity = compareChildrenParity(result, sdk, parentSessionId)
-  if (parity.divergence) console.warn("[Kilo Children] parity divergence:", parity.divergence, parity.details)
-  else if ((result as Record<string, unknown>).transportUnknown)
+  if (parity.divergence) {
+    if (parity.divergence === "transport-unknown") tally(connection, "transportUnknown")
+    else tally(connection, "divergence")
+    console.warn("[Kilo Children] parity divergence:", parity.divergence, parity.details)
+    return
+  }
+  if ((result as Record<string, unknown>).transportUnknown) {
+    tally(connection, "transportUnknown")
     console.warn("[Kilo Children] transport-unknown parity:", { op: "session/children", transportUnknown: true })
+    return
+  }
+  tally(connection, "comparedNoDivergence")
 }
 
-function validationDivergence(): void {
+function validationDivergence(connection: ChildrenParityConnection): void {
+  tally(connection, "validationDivergence")
   console.warn("[Kilo Children] validation divergence:", { op: "session/children", invalid: true })
 }
 
@@ -273,6 +365,7 @@ async function observeViaOutcome(
     })
   } catch (e) {
     if (isPrivateChildrenValidationError(e)) {
+      tally(connection, "validationDivergence")
       console.warn("[Kilo Children] validation divergence:", { op: "session/children", invalid: true })
       return
     }
@@ -280,10 +373,10 @@ async function observeViaOutcome(
   }
   if (!outcome) return
   if (outcome.kind === "invalid") {
-    validationDivergence()
+    validationDivergence(connection)
     return
   }
-  reportChildrenValid(outcome.result, sdk, parentSessionId)
+  reportChildrenValid(connection, outcome.result, sdk, parentSessionId)
 }
 
 async function observeChildrenParity(
@@ -324,6 +417,7 @@ async function observeChildrenParity(
     const handle = connection.privateChildrenOutcomeWithHandle(req)
     await observeViaOutcome(connection, handle, req, sdk, parentSessionId, timeoutMs, epochAtStart)
   } catch {
+    tally(connection, "failClosed")
     console.warn("[Kilo Children] private parity observation failed (fail-closed):", {
       op: "session/children",
       observationFailed: true,
@@ -349,11 +443,13 @@ function deferChildrenParityAfterNegotiation(
 ): void {
   const observe = (): void => {
     void observeChildrenParity(connection, sdk, dir, parentSessionId, opId, idempotencyKey, requestId, timeoutMs).catch(
-      () =>
+      () => {
+        tally(connection, "failClosed")
         console.warn("[Kilo Children] private parity observation failed (fail-closed):", {
           op: "session/children",
           observationFailed: true,
-        }),
+        })
+      },
     )
   }
   // Owner-managed dedupe when available: the connection service owns the key
@@ -370,6 +466,7 @@ function deferChildrenParityAfterNegotiation(
     try {
       unsub = add(dir, parentSessionId, observe)
     } catch {
+      tally(connection, "failClosed")
       console.warn("[Kilo Children] deferred parity subscribe failed (fail-closed):", {
         op: "session/children",
         subscribeFailed: true,
@@ -380,6 +477,7 @@ function deferChildrenParityAfterNegotiation(
       try {
         unsub?.()
       } catch {
+        tally(connection, "failClosed")
         console.warn("[Kilo Children] deferred parity unsubscribe failed (fail-closed):", {
           op: "session/children",
           unsubscribeFailed: true,
@@ -414,6 +512,7 @@ function deferChildrenFallback(
       try {
         oldUnsub()
       } catch {
+        tally(connection, "failClosed")
         console.warn("[Kilo Children] deferred parity unsubscribe failed (fail-closed):", {
           op: "session/children",
           unsubscribeFailed: true,
@@ -436,6 +535,7 @@ function deferChildrenFallback(
       try {
         oldUnsub()
       } catch {
+        tally(connection, "failClosed")
         console.warn("[Kilo Children] deferred parity unsubscribe failed (fail-closed):", {
           op: "session/children",
           unsubscribeFailed: true,
@@ -459,6 +559,7 @@ function deferChildrenFallback(
       try {
         unsub()
       } catch {
+        tally(connection, "failClosed")
         console.warn("[Kilo Children] deferred parity unsubscribe failed (fail-closed):", {
           op: "session/children",
           unsubscribeFailed: true,
@@ -475,6 +576,7 @@ function deferChildrenFallback(
       try {
         unsub()
       } catch {
+        tally(connection, "failClosed")
         console.warn("[Kilo Children] deferred parity unsubscribe failed (fail-closed):", {
           op: "session/children",
           unsubscribeFailed: true,
@@ -485,6 +587,7 @@ function deferChildrenFallback(
   } catch {
     seen.delete(key)
     entry.unsubs.delete(key)
+    tally(connection, "failClosed")
     console.warn("[Kilo Children] deferred parity subscribe failed (fail-closed):", {
       op: "session/children",
       subscribeFailed: true,
@@ -499,6 +602,7 @@ function fireDeferredChildren(
 ): void {
   const now = connection.getPrivateEpoch?.() ?? null
   if (now !== epochAtDefer) {
+    tally(connection, "staleSkipped")
     console.warn("[Kilo Children] stale deferred parity skipped (epoch changed)")
     return
   }
@@ -526,13 +630,15 @@ function launchChildrenParity(
       requestId,
       timeoutMs,
     )
-    void pending.catch(() =>
+    void pending.catch(() => {
+      tally(connection, "failClosed")
       console.warn("[Kilo Children] private parity observation failed (fail-closed):", {
         op: "session/children",
         observationFailed: true,
-      }),
-    )
+      })
+    })
   } catch {
+    tally(connection, "failClosed")
     console.warn("[Kilo Children] private parity observation failed (fail-closed):", {
       op: "session/children",
       observationFailed: true,
@@ -551,6 +657,12 @@ function launchChildrenParity(
  * the default bounded timeout. Invalid private wire bypasses the comparator
  * and only logs a diagnostic. Membership/content differences without a shared
  * revision are warn-only observation divergence, never parity failure.
+ *
+ * Each terminal outcome also increments one bounded per-connection counter
+ * (`getSessionChildrenParityDiagnostics`); counters are warn-adjacent only and
+ * never influence SDK authority, timing, or control flow. The no-divergence
+ * counter is comparator-scoped (`comparedNoDivergence`): it records only
+ * comparator `divergence: null` and never claims full parity/health.
  */
 export function observeSessionChildrenParityDetached(
   connection: ChildrenParityConnection,
@@ -571,6 +683,7 @@ export function observeSessionChildrenParityDetached(
     idempotencyKey = ident.idempotencyKey
     requestId = ident.requestId
   } catch {
+    tally(connection, "failClosed")
     console.warn("[Kilo Children] private parity observation failed (fail-closed):", {
       op: "session/children",
       observationFailed: true,

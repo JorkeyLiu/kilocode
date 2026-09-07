@@ -11,7 +11,9 @@ import {
 } from "./serve-private-peer"
 import {
   buildSessionChildrenIdentity,
+  getSessionChildrenParityDiagnostics,
   observeSessionChildrenParityDetached,
+  resetSessionChildrenParityDiagnostics,
   sdkChildrenHasTerminal,
   SESSION_CHILDREN_PARITY_TIMEOUT_MS,
   type ChildrenParityConnection,
@@ -1329,6 +1331,497 @@ describe("B8 session/children private peer", () => {
       try {
         svc.dispose()
       } catch {}
+    }
+  })
+})
+
+describe("session/children parity diagnostics (bounded)", () => {
+  function matchResult(req: { requestId: string; opId: string; idempotencyKey: string }) {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/children",
+      idempotencyKey: req.idempotencyKey,
+      status: "succeeded",
+      outcome: { type: "succeeded", time: 1 },
+      accepted: true,
+      data: { children: [kid(KID_A), kid(KID_B)] },
+    }
+  }
+
+  function zeros() {
+    return {
+      comparedNoDivergence: 0,
+      divergence: 0,
+      transportUnknown: 0,
+      validationDivergence: 0,
+      timeout: 0,
+      staleSkipped: 0,
+      failClosed: 0,
+    }
+  }
+
+  test("diagnostics count comparator no-divergence once; SDK-first and comparator unchanged", async () => {
+    const sdk = { data: [kid(KID_A), kid(KID_B)] }
+    const before = JSON.stringify(sdk)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: matchResult(req) }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      const ret = observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 200)
+      expect(ret).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(warns.length).toBe(0)
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({ ...zeros(), comparedNoDivergence: 1 })
+      const parity = compareChildrenParity(
+        matchResult({ requestId: "r", opId: "o", idempotencyKey: "o" }) as unknown as never,
+        sdk as unknown as never,
+        PARENT,
+      )
+      expect(parity.divergence).toBeNull()
+      // Children comparator carries no `*Unknown` detail fields: the
+      // no-divergence counter is comparator-scoped (stable id/parentID/
+      // canonical directory/title plus in-memory full-payload equality) and
+      // never claims full parity/health. Concurrent membership shifts stay
+      // warn-only observation divergence.
+      const details = parity.details as Record<string, unknown>
+      expect(Object.keys(details).some((k) => k.toLowerCase().includes("unknown"))).toBeFalse()
+      const snap = getSessionChildrenParityDiagnostics(conn) as Record<string, unknown>
+      expect(snap.comparedNoDivergence).toBe(1)
+      expect(Object.keys(snap).some((k) => k.toLowerCase().includes("unknown") && k !== "transportUnknown")).toBeFalse()
+      expect("match" in snap).toBeFalse()
+      expect("fullParity" in snap).toBeFalse()
+      expect("health" in snap).toBeFalse()
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count divergence; parity warn and comparator unchanged", async () => {
+    const sdk = { data: [kid(KID_A), kid(KID_B)] }
+    const before = JSON.stringify(sdk)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: { ...matchResult(req), data: { children: [kid(KID_A)] } },
+          }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 200)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(
+        warns.some(
+          (w) => String(w[0]).includes("parity divergence") && String(w[1]).includes("observation-divergence"),
+        ),
+      ).toBeTrue()
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({ ...zeros(), divergence: 1 })
+      const parity = compareChildrenParity(
+        { ...matchResult({ requestId: "r", opId: "o", idempotencyKey: "o" }), data: { children: [kid(KID_A)] } } as unknown as never,
+        sdk as unknown as never,
+        PARENT,
+      )
+      expect(parity.divergence).toContain("observation-divergence")
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count transport-unknown separately from divergence", async () => {
+    const sdk = { data: [kid(KID_A)] }
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: "session/children",
+              idempotencyKey: req.idempotencyKey,
+              status: "ambiguous",
+              outcome: { type: "ambiguous", time: 1 },
+              accepted: false,
+              transportUnknown: true,
+            },
+          }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 200)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(warns.some((w) => JSON.stringify(w).includes("transport-unknown"))).toBeTrue()
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({ ...zeros(), transportUnknown: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count validation divergence without comparator codes", async () => {
+    const sdk = { data: [kid(KID_A), kid(KID_B)] }
+    const before = JSON.stringify(sdk)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: () => ({
+          id: 2,
+          promise: Promise.resolve({ kind: "invalid", detail: "succeeded data.children entry must be object" }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 200)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(warns.some((w) => String(w[0]).includes("validation divergence"))).toBeTrue()
+      expect(warns.some((w) => String(w[0]).includes("parity divergence"))).toBeFalse()
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({ ...zeros(), validationDivergence: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count observer timeout; SDK snapshot untouched", async () => {
+    const sdk = { data: [kid(KID_A)] }
+    const before = JSON.stringify(sdk)
+    const invalidated: string[] = []
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: () => ({
+          id: 42,
+          promise: new Promise(() => {}),
+          cancel: () => true,
+        }),
+        tryCancelPrivatePending: () => false,
+        invalidatePrivatePeerOnObserverTimeout: (r) => {
+          invalidated.push(r)
+        },
+        getPrivateEpoch: () => 9,
+      }
+      observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 20)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(invalidated).toEqual([])
+      expect(warns.some((w) => String(w[0]).includes("private parity timeout"))).toBeTrue()
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({ ...zeros(), timeout: 1, transportUnknown: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count stale epoch invalidation without timeout", async () => {
+    const sdk = { data: [kid(KID_A)] }
+    const invalidated: string[] = []
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: () => ({
+          id: 43,
+          promise: new Promise(() => {}),
+          cancel: () => "stale" as const,
+        }),
+        tryCancelPrivatePending: () => false,
+        invalidatePrivatePeerOnObserverTimeout: (r) => {
+          invalidated.push(r)
+        },
+        getPrivateEpoch: () => 9,
+      }
+      observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 20)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(invalidated).toEqual([])
+      expect(warns.some((w) => String(w[0]).includes("stale observer timeout skipped"))).toBeTrue()
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({ ...zeros(), staleSkipped: 1, transportUnknown: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count failClosed on handle.cancel throw alongside timeout", async () => {
+    const sdk = { data: [kid(KID_A)] }
+    const before = JSON.stringify(sdk)
+    const invalidated: string[] = []
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: () => ({
+          id: 44,
+          promise: new Promise(() => {}),
+          cancel: () => {
+            throw new Error("cancel-boom")
+          },
+        }),
+        tryCancelPrivatePending: () => false,
+        invalidatePrivatePeerOnObserverTimeout: (r) => {
+          invalidated.push(r)
+        },
+        getPrivateEpoch: () => 9,
+      }
+      observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 20)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(invalidated).toEqual(["children observer timeout"])
+      expect(
+        warns.some(
+          (w) =>
+            String(w[0]).includes("handle.cancel failed") &&
+            String(JSON.stringify(w[1] ?? {})).includes('"cancelFailed":true'),
+        ),
+      ).toBeTrue()
+      expect(warns.some((w) => String(w[0]).includes("private parity timeout"))).toBeTrue()
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({
+        ...zeros(),
+        timeout: 1,
+        transportUnknown: 1,
+        failClosed: 1,
+      })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count failClosed on tryCancel throw alongside timeout", async () => {
+    const sdk = { data: [kid(KID_A)] }
+    const before = JSON.stringify(sdk)
+    const invalidated: string[] = []
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: () => ({
+          id: 45,
+          promise: new Promise(() => {}),
+        }),
+        tryCancelPrivatePending: () => {
+          throw new Error("try-cancel-boom")
+        },
+        invalidatePrivatePeerOnObserverTimeout: (r) => {
+          invalidated.push(r)
+        },
+        getPrivateEpoch: () => 9,
+      }
+      observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 20)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(invalidated).toEqual(["children observer timeout"])
+      expect(
+        warns.some(
+          (w) =>
+            String(w[0]).includes("tryCancelPrivatePending failed") &&
+            String(JSON.stringify(w[1] ?? {})).includes('"cancelFailed":true'),
+        ),
+      ).toBeTrue()
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({
+        ...zeros(),
+        timeout: 1,
+        transportUnknown: 1,
+        failClosed: 1,
+      })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count failClosed on invalidate throw alongside timeout", async () => {
+    const sdk = { data: [kid(KID_A)] }
+    const before = JSON.stringify(sdk)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: () => ({
+          id: 46,
+          promise: new Promise(() => {}),
+          cancel: () => false,
+        }),
+        tryCancelPrivatePending: () => false,
+        invalidatePrivatePeerOnObserverTimeout: () => {
+          throw new Error("invalidate-boom")
+        },
+        getPrivateEpoch: () => 9,
+      }
+      observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 20)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(
+        warns.some(
+          (w) =>
+            String(w[0]).includes("invalidatePrivatePeerOnObserverTimeout failed") &&
+            String(JSON.stringify(w[1] ?? {})).includes('"invalidateFailed":true'),
+        ),
+      ).toBeTrue()
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({
+        ...zeros(),
+        timeout: 1,
+        transportUnknown: 1,
+        failClosed: 1,
+      })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count fail-closed on private throw; SDK-first preserved", async () => {
+    const sdk = { data: [kid(KID_A)] }
+    const before = JSON.stringify(sdk)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: () => {
+          throw new Error("private boom")
+        },
+        getPrivateEpoch: () => 1,
+      }
+      const ret = observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 50)
+      expect(ret).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(warns.some((w) => String(w[0]).includes("private parity observation failed (fail-closed)"))).toBeTrue()
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({ ...zeros(), failClosed: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count deferred stale skip; snapshot frozen, resettable, per-connection", async () => {
+    const sdk = { data: [kid(KID_A)] }
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      let listener: (() => void) | null = null
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => false,
+        privateChildrenOutcomeWithHandle: () => ({
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: {} }),
+        }),
+        getPrivateEpoch: () => 3,
+        onPrivateAvailable: (fn) => {
+          listener = fn
+          return () => {
+            listener = null
+          }
+        },
+      }
+      const other: ChildrenParityConnection = {
+        isPrivateAvailable: () => false,
+        privateChildrenOutcomeWithHandle: () => ({
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: {} }),
+        }),
+        getPrivateEpoch: () => 3,
+        onPrivateAvailable: () => () => {},
+      }
+      observeSessionChildrenParityDetached(conn, sdk as never, PARENT, "/tmp", 50)
+      expect(listener).not.toBeNull()
+      ;(conn as { getPrivateEpoch: () => number }).getPrivateEpoch = () => 4
+      listener!()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(warns.some((w) => String(w[0]).includes("stale deferred parity skipped"))).toBeTrue()
+      const snap = getSessionChildrenParityDiagnostics(conn)
+      expect({ ...snap }).toEqual({ ...zeros(), staleSkipped: 1 })
+      expect(Object.isFrozen(snap)).toBeTrue()
+      const warnCount = warns.length
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual({ ...zeros(), staleSkipped: 1 })
+      expect(warns.length).toBe(warnCount)
+      expect({ ...getSessionChildrenParityDiagnostics(other) }).toEqual(zeros())
+      resetSessionChildrenParityDiagnostics(conn)
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual(zeros())
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics ignore non-terminal SDK results without observing", async () => {
+    const sdk = { error: new Error("aborted"), response: undefined }
+    let calls = 0
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: ChildrenParityConnection = {
+        isPrivateAvailable: () => true,
+        privateChildrenOutcomeWithHandle: () => {
+          calls += 1
+          throw new Error("must not observe")
+        },
+        getPrivateEpoch: () => 1,
+      }
+      const ret = observeSessionChildrenParityDetached(conn, sdk as unknown as never, PARENT, "/tmp", 50)
+      expect(ret).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(calls).toBe(0)
+      expect(warns.length).toBe(0)
+      expect({ ...getSessionChildrenParityDiagnostics(conn) }).toEqual(zeros())
+    } finally {
+      console.warn = origWarn
     }
   })
 })
