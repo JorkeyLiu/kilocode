@@ -15,6 +15,8 @@ import {
   observeSessionGetParityDetached,
   sdkGetHasTerminal,
   SESSION_GET_PARITY_TIMEOUT_MS,
+  getSessionGetParityDiagnostics,
+  resetSessionGetParityDiagnostics,
   type GetParityConnection,
 } from "../../kilo-provider/session-get-parity"
 
@@ -764,6 +766,360 @@ describe("B6 session/get private peer", () => {
       try {
         svc.dispose()
       } catch {}
+    }
+  })
+})
+
+describe("B6 session/get parity diagnostics (bounded)", () => {
+  function matchResult(req: { requestId: string; opId: string; idempotencyKey: string }) {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/get",
+      idempotencyKey: req.idempotencyKey,
+      status: "succeeded",
+      outcome: { type: "succeeded", time: 1 },
+      accepted: true,
+      data: { session: { id: "ses_abc", directory: "/tmp", title: "hello" } },
+    }
+  }
+
+  function zeros() {
+    return {
+      match: 0,
+      divergence: 0,
+      transportUnknown: 0,
+      validationDivergence: 0,
+      timeout: 0,
+      staleSkipped: 0,
+      failClosed: 0,
+    }
+  }
+
+  test("diagnostics count match once; SDK-first and comparator unchanged", async () => {
+    const sdk = { data: { id: "ses_abc", directory: "/tmp", title: "hello" } }
+    const before = JSON.stringify(sdk.data)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: GetParityConnection = {
+        isPrivateAvailable: () => true,
+        privateGet: async () => {
+          throw new Error("unused")
+        },
+        privateGetWithHandle: () => {
+          throw new Error("unused")
+        },
+        privateGetOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: matchResult(req) }),
+        }),
+      }
+      const ret = observeSessionGetParityDetached(conn, sdk as unknown as never, "ses_abc", "/tmp", 200)
+      expect(ret).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk.data)).toBe(before)
+      expect(warns.length).toBe(0)
+      expect({ ...getSessionGetParityDiagnostics(conn) }).toEqual({ ...zeros(), match: 1 })
+      const parity = compareGetParity(matchResult({ requestId: "r", opId: "o", idempotencyKey: "o" }) as unknown as never, sdk as unknown as never)
+      expect(parity.divergence).toBeNull()
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count divergence; parity warn and comparator unchanged", async () => {
+    const sdk = { data: { id: "ses_abc", directory: "/tmp", title: "hello" } }
+    const before = JSON.stringify(sdk.data)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: GetParityConnection = {
+        isPrivateAvailable: () => true,
+        privateGet: async () => {
+          throw new Error("unused")
+        },
+        privateGetWithHandle: () => {
+          throw new Error("unused")
+        },
+        privateGetOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              ...matchResult(req),
+              data: { session: { id: "ses_abc", directory: "/tmp", title: "other" } },
+            },
+          }),
+        }),
+      }
+      observeSessionGetParityDetached(conn, sdk as unknown as never, "ses_abc", "/tmp", 200)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk.data)).toBe(before)
+      expect(warns.some((w) => String(w[0]).includes("parity divergence") && String(w[1]).includes("get-title-mismatch"))).toBeTrue()
+      expect({ ...getSessionGetParityDiagnostics(conn) }).toEqual({ ...zeros(), divergence: 1 })
+      const parity = compareGetParity(
+        { ...matchResult({ requestId: "r", opId: "o", idempotencyKey: "o" }), data: { session: { id: "ses_abc", directory: "/tmp", title: "other" } } } as unknown as never,
+        sdk as unknown as never,
+      )
+      expect(parity.divergence).toBe("get-title-mismatch")
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count transport-unknown separately from divergence", async () => {
+    const sdk = { data: { id: "ses_abc", directory: "/tmp", title: "hello" } }
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: GetParityConnection = {
+        isPrivateAvailable: () => true,
+        privateGet: async () => {
+          throw new Error("unused")
+        },
+        privateGetWithHandle: () => {
+          throw new Error("unused")
+        },
+        privateGetOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 1,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: "session/get",
+              idempotencyKey: req.idempotencyKey,
+              status: "ambiguous",
+              outcome: { type: "ambiguous", time: 1 },
+              accepted: false,
+              transportUnknown: true,
+            },
+          }),
+        }),
+      }
+      observeSessionGetParityDetached(conn, sdk as unknown as never, "ses_abc", "/tmp", 200)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(warns.some((w) => String(w[1] ?? "").includes("transport-unknown"))).toBeTrue()
+      expect({ ...getSessionGetParityDiagnostics(conn) }).toEqual({ ...zeros(), transportUnknown: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count validation divergence without comparator codes", async () => {
+    const sdk = { data: { id: "ses_abc", directory: "/tmp", title: "hello" } }
+    const before = JSON.stringify(sdk.data)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: GetParityConnection = {
+        isPrivateAvailable: () => true,
+        privateGet: async () => {
+          throw new Error("unused")
+        },
+        privateGetWithHandle: () => {
+          throw new Error("unused")
+        },
+        privateGetOutcomeWithHandle: () => ({
+          id: 2,
+          promise: Promise.resolve({ kind: "invalid", detail: "succeeded data.session must be object" }),
+        }),
+      }
+      observeSessionGetParityDetached(conn, sdk as unknown as never, "ses_abc", "/tmp", 200)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk.data)).toBe(before)
+      expect(warns.some((w) => String(w[0]).includes("validation divergence"))).toBeTrue()
+      expect(warns.some((w) => String(w[1] ?? "").includes("get-"))).toBeFalse()
+      expect({ ...getSessionGetParityDiagnostics(conn) }).toEqual({ ...zeros(), validationDivergence: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count observer timeout; SDK snapshot untouched", async () => {
+    const sdk = { data: { id: "ses_abc", directory: "/tmp", title: "hello" } }
+    const before = JSON.stringify(sdk.data)
+    const invalidated: string[] = []
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: GetParityConnection = {
+        isPrivateAvailable: () => true,
+        privateGet: async () => {
+          throw new Error("unused")
+        },
+        privateGetWithHandle: () => {
+          throw new Error("unused")
+        },
+        privateGetOutcomeWithHandle: () => ({
+          id: 42,
+          promise: new Promise(() => {}),
+          cancel: () => true,
+        }),
+        tryCancelPrivatePending: () => false,
+        invalidatePrivatePeerOnObserverTimeout: (r) => {
+          invalidated.push(r)
+        },
+        getPrivateEpoch: () => 9,
+      }
+      observeSessionGetParityDetached(conn, sdk as unknown as never, "ses_abc", "/tmp", 20)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(JSON.stringify(sdk.data)).toBe(before)
+      expect(invalidated).toEqual([])
+      expect(warns.some((w) => String(w[0]).includes("private parity timeout"))).toBeTrue()
+      // The timed-out observation still resolves to the existing ambiguous
+      // transport-unknown result, so both counters move; timeout exactly once.
+      expect({ ...getSessionGetParityDiagnostics(conn) }).toEqual({ ...zeros(), timeout: 1, transportUnknown: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count stale epoch invalidation without timeout", async () => {
+    const sdk = { data: { id: "ses_abc", directory: "/tmp", title: "hello" } }
+    const invalidated: string[] = []
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: GetParityConnection = {
+        isPrivateAvailable: () => true,
+        privateGet: async () => {
+          throw new Error("unused")
+        },
+        privateGetWithHandle: () => {
+          throw new Error("unused")
+        },
+        privateGetOutcomeWithHandle: () => ({
+          id: 43,
+          promise: new Promise(() => {}),
+          cancel: () => "stale" as const,
+        }),
+        tryCancelPrivatePending: () => false,
+        invalidatePrivatePeerOnObserverTimeout: (r) => {
+          invalidated.push(r)
+        },
+        getPrivateEpoch: () => 9,
+      }
+      observeSessionGetParityDetached(conn, sdk as unknown as never, "ses_abc", "/tmp", 20)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(invalidated).toEqual([])
+      expect(warns.some((w) => String(w[0]).includes("stale observer timeout skipped"))).toBeTrue()
+      expect({ ...getSessionGetParityDiagnostics(conn) }).toEqual({ ...zeros(), staleSkipped: 1, transportUnknown: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count deferred stale skip; snapshot frozen, resettable, per-connection", async () => {
+    const sdk = { data: { id: "ses_abc", directory: "/tmp", title: "hello" } }
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      let listener: (() => void) | null = null
+      const conn: GetParityConnection = {
+        isPrivateAvailable: () => false,
+        privateGet: async () => {
+          throw new Error("unused")
+        },
+        privateGetWithHandle: () => {
+          throw new Error("unused")
+        },
+        getPrivateEpoch: () => 3,
+        onPrivateAvailable: (fn) => {
+          listener = fn
+          return () => {
+            listener = null
+          }
+        },
+      }
+      const other: GetParityConnection = {
+        isPrivateAvailable: () => false,
+        privateGet: async () => {
+          throw new Error("unused")
+        },
+        privateGetWithHandle: () => {
+          throw new Error("unused")
+        },
+        getPrivateEpoch: () => 3,
+        onPrivateAvailable: () => () => {},
+      }
+      observeSessionGetParityDetached(conn, sdk as unknown as never, "ses_abc", "/tmp", 50)
+      expect(listener).not.toBeNull()
+      ;(conn as { getPrivateEpoch: () => number }).getPrivateEpoch = () => 4
+      listener!()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(warns.some((w) => String(w[0]).includes("stale deferred parity skipped"))).toBeTrue()
+      const snap = getSessionGetParityDiagnostics(conn)
+      expect({ ...snap }).toEqual({ ...zeros(), staleSkipped: 1 })
+      expect(Object.isFrozen(snap)).toBeTrue()
+      // Reading diagnostics never warns and never changes behavior.
+      const warnCount = warns.length
+      expect({ ...getSessionGetParityDiagnostics(conn) }).toEqual({ ...zeros(), staleSkipped: 1 })
+      expect(warns.length).toBe(warnCount)
+      // Per-connection isolation and reset.
+      expect({ ...getSessionGetParityDiagnostics(other) }).toEqual(zeros())
+      resetSessionGetParityDiagnostics(conn)
+      expect({ ...getSessionGetParityDiagnostics(conn) }).toEqual(zeros())
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics ignore non-terminal SDK results without observing", async () => {
+    const sdk = { error: new Error("aborted"), response: undefined }
+    let calls = 0
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: GetParityConnection = {
+        isPrivateAvailable: () => true,
+        privateGet: async () => {
+          throw new Error("unused")
+        },
+        privateGetWithHandle: () => {
+          calls += 1
+          throw new Error("must not observe")
+        },
+        privateGetOutcomeWithHandle: () => {
+          calls += 1
+          throw new Error("must not observe")
+        },
+      }
+      const ret = observeSessionGetParityDetached(conn, sdk as unknown as never, "ses_abc", "/tmp", 50)
+      expect(ret).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(calls).toBe(0)
+      expect(warns.length).toBe(0)
+      expect({ ...getSessionGetParityDiagnostics(conn) }).toEqual(zeros())
+    } finally {
+      console.warn = origWarn
     }
   })
 })

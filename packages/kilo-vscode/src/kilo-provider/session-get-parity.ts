@@ -98,6 +98,69 @@ export function sdkGetHasTerminal(sdk: { data?: unknown; error?: unknown; respon
  */
 const deferredGetKeysByConnection = new WeakMap<object, Set<string>>()
 
+/**
+ * Bounded per-connection health counters for detached `session/get` parity.
+ * Fixed categories only — no arrays, no timers, no cross-process state.
+ * Keyed by connection instance so entries end with the instance lifecycle
+ * via `WeakMap`; `resetSessionGetParityDiagnostics` clears one entry.
+ * Counters are write-only: production paths only `tally` next to the
+ * existing `warn` and never read diagnostics to change behavior.
+ */
+export type SessionGetParityDiagnostics = {
+  readonly match: number
+  readonly divergence: number
+  readonly transportUnknown: number
+  readonly validationDivergence: number
+  readonly timeout: number
+  readonly staleSkipped: number
+  readonly failClosed: number
+}
+
+type ParityTally = {
+  match: number
+  divergence: number
+  transportUnknown: number
+  validationDivergence: number
+  timeout: number
+  staleSkipped: number
+  failClosed: number
+}
+
+const parityDiagnosticsByConnection = new WeakMap<object, ParityTally>()
+
+function tally(connection: GetParityConnection, key: keyof ParityTally): void {
+  if ((typeof connection !== "object" && typeof connection !== "function") || connection === null) return
+  let cur = parityDiagnosticsByConnection.get(connection)
+  if (!cur) {
+    cur = { match: 0, divergence: 0, transportUnknown: 0, validationDivergence: 0, timeout: 0, staleSkipped: 0, failClosed: 0 }
+    parityDiagnosticsByConnection.set(connection, cur)
+  }
+  cur[key] += 1
+}
+
+/**
+ * Snapshot copy of the fixed-category parity counters for one connection.
+ * Returns zeros when nothing was observed. The copy is frozen so callers
+ * cannot mutate stored state; reading never affects parity behavior.
+ */
+export function getSessionGetParityDiagnostics(connection: GetParityConnection): SessionGetParityDiagnostics {
+  const cur = parityDiagnosticsByConnection.get(connection as object)
+  return Object.freeze({
+    match: cur?.match ?? 0,
+    divergence: cur?.divergence ?? 0,
+    transportUnknown: cur?.transportUnknown ?? 0,
+    validationDivergence: cur?.validationDivergence ?? 0,
+    timeout: cur?.timeout ?? 0,
+    staleSkipped: cur?.staleSkipped ?? 0,
+    failClosed: cur?.failClosed ?? 0,
+  })
+}
+
+/** Clears the stored counters for one connection. Instance GC clears the rest. */
+export function resetSessionGetParityDiagnostics(connection: GetParityConnection): void {
+  parityDiagnosticsByConnection.delete(connection as object)
+}
+
 function deferredGetKey(epoch: number | null, dir: string, sessionId: string): string {
   let canonical = dir
   try {
@@ -150,15 +213,18 @@ function cancelObserverTimeout(
     }
   }
   if (result === "stale") {
+    tally(connection, "staleSkipped")
     console.warn(`[Kilo Get] stale observer timeout skipped invalidation (epoch changed):`, { opId, requestId })
     return
   }
   if (result === true) {
+    tally(connection, "timeout")
     console.warn(`[Kilo Get] private parity timeout after ${timeoutMs}ms:`, { opId, requestId })
     return
   }
   const epochNow = connection.getPrivateEpoch?.() ?? null
   if (epochAtStart !== null && epochNow !== null && epochNow !== epochAtStart) {
+    tally(connection, "staleSkipped")
     console.warn(`[Kilo Get] stale observer timeout skipped invalidation (epoch changed):`, { opId, requestId })
     return
   }
@@ -169,20 +235,33 @@ function cancelObserverTimeout(
       console.warn("[Kilo Get] invalidatePrivatePeerOnObserverTimeout failed:", String(err).slice(0, 200), { opId })
     }
   }
+  tally(connection, "timeout")
   console.warn(`[Kilo Get] private parity timeout after ${timeoutMs}ms:`, { opId, requestId })
 }
 
 function reportGetValid(
+  connection: GetParityConnection,
   result: ServePrivateGetResult,
   sdk: { data?: unknown; error?: unknown; response?: unknown },
   opId: string,
 ): void {
   const parity = compareGetParity(result, sdk)
-  if (parity.divergence) console.warn("[Kilo Get] parity divergence:", parity.divergence, parity.details)
-  else if ((result as Record<string, unknown>).transportUnknown) console.warn("[Kilo Get] transport-unknown parity:", opId)
+  if (parity.divergence) {
+    if (parity.divergence === "transport-unknown") tally(connection, "transportUnknown")
+    else tally(connection, "divergence")
+    console.warn("[Kilo Get] parity divergence:", parity.divergence, parity.details)
+    return
+  }
+  if ((result as Record<string, unknown>).transportUnknown) {
+    tally(connection, "transportUnknown")
+    console.warn("[Kilo Get] transport-unknown parity:", opId)
+    return
+  }
+  tally(connection, "match")
 }
 
-function validationDivergence(detail: string, opId: string, diag?: string): void {
+function validationDivergence(connection: GetParityConnection, detail: string, opId: string, diag?: string): void {
+  tally(connection, "validationDivergence")
   console.warn("[Kilo Get] validation divergence:", `invalid private response shape: ${detail}`.slice(0, 200), {
     opId,
     ...(diag ? { _error: diag.slice(0, 200) } : {}),
@@ -215,6 +294,7 @@ async function observeViaOutcome(
     })
   } catch (e) {
     if (isPrivateGetValidationError(e)) {
+      tally(connection, "validationDivergence")
       console.warn("[Kilo Get] validation divergence:", String(e).slice(0, 200), { opId })
       return
     }
@@ -223,10 +303,10 @@ async function observeViaOutcome(
   }
   if (!outcome) return
   if (outcome.kind === "invalid") {
-    validationDivergence(outcome.detail, opId, diag)
+    validationDivergence(connection, outcome.detail, opId, diag)
     return
   }
-  reportGetValid(outcome.result, sdk, opId)
+  reportGetValid(connection, outcome.result, sdk, opId)
 }
 
 async function observeStatusParity(
@@ -264,6 +344,7 @@ async function observeStatusParity(
       }
     } catch (e) {
       if (isPrivateGetValidationError(e)) {
+        tally(connection, "validationDivergence")
         console.warn("[Kilo Get] validation divergence:", String(e).slice(0, 200), { opId })
         return
       }
@@ -271,6 +352,7 @@ async function observeStatusParity(
     }
     await observeViaLegacy(connection, req, sdk, opId, requestId, timeoutMs, epochAtStart)
   } catch (e) {
+    tally(connection, "failClosed")
     console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
   }
 }
@@ -292,6 +374,7 @@ async function observeViaLegacy(
     privPromise = h.promise
   } catch (e) {
     if (isPrivateGetValidationError(e)) {
+      tally(connection, "validationDivergence")
       console.warn("[Kilo Get] validation divergence:", String(e).slice(0, 200), { opId })
       return
     }
@@ -333,10 +416,11 @@ async function observeViaLegacy(
     })
   const rec = (settled ?? {}) as Record<string, unknown>
   if (typeof rec.__validationError === "string") {
+    tally(connection, "validationDivergence")
     console.warn("[Kilo Get] validation divergence:", String(rec.__validationError).slice(0, 200), { opId })
     return
   }
-  reportGetValid(rec as unknown as ServePrivateGetResult, sdk, opId)
+  reportGetValid(connection, rec as unknown as ServePrivateGetResult, sdk, opId)
 }
 
 /**
@@ -356,9 +440,10 @@ function deferGetParityAfterNegotiation(
   timeoutMs: number,
 ): void {
   const observe = (): void => {
-    void observeStatusParity(connection, sdk, dir, sessionId, opId, idempotencyKey, requestId, timeoutMs).catch((e) =>
-      console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200)),
-    )
+    void observeStatusParity(connection, sdk, dir, sessionId, opId, idempotencyKey, requestId, timeoutMs).catch((e) => {
+      tally(connection, "failClosed")
+      console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+    })
   }
   // Owner-managed dedupe when available: the connection service owns the key
   // lifecycle and releases stale keys on failed/superseded negotiation,
@@ -369,6 +454,7 @@ function deferGetParityAfterNegotiation(
     try {
       add(dir, sessionId, observe)
     } catch (e) {
+      tally(connection, "failClosed")
       console.warn("[Kilo Get] deferred parity subscribe failed (fail-closed):", String(e).slice(0, 200))
     }
     return
@@ -388,27 +474,30 @@ function deferGetParityAfterNegotiation(
     seen.delete(key)
     return
   }
-  try {
-    const unsub = sub(() => {
+    try {
+      const unsub = sub(() => {
+        seen.delete(key)
+        try {
+          unsub()
+        } catch (err) {
+          tally(connection, "failClosed")
+          console.warn("[Kilo Get] deferred parity unsubscribe failed (fail-closed):", String(err).slice(0, 200), {
+            epoch: epochAtDefer,
+          })
+        }
+        const now = connection.getPrivateEpoch?.() ?? null
+        if (now !== epochAtDefer) {
+          tally(connection, "staleSkipped")
+          console.warn("[Kilo Get] stale deferred parity skipped (epoch changed)")
+          return
+        }
+        observe()
+      })
+    } catch (e) {
       seen.delete(key)
-      try {
-        unsub()
-      } catch (err) {
-        console.warn("[Kilo Get] deferred parity unsubscribe failed (fail-closed):", String(err).slice(0, 200), {
-          epoch: epochAtDefer,
-        })
-      }
-      const now = connection.getPrivateEpoch?.() ?? null
-      if (now !== epochAtDefer) {
-        console.warn("[Kilo Get] stale deferred parity skipped (epoch changed)")
-        return
-      }
-      observe()
-    })
-  } catch (e) {
-    seen.delete(key)
-    console.warn("[Kilo Get] deferred parity subscribe failed (fail-closed):", String(e).slice(0, 200))
-  }
+      tally(connection, "failClosed")
+      console.warn("[Kilo Get] deferred parity subscribe failed (fail-closed):", String(e).slice(0, 200))
+    }
 }
 
 function launchGetParity(
@@ -423,10 +512,12 @@ function launchGetParity(
 ): void {
   try {
     const pending = observeStatusParity(connection, sdk, dir, sessionId, opId, idempotencyKey, requestId, timeoutMs)
-    void pending.catch((e) =>
-      console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200)),
-    )
+    void pending.catch((e) => {
+      tally(connection, "failClosed")
+      console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+    })
   } catch (e) {
+    tally(connection, "failClosed")
     console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
   }
 }
@@ -440,6 +531,10 @@ function launchGetParity(
  * SDK errors. It returns synchronously (non-blocking); private work runs
  * detached with the default bounded timeout. Invalid private wire bypasses
  * the comparator and only logs a diagnostic.
+ *
+ * Each terminal outcome also increments one bounded per-connection counter
+ * (`getSessionGetParityDiagnostics`); counters are warn-adjacent only and
+ * never influence SDK authority, timing, or control flow.
  */
 export function observeSessionGetParityDetached(
   connection: GetParityConnection,
@@ -460,6 +555,7 @@ export function observeSessionGetParityDetached(
     idempotencyKey = ident.idempotencyKey
     requestId = ident.requestId
   } catch (e) {
+    tally(connection, "failClosed")
     console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
     return
   }
