@@ -36,13 +36,33 @@ background, and every session stays a full agent with its complete harness.
   edits the same canonical files a person would edit, and external file edits
   reconcile visibly into the UI. Each generation runs on the immutable
   versioned snapshot it started with; later updates never disturb active work.
-- Permissions compose restrictively: a denial at any applicable layer wins,
-  an explicit confirmation requirement beats a plain grant, and a grant needs
-  every applicable layer to permit. Narrower scopes never widen what encloses
-  them.
-- Observation of runtime state converges through snapshots, revisions, and
-  events across reconnects and restarts. Presentation state settles onto
-  runtime truth without loss, duplication, or stale authority.
+- Permissions are runtime-decided: the private runtime is the sole authority
+  for the effective decision; the extension and webview never grant, widen,
+  or override it. Composition is restrictive across global, project, agent,
+  and session layers: any applicable denial or hard-safety ceiling holds and
+  cannot be overridden by a more permissive layer, a confirmation requirement
+  beats a plain grant, and a grant holds only when every applicable layer
+  permits. Within one document, match order settles only that document's
+  reading and never becomes cross-layer last-writer-wins. A child session
+  inherits enclosing denials and restrictions but never inherits a parent
+  grant or approval. An approval binds exactly the current session, agent,
+  permission, and pattern with a bounded lifetime and does not persist across
+  sessions by default. Free-form inquiry and the question tool carry separate
+  permission identities. Where no rule applies the decision defaults to
+  asking. Every effective decision carries provenance sufficient to explain
+  which layers and entries produced it. Current project scope is supplied
+  by the first workspace root `<workspaceRoot>/.kilo/`; with no folder open
+  there is no project layer.
+- Observation converges from runtime truth across panel close/reopen,
+  targeted reload, session switch, transport reconnect, and worker restart:
+  after any of these boundaries the projection settles onto what the runtime
+  reports, without loss, duplication, or stale authority. Runtime occurrence
+  time and transport receipt time are distinct facts; projection never
+  presents receipt time as fact time. Clients re-observe only: an
+  already-accepted semantic operation is never replayed or re-dispatched to
+  recover state. A bounded changefeed assists convergence only; it is not the
+  history reconstruction authority. A projection never becomes the
+  operational fact owner across lifecycles.
 - Failure, outcome, and recovery are runtime-owned. Exactly one runtime
   normalization boundary converts provider, session, tool, permission, worker,
   and transport errors into failure records; classification never schedules

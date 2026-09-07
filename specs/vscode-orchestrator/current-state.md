@@ -20,8 +20,15 @@ this note; when they disagree, the code is right.
   observation service exist in the extension, but the target ownership and
   cutover are unfinished. Effective configuration still comes from the CLI
   loader with its multi-source merge and convergence pass.
-- Permissions still evaluate under the current last-match behavior, not the
-  approved restrictive composition.
+- Production permission decisions come only from
+  `packages/opencode/src/permission/evaluator.ts`. Across
+  global/project/agent/session-restriction layers, deny wins first,
+  ask/ceiling next, and allow holds only when every applicable layer allows.
+  The old last-match helper is not on this path.
+- The extension restrictive `{global,project}` product from
+  `packages/kilo-vscode/src/config/compose.ts` feeds only extension
+  materialization/webview projection today, not CLI evaluator input; the CLI
+  still assembles its layers from canonical files.
 - The private runtime and storage cutover is unfinished. The legacy store
   still serves sessions until that landing.
 
@@ -31,8 +38,6 @@ this note; when they disagree, the code is right.
   diagnostics without changing the SDK authority.
 - What the smallest ownership landing is that moves one real datum from the
   shared backend bridge to the private runtime without a compatibility window.
-- Where the permission composition lands first so behavior stays explainable
-  while the current evaluation still runs.
 
 No backlog lives here. Anything that does not change the next judgment is
 omitted.
