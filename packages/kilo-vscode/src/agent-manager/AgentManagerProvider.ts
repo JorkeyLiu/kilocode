@@ -33,6 +33,8 @@ import { PLATFORM } from "./constants"
 import * as Persist from "./persistence"
 import type { AgentManagerOutMessage, AgentManagerInMessage, ManagedSession } from "./types"
 import type { Host, PanelContext, OutputHandle, Disposable } from "./host"
+import type { PrivateObservationService } from "../private-worker/private-observation-service"
+import { AgentManagerObservationCoordinator } from "./observation-coordinator"
 
 export class AgentManagerProvider implements Disposable {
   public static readonly viewType = "kilo-code.new.AgentManagerPanel"
@@ -81,10 +83,18 @@ export class AgentManagerProvider implements Disposable {
     () => this.panel?.visible ?? false,
     (ids) => this.connectionService.registerAttached("agent-manager", ids),
   )
+  private hydrated = false
+  private generation = 0
+  private refreshPromise: Promise<void> | null = null
+  private refreshGen: number | null = null
+  private refreshSessions: unknown | null = null
+  private coordinator: AgentManagerObservationCoordinator | undefined
   constructor(
     private readonly host: Host,
     private readonly connectionService: KiloConnectionService,
+    privateObservation?: PrivateObservationService,
   ) {
+    if (privateObservation) this.coordinator = new AgentManagerObservationCoordinator(privateObservation)
     this.outputChannel = host.createOutput("Kilo Agent Manager")
     this.timing = new SessionTiming(host.workspaceStore)
     this.terminalManager = new SessionTerminalManager(
@@ -307,6 +317,8 @@ export class AgentManagerProvider implements Disposable {
     if (ctx.sessions.onCatalog) {
       this.catalogUnsub = ctx.sessions.onCatalog((update) => this.onCatalogUpdate(update))
     }
+    this.generation++
+    this.hydrated = false
     this.stateReady = this.initializeState()
     void this.sendRepoInfo()
     this.sendKeybindings()
@@ -728,15 +740,82 @@ export class AgentManagerProvider implements Disposable {
       ?.then(() => {
         this.pushState()
         if (this.cachedLocalStats) this.postToWebview(this.cachedLocalStats)
-        // Intentionally fire-and-forget: the refresh enqueues through the
-        // serialized session-load chain and its internal error handling is
-        // preserved inside KiloProvider. Explicit void marks the intent.
-        void this.panel?.sessions.refreshSessions()
+        void this.handleObservationRefresh()
       })
       .catch((err) => {
         this.log("initializeState failed, pushing partial state:", err)
         this.pushState()
       })
+  }
+
+  private handleObservationRefresh(): Promise<void> {
+    const sessions = this.panel?.sessions
+    if (!sessions) return Promise.resolve()
+    const gen = this.generation
+    if (this.refreshPromise && this.refreshGen === gen && this.refreshSessions === sessions) return this.refreshPromise
+    const p = this.doObservationRefresh(gen, sessions).finally(() => {
+      if (this.refreshPromise === p) {
+        this.refreshPromise = null
+        this.refreshGen = null
+        this.refreshSessions = null
+      }
+    })
+    this.refreshPromise = p
+    this.refreshGen = gen
+    this.refreshSessions = sessions
+    return p
+  }
+
+  private async doObservationRefresh(gen: number, sessions: PanelContext["sessions"]): Promise<void> {
+    if (!this.hydrated) {
+      let cap: number | undefined
+      if (this.coordinator) {
+        try {
+          cap = await this.coordinator.captureSnapshotCursor()
+        } catch {
+          cap = undefined
+        }
+      }
+      if (this.generation !== gen || this.panel?.sessions !== sessions) return
+      const hasCap = cap !== undefined
+      try {
+        await sessions.refreshSessions()
+      } catch {
+        return
+      }
+      if (this.generation !== gen || this.panel?.sessions !== sessions) return
+      if (hasCap && this.coordinator) {
+        const ok = await this.coordinator.ack(cap!)
+        if (!ok) return
+      }
+      if (this.generation !== gen || this.panel?.sessions !== sessions) return
+      this.hydrated = true
+      return
+    }
+    if (this.coordinator) {
+      let decision: { shouldRefresh: boolean; ackCursor?: number } | null = null
+      try {
+        decision = await this.coordinator.decide()
+      } catch {
+        decision = null
+      }
+      if (this.generation !== gen || this.panel?.sessions !== sessions) return
+      if (decision !== null) {
+        if (!decision.shouldRefresh) return
+        try {
+          await sessions.refreshSessions()
+        } catch {
+          return
+        }
+        if (this.generation !== gen || this.panel?.sessions !== sessions) return
+        if (decision.ackCursor !== undefined) await this.coordinator.ack(decision.ackCursor)
+        return
+      }
+    }
+    if (this.generation !== gen || this.panel?.sessions !== sessions) return
+    try {
+      await sessions.refreshSessions()
+    } catch {}
   }
 
   private shouldWaitForState(m: AgentManagerInMessage): boolean {

@@ -31,13 +31,12 @@ this note; when they disagree, the code is right.
   still assembles its layers from canonical files.
 - The private runtime and storage cutover is unfinished. The legacy store
   still serves sessions until that landing.
+- Agent Manager `agentManager.requestState` session-list re-observation decision is now owned by the extension standalone `PrivateObservationService` (snapshot/read/ack) per panel hydration; the generated SDK remains the sole data authority, changefeed entries are decision/provenance only, and the old unconditional `refreshSessions()` is removed.
 
 ## Unknowns that matter next
 
 - Which private carrier, if any, is proven far enough to widen beyond
   diagnostics without changing the SDK authority.
-- What the smallest ownership landing is that moves one real datum from the
-  shared backend bridge to the private runtime without a compatibility window.
 
 No backlog lives here. Anything that does not change the next judgment is
 omitted.

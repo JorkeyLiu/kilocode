@@ -256,7 +256,7 @@ export function activate(context: vscode.ExtensionContext) {
     remoteService,
     canonicalConfig,
   )
-  const agentManagerProvider = new AgentManagerProvider(agentManagerHost, connectionService)
+  const agentManagerProvider = new AgentManagerProvider(agentManagerHost, connectionService, privateObservation)
   context.subscriptions.push(
     agentManagerProvider.onPanelVisibilityChange((visible) => remember({ agentManager: visible })),
   )

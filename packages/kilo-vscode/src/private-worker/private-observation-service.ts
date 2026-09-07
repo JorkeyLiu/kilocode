@@ -99,6 +99,7 @@ export class PrivateObservationService implements Disposable {
   private readonly isFixtureRecorderEnabled: boolean
   private peerClosedHook: (() => void) | null = null
   private suppressDepth = 0
+  private ackChain: Promise<void> = Promise.resolve()
 
   constructor(opts?: PrivateObservationServiceOptions)
   constructor(context: unknown, opts: PrivateObservationServiceOptions)
@@ -478,18 +479,32 @@ export class PrivateObservationService implements Disposable {
     }
   }
 
-  /** Delegate observation/ack. On success, persist cursor via store (never throws to caller). */
+  /** Delegate observation/ack. On success, persist cursor via store. Both remote ack and persistence must succeed for coordination.
+   * Serialized end-to-end (remote observation/ack then cursorStore persistence) in invocation order via a per-service promise chain.
+   * No timer/background loop, queue continues after rejection, errors preserved per caller, bounded to active calls.
+   */
   async ack(cursor: number): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
-    const res = await this.host.request(OBSERVATION_METHODS.ACK, { cursor })
-    if (this.cursorStore) {
-      try {
-        await this.cursorStore.set(cursor)
-      } catch (e) {
-        console.warn("[Kilo] PrivateObservationService ack persist failed:", e)
+    const host = this.host
+    const store = this.cursorStore
+    const task = async (): Promise<unknown> => {
+      const res = await host.request(OBSERVATION_METHODS.ACK, { cursor })
+      if (store) {
+        try {
+          await store.set(cursor)
+        } catch (e) {
+          console.warn("[Kilo] PrivateObservationService ack persist failed:", e)
+          throw e
+        }
       }
+      return res
     }
-    return res
+    const pending: Promise<unknown> = this.ackChain.then(task, task)
+    this.ackChain = pending.then(
+      () => undefined,
+      () => undefined,
+    )
+    return pending
   }
 
   /** Delegate observation/subscribe. */
