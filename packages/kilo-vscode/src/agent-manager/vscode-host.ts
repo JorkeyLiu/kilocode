@@ -17,6 +17,7 @@ import { TelemetryProxy, type TelemetryEventName } from "../services/telemetry"
 import type { AutoApproveController } from "../commands/toggle-auto-approve"
 import type { RemoteStatusService } from "../services/RemoteStatusService"
 import type { CanonicalConfigService } from "../config/service"
+import type { PrivateSessionList } from "../kilo-provider/options"
 
 export class VscodeHost implements Host {
   private autoApprove: AutoApproveController | undefined
@@ -35,6 +36,7 @@ export class VscodeHost implements Host {
     private readonly context: vscode.ExtensionContext,
     private readonly remoteService: RemoteStatusService,
     private readonly canonicalConfig: CanonicalConfigService,
+    private readonly privateSessionList?: PrivateSessionList | null,
   ) {}
 
   setAutoApproveController(ctrl: AutoApproveController): void {
@@ -248,6 +250,7 @@ export class VscodeHost implements Host {
       slimEditMetadata: true,
       disableViewedRegistration: true,
       canonicalConfig: this.canonicalConfig,
+      ...(this.privateSessionList ? { privateSessionList: this.privateSessionList } : {}),
     })
     provider.setRemoteService(this.remoteService)
     provider.attachToWebview(panel.webview, {

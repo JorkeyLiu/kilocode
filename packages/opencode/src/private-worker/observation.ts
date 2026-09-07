@@ -38,6 +38,20 @@ function isValidKind(v: unknown): v is ObservationKind {
   return typeof v === "string" && VALID_KINDS.has(v)
 }
 
+function isValidSessionId(v: unknown): boolean {
+  return typeof v === "string" && v.length > 0 && v.startsWith("ses") && !v.includes("\0")
+}
+
+function isValidTimestamp(v: unknown): boolean {
+  return (
+    typeof v === "number" &&
+    Number.isFinite(v) &&
+    Number.isSafeInteger(v) &&
+    (v as number) >= 0 &&
+    (v as number) <= 8640000000000000
+  )
+}
+
 export interface ObservationEntry {
   seq: number
   session_id: string
@@ -82,6 +96,7 @@ export interface ObservationListEntry {
   title: string
   parentID: string | null
   directory: string
+  projectID: string
   createdAt: number
   updatedAt: number
 }
@@ -270,19 +285,33 @@ export class ObservationController {
     if (!Array.isArray(res.entries)) throw internalError("list returned invalid entries")
     for (const e of res.entries) {
       if (
-        typeof e.id !== "string" ||
+        !isValidSessionId(e.id) ||
         typeof e.title !== "string" ||
-        (e.parentID !== null && typeof e.parentID !== "string") ||
+        (e.parentID !== null && !isValidSessionId(e.parentID)) ||
         typeof e.directory !== "string" ||
-        typeof e.createdAt !== "number" ||
-        typeof e.updatedAt !== "number"
+        e.directory.length === 0 ||
+        e.directory.includes("\0") ||
+        !isAbsolute(e.directory) ||
+        (() => {
+          try {
+            return canonicalDirectory(e.directory) !== e.directory || e.directory !== directory
+          } catch {
+            return true
+          }
+        })() ||
+        typeof e.projectID !== "string" ||
+        e.projectID.length === 0 ||
+        e.projectID.includes("\0") ||
+        !isValidTimestamp(e.createdAt) ||
+        !isValidTimestamp(e.updatedAt)
       ) {
         throw internalError("list returned invalid entry shape")
       }
     }
     if (res.nextCursor !== undefined) {
       try {
-        decodeGlobalListCursor(res.nextCursor)
+        const decoded = decodeGlobalListCursor(res.nextCursor)
+        if (!isValidTimestamp(decoded.updated) || !isValidSessionId(decoded.id)) throw new Error("invalid cursor")
       } catch {
         throw internalError("list returned invalid nextCursor")
       }

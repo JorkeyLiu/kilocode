@@ -240,12 +240,19 @@ export function activate(context: vscode.ExtensionContext) {
   const skip = ["kilo-code.new.agentManagerOpen", "kilo-code.new.agentManager.showTerminal"]
   ensureCommandsSkipShell(skip)
 
+  const privateSessionList = {
+    isEnabled: () => privateObservation.isEnabled(),
+    isStarted: () => privateObservation.isStarted(),
+    list: (input: { directory: string; archived?: boolean; cursor?: string; limit?: number }) =>
+      privateObservation.list(input) as Promise<unknown>,
+  }
   const agentManagerHost = new VscodeHost(
     context.extensionUri,
     connectionService,
     context,
     remoteService,
     canonicalConfig,
+    privateSessionList,
   )
   const agentManagerProvider = new AgentManagerProvider(agentManagerHost, connectionService, privateObservation)
   context.subscriptions.push(

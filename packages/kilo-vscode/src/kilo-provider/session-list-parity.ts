@@ -1,5 +1,6 @@
 import { isAbsolute, normalize, resolve } from "path"
 import * as crypto from "crypto"
+import { decodeGlobalListCursor } from "../private-worker/session-cursor"
 import type {
   PrivateSessionListWireOutcome,
   ServePrivateSessionListRequest,
@@ -62,27 +63,12 @@ function isFiniteNumber(v: unknown): v is number {
   return typeof v === "number" && Number.isFinite(v)
 }
 
-// Canonical session-list cursor grammar duplicate (LOCK-002):
-// the extension cannot import the opencode decoder, so this mirrors it
-// exactly ({v:1,updated:non-negative-int,id:ses* without NUL}, strict
-// 3-key JSON/base64url) rather than inventing a second grammar.
+// Canonical session-list cursor validation aligned with the strengthened
+// local/private-worker and opencode decoder. Reuses decodeGlobalListCursor
+// so any unsafe/out-of-range cursor is rejected before parity work.
 function isOpaqueCursor(v: unknown): boolean {
-  if (typeof v !== "string" || v.length === 0 || v.length > 512) return false
-  if (!/^[A-Za-z0-9_-]+$/.test(v)) return false
   try {
-    const parsed = JSON.parse(Buffer.from(v, "base64url").toString("utf8")) as Record<string, unknown>
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return false
-    const keys = Object.keys(parsed)
-    if (keys.length !== 3 || !keys.includes("v") || !keys.includes("updated") || !keys.includes("id")) return false
-    if (parsed.v !== 1) return false
-    if (typeof parsed.updated !== "number" || !Number.isInteger(parsed.updated) || (parsed.updated as number) < 0)
-      return false
-    if (
-      typeof parsed.id !== "string" ||
-      !(parsed.id as string).startsWith("ses") ||
-      (parsed.id as string).includes("\0")
-    )
-      return false
+    decodeGlobalListCursor(v)
     return true
   } catch {
     return false

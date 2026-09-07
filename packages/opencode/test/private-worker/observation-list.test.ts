@@ -37,7 +37,7 @@ describe("observation/list wire validation", () => {
     let captured: { directory: string; archived?: boolean; cursor?: string; limit: number } | undefined
     const fake: ObservationListResult = {
       v: "1.0",
-      entries: [{ id: "ses_a", title: "hello", parentID: null, directory: "/tmp/ws", createdAt: 100, updatedAt: 200 }],
+      entries: [{ id: "ses_a", title: "hello", parentID: null, directory: "/tmp/ws", projectID: "proj_list", createdAt: 100, updatedAt: 200 }],
     }
     const { ctrl } = makeController(async (input) => {
       captured = input
@@ -52,7 +52,7 @@ describe("observation/list wire validation", () => {
     expect(captured!.cursor).toBeUndefined()
     expect(captured!.directory).toBe("/tmp/ws")
     expect(captured!.archived).toBeUndefined()
-    expect(Object.keys(res.entries[0]!).sort()).toEqual(["createdAt", "directory", "id", "parentID", "title", "updatedAt"])
+    expect(Object.keys(res.entries[0]!).sort()).toEqual(["createdAt", "directory", "id", "parentID", "projectID", "title", "updatedAt"])
     pair.client.dispose()
     pair.server.dispose()
   })
@@ -151,7 +151,7 @@ describe("observation/list wire validation", () => {
   it("returns nextCursor only when truncated", async () => {
     const fakeTruncated: ObservationListResult = {
       v: "1.0",
-      entries: [{ id: "ses_b", title: "b", parentID: null, directory: "/tmp", createdAt: 1, updatedAt: 2 }],
+      entries: [{ id: "ses_b", title: "b", parentID: null, directory: "/tmp", projectID: "proj_list", createdAt: 1, updatedAt: 2 }],
       nextCursor: Buffer.from(JSON.stringify({ v: 1, updated: 2, id: "ses_b" }), "utf8").toString("base64url"),
     }
     const { ctrl } = makeController(async () => fakeTruncated)

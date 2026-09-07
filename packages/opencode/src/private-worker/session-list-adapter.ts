@@ -71,6 +71,7 @@ export function createSessionListDeps(db: Database.Interface["db"]): {
         title: row.title,
         parentID: (row.parent_id as string | null) ?? null,
         directory: row.directory,
+        projectID: row.project_id as unknown as string,
         createdAt: row.time_created,
         updatedAt: row.time_updated,
       }))

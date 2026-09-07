@@ -93,6 +93,8 @@ import {
 } from "./kilo-provider/work-style"
 import * as McpOAuth from "./kilo-provider/mcp-oauth"
 import { retryable, backoff, MAX_RETRIES } from "./util/retry"
+import { canonicalDirectory } from "./private-worker/canonical-directory"
+import { decodeGlobalListCursor } from "./private-worker/session-cursor"
 import { hasGit } from "./kilo-provider/git-status"
 import {
   handleLogin,
@@ -472,6 +474,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private unsubscribeRemote: (() => void) | null = null
   private readonly requirements: AgentRequirementsController
   private canonicalConfig: CanonicalConfigService | null
+  private readonly privateSessionList: import("./kilo-provider/options").PrivateSessionList | null
   /**
    * Host-owned cleanup retry records keyed by opaque retryID.
    * Namespaced as "provider:<scope>:<id>" and "mcp:<scope>:<id>" so provider
@@ -497,6 +500,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   ) {
     this.projectDirectory = opts.projectDirectory
     this.canonicalConfig = opts.canonicalConfig ?? null
+    this.privateSessionList = opts.privateSessionList ?? null
     this.slimEditMetadata = opts.slimEditMetadata ?? true
     this.unsubscribeSandboxPreference = this.connectionService.sandboxPreference?.onChange(() => {
       if (this.connectionState === "connected") void this.fetchAndSendSandboxDefault()
@@ -3053,11 +3057,124 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const client = this.client
     const directory = this.getWorkspaceDirectory()
     const connection = this.connectionService
-    return {
-      pendingSessionRefresh: this.pendingSessionRefresh,
-      connectionState: this.connectionState,
-      listSessions: client
+    const privateList = this.privateSessionList
+    const hasPrivate = !!privateList && privateList.isEnabled() && privateList.isStarted()
+    const hasClient = !!client
+    const listSessions: SessionRefreshContext["listSessions"] =
+      hasPrivate || hasClient
         ? async (input: { limit: number; cursor?: string }) => {
+            if (hasPrivate) {
+              try {
+                const canonicalRequested = (() => {
+                  try {
+                    return canonicalDirectory(directory)
+                  } catch {
+                    throw new Error("invalid requested directory")
+                  }
+                })()
+                const raw = (await privateList!.list({
+                  directory,
+                  archived: false,
+                  limit: input.limit,
+                  ...(input.cursor !== undefined ? { cursor: input.cursor } : {}),
+                })) as unknown as {
+                  v?: unknown
+                  entries?: unknown
+                  nextCursor?: unknown
+                }
+                if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("invalid private shape")
+                const rec = raw as Record<string, unknown>
+                if (rec.v !== "1.0") throw new Error("invalid private version")
+                if (!Array.isArray(rec.entries)) throw new Error("invalid private entries")
+                const entries = rec.entries as unknown[]
+                for (const e of entries) {
+                  if (!e || typeof e !== "object" || Array.isArray(e)) throw new Error("invalid entry shape")
+                  const r = e as Record<string, unknown>
+                  const idOk =
+                    typeof r.id === "string" &&
+                    (r.id as string).length > 0 &&
+                    (r.id as string).startsWith("ses") &&
+                    !(r.id as string).includes("\0")
+                  const titleOk = typeof r.title === "string"
+                  const parentOk =
+                    r.parentID === null ||
+                    (typeof r.parentID === "string" &&
+                      (r.parentID as string).length > 0 &&
+                      (r.parentID as string).startsWith("ses") &&
+                      !(r.parentID as string).includes("\0"))
+                  const dirOk =
+                    typeof r.directory === "string" &&
+                    (r.directory as string).length > 0 &&
+                    !(r.directory as string).includes("\0") &&
+                    (() => {
+                      try {
+                        return canonicalDirectory(r.directory as string) === (r.directory as string) && (r.directory as string) === canonicalRequested
+                      } catch {
+                        return false
+                      }
+                    })()
+                  const projOk =
+                    typeof r.projectID === "string" &&
+                    (r.projectID as string).length > 0 &&
+                    !(r.projectID as string).includes("\0")
+                  const createdOk =
+                    typeof r.createdAt === "number" &&
+                    Number.isFinite(r.createdAt as number) &&
+                    Number.isSafeInteger(r.createdAt as number) &&
+                    (r.createdAt as number) >= 0 &&
+                    (r.createdAt as number) <= 8640000000000000
+                  const updatedOk =
+                    typeof r.updatedAt === "number" &&
+                    Number.isFinite(r.updatedAt as number) &&
+                    Number.isSafeInteger(r.updatedAt as number) &&
+                    (r.updatedAt as number) >= 0 &&
+                    (r.updatedAt as number) <= 8640000000000000
+                  if (!idOk || !titleOk || !parentOk || !dirOk || !projOk || !createdOk || !updatedOk)
+                    throw new Error("invalid entry shape")
+                }
+                const mapped = (entries as Array<{
+                  id: string
+                  parentID: string | null
+                  title: string
+                  directory: string
+                  projectID: string
+                  createdAt: number
+                  updatedAt: number
+                }>).map((e) => ({
+                  id: e.id,
+                  parentID: e.parentID ?? null,
+                  title: e.title,
+                  directory: e.directory,
+                  projectID: e.projectID,
+                  time: { created: e.createdAt, updated: e.updatedAt },
+                })) as unknown as Session[]
+                const rawNext = rec.nextCursor as unknown
+                let next: string | null = null
+                if (rawNext !== undefined) {
+                  if (typeof rawNext !== "string") throw new Error("invalid nextCursor shape")
+                  const decoded = decodeGlobalListCursor(rawNext)
+                  if (
+                    !Number.isFinite(decoded.updated) ||
+                    !Number.isSafeInteger(decoded.updated) ||
+                    decoded.updated < 0 ||
+                    decoded.updated > 8640000000000000 ||
+                    decoded.id.length === 0 ||
+                    !decoded.id.startsWith("ses") ||
+                    decoded.id.includes("\0")
+                  )
+                    throw new Error("invalid nextCursor content")
+                  const normalized = normalizeSessionListNextCursor(rawNext)
+                  if (normalized === null) throw new Error("invalid nextCursor")
+                  next = normalized
+                }
+                return { sessions: mapped, cursor: next }
+              } catch {
+                console.warn("[Kilo SessionList] private projection invalid, falling back to SDK", {
+                  fallback: true,
+                })
+              }
+            }
+            if (!client) throw new Error("Not connected to CLI backend")
             const filter = { limit: input.limit, ...(input.cursor !== undefined ? { cursor: input.cursor } : {}) }
             try {
               const result = await client.experimental.session.list(
@@ -3065,10 +3182,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
                 { throwOnError: true },
               )
               const raw = result.response.headers.get("x-next-cursor")
-              // Canonical gate: malformed/legacy headers never become paging state.
               const next = normalizeSessionListNextCursor(raw)
-              // Detached SDK-first session-list parity: warn-only, never
-              // blocks refresh, never mutates SDK state or the return value.
               try {
                 observeSessionListParityDetached(
                   connection as unknown as Parameters<typeof observeSessionListParityDetached>[0],
@@ -3087,8 +3201,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               }
               return { sessions: result.data, cursor: next }
             } catch (error) {
-              // Failure-path parity is detached and warn-only; the throw
-              // below preserves the exact SDK error semantics for refresh.
               try {
                 observeSessionListParityDetached(
                   connection as unknown as Parameters<typeof observeSessionListParityDetached>[0],
@@ -3108,7 +3220,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               throw error
             }
           }
-        : null,
+        : null
+    return {
+      pendingSessionRefresh: this.pendingSessionRefresh,
+      connectionState: this.connectionState,
+      listSessions,
       loadedCount: this.sessionCount,
       cursor: this.sessionCursor,
       root: directory,

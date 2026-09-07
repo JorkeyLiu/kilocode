@@ -279,10 +279,17 @@ export function normalizeSessionListNextCursor(raw: unknown): string | null {
     const keys = Object.keys(parsed)
     if (keys.length !== 3 || !keys.includes("v") || !keys.includes("updated") || !keys.includes("id")) return null
     if (parsed.v !== 1) return null
-    if (typeof parsed.updated !== "number" || !Number.isInteger(parsed.updated) || (parsed.updated as number) < 0)
+    if (
+      typeof parsed.updated !== "number" ||
+      !Number.isFinite(parsed.updated as number) ||
+      !Number.isSafeInteger(parsed.updated as number) ||
+      (parsed.updated as number) < 0 ||
+      (parsed.updated as number) > 8640000000000000
+    )
       return null
     if (
       typeof parsed.id !== "string" ||
+      (parsed.id as string).length === 0 ||
       !(parsed.id as string).startsWith("ses") ||
       (parsed.id as string).includes("\0")
     )
@@ -333,7 +340,13 @@ export async function loadSessions(ctx: SessionRefreshContext, cursor?: string):
 
   const append = cursor !== undefined
   const limit = append ? SESSION_LOAD_MORE_LIMIT : Math.max(SESSION_INITIAL_LIMIT, ctx.loadedCount)
-  const page = await list({ limit, cursor })
+  let page: { sessions: Session[]; cursor: string | null }
+  try {
+    page = await list({ limit, cursor })
+  } catch (error) {
+    if (ctx.connectionState !== "connected") ctx.pendingSessionRefresh = true
+    throw error
+  }
   ctx.cursor = page.cursor
   ctx.loadedCount = append ? ctx.loadedCount + page.sessions.length : page.sessions.length
 

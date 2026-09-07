@@ -11,6 +11,7 @@ export function encodeGlobalListCursor(updated: number, id: string): string {
   return Buffer.from(JSON.stringify({ v: GLOBAL_LIST_CURSOR_VERSION, updated, id }), "utf8").toString("base64url")
 }
 
+// eslint-disable-next-line complexity
 export function decodeGlobalListCursor(raw: unknown): GlobalListCursor {
   if (typeof raw !== "string" || raw.length === 0 || raw.length > GLOBAL_LIST_CURSOR_MAX_LENGTH)
     throw new Error("cursor must be opaque session-list cursor string")
@@ -29,9 +30,20 @@ export function decodeGlobalListCursor(raw: unknown): GlobalListCursor {
   if (keys.length !== 3 || !keys.includes("v") || !keys.includes("updated") || !keys.includes("id"))
     throw new Error("cursor must be opaque session-list cursor string")
   if (rec.v !== GLOBAL_LIST_CURSOR_VERSION) throw new Error("cursor must be opaque session-list cursor string")
-  if (typeof rec.updated !== "number" || !Number.isInteger(rec.updated) || (rec.updated as number) < 0)
+  if (
+    typeof rec.updated !== "number" ||
+    !Number.isFinite(rec.updated as number) ||
+    !Number.isSafeInteger(rec.updated as number) ||
+    (rec.updated as number) < 0 ||
+    (rec.updated as number) > 8640000000000000
+  )
     throw new Error("cursor must be opaque session-list cursor string")
-  if (typeof rec.id !== "string" || !(rec.id as string).startsWith("ses") || (rec.id as string).includes("\0"))
+  if (
+    typeof rec.id !== "string" ||
+    (rec.id as string).length === 0 ||
+    !(rec.id as string).startsWith("ses") ||
+    (rec.id as string).includes("\0")
+  )
     throw new Error("cursor must be opaque session-list cursor string")
   return { v: GLOBAL_LIST_CURSOR_VERSION, updated: rec.updated as number, id: rec.id as string }
 }

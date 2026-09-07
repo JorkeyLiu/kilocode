@@ -192,7 +192,7 @@ describe("PrivateObservationService.list delegation and gating", () => {
 
       const paged = (await svc.list({ directory: "/tmp/ws", limit: 1 })) as {
         v: string
-        entries: Array<{ id: string; title: string; parentID: string | null; directory: string; createdAt: number; updatedAt: number }>
+        entries: Array<{ id: string; title: string; parentID: string | null; directory: string; projectID: string; createdAt: number; updatedAt: number }>
         nextCursor?: string
       }
       expect(paged.v).toBe("1.0")
@@ -201,7 +201,8 @@ describe("PrivateObservationService.list delegation and gating", () => {
       expect(paged.nextCursor).toBeDefined()
       const decoded = JSON.parse(Buffer.from(paged.nextCursor!, "base64url").toString("utf8")) as { v: number; updated: number; id: string }
       expect(decoded.id).toBe("ses_vs_b")
-      expect(Object.keys(paged.entries[0]!).sort()).toEqual(["createdAt", "directory", "id", "parentID", "title", "updatedAt"])
+      expect(Object.keys(paged.entries[0]!).sort()).toEqual(["createdAt", "directory", "id", "parentID", "projectID", "title", "updatedAt"])
+      expect(paged.entries[0]!.projectID).toBe("proj_vscode_list")
       expect(paged.entries[0]!.parentID).toBeNull()
       expect((paged as unknown as Record<string, unknown>).truncated).toBeUndefined()
 

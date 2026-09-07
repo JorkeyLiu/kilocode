@@ -161,9 +161,11 @@ describe("observation/list DB-backed pagination/order/cursor and projection (rea
         expect(child.parentID).toBe("ses_parent")
         expect(parent.parentID).toBeNull()
         for (const e of out.entries) {
-          expect(Object.keys(e).sort()).toEqual(["createdAt", "directory", "id", "parentID", "title", "updatedAt"])
+          expect(Object.keys(e).sort()).toEqual(["createdAt", "directory", "id", "parentID", "projectID", "title", "updatedAt"])
           expect(typeof e.createdAt).toBe("number")
           expect(typeof e.updatedAt).toBe("number")
+          expect(typeof e.projectID).toBe("string")
+          expect(e.projectID.length).toBeGreaterThan(0)
         }
         expect((out as unknown as Record<string, unknown>).truncated).toBeUndefined()
         expect(out.nextCursor).toBeUndefined()
