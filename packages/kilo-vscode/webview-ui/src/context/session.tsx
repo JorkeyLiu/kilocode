@@ -579,13 +579,8 @@ export const SessionProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "requestMcpStatus" })
   }
 
-  const retryMcpCleanup = (retry: {
-    requestId: string
-    name: string
-    scope: "global" | "project"
-    retryID: string
-    stamp: import("../../../src/config/types").CanonicalStamp
-  }) => {
+  // prettier-ignore
+  const retryMcpCleanup = (retry: { requestId: string; name: string; scope: "global" | "project"; retryID: string; stamp: import("../../../src/config/types").CanonicalStamp }) => {
     // Host-owned: the request carries the opaque retryID only — no authority
     // refs. The host looks up its stored record for scope/name/ref/stamp.
     vscode.postMessage({ type: "retryMcpCleanup", requestId: retry.requestId, retryID: retry.retryID })

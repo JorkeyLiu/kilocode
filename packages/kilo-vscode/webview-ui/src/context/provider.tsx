@@ -124,13 +124,8 @@ export const ProviderProvider: ParentComponent = (props) => {
     setAuthStates(message.canonical ? {} : message.authStates)
     setDiagnostics(message.diagnostics ?? null)
     // P4.1: ready:false closes readiness; ready:true/error-free opens it.
-    if (
-      message.canonical &&
-      message.materializationVersion !== undefined &&
-      message.materializationVersion > 0 &&
-      message.ready !== false
-    )
-      setCanonical(true)
+    // prettier-ignore
+    if (message.canonical && message.materializationVersion !== undefined && message.materializationVersion > 0 && message.ready !== false) setCanonical(true)
     else if (message.canonical && message.ready === false) setCanonical(false)
     if (message.canonical && "stamp" in message) setStamp(message.stamp)
   }
