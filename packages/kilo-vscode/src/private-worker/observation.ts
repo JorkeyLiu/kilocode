@@ -26,6 +26,7 @@ export const OBSERVATION_METHODS = {
   ACK: "observation/ack",
   SUBSCRIBE: "observation/subscribe",
   LIST: "observation/list",
+  GET: "observation/get",
 } as const
 
 export const OBSERVATION_NOTIFICATION = "observation/changed" as const
@@ -42,6 +43,14 @@ function isValidSessionId(v: unknown): boolean {
   return typeof v === "string" && v.length > 0 && v.startsWith("ses") && !v.includes("\0")
 }
 
+function isValidMessageId(v: unknown): boolean {
+  return typeof v === "string" && v.length > 0 && v.startsWith("msg") && !v.includes("\0")
+}
+
+function isValidPartId(v: unknown): boolean {
+  return typeof v === "string" && v.length > 0 && v.startsWith("prt") && !v.includes("\0")
+}
+
 function isValidTimestamp(v: unknown): boolean {
   return (
     typeof v === "number" &&
@@ -50,6 +59,10 @@ function isValidTimestamp(v: unknown): boolean {
     (v as number) >= 0 &&
     (v as number) <= 8640000000000000
   )
+}
+
+function isFiniteNumber(v: unknown): boolean {
+  return typeof v === "number" && Number.isFinite(v as number)
 }
 
 export interface ObservationEntry {
@@ -107,11 +120,30 @@ export interface ObservationListResult {
   nextCursor?: string
 }
 
+export interface ObservationGetSession {
+  id: string
+  title: string
+  parentID: string | null
+  directory: string
+  projectID: string
+  createdAt: number
+  updatedAt: number
+  agent?: string
+  summary?: { additions: number; deletions: number; files: number; diffs?: Array<{ file?: string; additions: number; deletions: number; status?: "added" | "deleted" | "modified" }> }
+  revert?: { messageID: string; partID?: string; snapshot?: string; diff?: string }
+}
+
+export type ObservationGetResult =
+  | { v: typeof OBSERVATION_VERSION; status: "found"; session: ObservationGetSession }
+  | { v: typeof OBSERVATION_VERSION; status: "not_found" }
+  | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
+
 export interface ObservationDeps {
   getSnapshot: () => Promise<{ cursor: number; snapshot: unknown }>
   readAfter: (cursor: number) => Promise<ObservationReadBackendResult>
   ack: (cursor: number) => Promise<void>
   list?: (input: { directory: string; archived?: boolean; cursor?: string; limit: number }) => Promise<ObservationListResult>
+  get?: (input: { directory: string; sessionId: string }) => Promise<ObservationGetResult>
 }
 
 function invalidParams(msg: string): Error & { code?: number } {
@@ -157,6 +189,116 @@ function extractCursor(params: unknown, required: boolean): number {
   return c
 }
 
+function parseDirectory(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("directory must be non-empty absolute path")
+  if (!isAbsolute(raw)) throw invalidParams("directory must be non-empty absolute path")
+  try {
+    return canonicalDirectory(raw)
+  } catch (e) {
+    const msg = (e as Error).message
+    if (msg.includes("directory")) throw invalidParams(msg)
+    throw invalidParams("directory must be non-empty absolute path")
+  }
+}
+
+function parseSessionId(raw: unknown): string {
+  if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0") || !raw.startsWith("ses")) throw invalidParams("sessionId must be non-empty session id")
+  if (!isValidSessionId(raw)) throw invalidParams("sessionId must be non-empty session id")
+  return raw as string
+}
+
+// eslint-disable-next-line complexity
+function validateSummary(sum: unknown): void {
+  if (typeof sum !== "object" || sum === null || Array.isArray(sum)) throw internalError("get returned invalid session shape")
+  const s = sum as Record<string, unknown>
+  const allowed = new Set(["additions", "deletions", "files", "diffs"])
+  for (const k of Object.keys(s)) if (!allowed.has(k)) throw internalError("get returned invalid session shape")
+  if (!isFiniteNumber(s.additions)) throw internalError("get returned invalid session shape")
+  if (!isFiniteNumber(s.deletions)) throw internalError("get returned invalid session shape")
+  if (!isFiniteNumber(s.files)) throw internalError("get returned invalid session shape")
+  if ("diffs" in s && s.diffs !== undefined) {
+    if (!Array.isArray(s.diffs)) throw internalError("get returned invalid session shape")
+    for (const d of s.diffs as unknown[]) {
+      if (typeof d !== "object" || d === null || Array.isArray(d)) throw internalError("get returned invalid session shape")
+      const diff = d as Record<string, unknown>
+      const allowedDiff = new Set(["file", "additions", "deletions", "status"])
+      for (const k of Object.keys(diff)) if (!allowedDiff.has(k)) throw internalError("get returned invalid session shape")
+      if (!isFiniteNumber(diff.additions)) throw internalError("get returned invalid session shape")
+      if (!isFiniteNumber(diff.deletions)) throw internalError("get returned invalid session shape")
+      if ("file" in diff && diff.file !== undefined && typeof diff.file !== "string") throw internalError("get returned invalid session shape")
+      if ("status" in diff && diff.status !== undefined) {
+        if (typeof diff.status !== "string" || !["added", "deleted", "modified"].includes(diff.status as string)) throw internalError("get returned invalid session shape")
+      }
+    }
+  }
+}
+
+function validateRevert(rev: unknown): void {
+  if (typeof rev !== "object" || rev === null || Array.isArray(rev)) throw internalError("get returned invalid session shape")
+  const r = rev as Record<string, unknown>
+  const allowed = new Set(["messageID", "partID", "snapshot", "diff"])
+  for (const k of Object.keys(r)) if (!allowed.has(k)) throw internalError("get returned invalid session shape")
+  if (!isValidMessageId(r.messageID)) throw internalError("get returned invalid session shape")
+  if ("partID" in r && r.partID !== undefined && !isValidPartId(r.partID)) throw internalError("get returned invalid session shape")
+  if ("snapshot" in r && r.snapshot !== undefined && typeof r.snapshot !== "string") throw internalError("get returned invalid session shape")
+  if ("diff" in r && r.diff !== undefined && typeof r.diff !== "string") throw internalError("get returned invalid session shape")
+}
+
+// eslint-disable-next-line complexity
+function validateFoundSession(raw: unknown, directory: string, sessionId: string): void {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) throw internalError("get returned invalid session shape")
+  const s = raw as Record<string, unknown>
+  if (
+    !isValidSessionId(s.id) ||
+    typeof s.title !== "string" ||
+    (s.parentID !== null && !isValidSessionId(s.parentID as unknown)) ||
+    s.parentID === undefined ||
+    typeof s.directory !== "string" ||
+    s.directory.length === 0 ||
+    s.directory.includes("\0") ||
+    !isAbsolute(s.directory as string) ||
+    (() => {
+      try {
+        return canonicalDirectory(s.directory as string) !== (s.directory as string) || (s.directory as string) !== directory
+      } catch {
+        return true
+      }
+    })() ||
+    typeof s.projectID !== "string" ||
+    s.projectID.length === 0 ||
+    (s.projectID as string).includes("\0") ||
+    !isValidTimestamp(s.createdAt) ||
+    !isValidTimestamp(s.updatedAt)
+  ) {
+    throw internalError("get returned invalid session shape")
+  }
+  if (s.id !== sessionId) throw internalError("get returned invalid session shape")
+  if ("agent" in s && s.agent !== undefined && typeof s.agent !== "string") throw internalError("get returned invalid session shape")
+  if ("agent" in s && typeof s.agent === "string" && s.agent.includes("\0")) throw internalError("get returned invalid session shape")
+  if ("summary" in s && s.summary !== undefined) validateSummary(s.summary)
+  if ("revert" in s && s.revert !== undefined) validateRevert(s.revert)
+  const allowed = new Set(["id", "title", "parentID", "directory", "projectID", "createdAt", "updatedAt", "agent", "summary", "revert"])
+  for (const k of Object.keys(s)) if (!allowed.has(k)) throw internalError("get returned invalid session shape")
+}
+
+function validateGetResult(res: unknown, directory: string, sessionId: string): asserts res is ObservationGetResult {
+  if (res === null || typeof res !== "object" || Array.isArray(res)) throw internalError("get returned invalid shape")
+  const r = res as Record<string, unknown>
+  if (r.v !== OBSERVATION_VERSION) throw internalError("get returned invalid version")
+  if (typeof r.status !== "string" || !["found", "not_found", "scope_mismatch"].includes(r.status as string)) throw internalError("get returned invalid status")
+  const status = r.status as string
+  if (status === "not_found" || status === "scope_mismatch") {
+    const allowed = new Set(["v", "status"])
+    for (const k of Object.keys(r)) if (!allowed.has(k)) throw internalError("get returned invalid shape")
+    if ("session" in r) throw internalError("get returned invalid shape")
+    return
+  }
+  const allowedFound = new Set(["v", "status", "session"])
+  for (const k of Object.keys(r)) if (!allowedFound.has(k)) throw internalError("get returned invalid shape")
+  if (!("session" in r)) throw internalError("get returned invalid session")
+  validateFoundSession(r.session, directory, sessionId)
+}
+
 export class ObservationController {
   constructor(private readonly deps: ObservationDeps) {}
 
@@ -172,6 +314,8 @@ export class ObservationController {
         return this.handleSubscribe(params)
       case OBSERVATION_METHODS.LIST:
         return this.handleList(params)
+      case OBSERVATION_METHODS.GET:
+        return this.handleGet(params)
       default:
         throw notFound(`Method not found: ${method}`)
     }
@@ -243,18 +387,9 @@ export class ObservationController {
     const allowed = new Set(["v", "directory", "archived", "cursor", "limit"])
     for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
     if (o.v !== OBSERVATION_VERSION) throw invalidParams(`unsupported observation version: ${String(o.v)}`)
-    const directory: string = (() => {
+    const directory = (() => {
       if (!("directory" in o)) throw invalidParams("directory is required")
-      const raw = o.directory
-      if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("directory must be non-empty absolute path")
-      if (!isAbsolute(raw)) throw invalidParams("directory must be non-empty absolute path")
-      try {
-        return canonicalDirectory(raw)
-      } catch (e) {
-        const msg = (e as Error).message
-        if (msg.includes("directory")) throw invalidParams(msg)
-        throw invalidParams("directory must be non-empty absolute path")
-      }
+      return parseDirectory(o.directory)
     })()
     const archived: boolean | undefined = (() => {
       if (!("archived" in o)) return undefined
@@ -321,6 +456,29 @@ export class ObservationController {
     const out: ObservationListResult = { v: OBSERVATION_VERSION, entries: [...res.entries] }
     if (res.nextCursor !== undefined) out.nextCursor = res.nextCursor
     return out
+  }
+
+  private async handleGet(params: unknown): Promise<ObservationGetResult> {
+    if (params === null || typeof params !== "object" || Array.isArray(params)) throw invalidParams("params must be object")
+    const o = params as Record<string, unknown>
+    const allowed = new Set(["v", "directory", "sessionId"])
+    for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
+    if (o.v !== OBSERVATION_VERSION) throw invalidParams(`unsupported observation version: ${String(o.v)}`)
+    if (!("directory" in o)) throw invalidParams("directory is required")
+    if (!("sessionId" in o)) throw invalidParams("sessionId is required")
+    const directory = parseDirectory(o.directory)
+    const sessionId = parseSessionId(o.sessionId)
+    if (!this.deps.get) throw notFound(`Method not found: ${OBSERVATION_METHODS.GET}`)
+    const res = await (async () => {
+      try {
+        return await this.deps.get!({ directory, sessionId })
+      } catch (e) {
+        if (e instanceof Error && (e as { code?: number }).code !== undefined) throw e
+        throw internalError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+    validateGetResult(res, directory, sessionId)
+    return res
   }
 
   notifyChanged(peer: { notify: (method: string, params?: unknown) => void }, entries: ReadonlyArray<ObservationEntry>, cursor: number): void {
