@@ -1,9 +1,11 @@
+import { isAbsolute } from "path"
 import { Effect } from "effect"
 import { Database } from "@opencode-ai/core/database/database"
 import { SessionTable } from "@opencode-ai/core/session/sql"
-import { and, desc, eq, lt, or } from "drizzle-orm"
+import { and, desc, eq, isNull, lt, or } from "drizzle-orm"
 import type { SQL } from "drizzle-orm"
 import { decodeGlobalListCursor, encodeGlobalListCursor } from "./session-cursor"
+import { canonicalDirectory } from "./canonical-directory"
 import { ErrorCode } from "./json-rpc"
 import type { ObservationListResult } from "./observation"
 
@@ -14,15 +16,29 @@ function invalidParams(msg: string): Error & { code?: number } {
 }
 
 export function createSessionListDeps(db: Database.Interface["db"]): {
-  list: (input: { cursor?: string; limit: number }) => Promise<ObservationListResult>
+  list: (input: { directory: string; archived?: boolean; cursor?: string; limit: number }) => Promise<ObservationListResult>
 } {
   return {
     list: async (input) => {
+      const rawDir = (input as { directory?: unknown }).directory
+      if (typeof rawDir !== "string" || rawDir.length === 0 || rawDir.includes("\0")) throw invalidParams("directory must be non-empty absolute path")
+      if (!isAbsolute(rawDir)) throw invalidParams("directory must be non-empty absolute path")
+      const directory = (() => {
+        try {
+          return canonicalDirectory(rawDir)
+        } catch (e) {
+          throw invalidParams((e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path")
+        }
+      })()
+      if ("archived" in input && input.archived !== undefined && typeof input.archived !== "boolean") throw invalidParams("archived must be boolean when present")
+      const archived = input.archived
       const limit = input.limit
       if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 500) {
         throw invalidParams("limit must be integer 1..500")
       }
       const conditions: SQL[] = []
+      conditions.push(eq(SessionTable.directory as never, directory as never))
+      if (!archived) conditions.push(isNull(SessionTable.time_archived as never) as never)
       if (input.cursor !== undefined) {
         const decoded: { updated: number; id: string } = (() => {
           try {
@@ -38,10 +54,7 @@ export function createSessionListDeps(db: Database.Interface["db"]): {
           )!,
         )
       }
-      const query =
-        conditions.length > 0
-          ? db.select().from(SessionTable).where(and(...conditions) as never)
-          : db.select().from(SessionTable)
+      const query = db.select().from(SessionTable).where(and(...conditions) as never)
       const rows = (await Effect.runPromise(
         (query as unknown as { orderBy: (...a: unknown[]) => { limit: (n: number) => { all: () => Effect.Effect<unknown[], never, never> } } })
           .orderBy(desc(SessionTable.time_updated as never), desc(SessionTable.id as never))

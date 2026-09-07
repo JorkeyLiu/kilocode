@@ -513,12 +513,13 @@ export class PrivateObservationService implements Disposable {
     return this.host.request(OBSERVATION_METHODS.SUBSCRIBE, params ?? {})
   }
 
-  /** Delegate observation/list — versioned session-list projection, no InstanceRef/drain-control. */
-  async list(input?: { cursor?: string; limit?: number }): Promise<unknown> {
+  /** Delegate observation/list — versioned directory-scoped session-list projection, no InstanceRef/drain-control. */
+  async list(input: { directory: string; archived?: boolean; cursor?: string; limit?: number }): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
-    const payload: Record<string, unknown> = { v: OBSERVATION_VERSION }
-    if (input?.cursor !== undefined) payload.cursor = input.cursor
-    if (input?.limit !== undefined) payload.limit = input.limit
+    const payload: Record<string, unknown> = { v: OBSERVATION_VERSION, directory: input.directory }
+    if (input.archived !== undefined) payload.archived = input.archived
+    if (input.cursor !== undefined) payload.cursor = input.cursor
+    if (input.limit !== undefined) payload.limit = input.limit
     return this.host.request(OBSERVATION_METHODS.LIST, payload)
   }
 

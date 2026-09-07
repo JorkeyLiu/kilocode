@@ -10,7 +10,7 @@ import {
   type ObservationListResult,
 } from "../../src/private-worker/observation"
 
-function makeController(fakeList?: (input: { cursor?: string; limit: number }) => Promise<ObservationListResult>): {
+function makeController(fakeList?: (input: { directory: string; archived?: boolean; cursor?: string; limit: number }) => Promise<ObservationListResult>): {
   ctrl: ObservationController
   deps: ObservationDeps
 } {
@@ -34,25 +34,40 @@ function makePair(ctrl: ObservationController) {
 
 describe("observation/list wire validation", () => {
   it("valid request delegates with version 1.0 and returns projection", async () => {
-    let captured: { cursor?: string; limit: number } | undefined
+    let captured: { directory: string; archived?: boolean; cursor?: string; limit: number } | undefined
     const fake: ObservationListResult = {
       v: "1.0",
-      entries: [
-        { id: "ses_a", title: "hello", parentID: null, directory: "/tmp/ws", createdAt: 100, updatedAt: 200 },
-      ],
+      entries: [{ id: "ses_a", title: "hello", parentID: null, directory: "/tmp/ws", createdAt: 100, updatedAt: 200 }],
     }
     const { ctrl } = makeController(async (input) => {
       captured = input
       return fake
     })
     const pair = makePair(ctrl)
-    const res = (await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", limit: 2 })) as ObservationListResult
+    const res = (await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", directory: "/tmp/ws", limit: 2 })) as ObservationListResult
     expect(res.v).toBe("1.0")
     expect(res.entries.length).toBe(1)
     expect(res.entries[0]!.id).toBe("ses_a")
     expect(captured!.limit).toBe(2)
     expect(captured!.cursor).toBeUndefined()
+    expect(captured!.directory).toBe("/tmp/ws")
+    expect(captured!.archived).toBeUndefined()
     expect(Object.keys(res.entries[0]!).sort()).toEqual(["createdAt", "directory", "id", "parentID", "title", "updatedAt"])
+    pair.client.dispose()
+    pair.server.dispose()
+  })
+
+  it("forwards archived flag when present", async () => {
+    let captured: { archived?: boolean } | undefined
+    const { ctrl } = makeController(async (input) => {
+      captured = input
+      return { v: "1.0", entries: [] }
+    })
+    const pair = makePair(ctrl)
+    await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", directory: "/tmp/ws", archived: true, limit: 5 })
+    expect(captured!.archived).toBe(true)
+    await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", directory: "/tmp/ws", limit: 5 })
+    expect(captured!.archived).toBeUndefined()
     pair.client.dispose()
     pair.server.dispose()
   })
@@ -64,7 +79,7 @@ describe("observation/list wire validation", () => {
       return { v: "1.0", entries: [] }
     })
     const pair = makePair(ctrl)
-    const res = (await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0" })) as ObservationListResult
+    const res = (await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", directory: "/tmp/ws" })) as ObservationListResult
     expect(res.v).toBe("1.0")
     expect(captured).toBe(100)
     pair.client.dispose()
@@ -75,23 +90,53 @@ describe("observation/list wire validation", () => {
     const { ctrl } = makeController(async () => ({ v: "1.0", entries: [] }))
     const pair = makePair(ctrl)
     const bad: unknown[] = [
-      { v: "9.9", limit: 10 },
-      { v: "1.0", limit: 0 },
-      { v: "1.0", limit: 501 },
-      { v: "1.0", limit: 2.5 },
-      { v: "1.0", limit: "2" },
-      { v: "1.0", unexpected: 1 },
-      { v: "1.0", cursor: "bad" },
-      { v: "1.0", cursor: 123 },
-      { v: "1.0", cursor: null },
+      { v: "9.9", directory: "/tmp/ws", limit: 10 },
+      { v: "1.0", directory: "/tmp/ws", limit: 0 },
+      { v: "1.0", directory: "/tmp/ws", limit: 501 },
+      { v: "1.0", directory: "/tmp/ws", limit: 2.5 },
+      { v: "1.0", directory: "/tmp/ws", limit: "2" },
+      { v: "1.0", directory: "/tmp/ws", unexpected: 1 },
+      { v: "1.0", directory: "/tmp/ws", cursor: "bad" },
+      { v: "1.0", directory: "/tmp/ws", cursor: 123 },
+      { v: "1.0", directory: "/tmp/ws", cursor: null },
       {},
-      { limit: 10 },
+      { directory: "/tmp/ws", limit: 10 },
+      { v: "1.0", limit: 10 },
+      { v: "1.0", directory: "", limit: 10 },
+      { v: "1.0", directory: "relative/path", limit: 10 },
+      { v: "1.0", directory: "/tmp/ws", archived: "yes" },
+      { v: "1.0", directory: "/tmp/ws", archived: 1 },
+      { v: "1.0", directory: "/tmp/ws", projectID: "proj" },
+      { v: "1.0", directory: "/tmp/ws", search: "foo" },
       null,
       "string",
-      { v: "1.0", cursor: Buffer.from(JSON.stringify({ v: 2, updated: 1, id: "ses_a" }), "utf8").toString("base64url") },
-      { v: "1.0", cursor: Buffer.from(JSON.stringify({ v: 1, updated: 1, id: "ses_a", extra: 1 }), "utf8").toString("base64url") },
+      { v: "1.0", directory: "/tmp/ws", cursor: Buffer.from(JSON.stringify({ v: 2, updated: 1, id: "ses_a" }), "utf8").toString("base64url") },
+      { v: "1.0", directory: "/tmp/ws", cursor: Buffer.from(JSON.stringify({ v: 1, updated: 1, id: "ses_a", extra: 1 }), "utf8").toString("base64url") },
     ]
     for (const params of bad) {
+      try {
+        await pair.client.request(OBSERVATION_METHODS.LIST, params)
+        expect(false).toBe(true)
+      } catch (e) {
+        expect((e as { code?: number }).code).toBe(ErrorCode.InvalidParams)
+      }
+    }
+    pair.client.dispose()
+    pair.server.dispose()
+  })
+
+  it("requires directory non-empty absolute path", async () => {
+    const { ctrl } = makeController(async () => ({ v: "1.0", entries: [] }))
+    const pair = makePair(ctrl)
+    const cases: unknown[] = [
+      { v: "1.0", limit: 10 },
+      { v: "1.0", directory: "", limit: 10 },
+      { v: "1.0", directory: "relative/path", limit: 10 },
+      { v: "1.0", directory: "./relative", limit: 10 },
+      { v: "1.0", directory: null, limit: 10 },
+      { v: "1.0", directory: 123, limit: 10 },
+    ]
+    for (const params of cases) {
       try {
         await pair.client.request(OBSERVATION_METHODS.LIST, params)
         expect(false).toBe(true)
@@ -111,11 +156,11 @@ describe("observation/list wire validation", () => {
     }
     const { ctrl } = makeController(async () => fakeTruncated)
     const pair = makePair(ctrl)
-    const res = (await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", limit: 1 })) as ObservationListResult
+    const res = (await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", directory: "/tmp", limit: 1 })) as ObservationListResult
     expect(res.nextCursor).toBeDefined()
     const { ctrl: ctrl2 } = makeController(async () => ({ v: "1.0", entries: [] }))
     const pair2 = makePair(ctrl2)
-    const res2 = (await pair2.client.request(OBSERVATION_METHODS.LIST, { v: "1.0" })) as ObservationListResult
+    const res2 = (await pair2.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", directory: "/tmp" })) as ObservationListResult
     expect(res2.nextCursor).toBeUndefined()
     pair.client.dispose()
     pair.server.dispose()
@@ -128,7 +173,7 @@ describe("observation/list wire validation", () => {
     delete (ctrl as unknown as { deps: ObservationDeps }).deps.list
     const pair = makePair(ctrl)
     try {
-      await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0" })
+      await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", directory: "/tmp/ws" })
       expect(false).toBe(true)
     } catch (e) {
       expect((e as { code?: number }).code).toBe(ErrorCode.MethodNotFound)
@@ -149,7 +194,7 @@ describe("observation/list wire validation", () => {
     ]
     for (const cursor of badCursors) {
       try {
-        await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", cursor })
+        await pair.client.request(OBSERVATION_METHODS.LIST, { v: "1.0", directory: "/tmp/ws", cursor })
         expect(false).toBe(true)
       } catch (e) {
         expect((e as { code?: number }).code).toBe(ErrorCode.InvalidParams)

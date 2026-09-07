@@ -13,6 +13,8 @@
  * and testable without storage.
  */
 
+import { isAbsolute } from "path"
+import { canonicalDirectory } from "@/kilocode/session/canonical-directory"
 import { decodeGlobalListCursor } from "@/session/global-cursor"
 import { ErrorCode } from "./json-rpc"
 
@@ -94,7 +96,7 @@ export interface ObservationDeps {
   getSnapshot: () => Promise<{ cursor: number; snapshot: unknown }>
   readAfter: (cursor: number) => Promise<ObservationReadBackendResult>
   ack: (cursor: number) => Promise<void>
-  list?: (input: { cursor?: string; limit: number }) => Promise<ObservationListResult>
+  list?: (input: { directory: string; archived?: boolean; cursor?: string; limit: number }) => Promise<ObservationListResult>
 }
 
 function invalidParams(msg: string): Error & { code?: number } {
@@ -223,9 +225,26 @@ export class ObservationController {
       throw invalidParams("params must be object")
     }
     const o = params as Record<string, unknown>
-    const allowed = new Set(["v", "cursor", "limit"])
+    const allowed = new Set(["v", "directory", "archived", "cursor", "limit"])
     for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
     if (o.v !== OBSERVATION_VERSION) throw invalidParams(`unsupported observation version: ${String(o.v)}`)
+    const directory: string = (() => {
+      if (!("directory" in o)) throw invalidParams("directory is required")
+      const raw = o.directory
+      if (typeof raw !== "string" || raw.length === 0 || raw.includes("\0")) throw invalidParams("directory must be non-empty absolute path")
+      if (!isAbsolute(raw)) throw invalidParams("directory must be non-empty absolute path")
+      try {
+        return canonicalDirectory(raw)
+      } catch (e) {
+        throw invalidParams((e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path")
+      }
+    })()
+    const archived: boolean | undefined = (() => {
+      if (!("archived" in o)) return undefined
+      const raw = o.archived
+      if (typeof raw !== "boolean") throw invalidParams("archived must be boolean when present")
+      return raw as boolean
+    })()
     const cursor: string | undefined = (() => {
       if (!("cursor" in o)) return undefined
       const raw = o.cursor
@@ -246,7 +265,7 @@ export class ObservationController {
       return raw as number
     })()
     if (!this.deps.list) throw notFound(`Method not found: ${OBSERVATION_METHODS.LIST}`)
-    const res = await this.deps.list({ cursor, limit })
+    const res = await this.deps.list({ directory, archived, cursor, limit })
     if (res.v !== OBSERVATION_VERSION) throw internalError("list returned invalid version")
     if (!Array.isArray(res.entries)) throw internalError("list returned invalid entries")
     for (const e of res.entries) {
