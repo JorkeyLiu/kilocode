@@ -13,7 +13,9 @@ import {
 const OPAQUE = (updated = 7, id = "ses_abc"): string => encodeSessionListCursor(updated, id)
 import {
   buildSessionListIdentity,
+  getSessionListParityDiagnostics,
   observeSessionListParityDetached,
+  resetSessionListParityDiagnostics,
   sdkSessionListHasTerminal,
   type SessionListParityConnection,
 } from "../../kilo-provider/session-list-parity"
@@ -458,6 +460,368 @@ describe("session-list private peer", () => {
       await new Promise((r) => setTimeout(r, 20))
       expect(calls).toHaveLength(0)
       expect(deferred).not.toBeNull()
+    } finally {
+      console.warn = origWarn
+    }
+  })
+})
+
+describe("session-list parity diagnostics (bounded)", () => {
+  function matchResult(req: { requestId: string; opId: string; idempotencyKey: string }) {
+    return {
+      v: 2,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "experimental/session/list",
+      idempotencyKey: req.idempotencyKey,
+      status: "succeeded",
+      outcome: { type: "succeeded", time: 1 },
+      accepted: true,
+      data: { sessions: [{ id: "ses_abc", directory: "/tmp", title: "t", updated: 7 }] },
+    }
+  }
+
+  function zeros() {
+    return {
+      comparedNoDivergence: 0,
+      divergence: 0,
+      transportUnknown: 0,
+      validationDivergence: 0,
+      timeout: 0,
+      staleSkipped: 0,
+      failClosed: 0,
+    }
+  }
+
+  test("diagnostics count comparator no-divergence once; unknowns stay unresolved, SDK-first and comparator unchanged", async () => {
+    const sdk = sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null)
+    const before = JSON.stringify(sdk)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateSessionListOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: matchResult(req) }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      const ret = observeSessionListParityDetached(conn, sdk as never, "/tmp", undefined, { limit: 10 }, 200)
+      expect(ret).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(warns.length).toBe(0)
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({ ...zeros(), comparedNoDivergence: 1 })
+      const parity = compareSessionListParity(
+        matchResult({ requestId: "r", opId: "o", idempotencyKey: "o" }) as unknown as never,
+        sdk as unknown as never,
+      )
+      expect(parity.divergence).toBeNull()
+      // Comparator-scoped only: compared fields show no divergence, but the
+      // comparator's explicit unknowns remain true and are never resolved by
+      // the diagnostics counter.
+      const details = parity.details as Record<string, unknown>
+      expect(details.orderingUnknown).toBeTrue()
+      expect(details.paginationUnknown).toBeTrue()
+      expect(details.freshnessUnknown).toBeTrue()
+      expect(details.lifecycleUnknown).toBeTrue()
+      const snap = getSessionListParityDiagnostics(conn) as Record<string, unknown>
+      expect(snap.comparedNoDivergence).toBe(1)
+      expect("orderingUnknown" in snap).toBeFalse()
+      expect("paginationUnknown" in snap).toBeFalse()
+      expect("freshnessUnknown" in snap).toBeFalse()
+      expect("lifecycleUnknown" in snap).toBeFalse()
+      expect("match" in snap).toBeFalse()
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count divergence; parity warn and comparator unchanged", async () => {
+    const sdk = sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null)
+    const before = JSON.stringify(sdk)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateSessionListOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              ...matchResult(req),
+              data: { sessions: [{ id: "ses_abc", directory: "/tmp", title: "other", updated: 7 }] },
+            },
+          }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      observeSessionListParityDetached(conn, sdk as never, "/tmp", undefined, { limit: 10 }, 200)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(
+        warns.some(
+          (w) => String(w[0]).includes("parity divergence") && String(w[1]).includes("session-list-title-mismatch"),
+        ),
+      ).toBeTrue()
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({ ...zeros(), divergence: 1 })
+      const parity = compareSessionListParity(
+        {
+          ...matchResult({ requestId: "r", opId: "o", idempotencyKey: "o" }),
+          data: { sessions: [{ id: "ses_abc", directory: "/tmp", title: "other", updated: 7 }] },
+        } as unknown as never,
+        sdk as unknown as never,
+      )
+      expect(parity.divergence).toBe("session-list-title-mismatch")
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count transport-unknown separately from divergence", async () => {
+    const sdk = sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateSessionListOutcomeWithHandle: (req) => ({
+          id: 1,
+          promise: Promise.resolve({
+            kind: "valid",
+            result: {
+              v: 2,
+              requestId: req.requestId,
+              opId: req.opId,
+              op: "experimental/session/list",
+              idempotencyKey: req.idempotencyKey,
+              status: "ambiguous",
+              outcome: { type: "ambiguous", time: 1 },
+              accepted: false,
+              transportUnknown: true,
+            },
+          }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      observeSessionListParityDetached(conn, sdk as never, "/tmp", undefined, { limit: 10 }, 200)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(warns.some((w) => JSON.stringify(w).includes("transport-unknown"))).toBeTrue()
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({ ...zeros(), transportUnknown: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count validation divergence without comparator codes", async () => {
+    const sdk = sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null)
+    const before = JSON.stringify(sdk)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateSessionListOutcomeWithHandle: () => ({
+          id: 2,
+          promise: Promise.resolve({ kind: "invalid", detail: "succeeded data must be object" }),
+        }),
+        getPrivateEpoch: () => 1,
+      }
+      observeSessionListParityDetached(conn, sdk as never, "/tmp", undefined, { limit: 10 }, 200)
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(warns.some((w) => String(w[0]).includes("validation divergence"))).toBeTrue()
+      expect(warns.some((w) => String(w[0]).includes("parity divergence"))).toBeFalse()
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({ ...zeros(), validationDivergence: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count observer timeout; SDK snapshot untouched", async () => {
+    const sdk = sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null)
+    const before = JSON.stringify(sdk)
+    const invalidated: string[] = []
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateSessionListOutcomeWithHandle: () => ({
+          id: 42,
+          promise: new Promise(() => {}),
+          cancel: () => true,
+        }),
+        tryCancelPrivatePending: () => false,
+        invalidatePrivatePeerOnObserverTimeout: (r) => {
+          invalidated.push(r)
+        },
+        getPrivateEpoch: () => 9,
+      }
+      observeSessionListParityDetached(conn, sdk as never, "/tmp", undefined, { limit: 10 }, 20)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(invalidated).toEqual([])
+      expect(warns.some((w) => String(w[0]).includes("private parity timeout"))).toBeTrue()
+      // The timed-out observation still resolves to the existing ambiguous
+      // transport-unknown result, so both counters move; timeout exactly once.
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({ ...zeros(), timeout: 1, transportUnknown: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count stale epoch invalidation without timeout", async () => {
+    const sdk = sdkSuccess([{ id: "ses_abc", directory: "/tmp", title: "t" }], null)
+    const invalidated: string[] = []
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateSessionListOutcomeWithHandle: () => ({
+          id: 43,
+          promise: new Promise(() => {}),
+          cancel: () => "stale" as const,
+        }),
+        tryCancelPrivatePending: () => false,
+        invalidatePrivatePeerOnObserverTimeout: (r) => {
+          invalidated.push(r)
+        },
+        getPrivateEpoch: () => 9,
+      }
+      observeSessionListParityDetached(conn, sdk as never, "/tmp", undefined, { limit: 10 }, 20)
+      await new Promise((r) => setTimeout(r, 100))
+      expect(invalidated).toEqual([])
+      expect(warns.some((w) => String(w[0]).includes("stale observer timeout skipped"))).toBeTrue()
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({ ...zeros(), staleSkipped: 1, transportUnknown: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count fail-closed on private throw; SDK-first throw preserved", async () => {
+    const sdk = sdkSuccess([], null)
+    const before = JSON.stringify(sdk)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateSessionListOutcomeWithHandle: () => {
+          throw new Error("private boom")
+        },
+        getPrivateEpoch: () => 1,
+      }
+      const ret = observeSessionListParityDetached(conn, sdk as never, "/tmp", undefined, { limit: 2 }, 50)
+      expect(ret).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 50))
+      expect(JSON.stringify(sdk)).toBe(before)
+      expect(warns.some((w) => String(w[0]).includes("private parity observation failed (fail-closed)"))).toBeTrue()
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({ ...zeros(), failClosed: 1 })
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics count deferred stale skip; snapshot frozen, resettable, per-connection", async () => {
+    const sdk = sdkSuccess([], null)
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      let listener: (() => void) | null = null
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => false,
+        privateSessionListOutcomeWithHandle: () => ({
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: {} }),
+        }),
+        getPrivateEpoch: () => 3,
+        onPrivateAvailable: (fn) => {
+          listener = fn
+          return () => {
+            listener = null
+          }
+        },
+      }
+      const other: SessionListParityConnection = {
+        isPrivateAvailable: () => false,
+        privateSessionListOutcomeWithHandle: () => ({
+          id: 1,
+          promise: Promise.resolve({ kind: "valid", result: {} }),
+        }),
+        getPrivateEpoch: () => 3,
+        onPrivateAvailable: () => () => {},
+      }
+      observeSessionListParityDetached(conn, sdk as never, "/tmp", undefined, { limit: 2 }, 50)
+      expect(listener).not.toBeNull()
+      ;(conn as { getPrivateEpoch: () => number }).getPrivateEpoch = () => 4
+      listener!()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(warns.some((w) => String(w[0]).includes("stale deferred parity skipped"))).toBeTrue()
+      const snap = getSessionListParityDiagnostics(conn)
+      expect({ ...snap }).toEqual({ ...zeros(), staleSkipped: 1 })
+      expect(Object.isFrozen(snap)).toBeTrue()
+      const warnCount = warns.length
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual({ ...zeros(), staleSkipped: 1 })
+      expect(warns.length).toBe(warnCount)
+      expect({ ...getSessionListParityDiagnostics(other) }).toEqual(zeros())
+      resetSessionListParityDiagnostics(conn)
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual(zeros())
+    } finally {
+      console.warn = origWarn
+    }
+  })
+
+  test("diagnostics ignore non-terminal SDK results without observing", async () => {
+    const sdk = { error: new Error("aborted"), response: undefined }
+    let calls = 0
+    const warns: unknown[][] = []
+    const origWarn = console.warn
+    console.warn = (...args: unknown[]) => {
+      warns.push(args)
+    }
+    try {
+      const conn: SessionListParityConnection = {
+        isPrivateAvailable: () => true,
+        privateSessionListOutcomeWithHandle: () => {
+          calls += 1
+          throw new Error("must not observe")
+        },
+        getPrivateEpoch: () => 1,
+      }
+      const ret = observeSessionListParityDetached(conn, sdk as unknown as never, "/tmp", undefined, { limit: 2 }, 50)
+      expect(ret).toBeUndefined()
+      await new Promise((r) => setTimeout(r, 30))
+      expect(calls).toBe(0)
+      expect(warns.length).toBe(0)
+      expect({ ...getSessionListParityDiagnostics(conn) }).toEqual(zeros())
     } finally {
       console.warn = origWarn
     }

@@ -249,6 +249,78 @@ function stableFilterString(filter: SessionListParityFilter): string {
 }
 
 /**
+ * Bounded per-connection counters for detached `experimental/session/list`
+ * parity. Fixed categories only — no arrays, no timers, no cross-process state.
+ * Keyed by connection instance so entries end with the instance lifecycle
+ * via `WeakMap`; `resetSessionListParityDiagnostics` clears one entry.
+ * Counters are write-only: production paths only `tally` next to the
+ * existing `warn` and never read diagnostics to change behavior.
+ *
+ * `comparedNoDivergence` is comparator-scoped only: the session-list
+ * comparator returned `divergence: null` for the fields it compares. It is
+ * not full parity/health — `orderingUnknown`, `paginationUnknown`,
+ * `freshnessUnknown`, and `lifecycleUnknown` remain true in the comparator
+ * details, and cross-directory behavior stays unproven.
+ */
+export type SessionListParityDiagnostics = {
+  readonly comparedNoDivergence: number
+  readonly divergence: number
+  readonly transportUnknown: number
+  readonly validationDivergence: number
+  readonly timeout: number
+  readonly staleSkipped: number
+  readonly failClosed: number
+}
+
+type ParityTally = {
+  comparedNoDivergence: number
+  divergence: number
+  transportUnknown: number
+  validationDivergence: number
+  timeout: number
+  staleSkipped: number
+  failClosed: number
+}
+
+const parityDiagnosticsByConnection = new WeakMap<object, ParityTally>()
+
+function tally(connection: SessionListParityConnection, key: keyof ParityTally): void {
+  if ((typeof connection !== "object" && typeof connection !== "function") || connection === null) return
+  let cur = parityDiagnosticsByConnection.get(connection)
+  if (!cur) {
+    cur = { comparedNoDivergence: 0, divergence: 0, transportUnknown: 0, validationDivergence: 0, timeout: 0, staleSkipped: 0, failClosed: 0 }
+    parityDiagnosticsByConnection.set(connection, cur)
+  }
+  cur[key] += 1
+}
+
+/**
+ * Snapshot copy of the fixed-category parity counters for one connection.
+ * Returns zeros when nothing was observed. The copy is frozen so callers
+ * cannot mutate stored state; reading never affects parity behavior.
+ * `comparedNoDivergence` counts only comparator `divergence: null` outcomes
+ * and does not resolve the comparator's ordering/pagination/freshness/
+ * lifecycle unknowns.
+ */
+export function getSessionListParityDiagnostics(connection: SessionListParityConnection): SessionListParityDiagnostics {
+  const cur = parityDiagnosticsByConnection.get(connection as object)
+  return Object.freeze({
+    comparedNoDivergence: cur?.comparedNoDivergence ?? 0,
+    divergence: cur?.divergence ?? 0,
+    transportUnknown: cur?.transportUnknown ?? 0,
+    validationDivergence: cur?.validationDivergence ?? 0,
+    timeout: cur?.timeout ?? 0,
+    staleSkipped: cur?.staleSkipped ?? 0,
+    failClosed: cur?.failClosed ?? 0,
+  })
+}
+
+/** Clears the stored counters for one connection. Instance GC clears the rest. */
+export function resetSessionListParityDiagnostics(connection: SessionListParityConnection): void {
+  parityDiagnosticsByConnection.delete(connection as object)
+}
+
+/**
  * Fallback dedupe for connections without keyed registration: pending
  * deferred keys per connection instance. Bounded by distinct
  * epoch+directory+workspace+filter triples; no timers, no polling.
@@ -316,6 +388,7 @@ function cancelObserverTimeout(
     }
   }
   if (result === "stale") {
+    tally(connection, "staleSkipped")
     console.warn(`[Kilo SessionList] stale observer timeout skipped invalidation (epoch changed):`, {
       op: "experimental/session/list",
       stale: true,
@@ -323,6 +396,7 @@ function cancelObserverTimeout(
     return
   }
   if (result === true) {
+    tally(connection, "timeout")
     console.warn(`[Kilo SessionList] private parity timeout after ${timeoutMs}ms:`, {
       op: "experimental/session/list",
       timeoutMs,
@@ -331,6 +405,7 @@ function cancelObserverTimeout(
   }
   const epochNow = connection.getPrivateEpoch?.() ?? null
   if (epochAtStart !== null && epochNow !== null && epochNow !== epochAtStart) {
+    tally(connection, "staleSkipped")
     console.warn(`[Kilo SessionList] stale observer timeout skipped invalidation (epoch changed):`, {
       op: "experimental/session/list",
       stale: true,
@@ -347,6 +422,7 @@ function cancelObserverTimeout(
       })
     }
   }
+  tally(connection, "timeout")
   console.warn(`[Kilo SessionList] private parity timeout after ${timeoutMs}ms:`, {
     op: "experimental/session/list",
     timeoutMs,
@@ -354,19 +430,30 @@ function cancelObserverTimeout(
 }
 
 function reportSessionListValid(
+  connection: SessionListParityConnection,
   result: ServePrivateSessionListResult,
   sdk: { data?: unknown; error?: unknown; response?: unknown },
 ): void {
   const parity = compareSessionListParity(result, sdk)
-  if (parity.divergence) console.warn("[Kilo SessionList] parity divergence:", parity.divergence, parity.details)
-  else if ((result as Record<string, unknown>).transportUnknown)
+  if (parity.divergence) {
+    if (parity.divergence === "transport-unknown") tally(connection, "transportUnknown")
+    else tally(connection, "divergence")
+    console.warn("[Kilo SessionList] parity divergence:", parity.divergence, parity.details)
+    return
+  }
+  if ((result as Record<string, unknown>).transportUnknown) {
+    tally(connection, "transportUnknown")
     console.warn("[Kilo SessionList] transport-unknown parity:", {
       op: "experimental/session/list",
       transportUnknown: true,
     })
+    return
+  }
+  tally(connection, "comparedNoDivergence")
 }
 
-function validationDivergence(): void {
+function validationDivergence(connection: SessionListParityConnection): void {
+  tally(connection, "validationDivergence")
   console.warn("[Kilo SessionList] validation divergence:", { op: "experimental/session/list", invalid: true })
 }
 
@@ -390,6 +477,7 @@ async function observeViaOutcome(
     })
   } catch (e) {
     if (isPrivateSessionListValidationError(e)) {
+      tally(connection, "validationDivergence")
       console.warn("[Kilo SessionList] validation divergence:", { op: "experimental/session/list", invalid: true })
       return
     }
@@ -397,10 +485,10 @@ async function observeViaOutcome(
   }
   if (!outcome) return
   if (outcome.kind === "invalid") {
-    validationDivergence()
+    validationDivergence(connection)
     return
   }
-  reportSessionListValid(outcome.result, sdk)
+  reportSessionListValid(connection, outcome.result, sdk)
 }
 
 async function observeSessionListParity(
@@ -447,12 +535,14 @@ async function observeSessionListParity(
       return
     } catch (e) {
       if (isPrivateSessionListValidationError(e)) {
+        tally(connection, "validationDivergence")
         console.warn("[Kilo SessionList] validation divergence:", { op: "experimental/session/list", invalid: true })
         return
       }
       throw e
     }
   } catch {
+    tally(connection, "failClosed")
     console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
       op: "experimental/session/list",
       observationFailed: true,
@@ -490,12 +580,13 @@ function deferSessionListParityAfterNegotiation(
       idempotencyKey,
       requestId,
       timeoutMs,
-    ).catch(() =>
+    ).catch(() => {
+      tally(connection, "failClosed")
       console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
         op: "experimental/session/list",
         observationFailed: true,
-      }),
-    )
+      })
+    })
   }
   const add = connection.addDeferredSessionListObserver?.bind(connection) ?? null
   if (add) {
@@ -503,6 +594,7 @@ function deferSessionListParityAfterNegotiation(
     try {
       unsub = add(dir, workspace, filter, observe)
     } catch {
+      tally(connection, "failClosed")
       console.warn("[Kilo SessionList] deferred parity subscribe failed (fail-closed):", {
         op: "experimental/session/list",
         subscribeFailed: true,
@@ -513,6 +605,7 @@ function deferSessionListParityAfterNegotiation(
       try {
         unsub?.()
       } catch {
+        tally(connection, "failClosed")
         console.warn("[Kilo SessionList] deferred parity unsubscribe failed (fail-closed):", {
           op: "experimental/session/list",
           unsubscribeFailed: true,
@@ -558,6 +651,7 @@ function deferSessionListFallback(
       try {
         unsub()
       } catch {
+        tally(connection, "failClosed")
         console.warn("[Kilo SessionList] deferred parity unsubscribe failed (fail-closed):", {
           op: "experimental/session/list",
           unsubscribeFailed: true,
@@ -570,6 +664,7 @@ function deferSessionListFallback(
       try {
         unsub()
       } catch {
+        tally(connection, "failClosed")
         console.warn("[Kilo SessionList] deferred parity unsubscribe failed (fail-closed):", {
           op: "experimental/session/list",
           unsubscribeFailed: true,
@@ -579,6 +674,7 @@ function deferSessionListFallback(
     }
   } catch {
     seen.delete(key)
+    tally(connection, "failClosed")
     console.warn("[Kilo SessionList] deferred parity subscribe failed (fail-closed):", {
       op: "experimental/session/list",
       subscribeFailed: true,
@@ -593,6 +689,7 @@ function fireDeferredSessionList(
 ): void {
   const now = connection.getPrivateEpoch?.() ?? null
   if (now !== epochAtDefer) {
+    tally(connection, "staleSkipped")
     console.warn("[Kilo SessionList] stale deferred parity skipped (epoch changed)")
     return
   }
@@ -622,13 +719,15 @@ function launchSessionListParity(
       requestId,
       timeoutMs,
     )
-    void pending.catch(() =>
+    void pending.catch(() => {
+      tally(connection, "failClosed")
       console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
         op: "experimental/session/list",
         observationFailed: true,
-      }),
-    )
+      })
+    })
   } catch {
+    tally(connection, "failClosed")
     console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
       op: "experimental/session/list",
       observationFailed: true,
@@ -649,6 +748,13 @@ function launchSessionListParity(
  * differences, membership gaps, and cursor presence/value differences are
  * warn-only observation divergence, never parity failure. Ordering,
  * freshness, and lifecycle remain explicitly unknown and are never compared.
+ *
+ * Each terminal outcome also increments one bounded per-connection counter
+ * (`getSessionListParityDiagnostics`); counters are warn-adjacent only and
+ * never influence SDK authority, timing, or control flow. The no-divergence
+ * counter is comparator-scoped (`comparedNoDivergence`): it records only
+ * comparator `divergence: null` and leaves ordering, pagination, freshness,
+ * lifecycle, and cross-directory unknowns unresolved.
  */
 export function observeSessionListParityDetached(
   connection: SessionListParityConnection,
@@ -671,6 +777,7 @@ export function observeSessionListParityDetached(
     idempotencyKey = ident.idempotencyKey
     requestId = ident.requestId
   } catch {
+    tally(connection, "failClosed")
     console.warn("[Kilo SessionList] private parity observation failed (fail-closed):", {
       op: "experimental/session/list",
       observationFailed: true,
