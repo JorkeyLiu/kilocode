@@ -1,6 +1,6 @@
 import { isAbsolute } from "path"
 import { PrivateWorkerHost, type HostOptions } from "./host"
-import { OBSERVATION_METHODS } from "./observation"
+import { OBSERVATION_METHODS, OBSERVATION_VERSION } from "./observation"
 import type { ObservationCursorStore } from "./observation-cursor-store"
 import { isE2EFixtureEnabled } from "../util/e2e-fixture"
 
@@ -511,6 +511,15 @@ export class PrivateObservationService implements Disposable {
   async subscribe(params?: unknown): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
     return this.host.request(OBSERVATION_METHODS.SUBSCRIBE, params ?? {})
+  }
+
+  /** Delegate observation/list — versioned session-list projection, no InstanceRef/drain-control. */
+  async list(input?: { cursor?: string; limit?: number }): Promise<unknown> {
+    if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
+    const payload: Record<string, unknown> = { v: OBSERVATION_VERSION }
+    if (input?.cursor !== undefined) payload.cursor = input.cursor
+    if (input?.limit !== undefined) payload.limit = input.limit
+    return this.host.request(OBSERVATION_METHODS.LIST, payload)
   }
 
   /** Generic request delegation (e.g., test/mutateChangefeed when testBridge enabled). */

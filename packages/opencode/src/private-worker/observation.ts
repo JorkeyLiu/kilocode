@@ -13,6 +13,7 @@
  * and testable without storage.
  */
 
+import { decodeGlobalListCursor } from "@/session/global-cursor"
 import { ErrorCode } from "./json-rpc"
 
 export const OBSERVATION_VERSION = "1.0" as const
@@ -22,6 +23,7 @@ export const OBSERVATION_METHODS = {
   READ: "observation/read",
   ACK: "observation/ack",
   SUBSCRIBE: "observation/subscribe",
+  LIST: "observation/list",
 } as const
 
 export const OBSERVATION_NOTIFICATION = "observation/changed" as const
@@ -73,10 +75,26 @@ export type ObservationReadBackendResult =
   | { type: "deltas"; cursor: number; entries: ReadonlyArray<ObservationEntry> }
   | { type: "rehydrate"; cursor: number; reason: string }
 
+export interface ObservationListEntry {
+  id: string
+  title: string
+  parentID: string | null
+  directory: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ObservationListResult {
+  v: typeof OBSERVATION_VERSION
+  entries: ObservationListEntry[]
+  nextCursor?: string
+}
+
 export interface ObservationDeps {
   getSnapshot: () => Promise<{ cursor: number; snapshot: unknown }>
   readAfter: (cursor: number) => Promise<ObservationReadBackendResult>
   ack: (cursor: number) => Promise<void>
+  list?: (input: { cursor?: string; limit: number }) => Promise<ObservationListResult>
 }
 
 function invalidParams(msg: string): Error & { code?: number } {
@@ -135,6 +153,8 @@ export class ObservationController {
         return this.handleAck(params)
       case OBSERVATION_METHODS.SUBSCRIBE:
         return this.handleSubscribe(params)
+      case OBSERVATION_METHODS.LIST:
+        return this.handleList(params)
       default:
         throw notFound(`Method not found: ${method}`)
     }
@@ -195,6 +215,62 @@ export class ObservationController {
       throw internalError("snapshot returned invalid cursor")
     }
     return { v: OBSERVATION_VERSION, cursor: snap.cursor, subscribed: true }
+  }
+
+  // eslint-disable-next-line complexity
+  private async handleList(params: unknown): Promise<ObservationListResult> {
+    if (params === null || typeof params !== "object" || Array.isArray(params)) {
+      throw invalidParams("params must be object")
+    }
+    const o = params as Record<string, unknown>
+    const allowed = new Set(["v", "cursor", "limit"])
+    for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
+    if (o.v !== OBSERVATION_VERSION) throw invalidParams(`unsupported observation version: ${String(o.v)}`)
+    const cursor: string | undefined = (() => {
+      if (!("cursor" in o)) return undefined
+      const raw = o.cursor
+      if (typeof raw !== "string") throw invalidParams("cursor must be opaque session-list cursor string")
+      try {
+        decodeGlobalListCursor(raw)
+      } catch (e) {
+        throw invalidParams((e as Error).message)
+      }
+      return raw as string
+    })()
+    const limit = (() => {
+      if (!("limit" in o)) return 100
+      const raw = o.limit
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 500) {
+        throw invalidParams("limit must be integer 1..500")
+      }
+      return raw as number
+    })()
+    if (!this.deps.list) throw notFound(`Method not found: ${OBSERVATION_METHODS.LIST}`)
+    const res = await this.deps.list({ cursor, limit })
+    if (res.v !== OBSERVATION_VERSION) throw internalError("list returned invalid version")
+    if (!Array.isArray(res.entries)) throw internalError("list returned invalid entries")
+    for (const e of res.entries) {
+      if (
+        typeof e.id !== "string" ||
+        typeof e.title !== "string" ||
+        (e.parentID !== null && typeof e.parentID !== "string") ||
+        typeof e.directory !== "string" ||
+        typeof e.createdAt !== "number" ||
+        typeof e.updatedAt !== "number"
+      ) {
+        throw internalError("list returned invalid entry shape")
+      }
+    }
+    if (res.nextCursor !== undefined) {
+      try {
+        decodeGlobalListCursor(res.nextCursor)
+      } catch {
+        throw internalError("list returned invalid nextCursor")
+      }
+    }
+    const out: ObservationListResult = { v: OBSERVATION_VERSION, entries: [...res.entries] }
+    if (res.nextCursor !== undefined) out.nextCursor = res.nextCursor
+    return out
   }
 
   notifyChanged(peer: { notify: (method: string, params?: unknown) => void }, entries: ReadonlyArray<ObservationEntry>, cursor: number): void {

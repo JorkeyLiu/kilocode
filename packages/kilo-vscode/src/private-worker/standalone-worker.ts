@@ -3,6 +3,7 @@ import { isAbsolute } from "path"
 import { Database } from "@opencode-ai/core/database/database"
 import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 import { createChangefeedDeps } from "./changefeed-adapter"
+import { createSessionListDeps } from "./session-list-adapter"
 import { startWorker } from "./worker"
 import type { ObservationDeps } from "./observation"
 import { JsonRpcPeer } from "./peer"
@@ -37,7 +38,9 @@ export async function createStandaloneDeps(): Promise<{ deps: ObservationDeps; d
       return yield* Database.Service
     }),
   )
-  const deps = createChangefeedDeps(svc.db)
+  const base = createChangefeedDeps(svc.db)
+  const list = createSessionListDeps(svc.db)
+  const deps: ObservationDeps = { ...base, list: list.list }
   const dispose = async () => {
     try {
       await runtime.dispose()

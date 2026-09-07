@@ -790,7 +790,8 @@
     "web-tree-sitter": "^0.24.7",
     "yaml": "2.8.3",
     "zod": "^3.24.2",
-    "jsonc-parser": "3.3.1"
+    "jsonc-parser": "3.3.1",
+    "drizzle-orm": "catalog:"
   },
   "peerDependencies": {}
 }
