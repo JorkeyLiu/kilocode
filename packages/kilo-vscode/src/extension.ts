@@ -260,20 +260,6 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     agentManagerProvider.onPanelVisibilityChange((visible) => remember({ agentManager: visible })),
   )
-  context.subscriptions.push(
-    agentManagerProvider.onPanelVisibilityChange((visible) => {
-      void privateObservationTriggers.onPanelVisibilityChanged(visible).catch((err) => {
-        console.warn("[Kilo] privateObservation panel trigger failed:", err)
-      })
-    }),
-  )
-  context.subscriptions.push(
-    agentManagerProvider.onActiveSessionChanged((id) => {
-      void privateObservationTriggers.onActiveSessionChanged(id).catch((err) => {
-        console.warn("[Kilo] privateObservation session trigger failed:", err)
-      })
-    }),
-  )
   agentManager = agentManagerProvider
   context.subscriptions.push(agentManagerProvider)
 

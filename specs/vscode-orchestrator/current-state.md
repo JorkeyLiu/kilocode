@@ -31,12 +31,11 @@ this note; when they disagree, the code is right.
   still assembles its layers from canonical files.
 - The private runtime and storage cutover is unfinished. The legacy store
   still serves sessions until that landing.
-- Agent Manager `agentManager.requestState` session-list re-observation decision is now owned by the extension standalone `PrivateObservationService` (snapshot/read/ack) per panel hydration; the generated SDK remains the sole data authority, changefeed entries are decision/provenance only, and the old unconditional `refreshSessions()` is removed.
+- Agent Manager session-list re-observation decision is now owned by the extension standalone `PrivateObservationService` (snapshot/read/ack with observation coordinator, generation and singleflight) at `requestState` plus panel `visible` and active session-switch boundaries; the generated SDK remains the sole data authority, changefeed entries are decision/provenance only, and the old unconditional `refreshSessions()` is removed. Peer, window and config lifecycle reads remain observation-only.
 
 ## Unknowns that matter next
 
-- Which private carrier, if any, is proven far enough to widen beyond
-  diagnostics without changing the SDK authority.
+- FD carriers terminate in the same backend `AppLayer` and remain diagnostics-only; standalone observation is the ownership path.
 
 No backlog lives here. Anything that does not change the next judgment is
 omitted.

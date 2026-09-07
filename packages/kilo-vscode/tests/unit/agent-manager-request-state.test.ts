@@ -686,4 +686,39 @@ describe("AgentManagerProvider requestState message routing (production-shaped)"
     expect(provider.hydrated).toBe(true)
     expect(store.get()).toBe(11)
   })
+
+  it("rejected stateReady via production routing still triggers exactly one SDK refresh and no unhandled rejection", async () => {
+    const { svc } = fakePrivate({ enabled: true, snapshotCursor: 9 })
+    const provider: any = makeProvider(svc)
+    provider.generation = 1
+    provider.hydrated = false
+    let rc = 0
+    let pushCount = 0
+    const rejections: unknown[] = []
+    const onUnhandled = (reason: unknown) => rejections.push(reason)
+    process.on("unhandledRejection", onUnhandled)
+    try {
+      provider.panel = { sessions: { refreshSessions: async () => { rc++ } } as any } as any
+      provider.pushState = () => { pushCount++ }
+      provider.postToWebview = () => {}
+      provider.log = () => {}
+      const initErr = new Error("init fail")
+      provider.stateReady = Promise.reject(initErr)
+      // prevent immediate unhandled due to creation: attach a no-op catch that does not interfere with onRequestState's handling
+      provider.stateReady.catch(() => {})
+      await provider.handleMessage({ type: "agentManager.requestState" })
+      await new Promise((r) => setTimeout(r, 15))
+      if (provider.refreshPromise) await provider.refreshPromise
+      await new Promise((r) => setTimeout(r, 30))
+      expect(rc).toBe(1)
+      expect(pushCount).toBe(1)
+      expect(rejections.length).toBe(0)
+      // ensure trigger was not duplicated (would be rc 2 if duplicated)
+      expect(rc).toBe(1)
+    } finally {
+      process.off("unhandledRejection", onUnhandled)
+      // flush any pending floating rejection
+      await new Promise((r) => setTimeout(r, 0))
+    }
+  })
 })

@@ -304,6 +304,7 @@ export class AgentManagerProvider implements Disposable {
       this.statsPoller.setVisible(visible)
       this.visiblePresence.flush()
       this.emitVisibilityChanged(visible)
+      if (visible) this.triggerObservationRefresh()
     })
 
     if (this.catalogUnsub) {
@@ -647,10 +648,12 @@ export class AgentManagerProvider implements Disposable {
     }
 
     if (m.type === "loadMessages") {
+      const prev = this.activeSessionId
       this.activeSessionId = m.sessionID
       this.terminalManager.syncOnSessionSwitch(m.sessionID)
       this.emitActiveSessionChanged(m.sessionID)
       this.schedulePersist()
+      if (prev !== m.sessionID) this.triggerObservationRefresh()
       return msg
     }
 
@@ -736,16 +739,25 @@ export class AgentManagerProvider implements Disposable {
   }
 
   private onRequestState(): void {
+    // finally-equivalent without duplicating trigger; triggerObservationRefresh
+    // already waits/catches stateReady internally, so call it unconditionally
+    // after the pushState chain to avoid a second sequential wait.
     void this.stateReady
       ?.then(() => {
         this.pushState()
         if (this.cachedLocalStats) this.postToWebview(this.cachedLocalStats)
-        void this.handleObservationRefresh()
       })
       .catch((err) => {
         this.log("initializeState failed, pushing partial state:", err)
         this.pushState()
       })
+    this.triggerObservationRefresh()
+  }
+
+  private triggerObservationRefresh(): void {
+    void this.waitForStateReady("observationRefresh").then(() => {
+      void this.handleObservationRefresh()
+    })
   }
 
   private handleObservationRefresh(): Promise<void> {
