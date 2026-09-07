@@ -33,6 +33,7 @@ import { PrivateObservationService } from "./private-worker/private-observation-
 import { createMementoCursorStore } from "./private-worker/observation-cursor-store"
 import { PrivateObservationLifecycleTriggers } from "./private-worker/private-observation-lifecycle-triggers"
 import { resolveCanonicalDbPath } from "./private-worker/canonical-db-path"
+import { wirePeerCloseObservation } from "./agent-manager/peer-close-wiring"
 import { isE2EFixtureEnabled } from "./util/e2e-fixture"
 import { SseTimelineFixture, resolveTimelineSessionId } from "./services/cli-backend/sse-timeline"
 
@@ -159,17 +160,7 @@ export function activate(context: vscode.ExtensionContext) {
     privateObservation = fallback
   }
   context.subscriptions.push(privateObservation)
-  privateObservation.initialize().catch((err) => {
-    console.warn("[Kilo] PrivateObservationService initialize failed (fail-closed):", err)
-  })
   const privateObservationTriggers = PrivateObservationLifecycleTriggers.wireVscode(privateObservation, context)
-  try {
-    privateObservation.setOnPeerClosed(() => {
-      void privateObservationTriggers.onPeerClosed().catch((err) => {
-        console.warn("[Kilo] privateObservation peer-close trigger failed:", err)
-      })
-    })
-  } catch {}
   context.subscriptions.push(privateObservationTriggers)
 
   let restore = context.workspaceState.get<RestoreState>(RESTORE_KEY) ?? {}
@@ -262,6 +253,18 @@ export function activate(context: vscode.ExtensionContext) {
   )
   agentManager = agentManagerProvider
   context.subscriptions.push(agentManagerProvider)
+
+  // Bounded worker-restart convergence: peer-close lifecycle performs one reconnect+read(persistedCursor)
+  // and that exact read result drives the provider's refresh decision without a second private read.
+  // Failure (result absent/readError/missing cursor/readResult or invalid wire) -> one SDK fallback
+  // with no second read; temporal staleness (current persisted undefined or != requestedCursor,
+  // whether < or >) -> normal fresh decision which may read again. Window/config remain
+  // observation-only and are not routed to UI.
+  wirePeerCloseObservation(privateObservation, privateObservationTriggers, agentManagerProvider)
+
+  privateObservation.initialize().catch((err) => {
+    console.warn("[Kilo] PrivateObservationService initialize failed (fail-closed):", err)
+  })
 
   const defaultDir = () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd()
   const autoApprove = registerToggleAutoApprove(

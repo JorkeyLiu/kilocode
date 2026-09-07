@@ -34,6 +34,7 @@ import * as Persist from "./persistence"
 import type { AgentManagerOutMessage, AgentManagerInMessage, ManagedSession } from "./types"
 import type { Host, PanelContext, OutputHandle, Disposable } from "./host"
 import type { PrivateObservationService } from "../private-worker/private-observation-service"
+import type { TriggerResult } from "../private-worker/private-observation-lifecycle-triggers"
 import { AgentManagerObservationCoordinator } from "./observation-coordinator"
 
 export class AgentManagerProvider implements Disposable {
@@ -828,6 +829,132 @@ export class AgentManagerProvider implements Disposable {
     try {
       await sessions.refreshSessions()
     } catch {}
+  }
+
+  /**
+   * Narrow precomputed peer-close observation entry.
+   * If the panel is hidden or absent, discards (next visible/requestState re-reads).
+   * Waits for stateReady and enters the same singleflight key; if another refresh
+   * is in flight shares it. No hydration flag corruption: when not yet hydrated,
+   * falls back to normal initial hydration path via singleflight (snapshot before SDK).
+   * Distinguishes failure from staleness with protocol validation first:
+   * - Failure: result absent, readError present, requestedCursor absent/unusable, or
+   *   readResult absent/invalid/malformed (validated via decideFromReadResultWithValidity
+   *   before freshness) -> precomputed singleflight fallback with {shouldRefresh:true},
+   *   exactly one SDK refresh, no second private read, no ack, even if current persisted
+   *   cursor differs (advanced/lower/undefined). Only a structurally and semantically valid
+   *   result may be classified as temporally stale.
+   * - Staleness: valid result but current persisted cursor is undefined or not exactly
+   *   equal to requestedCursor (whether current < or >) -> normal fresh
+   *   handleObservationRefresh() decision which may read again. This is the only reason
+   *   for a second read.
+   * - Valid fresh result stays no-second-read.
+   * Validation is done once before freshness; the prevalidated decision is passed into
+   * doPeerCloseObservationRefresh to avoid double validation. Before acking, re-read current
+   * persisted cursor; never ack if current differs from baseline or is greater than
+   * requested/ackCursor — skip ack rather than recursively starting a lane to avoid deadlock.
+   */
+  public async handlePeerCloseObservation(result: TriggerResult | undefined): Promise<void> {
+    const panelAtCall = this.panel
+    const genAtCall = this.generation
+    const sessionsAtCall = panelAtCall?.sessions
+    if (!panelAtCall || !sessionsAtCall || !panelAtCall.visible) return
+    await this.waitForStateReady("peerClosedObservation")
+    const curPanel = this.panel
+    const curGen = this.generation
+    const curSessions = curPanel?.sessions
+    if (!curPanel || !curSessions || !curPanel.visible) return
+    if (curGen !== genAtCall || curSessions !== sessionsAtCall) return
+    if (!this.hydrated) {
+      return this.handleObservationRefresh()
+    }
+    let prevalidated: { shouldRefresh: boolean; ackCursor?: number } = { shouldRefresh: true }
+    let valid = false
+    if (result && !result.readError && result.requestedCursor !== undefined && result.readResult !== undefined && this.coordinator) {
+      try {
+        const r = this.coordinator.decideFromReadResultWithValidity(result.readResult, result.requestedCursor)
+        valid = r.valid
+        prevalidated = r.decision
+      } catch {
+        valid = false
+        prevalidated = { shouldRefresh: true }
+      }
+    } else {
+      valid = false
+      prevalidated = { shouldRefresh: true }
+    }
+    if (!valid) {
+      if (this.refreshPromise && this.refreshGen === curGen && this.refreshSessions === curSessions)
+        return this.refreshPromise
+      const p = this.doPeerCloseObservationRefresh(curGen, curSessions, result, prevalidated).finally(() => {
+        if (this.refreshPromise === p) {
+          this.refreshPromise = null
+          this.refreshGen = null
+          this.refreshSessions = null
+        }
+      })
+      this.refreshPromise = p
+      this.refreshGen = curGen
+      this.refreshSessions = curSessions
+      return p
+    }
+    const curPersisted = this.coordinator?.getPersistedCursor()
+    if (curPersisted === undefined || result?.requestedCursor === undefined || curPersisted !== result.requestedCursor) {
+      return this.handleObservationRefresh()
+    }
+    if (this.refreshPromise && this.refreshGen === curGen && this.refreshSessions === curSessions) return this.refreshPromise
+    const p = this.doPeerCloseObservationRefresh(curGen, curSessions, result, prevalidated).finally(() => {
+      if (this.refreshPromise === p) {
+        this.refreshPromise = null
+        this.refreshGen = null
+        this.refreshSessions = null
+      }
+    })
+    this.refreshPromise = p
+    this.refreshGen = curGen
+    this.refreshSessions = curSessions
+    return p
+  }
+
+  private async doPeerCloseObservationRefresh(
+    gen: number,
+    sessions: PanelContext["sessions"],
+    result: TriggerResult | undefined,
+    prevalidated?: { shouldRefresh: boolean; ackCursor?: number },
+  ): Promise<void> {
+    if (this.generation !== gen || this.panel?.sessions !== sessions) return
+    let decision: { shouldRefresh: boolean; ackCursor?: number } = prevalidated ?? { shouldRefresh: true }
+    if (!prevalidated) {
+      if (!result || result.readError || result.requestedCursor === undefined || result.readResult === undefined) {
+        decision = { shouldRefresh: true }
+      } else if (!this.coordinator) {
+        decision = { shouldRefresh: true }
+      } else {
+        try {
+          decision = this.coordinator.decideFromReadResult(result.readResult, result.requestedCursor)
+        } catch {
+          decision = { shouldRefresh: true }
+        }
+      }
+    }
+    if (this.generation !== gen || this.panel?.sessions !== sessions) return
+    if (!decision.shouldRefresh) return
+    try {
+      await sessions.refreshSessions()
+    } catch {
+      return
+    }
+    if (this.generation !== gen || this.panel?.sessions !== sessions) return
+    if (decision.ackCursor !== undefined && this.coordinator) {
+      const baseline = result?.requestedCursor
+      if (baseline !== undefined) {
+        const curNow = this.coordinator.getPersistedCursor()
+        if (curNow === undefined || curNow !== baseline || curNow > baseline || curNow > decision.ackCursor) {
+          return
+        }
+      }
+      await this.coordinator.ack(decision.ackCursor)
+    }
   }
 
   private shouldWaitForState(m: AgentManagerInMessage): boolean {

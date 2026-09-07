@@ -28,6 +28,14 @@ function isValidRehydrateReason(v: unknown): boolean {
 export class AgentManagerObservationCoordinator {
   constructor(private readonly svc: PrivateObservationService) {}
 
+  getPersistedCursor(): number | undefined {
+    try {
+      return this.svc.getPersistedCursor()
+    } catch {
+      return undefined
+    }
+  }
+
   async captureSnapshotCursor(): Promise<number | undefined> {
     if (!this.svc.isEnabled()) return undefined
     try {
@@ -38,6 +46,41 @@ export class AgentManagerObservationCoordinator {
     } catch {
       return undefined
     }
+  }
+
+  decideFromReadResultWithValidity(
+    raw: unknown,
+    requestedCursor: number | undefined,
+  ): { valid: boolean; decision: { shouldRefresh: boolean; ackCursor?: number } } {
+    if (requestedCursor === undefined) return { valid: false, decision: { shouldRefresh: true } }
+    if (!isSafeNonNegativeCursor(requestedCursor)) return { valid: false, decision: { shouldRefresh: true } }
+    const o = raw as { v?: unknown; cursor?: unknown; rehydrate?: unknown; entries?: unknown; reason?: unknown }
+    if (!o || o.v !== "1.0" || !isSafeNonNegativeCursor(o.cursor) || o.cursor < requestedCursor || typeof o.rehydrate !== "boolean" || !Array.isArray(o.entries)) {
+      return { valid: false, decision: { shouldRefresh: true } }
+    }
+    if (o.rehydrate) {
+      if ((o.entries as unknown[]).length !== 0) return { valid: false, decision: { shouldRefresh: true } }
+      if (!isValidRehydrateReason((o as { reason?: unknown }).reason)) return { valid: false, decision: { shouldRefresh: true } }
+      return { valid: true, decision: { shouldRefresh: true, ackCursor: o.cursor } }
+    }
+    const entries = o.entries as unknown[]
+    if (entries.length === 0) {
+      if (o.cursor !== requestedCursor) return { valid: false, decision: { shouldRefresh: true } }
+      return { valid: true, decision: { shouldRefresh: false } }
+    }
+    let prevSeq = requestedCursor
+    for (const e of entries) {
+      const r = isValidObservationEntry(e, o.cursor, prevSeq)
+      if (!r.ok) return { valid: false, decision: { shouldRefresh: true } }
+      if (r.seq !== prevSeq + 1) return { valid: false, decision: { shouldRefresh: true } }
+      prevSeq = r.seq
+    }
+    if (prevSeq !== o.cursor) return { valid: false, decision: { shouldRefresh: true } }
+    return { valid: true, decision: { shouldRefresh: true, ackCursor: o.cursor } }
+  }
+
+  decideFromReadResult(raw: unknown, requestedCursor: number | undefined): { shouldRefresh: boolean; ackCursor?: number } {
+    return this.decideFromReadResultWithValidity(raw, requestedCursor).decision
   }
 
   async decide(): Promise<{ shouldRefresh: boolean; ackCursor?: number }> {
@@ -55,30 +98,7 @@ export class AgentManagerObservationCoordinator {
     } catch {
       return { shouldRefresh: true }
     }
-    const o = raw as { v?: unknown; cursor?: unknown; rehydrate?: unknown; entries?: unknown; reason?: unknown }
-    if (!o || o.v !== "1.0" || !isSafeNonNegativeCursor(o.cursor) || o.cursor < cur || typeof o.rehydrate !== "boolean" || !Array.isArray(o.entries)) {
-      return { shouldRefresh: true }
-    }
-    if (o.rehydrate) {
-      if ((o.entries as unknown[]).length !== 0) return { shouldRefresh: true }
-      if (!isValidRehydrateReason((o as { reason?: unknown }).reason)) return { shouldRefresh: true }
-      return { shouldRefresh: true, ackCursor: o.cursor }
-    }
-    // rehydrate:false — do not require reason, validate delta entries with exact contiguous coverage of (persistedCursor, returnedCursor]
-    const entries = o.entries as unknown[]
-    if (entries.length === 0) {
-      if (o.cursor !== cur) return { shouldRefresh: true }
-      return { shouldRefresh: false }
-    }
-    let prevSeq = cur
-    for (const e of entries) {
-      const r = isValidObservationEntry(e, o.cursor, prevSeq)
-      if (!r.ok) return { shouldRefresh: true }
-      if (r.seq !== prevSeq + 1) return { shouldRefresh: true }
-      prevSeq = r.seq
-    }
-    if (prevSeq !== o.cursor) return { shouldRefresh: true }
-    return { shouldRefresh: true, ackCursor: o.cursor }
+    return this.decideFromReadResult(raw, cur)
   }
 
   async ack(cursor: number): Promise<boolean> {

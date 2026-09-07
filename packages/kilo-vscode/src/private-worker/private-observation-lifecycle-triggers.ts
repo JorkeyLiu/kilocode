@@ -45,6 +45,7 @@ export type TriggerResult = {
   readResult?: unknown
   rehydrate?: boolean
   readError?: string
+  requestedCursor?: number
 }
 
 export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
@@ -176,9 +177,11 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
         let readResult: unknown = undefined
         let rehydrate: boolean | undefined = undefined
         let readError: string | undefined = undefined
+        let requestedCursor: number | undefined = undefined
         try {
           const c = this.service.getPersistedCursor()
           if (c !== undefined) {
+            requestedCursor = c
             readResult = await this.service.read(c)
             const r = readResult as { rehydrate?: boolean }
             if (r && typeof r.rehydrate === "boolean") rehydrate = r.rehydrate
@@ -187,7 +190,14 @@ export class PrivateObservationLifecycleTriggers implements vscode.Disposable {
           readError = String((e as Error)?.message ?? String(e))
           console.warn("[Kilo] PrivateObservationLifecycleTriggers read failed:", e, { reason, readError })
         }
-        const out: TriggerResult = { reason, reconnectResult, readResult, rehydrate, ...(readError ? { readError } : {}) }
+        const out: TriggerResult = {
+          reason,
+          reconnectResult,
+          readResult,
+          rehydrate,
+          ...(readError ? { readError } : {}),
+          ...(requestedCursor !== undefined ? { requestedCursor } : {}),
+        }
         // Do not claim successful convergence when read is unavailable — callers observe readError
         return out
       } catch (e) {
