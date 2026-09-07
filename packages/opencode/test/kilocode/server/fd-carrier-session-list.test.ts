@@ -11,6 +11,7 @@ import { createFdCarrier } from "../../../src/kilocode/server/fd-carrier"
 import { FD_PROTOCOL_NAME } from "../../../src/kilocode/server/fd-carrier-protocol"
 import { AppLayer } from "../../../src/effect/app-runtime"
 import { Session } from "../../../src/session/session"
+import type { SessionID } from "../../../src/session/schema"
 import { canonicalDirectory } from "../../../src/kilocode/session/canonical-directory"
 import { InstanceStore } from "../../../src/project/instance-store"
 import { InstanceRef } from "../../../src/effect/instance-ref"
@@ -464,7 +465,7 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
         const ctx = yield* store.load({ directory: dir })
         const captured = yield* Effect.context()
         const run = scoped(ctx, captured)
-        const created: string[] = []
+        const created: SessionID[] = []
         for (const title of ["carrier-list-tie-1", "carrier-list-tie-2", "carrier-list-tie-3"]) {
           const info = yield* run(
             Effect.gen(function* () {
@@ -533,7 +534,7 @@ describe("fd-carrier experimental/session/list (parity-only read)", () => {
             expect(s.directory).toBe(canon)
             expect(s.updated).toBe(pinned)
           }
-          expect(created.sort()).toEqual([...page1summaries, ...page2summaries].map((s) => s.id).sort())
+          expect(created.sort() as string[]).toEqual([...page1summaries, ...page2summaries].map((s) => s.id).sort())
           // Exact continuation in the same canonical order.
           expect([...page1ids, ...page2summaries.map((s) => s.id)]).toEqual([...created].sort().reverse())
         } finally {

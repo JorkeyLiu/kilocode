@@ -76,6 +76,23 @@ import {
   rehydrateModelIndex,
   markIndexStale,
 } from "./selectors"
+import {
+  isRecord,
+  parseScopeDocument,
+  isValidAssetId,
+  assembleAssetMarkdown,
+  createDefaultEmitterFactory,
+  buildAgentEntriesFromScan as buildAgentEntries,
+  computeProviderCredentialStatus as computeCredentialStatus,
+  stampView,
+  assetStampView,
+  readAssetView,
+  fixtureSnapshotView,
+  checkStaleForWriteView,
+  buildMergedDocView,
+  validateCrossScopeCompositionView,
+  scopeConfigView,
+} from "./service-views"
 
 // ── Events ───────────────────────────────────────────────────────────
 
@@ -354,43 +371,16 @@ export class CanonicalConfigService implements Disposable {
    */
   fixtureStateSnapshot(): CanonicalStateSnapshot {
     if (!isE2EFixtureEnabled()) throw new Error("fixture canonicalState requires KILO_E2E_FIXTURE")
-    const scan = this.lastAssetScan
-    const provider = this.providerIndex
-    const agent = this.agentIndex
-    const snapshot = this.currentSnapshot
-    const rawModel = snapshot?.config.value.model
-    const defaultModel = typeof rawModel === "string" ? rawModel : null
-    const selected = defaultModel ? defaultModel.split("/") : []
-    const providerID = selected[0] && provider?.providers.some((p) => p.id === selected[0]) ? selected[0] : ""
-    const defaultSelection =
-      defaultModel && providerID
-        ? { providerID, modelID: selected.slice(1).join("/") || "auto" }
-        : providerID
-          ? { providerID, modelID: "" }
-          : null
-    return {
-      globalRoot: this.paths.globalRoot,
-      projectRoot: this.paths.projectRoot ?? null,
-      materializationReady: this.materializationReady,
-      successfulMaterializationStamp: this.lastReadyStamp,
-      lastMaterializationError: this.lastError,
-      assetScan: summarizeAssetScan(scan, this.paths),
-      providerIndex: provider
-        ? {
-            size: provider.providers.length,
-            ids: provider.providers.map((p) => p.id),
-            entries: provider.providers.map((p) => ({
-              id: p.id,
-              hasCredential: p.hasCredential,
-              modelIds: [...p.modelIds],
-            })),
-            connected: provider.providers.filter((p) => p.hasCredential).map((p) => p.id),
-          }
-        : null,
-      agentIndex: agent ? { size: agent.agents.length, ids: agent.agents.map((a) => a.id) } : null,
-      defaultModel,
-      defaultSelection,
-    }
+    return fixtureSnapshotView({
+      paths: this.paths,
+      scan: this.lastAssetScan,
+      provider: this.providerIndex,
+      agent: this.agentIndex,
+      snapshot: this.currentSnapshot,
+      ready: this.materializationReady,
+      readyStamp: this.lastReadyStamp,
+      error: this.lastError,
+    })
   }
 
   /**
@@ -1685,24 +1675,7 @@ export class CanonicalConfigService implements Disposable {
    * No prefix scan — each status traces to a validated canonical record ref.
    */
   private async computeProviderCredentialStatus(snapshot: ConfigSnapshot): Promise<Map<string, boolean>> {
-    const status = new Map<string, boolean>()
-    const providerMap = snapshot.config.value.provider
-    if (!providerMap || typeof providerMap !== "object" || Array.isArray(providerMap)) return status
-    for (const [id, entry] of Object.entries(providerMap as Record<string, unknown>)) {
-      if (!entry || typeof entry !== "object" || Array.isArray(entry)) continue
-      const credential = (entry as Record<string, unknown>).credential
-      if (typeof credential !== "string") {
-        status.set(id, false)
-        continue
-      }
-      const parsed = parseOwnedCredentialRef(credential)
-      if (parsed && parsed.kind === "provider" && parsed.id === id) {
-        status.set(id, await hasCredential(this.secrets, credential))
-      } else {
-        status.set(id, false)
-      }
-    }
-    return status
+    return computeCredentialStatus(snapshot, this.secrets)
   }
 
   /**
@@ -1721,19 +1694,11 @@ export class CanonicalConfigService implements Disposable {
   }
 
   get stamp(): CanonicalStamp {
-    return {
-      globalHash: this.globalHash,
-      projectHash: this.projectHash,
-      materializationVersion: this.currentSnapshot?.generation ?? 0,
-      assetHash: null,
-    }
+    return stampView(this.globalHash, this.projectHash, this.currentSnapshot?.generation ?? 0)
   }
 
   getAssetStamp(assetType: AssetDirectory, id: string, scope: "global" | "project"): string {
-    if (scope === "project" && !this.hasProject) return "absent"
-    const dir = scope === "global" ? this.paths.globalAssetDirs[assetType] : this.paths.projectAssetDirs![assetType]
-    const raw = readFile(path.join(dir, `${id}.md`))
-    return raw.type === "present" ? raw.hash : "absent"
+    return assetStampView(this.paths, this.hasProject, assetType, id, scope)
   }
 
   readAsset(
@@ -1743,14 +1708,7 @@ export class CanonicalConfigService implements Disposable {
   ):
     | { ok: true; frontmatter: Record<string, unknown>; body: string; contentHash: string }
     | { ok: false; message: string } {
-    if (scope === "project" && !this.hasProject)
-      return { ok: false, message: "No workspace folder available; project scope is not configured" }
-    const dir = scope === "global" ? this.paths.globalAssetDirs[assetType] : this.paths.projectAssetDirs![assetType]
-    const raw = readFile(path.join(dir, `${id}.md`))
-    if (raw.type !== "present") return { ok: false, message: raw.type === "failure" ? raw.message : "Asset not found" }
-    const parsed = parseMarkdown(raw.bytes)
-    if (parsed.errors.length > 0) return { ok: false, message: parsed.errors.join("; ") }
-    return { ok: true, frontmatter: parsed.data, body: parsed.content, contentHash: raw.hash }
+    return readAssetView(this.paths, this.hasProject, assetType, id, scope)
   }
 
   async deleteAsset(
@@ -1810,7 +1768,7 @@ export class CanonicalConfigService implements Disposable {
   getScopeConfig(scope: "global" | "project"): Record<string, unknown> {
     if (scope === "project" && !this.hasProject) return {}
     const filePath = scope === "global" ? this.paths.globalConfigFile : this.paths.projectConfigFile!
-    return parseScopeDocument(readFile(filePath))
+    return scopeConfigView(readFile(filePath))
   }
 
   /**
@@ -2901,40 +2859,14 @@ export class CanonicalConfigService implements Disposable {
     existing: FileReadResult,
     expectedHash: string,
   ): { ok: false; kind: "stale"; message: string } | null {
-    if (!expectedHash || expectedHash === "absent") return null
-    if (existing.type === "absent") {
-      return { ok: false, kind: "stale", message: "Config file was deleted externally" }
-    }
-    if (existing.type === "failure") {
-      return { ok: false, kind: "stale", message: `Config file unreadable: ${existing.message}` }
-    }
-    if (existing.type === "present" && existing.hash !== expectedHash) {
-      return {
-        ok: false,
-        kind: "stale",
-        message: `Config file was modified externally (expected ${expectedHash}, got ${existing.hash})`,
-      }
-    }
-    return null
+    return checkStaleForWriteView(existing, expectedHash)
   }
 
   /**
    * Build merged document from existing file + patch (Blocker 9).
    */
   private buildMergedDoc(existing: FileReadResult, patch: Record<string, unknown>): Record<string, unknown> {
-    let doc: Record<string, unknown> = {}
-    if (existing.type === "present") {
-      const parsed = parseJsonc(existing.bytes)
-      if (parsed.ok) doc = { ...parsed.value }
-    }
-    for (const [key, val] of Object.entries(patch)) {
-      if (val === undefined) {
-        delete doc[key]
-      } else {
-        doc[key] = val
-      }
-    }
-    return doc
+    return buildMergedDocView(existing, patch)
   }
 
   /**
@@ -3037,7 +2969,7 @@ export class CanonicalConfigService implements Disposable {
     global: Record<string, unknown>,
     project: Record<string, unknown>,
   ): ValidationError[] {
-    return validateCrossScope(global, project)
+    return validateCrossScopeCompositionView(global, project)
   }
 
   /**
@@ -3058,133 +2990,6 @@ export class CanonicalConfigService implements Disposable {
     body?: string
     assetHash?: string
   }> {
-    return scan.entries
-      .filter((e) =>
-        sameCanonicalPath(
-          path.dirname(e.filePath),
-          e.scope === "global" ? this.paths.globalAssetDirs.agent : this.paths.projectAssetDirs!.agent,
-        ),
-      )
-      .map((e) => {
-        // Use retained frontmatter from the scan entry (Correction 5).
-        // For malformed/unreadable replacements, prior entry carries valid frontmatter.
-        const fm = e.frontmatter ?? {}
-        return {
-          id: e.id,
-          displayName:
-            (typeof fm.displayName === "string" ? fm.displayName : undefined) ??
-            (typeof fm.name === "string" ? fm.name : e.id),
-          description: typeof fm.description === "string" ? fm.description : undefined,
-          mode:
-            fm.mode === "primary" || fm.mode === "secondary" || fm.mode === "specialized"
-              ? (fm.mode as "primary" | "secondary" | "specialized")
-              : undefined,
-          hidden: typeof fm.hidden === "boolean" ? fm.hidden : undefined,
-          color: typeof fm.color === "string" ? fm.color : undefined,
-          source: e.scope,
-          filePath: e.filePath,
-          frontmatter: e.frontmatter,
-          body: e.body,
-          assetHash: e.contentHash,
-        }
-      })
-  }
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value)
-}
-
-/** Summarize an asset scan per directory/scope (fixture snapshot only). */
-function summarizeAssetScan(scan: AssetScanResult | null, paths: CanonicalPaths): CanonicalAssetDirSummary[] {
-  if (!scan) return []
-  const out: CanonicalAssetDirSummary[] = []
-  for (const dir of ASSET_DIRECTORIES) {
-    for (const scope of ["global", "project"] as const) {
-      const root = scope === "global" ? paths.globalAssetDirs[dir] : paths.projectAssetDirs?.[dir]
-      if (!root) continue
-      out.push({
-        dir,
-        scope,
-        entries: scan.entries.filter((e) => e.scope === scope && sameCanonicalPath(path.dirname(e.filePath), root))
-          .length,
-        errors: scan.errors.filter(
-          (e) =>
-            e.scope === scope &&
-            e.file !== undefined &&
-            (sameCanonicalPath(path.dirname(e.file), root) || sameCanonicalPath(e.file, root)),
-        ).length,
-      })
-    }
-  }
-  return out
-}
-
-function parseScopeDocument(raw: FileReadResult | undefined): Record<string, unknown> {
-  if (!raw || raw.type !== "present") return {}
-  const parsed = parseJsonc(raw.bytes)
-  return parsed.ok ? parsed.value : {}
-}
-
-/**
- * Validate that an asset ID is a safe filename segment (Blocker 11).
- * No separators, traversal, or absolute path.
- */
-function isValidAssetId(id: string): boolean {
-  if (!id || id.length === 0) return false
-  if (id.includes("/") || id.includes("\\") || id.includes("..")) return false
-  if (path.isAbsolute(id)) return false
-  if (id !== path.basename(id)) return false
-  return true
-}
-
-/**
- * Assemble markdown content from frontmatter and body.
- * Uses YAML library for proper formatting (Finding 11).
- */
-function assembleAssetMarkdown(frontmatter: Record<string, unknown>, body: string): string {
-  const parts: string[] = ["---\n"]
-  const { stringify: yamlStr, parseDocument: yamlParseDoc } = require("yaml")
-  const doc = yamlParseDoc("")
-  doc.contents = new Map(Object.entries(frontmatter)) as any
-  parts.push(yamlStr(doc))
-  parts.push("---\n")
-  if (body) {
-    parts.push("\n", body)
-    if (!body.endsWith("\n")) parts.push("\n")
-  }
-  return parts.join("")
-}
-
-// ── Helpers ──────────────────────────────────────────────────────────
-
-/**
- * Default in-memory emitter factory. Used when no vscode or test override is provided.
- * Decouples from vscode.EventEmitter for testability.
- */
-function createDefaultEmitterFactory(): EmitterFactory {
-  return {
-    create: <T>() => {
-      const listeners: Array<(e: T) => void> = []
-      return {
-        event: (listener: (e: T) => void) => {
-          listeners.push(listener)
-          return {
-            dispose() {
-              const idx = listeners.indexOf(listener)
-              if (idx >= 0) listeners.splice(idx, 1)
-            },
-          }
-        },
-        fire: (e: T) => {
-          for (const l of listeners) l(e)
-        },
-        dispose: () => {
-          listeners.length = 0
-        },
-      }
-    },
+    return buildAgentEntries(scan, this.paths)
   }
 }

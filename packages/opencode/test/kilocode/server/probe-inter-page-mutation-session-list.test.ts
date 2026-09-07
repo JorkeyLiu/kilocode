@@ -10,6 +10,7 @@ import { createFdCarrier } from "../../../src/kilocode/server/fd-carrier"
 import { FD_PROTOCOL_NAME } from "../../../src/kilocode/server/fd-carrier-protocol"
 import { AppLayer } from "../../../src/effect/app-runtime"
 import { Session } from "../../../src/session/session"
+import type { SessionID } from "../../../src/session/schema"
 import { InstanceStore } from "../../../src/project/instance-store"
 import { InstanceRef } from "../../../src/effect/instance-ref"
 import type { InstanceContext } from "../../../src/project/instance-context"
@@ -221,7 +222,7 @@ describe("probe: inter-page sequential mutation private carrier (raw observation
         yield* run(
           Effect.gen(function* () {
             const { db } = yield* Database.Service
-            const pins: Array<[string, number]> = [
+            const pins: Array<[SessionID, number]> = [
               [fixture.a.id, BASE],
               [fixture.b.id, BASE + 1000],
               [fixture.c.id, BASE + 2000],
@@ -319,7 +320,7 @@ describe("probe: inter-page sequential mutation private carrier (raw observation
               [fixture.b.id, BASE + 1000],
               [fixture.c.id, BASE + 2000],
               [fixture.d.id, BASE + 3000],
-            ] as Array<[string, number]>) {
+            ] as Array<[SessionID, number]>) {
               yield* db
                 .update(SessionTable)
                 .set({ time_updated: updated })
@@ -347,7 +348,7 @@ describe("probe: inter-page sequential mutation private carrier (raw observation
               yield* db
                 .update(SessionTable)
                 .set({ time_updated: BASE + 5000 })
-                .where(eq(SessionTable.id, mutated))
+                .where(eq(SessionTable.id, mutated as SessionID))
                 .run()
                 .pipe(Effect.orDie)
             }),
@@ -409,7 +410,7 @@ describe("probe: inter-page sequential mutation private carrier (raw observation
               [fixture.b.id, BASE + 1000],
               [fixture.c.id, BASE + 2000],
               [fixture.d.id, BASE + 3000],
-            ] as Array<[string, number]>) {
+            ] as Array<[SessionID, number]>) {
               yield* db
                 .update(SessionTable)
                 .set({ time_updated: updated })
@@ -498,7 +499,7 @@ describe("probe: inter-page sequential mutation private carrier (raw observation
               [fixture.b.id, BASE + 1000],
               [fixture.c.id, BASE + 2000],
               [fixture.d.id, BASE + 3000],
-            ] as Array<[string, number]>) {
+            ] as Array<[SessionID, number]>) {
               yield* db
                 .update(SessionTable)
                 .set({ time_updated: updated })
@@ -583,7 +584,7 @@ describe("probe: inter-page sequential mutation private carrier (raw observation
               [fixture.b.id, BASE + 1000],
               [fixture.c.id, BASE + 2000],
               [fixture.d.id, BASE + 3000],
-            ] as Array<[string, number]>) {
+            ] as Array<[SessionID, number]>) {
               yield* db
                 .update(SessionTable)
                 .set({ time_updated: updated })

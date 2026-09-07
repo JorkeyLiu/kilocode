@@ -83,7 +83,7 @@ const removeOne = async (id: string, ctx: InstanceContext) => {
 type Page = { status: number; ids: string[]; cursor: string | null }
 
 const getPage = async (
-  app: { request: (url: string, init?: RequestInit) => Promise<Response> },
+  app: { request: (url: string, init?: RequestInit) => Response | Promise<Response> },
   dir: string,
   search: string,
   limit: number,
