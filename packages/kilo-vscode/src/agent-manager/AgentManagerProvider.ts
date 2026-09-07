@@ -12,6 +12,7 @@ import {
   type McpTruth,
 } from "./fixture-backend"
 import type { KiloConnectionService } from "../services/cli-backend"
+import type { ConnectionState } from "../services/cli-backend/connection-service"
 import { getErrorMessage } from "../kilo-provider-utils"
 import { observeSessionChildrenParityDetached } from "../kilo-provider/session-children-parity"
 import { isAbsolutePath } from "../path-utils"
@@ -52,6 +53,9 @@ export class AgentManagerProvider implements Disposable {
   private unsubStatus: (() => void) | undefined
   private unsubDeleted: (() => void) | undefined
   private unsubFont: (() => void) | undefined
+  private unsubConnectionState: (() => void) | undefined
+  private prevConnectionState: ConnectionState
+  private seenConnected = false
   private timing: SessionTiming
   private closing: Promise<void> | undefined
   private visibilityCbs: Array<(visible: boolean) => void> = []
@@ -143,6 +147,40 @@ export class AgentManagerProvider implements Disposable {
       (event) => (event as { type?: string }).type === "session.deleted",
       (event) => this.onSessionDeleted(event),
     )
+    this.prevConnectionState = this.connectionService.getConnectionState()
+    this.seenConnected = this.prevConnectionState === "connected"
+    this.unsubConnectionState = this.connectionService.onStateChange((state) => this.onConnectionState(state))
+  }
+
+  private onConnectionState(state: ConnectionState): void {
+    if (state !== "connected") {
+      this.prevConnectionState = state
+      return
+    }
+    if (!this.seenConnected) {
+      this.seenConnected = true
+      this.prevConnectionState = state
+      return
+    }
+    const prev = this.prevConnectionState
+    this.prevConnectionState = state
+    if (prev === "connected") return
+    if (!this.hydrated) return
+    if (!this.panel?.visible) return
+    this.triggerVisibleObservationRefresh()
+  }
+
+  private triggerVisibleObservationRefresh(): void {
+    const genAtCall = this.generation
+    const sessionsAtCall = this.panel?.sessions
+    if (!sessionsAtCall) return
+    if (!this.panel?.visible) return
+    void this.waitForStateReady("observationRefreshVisible").then(() => {
+      if (this.generation !== genAtCall) return
+      if (this.panel?.sessions !== sessionsAtCall) return
+      if (!this.panel?.visible) return
+      void this.handleObservationRefresh()
+    })
   }
 
   private onSessionStatus(event: unknown): void {
@@ -305,7 +343,7 @@ export class AgentManagerProvider implements Disposable {
       this.statsPoller.setVisible(visible)
       this.visiblePresence.flush()
       this.emitVisibilityChanged(visible)
-      if (visible) this.triggerObservationRefresh()
+      if (visible) this.triggerVisibleObservationRefresh()
     })
 
     if (this.catalogUnsub) {
@@ -1464,6 +1502,8 @@ export class AgentManagerProvider implements Disposable {
   }
 
   private async disposeAsync(): Promise<void> {
+    this.unsubConnectionState?.()
+    this.unsubConnectionState = undefined
     await this.stateReady?.catch((err) => this.log("dispose: stateReady rejected:", err))
     // Stop accepting timing-mutating backend events before settling. If a
     // session.status/session.deleted event arrived while settle awaited its
