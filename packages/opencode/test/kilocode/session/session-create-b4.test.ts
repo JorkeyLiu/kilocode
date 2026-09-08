@@ -179,16 +179,17 @@ describe("sessionCreate B4", () => {
       expect((afterReplaySessions as unknown[]).length).toBe((beforeSessions as unknown[]).length)
       expect((afterReplayOps as unknown[]).length).toBe((beforeOps as unknown[]).length)
       const opId2 = SessionOperation.createId("tok-fd2")
-      const req2 = { v: 1 as const, requestId: "req-fd2", opId: opId2, op: "session/create" as const, idempotencyKey: "create:tok-fd2", context: { directory: dir, parentSessionId: null }, payload: { title: "no-commit" } }
+      const req2 = { v: 1 as const, requestId: "req-fd2", opId: opId2, op: "session/create" as const, idempotencyKey: "create:tok-fd2", context: { directory: dir, parentSessionId: null }, payload: { title: "fd-create-authoritative" } }
       const beforeNoCommitOps = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const db = (yield* Database.Service).db; const { SessionOperationTable } = yield* Effect.promise(() => import("@opencode-ai/core/session/sql")); const rows = yield* db.select().from(SessionOperationTable).all().pipe(Effect.orDie); return rows })))) as unknown as Effect.Effect<any, any, any>)
       const privNo = yield* Effect.promise(() => extPeer.request("session/create", req2).catch((e: unknown) => e)) as unknown as Effect.Effect<any, any, any>
       if (privNo && typeof privNo === "object" && "status" in (privNo as Record<string, unknown>)) {
-        expect((privNo as any).status).toBe("failed")
+        expect((privNo as any).status).toBe("succeeded")
+        expect(((privNo as any).data as Record<string, unknown>).session).toBeDefined()
       }
       const afterNoCommitSessions = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const db = (yield* Database.Service).db; const rows = yield* db.select().from(SessionTable).all().pipe(Effect.orDie); return rows })))) as unknown as Effect.Effect<any, any, any>)
       const afterNoCommitOps = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const db = (yield* Database.Service).db; const { SessionOperationTable } = yield* Effect.promise(() => import("@opencode-ai/core/session/sql")); const rows = yield* db.select().from(SessionOperationTable).all().pipe(Effect.orDie); return rows })))) as unknown as Effect.Effect<any, any, any>)
-      expect((afterNoCommitSessions as unknown[]).length).toBe((afterReplaySessions as unknown[]).length)
-      expect((afterNoCommitOps as unknown[]).length).toBe((beforeNoCommitOps as unknown[]).length)
+      expect((afterNoCommitSessions as unknown[]).length).toBe((afterReplaySessions as unknown[]).length + 1)
+      expect((afterNoCommitOps as unknown[]).length).toBe((beforeNoCommitOps as unknown[]).length + 1)
       extPeer.dispose()
       carrier.dispose()
     }),

@@ -11,11 +11,10 @@ this note; when they disagree, the code is right.
   process reached over HTTP with server-sent events through the generated SDK.
   That path is the current authority for sessions, not a future contract.
 - Private file-descriptor carriers into the same backend exist as incremental
-  work. They provide parity and diagnostics only; the SDK path stays
-  authoritative and there is no cutover.
+  work. They provide parity and diagnostics for most surfaces; Agent Manager
+  local `session/create` is now private-first with authoritative `SessionCreateDispatch.dispatch` commit (same `create:<token>` durable tuple for `opId`/`idempotencyKey` + `requestId` + `directory`/`parentSessionId:null`, 3 s timeout/epoch, valid `succeeded` authoritative without SDK else exactly one SDK `POST /session` fallback with same tuple; `sandboxInheritanceToken` bypasses private with exactly one SDK `create`).
 - Durable session operations with an atomic commit plus a bounded derived
-  changefeed exist as an incremental foundation. They are not yet the
-  authoritative history.
+  changefeed exist as an incremental foundation. `session/create` private path now commits `SessionTable`/`session_operation`/`changefeed`/`Event` atomically via `fd-carrier.ts` → `SessionCreateDispatch.dispatch` (not replay-only `dispatchPrivate`); idempotent replay returns same session without duplicate. The `dispatchPrivate` replay-only path remains for diagnostics but is not used by `fd-carrier.ts` for `session/create`.
 - A canonical file-authoritative configuration service and a private
   observation service exist in the extension, but the target ownership and
   cutover are unfinished. Effective configuration still comes from the CLI
@@ -38,8 +37,8 @@ this note; when they disagree, the code is right.
 
 ## Unknowns that matter next
 
-- FD carriers terminate in the same backend `AppLayer` and remain diagnostics-only; standalone observation is the ownership path.
-- Agent Manager session-list paging, bounded single-session detail, and paged plus full-read (`limit=0`) messages now consume the private `observation/list` + `observation/get` + `observation/messages` projections, and transcript export plus child-sync `handleSyncSession` follow the same full-read boundary; the remaining unresolved boundary is that session lifecycle still depends on the SDK path, with no private authority beyond list + detail + messages and no transport removal.
+- FD carriers terminate in the same backend `AppLayer`; `session/create` is now authoritative via `dispatch`, other lifecycle still SDK/extension-owned with no transport removal; standalone observation remains the ownership path for reads.
+- Agent Manager session-list paging, bounded single-session detail, and paged plus full-read (`limit=0`) messages now consume the private `observation/list` + `observation/get` + `observation/messages` projections, and transcript export plus child-sync `handleSyncSession` follow the same full-read boundary; the remaining unresolved boundary is that session lifecycle beyond `session/create` still depends on the SDK path, with no private authority beyond `session/create` + list + detail + messages and no transport removal.
 
 No backlog lives here. Anything that does not change the next judgment is
 omitted.

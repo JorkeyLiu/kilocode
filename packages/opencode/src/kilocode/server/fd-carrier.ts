@@ -1339,18 +1339,18 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
         return result
       }
       if (method === "session/create") {
-        const result = await AppRuntime.runPromise(
+        const result = (await AppRuntime.runPromise(
           Effect.gen(function* () {
             const svc = yield* SessionCreateDispatchService
-            const fn = (svc as unknown as { dispatchPrivate?: (p: unknown) => Effect.Effect<unknown> }).dispatchPrivate
-            if (!fn) {
-              const err = new Error("session/create private replay unavailable") as Error & { code: number }
-              err.code = ErrorCode.MethodNotFound
-              throw err
-            }
-            return yield* (fn as (p: unknown) => Effect.Effect<unknown>)(params)
+            return yield* (svc.dispatch as (p: unknown) => Effect.Effect<unknown>)(params)
           }),
-        )
+        )) as Record<string, unknown>
+        if (result && (result as { status?: string }).status === "succeeded" && (result as { data?: unknown }).data) {
+          const data = (result as { data: unknown }).data
+          if (data && typeof data === "object" && !Array.isArray(data) && (data as Record<string, unknown>).session === undefined) {
+            return { ...(result as object), data: { session: data } }
+          }
+        }
         return result
       }
       if (method === "session/status") {

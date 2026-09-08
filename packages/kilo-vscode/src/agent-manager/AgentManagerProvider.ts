@@ -1048,32 +1048,31 @@ export class AgentManagerProvider implements Disposable {
             return false
           }
           const metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, client, root)
-          const { data: session } = await startSession(
+          const { createSessionPrivateFirst } = await import("../kilo-provider/session-create")
+          const session = await startSession(
             client,
             root,
             () =>
-              client.session.create(
-                {
-                  directory: root,
-                  platform: PLATFORM,
-                  metadata,
-                  ...(source?.sandboxInheritanceToken
-                    ? { sandboxInheritanceToken: source.sandboxInheritanceToken }
-                    : {}),
-                },
-                { throwOnError: true },
-              ),
+              createSessionPrivateFirst({
+                client,
+                connection: this.connectionService,
+                directory: root,
+                platform: PLATFORM,
+                metadata: metadata as unknown as Record<string, unknown> | undefined,
+                sandboxInheritanceToken: source?.sandboxInheritanceToken,
+              }),
             (...args) => this.log(...args),
           )
-          this.addSession(session.id, { recent: true })
+          const sid = (session as unknown as Session).id ?? (session as unknown as { id: string }).id
+          this.addSession(sid, { recent: true })
           this.push()
-          this.postToWebview({ type: "agentManager.sessionAdded", sessionId: session.id })
-          this.panel?.sessions.registerSession(session)
+          this.postToWebview({ type: "agentManager.sessionAdded", sessionId: sid })
+          this.panel?.sessions.registerSession(session as unknown as Session)
           const body = task.prompt?.trim()
           if (body) {
             await client.session.promptAsync(
               {
-                sessionID: session.id,
+                sessionID: sid,
                 directory: root,
                 parts: [{ type: "text", text: body }],
                 model: task.model,
@@ -1084,7 +1083,7 @@ export class AgentManagerProvider implements Disposable {
           }
           this.host.capture("Agent Manager Session Started", {
             source: PLATFORM,
-            sessionId: session.id,
+            sessionId: sid,
             tool: true,
           })
           return true

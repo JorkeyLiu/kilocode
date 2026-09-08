@@ -73,6 +73,7 @@ import {
   buildSessionUpdateIdentity,
   buildSessionCreateIdentity,
 } from "./kilo-provider/rename-session"
+import { createSessionPrivateFirst } from "./kilo-provider/session-create"
 import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
 import { observeSessionListParityDetached } from "./kilo-provider/session-list-parity"
 import { parseSessionTitle } from "./shared/session-title"
@@ -2613,231 +2614,32 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
 
     const workspaceDir = this.getContextDirectory()
-    const { opId, idempotencyKey, requestId } = buildSessionCreateIdentity()
-    const durableContext = { directory: workspaceDir, parentSessionId: null as string | null }
-    let sdkResult: { data?: Session; error?: unknown; response?: unknown } | null = null
-    let sdkData: Session | undefined
     let metadata: Record<string, unknown> | undefined
     try {
-      // sandbox metadata lookup inside error boundary (previously outside)
-      try {
-        metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, this.client!, workspaceDir)
-      } catch (e) {
-        console.warn("[Kilo New] KiloProvider: sandbox metadata lookup failed, using empty", String(e))
-        metadata = undefined
-      }
-      const res = (await this.client!.session.create(
-        {
-          directory: workspaceDir,
-          platform: this.opts.platform,
-          metadata,
-          opId,
-          idempotencyKey,
-          requestId,
-          context: durableContext,
-        } as unknown as Record<string, unknown>,
-        { throwOnError: false } as unknown as { throwOnError: false },
-      )) as unknown as { data?: Session; error?: unknown; response?: unknown }
-      sdkResult = res
-      if (res.error) {
-        console.error("[Kilo New] KiloProvider: Failed to create session:", res.error)
-        this.postMessage({ type: "error", message: getErrorMessage(res.error) || "Failed to create session" })
-      } else if (res.data) {
-        sdkData = res.data as Session
-        const detail = sdkSessionToDetail(sdkData)
-        this.stopCurrentSessionProcesses(detail.id)
-        this.setCurrentSession(detail)
-        this.contextSessionID = detail.id
-        this.focusSession(detail.id)
-        this.trackDirectory(detail.id, workspaceDir)
-        this.trackedSessionIds.add(detail.id)
-        this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(this.currentSession!) })
-      }
+      metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, this.client!, workspaceDir)
+    } catch (e) {
+      console.warn("[Kilo New] KiloProvider: sandbox metadata lookup failed, using empty", String(e))
+      metadata = undefined
+    }
+    try {
+      const session = await createSessionPrivateFirst({
+        client: this.client!,
+        connection: this.connectionService,
+        directory: workspaceDir,
+        platform: this.opts.platform,
+        metadata: metadata as unknown as Record<string, unknown> | undefined,
+      })
+      const detail = sdkSessionToDetail(session as Session)
+      this.stopCurrentSessionProcesses(detail.id)
+      this.setCurrentSession(detail)
+      this.contextSessionID = detail.id
+      this.focusSession(detail.id)
+      this.trackDirectory(detail.id, workspaceDir)
+      this.trackedSessionIds.add(detail.id)
+      this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(this.currentSession!) })
     } catch (error) {
       console.error("[Kilo New] KiloProvider: Failed to create session:", error)
       this.postMessage({ type: "error", message: getErrorMessage(error) || "Failed to create session" })
-      sdkResult = { error, response: undefined, data: undefined }
-    }
-
-    // SDK-first parity observation (fail-closed)
-    try {
-      if (!sdkResult) return
-      const isPrivateAvailable =
-        (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
-      if (!isPrivateAvailable) return
-      const hasTerminal = (() => {
-        const resp = (sdkResult as unknown as { response?: { status?: unknown } })?.response
-        const respStatus =
-          resp && typeof resp.status === "number" && Number.isInteger(resp.status)
-            ? (resp.status as number)
-            : resp && typeof resp.status === "string"
-              ? Number(resp.status)
-              : null
-        if (respStatus !== null && Number.isInteger(respStatus) && respStatus >= 100 && respStatus < 600) {
-          if ([400, 404, 409, 500].includes(respStatus)) return true
-          if (sdkResult.error) return false
-          return true
-        }
-        if (!sdkResult.error) return true
-        const err = sdkResult.error as Record<string, unknown>
-        const candidates: unknown[] = [err.status, err.statusCode, err.code, err.httpStatus]
-        for (const c of candidates) {
-          if (typeof c === "number" && [400, 404, 409, 500].includes(c)) return true
-          if (typeof c === "string" && ["400", "404", "409", "500"].includes(c)) return true
-          const n = typeof c === "string" ? Number(c) : null
-          if (n !== null && [400, 404, 409, 500].includes(n)) return true
-        }
-        if (typeof err.message === "string" && /\b(400|404|409|500)\b/.test(err.message)) return true
-        const tag = typeof err._tag === "string" ? String(err._tag).toLowerCase() : ""
-        if (
-          tag.includes("badrequest") ||
-          tag.includes("notfound") ||
-          tag.includes("conflict") ||
-          tag.includes("internal")
-        )
-          return true
-        if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined")
-          return false
-        return false
-      })()
-      if (!hasTerminal) return
-      const privateReq = {
-        v: 1 as const,
-        requestId,
-        opId,
-        op: "session/create" as const,
-        idempotencyKey,
-        context: durableContext,
-        payload: {},
-      }
-      const svc = this.connectionService as unknown as { privateCreate: (r: typeof privateReq) => Promise<unknown> }
-      if (typeof svc.privateCreate !== "function") return
-      const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
-        let timer: ReturnType<typeof setTimeout> | undefined
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`private parity timeout after ${ms}ms`)), ms)
-          ;(timer as unknown as { unref?: () => void })?.unref?.()
-        })
-        return Promise.race([p, timeout]).finally(() => {
-          if (timer) clearTimeout(timer)
-        }) as Promise<T>
-      }
-      const tryCancel =
-        (
-          this.connectionService as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean }
-        )?.tryCancelPrivatePending?.bind(this.connectionService) ?? null
-      const invalidate =
-        (
-          this.connectionService as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void }
-        )?.invalidatePrivatePeerOnObserverTimeout?.bind(this.connectionService) ?? null
-      const handleFactory =
-        (
-          this.connectionService as unknown as {
-            privateCreateWithHandle?: (r: typeof privateReq) => {
-              id: number
-              promise: Promise<unknown>
-              cancel?: (msg?: string) => boolean
-            }
-          }
-        )?.privateCreateWithHandle?.bind(this.connectionService) ?? null
-      const peekNextId =
-        (
-          this.connectionService as unknown as { peekPrivatePeerNextId?: () => number | null }
-        )?.peekPrivatePeerNextId?.bind(this.connectionService) ?? null
-      // Atomic ownership: handle-allocated id eliminates peek-before-request race; fallback to peek for legacy mocks.
-      let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } | null = null
-      let exactId: number | null = null
-      let privPromise: Promise<unknown>
-      if (handleFactory) {
-        try {
-          const h = handleFactory(privateReq as unknown as never) as {
-            id: number
-            promise: Promise<unknown>
-            cancel?: (msg?: string) => boolean
-          }
-          handle = h
-          exactId = h.id
-          privPromise = h.promise
-        } catch (e) {
-          privPromise = Promise.reject(e)
-        }
-      } else {
-        exactId = peekNextId ? peekNextId() : null
-        privPromise = svc.privateCreate(privateReq)
-      }
-      let priv: unknown
-      try {
-        priv = await withTimeout(privPromise, 3000).catch((e: unknown) => {
-          const msg = String(e)
-          const isTimeout = msg.includes("private parity timeout")
-          if (isTimeout) {
-            if (handle?.cancel) {
-              try {
-                handle.cancel(`private parity timeout opId=${opId}`)
-              } catch (e) {
-                console.warn("[Kilo Create] handle.cancel cleanup failed", String(e))
-              }
-            } else {
-              let cleaned = false
-              if (exactId !== null && tryCancel) {
-                try {
-                  cleaned = tryCancel(exactId as number, `private parity timeout opId=${opId}`)
-                } catch (e) {
-                  console.warn("[Kilo Create] tryCancel cleanup failed", String(e))
-                }
-              }
-              if (!cleaned && invalidate) {
-                try {
-                  invalidate(`create observer timeout opId=${opId}`)
-                } catch (e) {
-                  console.warn("[Kilo Create] invalidate cleanup failed", String(e))
-                }
-              }
-            }
-          }
-          return {
-            v: 1,
-            requestId,
-            opId,
-            op: "session/create",
-            idempotencyKey,
-            status: "ambiguous",
-            outcome: { type: "ambiguous", time: Date.now() },
-            accepted: false,
-            transportUnknown: true,
-            _error: String(e),
-          }
-        })
-      } catch (e) {
-        priv = {
-          v: 1,
-          requestId,
-          opId,
-          op: "session/create",
-          idempotencyKey,
-          status: "ambiguous",
-          outcome: { type: "ambiguous", time: Date.now() },
-          accepted: false,
-          transportUnknown: true,
-          _error: String(e),
-        }
-      }
-      try {
-        const { compareCreateParity } = await import("./services/cli-backend/serve-private-peer")
-        const res = compareCreateParity(
-          priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateCreateResult,
-          sdkResult as unknown as { data?: unknown; error?: unknown; response?: unknown },
-        )
-        if (res.divergence) {
-          console.warn("[Kilo Create] parity divergence", { opId, divergence: res.divergence, details: res.details })
-        } else if ((priv as Record<string, unknown>).transportUnknown) {
-          console.warn("[Kilo Create] transport-unknown parity", { opId })
-        }
-      } catch (e) {
-        console.warn("[Kilo Create] parity observation failed", { opId, error: String(e) })
-      }
-    } catch (e) {
-      console.warn("[Kilo Create] private parity observation failed (fail-closed):", String(e).slice(0, 200))
     }
   }
 
@@ -5380,10 +5182,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       if (draftID) this.creatingDrafts.add(draftID)
       const creation = (async () => {
         const metadata = await sandboxSessionMetadata(this.connectionService.sandboxPreference, this.client!, dir)
-        const { data: session } = await this.client!.session.create(
-          { directory: dir, platform: this.opts.platform, metadata },
-          { throwOnError: true },
-        )
+        const session = await createSessionPrivateFirst({
+          client: this.client!,
+          connection: this.connectionService,
+          directory: dir,
+          platform: this.opts.platform,
+          metadata: metadata as unknown as Record<string, unknown> | undefined,
+        })
         if (draftID && this.closedDrafts.delete(draftID)) {
           await this.client!.session.delete({ sessionID: session.id, directory: dir }, { throwOnError: true })
           return undefined

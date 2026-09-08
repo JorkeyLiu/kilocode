@@ -1,3 +1,4 @@
+/* eslint-disable max-lines */
 import { isAbsolute, normalize, resolve } from "path"
 import { JsonRpcPeer } from "../../private-worker/peer"
 import type { ChildProcess } from "child_process"
@@ -829,6 +830,8 @@ export interface ServePrivateCreateRequest {
   payload: {
     title?: string | null
     parentID?: string | null
+    platform?: string | null
+    metadata?: Record<string, unknown> | null
   }
 }
 
@@ -1385,13 +1388,19 @@ export function validateCreateRequest(raw: unknown): ServePrivateCreateRequest {
   if ("parentID" in payload && payload.parentID !== null && payload.parentID !== undefined) {
     if (!isSessionId(payload.parentID)) throw new Error("payload.parentID must be SessionID")
   }
+  if ("platform" in payload && payload.platform !== null && payload.platform !== undefined) {
+    if (typeof payload.platform !== "string") throw new Error("payload.platform must be string")
+  }
+  if ("metadata" in payload && payload.metadata !== null && payload.metadata !== undefined) {
+    if (!isRecord(payload.metadata)) throw new Error("payload.metadata must be object")
+  }
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
   for (const k of Object.keys(raw as Record<string, unknown>))
     if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
   const allowedCtx = new Set(["directory", "parentSessionId", "configVersion"])
   for (const k of Object.keys(ctx as Record<string, unknown>))
     if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
-  const allowedPayload = new Set(["title", "parentID"])
+  const allowedPayload = new Set(["title", "parentID", "platform", "metadata"])
   for (const k of Object.keys(payload as Record<string, unknown>))
     if (!allowedPayload.has(k)) throw new Error(`unexpected payload field ${k}`)
   const opId = raw.opId as string
@@ -1435,10 +1444,18 @@ export function validateCreateResult(raw: unknown, req: ServePrivateCreateReques
     if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
     const data = (raw as Record<string, unknown>).data
     if (!isRecord(data)) throw new Error("succeeded data must be object")
-    if (!isRecord((data as Record<string, unknown>).session)) throw new Error("succeeded data.session must be object")
+    const sess = (data as Record<string, unknown>).session
+    if (!isRecord(sess)) throw new Error("succeeded data.session must be object")
+    if (typeof (sess as Record<string, unknown>).id !== "string" || !((sess as Record<string, unknown>).id as string).startsWith("ses"))
+      throw new Error("succeeded data.session.id must be SessionID")
+    if (typeof (sess as Record<string, unknown>).directory !== "string" || !isAbsolute((sess as Record<string, unknown>).directory as string))
+      throw new Error("succeeded data.session.directory must be absolute")
+    if (typeof (sess as Record<string, unknown>).title !== "string") throw new Error("succeeded data.session.title must be string")
+    if ((sess as Record<string, unknown>).title === "") throw new Error("succeeded data.session.title must be non-empty")
     if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
     if ((outcome as Record<string, unknown>).failure !== undefined)
       throw new Error("succeeded outcome must not have failure")
+    if ((raw as Record<string, unknown>).transportUnknown !== undefined) throw new Error("succeeded must not have transportUnknown")
     return raw as unknown as ServePrivateCreateResult
   }
   if (status === "failed") {
