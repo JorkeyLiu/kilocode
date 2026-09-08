@@ -18,7 +18,6 @@ import { buildInitializeResult, FD_PROTOCOL_NAME } from "../../../src/kilocode/s
 import { AppRuntime } from "../../../src/effect/app-runtime"
 import { Session } from "../../../src/session/session"
 import { SessionID } from "../../../src/session/schema"
-import { SessionUpdateDispatchService } from "../../../src/kilocode/session/session-update-dispatch"
 import { MessageID } from "../../../src/session/schema"
 import { SessionOperation } from "@opencode-ai/core/session/operation"
 import { provideInstance, tmpdir, disposeAllInstances } from "../../fixture/fixture"
@@ -620,7 +619,7 @@ describe("fd-carrier", () => {
     }
   })
 
-  test("session/update via carrier is replay-only and fails closed without prior commit (no fallback to mutating dispatch)", async () => {
+  test("session/update via carrier is authoritative and commits without prior SDK dispatch", async () => {
     const origParent = process.env.KILO_PARENT_PID
     process.env.KILO_PARENT_PID = "1"
     const tmp = await tmpdir({ git: true, retain: true })
@@ -665,8 +664,10 @@ describe("fd-carrier", () => {
         payload: { title: "carrier-title" },
       }
       const res = (await ext.request("session/update", req)) as Record<string, unknown>
-      expect(res.status).toBe("failed")
-      expect((res as unknown as { failure: { code: string } }).failure.code).toBe("internal")
+      expect(res.status).toBe("succeeded")
+      const data = (res as unknown as { data: Record<string, unknown> }).data
+      const title = (data.title as string) ?? ((data.session as Record<string, unknown>)?.title as string)
+      expect(title).toBe("carrier-title")
       const afterTitle = (
         await AppRuntime.runPromise(
           provideInstance(dir)(
@@ -677,7 +678,7 @@ describe("fd-carrier", () => {
           ),
         )
       ).title
-      expect(afterTitle).toBe(beforeTitle)
+      expect(afterTitle).toBe("carrier-title")
     } finally {
       carrier.dispose()
       ext.dispose()
@@ -686,7 +687,7 @@ describe("fd-carrier", () => {
     }
   })
 
-  test("session/update via carrier positive persisted replay via createFdCarrier JSON-RPC without fallback", async () => {
+  test("session/update via carrier authoritative commit then idempotent replay via createFdCarrier JSON-RPC", async () => {
     const origParent = process.env.KILO_PARENT_PID
     process.env.KILO_PARENT_PID = "1"
     const tmp = await tmpdir({ git: true, retain: true })
@@ -710,20 +711,7 @@ describe("fd-carrier", () => {
       context: { directory: dir, sessionId: session.id, parentSessionId: null },
       payload: { title: "carrier-positive-title" },
     } as unknown as Record<string, unknown>
-    // Commit via SDK authoritative dispatch
-    const sdkRes = (await AppRuntime.runPromise(
-      provideInstance(dir)(
-        Effect.gen(function* () {
-          const d = yield* SessionUpdateDispatchService
-          return yield* (d as unknown as { dispatch: (r: unknown) => Effect.Effect<unknown> }).dispatch(req)
-        }),
-      ),
-    )) as Record<string, unknown>
-    expect((sdkRes as unknown as { status: string }).status).toBe("succeeded")
-    const sdkTitle = (sdkRes as unknown as { data: { title: string } }).data.title
-    expect(sdkTitle).toBe("carrier-positive-title")
-    const sdkRev = (sdkRes as unknown as { revision: { session: number } }).revision.session
-    // Now replay via actual createFdCarrier JSON-RPC (private replay-only path)
+    // Commit authoritatively via actual createFdCarrier JSON-RPC (no prior SDK dispatch)
     const extToCarrier = new PassThrough()
     const carrierToExt = new PassThrough()
     const carrier = createFdCarrier(extToCarrier, carrierToExt)
@@ -734,14 +722,22 @@ describe("fd-carrier", () => {
         clientInfo: { name: "kilo-vscode", version: "7.4.11" },
         capabilities: ["session/update", "session/cancelQueued"],
       })
+      const first = (await ext.request("session/update", req)) as Record<string, unknown>
+      expect(first.status).toBe("succeeded")
+      const firstData = (first as unknown as { data: Record<string, unknown> }).data
+      const firstTitle =
+        (firstData.title as string) ?? ((firstData.session as Record<string, unknown>)?.title as string)
+      expect(firstTitle).toBe("carrier-positive-title")
+      const firstRev = (first as unknown as { revision: { session: number } }).revision.session
+      // Idempotent replay of the identical tuple returns the same title/revision without a new mutation
       const res = (await ext.request("session/update", req)) as Record<string, unknown>
       expect(res.status).toBe("succeeded")
       const data = (res as unknown as { data: Record<string, unknown> }).data
       const title = (data.title as string) ?? ((data.session as Record<string, unknown>)?.title as string)
       expect(title).toBe("carrier-positive-title")
-      expect(title).toBe(sdkTitle)
+      expect(title).toBe(firstTitle)
       const rev = (res as unknown as { revision: { session: number } }).revision.session
-      expect(rev).toBe(sdkRev)
+      expect(rev).toBe(firstRev)
       // Verify no new mutation: current session title still the committed one and revision unchanged after replay
       const after = await AppRuntime.runPromise(
         provideInstance(dir)(
@@ -752,6 +748,74 @@ describe("fd-carrier", () => {
         ),
       )
       expect(after.title).toBe("carrier-positive-title")
+    } finally {
+      carrier.dispose()
+      ext.dispose()
+      if (origParent === undefined) delete process.env.KILO_PARENT_PID
+      else process.env.KILO_PARENT_PID = origParent
+    }
+  })
+
+  test("session/update via carrier rejects omitted parentSessionId without mutation", async () => {
+    const origParent = process.env.KILO_PARENT_PID
+    process.env.KILO_PARENT_PID = "1"
+    const tmp = await tmpdir({ git: true, retain: true })
+    const dir = tmp.path
+    const session = await AppRuntime.runPromise(
+      provideInstance(dir)(
+        Effect.gen(function* () {
+          const svc = yield* Session.Service
+          return yield* svc.create({ title: "carrier-strict" })
+        }),
+      ),
+    )
+    const extToCarrier = new PassThrough()
+    const carrierToExt = new PassThrough()
+    const carrier = createFdCarrier(extToCarrier, carrierToExt)
+    const ext = new JsonRpcPeer({ reader: carrierToExt, writer: extToCarrier })
+    try {
+      await ext.request("initialize", {
+        protocol: { name: FD_PROTOCOL_NAME, major: 1, minor: 0 },
+        clientInfo: { name: "kilo-vscode", version: "7.4.11" },
+        capabilities: ["session/update", "session/cancelQueued"],
+      })
+      const beforeTitle = (
+        await AppRuntime.runPromise(
+          provideInstance(dir)(
+            Effect.gen(function* () {
+              const svc = yield* Session.Service
+              return yield* svc.get(session.id as unknown as import("../../../src/session/schema").SessionID)
+            }),
+          ),
+        )
+      ).title
+      const token = "carrier-strict-" + Math.random().toString(36).slice(2, 8)
+      const opId = SessionOperation.sessionUpdateId(session.id, token)
+      // Omit parentSessionId entirely: private-carrier fail-closed validation
+      // must reject without mutation even though the public contract allows it.
+      const req = {
+        v: 1 as const,
+        requestId: "req-carrier-strict",
+        opId,
+        op: "session/update" as const,
+        idempotencyKey: `sessionUpdate:${session.id}:${token}`,
+        context: { directory: dir, sessionId: session.id },
+        payload: { title: "carrier-strict-title" },
+      } as unknown as Record<string, unknown>
+      const res = (await ext.request("session/update", req)) as Record<string, unknown>
+      expect(res.status).toBe("failed")
+      expect((res as unknown as { failure: { code: string } }).failure.code).toBe("validation.failed")
+      const afterTitle = (
+        await AppRuntime.runPromise(
+          provideInstance(dir)(
+            Effect.gen(function* () {
+              const svc = yield* Session.Service
+              return yield* svc.get(session.id as unknown as import("../../../src/session/schema").SessionID)
+            }),
+          ),
+        )
+      ).title
+      expect(afterTitle).toBe(beforeTitle)
     } finally {
       carrier.dispose()
       ext.dispose()

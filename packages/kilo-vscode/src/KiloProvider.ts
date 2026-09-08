@@ -68,12 +68,8 @@ import { normalize, type SSEPayload, type SyncPayload, type WirePayload } from "
 import { isP0PerfEnabled, p0Stage, p0Webview } from "./perf/perf-instrument"
 import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
-import {
-  renameSessionWithResult,
-  buildSessionUpdateIdentity,
-  buildSessionCreateIdentity,
-} from "./kilo-provider/rename-session"
 import { createSessionPrivateFirst } from "./kilo-provider/session-create"
+import { renameSessionPrivateFirst } from "./kilo-provider/session-update"
 import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
 import { observeSessionListParityDetached } from "./kilo-provider/session-list-parity"
 import { parseSessionTitle } from "./shared/session-title"
@@ -3355,10 +3351,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Handle renaming a session — SDK authoritative, private parity observation-only (B2).
-   * SDK PATCH executes first and is the only user-visible authority; private session/update
-   * replays the same identity (sessionUpdate:<sessionID> + per-attempt idempotencyKey) with
-   * log-only compare, fail-closed on unavailable/timeout/epoch drift.
+   * Handle renaming a session — private-first with exactly-one SDK fallback.
+   * `renameSessionPrivateFirst` attempts the private title-only update first;
+   * a valid private `succeeded` + `accepted` session/title returns with zero
+   * SDK mutation, otherwise exactly one SDK `session.update` runs with the
+   * identical durable tuple. Title validation stays first; private fallback
+   * is logged redacted.
    */
   private async handleRenameSession(sessionID: string, title: string): Promise<void> {
     if (!this.client) {
@@ -3374,284 +3372,20 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       })
       return
     }
-    const { opId, idempotencyKey, requestId } = buildSessionUpdateIdentity(sessionID)
-    const durableContext: { directory: string; sessionId: string; parentSessionId: null } = {
-      directory: dir,
-      sessionId: sessionID,
-      parentSessionId: null,
-    }
-    let sdkRes: { data?: Session; error?: unknown; response?: unknown }
-    let sdkThrew = false
     try {
-      sdkRes = await renameSessionWithResult({
+      const data = await renameSessionPrivateFirst({
         client: this.client,
+        connection: this.connectionService,
         sessionID,
         title: parsed.value,
         directory: dir,
-        opId,
-        idempotencyKey,
-        requestId,
-        context: durableContext,
       })
+      const updated = sdkSessionToDetail(data as Session)
+      if (this.currentSession?.id === sessionID) this.setCurrentSession(updated)
+      this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(updated) })
     } catch (error) {
-      sdkThrew = true
       console.error("[Kilo New] KiloProvider: Failed to rename session:", error)
       this.postMessage({ type: "error", message: getErrorMessage(error) || "Failed to rename session" })
-      sdkRes = { error, response: undefined, data: undefined }
-    }
-    // Preserve Session.Info success and SDK terminal status (authoritative)
-    if (!sdkThrew) {
-      if (sdkRes!.data && !sdkRes!.error) {
-        const updated = sdkSessionToDetail(sdkRes!.data as Session)
-        if (this.currentSession?.id === sessionID) this.setCurrentSession(updated)
-        this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(updated) })
-      } else if (sdkRes!.error) {
-        console.error("[Kilo New] KiloProvider: Failed to rename session:", sdkRes!.error)
-        this.postMessage({ type: "error", message: getErrorMessage(sdkRes!.error) || "Failed to rename session" })
-      }
-    }
-
-    const isPrivateAvailable =
-      (this.connectionService as unknown as { isPrivateAvailable?: () => boolean }).isPrivateAvailable?.() ?? false
-    if (!isPrivateAvailable) return
-    const sdkHasTerminal = (() => {
-      const resp = (sdkRes as unknown as { response?: { status?: unknown } })?.response
-      const respStatus =
-        resp && typeof resp.status === "number" && Number.isInteger(resp.status)
-          ? (resp.status as number)
-          : resp && typeof resp.status === "string"
-            ? Number(resp.status)
-            : null
-      if (respStatus !== null && Number.isInteger(respStatus) && respStatus >= 100 && respStatus < 600) {
-        if ([400, 404, 409, 500].includes(respStatus)) return true
-        if (sdkRes.error) return false
-        return true
-      }
-      if (!sdkRes.error) return true
-      const err = sdkRes.error as Record<string, unknown>
-      const candidates: unknown[] = [err.status, err.statusCode, err.code, err.httpStatus]
-      for (const c of candidates) {
-        if (typeof c === "number" && [400, 404, 409, 500].includes(c)) return true
-        if (typeof c === "string" && ["400", "404", "409", "500"].includes(c)) return true
-        const n = typeof c === "string" ? Number(c) : null
-        if (n !== null && [400, 404, 409, 500].includes(n)) return true
-      }
-      if (typeof err.message === "string" && /\b(400|404|409|500)\b/.test(err.message)) return true
-      const tag = typeof err._tag === "string" ? String(err._tag).toLowerCase() : ""
-      if (
-        tag.includes("badrequest") ||
-        tag.includes("notfound") ||
-        tag.includes("conflict") ||
-        tag.includes("internal")
-      )
-        return true
-      if (typeof err.status === "undefined" && typeof err.code === "undefined" && typeof err._tag === "undefined")
-        return false
-      return false
-    })()
-    if (!sdkHasTerminal) return
-    const privateReq = {
-      v: 1 as const,
-      requestId,
-      opId,
-      op: "session/update" as const,
-      idempotencyKey,
-      context: durableContext,
-      payload: { title: parsed.value },
-    }
-    const svc = this.connectionService as unknown as {
-      privateSessionUpdate: (req: typeof privateReq) => Promise<unknown>
-      privateSessionUpdateWithHandle?: (req: typeof privateReq) => {
-        id: number
-        promise: Promise<unknown>
-        cancel: (msg?: string) => boolean
-      }
-    }
-    if (typeof svc.privateSessionUpdate !== "function" && typeof svc.privateSessionUpdateWithHandle !== "function")
-      return
-    let priv: unknown
-    try {
-      const withTimeout = <T>(p: Promise<T>, ms: number): Promise<T> => {
-        let timer: ReturnType<typeof setTimeout> | undefined
-        const timeout = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new Error(`private parity timeout after ${ms}ms`)), ms)
-          ;(timer as unknown as { unref?: () => void })?.unref?.()
-        })
-        return Promise.race([p, timeout]).finally(() => {
-          if (timer) clearTimeout(timer)
-        }) as Promise<T>
-      }
-      const tryCancel =
-        (
-          this.connectionService as unknown as { tryCancelPrivatePending?: (id: number, msg?: string) => boolean }
-        )?.tryCancelPrivatePending?.bind(this.connectionService) ?? null
-      const invalidate =
-        (
-          this.connectionService as unknown as { invalidatePrivatePeerOnObserverTimeout?: (r: string) => void }
-        )?.invalidatePrivatePeerOnObserverTimeout?.bind(this.connectionService) ?? null
-      const handleFactory =
-        (
-          this.connectionService as unknown as {
-            privateSessionUpdateWithHandle?: (r: typeof privateReq) => {
-              id: number
-              promise: Promise<unknown>
-              cancel?: (msg?: string) => boolean
-            }
-          }
-        )?.privateSessionUpdateWithHandle?.bind(this.connectionService) ?? null
-      const peekNextId =
-        (
-          this.connectionService as unknown as { peekPrivatePeerNextId?: () => number | null }
-        )?.peekPrivatePeerNextId?.bind(this.connectionService) ?? null
-      let handle: { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean } | null = null
-      let exactId: number | null = null
-      let privPromise: Promise<unknown>
-      if (handleFactory) {
-        try {
-          const h = handleFactory(privateReq as unknown as never) as {
-            id: number
-            promise: Promise<unknown>
-            cancel?: (msg?: string) => boolean
-          }
-          handle = h
-          exactId = h.id
-          privPromise = h.promise
-        } catch (e) {
-          privPromise = Promise.reject(e)
-        }
-      } else {
-        exactId = peekNextId ? peekNextId() : null
-        privPromise = (svc.privateSessionUpdate as (r: typeof privateReq) => Promise<unknown>)(privateReq)
-      }
-      try {
-        priv = await withTimeout(privPromise, 3000).catch((e: unknown) => {
-          const msg = String(e)
-          const isTimeout = msg.includes("private parity timeout")
-          if (isTimeout) {
-            if (handle?.cancel) {
-              try {
-                handle.cancel(`private parity timeout opId=${privateReq.opId}`)
-              } catch (err) {
-                console.warn("[Kilo PrivateParity] session/update handle.cancel failed:", String(err).slice(0, 200), {
-                  opId: privateReq.opId,
-                })
-              }
-            } else if (exactId !== null && tryCancel) {
-              let cleaned = false
-              try {
-                cleaned = tryCancel(exactId, `private parity timeout opId=${privateReq.opId}`)
-              } catch (err) {
-                console.warn("[Kilo PrivateParity] session/update tryCancel failed:", String(err).slice(0, 200), {
-                  opId: privateReq.opId,
-                })
-              }
-              if (!cleaned && invalidate) {
-                try {
-                  invalidate(`session/update observer timeout opId=${privateReq.opId}`)
-                } catch (err) {
-                  console.warn("[Kilo PrivateParity] session/update invalidate failed:", String(err).slice(0, 200), {
-                    opId: privateReq.opId,
-                  })
-                }
-              }
-            } else if (invalidate) {
-              try {
-                invalidate(`session/update observer timeout opId=${privateReq.opId}`)
-              } catch (err) {
-                console.warn("[Kilo PrivateParity] session/update invalidate failed:", String(err).slice(0, 200), {
-                  opId: privateReq.opId,
-                })
-              }
-            }
-            console.warn("[Kilo PrivateParity] session/update private parity timeout after 3000ms:", {
-              opId: privateReq.opId,
-              requestId: privateReq.requestId,
-            })
-          }
-          return {
-            v: 1,
-            requestId: privateReq.requestId,
-            opId: privateReq.opId,
-            op: "session/update",
-            idempotencyKey: privateReq.idempotencyKey,
-            status: "ambiguous",
-            outcome: { type: "ambiguous", time: Date.now() },
-            accepted: false,
-            transportUnknown: true,
-            _error: String(e),
-          }
-        })
-      } catch (e) {
-        const msg = String(e)
-        const isTimeout = msg.includes("private parity timeout")
-        if (isTimeout) {
-          if (handle?.cancel) {
-            try {
-              handle.cancel(`private parity timeout opId=${privateReq.opId}`)
-            } catch (err) {
-              console.warn("[Kilo PrivateParity] session/update handle.cancel failed:", String(err).slice(0, 200), {
-                opId: privateReq.opId,
-              })
-            }
-          } else if (exactId !== null && tryCancel) {
-            try {
-              const cleaned = tryCancel(exactId, `private parity timeout opId=${privateReq.opId}`)
-              if (!cleaned && invalidate) invalidate(`session/update observer timeout opId=${privateReq.opId}`)
-            } catch (err) {
-              console.warn("[Kilo PrivateParity] session/update timeout cancel failed:", String(err).slice(0, 200), {
-                opId: privateReq.opId,
-              })
-            }
-          } else if (invalidate) {
-            try {
-              invalidate(`session/update observer timeout opId=${privateReq.opId}`)
-            } catch (err) {
-              console.warn(
-                "[Kilo PrivateParity] session/update timeout invalidate failed:",
-                String(err).slice(0, 200),
-                { opId: privateReq.opId },
-              )
-            }
-          }
-        }
-        priv = {
-          v: 1,
-          requestId: privateReq.requestId,
-          opId: privateReq.opId,
-          op: "session/update",
-          idempotencyKey: privateReq.idempotencyKey,
-          status: "ambiguous",
-          outcome: { type: "ambiguous", time: Date.now() },
-          accepted: false,
-          transportUnknown: true,
-          _error: String(e),
-        }
-      }
-    } catch (e) {
-      console.warn("[Kilo PrivateParity] session/update parity observation failed", { opId, error: String(e) })
-      return
-    }
-    try {
-      const { compareUpdateParity } = await import("./services/cli-backend/serve-private-peer")
-      const res = compareUpdateParity(
-        priv as unknown as import("./services/cli-backend/serve-private-peer").ServePrivateSessionUpdateResult,
-        sdkRes as unknown as { data?: unknown; error?: unknown; response?: unknown },
-      )
-      if (res.divergence) {
-        const p = priv as Record<string, unknown>
-        console.warn("[Kilo PrivateParity] divergence", {
-          opId,
-          sessionID,
-          divergence: res.divergence,
-          details: res.details,
-          privStatus: (p.status as string) ?? "unknown",
-          transportUnknown: !!(p.transportUnknown as boolean),
-        })
-      } else {
-        console.log("[Kilo PrivateParity] parity match", { opId, status: sdkRes.error ? "failed" : "succeeded" })
-      }
-    } catch (e) {
-      console.warn("[Kilo PrivateParity] session/update parity observation failed", { opId, error: String(e) })
     }
   }
 

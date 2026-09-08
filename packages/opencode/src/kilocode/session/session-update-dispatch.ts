@@ -133,6 +133,23 @@ export function validateRequest(raw: unknown): SessionUpdateRequest {
   return o as unknown as SessionUpdateRequest
 }
 
+/**
+ * Private-carrier request validation: shared `validateRequest` plus the
+ * fail-closed private constraint that `context.parentSessionId` is explicitly
+ * present and null (omitted or non-null is rejected without mutation).
+ * Single source for `dispatchPrivate` and the fd-carrier private-first gate
+ * before authoritative `dispatch`.
+ */
+export function validatePrivateRequest(raw: unknown): SessionUpdateRequest {
+  const req = validateRequest(raw)
+  const rawCtx = (raw as Record<string, unknown>)?.context as Record<string, unknown> | undefined
+  if (!rawCtx || !("parentSessionId" in rawCtx) || rawCtx.parentSessionId !== null) {
+    throw new Error("context.parentSessionId must be null")
+  }
+  if (req.context.parentSessionId !== null) throw new Error("context.parentSessionId must be null")
+  return req
+}
+
 function buildFailed(
   req: SessionUpdateRequest,
   code: string,
@@ -664,13 +681,7 @@ export const layer = Layer.effect(
     const dispatchPrivate = Effect.fn("SessionUpdateDispatch.dispatchPrivate")(function* (raw: unknown) {
       let req: SessionUpdateRequest
       try {
-        req = validateRequest(raw)
-        // Private requires explicit parentSessionId === null (must be present and null)
-        const rawCtx = (raw as Record<string, unknown>)?.context as Record<string, unknown> | undefined
-        if (!rawCtx || !("parentSessionId" in rawCtx) || rawCtx.parentSessionId !== null) {
-          throw new Error("context.parentSessionId must be null")
-        }
-        if (req.context.parentSessionId !== null) throw new Error("context.parentSessionId must be null")
+        req = validatePrivateRequest(raw)
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         const fallback = raw as Record<string, unknown>

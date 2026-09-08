@@ -3149,13 +3149,17 @@ export class KiloConnectionService {
   }
 
   /**
-   * Fixture-only durable title operation: SDK PATCH is the sole mutation
-   * authority via the same production `renameSessionWithResult` path that
-   * KiloProvider uses (shared `buildSessionUpdateIdentity` token), then a
-   * private same-key replay observation with `compareUpdateParity` (redacted).
-   * Order is always SDK then private; private is read-only replay and never
-   * replaces the SDK result. Hashes redact identities/titles; no raw secret
-   * data leaves the fixture. Stores the identity for later same-key replay.
+   * Legacy fixture-only SDK-first diagnostic path (non-production, diagnostic only):
+   * SDK PATCH is the sole mutation authority via the same production
+   * `renameSessionWithResult` path that KiloProvider historically used (shared
+   * `buildSessionUpdateIdentity` token), then a private same-key replay
+   * observation with `compareUpdateParity` (redacted). Order is always SDK
+   * then private; private is read-only replay and never replaces the SDK
+   * result. This legacy fixture-only SDK-first diagnostic path is not
+   * production private-first ownership (`renameSessionPrivateFirst` owns
+   * production); it exists only for diagnostics. Hashes redact
+   * identities/titles; no raw secret data leaves the fixture. Stores the
+   * identity for later same-key replay.
    */
   // eslint-disable-next-line complexity
   public async fixtureSessionUpdate(input: { sessionId: string; title: string; directory?: string }): Promise<{

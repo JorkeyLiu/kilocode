@@ -47,9 +47,9 @@ function makeCtx(storage: string, extensionPath: string): unknown {
   }
 }
 
-describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durable production", () => {
+describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate carrier persistence (proves ServerManager/fd-carrier/AppLayer carrier persistence; full KiloConnectionService/KiloProvider remains outside this unit)", () => {
   test.skipIf(process.platform !== "darwin")(
-    "covers SDK durable title mutation + private replay same revision/no duplicate, restart epoch/capability, private-unavailable/fail-closed authoritative",
+    "proves ServerManager/fd-carrier/AppLayer carrier persistence: authoritative title commit + idempotent replay same revision/no duplicate, restart epoch/capability, private-unavailable/fail-closed; full KiloConnectionService/KiloProvider remains outside this unit",
     async () => {
       const extensionPath = path.resolve(import.meta.dir, "../../..")
       const binPath = path.join(extensionPath, "bin", process.platform === "win32" ? "kilo.exe" : "kilo")
@@ -149,32 +149,66 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
         expect(session.id.startsWith("ses")).toBeTrue()
         expect(session.directory).toBeDefined()
 
-        // 4. SDK durable title mutation (LOCK-001 authoritative) -> persisted snapshot
+        // 4. Carrier-level authoritative title commit via ServerManager/fd-carrier/AppLayer
+        // (no prior SDK dispatch for this opId). This proves ServerManager/fd-carrier/AppLayer
+        // carrier persistence; full KiloConnectionService/KiloProvider remains outside this unit.
+        // This invokes the production private request handle/validator
+        // (ServePrivatePeer.privateSessionUpdateWithHandle → fd-carrier
+        // validatePrivateRequest → SessionUpdateDispatch.dispatch) and proves
+        // the authoritative carrier response. Full KiloConnectionService/KiloProvider
+        // remains outside this unit: it needs Extension Host workspace/directory + a live
+        // KiloConnectionService bound to this child, which would require a
+        // second backend or E2E harness (out of scope, no VS Code E2E).
         const newTitle = `b2-title-${crypto.randomUUID().slice(0, 8)}`
         const token = crypto.randomUUID().replace(/-/g, "").slice(0, 8)
         const opId = canonicalSessionUpdateOpId(session.id, token)
         const idempotencyKey = `sessionUpdate:${session.id}:${token}`
-        const requestId1 = crypto.randomUUID()
-        const sdkRes1 = await client.session.update({
-          sessionID: session.id,
-          directory: workspace,
-          title: newTitle,
-          idempotencyKey,
-          requestId: requestId1,
+        const privateReq0 = {
+          v: 1 as const,
+          requestId: crypto.randomUUID(),
           opId,
-          context: { directory: workspace, sessionId: session.id, parentSessionId: null },
-        })
-        if (sdkRes1.error) {
-          console.error("sdkRes1 error:", JSON.stringify(sdkRes1.error, null, 2))
-          console.error("session", JSON.stringify(session, null, 2))
+          op: "session/update" as const,
+          idempotencyKey,
+          context: { directory: workspace, sessionId: session.id, parentSessionId: null as string | null },
+          payload: { title: newTitle },
         }
-        expect(sdkRes1.error).toBeUndefined()
-        const sdkData1 = sdkRes1.data as unknown as { id: string; title: string; time?: { updated?: number; created?: number } }
-        expect(sdkData1.title).toBe(newTitle)
-        expect(sdkData1.id).toBe(session.id)
-        const sdkUpdated1 = (sdkData1.time as unknown as Record<string, unknown> | undefined)?.updated as number | undefined
+        const priv0 = await peer.privateSessionUpdate(privateReq0)
+        if (priv0.status !== "succeeded") {
+          console.error("private priv0 failed:", JSON.stringify(priv0, null, 2))
+        }
+        expect(priv0.status).toBe("succeeded")
+        if (priv0.status === "succeeded") {
+          expect(priv0.accepted).toBeTrue()
+          const pdata0 = priv0.data as Record<string, unknown>
+          const ptitle0 =
+            (pdata0.title as string | undefined) ??
+            ((pdata0.session as Record<string, unknown> | undefined)?.title as string | undefined)
+          expect(ptitle0).toBe(newTitle)
+          const psess0 = pdata0.session as Record<string, unknown> | undefined
+          if (psess0) expect(psess0.id).toBe(session.id)
+          expect((priv0 as Record<string, unknown>).transportUnknown).toBeUndefined()
+        }
+        // The real carrier response shape must pass the production result
+        // validator — the same validator `renameSessionPrivateFirst` uses to
+        // accept private success without SDK mutation.
+        const { validateSessionUpdateResult } = await import("./serve-private-peer")
+        expect(() =>
+          validateSessionUpdateResult(priv0 as unknown as never, privateReq0 as unknown as never),
+        ).not.toThrow()
+        const fetchedAfterPrivate = await client.session.get({ sessionID: session.id, directory: workspace })
+        expect(fetchedAfterPrivate.error).toBeUndefined()
+        const fetchedPrivateData = fetchedAfterPrivate.data as unknown as {
+          id: string
+          title: string
+          time?: { updated?: number; created?: number }
+        }
+        expect(fetchedPrivateData.title).toBe(newTitle)
+        expect(fetchedPrivateData.id).toBe(session.id)
+        const sdkUpdated1 = (fetchedPrivateData.time as unknown as Record<string, unknown> | undefined)?.updated as
+          | number
+          | undefined
 
-        // 5. Private same-key replay with DIFFERENT requestId (LOCK-002 replay-only) -> same snapshot, same revision, no second mutation
+        // 5. Private same-key replay with DIFFERENT requestId -> same snapshot, same revision, no second mutation
         const privateReq1 = {
           v: 1 as const,
           requestId: crypto.randomUUID(),
@@ -184,7 +218,7 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
           context: { directory: workspace, sessionId: session.id, parentSessionId: null as string | null },
           payload: { title: newTitle },
         }
-        expect(privateReq1.requestId).not.toBe(requestId1)
+        expect(privateReq1.requestId).not.toBe(privateReq0.requestId)
         const priv1 = await peer.privateSessionUpdate(privateReq1)
         if (priv1.status !== "succeeded") {
           console.error("private priv1 failed:", JSON.stringify(priv1, null, 2))
@@ -210,8 +244,15 @@ describe("ServerManager → real kilo serve → fd3/fd4 → SessionUpdate durabl
             expect(Number.isInteger(priv1.revision.config)).toBeTrue()
           }
         }
-        const parity1 = compareUpdateParity(priv1, sdkRes1 as unknown as { data?: unknown; error?: unknown })
+        const parity1 = compareUpdateParity(priv1, { data: fetchedPrivateData, error: undefined } as unknown as {
+          data?: unknown
+          error?: unknown
+        })
         expect(parity1.divergence).toBeNull()
+        if (priv0.status === "succeeded" && priv1.status === "succeeded" && priv0.revision && priv1.revision) {
+          expect(priv1.revision.session).toBe(priv0.revision.session)
+          expect(priv1.revision.config).toBe(priv0.revision.config)
+        }
 
         // 6. Private durable replay with another different requestId but same idempotencyKey -> must replay same result, same revision, no duplicate
         const privateReq2 = {

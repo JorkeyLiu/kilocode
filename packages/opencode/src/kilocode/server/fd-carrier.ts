@@ -3,7 +3,7 @@ import { Effect, Option, Schema } from "effect"
 import { ErrorCode } from "@/private-worker/json-rpc"
 import { AppRuntime } from "@/effect/app-runtime"
 import { CancelQueuedDispatchService } from "@/kilocode/session/cancel-queued-dispatch"
-import { SessionUpdateDispatchService } from "@/kilocode/session/session-update-dispatch"
+import { SessionUpdateDispatchService, validatePrivateRequest } from "@/kilocode/session/session-update-dispatch"
 import { SessionForkDispatchService } from "@/kilocode/session/session-fork-dispatch"
 import { SessionCreateDispatchService } from "@/kilocode/session/session-create-dispatch"
 import { SessionStatus } from "@/session/status"
@@ -1311,10 +1311,26 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
         const result = await AppRuntime.runPromise(
           Effect.gen(function* () {
             const svc = yield* SessionUpdateDispatchService
-            // B2 private is structurally replay-only: missing dispatchPrivate fails closed without mutation
-            const fn = (svc as unknown as { dispatchPrivate?: (p: unknown) => Effect.Effect<unknown> }).dispatchPrivate
+            // Private-first authoritative: private-carrier fail-closed request
+            // validation (explicit parentSessionId null + all private constraints)
+            // runs before authoritative dispatch. Strict failure returns via the
+            // replay-only fail-closed path without mutation.
+            try {
+              validatePrivateRequest(params)
+            } catch {
+              const fail = (svc as unknown as { dispatchPrivate?: (p: unknown) => Effect.Effect<unknown> })
+                .dispatchPrivate
+              if (!fail) {
+                const err = new Error("session/update private authoritative unavailable") as Error & { code: number }
+                err.code = ErrorCode.MethodNotFound
+                throw err
+              }
+              return yield* (fail as (p: unknown) => Effect.Effect<unknown>)(params)
+            }
+            // Private-first authoritative: missing dispatch fails closed without mutation
+            const fn = (svc as unknown as { dispatch?: (p: unknown) => Effect.Effect<unknown> }).dispatch
             if (!fn) {
-              const err = new Error("session/update private replay unavailable") as Error & { code: number }
+              const err = new Error("session/update private authoritative unavailable") as Error & { code: number }
               err.code = ErrorCode.MethodNotFound
               throw err
             }
