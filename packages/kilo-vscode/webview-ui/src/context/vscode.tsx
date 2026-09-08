@@ -67,7 +67,10 @@ export const VSCodeProvider: ParentComponent = (props) => {
 
   const value: VSCodeContextValue = {
     postMessage: (message: WebviewMessage) => {
-      window.dispatchEvent(new CustomEvent("kilo-webview-message", { detail: message }))
+      // Construct the event from the target window realm so happy-dom (and any
+      // multi-realm host) accepts the dispatch instead of rejecting a
+      // foreign-realm CustomEvent.
+      window.dispatchEvent(new window.CustomEvent("kilo-webview-message", { detail: message }))
       api.postMessage(message)
     },
     onMessage: (handler: (message: ExtensionMessage) => void) => {
