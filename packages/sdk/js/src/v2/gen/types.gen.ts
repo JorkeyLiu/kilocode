@@ -68,9 +68,6 @@ export type Event =
   | EventSessionNextCompactionStarted
   | EventSessionNextCompactionDelta
   | EventSessionNextCompactionEnded
-  | EventQuestionAsked
-  | EventQuestionReplied
-  | EventQuestionRejected
   | EventTuiPromptAppend
   | EventTuiCommandExecute
   | EventTuiToastShow1
@@ -78,6 +75,9 @@ export type Event =
   | EventMcpToolsChanged
   | EventMcpBrowserOpenFailed
   | EventMessagePartDelta
+  | EventQuestionAsked
+  | EventQuestionReplied
+  | EventQuestionRejected
   | EventSessionStatus
   | EventSessionIdle
   | EventSessionDiff
@@ -798,46 +798,6 @@ export type Prompt = {
   references?: Array<PromptReferenceAttachment>
 }
 
-export type QuestionOption = {
-  /**
-   * Display text (1-5 words, concise)
-   */
-  label: string
-  /**
-   * Explanation of choice
-   */
-  description: string
-  labelKey?: string
-  descriptionKey?: string
-  mode?: string
-}
-
-export type QuestionInfo = {
-  /**
-   * Complete question
-   */
-  question: string
-  /**
-   * Very short label (max 30 chars)
-   */
-  header: string
-  /**
-   * Available choices
-   */
-  options: Array<QuestionOption>
-  multiple?: boolean
-  questionKey?: string
-  headerKey?: string
-  custom?: boolean
-}
-
-export type QuestionTool = {
-  messageID: string
-  callID: string
-}
-
-export type QuestionAnswer = Array<string>
-
 export type EventTuiPromptAppend = {
   id: string
   type: "tui.prompt.append"
@@ -891,6 +851,46 @@ export type EventTuiSessionSelect = {
     sessionID: string
   }
 }
+
+export type QuestionOption = {
+  /**
+   * Display text (1-5 words, concise)
+   */
+  label: string
+  /**
+   * Explanation of choice
+   */
+  description: string
+  labelKey?: string
+  descriptionKey?: string
+  mode?: string
+}
+
+export type QuestionInfo = {
+  /**
+   * Complete question
+   */
+  question: string
+  /**
+   * Very short label (max 30 chars)
+   */
+  header: string
+  /**
+   * Available choices
+   */
+  options: Array<QuestionOption>
+  multiple?: boolean
+  questionKey?: string
+  headerKey?: string
+  custom?: boolean
+}
+
+export type QuestionTool = {
+  messageID: string
+  callID: string
+}
+
+export type QuestionAnswer = Array<string>
 
 export type SessionStatus =
   | {
@@ -1023,9 +1023,6 @@ export type GlobalEvent = {
     | EventSessionNextCompactionStarted
     | EventSessionNextCompactionDelta
     | EventSessionNextCompactionEnded
-    | EventQuestionAsked
-    | EventQuestionReplied
-    | EventQuestionRejected
     | EventTuiPromptAppend
     | EventTuiCommandExecute
     | EventTuiToastShow
@@ -1033,6 +1030,9 @@ export type GlobalEvent = {
     | EventMcpToolsChanged
     | EventMcpBrowserOpenFailed
     | EventMessagePartDelta
+    | EventQuestionAsked
+    | EventQuestionReplied
+    | EventQuestionRejected
     | EventSessionStatus
     | EventSessionIdle
     | EventSessionDiff
@@ -4076,6 +4076,35 @@ export type EventSessionNextCompactionEnded = {
   }
 }
 
+export type EventMcpToolsChanged = {
+  id: string
+  type: "mcp.tools.changed"
+  properties: {
+    server: string
+  }
+}
+
+export type EventMcpBrowserOpenFailed = {
+  id: string
+  type: "mcp.browser.open.failed"
+  properties: {
+    mcpName: string
+    url: string
+  }
+}
+
+export type EventMessagePartDelta = {
+  id: string
+  type: "message.part.delta"
+  properties: {
+    sessionID: string
+    messageID: string
+    partID: string
+    field: string
+    delta: string
+  }
+}
+
 export type EventQuestionAsked = {
   id: string
   type: "question.asked"
@@ -4107,35 +4136,6 @@ export type EventQuestionRejected = {
   properties: {
     sessionID: string
     requestID: string
-  }
-}
-
-export type EventMcpToolsChanged = {
-  id: string
-  type: "mcp.tools.changed"
-  properties: {
-    server: string
-  }
-}
-
-export type EventMcpBrowserOpenFailed = {
-  id: string
-  type: "mcp.browser.open.failed"
-  properties: {
-    mcpName: string
-    url: string
-  }
-}
-
-export type EventMessagePartDelta = {
-  id: string
-  type: "message.part.delta"
-  properties: {
-    sessionID: string
-    messageID: string
-    partID: string
-    field: string
-    delta: string
   }
 }
 
@@ -8222,7 +8222,19 @@ export type SessionStatusResponses = {
 export type SessionStatusResponse = SessionStatusResponses[keyof SessionStatusResponses]
 
 export type SessionDeleteData = {
-  body?: never
+  body?: {
+    directory?: string
+    opId?: string
+    idempotencyKey?: string
+    requestId?: string
+    context?: {
+      directory: string
+      sessionId: string
+      parentSessionId?: string | null
+      configVersion?: number
+      sessionRevision?: number
+    }
+  }
   path: {
     sessionID: string
   }
@@ -8242,6 +8254,14 @@ export type SessionDeleteErrors = {
    * NotFoundError
    */
   404: NotFoundError
+  /**
+   * Conflict
+   */
+  409: EffectHttpApiErrorConflict
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type SessionDeleteError = SessionDeleteErrors[keyof SessionDeleteErrors]

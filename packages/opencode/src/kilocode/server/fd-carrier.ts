@@ -6,6 +6,7 @@ import { CancelQueuedDispatchService } from "@/kilocode/session/cancel-queued-di
 import { SessionUpdateDispatchService, validatePrivateRequest } from "@/kilocode/session/session-update-dispatch"
 import { SessionForkDispatchService } from "@/kilocode/session/session-fork-dispatch"
 import { SessionCreateDispatchService } from "@/kilocode/session/session-create-dispatch"
+import { SessionDeleteDispatchService } from "@/kilocode/session/session-delete-dispatch"
 import { SessionStatus } from "@/session/status"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
@@ -1367,6 +1368,21 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
             return { ...(result as object), data: { session: data } }
           }
         }
+        return result
+      }
+      if (method === "session/delete") {
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const svc = yield* SessionDeleteDispatchService
+            const fn = (svc as unknown as { dispatch?: (p: unknown) => Effect.Effect<unknown> }).dispatch
+            if (!fn) {
+              const err = new Error("session/delete private authoritative unavailable") as Error & { code: number }
+              err.code = ErrorCode.MethodNotFound
+              throw err
+            }
+            return yield* (fn as (p: unknown) => Effect.Effect<unknown>)(params)
+          }),
+        )
         return result
       }
       if (method === "session/status") {

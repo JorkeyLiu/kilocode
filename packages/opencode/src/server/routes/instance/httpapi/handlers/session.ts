@@ -7,6 +7,7 @@ import { CancelQueuedDispatchService, type CancelQueuedResult } from "@/kilocode
 import { SessionUpdateDispatchService, type SessionUpdateResult } from "@/kilocode/session/session-update-dispatch" // kilocode_change - P4.4-G3-B2 durable title
 import { SessionForkDispatchService, type SessionForkResult } from "@/kilocode/session/session-fork-dispatch" // kilocode_change - P4.4-G3-B3 fork
 import { SessionCreateDispatchService, type SessionCreateResult } from "@/kilocode/session/session-create-dispatch" // kilocode_change - P4.4-G3-B4 create
+import { SessionDeleteDispatchService } from "@/kilocode/session/session-delete-dispatch" // kilocode_change - P4.4-G3-B5 delete
 import { canonicalDirectory } from "@/kilocode/session/canonical-directory" // kilocode_change - P4.4-G3 double directory contract
 import { forkTargetDirectory } from "@/kilocode/server/routes/fork-routing" // kilocode_change - P4.4-G3 double directory contract
 import { WorkspaceRouteContext } from "../middleware/workspace-routing" // kilocode_change - P4.4-G3-B4 effective directory
@@ -33,6 +34,7 @@ import { HttpApiBuilder, HttpApiError, HttpApiSchema } from "effect/unstable/htt
 import { InstanceHttpApi } from "../api"
 import {
   CommandPayload,
+  DeletePayload,
   DiffQuery,
   ForkPayload,
   InitPayload,
@@ -287,9 +289,95 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* create({ payload: payload as unknown as Session.CreateInput })
     })
 
-    const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID } }) {
+    const sessionDeleteDispatch = yield* SessionDeleteDispatchService
+    const remove = Effect.fn("SessionHttpApi.remove")(function* (ctx: { params: { sessionID: SessionID }; payload?: typeof DeletePayload.Type }) {
+      const p = ctx.payload as unknown as Record<string, unknown> | undefined
+      const isDurable = p && (p.opId !== undefined || p.idempotencyKey !== undefined || p.requestId !== undefined || p.context !== undefined || p.directory !== undefined)
+      if (isDurable) {
+        if (p.opId === undefined || p.idempotencyKey === undefined || p.requestId === undefined || p.context === undefined) return yield* new HttpApiError.BadRequest({})
+        const c = p.context as Record<string, unknown>
+        if (typeof c.directory !== "string" || c.directory.length === 0) return yield* new HttpApiError.BadRequest({})
+        if (typeof c.sessionId !== "string" || c.sessionId !== ctx.params.sessionID) return yield* new HttpApiError.BadRequest({})
+        {
+          const routeOpt = yield* Effect.serviceOption(WorkspaceRouteContext)
+          const reqOpt = yield* Effect.serviceOption(HttpServerRequest.HttpServerRequest)
+          let effectiveDir: string | undefined
+          if (Option.isSome(routeOpt)) effectiveDir = routeOpt.value.directory
+          else if (Option.isSome(reqOpt)) {
+            const httpReq = reqOpt.value
+            const url = new URL(httpReq.url, "http://localhost")
+            const rawRoute = url.searchParams.get("directory") || (httpReq.headers as Record<string, string | undefined>)["x-kilo-directory"]
+            if (rawRoute) {
+              const tryDecode = (v: string) => {
+                try { return v.includes("%") ? decodeURIComponent(v) : v } catch { return v }
+              }
+              effectiveDir = tryDecode(rawRoute)
+            } else effectiveDir = process.cwd()
+          } else effectiveDir = process.cwd()
+          if (effectiveDir) {
+            try {
+              const canonRoute = canonicalDirectory(effectiveDir)
+              const canonBody = canonicalDirectory(c.directory as string)
+              if (canonRoute !== canonBody) return yield* new HttpApiError.BadRequest({})
+            } catch { return yield* new HttpApiError.BadRequest({}) }
+          }
+        }
+        const req = {
+          v: 1 as const,
+          requestId: p.requestId as string,
+          opId: p.opId as string,
+          op: "session/delete" as const,
+          idempotencyKey: p.idempotencyKey as string,
+          context: {
+            directory: c.directory as string,
+            sessionId: c.sessionId as string,
+            parentSessionId: (c.parentSessionId ?? null) as string | null,
+            configVersion: c.configVersion as number | undefined,
+            sessionRevision: c.sessionRevision as number | undefined,
+          },
+          payload: {},
+        }
+        const result = yield* (sessionDeleteDispatch.dispatch(req).pipe(
+          Effect.catchDefect(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+          Effect.catch(() => Effect.fail(new HttpApiError.InternalServerError({}))),
+        ) as Effect.Effect<import("@/kilocode/session/session-delete-dispatch").SessionDeleteResult, HttpApiError.InternalServerError>)
+        if (result.status === "succeeded") return true
+        if (result.status === "failed") {
+          if (result.failure.code === "session.not_found") return yield* Effect.fail(new ApiNotFoundError({ name: "NotFoundError", data: { message: result.failure.message } }))
+          if (result.failure.code === "validation.failed") return yield* new HttpApiError.BadRequest({})
+          if (result.failure.code === "scope_mismatch") return yield* new HttpApiError.BadRequest({})
+          if (result.failure.code === "stale" || result.failure.code === "conflict") return yield* new HttpApiError.Conflict({})
+          if (result.failure.code === "InstanceUnavailableDuringConfigRebuild") return yield* new HttpApiError.Conflict({})
+          if (result.failure.code === "internal") return yield* new HttpApiError.InternalServerError({})
+          return yield* new HttpApiError.InternalServerError({})
+        }
+        return yield* new HttpApiError.InternalServerError({})
+      }
       yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID))
       return true
+    })
+
+    const removeRaw = Effect.fn("SessionHttpApi.removeRaw")(function* (ctx: { params: { sessionID: SessionID }; request: HttpServerRequest.HttpServerRequest }) {
+      const body = yield* Effect.orDie(ctx.request.text)
+      if (body.trim().length === 0) return yield* SessionError.mapStorageNotFound(session.remove(ctx.params.sessionID)).pipe(Effect.map(() => true as const))
+      const json = yield* tryParseJson(body)
+      if (json !== null && typeof json === "object" && !Array.isArray(json)) {
+        const j = json as Record<string, unknown>
+        const hasDurable = "opId" in j || "idempotencyKey" in j || "requestId" in j || "context" in j || "directory" in j
+        if (hasDurable) {
+          const allowedRoot = new Set(["directory", "opId", "idempotencyKey", "requestId", "context"])
+          for (const k of Object.keys(j)) if (!allowedRoot.has(k)) return yield* new HttpApiError.BadRequest({})
+          const c = j.context as unknown
+          if (c !== null && typeof c === "object" && !Array.isArray(c)) {
+            const allowedCtx = new Set(["directory", "sessionId", "parentSessionId", "configVersion", "sessionRevision"])
+            for (const k of Object.keys(c as Record<string, unknown>)) if (!allowedCtx.has(k)) return yield* new HttpApiError.BadRequest({})
+          }
+          const decoded = { ...j } as unknown as typeof DeletePayload.Type
+          return yield* remove({ params: ctx.params, payload: decoded })
+        }
+      }
+      const decoded = yield* Schema.decodeUnknownEffect(DeletePayload)(json).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
+      return yield* remove({ params: ctx.params, payload: decoded })
     })
 
     const sessionUpdateDispatch = yield* SessionUpdateDispatchService // kilocode_change - P4.4-G3-B2
@@ -745,7 +833,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("messages", messages)
       .handle("message", message)
       .handleRaw("create", createRaw)
-      .handle("remove", remove)
+      .handleRaw("remove", removeRaw)
       .handleRaw("update", updateRaw)
       .handleRaw("fork", forkRaw) // kilocode_change - carry upstream bodyless full-session fork support
       .handle("abort", abort)

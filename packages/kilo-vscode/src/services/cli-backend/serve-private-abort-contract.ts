@@ -315,7 +315,6 @@ export function makeAbortDispositionTerminal(
   }
 }
 
-// eslint-disable-next-line complexity
 export function validateAbortDispositionTerminal(raw: unknown): AbortDispositionTerminal {
   if (!isRecord(raw)) throw new Error("disposition terminal must be object")
   if (raw.kind !== "terminal") throw new Error("disposition terminal kind must be terminal")
@@ -448,7 +447,6 @@ export function makeAbortNotFoundFixture(
   }
 }
 
-// eslint-disable-next-line complexity
 export function validateAbortNotFoundTerminal(raw: unknown): AbortNotFoundTerminal {
   if (!isRecord(raw)) throw new Error("not_found terminal must be object")
   if (raw.kind !== "terminal-failure") throw new Error("not_found terminal kind must be terminal-failure")

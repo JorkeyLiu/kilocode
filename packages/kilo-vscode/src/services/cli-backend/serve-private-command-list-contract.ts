@@ -167,7 +167,6 @@ export interface CommandListEntry {
 const COMMAND_LIST_ENTRY_FIELDS = new Set(["name", "description", "source", "hints"])
 const COMMAND_LIST_ENTRY_SOURCES = new Set(["command", "mcp", "skill"])
 
-// eslint-disable-next-line complexity
 export function validateCommandListEntry(raw: unknown): CommandListEntry {
   if (!isRecord(raw)) throw new Error("command entry must be object")
   assertAllowedKeys(raw as Record<string, unknown>, COMMAND_LIST_ENTRY_FIELDS, "command-entry")

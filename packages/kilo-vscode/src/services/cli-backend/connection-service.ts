@@ -17,6 +17,8 @@ import {
   type ServePrivateForkResult,
   type ServePrivateCreateRequest,
   type ServePrivateCreateResult,
+  type ServePrivateDeleteRequest,
+  type ServePrivateDeleteResult,
   type PrivateStatusWireOutcome,
   type PrivateGetWireOutcome,
   type PrivateMessagesWireOutcome,
@@ -1917,6 +1919,82 @@ export class KiloConnectionService {
 
   async privateCreate(req: ServePrivateCreateRequest): Promise<ServePrivateCreateResult> {
     const handle = this.privateCreateWithHandle(req)
+    return handle.promise
+  }
+
+  privateDeleteWithHandle(req: ServePrivateDeleteRequest): {
+    id: number
+    promise: Promise<ServePrivateDeleteResult>
+    cancel: (msg?: string) => boolean
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("session/delete")) {
+      throw new Error("Private peer missing session/delete capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const handle = peerAtCall.privateDeleteWithHandle(req)
+    const promise = handle.promise.then((result) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/delete",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateDeleteResult
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/delete",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as ServePrivateDeleteResult
+      }
+      return result
+    })
+    const cancel = (msg = "private parity timeout"): boolean => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout(`stale observer timeout opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout cancel throw opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout exact cancel miss opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      return true
+    }
+    return { id: handle.id, promise, cancel }
+  }
+
+  async privateDelete(req: ServePrivateDeleteRequest): Promise<ServePrivateDeleteResult> {
+    const handle = this.privateDeleteWithHandle(req)
     return handle.promise
   }
 

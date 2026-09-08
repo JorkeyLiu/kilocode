@@ -247,6 +247,14 @@ export function canonicalCreateOpId(token: string): string {
   return `create:${token}`
 }
 
+function canonicalDeleteOpId(sessionId: string, token: string): string {
+  if (typeof sessionId !== "string" || sessionId.length === 0) throw new TypeError("sessionId must be non-empty string")
+  if (sessionId.includes(":")) throw new TypeError("sessionId must not contain ':'")
+  if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
+  if (token.includes(":")) throw new TypeError("token must not contain ':'")
+  return `delete:${sessionId}:${token}`
+}
+
 export function buildStatusOpId(token: string): string {
   if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
   if (token.includes(":")) throw new TypeError("token must not contain ':'")
@@ -892,6 +900,97 @@ function makeCreateFailedInternal(
   }
 }
 
+export interface ServePrivateDeleteRequest {
+  v: 1
+  requestId: string
+  opId: string
+  op: "session/delete"
+  idempotencyKey: string
+  context: {
+    directory: string
+    sessionId: string
+    parentSessionId?: string | null
+    configVersion?: number
+    sessionRevision?: number
+  }
+  payload: Record<string, never>
+}
+
+export type ServePrivateDeleteResult =
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "session/delete"
+      idempotencyKey: string
+      status: "succeeded"
+      outcome: { type: "succeeded"; time: number }
+      accepted: true
+      data: Record<string, never>
+      revision?: { session: number; config: number }
+    }
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "session/delete"
+      idempotencyKey: string
+      status: "failed"
+      outcome: {
+        type: "failed"
+        time: number
+        failure: { code: string; message: string; retryable: boolean; detail?: string }
+      }
+      accepted: boolean
+      failure: { code: string; message: string; retryable: boolean; detail?: string }
+      revision?: { session: number; config: number }
+    }
+  | {
+      v: 1
+      requestId: string
+      opId: string
+      op: "session/delete"
+      idempotencyKey: string
+      status: "ambiguous"
+      outcome: { type: "ambiguous"; time: number }
+      accepted: false
+      revision?: { session: number; config: number }
+      transportUnknown?: boolean
+    }
+
+function makeDeleteAmbiguous(req: ServePrivateDeleteRequest, transportUnknown = true): ServePrivateDeleteResult {
+  const out: ServePrivateDeleteResult = {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: "session/delete",
+    idempotencyKey: req.idempotencyKey,
+    status: "ambiguous",
+    outcome: { type: "ambiguous", time: Date.now() },
+    accepted: false,
+  }
+  if (transportUnknown) (out as { transportUnknown?: boolean }).transportUnknown = true
+  return out
+}
+
+function makeDeleteFailedInternal(
+  req: ServePrivateDeleteRequest,
+  message: string,
+  code = "internal",
+): ServePrivateDeleteResult {
+  return {
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    op: "session/delete",
+    idempotencyKey: req.idempotencyKey,
+    status: "failed",
+    outcome: { type: "failed", time: Date.now(), failure: { code, message, retryable: false } },
+    accepted: false,
+    failure: { code, message, retryable: false },
+  }
+}
+
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v)
 }
@@ -1473,6 +1572,134 @@ export function validateCreateResult(raw: unknown, req: ServePrivateCreateReques
   return raw as unknown as ServePrivateCreateResult
 }
 
+function parseDeleteOpId(opId: string): { kind: string; parts: string[] } {
+  if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
+  const segs = opId.split(":")
+  if (segs.length < 2) throw new TypeError(`opId must contain ':'`)
+  const kind = segs[0]!
+  if (kind !== "delete") throw new TypeError(`opId kind must be delete: ${opId}`)
+  const rest = segs.slice(1)
+  for (const p of rest) if (p.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
+  if (rest.length !== 2) throw new TypeError(`delete opId must have 2 segments: ${opId}`)
+  return { kind, parts: rest }
+}
+
+// eslint-disable-next-line complexity
+export function validateDeleteRequest(raw: unknown): ServePrivateDeleteRequest {
+  if (!isRecord(raw)) throw new Error("request must be object")
+  if (raw.v !== 1) throw new Error("v must be 1")
+  if (!isNonEmptyString(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmptyString(raw.opId)) throw new Error("opId must be non-empty string")
+  if (raw.op !== "session/delete") throw new Error("op must be session/delete")
+  if (!isNonEmptyString(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.idempotencyKey !== raw.opId) throw new Error("idempotencyKey must equal opId for delete")
+  const ctx = raw.context
+  if (!isRecord(ctx)) throw new Error("context must be object")
+  if (
+    typeof ctx.directory !== "string" ||
+    !isAbsolute(ctx.directory as string) ||
+    (ctx.directory as string).includes("\0")
+  )
+    throw new Error("context.directory must be absolute path")
+  if (!isSessionId(ctx.sessionId)) throw new Error("context.sessionId must be SessionID")
+  if (!("parentSessionId" in ctx) || ctx.parentSessionId !== null) throw new Error("context.parentSessionId must be null")
+  if ("configVersion" in ctx && ctx.configVersion !== undefined && !isSafeInt(ctx.configVersion))
+    throw new Error("context.configVersion must be integer >=0")
+  if ("sessionRevision" in ctx && ctx.sessionRevision !== undefined && !isSafeInt(ctx.sessionRevision))
+    throw new Error("context.sessionRevision must be integer >=0")
+  const payload = raw.payload
+  if (!isRecord(payload)) throw new Error("payload must be object")
+  if (Object.keys(payload as Record<string, unknown>).length !== 0) throw new Error("payload must be empty object for delete")
+  const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
+  for (const k of Object.keys(raw as Record<string, unknown>))
+    if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
+  const allowedCtx = new Set(["directory", "sessionId", "parentSessionId", "configVersion", "sessionRevision"])
+  for (const k of Object.keys(ctx as Record<string, unknown>))
+    if (!allowedCtx.has(k)) throw new Error(`unexpected context field ${k}`)
+  const opId = raw.opId as string
+  const parsed = parseDeleteOpId(opId)
+  if (parsed.parts[0] !== ctx.sessionId) throw new Error(`opId session binding mismatch: ${opId} vs ${ctx.sessionId}`)
+  const idemParsed = parseDeleteOpId(raw.idempotencyKey as string)
+  if (idemParsed.parts[0] !== ctx.sessionId) throw new Error(`idempotencyKey session binding mismatch: ${raw.idempotencyKey} vs ${ctx.sessionId}`)
+  return raw as unknown as ServePrivateDeleteRequest
+}
+
+// eslint-disable-next-line complexity
+export function validateDeleteResult(raw: unknown, req: ServePrivateDeleteRequest): ServePrivateDeleteResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  if (raw.v !== 1) throw new Error("result v must be 1")
+  if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+  if (raw.opId !== req.opId) throw new Error("opId mismatch")
+  if (raw.op !== "session/delete") throw new Error("op mismatch")
+  if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+  const status = raw.status
+  if (status !== "succeeded" && status !== "failed" && status !== "ambiguous")
+    throw new Error("status must be succeeded/failed/ambiguous")
+  if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
+  const outcome = raw.outcome
+  if (!isRecord(outcome) || typeof outcome.type !== "string" || typeof outcome.time !== "number")
+    throw new Error("outcome invalid")
+  if (outcome.type !== status) throw new Error("outcome.type must match status")
+  if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
+  if ("revision" in raw && raw.revision !== undefined) {
+    const rev = raw.revision as unknown
+    if (
+      !isRecord(rev) ||
+      typeof rev.session !== "number" ||
+      typeof rev.config !== "number" ||
+      !isSafeInt(rev.session) ||
+      !isSafeInt(rev.config)
+    )
+      throw new Error("revision must be {session,config} integers")
+  }
+  if ("transportUnknown" in raw && raw.transportUnknown !== undefined && typeof raw.transportUnknown !== "boolean")
+    throw new Error("transportUnknown must be boolean")
+  if (status === "succeeded") {
+    if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
+    const data = (raw as Record<string, unknown>).data
+    if (!isRecord(data)) throw new Error("succeeded data must be object")
+    if (Object.keys(data as Record<string, unknown>).length !== 0) throw new Error("succeeded data must be empty object")
+    if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
+    if ((outcome as Record<string, unknown>).failure !== undefined)
+      throw new Error("succeeded outcome must not have failure")
+    if ((raw as Record<string, unknown>).transportUnknown !== undefined) throw new Error("succeeded must not have transportUnknown")
+    return raw as unknown as ServePrivateDeleteResult
+  }
+  if (status === "failed") {
+    if (raw.accepted !== false) throw new Error("failed accepted must be false")
+    if ((raw as Record<string, unknown>).transportUnknown !== undefined) throw new Error("failed must not have transportUnknown")
+    const failure = (raw as Record<string, unknown>).failure
+    const outFailure = (outcome as Record<string, unknown>).failure
+    if (
+      !isRecord(failure) ||
+      typeof failure.code !== "string" ||
+      typeof failure.message !== "string" ||
+      typeof failure.retryable !== "boolean"
+    )
+      throw new Error("failed failure invalid")
+    if (
+      !isRecord(outFailure) ||
+      typeof outFailure.code !== "string" ||
+      typeof outFailure.message !== "string" ||
+      typeof outFailure.retryable !== "boolean"
+    )
+      throw new Error("failed outcome.failure invalid")
+    if (failure.code !== (outFailure as Record<string, unknown>).code) throw new Error("failure code mismatch")
+    if (failure.message !== (outFailure as Record<string, unknown>).message) throw new Error("failure message mismatch")
+    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable)
+      throw new Error("failure retryable mismatch")
+    if ((raw as Record<string, unknown>).data !== undefined) throw new Error("failed must not have data")
+    return raw as unknown as ServePrivateDeleteResult
+  }
+  if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+  if ((raw as Record<string, unknown>).data !== undefined) throw new Error("ambiguous must not have data")
+  if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous must not have failure")
+  if ((outcome as Record<string, unknown>).failure !== undefined)
+    throw new Error("ambiguous outcome must not have failure")
+  if ((outcome as Record<string, unknown>).data !== undefined) throw new Error("ambiguous outcome must not have data")
+  return raw as unknown as ServePrivateDeleteResult
+}
+
 export interface ServePrivatePeerOptions {
   reader: NodeJS.ReadableStream | null
   writer: NodeJS.WritableStream | null
@@ -1568,6 +1795,7 @@ export class ServePrivatePeer {
         "session/update",
         "session/fork",
         "session/create",
+        "session/delete",
         "session/status",
         "session/get",
         "session/messages",
@@ -1904,6 +2132,20 @@ export class ServePrivatePeer {
     }
   }
 
+  private failedDelete(req: ServePrivateDeleteRequest, code: string, msg: string): ServePrivateDeleteResult {
+    return {
+      v: 1,
+      requestId: req.requestId,
+      opId: req.opId,
+      op: "session/delete",
+      idempotencyKey: req.idempotencyKey,
+      status: "failed",
+      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
+      accepted: false,
+      failure: { code, message: msg, retryable: false },
+    }
+  }
+
   private failedPath(req: PathContractRequest, code: string, msg: string): PathResult {
     return failedPathResult(req, code, msg)
   }
@@ -2192,6 +2434,13 @@ export class ServePrivatePeer {
         const sess = c.session as Record<string, unknown>
         if (sess.create) return true
       }
+      if (cap === "session/delete" && c["session/delete"] === true) return true
+      if (cap === "session/delete" && Array.isArray(c.session) && (c.session as unknown[]).includes("delete"))
+        return true
+      if (cap === "session/delete" && typeof c.session === "object" && c.session !== null) {
+        const sess = c.session as Record<string, unknown>
+        if (sess.delete) return true
+      }
       if (cap === "session/status" && c["session/status"] === true) return true
       if (cap === "session/status" && Array.isArray(c.session) && (c.session as unknown[]).includes("status"))
         return true
@@ -2347,6 +2596,45 @@ export class ServePrivatePeer {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeCreateAmbiguous(req, true)
         const { code, msg } = this.parseFailedInfo(e)
         return this.failedCreate(req, code, msg)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateDelete(req: ServePrivateDeleteRequest): Promise<ServePrivateDeleteResult> {
+    const handle = this.privateDeleteWithHandle(req)
+    return handle.promise
+  }
+
+  privateDeleteWithHandle(req: ServePrivateDeleteRequest): {
+    id: number
+    promise: Promise<ServePrivateDeleteResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateDeleteRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/delete")) {
+      throw new Error("Private peer missing session/delete capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/delete", req)
+    const promise = (async (): Promise<ServePrivateDeleteResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeDeleteAmbiguous(req, true)
+        try {
+          return validateDeleteResult(raw, req)
+        } catch {
+          return makeDeleteAmbiguous(req, true)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeDeleteAmbiguous(req, true)
+        return makeDeleteAmbiguous(req, true)
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)

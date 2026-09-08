@@ -179,6 +179,28 @@ export const SessionContextEpochTable = sqliteTable("session_context_epoch", {
   revision: integer().notNull().default(0),
 })
 
+export const SessionDeleteTombstoneTable = sqliteTable(
+  "session_delete_tombstone",
+  {
+    op_id: text().primaryKey(),
+    session_id: text().$type<SessionSchema.ID>().notNull(),
+    idempotency_hash: text().notNull(),
+    request_id: text(),
+    directory: text(),
+    parent_session_id: text(),
+    config_version: integer(),
+    session_revision: integer(),
+    time: integer().notNull(),
+    code: text().notNull(),
+    message: text().notNull(),
+    outcome: text().$type<"succeeded" | "failed">().notNull(),
+  },
+  (table) => [
+    uniqueIndex("session_delete_tombstone_session_hash_idx").on(table.session_id, table.idempotency_hash),
+    index("session_delete_tombstone_session_idx").on(table.session_id),
+  ],
+)
+
 export const SessionOperationTable = sqliteTable(
   "session_operation",
   {
@@ -187,7 +209,7 @@ export const SessionOperationTable = sqliteTable(
       .$type<SessionSchema.ID>()
       .notNull()
       .references(() => SessionTable.id, { onDelete: "cascade" }),
-    op_kind: text().$type<"prompt" | "provider" | "tool" | "permission" | "task" | "cancelQueued" | "sessionUpdate" | "fork" | "create">().notNull(),
+    op_kind: text().$type<"prompt" | "provider" | "tool" | "permission" | "task" | "cancelQueued" | "sessionUpdate" | "fork" | "create" | "delete">().notNull(),
     outcome: text().$type<"succeeded" | "failed" | "ambiguous" | "in-flight" | "superseded" | "abandoned">().notNull(),
     code: text().notNull(),
     message: text().notNull(),
@@ -215,7 +237,7 @@ export const SessionOperationTable = sqliteTable(
       .on(table.session_id, table.idempotency_hash)
       .where(sql`${table.idempotency_hash} IS NOT NULL`),
     index("session_operation_message_id_idx").on(table.message_id).where(sql`${table.message_id} IS NOT NULL`),
-    check("session_operation_op_kind_check", sql`${table.op_kind} IN ('prompt','provider','tool','permission','task','cancelQueued','sessionUpdate','fork','create')`),
+    check("session_operation_op_kind_check", sql`${table.op_kind} IN ('prompt','provider','tool','permission','task','cancelQueued','sessionUpdate','fork','create','delete')`),
     check(
       "session_operation_outcome_check",
       sql`${table.outcome} IN ('succeeded','failed','ambiguous','in-flight','superseded','abandoned')`,

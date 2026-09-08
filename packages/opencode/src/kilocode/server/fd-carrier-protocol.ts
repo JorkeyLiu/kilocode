@@ -11,6 +11,7 @@ export const FD_CAPABILITIES = [
   "session/update",
   "session/fork",
   "session/create",
+  "session/delete",
   "session/status",
   "session/get",
   "session/messages",

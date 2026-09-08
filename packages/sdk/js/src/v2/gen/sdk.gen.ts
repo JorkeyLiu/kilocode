@@ -3921,8 +3921,19 @@ export class Session2 extends HeyApiClient {
   public delete<ThrowOnError extends boolean = false>(
     parameters: {
       sessionID: string
-      directory?: string
+      query_directory?: string
       workspace?: string
+      body_directory?: string
+      opId?: string
+      idempotencyKey?: string
+      requestId?: string
+      context?: {
+        directory: string
+        sessionId: string
+        parentSessionId?: string | null
+        configVersion?: number
+        sessionRevision?: number
+      }
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3932,8 +3943,21 @@ export class Session2 extends HeyApiClient {
         {
           args: [
             { in: "path", key: "sessionID" },
-            { in: "query", key: "directory" },
+            {
+              in: "query",
+              key: "query_directory",
+              map: "directory",
+            },
             { in: "query", key: "workspace" },
+            {
+              in: "body",
+              key: "body_directory",
+              map: "directory",
+            },
+            { in: "body", key: "opId" },
+            { in: "body", key: "idempotencyKey" },
+            { in: "body", key: "requestId" },
+            { in: "body", key: "context" },
           ],
         },
       ],
@@ -3942,6 +3966,11 @@ export class Session2 extends HeyApiClient {
       url: "/session/{sessionID}",
       ...options,
       ...params,
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers,
+        ...params.headers,
+      },
     })
   }
 

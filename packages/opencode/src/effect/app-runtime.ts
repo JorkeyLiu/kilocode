@@ -69,6 +69,7 @@ import * as CancelQueuedDispatch from "@/kilocode/session/cancel-queued-dispatch
 import * as SessionUpdateDispatch from "@/kilocode/session/session-update-dispatch" // kilocode_change - P4.4-G3-B2 durable title
 import * as SessionForkDispatch from "@/kilocode/session/session-fork-dispatch" // kilocode_change - P4.4-G3-B3 fork
 import * as SessionCreateDispatch from "@/kilocode/session/session-create-dispatch" // kilocode_change - P4.4-G3-B4 create
+import * as SessionDeleteDispatch from "@/kilocode/session/session-delete-dispatch" // kilocode_change - P4.4-G3-B5 delete
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 
 // kilocode_change start - LOCK-001/LOCK-002: canonical defaults shared with feature layers (P4.4-G2: no preset catalog)
@@ -181,8 +182,9 @@ const buildAppLayer = (provider: ProviderLayer = Provider.defaultLayer) => {
   const sessionUpdate = SessionUpdateDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
   const sessionFork = SessionForkDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
   const sessionCreate = SessionCreateDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
+  const sessionDelete = SessionDeleteDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
   const maintenance = RetentionMaintenance.layer.pipe(Layer.provide(base))
-  return Layer.mergeAll(lifecycle, cancelQueued, sessionUpdate, sessionFork, sessionCreate, maintenance)
+  return Layer.mergeAll(lifecycle, cancelQueued, sessionUpdate, sessionFork, sessionCreate, sessionDelete, maintenance)
 }
 // kilocode_change end
 

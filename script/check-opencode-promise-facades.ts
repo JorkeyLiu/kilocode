@@ -63,7 +63,7 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   "kilocode/session/platform-attribution.test.ts": { count: 2, reason: "existing runtime integration test" },
   "kilocode/session-prompt-queue.test.ts": { count: 6, reason: "prompt queue legacy instance bridge regression" },
   "server/experimental-session-list.test.ts": { count: 2, reason: "Kilo session list integration test" },
-  "kilocode/server/listener-runtime.test.ts": { count: 4, reason: "listener and AppRuntime integration test" },
+  "kilocode/server/listener-runtime.test.ts": { count: 1, reason: "listener and AppRuntime integration test" },
   "kilocode/server/config-rebuild-stream.test.ts": {
     count: 3,
     reason: "in-process server and AppRuntime integration test (global writer vs unseen-directory PATCH intake regression)",
@@ -99,7 +99,7 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason: "B0 durable cancelQueued integration test via AppRuntime and InstanceRef (LOCK-301..307 bounded corrections)",
   },
   "kilocode/server/fd-carrier.test.ts": {
-    count: 8,
+    count: 10,
     reason: "B1 fd-carrier integration test via AppRuntime for real B0 dispatch and B2 sessionUpdate replay via carrier (carrier + HTTP fallback, positive persisted replay via createFdCarrier)",
   },
   "kilocode/session/session-update-b2.test.ts": {
@@ -145,6 +145,38 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   "kilocode/session/changefeed-creation.test.ts": {
     count: 50,
     reason: "creation changefeed integration test via AppRuntime and InstanceRef (ordinary projector + durable create/fork + fresh import service + CLI aggregate success/rollback/replay)",
+  },
+  "kilocode/server/fd-carrier-delete.test.ts": {
+    count: 7,
+    reason: "B5 durable delete fd-carrier integration test via AppRuntime (carrier authoritative delete, replay, strict validation without mutation, instance cleanup)",
+  },
+  "kilocode/session/session-delete-fd-private-first.test.ts": {
+    count: 14,
+    reason: "B5 durable delete FD private-first integration test via AppRuntime and InstanceRef (commit, missing, strict parentSessionId, scope mismatch)",
+  },
+  "kilocode/session/session-delete-regression.test.ts": {
+    count: 15,
+    reason: "B5 durable delete regression integration test via AppRuntime and InstanceRef (atomic tombstone, conflict, instance cleanup)",
+  },
+  "kilocode/session/session-delete-concurrent.test.ts": {
+    count: 12,
+    reason: "B5 durable delete concurrent disappearance integration test via AppRuntime and InstanceRef (empty family die, dispatch not-found, no fabricate)",
+  },
+  "kilocode/session/session-create-fd-private-first.test.ts": {
+    count: 15,
+    reason: "B4 durable create FD private-first integration test via AppRuntime and InstanceRef (atomic create, replay, concurrent)",
+  },
+  "kilocode/session/session-fork-fd-private-first.test.ts": {
+    count: 7,
+    reason: "B3 durable fork FD private-first integration test via AppRuntime and InstanceRef (dispatch, replay, list)",
+  },
+  "server/experimental-session-list-cursor.test.ts": {
+    count: 4,
+    reason: "session list cursor pagination integration test via AppRuntime (equal-updated tie handling, cursor grammar)",
+  },
+  "server/probe-concurrent-mutation-pagination.test.ts": {
+    count: 8,
+    reason: "probe inter-page mutation pagination observations via AppRuntime (insert/update/delete/archive between pages)",
   },
 }
 

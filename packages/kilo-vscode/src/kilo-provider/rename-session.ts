@@ -17,7 +17,7 @@ export function buildSessionUpdateIdentity(sessionID: string): { opId: string; i
   return { opId, idempotencyKey, requestId }
 }
 
-export function buildSessionCreateIdentity(): { opId: string; idempotencyKey: string; requestId: string } {
+function buildSessionCreateIdentity(): { opId: string; idempotencyKey: string; requestId: string } {
   const token = crypto.randomUUID()
   const opId = `create:${token}`
   const idempotencyKey = `create:${token}`

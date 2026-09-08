@@ -566,7 +566,20 @@ export interface Interface {
   readonly diff: (sessionID: SessionID) => Effect.Effect<Snapshot.FileDiff[]>
   readonly messages: (input: { sessionID: SessionID; limit?: number }) => Effect.Effect<SessionV1.WithParts[], NotFound>
   readonly children: (parentID: SessionID) => Effect.Effect<Info[]>
-  readonly remove: (sessionID: SessionID) => Effect.Effect<void, NotFound>
+  readonly remove: (
+    sessionID: SessionID,
+    options?: {
+      tombstone?: {
+        opId: string
+        hash: string
+        requestId: string
+        directory: string
+        parentSessionId: string | null
+        configVersion: number | null
+        sessionRevision: number | null
+      }
+    },
+  ) => Effect.Effect<void, NotFound>
   readonly updateMessage: <T extends SessionV1.Info>(msg: T) => Effect.Effect<T>
   readonly removeMessage: (input: { sessionID: SessionID; messageID: MessageID }) => Effect.Effect<MessageID>
   readonly removePart: (input: { sessionID: SessionID; messageID: MessageID; partID: PartID }) => Effect.Effect<PartID>
@@ -740,8 +753,22 @@ export const layer: Layer.Layer<
     })
     // kilocode_change end
 
-    const remove: Interface["remove"] = Effect.fnUntraced(function* (sessionID: SessionID) {
+    const remove: Interface["remove"] = Effect.fnUntraced(function* (
+      sessionID: SessionID,
+      options?: {
+        tombstone?: {
+          opId: string
+          hash: string
+          requestId: string
+          directory: string
+          parentSessionId: string | null
+          configVersion: number | null
+          sessionRevision: number | null
+        }
+      },
+    ) {
       const session = yield* get(sessionID)
+      const hasTombstone = !!options?.tombstone
       try {
         const hasInstance = yield* InstanceState.directory.pipe(
           Effect.as(true),
@@ -773,7 +800,21 @@ export const layer: Layer.Layer<
             yield* Effect.promise(() => SessionExport.onSessionClose(sessionID, workspaceKey))
             yield* events.remove(sessionID)
             const now = Date.now()
-            const familyIDs = yield* Retention.deleteFamilyUnprotected(db, sessionID, now).pipe(Effect.orDie)
+            const familyIDs = options?.tombstone
+              ? yield* Retention.deleteFamilyWithDeleteTombstoneUnprotected(db, sessionID, now, {
+                  opId: options.tombstone.opId,
+                  sessionId: sessionID,
+                  hash: options.tombstone.hash,
+                  requestId: options.tombstone.requestId,
+                  directory: options.tombstone.directory,
+                  parentSessionId: options.tombstone.parentSessionId,
+                  configVersion: options.tombstone.configVersion,
+                  sessionRevision: options.tombstone.sessionRevision,
+                  time: now,
+                  code: "delete.succeeded",
+                  message: "delete succeeded",
+                }).pipe(Effect.orDie)
+              : yield* Retention.deleteFamilyUnprotected(db, sessionID, now).pipe(Effect.orDie)
             if (familyIDs.length > 0) {
               const keys = Artifact.familyArtifactsForFamily(familyIDs)
               const delExit = yield* Effect.forEach(keys, (key) => storage.remove(key), { discard: true }).pipe(
@@ -836,6 +877,7 @@ export const layer: Layer.Layer<
         )
         // kilocode_change end
       } catch (e) {
+        if (hasTombstone) throw e
         log.error(e)
       }
     })

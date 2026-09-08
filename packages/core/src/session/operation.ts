@@ -4,7 +4,7 @@ import { asc, eq, and, sql } from "drizzle-orm"
 import { Effect } from "effect"
 import { createHash } from "node:crypto"
 import { Database } from "../database/database"
-import { SessionTable, SessionOperationTable } from "./sql"
+import { SessionTable, SessionOperationTable, SessionDeleteTombstoneTable } from "./sql"
 import type { SessionSchema } from "./schema"
 import * as Changefeed from "../retention/changefeed"
 import { SessionRevision } from "./revision"
@@ -12,7 +12,7 @@ import { SessionRevision } from "./revision"
 // ---------------------------------------------------------------------------
 // R12-compatible record shape (persist tier = full redacted record)
 // ---------------------------------------------------------------------------
-export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork", "create"] as const
+export const OP_KINDS = ["prompt", "provider", "tool", "permission", "task", "cancelQueued", "sessionUpdate", "fork", "create", "delete"] as const
 export type OpKind = (typeof OP_KINDS)[number]
 
 export const OUTCOMES = ["succeeded", "failed", "ambiguous", "in-flight", "superseded", "abandoned"] as const
@@ -215,6 +215,14 @@ export function createId(token: string): string {
   return `create:${token}`
 }
 
+export function deleteId(sessionID: string, token: string): string {
+  if (typeof sessionID !== "string" || sessionID.length === 0) throw new TypeError("sessionID must be non-empty string")
+  assertNoColon(sessionID, "sessionID")
+  if (typeof token !== "string" || token.length === 0) throw new TypeError("token must be non-empty string")
+  assertNoColon(token, "token")
+  return `delete:${sessionID}:${token}`
+}
+
 export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
   if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
   const segments = opId.split(":")
@@ -246,6 +254,9 @@ export function parseOpId(opId: string): { kind: OpKind; parts: string[] } {
     if (rest.length === 2 && rest[1]!.length === 0) throw new TypeError(`fork token must be non-empty: ${opId}`)
   } else if (kind === "create") {
     if (rest.length !== 1) throw new TypeError(`create opId must have 1 segment: ${opId}`)
+  } else if (kind === "delete") {
+    if (rest.length !== 2) throw new TypeError(`delete opId must have 2 segments: ${opId}`)
+    if (rest[1]!.length === 0) throw new TypeError(`delete token must be non-empty: ${opId}`)
   }
   return { kind: kind as OpKind, parts: rest }
 }
@@ -266,6 +277,23 @@ export function parseForkOpIdForSession(opId: string, sessionId: string): { kind
   if (parsed.parts[0] !== sessionId) throw new TypeError(`opId session binding mismatch: ${opId} vs ${sessionId}`)
   if (parsed.parts.length === 1) return { kind: "fork", sessionId }
   return { kind: "fork", sessionId, token: parsed.parts[1] }
+}
+
+export function parseDeleteOpIdForSession(opId: string, sessionId: string): { kind: "delete"; sessionId: string; token: string } {
+  if (typeof opId !== "string" || opId.length === 0) throw new TypeError("opId must be non-empty string")
+  if (typeof sessionId !== "string" || sessionId.length === 0) throw new TypeError("sessionId must be non-empty string")
+  const prefix = `delete:${sessionId}:`
+  if (opId.startsWith(prefix)) {
+    const token = opId.slice(prefix.length)
+    if (token.length === 0) throw new TypeError(`opId segment must be non-empty: ${opId}`)
+    if (token.includes(":")) throw new TypeError(`token must not contain ':'`)
+    return { kind: "delete", sessionId, token }
+  }
+  const parsed = parseOpId(opId)
+  if (parsed.kind !== "delete") throw new TypeError(`opId kind must be delete: ${opId}`)
+  if (parsed.parts[0] !== sessionId) throw new TypeError(`opId session binding mismatch: ${opId} vs ${sessionId}`)
+  if (parsed.parts.length !== 2) throw new TypeError(`delete opId must have 2 segments: ${opId}`)
+  return { kind: "delete", sessionId, token: parsed.parts[1]! }
 }
 
 function assertOpIdMatchesKind(opId: string, opKind: OpKind) {
@@ -1292,5 +1320,116 @@ export function insertSessionCreateSucceededTx(
     const rowRaw = yield* tx.select().from(SessionOperationTable).where(eq(SessionOperationTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
     if (!rowRaw) yield* Effect.die(new Error(`operation row missing after insert ${normalized.opId}`))
     return rowToSessionCreateRecord(rowRaw as typeof SessionOperationTable.$inferSelect)
+  })
+}
+
+ // ---------------------------------------------------------------------------
+ // SessionDelete tombstone helpers (delete survives cascade via separate table)
+ // ---------------------------------------------------------------------------
+export interface SessionDeleteMeta {
+  idempotencyHash: string
+  requestId: string
+  directory: string
+  parentSessionId?: string | null
+  configVersion?: number | null
+  sessionRevision?: number | null
+}
+
+export interface SessionDeleteRecord {
+  opId: string
+  sessionId: string
+  opKind: "delete"
+  outcome: "succeeded" | "failed"
+  code: string
+  message: string
+  time: number
+  meta: SessionDeleteMeta
+}
+
+function rowToSessionDeleteRecord(row: typeof SessionDeleteTombstoneTable.$inferSelect): SessionDeleteRecord {
+  return {
+    opId: row.op_id,
+    sessionId: row.session_id,
+    opKind: "delete",
+    outcome: row.outcome as "succeeded" | "failed",
+    code: row.code,
+    message: row.message,
+    time: row.time,
+    meta: {
+      idempotencyHash: row.idempotency_hash,
+      requestId: row.request_id ?? "",
+      directory: row.directory ?? "",
+      parentSessionId: row.parent_session_id ?? null,
+      configVersion: row.config_version ?? null,
+      sessionRevision: row.session_revision ?? null,
+    },
+  }
+}
+
+export function getSessionDeleteByIdempotencyHash(
+  db: Database.Interface["db"],
+  sessionID: SessionSchema.ID,
+  hash: string,
+): Effect.Effect<SessionDeleteRecord | undefined> {
+  return Effect.gen(function* () {
+    if (typeof hash !== "string" || hash.length === 0) yield* Effect.die(new TypeError("hash must be non-empty string"))
+    const row = yield* db.select().from(SessionDeleteTombstoneTable).where(and(eq(SessionDeleteTombstoneTable.session_id, sessionID), eq(SessionDeleteTombstoneTable.idempotency_hash, hash))).get().pipe(Effect.orDie)
+    if (!row) return undefined
+    return rowToSessionDeleteRecord(row as typeof SessionDeleteTombstoneTable.$inferSelect)
+  }).pipe(Effect.orDie) as Effect.Effect<SessionDeleteRecord | undefined>
+}
+
+export function getSessionDeleteByIdempotencyHashTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  hash: string,
+): Effect.Effect<SessionDeleteRecord | undefined> {
+  return Effect.gen(function* () {
+    const row = yield* tx.select().from(SessionDeleteTombstoneTable).where(and(eq(SessionDeleteTombstoneTable.session_id, sessionID), eq(SessionDeleteTombstoneTable.idempotency_hash, hash))).get().pipe(Effect.orDie)
+    if (!row) return undefined
+    return rowToSessionDeleteRecord(row as typeof SessionDeleteTombstoneTable.$inferSelect)
+  }).pipe(Effect.orDie) as Effect.Effect<SessionDeleteRecord | undefined>
+}
+
+export function isSessionDeleteConflict(
+  prev: SessionDeleteRecord,
+  next: { opId: string; directory: string; parentSessionId?: string | null; configVersion?: number | null; sessionRevision?: number | null },
+): boolean {
+  if (prev.opId !== next.opId) return true
+  if (prev.meta.directory !== next.directory) return true
+  if ((prev.meta.parentSessionId ?? null) !== (next.parentSessionId ?? null)) return true
+  if ((prev.meta.configVersion ?? null) !== (next.configVersion ?? null)) return true
+  if ((prev.meta.sessionRevision ?? null) !== (next.sessionRevision ?? null)) return true
+  return false
+}
+
+export function insertSessionDeleteSucceededTx(
+  tx: DbOrTx,
+  sessionID: SessionSchema.ID,
+  record: FailureRecord,
+  meta: SessionDeleteMeta,
+): Effect.Effect<SessionDeleteRecord> {
+  return Effect.gen(function* () {
+    validateRecord(record)
+    if (record.outcome !== "succeeded") yield* Effect.die(new Error("insertSessionDeleteSucceededTx requires succeeded outcome"))
+    if (record.opKind !== "delete") yield* Effect.die(new Error("insertSessionDeleteSucceededTx requires delete opKind"))
+    const normalized = normalizeRecord(record)
+    yield* tx.insert(SessionDeleteTombstoneTable).values({
+      op_id: normalized.opId,
+      session_id: sessionID,
+      idempotency_hash: meta.idempotencyHash,
+      request_id: meta.requestId,
+      directory: meta.directory,
+      parent_session_id: meta.parentSessionId ?? null,
+      config_version: meta.configVersion ?? null,
+      session_revision: meta.sessionRevision ?? null,
+      time: normalized.time,
+      code: normalized.code,
+      message: normalized.message,
+      outcome: normalized.outcome as "succeeded",
+    }).run().pipe(Effect.orDie)
+    const rowRaw = yield* tx.select().from(SessionDeleteTombstoneTable).where(eq(SessionDeleteTombstoneTable.op_id, normalized.opId)).get().pipe(Effect.orDie)
+    if (!rowRaw) yield* Effect.die(new Error(`delete tombstone missing after insert ${normalized.opId}`))
+    return rowToSessionDeleteRecord(rowRaw as typeof SessionDeleteTombstoneTable.$inferSelect)
   })
 }

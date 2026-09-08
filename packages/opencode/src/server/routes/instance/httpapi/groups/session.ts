@@ -108,6 +108,22 @@ export const ViewedPayload = Schema.Struct({
   attached: Schema.Array(PresenceSessionId).check(Schema.isMaxLength(1000)),
   visible: Schema.Array(PresenceSessionId).check(Schema.isMaxLength(199)),
 })
+
+export const DeletePayload = Schema.Struct({
+  directory: Schema.optional(Schema.String),
+  opId: Schema.optional(Schema.String),
+  idempotencyKey: Schema.optional(Schema.String),
+  requestId: Schema.optional(Schema.String),
+  context: Schema.optional(
+    Schema.Struct({
+      directory: Schema.String,
+      sessionId: SessionID,
+      parentSessionId: Schema.optional(Schema.NullOr(SessionID)),
+      configVersion: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }))),
+      sessionRevision: Schema.optional(Schema.Int.check(Schema.isBetween({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER }))),
+    }),
+  ),
+})
 // kilocode_change end
 
 export const SessionPaths = {
@@ -251,8 +267,9 @@ export const SessionApi = HttpApi.make("session")
         HttpApiEndpoint.delete("remove", SessionPaths.remove, {
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
+          payload: [HttpApiSchema.NoContent, DeletePayload],
           success: described(Schema.Boolean, "Successfully deleted session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, HttpApiError.Conflict, HttpApiError.InternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.delete",

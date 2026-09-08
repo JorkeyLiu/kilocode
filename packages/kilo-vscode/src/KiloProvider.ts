@@ -147,6 +147,7 @@ import { createAutoApproveBridge } from "./kilo-provider/auto-approve"
 import type { KiloProviderOptions } from "./kilo-provider/options"
 import { fetchImageModels } from "./image-generation/models"
 import { stopSessionProcesses } from "./kilo-provider/background-process"
+import { deleteSessionPrivateFirst } from "./kilo-provider/session-delete"
 import { sandboxDefault, sandboxSessionMetadata } from "./shared/sandbox-session"
 import type { CanonicalConfigService, CanonicalConfigEvent, CanonicalConfigError } from "./config/service"
 import { sameStamp } from "./config/types"
@@ -3319,7 +3320,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Handle deleting a session.
+   * Handle deleting a session — private-first with exactly-one SDK fallback.
+   * `deleteSessionPrivateFirst` attempts private delete first; a valid private
+   * `succeeded` + `accepted` returns with zero SDK mutation, otherwise exactly
+   * one SDK `session.delete` runs with the identical durable tuple. Background
+   * stop and local pruning remain unchanged.
    */
   private async handleDeleteSession(sessionID: string): Promise<void> {
     if (!this.client) {
@@ -3333,7 +3338,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.currentSession?.id === sessionID ? this.currentSession : undefined,
       )
       await stopSessionProcesses(this.client, sessionID, workspaceDir)
-      await this.client.session.delete({ sessionID, directory: workspaceDir }, { throwOnError: true })
+      await deleteSessionPrivateFirst({
+        client: this.client,
+        connection: this.connectionService,
+        sessionId: sessionID,
+        directory: workspaceDir,
+      })
       this.pruneDeletedSession(sessionID)
       if (this.currentSession?.id === sessionID) {
         this.contextSessionID = undefined
@@ -4924,7 +4934,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           metadata: metadata as unknown as Record<string, unknown> | undefined,
         })
         if (draftID && this.closedDrafts.delete(draftID)) {
-          await this.client!.session.delete({ sessionID: session.id, directory: dir }, { throwOnError: true })
+          await this.client!.session.delete(
+            { sessionID: session.id, query_directory: dir },
+            { throwOnError: true },
+          )
           return undefined
         }
         const detail = sdkSessionToDetail(session as Session)

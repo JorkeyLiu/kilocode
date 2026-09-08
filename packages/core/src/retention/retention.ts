@@ -1,7 +1,7 @@
 import { Effect, Schema } from "effect"
 import { sql, eq, inArray } from "drizzle-orm"
 import { Database } from "../database/database"
-import { SessionTable } from "../session/sql"
+import { SessionTable, SessionDeleteTombstoneTable } from "../session/sql"
 import { RetentionObligationTable } from "./sql"
 import * as Artifact from "./artifact"
 import * as Changefeed from "./changefeed"
@@ -167,6 +167,92 @@ export function deleteFamilyUnprotected(
   now: number,
 ) {
   return db.transaction((tx) => deleteFamilyCanonicalTx(tx, rootID, now), { behavior: "immediate" })
+}
+
+export function deleteFamilyWithDeleteTombstoneUnprotected(
+  db: Database.Interface["db"],
+  rootID: string,
+  now: number,
+  tombstone: {
+    opId: string
+    sessionId: string
+    hash: string
+    requestId: string
+    directory: string
+    parentSessionId: string | null
+    configVersion: number | null
+    sessionRevision: number | null
+    time: number
+    code: string
+    message: string
+  },
+) {
+  return db.transaction((tx) => deleteFamilyWithDeleteTombstoneTx(tx, rootID, now, tombstone), { behavior: "immediate" })
+}
+
+function deleteFamilyWithDeleteTombstoneTx(
+  tx: Tx,
+  rootID: string,
+  now: number,
+  tombstone: {
+    opId: string
+    sessionId: string
+    hash: string
+    requestId: string
+    directory: string
+    parentSessionId: string | null
+    configVersion: number | null
+    sessionRevision: number | null
+    time: number
+    code: string
+    message: string
+  },
+) {
+  return Effect.gen(function* () {
+    const raw = yield* tx
+      .all<{ id: string }>(
+        sql`WITH RECURSIVE family(id) AS (SELECT id FROM ${SessionTable} WHERE id = ${rootID} UNION ALL SELECT s.id FROM ${SessionTable} s JOIN family f ON s.parent_id = f.id) SELECT id FROM family`,
+      )
+      .pipe(Effect.orDie)
+    const actualIds = raw.map((r) => r.id)
+    if (actualIds.length === 0) yield* Effect.die(new Error(`family not found ${rootID}`))
+    const rows = yield* tx
+      .select({ id: SessionTable.id, time: SessionTable.time_updated, rev: SessionTable.revision })
+      .from(SessionTable)
+      .where(sessionIdInArray(actualIds))
+      .all()
+      .pipe(Effect.orDie)
+    if (rows.length !== actualIds.length) yield* Effect.die(`family row count mismatch ${rootID}`)
+    for (const row of rows) {
+      const finalRev = row.rev + 1
+      yield* Changefeed.appendTx(tx, { session_id: row.id as string, revision: finalRev, kind: "deleted", time: now })
+    }
+    yield* tx
+      .insert(RetentionObligationTable)
+      .values({ family_root_id: rootID, session_ids: actualIds, time_created: now })
+      .run()
+      .pipe(Effect.orDie)
+    yield* tx
+      .insert(SessionDeleteTombstoneTable)
+      .values({
+        op_id: tombstone.opId,
+        session_id: tombstone.sessionId,
+        idempotency_hash: tombstone.hash,
+        request_id: tombstone.requestId,
+        directory: tombstone.directory,
+        parent_session_id: tombstone.parentSessionId,
+        config_version: tombstone.configVersion,
+        session_revision: tombstone.sessionRevision,
+        time: tombstone.time,
+        code: tombstone.code,
+        message: tombstone.message,
+        outcome: "succeeded",
+      } as unknown as typeof SessionDeleteTombstoneTable.$inferInsert)
+      .run()
+      .pipe(Effect.orDie)
+    yield* tx.delete(SessionTable).where(sessionIdInArray(actualIds)).run().pipe(Effect.orDie)
+    return actualIds
+  })
 }
 
 export function deleteFamilyTransaction(
