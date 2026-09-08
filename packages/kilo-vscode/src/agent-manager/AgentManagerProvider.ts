@@ -1130,7 +1130,7 @@ export class AgentManagerProvider implements Disposable {
     this.pushState()
   }
 
-  /** Fork a session via the CLI backend (local-only) — shared durable SDK-first/private-observation path. */
+  /** Fork a session via the CLI backend (local-only) — private-first with single same-tuple SDK fallback. */
   private async onForkSession(sessionId: string, messageId?: string): Promise<void> {
     let client: KiloClient
     try {
@@ -1145,32 +1145,14 @@ export class AgentManagerProvider implements Disposable {
       this.postToWebview({ type: "error", message: "Workspace root not available" })
       return
     }
-    const { buildForkIdentity, executeDurableFork, observeForkParity } = await import("../kilo-provider/fork-session")
-    const identity = buildForkIdentity(sessionId)
-    const params = { sessionId, directory, messageId, opId: identity.opId, idempotencyKey: identity.idempotencyKey, requestId: identity.requestId }
+    const { forkSessionPrivateFirst } = await import("../kilo-provider/fork-session")
     let forked: Session | undefined
-    let sdkResult: { data?: Session; error?: unknown; response?: unknown } | null = null
     try {
-      const res = await executeDurableFork(client, params)
-      sdkResult = { data: res.data as Session | undefined, response: res.response, error: res.error }
-      if (res.error) {
-        const err = getErrorMessage(res.error)
-        this.postToWebview({ type: "error", message: `Failed to fork session: ${err}` })
-      } else if (res.data) {
-        forked = res.data as Session
-      }
+      forked = await forkSessionPrivateFirst({ client, connection: this.connectionService, sessionId, directory, messageId })
     } catch (error) {
-      const asRec = error as Record<string, unknown>
-      sdkResult = { data: (asRec?.data as Session) ?? undefined, error: (asRec?.error as unknown) ?? error, response: (asRec?.response as unknown) ?? undefined }
       const err = getErrorMessage(error)
       this.postToWebview({ type: "error", message: `Failed to fork session: ${err}` })
-    }
-    if (sdkResult) {
-      try {
-        await observeForkParity(this.connectionService, sdkResult as { data?: unknown; error?: unknown; response?: unknown }, params)
-      } catch (err) {
-        console.warn("[Kilo Fork] AgentManager observeForkParity failed:", String(err).slice(0, 200), { opId: params.opId, requestId: params.requestId })
-      }
+      return
     }
     if (!forked) return
     this.addSession(forked.id, { recent: true })

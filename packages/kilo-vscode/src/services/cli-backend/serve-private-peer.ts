@@ -798,24 +798,6 @@ function makeForkAmbiguous(req: ServePrivateForkRequest, transportUnknown = true
   return out
 }
 
-function makeForkFailedInternal(
-  req: ServePrivateForkRequest,
-  message: string,
-  code = "internal",
-): ServePrivateForkResult {
-  return {
-    v: 1,
-    requestId: req.requestId,
-    opId: req.opId,
-    op: "session/fork",
-    idempotencyKey: req.idempotencyKey,
-    status: "failed",
-    outcome: { type: "failed", time: Date.now(), failure: { code, message, retryable: false } },
-    accepted: false,
-    failure: { code, message, retryable: false },
-  }
-}
-
 export interface ServePrivateCreateRequest {
   v: 1
   requestId: string
@@ -1908,20 +1890,6 @@ export class ServePrivatePeer {
     }
   }
 
-  private failedFork(req: ServePrivateForkRequest, code: string, msg: string): ServePrivateForkResult {
-    return {
-      v: 1,
-      requestId: req.requestId,
-      opId: req.opId,
-      op: "session/fork",
-      idempotencyKey: req.idempotencyKey,
-      status: "failed",
-      outcome: { type: "failed", time: Date.now(), failure: { code, message: msg, retryable: false } },
-      accepted: false,
-      failure: { code, message: msg, retryable: false },
-    }
-  }
-
   private failedCreate(req: ServePrivateCreateRequest, code: string, msg: string): ServePrivateCreateResult {
     return {
       v: 1,
@@ -2322,20 +2290,21 @@ export class ServePrivatePeer {
     const currentEpoch = this.opts.epoch
     const peerAtCall = this.peer
     const { id, promise: rawPromise } = peerAtCall.requestWithId("session/fork", req)
+    // Fork failure closure: only a protocol-valid `failed` result carries a trusted
+    // `failure.retryable` signal. Invalid wire, transport, closed, and stale outcomes
+    // normalize to `ambiguous` so the provider takes the single SDK fallback.
     const promise = (async (): Promise<ServePrivateForkResult> => {
       try {
         const raw = (await rawPromise) as unknown
         if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeForkAmbiguous(req, true)
         try {
           return validateForkResult(raw, req)
-        } catch (e) {
-          const msg = e instanceof Error ? e.message : String(e)
-          return makeForkFailedInternal(req, `invalid private response shape: ${msg}`)
+        } catch {
+          return makeForkAmbiguous(req, true)
         }
       } catch (e: unknown) {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeForkAmbiguous(req, true)
-        const { code, msg } = this.parseFailedInfo(e)
-        return this.failedFork(req, code, msg)
+        return makeForkAmbiguous(req, true)
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)

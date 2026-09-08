@@ -233,7 +233,7 @@ describe("sessionFork B3", () => {
     }),
   )
 
-  it.live("fd-carrier session/fork is replay-only and positive replay works", () =>
+  it.live("fd-carrier session/fork commits authoritatively and replay returns same fork", () =>
     Effect.gen(function* () {
       const { createFdCarrier } = yield* Effect.promise(() => import("../../../src/kilocode/server/fd-carrier"))
       const { JsonRpcPeer } = yield* Effect.promise(() => import("../../../src/private-worker/peer"))
@@ -244,28 +244,26 @@ describe("sessionFork B3", () => {
       const tmp = yield* (Effect.promise(() => tmpdir({ git: true, retain: true })) as unknown as Effect.Effect<any, any, any>)
       const dir = tmp.path
       const source = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.create({ title: "carrier-fork" }) })))) as unknown as Effect.Effect<any, any, any>)
-      const tokenNo = "no-record-" + Math.random().toString(36).slice(2, 6)
-      const opIdNo = SessionOperation.forkId(source.id, tokenNo)
-      const reqNo = { v: 1 as const, requestId: "req-no", opId: opIdNo, op: "session/fork" as const, idempotencyKey: `fork:${source.id}:${tokenNo}`, context: { directory: dir, sessionId: source.id, parentSessionId: null }, payload: {} }
+      const token = "commit-" + Math.random().toString(36).slice(2, 8)
+      const opId = SessionOperation.forkId(source.id, token)
+      const req = { v: 1 as const, requestId: "req-commit", opId, op: "session/fork" as const, idempotencyKey: `fork:${source.id}:${token}`, context: { directory: dir, sessionId: source.id, parentSessionId: null }, payload: {} }
       const extToCarrier = new (PassThrough as unknown as new () => any)()
       const carrierToExt = new (PassThrough as unknown as new () => any)()
       const carrier = createFdCarrier(extToCarrier, carrierToExt)
       const ext = new JsonRpcPeer({ reader: carrierToExt, writer: extToCarrier })
       try {
         yield* Effect.promise(() => ext.request("initialize", { protocol: { name: "kilo-private", major: 1, minor: 0 }, clientInfo: { name: "kilo-vscode", version: "7.4.11" }, capabilities: ["session/fork", "session/update", "session/cancelQueued"] }))
-        const noRes = (yield* Effect.promise(() => ext.request("session/fork", reqNo) as Promise<Record<string, unknown>>)) as Record<string, unknown>
-        expect(noRes.status).toBe("failed")
-        expect((noRes as unknown as { failure: { code: string } }).failure.code).toBe("internal")
-        // now create via SDK then replay via carrier
-        const tokenYes = "yes-" + Math.random().toString(36).slice(2, 8)
-        const opIdYes = SessionOperation.forkId(source.id, tokenYes)
-        const reqYes = { v: 1 as const, requestId: "req-yes", opId: opIdYes, op: "session/fork" as const, idempotencyKey: `fork:${source.id}:${tokenYes}`, context: { directory: dir, sessionId: source.id, parentSessionId: null }, payload: {} }
-        const sdkRes = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const d = yield* SessionForkDispatchService; return yield* d.dispatch(reqYes) })))) as unknown as Effect.Effect<any, any, any>)
-        expect(sdkRes.status).toBe("succeeded")
-        const carrierRes = (yield* Effect.promise(() => ext.request("session/fork", reqYes) as Promise<Record<string, unknown>>)) as Record<string, unknown>
-        expect(carrierRes.status).toBe("succeeded")
-        const cid = ((carrierRes as unknown as { data: { id?: string; session?: { id: string } } }).data.id ?? (carrierRes as unknown as { data: { session: { id: string } } }).data.session?.id)
-        expect(cid).toBe(sdkRes.data.id)
+        const res = (yield* Effect.promise(() => ext.request("session/fork", req) as Promise<Record<string, unknown>>)) as Record<string, unknown>
+        expect(res.status).toBe("succeeded")
+        expect((res as unknown as { accepted: boolean }).accepted).toBeTrue()
+        const cid = ((res as unknown as { data: { id?: string; session?: { id: string } } }).data.id ?? (res as unknown as { data: { session: { id: string } } }).data.session?.id)
+        expect(typeof cid).toBe("string")
+        const replay = (yield* Effect.promise(() => ext.request("session/fork", { ...req, requestId: "req-commit-replay" }) as Promise<Record<string, unknown>>)) as Record<string, unknown>
+        expect(replay.status).toBe("succeeded")
+        const rid = ((replay as unknown as { data: { id?: string; session?: { id: string } } }).data.id ?? (replay as unknown as { data: { session: { id: string } } }).data.session?.id)
+        expect(rid).toBe(cid)
+        const list = yield* (Effect.promise(() => AppRuntime.runPromise(provideInstance(dir)(Effect.gen(function* () { const svc = yield* Session.Service; return yield* svc.list({}) })))) as unknown as Effect.Effect<any, any, any>)
+        expect((list as any[]).filter((s) => s.parentID === source.id).length).toBe(1)
       } finally {
         try { carrier.dispose() } catch {}
         try { ext.dispose() } catch {}
