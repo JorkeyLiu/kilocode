@@ -69,9 +69,13 @@ const PS_ARGS = ["-axo", "lstart=,pid=,ppid=,rss=,vsz=,args="]
 /**
  * Raw `lstart` identity: exactly 5 whitespace-separated tokens, e.g.
  * `Tue Aug 11 13:15:12 2026`. Token-count matching (not English month/day
- * names) keeps the parse locale-independent on macOS/linux `ps`.
+ * names) keeps the parse locale-independent on macOS/linux `ps`. The
+ * separator is `\s+` (not a single space) because `ps` space-pads
+ * single-digit days (`Tue Sep  8 14:01:56 2026` carries two spaces); the
+ * captured raw string is still compared exactly, so PID-reuse safety is
+ * unchanged.
  */
-const LSTART = String.raw`\S+(?: \S+){4}`
+const LSTART = String.raw`\S+(?:\s+\S+){4}`
 
 /** Full polled-row: lstart + pid + ppid + rss + vsz + args (spaces allowed). */
 const PS_ROW_RE = new RegExp(`^(${LSTART})\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(\\d+)\\s+(.*)$`)

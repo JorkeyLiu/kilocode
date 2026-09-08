@@ -117,16 +117,56 @@ describe("memory guard ps parsing", () => {
     ])
   })
 
+  it("parses space-padded single-digit and double-digit days into exact raw start+args", () => {
+    const stdout = [
+      "Tue Sep  8 14:01:56 2026       123     1  15712 426852672 /sbin/launchd --flag with spaces",
+      "Tue Sep 18 14:01:56 2026       124     1  15712 426852672 /sbin/launchd --flag with spaces",
+      "garbage line here",
+      "",
+      "Tue Sep  8 14:01:56",
+    ].join("\n")
+    const rows = parsePsRows(stdout)
+    expect(rows).toEqual([
+      {
+        pid: 123,
+        ppid: 1,
+        rssKb: 15712,
+        vszKb: 426852672,
+        start: "Tue Sep  8 14:01:56 2026",
+        args: "/sbin/launchd --flag with spaces",
+      },
+      {
+        pid: 124,
+        ppid: 1,
+        rssKb: 15712,
+        vszKb: 426852672,
+        start: "Tue Sep 18 14:01:56 2026",
+        args: "/sbin/launchd --flag with spaces",
+      },
+    ])
+    expect(parseLstartLine("Tue Sep  8 14:01:56 2026     /var/folders/kilo-p0-cli-abc/kilo serve --port 0")).toEqual({
+      start: "Tue Sep  8 14:01:56 2026",
+      rest: "/var/folders/kilo-p0-cli-abc/kilo serve --port 0",
+    })
+    expect(parseLstartLine("Tue Sep 18 14:01:56 2026     /var/folders/kilo-p0-cli-abc/kilo serve --port 0")).toEqual({
+      start: "Tue Sep 18 14:01:56 2026",
+      rest: "/var/folders/kilo-p0-cli-abc/kilo serve --port 0",
+    })
+    expect(parseLstartLine("Tue Sep  8 14:01:56")).toBeNull()
+  })
+
   it("skips header, empty, and malformed lines without crashing", () => {
-    const rows = parsePsRows([
-      "PID  PPID   RSS      VSZ COMMAND",
-      "",
-      "   garbage line here",
-      "Tue Aug 11 13:15:12 2026         1     0  15712 426852672 /sbin/launchd",
-      "   x     y      z       w /broken",
-      "Tue Aug 11 13:15:12 2026       703   611  not-a-number 461072032 /bin/odd",
-      "",
-    ].join("\n"))
+    const rows = parsePsRows(
+      [
+        "PID  PPID   RSS      VSZ COMMAND",
+        "",
+        "   garbage line here",
+        "Tue Aug 11 13:15:12 2026         1     0  15712 426852672 /sbin/launchd",
+        "   x     y      z       w /broken",
+        "Tue Aug 11 13:15:12 2026       703   611  not-a-number 461072032 /bin/odd",
+        "",
+      ].join("\n"),
+    )
     expect(rows).toEqual([
       { pid: 1, ppid: 0, rssKb: 15712, vszKb: 426852672, start: "Tue Aug 11 13:15:12 2026", args: "/sbin/launchd" },
     ])
@@ -285,9 +325,9 @@ describe("memory guard config (env rails, validated)", () => {
 
   it("rejects non-positive-integer rail values (fails safely before launch)", () => {
     for (const bad of ["abc", "0", "-5", "1.5"]) {
-      expect(() =>
-        memoryGuardConfig({ KILO_P0_MEMORY_GUARD_MAX_PROCESS_RSS_MB: bad }),
-      ).toThrow(MemoryGuardUnavailableError)
+      expect(() => memoryGuardConfig({ KILO_P0_MEMORY_GUARD_MAX_PROCESS_RSS_MB: bad })).toThrow(
+        MemoryGuardUnavailableError,
+      )
     }
   })
 })
@@ -345,7 +385,13 @@ describe("memory guard runtime (injected ps/clock/timers)", () => {
     f.setStdout(
       psLines([
         // The user's production VS Code — a different userData dir.
-        ownedRow(60, 1, 50 * 1024 * 1024, 1000, "/Applications/Code --user-data-dir=/Users/u/Library/Application Support/Code"),
+        ownedRow(
+          60,
+          1,
+          50 * 1024 * 1024,
+          1000,
+          "/Applications/Code --user-data-dir=/Users/u/Library/Application Support/Code",
+        ),
         ownedRow(61, 60, 50 * 1024 * 1024, 1000, "Code Helper --type=renderer"),
         // Our owned process stays tiny.
         ownedRow(100, 30, 1000, 1000, `/Code --user-data-dir=${USER_DATA}`),
