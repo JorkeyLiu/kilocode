@@ -125,7 +125,9 @@ export async function acquireB5GlobalLock(timeoutMs = 120_000): Promise<() => Pr
       // cross-worker entry, so releasing only the memory slot cannot admit
       // an unsafe successor. Surface the failure instead of swallowing it.
       releaseMem()
-      throw new Error(`B5 global lock release failed to remove owned metadata: ${(err as Error)?.message ?? String(err)}`)
+      throw new Error(
+        `B5 global lock release failed to remove owned metadata: ${(err as Error)?.message ?? String(err)}`,
+      )
     }
     try {
       fs.rmdirSync(dir)
@@ -135,13 +137,15 @@ export async function acquireB5GlobalLock(timeoutMs = 120_000): Promise<() => Pr
       // Never retry with recursive removal; the remaining directory (even if
       // empty/orphaned) intentionally fails closed until manual inspection.
       releaseMem()
-      throw new Error(`B5 global lock release failed to remove owned lock directory: ${(err as Error)?.message ?? String(err)}`)
+      throw new Error(
+        `B5 global lock release failed to remove owned lock directory: ${(err as Error)?.message ?? String(err)}`,
+      )
     }
     releaseMem()
   }
 }
 
-export async function withB5GlobalLock<T>(fn: () => Promise<T>): Promise<T> {
+async function withB5GlobalLock<T>(fn: () => Promise<T>): Promise<T> {
   const release = await acquireB5GlobalLock()
   try {
     return await fn()
