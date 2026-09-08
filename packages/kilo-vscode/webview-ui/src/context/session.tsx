@@ -1769,7 +1769,13 @@ export const SessionProvider: ParentComponent = (props) => {
 
       for (const msg of messages) {
         const parts = msg.parts ?? []
-        if (mode === "reconcile" && store.parts[msg.id]) {
+        // Replace and reconcile share the occurrence-boundary merge: a snapshot
+        // supersedes only pre-snapshot stream state. Parts already hydrated
+        // from pre-boundary emissions merge against the snapshot so proven
+        // newer streamed text survives a stale snapshot; post-boundary queue
+        // entries arrive after messagesLoaded and dedupe in handlePartUpdated.
+        // Replace without a boundary keeps the legacy stash path.
+        if ((mode === "reconcile" || (mode === "replace" && input.since !== undefined)) && store.parts[msg.id]) {
           // Reconcile on a message already hydrated into the reactive store:
           // write parts directly so visible turns pick up server corrections,
           // but do not erase proven newer streamed text absent from a stale snapshot.
@@ -1898,7 +1904,10 @@ export const SessionProvider: ParentComponent = (props) => {
             delta.textDelta &&
             (existing.type === "text" || existing.type === "reasoning")
           ) {
-            // Append text delta to text or reasoning parts
+            // Normal delta append. Dedupe of post-boundary replays happens
+            // upstream in the provider snapshot-aware drain, which drops
+            // deltas for parts already present in the fetched snapshot;
+            // delivered updates apply verbatim, including true repeats.
             ;(existing as { text: string }).text += delta.textDelta
           } else {
             // Preserve the proxy identity so Solid does not remount tool UI

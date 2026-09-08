@@ -64,16 +64,79 @@ describe("SessionStreamScheduler / coalescing", () => {
     expect(partText(sent[0]!)).toBe("new")
   })
 
-  it("flushes deltas before later full updates", () => {
+  it("supersedes a queued delta with a later full update without flushing", () => {
+    // Same-key authoritative full carries canonical cumulative content, so the
+    // stale delta is dropped in place and nothing emits until flush/drain.
+    const sent: Sent[] = []
+    const queue = new SessionStreamScheduler((msg) => sent.push(msg))
+    queue.push(update("a", "a"))
+    queue.push(update("done"))
+    expect(sent).toHaveLength(0)
+    queue.flush()
+    const flat = items(sent)
+    expect(flat).toHaveLength(1)
+    expect(partText(flat[0]!)).toBe("done")
+    expect(flat[0]!.delta).toBeUndefined()
+    queue.dispose()
+  })
+
+  it("delta→full keeps other queued keys ordered without early flush", () => {
+    const sent: Sent[] = []
+    const queue = new SessionStreamScheduler((msg) => sent.push(msg))
+    queue.push(update("a", "a", "sess-1", "p1"))
+    queue.push(update("b", "b", "sess-1", "p2"))
+    // Same-key full supersedes the p1 delta; p2 must not flush early.
+    queue.push(update("full-a", undefined, "sess-1", "p1"))
+    expect(sent).toHaveLength(0)
+    queue.flush("sess-1")
+    const flat = items(sent)
+    expect(flat).toHaveLength(2)
+    expect(partText(flat[0]!)).toBe("full-a")
+    expect(flat[0]!.delta).toBeUndefined()
+    expect(partText(flat[1]!)).toBe("b")
+    queue.dispose()
+  })
+
+  it("delta→full updates the receipt stamp so post-boundary drain keeps the full", () => {
+    const sent: Sent[] = []
+    const queue = new SessionStreamScheduler((msg) => sent.push(msg))
+    queue.push(update("a", "a", "s1", "p1"))
+    const boundary = Date.now()
+    queue.push(update("full-a", undefined, "s1", "p1"))
+    expect(sent).toHaveLength(0)
+    queue.drainSince("s1", boundary)
+    const flat = items(sent)
+    expect(flat).toHaveLength(1)
+    expect(partText(flat[0]!)).toBe("full-a")
+    expect(flat[0]!.delta).toBeUndefined()
+    queue.dispose()
+  })
+
+  it("merge semantics: full→delta appends, delta→delta concatenates, full→full keeps latest", () => {
+    // full→delta folds into an authoritative replace (no delta).
+    const fullDelta = items(flushSync(update("hello"), update("hello world", " world")))
+    expect(fullDelta).toHaveLength(1)
+    expect(partText(fullDelta[0]!)).toBe("hello world")
+    expect(fullDelta[0]!.delta).toBeUndefined()
+    // delta→delta concatenates text and delta payloads.
+    const deltaDelta = items(flushSync(update("a", "a"), update("b", "b")))
+    expect(deltaDelta).toHaveLength(1)
+    expect(partText(deltaDelta[0]!)).toBe("ab")
+    expect(deltaDelta[0]!.delta?.textDelta).toBe("ab")
+    // full→full keeps the latest authoritative content.
+    const fullFull = items(flushSync(update("old"), update("new")))
+    expect(fullFull).toHaveLength(1)
+    expect(partText(fullFull[0]!)).toBe("new")
+    // delta→full supersedes with the canonical full (covered above).
     const sent: Sent[] = []
     const queue = new SessionStreamScheduler((msg) => sent.push(msg))
     queue.push(update("a", "a"))
     queue.push(update("done"))
     queue.flush()
     const flat = items(sent)
-    expect(flat).toHaveLength(2)
-    expect(partText(flat[0]!)).toBe("a")
-    expect(partText(flat[1]!)).toBe("done")
+    expect(flat).toHaveLength(1)
+    expect(partText(flat[0]!)).toBe("done")
+    queue.dispose()
   })
 
   it("emits non-keyable updates immediately and flushes pending first", () => {

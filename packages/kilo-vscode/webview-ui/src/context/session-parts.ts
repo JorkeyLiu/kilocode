@@ -29,6 +29,8 @@ export function sameParts(local: Part[] = [], snapshot: Part[] = []): boolean {
  * Reconcile snapshots may be older than in-flight streaming deltas. Preserve
  * only appended streamed tail parts and open prefix extensions while still
  * accepting snapshots that heal older removals and completed corrections.
+ * Replace snapshots share the same occurrence-boundary merge when a `since`
+ * boundary is present.
  */
 export function mergeParts(local: Part[], snapshot: Part[], since: number): Part[] {
   const by = new Map(snapshot.map((part) => [part.id, part]))

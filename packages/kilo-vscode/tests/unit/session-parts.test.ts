@@ -100,6 +100,31 @@ describe("mergeParts", () => {
   })
 })
 
+describe("mergeParts / replace with since boundary", () => {
+  it("preserves a longer open prefix for replace like reconcile", () => {
+    const parts = mergeParts([text("p1", "hello world")], [text("p1", "hello")], 10)
+    expect(value(parts, "p1")).toBe("hello world")
+  })
+
+  it("preserves a new tail part whose start proves post-boundary creation", () => {
+    const parts = mergeParts(
+      [text("p1", "tool done", { end: 2 }), text("p2", "final summary", { start: 20 })],
+      [text("p1", "tool done", { end: 2 })],
+      10,
+    )
+    expect(parts.map((part) => part.id)).toEqual(["p1", "p2"])
+  })
+
+  it("drops a tail part that predates the boundary", () => {
+    const parts = mergeParts(
+      [text("p1", "tool done", { end: 2 }), text("p2", "stale", { start: 5 })],
+      [text("p1", "tool done", { end: 2 })],
+      10,
+    )
+    expect(parts.map((part) => part.id)).toEqual(["p1"])
+  })
+})
+
 describe("sameParts", () => {
   it("accepts equal hydrated and snapshot parts", () => {
     expect(sameParts([text("p1", "done", { end: 2 })], [text("p1", "done", { end: 2 })])).toBe(true)

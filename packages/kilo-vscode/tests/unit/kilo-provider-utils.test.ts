@@ -18,6 +18,7 @@ import type {
   Provider,
   Event,
   EventSessionStatus,
+  EventMessagePartDelta,
   EventSessionTurnClose,
   EventSandboxStatusChanged,
   EventPermissionAsked,
@@ -268,6 +269,31 @@ describe("mapSSEEventToWebviewMessage", () => {
     if (msg?.type === "partUpdated") {
       expect(msg.sessionID).toBe("sess-1")
       expect(msg.messageID).toBe("m1")
+    }
+  })
+
+  it("maps message.part.delta to a keyed chunk-only partUpdated", () => {
+    const event: EventMessagePartDelta = {
+      id: "evt-delta",
+      type: "message.part.delta",
+      properties: {
+        sessionID: "sess-1",
+        messageID: "m1",
+        partID: "p1",
+        field: "text",
+        delta: " world",
+      },
+    }
+    const msg = mapSSEEventToWebviewMessage(event, "sess-1")
+    expect(msg?.type).toBe("partUpdated")
+    if (msg?.type === "partUpdated") {
+      // Production deltas carry only the chunk: part.text equals delta.textDelta,
+      // and IDs are always present so the update is keyable by the scheduler.
+      expect(msg.sessionID).toBe("sess-1")
+      expect(msg.messageID).toBe("m1")
+      expect((msg.part as { id?: string }).id).toBe("p1")
+      expect((msg.part as { text?: string }).text).toBe(" world")
+      expect(msg.delta).toEqual({ type: "text-delta", textDelta: " world" })
     }
   })
 

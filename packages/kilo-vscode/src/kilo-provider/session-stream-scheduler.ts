@@ -99,6 +99,26 @@ function partUpdateKey(msg: PartUpdate): string | undefined {
   return `${msg.sessionID}:${mid}:${id}`
 }
 
+/**
+ * Snapshot key grammar shared with the provider drain predicate.
+ *
+ * Scheduler queue keys are session-scoped (`session:message:part`); snapshot
+ * membership compares only the `(messageID, partID)` suffix so a fetched page
+ * can veto ambiguous deltas without importing SDK message types.
+ */
+export function snapshotPartKey(messageID: string, partID: string): string {
+  return `${messageID}:${partID}`
+}
+
+/** Extract the `(messageID, partID)` snapshot key for a queued update, if keyable. */
+export function updateSnapshotKey(msg: PartUpdate): string | undefined {
+  const id = partField(msg.part, "id")
+  const mid = msg.messageID || partField(msg.part, "messageID")
+  if (typeof id !== "string" || !id) return undefined
+  if (typeof mid !== "string" || !mid) return undefined
+  return snapshotPartKey(mid, id)
+}
+
 function mergePartUpdate(prev: PartUpdate | undefined, msg: PartUpdate): PartUpdate {
   if (!prev) return msg
   const text = msg.delta?.textDelta
@@ -119,6 +139,7 @@ export class SessionStreamScheduler {
   private bgFirstQueuedAt = 0
   private visibleFirstQueuedAt = 0
   private readonly queues = new Map<string, Map<string, PartUpdate>>()
+  private readonly stamps = new Map<string, Map<string, number>>()
   private readonly visible = new Set<string>()
   private readonly activeMs: number
   private readonly visibleMs: number
@@ -190,13 +211,18 @@ export class SessionStreamScheduler {
 
     const queue = this.ensureQueue(msg.sessionID)
     const prev = queue.get(key)
-    // A full-part replacement after buffered deltas would lose information; flush first.
-    if (prev?.delta && !msg.delta) {
-      this.flush(msg.sessionID)
-      this.ensureQueue(msg.sessionID).set(key, msg)
-    } else {
-      queue.set(key, mergePartUpdate(prev, msg))
-    }
+    // Receipt evidence for the replace/reconcile occurrence boundary. The
+    // stamp records the last push time so a pre-boundary delta extended after
+    // the boundary is preserved (its old time.start cannot prove newness).
+    // A later authoritative full update for the same key supersedes a queued
+    // delta in place: the full part already carries canonical cumulative
+    // content, so emitting the stale delta first would duplicate text. The
+    // stamp moves to the full update's receipt time so a post-boundary full
+    // survives drainSince; a pre-boundary full with no later update still
+    // drops via the snapshot rule.
+    const now = Date.now()
+    queue.set(key, mergePartUpdate(prev, msg))
+    this.ensureStamps(msg.sessionID).set(key, now)
     this.schedule(msg.sessionID)
   }
 
@@ -228,14 +254,18 @@ export class SessionStreamScheduler {
   /**
    * Discard any queued updates for a session without emitting them.
    *
-   * Called when an authoritative snapshot supersedes buffered deltas
-   * (messagesLoaded fetch) or when a session is deleted. Does NOT alter focus
+   * Called when a session is deleted. Does NOT alter focus
    * state — callers that also want to clear focus should call `focus(undefined)`
    * themselves. A pending active-lane timer is left to fire harmlessly
    * (`take()` returns `[]` for the emptied queue).
+   *
+   * Note: non-keyable updates bypass the queue (immediate emit in `push`),
+   * so they are outside the receipt-boundary guarantee `drainSince` provides
+   * for keyed production updates. The production part mapper always emits IDs.
    */
   drop(sessionID: string): void {
     this.queues.delete(sessionID)
+    this.stamps.delete(sessionID)
     if (this.vtimer && !this.hasVisible()) {
       clearTimeout(this.vtimer)
       this.vtimer = null
@@ -246,10 +276,66 @@ export class SessionStreamScheduler {
     }
   }
 
+  /**
+   * Emit only queued updates received at or after `since`, dropping older
+   * entries without emitting them. An optional `keep` predicate applies the
+   * deterministic snapshot rule: the provider keeps authoritative full updates
+   * (`!update.delta`) and deltas for parts absent from the fetched snapshot,
+   * and drops deltas for parts present in the snapshot as ambiguous without
+   * inspecting text. They converge on the backend's subsequent durable full
+   * `message.part.updated.1`; if the process dies before that commit the
+   * delta was never canonical.
+   *
+   * Receipt stamps are the boundary: `part.time.start` is never consulted.
+   * Pre-boundary stamps drop unconditionally. Missing stamps are conservative:
+   * without `keep` they emit (legacy path); with `keep` the predicate
+   * decides, so a missing stamp only survives when it satisfies the snapshot
+   * rule. Non-keyable updates are never queued (immediate emit in `push`),
+   * so they are outside this boundary. Queue, stamps, and lane timers are
+   * always cleaned up regardless of keep/drop.
+   */
+  drainSince(sessionID: string, since: number, keep?: (update: PartUpdate) => boolean): void {
+    const queue = this.queues.get(sessionID)
+    if (!queue || queue.size === 0) {
+      this.queues.delete(sessionID)
+      this.stamps.delete(sessionID)
+      this.clearDrainTimers(sessionID)
+      return
+    }
+    const times = this.stamps.get(sessionID)
+    const keepList: PartUpdate[] = []
+    for (const [key, msg] of queue) {
+      const at = times?.get(key)
+      if (at !== undefined && at < since) continue
+      if (keep && !keep(msg)) continue
+      keepList.push(msg)
+    }
+    this.queues.delete(sessionID)
+    this.stamps.delete(sessionID)
+    this.clearDrainTimers(sessionID)
+    this.emit(keepList)
+  }
+
   dispose(): void {
     this.clearTimers()
     this.queues.clear()
+    this.stamps.clear()
     this.visible.clear()
+  }
+
+  private clearDrainTimers(sessionID: string): void {
+    if (this.active === sessionID && this.atimer) {
+      clearTimeout(this.atimer)
+      this.atimer = null
+    }
+    if (this.vtimer && !this.hasVisible()) {
+      clearTimeout(this.vtimer)
+      this.vtimer = null
+    }
+    if (this.btimer && !this.hasBackground()) {
+      clearTimeout(this.btimer)
+      this.btimer = null
+    }
   }
 
   stats(): Readonly<StreamSchedulerStats> {
@@ -262,6 +348,14 @@ export class SessionStreamScheduler {
     const queue = new Map<string, PartUpdate>()
     this.queues.set(sid, queue)
     return queue
+  }
+
+  private ensureStamps(sid: string): Map<string, number> {
+    const existing = this.stamps.get(sid)
+    if (existing) return existing
+    const map = new Map<string, number>()
+    this.stamps.set(sid, map)
+    return map
   }
 
   private schedule(sessionID: string): void {
@@ -324,12 +418,14 @@ export class SessionStreamScheduler {
     const queue = this.queues.get(sessionID)
     if (!queue) return []
     this.queues.delete(sessionID)
+    this.stamps.delete(sessionID)
     return [...queue.values()]
   }
 
   private takeAll(): PartUpdate[] {
     const updates = [...this.queues.values()].flatMap((queue) => [...queue.values()])
     this.queues.clear()
+    this.stamps.clear()
     return updates
   }
 
@@ -340,6 +436,7 @@ export class SessionStreamScheduler {
       if (this.visible.has(sid)) continue
       updates.push(...queue.values())
       this.queues.delete(sid)
+      this.stamps.delete(sid)
     }
     return updates
   }
@@ -350,6 +447,7 @@ export class SessionStreamScheduler {
       if (sid === this.active || !this.visible.has(sid)) continue
       updates.push(...queue.values())
       this.queues.delete(sid)
+      this.stamps.delete(sid)
     }
     return updates
   }

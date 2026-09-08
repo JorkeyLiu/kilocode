@@ -44,8 +44,10 @@ import {
   sameDirectory,
   SessionStreamScheduler,
   buildSettingPath,
+  buildSnapshotPartKeys,
   type SessionRefreshContext,
 } from "./kilo-provider-utils"
+import { updateSnapshotKey } from "./kilo-provider/session-stream-scheduler"
 import {
   sdkSessionToDetail,
   observationSessionToDetail,
@@ -2983,7 +2985,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.refreshSessionDetails(sessionID, dir, abort.signal)
       }
     }
-    const since = mode === "reconcile" ? Date.now() : undefined
+    // Occurrence boundary: parts/updates received at or after this instant are
+    // newer than the snapshot query-start and must survive the snapshot.
+    // Captured before the message fetch for replace and reconcile; reconcile
+    // behavior is unchanged, replace now threads the same boundary.
+    const since = mode === "replace" || mode === "reconcile" ? Date.now() : undefined
     let page: Awaited<ReturnType<typeof fetchMessagePage>>
     try {
       page = await fetchMessagePage(
@@ -3016,8 +3022,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.connectionService.recordMessageSessionId(message.id, message.sessionID)
     }
     if (mode === "replace" || mode === "reconcile") this.resetMessageCosts(sessionID, messages)
-    if ((mode === "replace" || mode === "reconcile") && !options.preserveStream) this.streams.drop(sessionID)
     if (mode === "reconcile") this.lastReconciledAt.set(sessionID, Date.now())
+    // Ordering contract: messagesLoaded first, then the deterministic
+    // snapshot-aware drain. The snapshot Set holds fetched (messageID, partID)
+    // keys; the predicate keeps authoritative full updates (!delta) and
+    // deltas for parts absent from the snapshot (new tail), and drops deltas
+    // for parts present in the snapshot as ambiguous without inspecting text.
+    // Pre-boundary receipts drop. Modes without since retain ordinary flush.
     this.postMessage({
       type: "messagesLoaded",
       sessionID,
@@ -3027,7 +3038,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       hasMore: Boolean(page.cursor),
       since,
     })
-    if (options.preserveStream) this.streams.flush(sessionID)
+    if ((mode === "replace" || mode === "reconcile") && since !== undefined) {
+      const snapshot = buildSnapshotPartKeys(page.items)
+      this.streams.drainSince(sessionID, since, (update) => {
+        if (!update.delta) return true
+        const key = updateSnapshotKey(update)
+        if (!key) return false
+        return !snapshot.has(key)
+      })
+    } else if (options.preserveStream) this.streams.flush(sessionID)
     this.recoverPendingPrompts()
     if (strict) this.activateSession(sessionID)
     return true
@@ -3055,6 +3074,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     try {
       const workspaceDir = this.getWorkspaceDirectory(sessionID)
+      const since = Date.now()
       const historyWithObserve = retry(() =>
         this.client!.session.messages({ sessionID, directory: workspaceDir }, { throwOnError: true }),
       ).then(
@@ -3081,6 +3101,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.getSessionDetail(sessionID, workspaceDir),
         historyWithObserve,
       ])
+      // Deletion tombstone: a delete racing the fetch wins over the snapshot.
+      // Evict the in-flight marker so a later legitimate retry can run, drop
+      // queued stream state, and return without posts so the child is not
+      // resurrected. Background child sync never consults detailGeneration.
+      if (!this.trackedSessionIds.has(sessionID)) {
+        this.syncedChildSessions.delete(sessionID)
+        this.streams.drop(sessionID)
+        return
+      }
       // SDK-first detached parity for the direct full messages read; the
       // private `session/messages` snapshot observes without mutating state.
       // Full load binds the exact empty query (no limit/before).
@@ -3113,15 +3142,22 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       }
       this.resetMessageCosts(sessionID, messages)
 
-      // Snapshot supersedes any queued deltas (see handleLoadMessages for the
-      // snapshot-freshness assumption that governs drop() here).
-      this.streams.drop(sessionID)
+      // Same ordering contract as doLoadMessages: messagesLoaded first,
+      // then the deterministic snapshot-aware drain over history.data keys.
       this.postMessage({
         type: "messagesLoaded",
         sessionID,
         messages,
         mode: "replace",
         hasMore: false,
+        since,
+      })
+      const snapshot = buildSnapshotPartKeys(history.data)
+      this.streams.drainSince(sessionID, since, (update) => {
+        if (!update.delta) return true
+        const key = updateSnapshotKey(update)
+        if (!key) return false
+        return !snapshot.has(key)
       })
 
       // Recover any prompts emitted by the child before we started tracking it.

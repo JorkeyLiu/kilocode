@@ -2,11 +2,16 @@ import type { Session, Agent, Event, ProviderListResponse } from "@kilocode/sdk/
 import type { SyncPayload } from "./services/cli-backend/sdk-sse-adapter"
 import { prettifyError } from "zod/v4"
 import type { PartBatch, PartUpdate } from "./kilo-provider/session-stream-scheduler"
+import { snapshotPartKey } from "./kilo-provider/session-stream-scheduler"
 import type { AgentIndex } from "./config/selectors"
 import type { PartRemove } from "./shared/stream-messages"
 import * as path from "path"
 
-export { SessionStreamScheduler } from "./kilo-provider/session-stream-scheduler"
+export {
+  SessionStreamScheduler,
+  snapshotPartKey,
+  updateSnapshotKey,
+} from "./kilo-provider/session-stream-scheduler"
 
 type SyncEventMessageUpdated = Extract<SyncPayload, { name: "message.updated.1" }>
 type SyncEventMessageRemoved = Extract<SyncPayload, { name: "message.removed.1" }>
@@ -455,6 +460,33 @@ export function sameDirectory(a: string, b: string): boolean {
 
   if (process.platform !== "win32") return false
   return path.relative(left.toLowerCase(), right.toLowerCase()) === ""
+}
+
+/**
+ * Build the deterministic snapshot membership set for the stream drain rule.
+ * Keys are `(messageID, partID)` pairs from fetched snapshot items; the drain
+ * predicate keeps authoritative full updates and deltas for absent keys, and
+ * drops deltas for present keys without inspecting text.
+ */
+export function buildSnapshotPartKeys(items: unknown): Set<string> {
+  const keys = new Set<string>()
+  if (!Array.isArray(items)) return keys
+  for (const item of items) {
+    if (!item || typeof item !== "object") continue
+    const rec = item as Record<string, unknown>
+    const info = rec.info as Record<string, unknown> | undefined
+    const mid = typeof info?.id === "string" ? info.id : undefined
+    if (!mid) continue
+    const parts = rec.parts
+    if (!Array.isArray(parts)) continue
+    for (const part of parts) {
+      if (!part || typeof part !== "object") continue
+      const id = (part as Record<string, unknown>).id
+      if (typeof id !== "string" || !id) continue
+      keys.add(snapshotPartKey(mid, id))
+    }
+  }
+  return keys
 }
 
 type SyncEvent =
