@@ -24,6 +24,8 @@ const ROOT = path.resolve(import.meta.dir, "../..")
 const KILOPROVIDER_FILE = path.join(ROOT, "src/KiloProvider.ts")
 const AGENT_MANAGER_PROVIDER_FILE = path.join(ROOT, "src/agent-manager/AgentManagerProvider.ts")
 const VSCODE_HOST_FILE = path.join(ROOT, "src/agent-manager/vscode-host.ts")
+const AGENT_OPTIONS_FILE = path.join(ROOT, "src/agent-manager/agent-options.ts")
+const PROVIDER_OPTIONS_FILE = path.join(ROOT, "src/kilo-provider/options.ts")
 const CONNECTION_SERVICE_FILE = path.join(ROOT, "src/services/cli-backend/connection-service.ts")
 
 function readFile(filePath: string): string {
@@ -111,8 +113,16 @@ describe("KiloProvider disableViewedRegistration contract", () => {
   it("embedded Agent Manager providers disable generic viewed registration", () => {
     // Each Agent Manager panel hosts a full KiloProvider; the "agent-manager"
     // keys own presence there, so the embedded provider must not
-    // double-register under its own instanceId.
-    expect(vscodeHost).toContain("disableViewedRegistration: true")
+    // double-register under its own instanceId. Ownership lives in
+    // agent-options (surfaced via KiloProviderOptions), with VscodeHost
+    // delegating through providerOpts/agentOptions rather than a literal.
+    const agentOptions = readFile(AGENT_OPTIONS_FILE)
+    const providerOptions = readFile(PROVIDER_OPTIONS_FILE)
+    expect(agentOptions).toContain("disableViewedRegistration: true")
+    expect(providerOptions).toContain("disableViewedRegistration")
+    expect(vscodeHost).toContain("agentOptions(this.canonicalConfig")
+    expect(vscodeHost).toContain("this.providerOpts()")
+    expect(vscodeHost).not.toContain("disableViewedRegistration: true")
   })
 })
 

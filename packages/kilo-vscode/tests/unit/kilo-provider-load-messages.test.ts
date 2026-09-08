@@ -27,7 +27,7 @@ function mkMessage(id: string, role: "user" | "assistant", time = 0) {
   return {
     info: {
       id,
-      sessionID: "s1",
+      sessionID: "ses_s1",
       role,
       time: { created: time },
     },
@@ -37,7 +37,7 @@ function mkMessage(id: string, role: "user" | "assistant", time = 0) {
 
 function mkSession(revert?: { messageID: string }) {
   return {
-    id: "s1",
+    id: "ses_s1",
     slug: "session",
     version: "1",
     projectID: "project",
@@ -54,8 +54,14 @@ function mkResult(items: unknown[]) {
   return { data: items, response: { headers: new Headers() } }
 }
 
-function mkCreatedSession(id = "created") {
-  return { id, title: "Created", time: { created: 0, updated: 0 } }
+function mkCreatedSession(id = "ses_created") {
+  return {
+    id,
+    title: "Created",
+    projectID: "project",
+    directory: "/repo",
+    time: { created: 0, updated: 0 },
+  }
 }
 
 function createClient(options?: {
@@ -267,19 +273,19 @@ describe("KiloProvider.handleAbort", () => {
     internal.handleEvent(
       {
         type: "session.status",
-        properties: { sessionID: "s1", status: { type: "busy" } },
+        properties: { sessionID: "ses_s1", status: { type: "busy" } },
       },
       "/repo",
     )
-    internal.sessionDirectories.set("s1", "/repo/worktree")
+    internal.sessionDirectories.set("ses_s1", "/repo/worktree")
 
-    await internal.handleAbort("s1")
+    await internal.handleAbort("ses_s1")
 
     expect(client.aborted).toEqual([
-      { sessionID: "s1", directory: "/repo" },
-      { sessionID: "s1", directory: "/repo/worktree" },
+      { sessionID: "ses_s1", directory: "/repo" },
+      { sessionID: "ses_s1", directory: "/repo/worktree" },
     ])
-    expect(sent.at(-1)).toMatchObject({ type: "sessionStatus", sessionID: "s1", status: "idle" })
+    expect(sent.at(-1)).toMatchObject({ type: "sessionStatus", sessionID: "ses_s1", status: "idle" })
   })
 
   it("aborts the resolved session directory when the status event lacks a directory", async () => {
@@ -287,13 +293,13 @@ describe("KiloProvider.handleAbort", () => {
     const { provider, internal } = makeProvider(client)
     internal.handleEvent({
       type: "session.status",
-      properties: { sessionID: "s1", status: { type: "busy" } },
+      properties: { sessionID: "ses_s1", status: { type: "busy" } },
     })
-    internal.sessionDirectories.set("s1", "/repo/worktree")
+    internal.sessionDirectories.set("ses_s1", "/repo/worktree")
 
-    await internal.handleAbort("s1")
+    await internal.handleAbort("ses_s1")
 
-    expect(client.aborted).toEqual([{ sessionID: "s1", directory: "/repo/worktree" }])
+    expect(client.aborted).toEqual([{ sessionID: "ses_s1", directory: "/repo/worktree" }])
   })
 
   it("attempts every owner and stays busy when one abort fails", async () => {
@@ -303,19 +309,19 @@ describe("KiloProvider.handleAbort", () => {
     internal.handleEvent(
       {
         type: "session.status",
-        properties: { sessionID: "s1", status: { type: "busy" } },
+        properties: { sessionID: "ses_s1", status: { type: "busy" } },
       },
       "/repo",
     )
-    internal.sessionDirectories.set("s1", "/repo/worktree")
+    internal.sessionDirectories.set("ses_s1", "/repo/worktree")
 
-    await internal.handleAbort("s1")
+    await internal.handleAbort("ses_s1")
 
     expect(client.aborted).toEqual([
-      { sessionID: "s1", directory: "/repo" },
-      { sessionID: "s1", directory: "/repo/worktree" },
+      { sessionID: "ses_s1", directory: "/repo" },
+      { sessionID: "ses_s1", directory: "/repo/worktree" },
     ])
-    expect(sent.at(-1)).toMatchObject({ type: "sessionStatus", sessionID: "s1", status: "busy" })
+    expect(sent.at(-1)).toMatchObject({ type: "sessionStatus", sessionID: "ses_s1", status: "busy" })
     expect(error).toHaveBeenCalledTimes(1)
     error.mockRestore()
   })
@@ -327,20 +333,20 @@ describe("KiloProvider.handleAbort", () => {
     internal.handleEvent(
       {
         type: "session.status",
-        properties: { sessionID: "s1", status: { type: "busy" } },
+        properties: { sessionID: "ses_s1", status: { type: "busy" } },
       },
       "/repo",
     )
-    internal.sessionDirectories.set("s1", "/repo/worktree")
-    internal.sessionDirectories.set("s2", "/repo/other")
+    internal.sessionDirectories.set("ses_s1", "/repo/worktree")
+    internal.sessionDirectories.set("ses_s2", "/repo/other")
 
-    const stopped = provider.abortSessions(["s1", "s2", "s2"])
+    const stopped = provider.abortSessions(["ses_s1", "ses_s2", "ses_s2"])
     provider.dispose()
 
     expect(client.aborted).toEqual([
-      { sessionID: "s1", directory: "/repo" },
-      { sessionID: "s1", directory: "/repo/worktree" },
-      { sessionID: "s2", directory: "/repo/other" },
+      { sessionID: "ses_s1", directory: "/repo" },
+      { sessionID: "ses_s1", directory: "/repo/worktree" },
+      { sessionID: "ses_s2", directory: "/repo/other" },
     ])
     pending.resolve(undefined)
     await stopped
@@ -356,7 +362,7 @@ describe("KiloProvider.handleAbort", () => {
     created.resolve({ data: mkCreatedSession() })
 
     expect(await resolving).toBeUndefined()
-    expect(client.deleted).toEqual([{ sessionID: "created", directory: "/repo" }])
+    expect(client.deleted).toEqual([{ sessionID: "ses_created", directory: "/repo" }])
     expect(sent).not.toContainEqual(expect.objectContaining({ type: "sessionCreated" }))
   })
 
@@ -383,7 +389,7 @@ describe("KiloProvider.handleAbort", () => {
     context.resolve({})
     await sending
 
-    expect(client.aborted).toEqual([{ sessionID: "created", directory: "/repo" }])
+    expect(client.aborted).toEqual([{ sessionID: "ses_created", directory: "/repo" }])
     expect(client.prompted).toEqual([])
 
     await provider.abortSessions(["pending:1"])
@@ -395,7 +401,7 @@ describe("KiloProvider.handleAbort", () => {
     const { provider, internal } = makeProvider(client)
 
     expect(await internal.resolveSession(undefined, "pending:1", "local")).toBeDefined()
-    provider.acknowledgeDraft("pending:1", "created")
+    provider.acknowledgeDraft("pending:1", "ses_created")
     await provider.abortSessions(["pending:1"])
 
     expect(client.aborted).toEqual([])
@@ -406,20 +412,22 @@ describe("KiloProvider sandbox status", () => {
   it("ignores events from another directory for the same session", () => {
     const client = createClient()
     const { internal, sent } = makeProvider(client)
-    internal.sessionDirectories.set("s1", "/repo")
-    internal.trackedSessionIds.add("s1")
+    internal.sessionDirectories.set("ses_s1", "/repo")
+    internal.trackedSessionIds.add("ses_s1")
 
     internal.handleEvent({
       type: "sandbox.status.changed",
-      properties: { sessionID: "s1", directory: "/other", enabled: true, available: true, version: 1 },
+      properties: { sessionID: "ses_s1", directory: "/other", enabled: true, available: true, version: 1 },
     })
     expect(sent.some((message) => (message as { type?: string }).type === "sandboxStatus")).toBe(false)
 
     internal.handleEvent({
       type: "sandbox.status.changed",
-      properties: { sessionID: "s1", directory: "/repo", enabled: true, available: true, version: 1 },
+      properties: { sessionID: "ses_s1", directory: "/repo", enabled: true, available: true, version: 1 },
     })
-    expect(sent).toContainEqual(expect.objectContaining({ type: "sandboxStatus", sessionID: "s1", directory: "/repo" }))
+    expect(sent).toContainEqual(
+      expect.objectContaining({ type: "sandboxStatus", sessionID: "ses_s1", directory: "/repo" }),
+    )
   })
 })
 
@@ -501,7 +509,7 @@ describe("KiloProvider sandbox toggle", () => {
     const { internal } = makeProvider(client)
     internal.currentSession = mkSession()
 
-    const toggle = internal.handleToggleSandbox({ sessionID: "s1", requestID: "sandbox-1" })
+    const toggle = internal.handleToggleSandbox({ sessionID: "ses_s1", requestID: "sandbox-1" })
     sandbox.resolve({ data: { directory: "/repo", enabled: false, available: true, version: 2 } })
     await toggle
 
@@ -532,7 +540,7 @@ describe("KiloProvider sandbox toggle", () => {
 describe("KiloProvider Agent Manager drafts", () => {
   it("creates distinct sessions for explicit drafts even when another session is current", async () => {
     const client = createClient({
-      createSession: async (_params, index) => ({ data: { ...mkSession(), id: `s${index + 1}` } }),
+      createSession: async (_params, index) => ({ data: { ...mkSession(), id: `ses_${index + 1}` } }),
     })
     const { internal } = makeProvider(client)
     internal.gatherEditorContext = async () => ({})
@@ -542,7 +550,7 @@ describe("KiloProvider Agent Manager drafts", () => {
     await internal.handleSendMessage("second follow-up", "m3", undefined, "draft-2")
 
     expect(client.created).toHaveLength(2)
-    expect(client.prompted.map((call) => call.sessionID)).toEqual(["s1", "s2", "s2"])
+    expect(client.prompted.map((call) => call.sessionID)).toEqual(["ses_1", "ses_2", "ses_2"])
   })
 })
 
@@ -556,7 +564,7 @@ describe("KiloProvider revert ordering", () => {
         id: "evt_clear",
         seq: 0,
         aggregateID: "sessionID",
-        data: { sessionID: "s1", info: mkSession() },
+        data: { sessionID: "ses_s1", info: mkSession() },
       },
     })
 
@@ -565,7 +573,7 @@ describe("KiloProvider revert ordering", () => {
       id: "evt_clear",
       seq: 0,
       type: "session.updated",
-      properties: { sessionID: "s1", info: mkSession() },
+      properties: { sessionID: "ses_s1", info: mkSession() },
     })
   })
 
@@ -576,19 +584,19 @@ describe("KiloProvider revert ordering", () => {
     internal.currentSession = mkSession()
     internal.gatherEditorContext = async () => ({})
 
-    internal.checkpoint("s1", () => internal.handleRevertSession("s1", "m1"))
-    const send = internal.handleSendMessage("replacement", "m2", "s1")
+    internal.checkpoint("ses_s1", () => internal.handleRevertSession("ses_s1", "msg_m1"))
+    const send = internal.handleSendMessage("replacement", "m2", "ses_s1")
     await Promise.resolve()
     await Promise.resolve()
 
     expect(client.reverted).toHaveLength(1)
     expect(client.prompted).toHaveLength(0)
 
-    revert.resolve({ data: mkSession({ messageID: "m1" }) })
+    revert.resolve({ data: mkSession({ messageID: "msg_m1" }) })
     await send
 
     expect(client.prompted).toHaveLength(1)
-    expect(client.prompted[0]?.sessionID).toBe("s1")
+    expect(client.prompted[0]?.sessionID).toBe("ses_s1")
   })
 
   it("waits for a revert queued while the replacement prompt gathers context", async () => {
@@ -599,16 +607,16 @@ describe("KiloProvider revert ordering", () => {
     internal.currentSession = mkSession()
     internal.gatherEditorContext = () => context.promise
 
-    const send = internal.handleSendMessage("replacement", "m2", "s1")
+    const send = internal.handleSendMessage("replacement", "m2", "ses_s1")
     await Promise.resolve()
-    internal.checkpoint("s1", () => internal.handleRevertSession("s1", "m1"))
+    internal.checkpoint("ses_s1", () => internal.handleRevertSession("ses_s1", "msg_m1"))
     context.resolve({})
     await Promise.resolve()
     await Promise.resolve()
 
     expect(client.prompted).toHaveLength(0)
 
-    revert.resolve({ data: mkSession({ messageID: "m1" }) })
+    revert.resolve({ data: mkSession({ messageID: "msg_m1" }) })
     await send
 
     expect(client.prompted).toHaveLength(1)
@@ -622,8 +630,8 @@ describe("KiloProvider revert ordering", () => {
     internal.currentSession = mkSession()
     internal.gatherEditorContext = async () => ({})
 
-    internal.checkpoint("s1", () => internal.handleRevertSession("s1", "m1"))
-    const send = internal.handleSendMessage("replacement", "m2", "s1")
+    internal.checkpoint("ses_s1", () => internal.handleRevertSession("ses_s1", "msg_m1"))
+    const send = internal.handleSendMessage("replacement", "m2", "ses_s1")
     await Promise.resolve()
     revert.resolve({ error: new Error("revert failed") })
     await send
@@ -636,20 +644,20 @@ describe("KiloProvider revert ordering", () => {
   it("clears a stale revert boundary from a full snapshot that omits revert", () => {
     const client = createClient()
     const { internal, sent } = makeProvider(client)
-    internal.currentSession = mkSession({ messageID: "m1" })
-    internal.trackedSessionIds.add("s1")
+    internal.currentSession = mkSession({ messageID: "msg_m1" })
+    internal.trackedSessionIds.add("ses_s1")
 
     internal.handleEvent({
       source: "sync",
       id: "evt_000000000002",
       seq: 0,
       type: "session.updated",
-      properties: { sessionID: "s1", info: mkSession() },
+      properties: { sessionID: "ses_s1", info: mkSession() },
     })
     internal.handleEvent({
       id: "evt_000000000003",
       type: "message.updated",
-      properties: { sessionID: "s1", info: mkMessage("m2", "user", 2).info },
+      properties: { sessionID: "ses_s1", info: mkMessage("m2", "user", 2).info },
     })
     const count = sent.length
 
@@ -658,19 +666,22 @@ describe("KiloProvider revert ordering", () => {
       id: "evt_000000000001",
       seq: 0,
       type: "session.updated",
-      properties: { sessionID: "s1", info: mkSession({ messageID: "m1" }) },
+      properties: { sessionID: "ses_s1", info: mkSession({ messageID: "msg_m1" }) },
     })
     internal.handleEvent({
       id: "evt_000000000001",
       type: "session.updated",
-      properties: { sessionID: "s1", info: mkSession({ messageID: "m1" }) },
+      properties: { sessionID: "ses_s1", info: mkSession({ messageID: "msg_m1" }) },
     })
 
     expect(internal.currentSession?.revert).toBeUndefined()
-    expect(internal.revisions.get("s1")).toEqual({ id: "evt_000000000002", seq: 0 })
+    expect(internal.revisions.get("ses_s1")).toEqual({ id: "evt_000000000002", seq: 0 })
     expect(sent).toHaveLength(count)
     expect(sent.slice(-2)).toEqual([
-      expect.objectContaining({ type: "sessionUpdated", session: expect.objectContaining({ id: "s1", revert: null }) }),
+      expect.objectContaining({
+        type: "sessionUpdated",
+        session: expect.objectContaining({ id: "ses_s1", revert: null }),
+      }),
       expect.objectContaining({ type: "messageCreated", message: expect.objectContaining({ id: "m2" }) }),
     ])
   })
@@ -678,40 +689,40 @@ describe("KiloProvider revert ordering", () => {
   it("uses sequence ordering for workspace-replayed session updates", () => {
     const client = createClient()
     const { internal } = makeProvider(client)
-    internal.currentSession = mkSession({ messageID: "m1" })
-    internal.trackedSessionIds.add("s1")
+    internal.currentSession = mkSession({ messageID: "msg_m1" })
+    internal.trackedSessionIds.add("ses_s1")
 
     internal.handleEvent({
       source: "sync",
       id: "evt_ffffffffffff",
       seq: 1,
       type: "session.updated",
-      properties: { sessionID: "s1", info: mkSession({ messageID: "m1" }) },
+      properties: { sessionID: "ses_s1", info: mkSession({ messageID: "msg_m1" }) },
     })
     internal.handleEvent({
       source: "sync",
       id: "evt_000000000001",
       seq: 2,
       type: "session.updated",
-      properties: { sessionID: "s1", info: mkSession() },
+      properties: { sessionID: "ses_s1", info: mkSession() },
     })
 
     expect(internal.currentSession?.revert).toBeUndefined()
-    expect(internal.revisions.get("s1")).toEqual({ id: "evt_000000000001", seq: 2 })
+    expect(internal.revisions.get("ses_s1")).toEqual({ id: "evt_000000000001", seq: 2 })
   })
 
   it("publishes authoritative session state after a missed clear event", async () => {
     const client = createClient({ sessionData: mkSession() })
     const { internal, sent } = makeProvider(client)
-    internal.currentSession = mkSession({ messageID: "m1" })
-    internal.contextSessionID = "s1"
+    internal.currentSession = mkSession({ messageID: "msg_m1" })
+    internal.contextSessionID = "ses_s1"
 
-    internal.refreshSessionDetails("s1", "/repo")
-    await Promise.resolve()
-    await Promise.resolve()
+    internal.refreshSessionDetails("ses_s1", "/repo")
+    await Bun.sleep(10)
+    await Bun.sleep(10)
 
     expect(internal.currentSession?.revert).toBeUndefined()
-    expect(sent.at(-1)).toMatchObject({ type: "sessionUpdated", session: { id: "s1", revert: null } })
+    expect(sent.at(-1)).toMatchObject({ type: "sessionUpdated", session: { id: "ses_s1", revert: null } })
   })
 
   it("retries a focused session refresh after a concurrent session update", async () => {
@@ -725,26 +736,28 @@ describe("KiloProvider revert ordering", () => {
       },
     })
     const { internal } = makeProvider(client)
-    internal.currentSession = mkSession({ messageID: "m1" })
-    internal.contextSessionID = "s1"
-    internal.trackedSessionIds.add("s1")
+    internal.currentSession = mkSession({ messageID: "msg_m1" })
+    internal.contextSessionID = "ses_s1"
+    internal.trackedSessionIds.add("ses_s1")
 
-    internal.refreshSessionDetails("s1", "/repo")
+    internal.refreshSessionDetails("ses_s1", "/repo")
     internal.handleEvent({
       source: "sync",
       id: "evt_000000000001",
       seq: 0,
       type: "session.updated",
-      properties: { sessionID: "s1", info: { ...mkSession(), title: "updated" } },
+      properties: { sessionID: "ses_s1", info: { ...mkSession(), title: "updated" } },
     })
     first.resolve({ data: mkSession() })
-    await Bun.sleep(0)
+    await Bun.sleep(10)
+    await Bun.sleep(10)
     expect(calls).toBe(2)
 
     second.resolve({ data: { ...mkSession(), title: "updated" } })
-    await Bun.sleep(0)
+    await Bun.sleep(10)
+    await Bun.sleep(10)
 
-    expect(internal.currentSession?.id).toBe("s1")
+    expect(internal.currentSession?.id).toBe("ses_s1")
     expect(internal.currentSession?.revert).toBeUndefined()
   })
 
@@ -759,15 +772,17 @@ describe("KiloProvider revert ordering", () => {
       },
     })
     const { internal, sent } = makeProvider(client)
-    internal.currentSession = mkSession({ messageID: "m1" })
-    internal.contextSessionID = "s1"
+    internal.currentSession = mkSession({ messageID: "msg_m1" })
+    internal.contextSessionID = "ses_s1"
 
-    internal.refreshSessionDetails("s1", "/repo")
-    internal.refreshSessionDetails("s1", "/repo")
+    internal.refreshSessionDetails("ses_s1", "/repo")
+    internal.refreshSessionDetails("ses_s1", "/repo")
     second.resolve({ data: mkSession() })
-    await Bun.sleep(0)
-    first.resolve({ data: mkSession({ messageID: "m1" }) })
-    await Bun.sleep(0)
+    await Bun.sleep(10)
+    await Bun.sleep(10)
+    first.resolve({ data: mkSession({ messageID: "msg_m1" }) })
+    await Bun.sleep(10)
+    await Bun.sleep(10)
 
     expect(internal.currentSession?.revert).toBeUndefined()
     expect(sent.filter((msg) => (msg as { type?: string }).type === "sessionUpdated")).toHaveLength(1)
@@ -778,38 +793,44 @@ describe("KiloProvider revert ordering", () => {
     const client = createClient({ sessionGet: async () => session.promise })
     const { internal } = makeProvider(client)
     internal.currentSession = mkSession()
-    internal.contextSessionID = "s1"
+    internal.contextSessionID = "ses_s1"
 
-    internal.refreshSessionDetails("s1", "/repo")
-    await internal.handleRevertSession("s1", "m1")
+    internal.refreshSessionDetails("ses_s1", "/repo")
+    await internal.handleRevertSession("ses_s1", "msg_m1")
     session.resolve({ data: mkSession() })
     await Bun.sleep(0)
 
-    expect(internal.currentSession?.revert).toEqual({ messageID: "m1" })
+    expect(internal.currentSession?.revert).toEqual({ messageID: "msg_m1" })
   })
 })
 
 describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
   it("stops background processes for the previous session when switching sessions", async () => {
     const client = createClient({
-      sessionData: { id: "s2", directory: "/repo/worktree", time: { created: 1, updated: 1 } },
+      sessionData: {
+        id: "ses_s2",
+        directory: "/repo/worktree",
+        title: "Session",
+        projectID: "project",
+        time: { created: 1, updated: 1 },
+      },
     })
     const { internal } = makeProvider(client)
-    internal.currentSession = { id: "s1", directory: "/repo/old" }
+    internal.currentSession = { id: "ses_s1", directory: "/repo/old" }
 
-    await internal.handleLoadMessages("s2")
+    await internal.handleLoadMessages("ses_s2")
 
-    expect(client.stopped).toEqual([{ sessionID: "s1", directory: "/repo/old" }])
+    expect(client.stopped).toEqual([{ sessionID: "ses_s1", directory: "/repo/old" }])
   })
 
   it("does not stop background processes twice for focus-mode reconcile", async () => {
     const client = createClient({ messagesData: [mkMessage("m1", "user", 1)] })
     const { internal } = makeProvider(client)
-    internal.currentSession = { id: "s1", directory: "/repo/old" }
+    internal.currentSession = { id: "ses_s1", directory: "/repo/old" }
 
-    await internal.handleLoadMessages("s2", { mode: "focus" })
+    await internal.handleLoadMessages("ses_s2", { mode: "focus" })
 
-    expect(client.stopped).toEqual([{ sessionID: "s1", directory: "/repo/old" }])
+    expect(client.stopped).toEqual([{ sessionID: "ses_s1", directory: "/repo/old" }])
   })
 
   it("ignores stale focus refreshes after switching sessions", async () => {
@@ -817,43 +838,61 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
     const s2 = defer<{ data: unknown }>()
     const client = createClient({
       sessionGet: async (params) => {
-        if (params.sessionID === "s1") return s1.promise
-        if (params.sessionID === "s2") return s2.promise
+        if (params.sessionID === "ses_s1") return s1.promise
+        if (params.sessionID === "ses_s2") return s2.promise
         return { data: null }
       },
     })
     const { internal } = makeProvider(client)
-    internal.currentSession = { id: "s1", directory: "/repo/old" }
-    internal.trackedSessionIds.add("s1")
+    internal.currentSession = { id: "ses_s1", directory: "/repo/old" }
+    internal.trackedSessionIds.add("ses_s1")
 
-    await internal.handleLoadMessages("s1", { mode: "focus" })
-    const load = internal.handleLoadMessages("s2")
-    s2.resolve({ data: { id: "s2", directory: "/repo/new", time: { created: 2, updated: 2 } } })
+    await internal.handleLoadMessages("ses_s1", { mode: "focus" })
+    const load = internal.handleLoadMessages("ses_s2")
+    s2.resolve({
+      data: {
+        id: "ses_s2",
+        directory: "/repo/new",
+        title: "Session",
+        projectID: "project",
+        time: { created: 2, updated: 2 },
+      },
+    })
     await load
-    await Promise.resolve()
-    expect(internal.currentSession?.id).toBe("s2")
+    await Bun.sleep(0)
+    await Bun.sleep(0)
+    expect(internal.currentSession?.id).toBe("ses_s2")
 
-    s1.resolve({ data: { id: "s1", directory: "/repo/old", time: { created: 1, updated: 1 } } })
-    await Promise.resolve()
+    s1.resolve({
+      data: {
+        id: "ses_s1",
+        directory: "/repo/old",
+        title: "Session",
+        projectID: "project",
+        time: { created: 1, updated: 1 },
+      },
+    })
+    await Bun.sleep(0)
+    await Bun.sleep(0)
 
-    expect(internal.currentSession?.id).toBe("s2")
-    expect(client.stopped).toEqual([{ sessionID: "s1", directory: "/repo/old" }])
+    expect(internal.currentSession?.id).toBe("ses_s2")
+    expect(client.stopped).toEqual([{ sessionID: "ses_s1", directory: "/repo/old" }])
   })
 
   it("stops each synchronously selected session during rapid switches", async () => {
     const messages = defer<{ data: unknown[]; response: { headers: Headers } }>()
     const client = createClient({ messagesDeferred: messages })
     const { internal } = makeProvider(client)
-    internal.currentSession = { id: "s1", directory: "/repo/s1" }
-    internal.contextSessionID = "s1"
-    internal.sessionDirectories.set("s2", "/repo/s2")
+    internal.currentSession = { id: "ses_s1", directory: "/repo/s1" }
+    internal.contextSessionID = "ses_s1"
+    internal.sessionDirectories.set("ses_s2", "/repo/s2")
 
-    const s2 = internal.handleLoadMessages("s2")
-    const s3 = internal.handleLoadMessages("s3")
+    const s2 = internal.handleLoadMessages("ses_s2")
+    const s3 = internal.handleLoadMessages("ses_s3")
 
     expect(client.stopped).toEqual([
-      { sessionID: "s1", directory: "/repo/s1" },
-      { sessionID: "s2", directory: "/repo/s2" },
+      { sessionID: "ses_s1", directory: "/repo/s1" },
+      { sessionID: "ses_s2", directory: "/repo/s2" },
     ])
 
     messages.resolve(mkResult([]))
@@ -863,15 +902,15 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
   it("stops the selected visible session when clearSession runs with stale currentSession", async () => {
     const client = createClient()
     const { internal } = makeProvider(client)
-    internal.currentSession = { id: "s1", directory: "/repo/s1" }
-    internal.contextSessionID = "s2"
-    internal.sessionDirectories.set("s2", "/repo/s2")
+    internal.currentSession = { id: "ses_s1", directory: "/repo/s1" }
+    internal.contextSessionID = "ses_s2"
+    internal.sessionDirectories.set("ses_s2", "/repo/s2")
 
     internal.stopCurrentSessionProcesses()
     internal.contextSessionID = undefined
     internal.currentSession = null
 
-    expect(client.stopped).toEqual([{ sessionID: "s2", directory: "/repo/s2" }])
+    expect(client.stopped).toEqual([{ sessionID: "ses_s2", directory: "/repo/s2" }])
   })
 
   it("refetches the tail page on focus-mode reselection and posts a reconcile snapshot", async () => {
@@ -889,9 +928,9 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
     ]
     const client = createClient({ messagesData: messages })
     const { internal, sent } = makeProvider(client)
-    internal.trackedSessionIds.add("s1")
+    internal.trackedSessionIds.add("ses_s1")
 
-    await internal.handleLoadMessages("s1", { mode: "focus" })
+    await internal.handleLoadMessages("ses_s1", { mode: "focus" })
 
     // Server must be hit to reconcile the current state.
     expect(client.calls.length).toBeGreaterThanOrEqual(1)
@@ -914,13 +953,13 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
     // still catching SSE drops on normal use patterns.
     const client = createClient({ messagesData: [mkMessage("m1", "user", 1)] })
     const { internal } = makeProvider(client)
-    internal.trackedSessionIds.add("s1")
+    internal.trackedSessionIds.add("ses_s1")
 
-    await internal.handleLoadMessages("s1", { mode: "focus" })
+    await internal.handleLoadMessages("ses_s1", { mode: "focus" })
     const callsAfterFirst = client.calls.length
 
     // Second focus within the throttle window — no fetch should happen.
-    await internal.handleLoadMessages("s1", { mode: "focus" })
+    await internal.handleLoadMessages("ses_s1", { mode: "focus" })
     expect(client.calls.length).toBe(callsAfterFirst)
   })
 
@@ -930,10 +969,10 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
     const messages = defer<{ data: unknown[]; response: { headers: Headers } }>()
     const client = createClient({ messagesDeferred: messages })
     const { internal, sent } = makeProvider(client)
-    internal.trackedSessionIds.add("s1")
+    internal.trackedSessionIds.add("ses_s1")
 
-    const load = internal.handleLoadMessages("s1", { mode: "focus" })
-    await internal.handleDeleteSession("s1")
+    const load = internal.handleLoadMessages("ses_s1", { mode: "focus" })
+    await internal.handleDeleteSession("ses_s1")
     messages.resolve(mkResult([mkMessage("m1", "user", 10)]))
     await load
 
@@ -941,7 +980,7 @@ describe("KiloProvider.handleLoadMessages / focus mode freshness", () => {
       (msg) => typeof msg === "object" && msg && (msg as { type?: unknown }).type === "messagesLoaded",
     )
     expect(loaded).toEqual([])
-    expect(client.stopped).toEqual([{ sessionID: "s1", directory: "/repo" }])
+    expect(client.stopped).toEqual([{ sessionID: "ses_s1", directory: "/repo" }])
   })
 })
 
@@ -949,11 +988,11 @@ describe("KiloProvider.handleDeleteSession / background processes", () => {
   it("stops session background processes in the session directory before deletion", async () => {
     const client = createClient()
     const { internal } = makeProvider(client)
-    internal.sessionDirectories.set("s1", "/repo/worktree")
+    internal.sessionDirectories.set("ses_s1", "/repo/worktree")
 
-    await internal.handleDeleteSession("s1")
+    await internal.handleDeleteSession("ses_s1")
 
-    expect(client.stopped).toEqual([{ sessionID: "s1", directory: "/repo/worktree" }])
+    expect(client.stopped).toEqual([{ sessionID: "ses_s1", directory: "/repo/worktree" }])
   })
 })
 
@@ -962,26 +1001,23 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     const client = createClient()
     const { internal, sent } = makeProvider(client)
     mockMaxCost(internal, 1)
-    internal.trackedSessionIds.add("s1")
+    internal.trackedSessionIds.add("ses_s1")
     internal.handleEvent({
       type: "session.status",
-      properties: { sessionID: "s1", status: { type: "idle" } },
+      properties: { sessionID: "ses_s1", status: { type: "idle" } },
     })
 
     internal.handleEvent({
       type: "session.updated",
       properties: {
-        sessionID: "s1",
-        info: {
-          id: "s1",
-          cost: 1.46,
-        },
+        sessionID: "ses_s1",
+        info: { ...mkSession(), cost: 1.46 },
       },
     })
 
     expect(sent).toContainEqual({
       type: "sessionCostAlert",
-      sessionID: "s1",
+      sessionID: "ses_s1",
       limit: 1,
       cost: "$1.46",
     })
@@ -991,19 +1027,19 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     const settings = makeProvider(createClient())
     const chat = makeProvider(createClient())
     mockMaxCost(settings.internal, 1)
-    chat.internal.trackedSessionIds.add("s1")
+    chat.internal.trackedSessionIds.add("ses_s1")
 
     chat.internal.handleEvent({
       type: "message.updated",
       properties: {
-        sessionID: "s1",
-        info: { id: "m1", sessionID: "s1", role: "assistant", time: { created: 1 }, cost: 1.5 },
+        sessionID: "ses_s1",
+        info: { id: "m1", sessionID: "ses_s1", role: "assistant", time: { created: 1 }, cost: 1.5 },
       },
     })
 
     expect(chat.sent).toContainEqual({
       type: "sessionCostAlert",
-      sessionID: "s1",
+      sessionID: "ses_s1",
       limit: 1,
       cost: "$1.50",
     })
@@ -1013,18 +1049,15 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     const client = createClient()
     const { internal, sent } = makeProvider(client)
     mockMaxCost(internal, 1)
-    internal.trackedSessionIds.add("s1")
+    internal.trackedSessionIds.add("ses_s1")
 
-    await internal.handleCostAlertResponse("s1", 1, "continue")
+    await internal.handleCostAlertResponse("ses_s1", 1, "continue")
     sent.length = 0
     internal.handleEvent({
       type: "session.updated",
       properties: {
-        sessionID: "s1",
-        info: {
-          id: "s1",
-          cost: 1.46,
-        },
+        sessionID: "ses_s1",
+        info: { ...mkSession(), cost: 1.46 },
       },
     })
 
@@ -1037,11 +1070,11 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     const client = createClient()
     const { internal, sent } = makeProvider(client)
     mockMaxCost(internal, 1)
-    internal.trackedSessionIds.add("s1")
+    internal.trackedSessionIds.add("ses_s1")
     internal.handleEvent(
       {
         type: "session.status",
-        properties: { sessionID: "s1", status: { type: "busy" } },
+        properties: { sessionID: "ses_s1", status: { type: "busy" } },
       },
       "/repo",
     )
@@ -1049,25 +1082,19 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     internal.handleEvent({
       type: "session.updated",
       properties: {
-        sessionID: "s1",
-        info: {
-          id: "s1",
-          cost: 1.46,
-        },
+        sessionID: "ses_s1",
+        info: { ...mkSession(), cost: 1.46 },
       },
     })
-    await internal.handleCostAlertResponse("s1", 1, "stop")
+    await internal.handleCostAlertResponse("ses_s1", 1, "stop")
 
     // Same run: alert already shown, no duplicate within same run
     sent.length = 0
     internal.handleEvent({
       type: "session.updated",
       properties: {
-        sessionID: "s1",
-        info: {
-          id: "s1",
-          cost: 1.46,
-        },
+        sessionID: "ses_s1",
+        info: { ...mkSession(), cost: 1.46 },
       },
     })
     expect(
@@ -1079,24 +1106,21 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     internal.handleEvent(
       {
         type: "session.status",
-        properties: { sessionID: "s1", status: { type: "busy" } },
+        properties: { sessionID: "ses_s1", status: { type: "busy" } },
       },
       "/repo",
     )
     internal.handleEvent({
       type: "session.updated",
       properties: {
-        sessionID: "s1",
-        info: {
-          id: "s1",
-          cost: 1.46,
-        },
+        sessionID: "ses_s1",
+        info: { ...mkSession(), cost: 1.46 },
       },
     })
 
     expect(sent).toContainEqual({
       type: "sessionCostAlert",
-      sessionID: "s1",
+      sessionID: "ses_s1",
       limit: 1,
       cost: "$1.46",
     })
@@ -1106,19 +1130,19 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     const client = createClient()
     const { internal, sent } = makeProvider(client)
     mockMaxCost(internal, 1)
-    internal.trackedSessionIds.add("s1")
+    internal.trackedSessionIds.add("ses_s1")
 
     internal.handleEvent({
       type: "message.updated",
       properties: {
-        sessionID: "s1",
-        info: { id: "m1", sessionID: "s1", role: "assistant", time: { created: 1 }, cost: 1.5 },
+        sessionID: "ses_s1",
+        info: { id: "m1", sessionID: "ses_s1", role: "assistant", time: { created: 1 }, cost: 1.5 },
       },
     })
 
     expect(sent).toContainEqual({
       type: "sessionCostAlert",
-      sessionID: "s1",
+      sessionID: "ses_s1",
       limit: 1,
       cost: "$1.50",
     })
@@ -1128,23 +1152,29 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     const client = createClient()
     const { internal, sent } = makeProvider(client)
     mockMaxCost(internal, 1)
-    internal.trackedSessionIds.add("s1")
-    internal.handleEvent({ type: "session.status", properties: { sessionID: "s1", status: { type: "busy" } } }, "/repo")
+    internal.trackedSessionIds.add("ses_s1")
+    internal.handleEvent(
+      { type: "session.status", properties: { sessionID: "ses_s1", status: { type: "busy" } } },
+      "/repo",
+    )
     internal.handleEvent({
       type: "message.updated",
       properties: {
-        sessionID: "s1",
-        info: { id: "m1", sessionID: "s1", role: "assistant", time: { created: 1 }, cost: 1.5 },
+        sessionID: "ses_s1",
+        info: { id: "m1", sessionID: "ses_s1", role: "assistant", time: { created: 1 }, cost: 1.5 },
       },
     })
     sent.length = 0
 
-    internal.handleEvent({ type: "session.status", properties: { sessionID: "s1", status: { type: "busy" } } }, "/repo")
+    internal.handleEvent(
+      { type: "session.status", properties: { sessionID: "ses_s1", status: { type: "busy" } } },
+      "/repo",
+    )
     internal.handleEvent({
       type: "message.updated",
       properties: {
-        sessionID: "s1",
-        info: { id: "m1", sessionID: "s1", role: "assistant", time: { created: 1 }, cost: 1.5 },
+        sessionID: "ses_s1",
+        info: { id: "m1", sessionID: "ses_s1", role: "assistant", time: { created: 1 }, cost: 1.5 },
       },
     })
 
@@ -1160,7 +1190,7 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     internal.currentSession = { ...mkSession(), cost: 2 }
     internal.gatherEditorContext = async () => ({})
 
-    await internal.handleSendMessage("hello", "m1", "s1")
+    await internal.handleSendMessage("hello", "m1", "ses_s1")
 
     expect(client.prompted).toHaveLength(1)
   })
@@ -1169,21 +1199,24 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     const client = createClient()
     const { internal, sent } = makeProvider(client)
     mockMaxCost(internal, 1)
-    internal.trackedSessionIds.add("s1")
-    internal.handleEvent({ type: "session.status", properties: { sessionID: "s1", status: { type: "busy" } } }, "/repo")
+    internal.trackedSessionIds.add("ses_s1")
+    internal.handleEvent(
+      { type: "session.status", properties: { sessionID: "ses_s1", status: { type: "busy" } } },
+      "/repo",
+    )
     internal.handleEvent({
       type: "message.updated",
       properties: {
-        sessionID: "s1",
-        info: { id: "m1", sessionID: "s1", role: "assistant", time: { created: 1 }, cost: 2 },
+        sessionID: "ses_s1",
+        info: { id: "m1", sessionID: "ses_s1", role: "assistant", time: { created: 1 }, cost: 2 },
       },
     })
 
-    await internal.handleCostAlertResponse("s1", 1, "stop")
+    await internal.handleCostAlertResponse("ses_s1", 1, "stop")
 
-    expect(client.aborted).toContainEqual({ sessionID: "s1", directory: "/repo" })
-    expect(sent).toContainEqual({ type: "sessionCostAlertResolved", sessionID: "s1", limit: 1 })
-    expect(sent).toContainEqual({ type: "sessionTurnClosed", sessionID: "s1", reason: "interrupted" })
+    expect(client.aborted).toContainEqual({ sessionID: "ses_s1", directory: "/repo" })
+    expect(sent).toContainEqual({ type: "sessionCostAlertResolved", sessionID: "ses_s1", limit: 1 })
+    expect(sent).toContainEqual({ type: "sessionTurnClosed", sessionID: "ses_s1", reason: "interrupted" })
   })
 
   it("strips transcript-only metadata before posting messages to the webview", async () => {
@@ -1213,7 +1246,7 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
     })
     const { provider, sent } = makeProvider(client)
 
-    await provider.loadMessages("s1")
+    await provider.loadMessages("ses_s1")
 
     const loaded = sent.find(
       (msg) => typeof msg === "object" && msg && (msg as { type?: unknown }).type === "messagesLoaded",
@@ -1238,7 +1271,7 @@ describe("KiloProvider.handleLoadMessages / slim payload", () => {
       properties: {
         info: {
           id: "m1",
-          sessionID: "s1",
+          sessionID: "ses_s1",
           role: "user",
           time: { created: 1 },
           summary: { diffs: [{ file: "a.ts", patch: "full patch", additions: 2, deletions: 1 }] },
@@ -1259,7 +1292,7 @@ describe("KiloProvider.loadMessages / sub-agent viewer", () => {
     const client = createClient({ messagesData: page })
     const { provider, sent } = makeProvider(client)
 
-    await provider.loadMessages("s1")
+    await provider.loadMessages("ses_s1")
 
     const loaded = sent.find(
       (msg) => typeof msg === "object" && msg && (msg as { type?: unknown }).type === "messagesLoaded",
@@ -1273,15 +1306,15 @@ describe("KiloProvider.loadMessages / sub-agent viewer", () => {
     const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
     const client = createClient({ messagesDeferred: pending })
     const { provider, internal, sent } = makeProvider(client)
-    const load = provider.loadMessages("s1")
+    const load = provider.loadMessages("ses_s1")
 
     internal.streams.push({
       type: "partUpdated",
-      sessionID: "s1",
+      sessionID: "ses_s1",
       messageID: "m2",
       part: {
         id: "r1",
-        sessionID: "s1",
+        sessionID: "ses_s1",
         messageID: "m2",
         type: "reasoning",
         text: "Complete reasoning",
@@ -1295,7 +1328,7 @@ describe("KiloProvider.loadMessages / sub-agent viewer", () => {
           parts: [
             {
               id: "r1",
-              sessionID: "s1",
+              sessionID: "ses_s1",
               messageID: "m2",
               type: "reasoning",
               text: "",
@@ -1326,12 +1359,12 @@ describe("KiloProvider.handleLoadMessages / prepend into deleted session", () =>
     const { internal, sent } = makeProvider(client)
 
     // Simulate the session being tracked (as it would after the initial load).
-    internal.trackedSessionIds.add("s1")
+    internal.trackedSessionIds.add("ses_s1")
 
-    const load = internal.handleLoadMessages("s1", { mode: "prepend", before: "cursor-1", limit: 80 })
+    const load = internal.handleLoadMessages("ses_s1", { mode: "prepend", before: "cursor-1", limit: 80 })
 
     // User deletes the session while the fetch is still pending.
-    await internal.handleDeleteSession("s1")
+    await internal.handleDeleteSession("ses_s1")
 
     // Fetch finally resolves after deletion.
     messages.resolve(mkResult([mkMessage("m1", "user", 10)]))

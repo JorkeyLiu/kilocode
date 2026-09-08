@@ -122,7 +122,32 @@ describe("Extension — Agent Manager remote wiring", () => {
   const host = fs.readFileSync(VSCODE_HOST_FILE, "utf-8")
 
   it("passes the shared remote service to Agent Manager", () => {
-    expect(ext).toContain("new VscodeHost(context.extensionUri, connectionService, context, remoteService, canonicalConfig)")
+    const start = ext.indexOf("new VscodeHost(")
+    expect(start).toBeGreaterThan(-1)
+    let depth = 0
+    let end = -1
+    for (let i = start; i < ext.length; i++) {
+      const ch = ext[i]
+      if (ch === "(") depth++
+      if (ch === ")") {
+        depth--
+        if (depth === 0) {
+          end = i
+          break
+        }
+      }
+    }
+    expect(end).toBeGreaterThan(start)
+    const raw = ext.slice(start, end + 1)
+    const normalized = raw
+      .replace(/\s+/g, " ")
+      .replace(/\(\s*/g, "(")
+      .replace(/,\s*/g, ", ")
+      .replace(/, \)/g, ")")
+      .trim()
+    expect(normalized).toBe(
+      "new VscodeHost(context.extensionUri, connectionService, context, remoteService, canonicalConfig, privateSessionReader)",
+    )
   })
 
   it("wires the remote service before attaching the Agent Manager webview", () => {
@@ -140,8 +165,11 @@ describe("KiloProvider — remote focus lifecycle", () => {
   it("registers newly created sessions and uses the synchronous session ID", () => {
     const create = sliceBlock(provider, provider.indexOf("private async handleCreateSession"))
     const resolve = sliceBlock(provider, provider.indexOf("private async resolveSession"))
-    expect(create).toContain("this.focusSession(session.id)")
-    expect(resolve).toContain("this.focusSession(session.id)")
+    expect(create).toContain("this.focusSession(detail.id)")
+    expect(create.indexOf("this.setCurrentSession(detail)")).toBeLessThan(
+      create.indexOf("this.focusSession(detail.id)"),
+    )
+    expect(resolve).toContain("this.focusSession(detail.id)")
     // Editor-tab panels keep the panel.visible-driven stream focus (the
     // sidebar's webviewView.visible path is removed with the sidebar).
     expect(provider).toContain("this.streams.focus(panel.visible ? id : undefined)")

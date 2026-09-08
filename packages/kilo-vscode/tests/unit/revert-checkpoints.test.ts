@@ -49,6 +49,20 @@ describe("revert session synchronization", () => {
       /if \(event\.type === "session\.updated"\) return "source" in event && event\.source === "sync"/,
     )
     expect(provider).toMatch(/if \(!isLegacySyncEvent\(event\)\) return/)
-    expect(provider).toMatch(/this\.setCurrentSession\(event\.properties\.info\)/)
+    const syncBlock = provider.slice(
+      provider.indexOf('if (event.type === "session.updated") {'),
+      provider.indexOf('if (event.type === "global.disposed")'),
+    )
+    expect(syncBlock.indexOf("if (!isLegacySyncEvent(event)) return")).toBeGreaterThan(-1)
+    expect(syncBlock.indexOf("this.revisions.set(sid, { id: event.id, seq: event.seq })")).toBeGreaterThan(
+      syncBlock.indexOf("if (!isLegacySyncEvent(event)) return"),
+    )
+    expect(syncBlock).toContain("event.seq <= revision.seq")
+    expect(provider).toContain("sdkSessionToDetail(event.properties.info")
+    const currentBlock = provider.slice(provider.indexOf('if (event.type === "session.updated" && this.currentSession'))
+    expect(currentBlock).toContain("sdkSessionToDetail(event.properties.info")
+    expect(currentBlock.indexOf("sdkSessionToDetail(event.properties.info")).toBeLessThan(
+      currentBlock.indexOf("this.setCurrentSession(detail)"),
+    )
   })
 })
