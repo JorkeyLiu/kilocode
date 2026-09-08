@@ -267,7 +267,7 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     expect((privCalls[0] as Record<string, unknown>).payload).toEqual({ limit: 0 })
   })
 
-  test("handleSyncSession direct full load is SDK-first with exact-once get + messages observers and no duplicates", async () => {
+  test("handleSyncSession full load via boundary fallback with exact-once get + messages observers and no duplicates", async () => {
     const h = makeHarness("ses_eee")
     const data = makeSessionData("ses_eee", "/tmp")
     ;(h.client.session as Record<string, unknown>).get = async (p: unknown) => {
@@ -282,7 +282,7 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     expect(h.privMessagesOutcomes).toHaveLength(1)
     const mreq = h.privMessagesOutcomes[0] as Record<string, unknown>
     expect((mreq.context as Record<string, unknown>).sessionId).toBe("ses_eee")
-    expect(mreq.payload).toEqual({})
+    expect(mreq.payload).toEqual({ limit: 0 })
     expect(String(mreq.opId).startsWith("messages:ses_eee:")).toBeTrue()
     const greq = h.privGetOutcomes[0] as Record<string, unknown>
     expect(String(greq.opId).startsWith("get:ses_eee:")).toBeTrue()
@@ -308,7 +308,7 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     expect(h.privMessagesOutcomes).toHaveLength(1)
     const mreq = h.privMessagesOutcomes[0] as Record<string, unknown>
     expect((mreq.context as Record<string, unknown>).sessionId).toBe("ses_term")
-    expect(mreq.payload).toEqual({})
+    expect(mreq.payload).toEqual({ limit: 0 })
     // Catch behavior preserved: failed sync is evicted so a later sync retries SDK.
     await (h.provider as unknown as { handleSyncSession: (s: string) => Promise<void> }).handleSyncSession("ses_term")
     expect(attempts).toBe(2)

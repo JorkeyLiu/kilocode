@@ -61,7 +61,8 @@ export async function fetchMessagePage(
     const query: { limit?: number; before?: string } =
       before === undefined ? { limit: input.limit } : { limit: input.limit, before }
     // Paged private-first, per bounded page read: at most one private attempt
-    // and on failure/unavailability exactly one SDK request for that page.
+    // and on failure/unavailability one logical SDK fallback for that page
+    // (existing transient retry preserved for bounded UI pages).
     // The outer assistant-boundary fill may legitimately read multiple pages;
     // parity observation stays intentionally bounded to once per outer
     // fetchMessagePage operation. Non-owning.
@@ -112,15 +113,25 @@ export async function fetchMessagePage(
   // oldest-first concatenation preserves chronological ASC and the projected
   // message shape. Terminal outcomes surface without SDK. Any skip/fallback,
   // cycle, or bound overflow falls back to exactly one SDK limit:0 read with
-  // parity bounded once per outer operation, never once per private page.
+  // no transient retry, with parity bounded once per outer operation, never
+  // once per private page. Private iteration stops promptly on input.signal:
+  // throwIfAborted runs before and after each awaited private page and before
+  // the SDK fallback, so no further private pages or SDK read run after abort.
   async function collect() {
+    const throwIfAborted = () => {
+      const s = input.signal
+      if (!s || !s.aborted) return
+      if (typeof s.throwIfAborted === "function") s.throwIfAborted()
+      throw s.reason ?? new DOMException("This operation was aborted", "AbortError")
+    }
     const query: { limit?: number; before?: string } =
       input.before === undefined ? { limit: 0 } : { limit: 0, before: input.before }
     const fallback = async () => {
       // Full-read fallback is exactly one SDK limit:0 invocation per outer
       // operation: no retry helper, so a transient rejection surfaces after
       // a single read while signal propagation, response shape, and
-      // exactly-once parity observation stay unchanged.
+      // exactly-once parity observation stay unchanged. Never runs after abort.
+      throwIfAborted()
       const result = await client.session
         .messages(
           { sessionID: input.sessionID, directory: input.workspaceDir, limit: 0, before: input.before },
@@ -137,6 +148,7 @@ export async function fetchMessagePage(
     let cursor = input.before
     const seen = new Set<string>()
     for (let n = 0; n < FULL_PRIVATE_PAGES; n++) {
+      throwIfAborted()
       if (cursor !== undefined) {
         if (seen.has(cursor)) return fallback()
         seen.add(cursor)
@@ -147,6 +159,7 @@ export async function fetchMessagePage(
         limit: FULL_PRIVATE_LIMIT,
         ...(cursor !== undefined ? { cursor } : {}),
       })
+      throwIfAborted()
       if (attempt.kind === "terminal") throw attempt.error
       if (attempt.kind !== "found") return fallback()
       if (attempt.items.length === 0) {

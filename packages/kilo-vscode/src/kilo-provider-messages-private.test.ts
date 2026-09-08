@@ -728,7 +728,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("per-page fallback: double private failure yields two private attempts, one SDK per page, one parity, merged fill", async () => {
+  it("per-page fallback: double private failure yields two private attempts, one logical SDK fallback per page, one parity, merged fill", async () => {
     const assistant = {
       info: { id: "msg_old", sessionID: SECRET_SES, role: "assistant", time: { created: 100 } },
       parts: [],
@@ -768,6 +768,91 @@ describe("paged messages private-first", () => {
     await tick()
     expect(h.parityCalls).toHaveLength(1)
     expect(((h.parityCalls[0] as Record<string, unknown>).payload as Record<string, unknown>).limit).toBe(2)
+  })
+
+  it("paged fallback preserves transient retry: one logical SDK fallback per page", async () => {
+    let sdkN = 0
+    const h = makeHarness({
+      privateMessages: async () => {
+        throw Object.assign(new Error("boom"), { code: ErrorCode.InternalError })
+      },
+      sdkMessages: async () => {
+        sdkN += 1
+        if (sdkN === 1) throw new Error("load failed")
+        return {
+          data: [userMsg("msg_2", 200)],
+          error: undefined,
+          response: { status: 200, headers: { get: () => null } },
+        }
+      },
+    })
+    const page = await fetchMessagePage(
+      h.client as never,
+      { sessionID: h.sid, workspaceDir: h.dir, limit: 2 },
+      h.connection as never,
+      h.reader as never,
+    )
+    expect(page.items).toHaveLength(1)
+    expect(h.privateCalls).toHaveLength(1)
+    expect(h.sdkCalls).toHaveLength(2)
+  })
+
+  it("limit=0 private iteration stops promptly on abort with no further pages or SDK fallback", async () => {
+    // Pre-aborted: no private pages and no SDK fallback run.
+    {
+      const h = makeHarness({
+        privateMessages: async (input) => privateFound(input.sessionId, [userMsg("msg_1", 100, input.sessionId)]),
+      })
+      const ctrl = new AbortController()
+      ctrl.abort()
+      let threw: unknown = null
+      try {
+        await fetchMessagePage(
+          h.client as never,
+          { sessionID: h.sid, workspaceDir: h.dir, limit: 0, signal: ctrl.signal },
+          h.connection as never,
+          h.reader as never,
+        )
+      } catch (e) {
+        threw = e
+      }
+      expect(threw).toBeInstanceOf(DOMException)
+      expect((threw as DOMException).name).toBe("AbortError")
+      expect(h.privateCalls).toHaveLength(0)
+      expect(h.sdkCalls).toHaveLength(0)
+      await tick()
+      expect(h.parityCalls).toHaveLength(0)
+    }
+    // Abort after the first private page resolves: post-await check throws
+    // before the second private page and before any SDK fallback.
+    {
+      const newest = Array.from({ length: 100 }, (_, i) => userMsg(`msg_${String(i + 2).padStart(3, "0")}`, i + 2))
+      const cursor0 = encodeMessageCursor({ id: newest[0]!.info.id, time: 2 })
+      const ctrl = new AbortController()
+      const h = makeHarness({
+        privateMessages: async (input) => {
+          ctrl.abort()
+          return privateFound(input.sessionId, newest, cursor0)
+        },
+      })
+      let threw: unknown = null
+      try {
+        await fetchMessagePage(
+          h.client as never,
+          { sessionID: h.sid, workspaceDir: h.dir, limit: 0, signal: ctrl.signal },
+          h.connection as never,
+          h.reader as never,
+        )
+      } catch (e) {
+        threw = e
+      }
+      expect(threw).toBeInstanceOf(DOMException)
+      expect((threw as DOMException).name).toBe("AbortError")
+      expect(h.privateCalls).toHaveLength(1)
+      expect(h.sdkCalls).toHaveLength(0)
+      await tick()
+      expect(h.parityCalls).toHaveLength(0)
+    }
   })
 
   it("production delegate shape reaches provider private-first with no SDK", async () => {

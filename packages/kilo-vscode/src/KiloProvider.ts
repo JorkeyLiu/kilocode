@@ -75,7 +75,6 @@ import {
   buildSessionCreateIdentity,
 } from "./kilo-provider/rename-session"
 import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
-import { observeSessionMessagesParityDetached } from "./kilo-provider/session-messages-parity"
 import { observeSessionListParityDetached } from "./kilo-provider/session-list-parity"
 import { parseSessionTitle } from "./shared/session-title"
 import { handleFileSearch } from "./kilo-provider/file-search"
@@ -3058,7 +3057,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
    * Tracks the session for SSE events and fetches its messages.
    */
   private async handleSyncSession(sessionID: string, parentSessionID?: string): Promise<void> {
-    if (!this.client) return
+    const client = this.client
+    if (!client) return
     if (this.syncedChildSessions.has(sessionID)) return
 
     this.syncedChildSessions.add(sessionID)
@@ -3076,31 +3076,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     try {
       const workspaceDir = this.getWorkspaceDirectory(sessionID)
       const since = Date.now()
-      const historyWithObserve = retry(() =>
-        this.client!.session.messages({ sessionID, directory: workspaceDir }, { throwOnError: true }),
-      ).then(
-        (result) => result,
-        (err: unknown) => {
-          try {
-            observeSessionMessagesParityDetached(
-              this.connectionService,
-              err as { data?: unknown; error?: unknown; response?: unknown },
-              sessionID,
-              workspaceDir,
-              {},
-            )
-          } catch {
-            console.warn("[Kilo Messages] private parity observation failed (fail-closed):", {
-              op: "session/messages",
-              observationFailed: true,
-            })
-          }
-          throw err
-        },
-      )
-      const [detail, history] = await Promise.all([
+      const [detail, page] = await Promise.all([
         this.getSessionDetail(sessionID, workspaceDir),
-        historyWithObserve,
+        fetchMessagePage(
+          client,
+          { sessionID, workspaceDir, limit: 0 },
+          this.connectionService,
+          this.privateSessionReader,
+        ),
       ])
       // Deletion tombstone: a delete racing the fetch wins over the snapshot.
       // Evict the in-flight marker so a later legitimate retry can run, drop
@@ -3111,28 +3094,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.streams.drop(sessionID)
         return
       }
-      // SDK-first detached parity for the direct full messages read; the
-      // private `session/messages` snapshot observes without mutating state.
-      // Full load binds the exact empty query (no limit/before).
-      if (history.data) {
-        try {
-          observeSessionMessagesParityDetached(
-            this.connectionService,
-            history as unknown as { data?: unknown },
-            sessionID,
-            workspaceDir,
-            {},
-          )
-        } catch {
-          console.warn("[Kilo Messages] private parity observation failed (fail-closed):", {
-            op: "session/messages",
-            observationFailed: true,
-          })
-        }
-      }
       this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
 
-      const messages = history.data.map((m) => ({
+      const messages = page.items.map((m) => ({
         ...this.slimInfo(m.info),
         parts: this.slimParts(m.parts),
         createdAt: new Date(m.info.time.created).toISOString(),
@@ -3144,7 +3108,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.resetMessageCosts(sessionID, messages)
 
       // Same ordering contract as doLoadMessages: messagesLoaded first,
-      // then the deterministic snapshot-aware drain over history.data keys.
+      // then the deterministic snapshot-aware drain over page.items keys.
       this.postMessage({
         type: "messagesLoaded",
         sessionID,
@@ -3153,7 +3117,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         hasMore: false,
         since,
       })
-      const snapshot = buildSnapshotPartKeys(history.data)
+      const snapshot = buildSnapshotPartKeys(page.items)
       this.streams.drainSince(sessionID, since, (update) => {
         if (!update.delta) return true
         const key = updateSnapshotKey(update)

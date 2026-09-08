@@ -343,7 +343,7 @@ B6 adds one private transport narrowly for `session/get` over the existing `kilo
 
 ### Private `session/messages` carrier over `kilo serve` fd3/fd4 — diagnostics-only, same AppLayer
 
-B7 adds one private transport narrowly for `session/messages` over the existing `kilo serve` process extra fds, terminating at the same `AppRuntime` read-only message page. Generated SDK `client.session.messages` HTTP remains the sole authority; the private path is detached warn-only parity observation with no mutation, reconcile, recovery, replay, or events. No new TCP listener, no Unix socket, no second runtime, no SDK regeneration, no `SessionOperation`/DB/EventV2/retention/cache authority.
+B7 adds one private transport narrowly for `session/messages` over the existing `kilo serve` process extra fds, terminating at the same `AppRuntime` read-only message page. For this fd-carrier parity path the generated SDK `client.session.messages` HTTP applies first and the private path is detached warn-only parity observation with no mutation, reconcile, recovery, replay, or events. Host message reads via the standalone `observation/messages` canonical-DB projection are separately private-first (see below). No new TCP listener, no Unix socket, no second runtime, no SDK regeneration, no `SessionOperation`/DB/EventV2/retention/cache authority.
 
 | Aspect | Behavior |
 |---|---|
@@ -354,6 +354,10 @@ B7 adds one private transport narrowly for `session/messages` over the existing 
 | Lifecycle and timeout | Observer never blocks the SDK path and runs detached with `catch` containment. Bounded 3000 ms timeout cancels the exact pending by `id` (`handle.cancel`/`tryCancelPending`); cancel miss/throw epoch-invalidates the peer until the next full backend connection/server reset. Closed/disposed/epoch-drift transport synthesizes `ambiguous transportUnknown true`. One-shot deferred observation covers the first-seed vs negotiation race (same epoch + canonical directory + exact `sessionId`/`limit`/`before` query dedupe, stale epoch skipped); definitive negotiation failure releases deferred observers without notifying. No automatic retry/reconnect, no polling/timers beyond the bounded timeout, no additional detached work beyond bounded one-shot observer. |
 | Safe diagnostics | Logs carry warn-only parity signals (`[Kilo Messages] parity divergence`/`transport-unknown parity`/`validation divergence`) with safe truncated metadata (counts, cursor-presence booleans, status/failure classes, `op:"session/messages"`). Logs contain no message/part content, IDs, cursor values, `opId`/`requestId`, or serialized payload. |
 | Non-goals | No mutation, reconcile, recovery, replay, or events; no `SessionOperation`/DB/EventV2/retention/cache authority; no shared revision/stale-cursor protocol; no public transport/API change; no new protocol design. |
+
+### Host message reads over the standalone observation projection — private-first
+
+Paged (`limit` 1..100) and full-history (`limit=0`) host reads go through the standalone no-lease canonical-DB `observation/messages` projection over the same `AppRuntime` data with no new transport, listener, or runtime. Private `found`/`not_found`/`scope_mismatch` are authoritative with no SDK call; other private outcomes fall back to bounded SDK `client.session.messages` (paged: one logical fallback per bounded page with existing transient retry preserved; full `limit=0`: private page iteration with `throwIfAborted` before and after each awaited page and exactly one SDK full-read with no retry). `messagesLoaded` then `drainSince` plus stale-generation checks are unchanged; lifecycle stays extension/SDK-owned with no transport or session-lifecycle cutover.
 
 ### Private `session/children` carrier over `kilo serve` fd3/fd4 — diagnostics-only, same AppLayer
 
