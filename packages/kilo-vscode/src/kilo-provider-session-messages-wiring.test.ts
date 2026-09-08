@@ -112,7 +112,18 @@ function makeHarness(sessionId = "ses_abc") {
   )
   Object.defineProperty(provider, "getWorkspaceDirectory", { value: () => dir, configurable: true })
   Object.defineProperty(provider, "initializeConnection", { value: async () => {}, configurable: true })
-  return { provider: provider as unknown as Record<string, unknown>, client, dir, data, items, sdkGets, sdkMessages, privGetOutcomes, privMessagesOutcomes, connectionService }
+  return {
+    provider: provider as unknown as Record<string, unknown>,
+    client,
+    dir,
+    data,
+    items,
+    sdkGets,
+    sdkMessages,
+    privGetOutcomes,
+    privMessagesOutcomes,
+    connectionService,
+  }
 }
 
 async function tick(ms = 60) {
@@ -129,7 +140,8 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
       order.push("sdk")
       return origMessages(p)
     }
-    const origOutcome = (h.connectionService as unknown as Record<string, unknown>).privateMessagesOutcomeWithHandle as (r: unknown) => unknown
+    const origOutcome = (h.connectionService as unknown as Record<string, unknown>)
+      .privateMessagesOutcomeWithHandle as (r: unknown) => unknown
     ;(h.connectionService as unknown as Record<string, unknown>).privateMessagesOutcomeWithHandle = (r: unknown) => {
       order.push("private")
       return origOutcome(r)
@@ -196,7 +208,11 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
         throw new Error("unused")
       },
     }
-    const page = await fetchMessagePage(client as never, { sessionID: "ses_abc", workspaceDir: "/tmp", limit: 2 }, conn as never)
+    const page = await fetchMessagePage(
+      client as never,
+      { sessionID: "ses_abc", workspaceDir: "/tmp", limit: 2 },
+      conn as never,
+    )
     expect(calls).toBe(2)
     expect(page.items).toHaveLength(2)
     await tick(30)
@@ -309,7 +325,9 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
       h.provider as unknown as {
         doLoadMessages: (s: string, o: unknown, strict: boolean) => Promise<boolean>
       }
-    ).doLoadMessages("ses_abort", { mode: "replace" }, false).catch(() => false)
+    )
+      .doLoadMessages("ses_abort", { mode: "replace" }, false)
+      .catch(() => false)
     // Direct fetchMessagePage with an already-aborted signal still runs the
     // SDK read (server contract) but must not observe.
     const privCalls: unknown[] = []
@@ -334,7 +352,11 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     }
     const c = new AbortController()
     c.abort()
-    await fetchMessagePage(client as never, { sessionID: "ses_abort", workspaceDir: "/tmp", limit: 2, signal: c.signal }, conn as never)
+    await fetchMessagePage(
+      client as never,
+      { sessionID: "ses_abort", workspaceDir: "/tmp", limit: 2, signal: c.signal },
+      conn as never,
+    )
     await tick(30)
     expect(privCalls).toHaveLength(0)
     void abort
@@ -391,6 +413,97 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     void exportTranscript
   })
 
+  test("transcript export reads full history private-first with no SDK messages", async () => {
+    const vscode = await import("vscode")
+    const win = vscode.window as unknown as Record<string, unknown>
+    const space = vscode.workspace as unknown as { fs: Record<string, unknown> }
+    const origDialog = win["showSaveDialog"]
+    const origWrite = space.fs["writeFile"]
+    const writes: Array<{ uri: unknown; bytes: Uint8Array }> = []
+    try {
+      const items = [
+        {
+          info: {
+            id: "msg_1",
+            sessionID: "ses_abc",
+            role: "user",
+            time: { created: 1 },
+            agent: "a",
+            model: { providerID: "p", modelID: "m" },
+          },
+          parts: [],
+        },
+        {
+          info: {
+            id: "msg_2",
+            sessionID: "ses_abc",
+            role: "user",
+            time: { created: 2 },
+            agent: "a",
+            model: { providerID: "p", modelID: "m" },
+          },
+          parts: [],
+        },
+      ]
+      let sdkMessages = 0
+      const client = {
+        session: {
+          messages: async () => {
+            sdkMessages += 1
+            return { data: items, response: { headers: { get: () => null } } }
+          },
+        },
+      }
+      const privateCalls: unknown[] = []
+      const reader = {
+        isEnabled: () => true,
+        isStarted: () => true,
+        list: async () => ({ v: "1.0", entries: [] }),
+        get: async () => ({ v: "1.0", status: "not_found" }),
+        messages: async (input: { directory: string; sessionId: string; limit: number; cursor?: string }) => {
+          privateCalls.push(input)
+          expect(input.limit).toBe(100)
+          return { v: "1.0", status: "found", messages: items }
+        },
+      }
+      const parity: unknown[] = []
+      const conn = {
+        isPrivateAvailable: () => true,
+        getPrivateEpoch: () => 1,
+        privateMessagesOutcomeWithHandle: (req: Record<string, unknown>) => {
+          parity.push(req)
+          return { id: 1, promise: new Promise(() => {}) }
+        },
+        privateMessagesWithHandle: () => {
+          throw new Error("unused")
+        },
+        privateMessages: async () => {
+          throw new Error("unused")
+        },
+      }
+      win["showSaveDialog"] = async () => ({ fsPath: "/tmp/out.md" })
+      space.fs["writeFile"] = async (uri: unknown, bytes: Uint8Array) => {
+        writes.push({ uri, bytes })
+      }
+      const detail = { id: "ses_abc", title: "hello", createdAt: 1, updatedAt: 2 }
+      const ok = await exportTranscript(
+        client as never,
+        { sessionID: "ses_abc", dir: "/tmp", getSessionDetail: async () => detail as never },
+        conn as never,
+        reader as never,
+      )
+      expect(ok).toBeTrue()
+      expect(privateCalls).toHaveLength(1)
+      expect(sdkMessages).toBe(0)
+      await tick(30)
+      expect(parity).toHaveLength(0)
+      expect(writes).toHaveLength(1)
+    } finally {
+      win["showSaveDialog"] = origDialog
+      space.fs["writeFile"] = origWrite
+    }
+  })
+
   test("fetchMessagePage real thrown non-terminal Error never observes but preserves rejection", async () => {
     const warns: unknown[][] = []
     const origWarn = console.warn
@@ -443,7 +556,9 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
     const client = {
       session: {
         messages: async () => {
-          throw Object.assign(new Error("Session not found"), { cause: { body: { name: "NotFoundError" }, status: 404 } })
+          throw Object.assign(new Error("Session not found"), {
+            cause: { body: { name: "NotFoundError" }, status: 404 },
+          })
         },
       },
     }
@@ -509,12 +624,16 @@ describe("KiloProvider B7 live session/messages wiring (LOCK-B7-001/002/005)", (
         h.sdkMessages.push(p)
         throw new Error("boom")
       }
-      await (h.provider as unknown as { handleSyncSession: (s: string) => Promise<void> }).handleSyncSession("ses_nterm")
+      await (h.provider as unknown as { handleSyncSession: (s: string) => Promise<void> }).handleSyncSession(
+        "ses_nterm",
+      )
       expect(attempts).toBe(1)
       await tick()
       expect(h.privMessagesOutcomes).toHaveLength(0)
       expect(warns.filter((w) => String(w[0]).includes("[Kilo Messages]"))).toHaveLength(0)
-      await (h.provider as unknown as { handleSyncSession: (s: string) => Promise<void> }).handleSyncSession("ses_nterm")
+      await (h.provider as unknown as { handleSyncSession: (s: string) => Promise<void> }).handleSyncSession(
+        "ses_nterm",
+      )
       expect(attempts).toBe(2)
       await tick()
       expect(h.privMessagesOutcomes).toHaveLength(0)

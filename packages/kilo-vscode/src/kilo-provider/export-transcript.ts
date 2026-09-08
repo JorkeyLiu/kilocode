@@ -3,6 +3,7 @@ import * as vscode from "vscode"
 import type { KiloClient, Message, Part } from "@kilocode/sdk/v2/client"
 import { fetchMessagePage } from "./message-page"
 import { sdkSessionToDetail } from "./session-detail"
+import type { PrivateSessionReader } from "./options"
 import type { MessagesParityConnection } from "./session-messages-parity"
 import type { SessionDetail } from "./session-detail"
 
@@ -19,18 +20,22 @@ export async function exportTranscript(
     getSessionDetail?: (sessionID: string, directory: string) => Promise<SessionDetail>
   },
   parityConnection?: MessagesParityConnection | null,
+  privateReader?: PrivateSessionReader | null,
 ) {
   const detailPromise = input.getSessionDetail
     ? input.getSessionDetail(input.sessionID, input.dir)
-    : client.session
-        .get({ sessionID: input.sessionID, directory: input.dir }, { throwOnError: true })
-        .then((r) => {
-          if (!r.data) throw new Error("Session metadata not found")
-          return sdkSessionToDetail(r.data)
-        })
+    : client.session.get({ sessionID: input.sessionID, directory: input.dir }, { throwOnError: true }).then((r) => {
+        if (!r.data) throw new Error("Session metadata not found")
+        return sdkSessionToDetail(r.data)
+      })
   const [session, page] = await Promise.all([
     detailPromise,
-    fetchMessagePage(client, { sessionID: input.sessionID, workspaceDir: input.dir, limit: 0 }, parityConnection ?? null),
+    fetchMessagePage(
+      client,
+      { sessionID: input.sessionID, workspaceDir: input.dir, limit: 0 },
+      parityConnection ?? null,
+      privateReader ?? null,
+    ),
   ])
   const text = formatTranscript(session, page.items)
   const uri = await vscode.window.showSaveDialog({

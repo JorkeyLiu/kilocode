@@ -3828,6 +3828,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           getSessionDetail: (sid, d) => this.getSessionDetail(sid, d),
         },
         this.connectionService,
+        this.privateSessionReader,
       )
       if (saved) void vscode.window.showInformationMessage("Session transcript exported as Markdown.")
     } catch (error) {
