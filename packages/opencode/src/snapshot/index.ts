@@ -21,6 +21,7 @@ import { KiloSnapshotMaterialize } from "../kilocode/snapshot/materialize"
 import type { MessageID, SessionID } from "../session/schema"
 import { withStatics } from "@opencode-ai/core/schema"
 import { zod } from "@opencode-ai/core/effect-zod"
+import { MAX_MESSAGE_PATCH_SIZE } from "@opencode-ai/core/session/message-read"
 // kilocode_change end
 
 export const Patch = Schema.Struct({
@@ -65,7 +66,7 @@ interface GitResult {
   readonly stderr: string
 }
 
-export const MAX_DIFF_SIZE = 256 * 1024 // kilocode_change
+export const MAX_DIFF_SIZE = MAX_MESSAGE_PATCH_SIZE // kilocode_change - compatibility alias to shared core owner
 
 type State = Omit<Interface, "init">
 

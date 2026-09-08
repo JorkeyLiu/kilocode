@@ -5,6 +5,7 @@ import * as Changefeed from "@opencode-ai/core/retention/changefeed"
 import { createChangefeedDeps } from "./changefeed-adapter"
 import { createSessionListDeps } from "./session-list-adapter"
 import { createSessionGetDeps } from "./session-get-adapter"
+import { createSessionMessagesDeps } from "./session-messages-adapter"
 import { startWorker } from "./worker"
 import type { ObservationDeps } from "./observation"
 import { JsonRpcPeer } from "./peer"
@@ -42,7 +43,8 @@ export async function createStandaloneDeps(): Promise<{ deps: ObservationDeps; d
   const base = createChangefeedDeps(svc.db)
   const list = createSessionListDeps(svc.db)
   const get = createSessionGetDeps(svc.db)
-  const deps: ObservationDeps = { ...base, list: list.list, get: get.get }
+  const messages = createSessionMessagesDeps(svc.db)
+  const deps: ObservationDeps = { ...base, list: list.list, get: get.get, messages: messages.messages }
   const dispose = async () => {
     try {
       await runtime.dispose()

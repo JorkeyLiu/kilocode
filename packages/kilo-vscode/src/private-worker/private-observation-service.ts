@@ -530,6 +530,14 @@ export class PrivateObservationService implements Disposable {
     return this.host.request(OBSERVATION_METHODS.GET, payload)
   }
 
+  /** Delegate observation/messages — bounded raw storage-stripped page, no InstanceRef/drain-control. */
+  async messages(input: { directory: string; sessionId: string; limit: number; cursor?: string }): Promise<unknown> {
+    if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")
+    const payload: Record<string, unknown> = { v: OBSERVATION_VERSION, directory: input.directory, sessionId: input.sessionId, limit: input.limit }
+    if (input.cursor !== undefined) payload.cursor = input.cursor
+    return this.host.request(OBSERVATION_METHODS.MESSAGES, payload)
+  }
+
   /** Generic request delegation (e.g., test/mutateChangefeed when testBridge enabled). */
   async request(method: string, params?: unknown): Promise<unknown> {
     if (!this.host) throw new Error("Not started — private observation not enabled or not initialized")

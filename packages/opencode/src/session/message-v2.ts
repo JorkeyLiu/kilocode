@@ -21,6 +21,8 @@ import {
 
 export { EditorContext } from "@opencode-ai/core/v1/session" // kilocode_change
 import { NamedError } from "@opencode-ai/core/util/error"
+import { MAX_MESSAGE_PATCH_SIZE, cursor, stripMessageMetadata, stripPartMetadata } from "@opencode-ai/core/session/message-read"
+export { MAX_MESSAGE_PATCH_SIZE, cursor, stripMessageMetadata, stripPartMetadata } from "@opencode-ai/core/session/message-read"
 import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
 import { Database } from "@opencode-ai/core/database/database"
 import { NotFoundError } from "@/storage/storage"
@@ -37,7 +39,6 @@ import { errorMessage } from "@/util/error"
 import { isMedia } from "@/util/media"
 import type { SystemError } from "bun"
 import type { Provider } from "@/provider/provider"
-import { Snapshot } from "@/snapshot" // kilocode_change
 import { SessionNetwork } from "./network" // kilocode_change
 import { CodexAuthExpiredError } from "@/kilocode/provider/codex-refresh" // kilocode_change
 import { KiloSessionMessageOrder } from "@/kilocode/session/message-order" // kilocode_change
@@ -106,109 +107,8 @@ export const Event = {
   PartRemoved: SessionV1.Event.PartRemoved,
 }
 
-const Cursor = Schema.Struct({
-  id: MessageID,
-  time: Schema.Finite.check(Schema.isGreaterThanOrEqualTo(0)),
-})
-type Cursor = typeof Cursor.Type
-
-const decodeCursor = Schema.decodeUnknownSync(Cursor)
-
-export const cursor = {
-  encode(input: Cursor) {
-    return Buffer.from(JSON.stringify(input)).toString("base64url")
-  },
-  decode(input: string) {
-    return decodeCursor(JSON.parse(Buffer.from(input, "base64url").toString("utf8")))
-  },
-}
-
-// kilocode_change start - strip bloated metadata fields from stored parts to prevent multi-MB payloads
-// This handles both legacy data that was stored with full file contents and keeps the API response lean.
-function stripPatch(value: unknown) {
-  if (typeof value !== "string") return undefined
-  if (Buffer.byteLength(value) > Snapshot.MAX_DIFF_SIZE) return undefined
-  return value
-}
-
-function withPatch(value: unknown) {
-  const kept = stripPatch(value)
-  return kept ? { patch: kept } : {}
-}
-
-export function stripPartMetadata(part: Part): Part {
-  // kilocode_change - exported for testing
-  if (part.type !== "tool") return part
-  const { state } = part
-  if (state.status !== "completed" && state.status !== "running") return part
-  const meta = state.metadata
-  if (!meta) return part
-
-  let changed = false
-  let next = meta
-
-  if (meta.diff !== undefined) {
-    const { diff, ...rest } = next
-    next = rest
-    changed = true
-  }
-
-  // Strip edit/write tool filediff.before/after (full file contents) and cap patches.
-  if (meta.filediff) {
-    const { before, after, patch, ...rest } = meta.filediff
-    next = { ...next, filediff: { ...rest, ...withPatch(patch) } }
-    changed = true
-  }
-
-  // Strip apply_patch tool's files[].before/after (full file contents per file) and cap per-file patches.
-  if (Array.isArray(meta.files) && meta.files.length > 0) {
-    next = {
-      ...next,
-      files: meta.files.map((f: Record<string, unknown>) => {
-        const { before, after, patch, diff, ...rest } = f
-        const kept = stripPatch(patch) ?? stripPatch(diff)
-        return { ...rest, ...(kept ? { patch: kept } : {}) }
-      }),
-    }
-    changed = true
-  }
-
-  if (Array.isArray(meta.results) && meta.results.length > 0) {
-    next = {
-      ...next,
-      results: meta.results.map((r: Record<string, unknown>) => {
-        const { diff, ...rest } = r
-        if (!r.filediff || typeof r.filediff !== "object") return rest
-        const fd = r.filediff as Record<string, unknown>
-        const { before, after, patch, ...file } = fd
-        return { ...rest, filediff: { ...file, ...withPatch(patch) } }
-      }),
-    }
-    changed = true
-  }
-
-  if (!changed) return part
-  return { ...part, state: { ...state, metadata: next } } as Part
-}
-
-export function stripMessageMetadata(info: Info): Info {
-  // kilocode_change - exported for testing
-  // Strip oversized summary.diffs patches from user messages to limit SSE payload.
-  // Small patches are preserved so the UI can render inline diffs.
-  if (info.role !== "user") return info
-  const user = info as User
-  if (!user.summary?.diffs?.length) return info
-  const oversized = (d: Snapshot.FileDiff) => d.patch && Buffer.byteLength(d.patch) > Snapshot.MAX_DIFF_SIZE
-  if (!user.summary.diffs.some(oversized)) return info
-  return {
-    ...user,
-    summary: {
-      ...user.summary,
-      diffs: user.summary.diffs.map((d: Snapshot.FileDiff) => (oversized(d) ? { ...d, patch: "" } : d)),
-    },
-  } as Info
-}
-// kilocode_change end
+// kilocode_change - message cursor/strip semantics owned by shared core message-read; re-exported above.
+type Cursor = { id: string; time: number }
 
 // kilocode_change - apply stripping inside helpers so all read paths are covered
 const info = (row: typeof MessageTable.$inferSelect) =>
@@ -228,7 +128,7 @@ const part = (row: typeof PartTable.$inferSelect) =>
 // kilocode_change end
 
 const older = (row: Cursor) =>
-  or(lt(MessageTable.time_created, row.time), and(eq(MessageTable.time_created, row.time), lt(MessageTable.id, row.id)))
+  or(lt(MessageTable.time_created, row.time), and(eq(MessageTable.time_created, row.time), lt(MessageTable.id, row.id as never)))
 
 function hydrate(db: Database.Interface["db"], rows: (typeof MessageTable.$inferSelect)[]) {
   const ids = rows.map((row) => row.id)

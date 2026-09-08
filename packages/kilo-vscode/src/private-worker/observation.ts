@@ -16,6 +16,14 @@
 import { isAbsolute } from "path"
 import { canonicalDirectory } from "./canonical-directory"
 import { decodeGlobalListCursor } from "./session-cursor"
+import {
+  assertFoundMessagePage,
+  decodeMessageCursor,
+  isStrictCursorTime,
+  validateInfo,
+  validatePart,
+} from "@opencode-ai/core/session/message-read"
+import type { SessionV1 } from "@opencode-ai/core/v1/session"
 import { ErrorCode } from "./json-rpc"
 
 export const OBSERVATION_VERSION = "1.0" as const
@@ -27,6 +35,7 @@ export const OBSERVATION_METHODS = {
   SUBSCRIBE: "observation/subscribe",
   LIST: "observation/list",
   GET: "observation/get",
+  MESSAGES: "observation/messages",
 } as const
 
 export const OBSERVATION_NOTIFICATION = "observation/changed" as const
@@ -138,12 +147,18 @@ export type ObservationGetResult =
   | { v: typeof OBSERVATION_VERSION; status: "not_found" }
   | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
 
+export type ObservationMessagesResult =
+  | { v: typeof OBSERVATION_VERSION; status: "found"; messages: SessionV1.WithParts[]; nextCursor?: string }
+  | { v: typeof OBSERVATION_VERSION; status: "not_found" }
+  | { v: typeof OBSERVATION_VERSION; status: "scope_mismatch" }
+
 export interface ObservationDeps {
   getSnapshot: () => Promise<{ cursor: number; snapshot: unknown }>
   readAfter: (cursor: number) => Promise<ObservationReadBackendResult>
   ack: (cursor: number) => Promise<void>
   list?: (input: { directory: string; archived?: boolean; cursor?: string; limit: number }) => Promise<ObservationListResult>
   get?: (input: { directory: string; sessionId: string }) => Promise<ObservationGetResult>
+  messages?: (input: { directory: string; sessionId: string; limit: number; cursor?: string }) => Promise<ObservationMessagesResult>
 }
 
 function invalidParams(msg: string): Error & { code?: number } {
@@ -195,9 +210,7 @@ function parseDirectory(raw: unknown): string {
   try {
     return canonicalDirectory(raw)
   } catch (e) {
-    const msg = (e as Error).message
-    if (msg.includes("directory")) throw invalidParams(msg)
-    throw invalidParams("directory must be non-empty absolute path")
+    throw invalidParams((e as Error).message.includes("directory") ? (e as Error).message : "directory must be non-empty absolute path")
   }
 }
 
@@ -299,6 +312,47 @@ function validateGetResult(res: unknown, directory: string, sessionId: string): 
   validateFoundSession(r.session, directory, sessionId)
 }
 
+// eslint-disable-next-line complexity
+function validateMessagesResult(res: unknown, limit: number): asserts res is ObservationMessagesResult {
+  if (res === null || typeof res !== "object" || Array.isArray(res)) throw internalError("messages returned invalid shape")
+  const r = res as Record<string, unknown>
+  if (r.v !== OBSERVATION_VERSION) throw internalError("messages returned invalid version")
+  if (typeof r.status !== "string" || !["found", "not_found", "scope_mismatch"].includes(r.status as string))
+    throw internalError("messages returned invalid status")
+  const status = r.status as string
+  if (status === "not_found" || status === "scope_mismatch") {
+    const allowed = new Set(["v", "status"])
+    for (const k of Object.keys(r)) if (!allowed.has(k)) throw internalError("messages returned invalid shape")
+    if ("messages" in r || "nextCursor" in r) throw internalError("messages returned invalid shape")
+    return
+  }
+  const allowedFound = new Set(["v", "status", "messages", "nextCursor"])
+  for (const k of Object.keys(r)) if (!allowedFound.has(k)) throw internalError("messages returned invalid shape")
+  if (!Array.isArray(r.messages)) throw internalError("messages returned invalid messages")
+  const messages = r.messages as unknown[]
+  try {
+    for (const m of messages) {
+      if (m === null || typeof m !== "object" || Array.isArray(m)) throw new Error("messages returned invalid message shape")
+      const rec = m as Record<string, unknown>
+      const keys = Object.keys(rec)
+      if (keys.length !== 2 || !keys.includes("info") || !keys.includes("parts")) throw new Error("messages returned invalid message shape")
+      validateInfo(rec.info)
+      if (!Array.isArray(rec.parts)) throw new Error("messages returned invalid message shape")
+      for (const p of rec.parts as unknown[]) validatePart(p)
+    }
+    const rawCursor = "nextCursor" in r ? r.nextCursor : undefined
+    if (rawCursor !== undefined && typeof rawCursor !== "string") throw new Error("messages returned invalid nextCursor")
+    if (rawCursor !== undefined) {
+      const decoded = decodeMessageCursor(rawCursor)
+      if (!isStrictCursorTime(decoded.time)) throw new Error("non-integer cursor time")
+    }
+    assertFoundMessagePage(messages as SessionV1.WithParts[], limit, rawCursor as string | undefined)
+  } catch (e) {
+    if (e instanceof Error && (e as { code?: number }).code !== undefined) throw e
+    throw internalError(e instanceof Error ? e.message : String(e))
+  }
+}
+
 export class ObservationController {
   constructor(private readonly deps: ObservationDeps) {}
 
@@ -316,6 +370,8 @@ export class ObservationController {
         return this.handleList(params)
       case OBSERVATION_METHODS.GET:
         return this.handleGet(params)
+      case OBSERVATION_METHODS.MESSAGES:
+        return this.handleMessages(params)
       default:
         throw notFound(`Method not found: ${method}`)
     }
@@ -478,6 +534,47 @@ export class ObservationController {
       }
     })()
     validateGetResult(res, directory, sessionId)
+    return res
+  }
+
+  private async handleMessages(params: unknown): Promise<ObservationMessagesResult> {
+    if (params === null || typeof params !== "object" || Array.isArray(params)) throw invalidParams("params must be object")
+    const o = params as Record<string, unknown>
+    const allowed = new Set(["v", "directory", "sessionId", "limit", "cursor"])
+    for (const k of Object.keys(o)) if (!allowed.has(k)) throw invalidParams(`unexpected field ${k}`)
+    if (o.v !== OBSERVATION_VERSION) throw invalidParams(`unsupported observation version: ${String(o.v)}`)
+    if (!("directory" in o)) throw invalidParams("directory is required")
+    if (!("sessionId" in o)) throw invalidParams("sessionId is required")
+    if (!("limit" in o)) throw invalidParams("limit is required")
+    const directory = parseDirectory(o.directory)
+    const sessionId = parseSessionId(o.sessionId)
+    const limit = (() => {
+      const raw = o.limit
+      if (typeof raw !== "number" || !Number.isInteger(raw) || raw < 1 || raw > 100) throw invalidParams("limit must be integer 1..100")
+      return raw as number
+    })()
+    const msgCursor: string | undefined = (() => {
+      if (!("cursor" in o) || o.cursor === undefined) return undefined
+      const raw = o.cursor
+      if (typeof raw !== "string") throw invalidParams("cursor must be opaque message cursor string")
+      try {
+        const decoded = decodeMessageCursor(raw)
+        if (!isStrictCursorTime(decoded.time)) throw new Error("cursor must be opaque message cursor string")
+      } catch (e) {
+        throw invalidParams((e as Error).message)
+      }
+      return raw as string
+    })()
+    if (!this.deps.messages) throw notFound(`Method not found: ${OBSERVATION_METHODS.MESSAGES}`)
+    const res = await (async () => {
+      try {
+        return await this.deps.messages!({ directory, sessionId, limit, cursor: msgCursor })
+      } catch (e) {
+        if (e instanceof Error && (e as { code?: number }).code !== undefined) throw e
+        throw internalError(e instanceof Error ? e.message : String(e))
+      }
+    })()
+    validateMessagesResult(res, limit)
     return res
   }
 
