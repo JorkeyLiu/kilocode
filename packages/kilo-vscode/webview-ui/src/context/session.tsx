@@ -1797,17 +1797,18 @@ export const SessionProvider: ParentComponent = (props) => {
 
       for (const msg of messages) {
         const parts = msg.parts ?? []
-        // Replace and reconcile share the occurrence-boundary merge: a snapshot
-        // supersedes only pre-snapshot stream state. Parts already hydrated
-        // from pre-boundary emissions merge against the snapshot so proven
-        // newer streamed text survives a stale snapshot; post-boundary queue
-        // entries arrive after messagesLoaded and dedupe in handlePartUpdated.
-        // Replace without a boundary keeps the legacy stash path.
+        // Token-ordered replace/reconcile: pre-token local state is replaced by
+        // the snapshot for same-ID parts (snapshot wins, no prefix heuristic).
+        // Local-only parts drop here; post-token capture replay after
+        // messagesLoaded restores absent tails and authoritative fulls, so the
+        // final state converges without duplication. `since` is the opaque
+        // scheduler occurrence token, never a wall-clock/time.start comparator.
+        // Replace without a token keeps the legacy stash path.
         if ((mode === "reconcile" || (mode === "replace" && input.since !== undefined)) && store.parts[msg.id]) {
-          // Reconcile on a message already hydrated into the reactive store:
-          // write parts directly so visible turns pick up server corrections,
-          // but do not erase proven newer streamed text absent from a stale snapshot.
-          const merged = mergeParts(store.parts[msg.id], parts, input.since ?? Number.POSITIVE_INFINITY)
+          const merged =
+            input.since !== undefined
+              ? mergeParts(store.parts[msg.id], parts, input.since)
+              : mergeParts(store.parts[msg.id], parts)
           setStore("parts", msg.id, reconcile(merged, { key: "id" }))
           stash.remove(msg.id)
           continue

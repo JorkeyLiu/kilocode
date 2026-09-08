@@ -47,7 +47,6 @@ import {
   buildSnapshotPartKeys,
   type SessionRefreshContext,
 } from "./kilo-provider-utils"
-import { updateSnapshotKey } from "./kilo-provider/session-stream-scheduler"
 import {
   sdkSessionToDetail,
   observationSessionToDetail,
@@ -1599,7 +1598,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   /** Register a session created externally and notify the webview. */
   public registerSession(session: SessionDetail | Session): void {
-    const detail = (session as SessionDetail).createdAt !== undefined ? (session as SessionDetail) : sdkSessionToDetail(session as Session)
+    const detail =
+      (session as SessionDetail).createdAt !== undefined
+        ? (session as SessionDetail)
+        : sdkSessionToDetail(session as Session)
     this.stopCurrentSessionProcesses(detail.id)
     this.setCurrentSession(detail)
     this.contextSessionID = detail.id
@@ -1622,7 +1624,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   public async loadMessagesStrict(sessionID: string, info?: SessionDetail | Session): Promise<boolean> {
-    const detail = info ? ((info as SessionDetail).createdAt !== undefined ? (info as SessionDetail) : sdkSessionToDetail(info as Session)) : undefined
+    const detail = info
+      ? (info as SessionDetail).createdAt !== undefined
+        ? (info as SessionDetail)
+        : sdkSessionToDetail(info as Session)
+      : undefined
     return this.doLoadMessages(sessionID, { preserveStream: true }, true, detail)
   }
 
@@ -2560,7 +2566,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     if (!this.client) throw new Error("Not connected to CLI backend")
     let res: { data?: unknown; error?: unknown; response?: unknown }
     try {
-      const raw = await this.client.session.get({ sessionID, directory }, { throwOnError: true, ...(signal ? { signal } : {}) } as unknown as { throwOnError: true })
+      const raw = await this.client.session.get({ sessionID, directory }, {
+        throwOnError: true,
+        ...(signal ? { signal } : {}),
+      } as unknown as { throwOnError: true })
       res = raw as unknown as { data?: unknown; error?: unknown; response?: unknown }
       if (!res.data) throw new Error("Session metadata not found")
       try {
@@ -2984,11 +2993,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.refreshSessionDetails(sessionID, dir, abort.signal)
       }
     }
-    // Occurrence boundary: parts/updates received at or after this instant are
-    // newer than the snapshot query-start and must survive the snapshot.
-    // Captured before the message fetch for replace and reconcile; reconcile
-    // behavior is unchanged, replace now threads the same boundary.
-    const since = mode === "replace" || mode === "reconcile" ? Date.now() : undefined
+    // Occurrence boundary: scheduler-owned monotonic token. Capture
+    // synchronously flushes pre-token queued state so the live queue after
+    // capture holds only post-token updates; live delivery is never suspended.
+    const token = mode === "replace" || mode === "reconcile" ? this.streams.capture(sessionID) : undefined
+    const dropToken = () => {
+      if (token !== undefined) this.streams.discard(sessionID, token)
+    }
     let page: Awaited<ReturnType<typeof fetchMessagePage>>
     try {
       page = await fetchMessagePage(
@@ -3004,49 +3015,90 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.privateSessionReader,
       )
     } catch (e) {
-      if (abort?.signal.aborted) return false
-      if (generation !== this.detailGeneration) return false
-      if (mode === "replace" && this.contextSessionID !== target) return false
+      if (abort?.signal.aborted) {
+        dropToken()
+        return false
+      }
+      if (generation !== this.detailGeneration) {
+        dropToken()
+        return false
+      }
+      if (mode === "replace" && this.contextSessionID !== target) {
+        dropToken()
+        return false
+      }
+      dropToken()
       throw e
     }
-    if (abort?.signal.aborted) return false
-    if (generation !== this.detailGeneration) return false
-    if (mode === "replace" && this.contextSessionID !== target) return false
-    if (!this.trackedSessionIds.has(sessionID)) return false
+    if (abort?.signal.aborted) {
+      dropToken()
+      return false
+    }
+    if (generation !== this.detailGeneration) {
+      dropToken()
+      return false
+    }
+    if (mode === "replace" && this.contextSessionID !== target) {
+      dropToken()
+      return false
+    }
+    if (!this.trackedSessionIds.has(sessionID)) {
+      dropToken()
+      return false
+    }
     const messages = page.items.map((m) => ({
       ...this.slimInfo(m.info),
       parts: this.slimParts(m.parts),
       createdAt: new Date(m.info.time.created).toISOString(),
     }))
-    for (const message of messages) {
-      this.connectionService.recordMessageSessionId(message.id, message.sessionID)
-    }
-    if (mode === "replace" || mode === "reconcile") this.resetMessageCosts(sessionID, messages)
-    if (mode === "reconcile") this.lastReconciledAt.set(sessionID, Date.now())
-    // Ordering contract: messagesLoaded first, then the deterministic
-    // snapshot-aware drain. The snapshot Set holds fetched (messageID, partID)
-    // keys; the predicate keeps authoritative full updates (!delta) and
-    // deltas for parts absent from the snapshot (new tail), and drops deltas
-    // for parts present in the snapshot as ambiguous without inspecting text.
-    // Pre-boundary receipts drop. Modes without since retain ordinary flush.
-    this.postMessage({
-      type: "messagesLoaded",
-      sessionID,
-      messages,
-      mode,
-      cursor: page.cursor,
-      hasMore: Boolean(page.cursor),
-      since,
-    })
-    if ((mode === "replace" || mode === "reconcile") && since !== undefined) {
+    if ((mode === "replace" || mode === "reconcile") && token !== undefined) {
+      // Authoritative validation: commit consumes the post-token live queue
+      // (preventing duplicate delta emission), posts the snapshot inside the
+      // synchronous callback, then replays the filtered capture once.
+      // Callback call-order is the guarantee, not delivery acknowledgement.
       const snapshot = buildSnapshotPartKeys(page.items)
-      this.streams.drainSince(sessionID, since, (update) => {
-        if (!update.delta) return true
-        const key = updateSnapshotKey(update)
-        if (!key) return false
-        return !snapshot.has(key)
+      const committed = this.streams.commit(sessionID, token, snapshot, () => {
+        for (const message of messages) {
+          this.connectionService.recordMessageSessionId(message.id, message.sessionID)
+        }
+        this.resetMessageCosts(sessionID, messages)
+        if (mode === "reconcile") this.lastReconciledAt.set(sessionID, Date.now())
+        this.postMessage({
+          type: "messagesLoaded",
+          sessionID,
+          messages,
+          mode,
+          cursor: page.cursor,
+          hasMore: Boolean(page.cursor),
+          since: token,
+        })
       })
-    } else if (options.preserveStream) this.streams.flush(sessionID)
+      if (!committed) {
+        // Latest-wins/bounded fail-closed: superseded, expired, or overflowed.
+        // No snapshot may be applied without complete replay. Strict user loads
+        // surface the existing bounded load error; background reconcile returns
+        // without posts so a later retry can run.
+        if (strict) throw new Error("Session messages snapshot expired before replay completed")
+        return false
+      }
+    } else {
+      for (const message of messages) {
+        this.connectionService.recordMessageSessionId(message.id, message.sessionID)
+      }
+      if (mode === "replace" || mode === "reconcile") this.resetMessageCosts(sessionID, messages)
+      if (mode === "reconcile") this.lastReconciledAt.set(sessionID, Date.now())
+      // Modes without a token retain ordinary flush.
+      this.postMessage({
+        type: "messagesLoaded",
+        sessionID,
+        messages,
+        mode,
+        cursor: page.cursor,
+        hasMore: Boolean(page.cursor),
+        since: token,
+      })
+      if (options.preserveStream) this.streams.flush(sessionID)
+    }
     this.recoverPendingPrompts()
     if (strict) this.activateSession(sessionID)
     return true
@@ -3073,9 +3125,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       }
     }
 
+    const token = this.streams.capture(sessionID)
     try {
       const workspaceDir = this.getWorkspaceDirectory(sessionID)
-      const since = Date.now()
       const [detail, page] = await Promise.all([
         this.getSessionDetail(sessionID, workspaceDir),
         fetchMessagePage(
@@ -3087,48 +3139,70 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       ])
       // Deletion tombstone: a delete racing the fetch wins over the snapshot.
       // Evict the in-flight marker so a later legitimate retry can run, drop
-      // queued stream state, and return without posts so the child is not
-      // resurrected. Background child sync never consults detailGeneration.
+      // queued stream state, discard only this capture, and return without
+      // posts so the child is not resurrected. Background child sync never
+      // consults detailGeneration.
       if (!this.trackedSessionIds.has(sessionID)) {
         this.syncedChildSessions.delete(sessionID)
+        this.streams.discard(sessionID, token)
         this.streams.drop(sessionID)
         return
       }
-      this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
-
       const messages = page.items.map((m) => ({
         ...this.slimInfo(m.info),
         parts: this.slimParts(m.parts),
         createdAt: new Date(m.info.time.created).toISOString(),
       }))
-
-      for (const message of messages) {
-        this.connectionService.recordMessageSessionId(message.id, message.sessionID)
-      }
-      this.resetMessageCosts(sessionID, messages)
-
-      // Same ordering contract as doLoadMessages: messagesLoaded first,
-      // then the deterministic snapshot-aware drain over page.items keys.
-      this.postMessage({
-        type: "messagesLoaded",
-        sessionID,
-        messages,
-        mode: "replace",
-        hasMore: false,
-        since,
-      })
+      // Authoritative validation: all sessionUpdated + messagesLoaded posts run
+      // inside the commit callback in required order, then the filtered capture
+      // replays once. Stale tokens return false without posts and without
+      // draining the current holder's state.
       const snapshot = buildSnapshotPartKeys(page.items)
-      this.streams.drainSince(sessionID, since, (update) => {
-        if (!update.delta) return true
-        const key = updateSnapshotKey(update)
-        if (!key) return false
-        return !snapshot.has(key)
+      const committed = this.streams.commit(sessionID, token, snapshot, () => {
+        this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
+        for (const message of messages) {
+          this.connectionService.recordMessageSessionId(message.id, message.sessionID)
+        }
+        this.resetMessageCosts(sessionID, messages)
+        this.postMessage({
+          type: "messagesLoaded",
+          sessionID,
+          messages,
+          mode: "replace",
+          hasMore: false,
+          since: token,
+        })
       })
+      if (!committed) {
+        // Fail-closed nonterminal invalidation (expiry/overflow/superseded):
+        // keep trackedSessionIds and scheduler queue/capture state untouched
+        // (no prune/drop) so live state survives. Evict the synced marker only
+        // for the latest attempt so an expired/overflowed sync can retry;
+        // a stale superseded attempt must not clear a newer attempt's marker.
+        if (this.streams.isLatestAttempt(sessionID, token)) this.syncedChildSessions.delete(sessionID)
+        return
+      }
 
       // Recover any prompts emitted by the child before we started tracking it.
       this.recoverPendingPrompts()
     } catch (err) {
+      if (!this.streams.isLatestAttempt(sessionID, token)) {
+        // Stale attempt: a newer same-session capture re-tracked after this
+        // fetch started. Discard only this token without touching newer
+        // tracking/capture/queue/markers.
+        this.streams.discard(sessionID, token)
+        return
+      }
+      if (err instanceof SessionNotFoundError || err instanceof SessionScopeMismatchError) {
+        // Latest authoritative terminal: the child is gone or out of scope.
+        // Reuse the natural deletion boundary so child caches, scheduler
+        // queue/captures, and tracked/synced markers clear consistently while
+        // the parent and unrelated sessions stay intact.
+        this.pruneDeletedSession(sessionID)
+        return
+      }
       this.syncedChildSessions.delete(sessionID)
+      this.streams.discard(sessionID, token)
       console.error("[Kilo New] KiloProvider: Failed to sync child session:", err)
     }
   }
@@ -3191,7 +3265,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
                     !(r.directory as string).includes("\0") &&
                     (() => {
                       try {
-                        return canonicalDirectory(r.directory as string) === (r.directory as string) && (r.directory as string) === canonicalRequested
+                        return (
+                          canonicalDirectory(r.directory as string) === (r.directory as string) &&
+                          (r.directory as string) === canonicalRequested
+                        )
                       } catch {
                         return false
                       }
@@ -3215,15 +3292,17 @@ export class KiloProvider implements TelemetryPropertiesProvider {
                   if (!idOk || !titleOk || !parentOk || !dirOk || !projOk || !createdOk || !updatedOk)
                     throw new Error("invalid entry shape")
                 }
-                const mapped = (entries as Array<{
-                  id: string
-                  parentID: string | null
-                  title: string
-                  directory: string
-                  projectID: string
-                  createdAt: number
-                  updatedAt: number
-                }>).map((e) => ({
+                const mapped = (
+                  entries as Array<{
+                    id: string
+                    parentID: string | null
+                    title: string
+                    directory: string
+                    projectID: string
+                    createdAt: number
+                    updatedAt: number
+                  }>
+                ).map((e) => ({
                   id: e.id,
                   parentID: e.parentID ?? null,
                   title: e.title,
@@ -3412,6 +3491,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
    * a session the backend has already deleted.
    */
   private pruneDeletedSession(sessionID: string): void {
+    this.modelUsageSessionIds.delete(sessionID)
     this.trackedSessionIds.delete(sessionID)
     for (const [key, session] of this.draftSessions) {
       if (session.sid === sessionID) this.draftSessions.delete(key)
@@ -6814,7 +6894,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const dir = (session as SessionDetail).directory ?? (session as Session).directory
     const id = (session as SessionDetail).id ?? (session as Session).id
     this.trackDirectory(id, dir)
-    const detailForCb = (session as SessionDetail).createdAt !== undefined ? (session as SessionDetail) : sdkSessionToDetail(session as Session)
+    const detailForCb =
+      (session as SessionDetail).createdAt !== undefined
+        ? (session as SessionDetail)
+        : sdkSessionToDetail(session as Session)
     for (const cb of this.followupListeners) cb(detailForCb, dir)
     this.registerSession(detailForCb as unknown as SessionDetail)
     void this.handleLoadMessages(id)

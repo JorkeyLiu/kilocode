@@ -509,7 +509,7 @@ describe("paged messages private-first", () => {
     }
   })
 
-  it("doLoadMessages private found preserves messagesLoaded then drainSince and stale checks", async () => {
+  it("doLoadMessages private found preserves messagesLoaded then commit and stale checks", async () => {
     const msgs = [userMsg("msg_1", 100), userMsg("msg_2", 200)]
     const h = makeHarness({ privateMessages: async (input) => privateFound(input.sessionId, msgs) })
     const anyP = h.provider as unknown as Record<string, unknown>
@@ -518,16 +518,13 @@ describe("paged messages private-first", () => {
     const posts: unknown[] = []
     ;(anyP["postMessage"] as unknown) = (m: unknown) => posts.push(m)
     const drains: Array<{ id: string; since: number }> = []
-    const origDrain = (
-      anyP["streams"] as { drainSince: (id: string, since: number, keep?: unknown) => void }
-    ).drainSince.bind(anyP["streams"])
-    ;(anyP["streams"] as { drainSince: (id: string, since: number, keep?: unknown) => void }).drainSince = (
-      id: string,
-      since: number,
-      keep?: unknown,
-    ) => {
+    const streams = anyP["streams"] as {
+      commit: (id: string, since: number, snapshot: Set<string>, before: () => void) => boolean
+    }
+    const origCommit = streams.commit.bind(streams)
+    streams.commit = (id: string, since: number, snapshot: Set<string>, before: () => void) => {
       drains.push({ id, since })
-      return origDrain(id, since, keep as never)
+      return origCommit(id, since, snapshot, before)
     }
     const ok = await (
       h.provider as unknown as { doLoadMessages: (id: string, opts: unknown, strict: boolean) => Promise<boolean> }

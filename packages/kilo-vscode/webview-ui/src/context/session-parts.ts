@@ -26,13 +26,29 @@ export function sameParts(local: Part[] = [], snapshot: Part[] = []): boolean {
 }
 
 /**
- * Reconcile snapshots may be older than in-flight streaming deltas. Preserve
- * only appended streamed tail parts and open prefix extensions while still
- * accepting snapshots that heal older removals and completed corrections.
- * Replace snapshots share the same occurrence-boundary merge when a `since`
- * boundary is present.
+ * Strict snapshot application for the token-ordered path: pre-token local
+ * state is replaced by the snapshot for same-ID parts (snapshot wins, no
+ * prefix/newer heuristic). Local-only parts drop here; post-token absent tails
+ * and authoritative fulls replay after `messagesLoaded` via the scheduler
+ * capture, keeping the final state without duplication. Applies equally to
+ * text and reasoning parts.
  */
-export function mergeParts(local: Part[], snapshot: Part[], since: number): Part[] {
+export function applySnapshot(snapshot: Part[]): Part[] {
+  return [...snapshot].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+}
+
+/**
+ * Reconcile snapshots may be older than in-flight streaming deltas. Legacy
+ * merge (no token) preserves only appended streamed tail parts and open prefix
+ * extensions while still accepting snapshots that heal older removals and
+ * completed corrections. When `since` carries the opaque scheduler occurrence
+ * token (never wall-clock/time.start), strict snapshot semantics apply:
+ * same-ID parts resolve to the snapshot and local-only parts drop pending
+ * capture replay. The token value itself is never compared against
+ * `part.time.start`.
+ */
+export function mergeParts(local: Part[], snapshot: Part[], since?: number): Part[] {
+  if (since !== undefined) return applySnapshot(snapshot)
   const by = new Map(snapshot.map((part) => [part.id, part]))
   const last = snapshot.reduce<string | undefined>((id, part) => (!id || part.id > id ? part.id : id), undefined)
   for (const part of local) {
@@ -42,7 +58,6 @@ export function mergeParts(local: Part[], snapshot: Part[], since: number): Part
       continue
     }
     if (!last || !stream(part) || part.id <= last) continue
-    if (part.time?.start === undefined || part.time.start < since) continue
     by.set(part.id, part)
   }
   return [...by.values()].sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))

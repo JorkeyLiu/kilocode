@@ -6,6 +6,41 @@
  * tuple, prioritizes the focused session, and throttles background sessions
  * so multi-agent streaming doesn't saturate the renderer main thread.
  *
+ * Ordering contract: snapshot/live-stream precedence is deterministic per
+ * `(sessionID, messageID, partID)` via scheduler-owned monotonic snapshot
+ * tokens. `capture` synchronously flushes that session's queued state before
+ * allocating an opaque occurrence token, so pre-token updates are delivered
+ * and the live queue after capture holds only post-token updates.
+ * Same-session captures are latest-wins (a newer capture supersedes any prior
+ * active one, different sessions stay independent). Live delivery is never
+ * suspended. Post-token keyed updates accumulate per capture against the
+ * capture's own prior cumulative entry (independent of live-queue merging)
+ * so real authoritative fulls stay replayable and bounds stay exact even
+ * across an early lane flush. At `commit` the same session's current live
+ * queue plus its derived map are taken before deletion, preserving keyed
+ * pending entries that have not yet lane-flushed. `commit` consumes the
+ * post-token live queue without emitting it to prevent duplicate delta
+ * emission, then invokes the synchronous `before` callback (which posts the
+ * snapshot) and replays once with delivered/pending semantics: real
+ * no-delta source fulls replay their latest cumulative capture full after
+ * the snapshot regardless of early flush (corrective replace); delta-derived
+ * entries replay nothing when the snapshot contains the key (strict snapshot
+ * wins); delta-derived entries replay only the currently pending live-queue
+ * entry when the snapshot lacks the key, and nothing when no pending entry
+ * remains because the webview already received it via the early flush
+ * (older paginated local bases are preserved, no duplicate appends).
+ * Pending entries emit at most once and no lane timer emits them afterward;
+ * a pending synthetic full uses its live derived metadata for filtering but
+ * keeps its update shape. Callback call-order is the guarantee, not delivery
+ * acknowledgement. Captures are bounded (max keys, byte budget, and a finite
+ * scheduler-owned expiry timer); overflow/expiry invalidates the capture
+ * immediately and the provider fails closed via `commit` returning false.
+ * The per-session latest attempt identity is retained across expiry/overflow
+ * so callers can distinguish a latest expired token from a superseded old
+ * token via `isLatestAttempt`. Lineage stays internal: a real no-delta
+ * source full is authoritative; a full→delta merged synthetic result stays
+ * delta-derived until a later real full supersedes it.
+ *
  * See the tuning comment on the default constants below for rationale.
  */
 
@@ -35,6 +70,15 @@ export type StreamSchedulerOptions = {
   backgroundMaxMs?: number
   /** Flush cadence for visible inline child sessions. Defaults to 50ms. */
   visibleMs?: number
+  /**
+   * Internal capture bounds (test tuning only, never user config). Defaults to
+   * CAPTURE_MAX_KEYS / CAPTURE_MAX_BYTES / CAPTURE_TTL_MS below.
+   */
+  captureMaxKeys?: number
+  /** Max retained merged text payload estimate per capture. */
+  captureMaxBytes?: number
+  /** Finite capture lifetime; expiry invalidates the capture. */
+  captureTTLms?: number
 }
 
 // Scheduler tuning — rationale:
@@ -79,6 +123,34 @@ const DEFAULT_BG_BASE_MS = 150
 const DEFAULT_BG_STEP_MS = 20
 const DEFAULT_BG_MAX_MS = 400
 
+// Capture bounds — rationale:
+//
+// Message loads hold a capture open across one fetch: paged loads (80
+// messages) typically resolve in ~100ms–2s, full-history child-sync reads in
+// ~1–5s, with a ~10s tail under contention or cold worker start. The fetch
+// itself never extends capture lifetime; the scheduler-owned TTL below is the
+// only owner, so a hung fetch cannot pin memory.
+//
+// - CAPTURE_MAX_KEYS = 200: distinct (message,part) keys updated mid-load.
+//   Normal streaming touches 1–2 live parts; 200 is ~100x headroom while
+//   bounding per-capture map growth. Coalescing stays per key.
+// - CAPTURE_MAX_BYTES = 512KiB retained complete update payload estimate per
+//   capture (deterministic JSON/UTF-8 size of each retained merged update,
+//   measured once per new entry). ~200 keys × ~2.5KB average streaming text;
+//   prevents a pathological tool-output stream from pinning megabytes across
+//   a slow load.
+// - CAPTURE_TTL_MS = 30000: ~3x the tail load duration. Long enough that a
+//   healthy load never expires mid-flight; short enough that an orphaned
+//   capture (fetch hung, provider never committed) frees without waiting for
+//   fetch settlement.
+//
+// On overflow or expiry the capture is invalidated immediately (deleted +
+// timer cleared). The provider uses `commit` as the authoritative validation
+// and fails closed without a snapshot that lacks complete replay.
+const CAPTURE_MAX_KEYS = 200
+const CAPTURE_MAX_BYTES = 524288
+const CAPTURE_TTL_MS = 30000
+
 function partField(part: unknown, key: string): unknown {
   if (!part || typeof part !== "object") return undefined
   return (part as Record<string, unknown>)[key]
@@ -119,6 +191,10 @@ export function updateSnapshotKey(msg: PartUpdate): string | undefined {
   return snapshotPartKey(mid, id)
 }
 
+function hasDeltaText(msg: PartUpdate): boolean {
+  return typeof msg.delta?.textDelta === "string" && msg.delta.textDelta.length > 0
+}
+
 function mergePartUpdate(prev: PartUpdate | undefined, msg: PartUpdate): PartUpdate {
   if (!prev) return msg
   const text = msg.delta?.textDelta
@@ -131,6 +207,42 @@ function mergePartUpdate(prev: PartUpdate | undefined, msg: PartUpdate): PartUpd
   }
 }
 
+type CaptureEntry = {
+  update: PartUpdate
+  derived: boolean
+  skey: string | undefined
+  size: number
+}
+
+type CaptureState = {
+  entries: Map<string, CaptureEntry>
+  bytes: number
+  timer: ReturnType<typeof setTimeout> | null
+}
+
+function measureUpdateSize(update: PartUpdate): number | undefined {
+  try {
+    const json = JSON.stringify(update)
+    if (typeof json !== "string") return undefined
+    const Encoder = globalThis.TextEncoder
+    if (typeof Encoder === "undefined") return undefined
+    return new Encoder().encode(json).length
+  } catch {
+    return undefined
+  }
+}
+
+function captureLineage(
+  prevEntry: CaptureEntry | undefined,
+  capPrev: PartUpdate | undefined,
+  msg: PartUpdate,
+): boolean {
+  if (!capPrev) return !!msg.delta
+  if (hasDeltaText(msg)) return true
+  if (msg.delta) return prevEntry?.derived ?? !!capPrev.delta
+  return false
+}
+
 export class SessionStreamScheduler {
   private active: string | undefined
   private atimer: ReturnType<typeof setTimeout> | null = null
@@ -139,13 +251,38 @@ export class SessionStreamScheduler {
   private bgFirstQueuedAt = 0
   private visibleFirstQueuedAt = 0
   private readonly queues = new Map<string, Map<string, PartUpdate>>()
-  private readonly stamps = new Map<string, Map<string, number>>()
+  /** Per-key lineage for queued entries: true = delta-derived synthetic, false = real full. */
+  private readonly derived = new Map<string, Map<string, boolean>>()
+  /**
+   * Post-token capture history: session -> token -> bounded capture state.
+   * Same-session captures are latest-wins: at most one active token per
+   * session; `capture` flushes pre-token queue state then supersedes
+   * (discards + clears timer) any prior active capture for that session.
+   * Different sessions stay independent. Populated on every post-token keyed
+   * push from the merged queue value so `commit` can replay post-token state
+   * once after consuming the live queue. Non-keyable updates bypass the queue
+   * (immediate emit in `push`) and are outside the capture/replay guarantee;
+   * the production part mapper always emits IDs.
+   */
+  private readonly captures = new Map<string, Map<number, CaptureState>>()
+  /**
+   * Latest capture attempt per session, retained even when its capture
+   * expires/overflows. `capture` advances it; `drop`/`dispose` clear it.
+   * Commit/discard/expiry never touch it so a latest expired token stays
+   * distinguishable from a superseded old token.
+   */
+  private readonly latest = new Map<string, number>()
+  /** Scheduler-owned monotonic sequence. Every keyed push and every capture advances it. */
+  private seq = 0
   private readonly visible = new Set<string>()
   private readonly activeMs: number
   private readonly visibleMs: number
   private readonly bgBase: number
   private readonly bgStep: number
   private readonly bgMax: number
+  private readonly capKeys: number
+  private readonly capBytes: number
+  private readonly capTTL: number
   private readonly counters: StreamSchedulerStats = {
     received: 0,
     emitted: 0,
@@ -164,6 +301,9 @@ export class SessionStreamScheduler {
     this.bgBase = opts?.backgroundBaseMs ?? DEFAULT_BG_BASE_MS
     this.bgStep = opts?.backgroundStepMs ?? DEFAULT_BG_STEP_MS
     this.bgMax = opts?.backgroundMaxMs ?? DEFAULT_BG_MAX_MS
+    this.capKeys = opts?.captureMaxKeys ?? CAPTURE_MAX_KEYS
+    this.capBytes = opts?.captureMaxBytes ?? CAPTURE_MAX_BYTES
+    this.capTTL = opts?.captureTTLms ?? CAPTURE_TTL_MS
   }
 
   focus(sessionID?: string): void {
@@ -199,6 +339,140 @@ export class SessionStreamScheduler {
     }
   }
 
+  /**
+   * Acquire an opaque monotonic occurrence token for a session. Synchronously
+   * flushes that session's queued updates first so all pre-token state is
+   * delivered and the live queue after capture holds only post-token updates.
+   * Other-session lane queues and timers are preserved. Must be called before
+   * the message fetch; every later keyed push is logically after the token.
+   * Never uses wall-clock time. Same-session latest-wins: supersedes
+   * (discards + clears timer) any prior active capture for the session so an
+   * old fetch can never replay after a newer capture. Different sessions stay
+   * independent. Starts the finite scheduler-owned expiry timer; expiry
+   * invalidates the capture without waiting for fetch settlement.
+   */
+  capture(sessionID: string): number {
+    this.flush(sessionID)
+    this.seq += 1
+    const token = this.seq
+    let bySid = this.captures.get(sessionID)
+    if (!bySid) {
+      bySid = new Map()
+      this.captures.set(sessionID, bySid)
+    } else {
+      for (const [, old] of bySid) this.clearCaptureTimer(old)
+      bySid.clear()
+    }
+    const state: CaptureState = { entries: new Map(), bytes: 0, timer: null }
+    bySid.set(token, state)
+    this.latest.set(sessionID, token)
+    if (this.capTTL > 0) {
+      state.timer = setTimeout(() => this.expire(sessionID, token), this.capTTL)
+      const t = state.timer as unknown as { unref?: () => void }
+      if (typeof t.unref === "function") t.unref()
+    }
+    return token
+  }
+
+  /**
+   * Atomically validate `token`, post the snapshot via `before`, and replay
+   * once with delivered/pending semantics. Algorithm: if `token` is unknown,
+   * superseded, expired, or overflowed, return false without invoking `before`
+   * and without touching the current token's capture or queue. Otherwise
+   * remove and clear the capture plus its TTL ownership first, take the same
+   * session's current live queue plus its derived map before deleting them
+   * without emitting (preserving keyed pending entries that have not yet
+   * lane-flushed and preventing duplicate delta emission), clear only the
+   * relevant lane timer state safely, invoke the synchronous `before`
+   * callback (the provider posts `sessionUpdated`/`messagesLoaded` inside, in
+   * required order), then emit once per capture key: real no-delta source
+   * fulls (`derived=false`) replay the latest cumulative capture full after
+   * the snapshot regardless of early flush; delta-derived entries replay
+   * nothing when the snapshot contains the key; delta-derived entries replay
+   * only the currently pending live-queue entry when the snapshot lacks the
+   * key (nothing when already flushed, since the webview already has it). A
+   * pending synthetic full is filtered by its live derived metadata but keeps
+   * its update shape. Pending entries emit at most once and no lane timer
+   * emits them afterward. If `before` throws, no replay is emitted and the
+   * error is rethrown with state already released. `before` call-order is the
+   * guarantee, not delivery acknowledgement.
+   */
+  commit(sessionID: string, token: number, snapshot: Set<string> | undefined, before: () => void): boolean {
+    const bySid = this.captures.get(sessionID)
+    const cap = bySid?.get(token)
+    if (!cap) return false
+    this.clearCaptureTimer(cap)
+    bySid!.delete(token)
+    if (bySid!.size === 0) this.captures.delete(sessionID)
+    const live = this.queues.get(sessionID)
+    const pending = live ? new Map(live) : new Map<string, PartUpdate>()
+    this.queues.delete(sessionID)
+    this.derived.delete(sessionID)
+    if (this.active === sessionID && this.atimer) {
+      clearTimeout(this.atimer)
+      this.atimer = null
+    }
+    if (this.vtimer && !this.hasVisible()) {
+      clearTimeout(this.vtimer)
+      this.vtimer = null
+    }
+    if (this.btimer && !this.hasBackground()) {
+      clearTimeout(this.btimer)
+      this.btimer = null
+    }
+    before()
+    const keep: PartUpdate[] = []
+    for (const [key, entry] of cap.entries) {
+      if (!entry.derived) {
+        keep.push(entry.update)
+        continue
+      }
+      if (snapshot && entry.skey && snapshot.has(entry.skey)) continue
+      const livePending = pending.get(key)
+      if (livePending) keep.push(livePending)
+    }
+    this.emit(keep)
+    return true
+  }
+
+  /** Discard `token` for a session without replaying (stale/abort/error). Clears its timer. */
+  discard(sessionID: string, token: number): void {
+    const bySid = this.captures.get(sessionID)
+    const cap = bySid?.get(token)
+    if (!cap) return
+    this.clearCaptureTimer(cap)
+    bySid!.delete(token)
+    if (bySid!.size === 0) this.captures.delete(sessionID)
+  }
+
+  /**
+   * Whether `token` is the latest capture attempt for the session, even when
+   * its capture already expired/overflowed. Never touches newer state.
+   */
+  isLatestAttempt(sessionID: string, token: number): boolean {
+    return this.latest.get(sessionID) === token
+  }
+
+  private expire(sessionID: string, token: number): void {
+    const bySid = this.captures.get(sessionID)
+    const cap = bySid?.get(token)
+    if (!cap) return
+    this.clearCaptureTimer(cap)
+    bySid!.delete(token)
+    if (bySid!.size === 0) this.captures.delete(sessionID)
+  }
+
+  private invalidate(sessionID: string, token: number): void {
+    this.expire(sessionID, token)
+  }
+
+  private clearCaptureTimer(cap: CaptureState): void {
+    if (cap.timer) {
+      clearTimeout(cap.timer)
+      cap.timer = null
+    }
+  }
+
   push(msg: PartUpdate): void {
     this.counters.received++
     const key = partUpdateKey(msg)
@@ -209,21 +483,79 @@ export class SessionStreamScheduler {
       return
     }
 
+    // Monotonic receipt sequence; never wall-clock. Capture tokens advance the
+    // same sequence so a capture sorts strictly between earlier and later pushes.
+    this.seq += 1
     const queue = this.ensureQueue(msg.sessionID)
     const prev = queue.get(key)
-    // Receipt evidence for the replace/reconcile occurrence boundary. The
-    // stamp records the last push time so a pre-boundary delta extended after
-    // the boundary is preserved (its old time.start cannot prove newness).
-    // A later authoritative full update for the same key supersedes a queued
-    // delta in place: the full part already carries canonical cumulative
-    // content, so emitting the stale delta first would duplicate text. The
-    // stamp moves to the full update's receipt time so a post-boundary full
-    // survives drainSince; a pre-boundary full with no later update still
-    // drops via the snapshot rule.
-    const now = Date.now()
-    queue.set(key, mergePartUpdate(prev, msg))
-    this.ensureStamps(msg.sessionID).set(key, now)
+    const merged = mergePartUpdate(prev, msg)
+    let lineage: boolean
+    if (!prev) {
+      lineage = !!msg.delta
+    } else if (hasDeltaText(msg)) {
+      // Delta after anything (full or delta) stays delta-derived. A full→delta
+      // synthetic result carries no wire delta but retains delta lineage until
+      // a later real full supersedes it.
+      lineage = true
+    } else if (msg.delta) {
+      // Degenerate delta without payload: keep previous content and lineage.
+      lineage = this.ensureDerived(msg.sessionID).get(key) ?? !!prev.delta
+    } else {
+      // Real no-delta source full is authoritative and supersedes lineage.
+      lineage = false
+    }
+    // Degenerate delta without payload keeps the previous merged value.
+    const next = !prev || hasDeltaText(msg) || !msg.delta ? merged : prev
+    queue.set(key, next)
+    this.ensureDerived(msg.sessionID).set(key, lineage)
     this.schedule(msg.sessionID)
+    this.trackCapture(msg.sessionID, key, msg)
+  }
+
+  /**
+   * Accumulate `msg` into every active capture for the session against that
+   * capture's own prior cumulative entry, independent of live-queue merging
+   * so real authoritative fulls stay correctively replayable and byte
+   * replacement accounting stays exact across an early lane flush (which
+   * clears the live queue but leaves captures). Delta-derived replay does
+   * not use this cumulative text: snapshot-absent deltas replay only the
+   * unflushed pending live-queue entry while already flushed deltas stay in
+   * the projection. Lineage and byte replacement accounting likewise derive
+   * from the capture predecessor.
+   */
+  private trackCapture(sid: string, key: string, msg: PartUpdate): void {
+    const bySid = this.captures.get(sid)
+    if (!bySid) return
+    for (const [token, cap] of [...bySid]) this.trackOneCapture(sid, key, msg, token, cap)
+  }
+
+  private trackOneCapture(sid: string, key: string, msg: PartUpdate, token: number, cap: CaptureState): void {
+    const prevEntry = cap.entries.get(key)
+    const capPrev = prevEntry?.update
+    const capMerged = mergePartUpdate(capPrev, msg)
+    const capLineage = captureLineage(prevEntry, capPrev, msg)
+    const capNext = !capPrev || hasDeltaText(msg) || !msg.delta ? capMerged : capPrev
+    if (capNext === capPrev) return
+    const prevSize = prevEntry ? prevEntry.size : 0
+    const nextSize = measureUpdateSize(capNext)
+    if (nextSize === undefined) {
+      // Unmeasurable payload fails closed: invalidate immediately (freed now,
+      // never held until fetch settlement). The provider's `commit` then
+      // returns false without a snapshot lacking complete replay.
+      this.invalidate(sid, token)
+      return
+    }
+    const grownBytes = cap.bytes - prevSize + nextSize
+    const grownKeys = prevEntry ? cap.entries.size : cap.entries.size + 1
+    if (grownKeys > this.capKeys || grownBytes > this.capBytes) {
+      // Bound the capture: overflow invalidates immediately (freed now,
+      // never held until fetch settlement). The provider's `commit`
+      // check then fails closed without a snapshot lacking complete replay.
+      this.invalidate(sid, token)
+      return
+    }
+    cap.bytes = grownBytes
+    cap.entries.set(key, { update: capNext, derived: capLineage, skey: updateSnapshotKey(capNext), size: nextSize })
   }
 
   flush(sessionID?: string): void {
@@ -252,7 +584,7 @@ export class SessionStreamScheduler {
   }
 
   /**
-   * Discard any queued updates for a session without emitting them.
+   * Discard any queued updates and captures for a session without emitting them.
    *
    * Called when a session is deleted. Does NOT alter focus
    * state — callers that also want to clear focus should call `focus(undefined)`
@@ -260,12 +592,18 @@ export class SessionStreamScheduler {
    * (`take()` returns `[]` for the emptied queue).
    *
    * Note: non-keyable updates bypass the queue (immediate emit in `push`),
-   * so they are outside the receipt-boundary guarantee `drainSince` provides
-   * for keyed production updates. The production part mapper always emits IDs.
+   * so they are outside the capture/replay guarantee for keyed production
+   * updates. The production part mapper always emits IDs.
    */
   drop(sessionID: string): void {
     this.queues.delete(sessionID)
-    this.stamps.delete(sessionID)
+    this.derived.delete(sessionID)
+    this.latest.delete(sessionID)
+    const bySid = this.captures.get(sessionID)
+    if (bySid) {
+      for (const [, cap] of bySid) this.clearCaptureTimer(cap)
+      this.captures.delete(sessionID)
+    }
     if (this.vtimer && !this.hasVisible()) {
       clearTimeout(this.vtimer)
       this.vtimer = null
@@ -274,68 +612,16 @@ export class SessionStreamScheduler {
       clearTimeout(this.btimer)
       this.btimer = null
     }
-  }
-
-  /**
-   * Emit only queued updates received at or after `since`, dropping older
-   * entries without emitting them. An optional `keep` predicate applies the
-   * deterministic snapshot rule: the provider keeps authoritative full updates
-   * (`!update.delta`) and deltas for parts absent from the fetched snapshot,
-   * and drops deltas for parts present in the snapshot as ambiguous without
-   * inspecting text. They converge on the backend's subsequent durable full
-   * `message.part.updated.1`; if the process dies before that commit the
-   * delta was never canonical.
-   *
-   * Receipt stamps are the boundary: `part.time.start` is never consulted.
-   * Pre-boundary stamps drop unconditionally. Missing stamps are conservative:
-   * without `keep` they emit (legacy path); with `keep` the predicate
-   * decides, so a missing stamp only survives when it satisfies the snapshot
-   * rule. Non-keyable updates are never queued (immediate emit in `push`),
-   * so they are outside this boundary. Queue, stamps, and lane timers are
-   * always cleaned up regardless of keep/drop.
-   */
-  drainSince(sessionID: string, since: number, keep?: (update: PartUpdate) => boolean): void {
-    const queue = this.queues.get(sessionID)
-    if (!queue || queue.size === 0) {
-      this.queues.delete(sessionID)
-      this.stamps.delete(sessionID)
-      this.clearDrainTimers(sessionID)
-      return
-    }
-    const times = this.stamps.get(sessionID)
-    const keepList: PartUpdate[] = []
-    for (const [key, msg] of queue) {
-      const at = times?.get(key)
-      if (at !== undefined && at < since) continue
-      if (keep && !keep(msg)) continue
-      keepList.push(msg)
-    }
-    this.queues.delete(sessionID)
-    this.stamps.delete(sessionID)
-    this.clearDrainTimers(sessionID)
-    this.emit(keepList)
   }
 
   dispose(): void {
     this.clearTimers()
     this.queues.clear()
-    this.stamps.clear()
+    this.derived.clear()
+    for (const [, bySid] of this.captures) for (const [, cap] of bySid) this.clearCaptureTimer(cap)
+    this.captures.clear()
+    this.latest.clear()
     this.visible.clear()
-  }
-
-  private clearDrainTimers(sessionID: string): void {
-    if (this.active === sessionID && this.atimer) {
-      clearTimeout(this.atimer)
-      this.atimer = null
-    }
-    if (this.vtimer && !this.hasVisible()) {
-      clearTimeout(this.vtimer)
-      this.vtimer = null
-    }
-    if (this.btimer && !this.hasBackground()) {
-      clearTimeout(this.btimer)
-      this.btimer = null
-    }
   }
 
   stats(): Readonly<StreamSchedulerStats> {
@@ -350,11 +636,11 @@ export class SessionStreamScheduler {
     return queue
   }
 
-  private ensureStamps(sid: string): Map<string, number> {
-    const existing = this.stamps.get(sid)
+  private ensureDerived(sid: string): Map<string, boolean> {
+    const existing = this.derived.get(sid)
     if (existing) return existing
-    const map = new Map<string, number>()
-    this.stamps.set(sid, map)
+    const map = new Map<string, boolean>()
+    this.derived.set(sid, map)
     return map
   }
 
@@ -418,14 +704,14 @@ export class SessionStreamScheduler {
     const queue = this.queues.get(sessionID)
     if (!queue) return []
     this.queues.delete(sessionID)
-    this.stamps.delete(sessionID)
+    this.derived.delete(sessionID)
     return [...queue.values()]
   }
 
   private takeAll(): PartUpdate[] {
     const updates = [...this.queues.values()].flatMap((queue) => [...queue.values()])
     this.queues.clear()
-    this.stamps.clear()
+    this.derived.clear()
     return updates
   }
 
@@ -436,7 +722,7 @@ export class SessionStreamScheduler {
       if (this.visible.has(sid)) continue
       updates.push(...queue.values())
       this.queues.delete(sid)
-      this.stamps.delete(sid)
+      this.derived.delete(sid)
     }
     return updates
   }
@@ -447,7 +733,7 @@ export class SessionStreamScheduler {
       if (sid === this.active || !this.visible.has(sid)) continue
       updates.push(...queue.values())
       this.queues.delete(sid)
-      this.stamps.delete(sid)
+      this.derived.delete(sid)
     }
     return updates
   }

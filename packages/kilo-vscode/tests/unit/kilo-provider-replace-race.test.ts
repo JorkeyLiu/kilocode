@@ -1,4 +1,4 @@
-import { describe, it, expect, spyOn } from "bun:test"
+import { describe, it, expect } from "bun:test"
 import type { PartUpdate } from "../../src/shared/stream-messages"
 
 // vscode mock is provided by the shared preload (tests/setup/vscode-mock.ts)
@@ -146,9 +146,9 @@ function types(sent: unknown[]) {
 }
 
 function loadedMsg(sent: unknown[]) {
-  return sent.find(
-    (msg) => typeof msg === "object" && msg && (msg as { type?: unknown }).type === "messagesLoaded",
-  ) as { mode?: string; since?: unknown; messages: Array<{ id: string; parts?: Array<{ id: string; text?: string }> }> } | undefined
+  return sent.find((msg) => typeof msg === "object" && msg && (msg as { type?: unknown }).type === "messagesLoaded") as
+    | { mode?: string; since?: unknown; messages: Array<{ id: string; parts?: Array<{ id: string; text?: string }> }> }
+    | undefined
 }
 
 function updates(sent: unknown[]) {
@@ -369,9 +369,9 @@ describe("KiloProvider replace snapshot / SSE race", () => {
     pending.resolve(mkResult([mkMessage("m1", "user", 10)]))
     await load
 
-    expect(sent.filter((msg) => typeof msg === "object" && msg && (msg as { type?: string }).type === "messagesLoaded")).toEqual(
-      [],
-    )
+    expect(
+      sent.filter((msg) => typeof msg === "object" && msg && (msg as { type?: string }).type === "messagesLoaded"),
+    ).toEqual([])
     expect(updates(sent)).toEqual([])
     internal.streams.dispose?.()
   })
@@ -387,7 +387,14 @@ describe("KiloProvider replace snapshot / SSE race", () => {
       type: "partUpdated",
       sessionID: "s1",
       messageID: "m2",
-      part: { id: "p2", sessionID: "s1", messageID: "m2", type: "text", text: "tail", time: { start: Date.now() + 1000 } },
+      part: {
+        id: "p2",
+        sessionID: "s1",
+        messageID: "m2",
+        type: "text",
+        text: "tail",
+        time: { start: Date.now() + 1000 },
+      },
     })
     pending.resolve(mkResult([mkMessage("m1", "user", 1)]))
     await load
@@ -463,43 +470,35 @@ describe("KiloProvider replace snapshot / SSE race", () => {
     internal.streams.dispose?.()
   })
 
-  it("(preserveStream) replace with since drains only post-boundary entries", async () => {
-    const now = spyOn(Date, "now")
-    try {
-      let clock = 1000
-      now.mockImplementation(() => clock)
-      const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
-      const client = createClient({ messagesDeferred: pending })
-      const { internal, sent } = makeProvider(client)
+  it("(preserveStream) replace with token replays only post-token entries", async () => {
+    const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const client = createClient({ messagesDeferred: pending })
+    const { internal, sent } = makeProvider(client)
 
-      internal.streams.push({
-        type: "partUpdated",
-        sessionID: "s1",
-        messageID: "m1",
-        part: { id: "p-pre", sessionID: "s1", messageID: "m1", type: "text", text: "stale" },
-      })
-      clock = 2000
-      const load = internal.handleLoadMessages("s1", { mode: "replace", preserveStream: true })
-      internal.streams.push({
-        type: "partUpdated",
-        sessionID: "s1",
-        messageID: "m1",
-        part: { id: "p-post", sessionID: "s1", messageID: "m1", type: "text", text: "fresh" },
-      })
-      pending.resolve(mkResult([mkMessage("m1", "user", 1)]))
-      await load
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m1",
+      part: { id: "p-pre", sessionID: "s1", messageID: "m1", type: "text", text: "stale" },
+    })
+    const load = internal.handleLoadMessages("s1", { mode: "replace", preserveStream: true })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m1",
+      part: { id: "p-post", sessionID: "s1", messageID: "m1", type: "text", text: "fresh" },
+    })
+    pending.resolve(mkResult([mkMessage("m1", "user", 1)]))
+    await load
 
-      const loaded = loadedMsg(sent)
-      expect(typeof loaded?.since).toBe("number")
-      const snapshot = types(sent).indexOf("messagesLoaded")
-      expect(snapshot).toBeGreaterThanOrEqual(0)
-      const after = sent.slice(snapshot + 1)
-      const ids = updates(after).map((u) => (u.part as { id?: string }).id)
-      expect(ids).toEqual(["p-post"])
-      internal.streams.dispose?.()
-    } finally {
-      now.mockRestore()
-    }
+    const loaded = loadedMsg(sent)
+    expect(typeof loaded?.since).toBe("number")
+    const snapshot = types(sent).indexOf("messagesLoaded")
+    expect(snapshot).toBeGreaterThanOrEqual(0)
+    const after = sent.slice(snapshot + 1)
+    const ids = updates(after).map((u) => (u.part as { id?: string }).id)
+    expect(ids).toEqual(["p-post"])
+    internal.streams.dispose?.()
   })
 
   it("(child sync) delete while detail/messages pending posts nothing and allows retry", async () => {
@@ -634,15 +633,394 @@ describe("KiloProvider replace snapshot / SSE race", () => {
     expect(snapshot).toBeGreaterThanOrEqual(0)
     expect(t.slice(0, snapshot).filter((type) => type === "partUpdated" || type === "partsUpdated")).toEqual([])
     const rawAfter = sent.slice(snapshot + 1)
-    const flatAfter = updates(rawAfter.filter((msg) => {
-      if (typeof msg !== "object" || !msg) return false
-      const m = msg as { type?: string; sessionID?: unknown; updates?: Array<{ sessionID?: unknown }> }
-      if (m.sessionID === "s1") return true
-      if (m.type === "partsUpdated" && Array.isArray(m.updates)) return m.updates.some((u) => u.sessionID === "s1")
-      return m.type === "partUpdated" || m.type === "partsUpdated"
-    }))
+    const flatAfter = updates(
+      rawAfter.filter((msg) => {
+        if (typeof msg !== "object" || !msg) return false
+        const m = msg as { type?: string; sessionID?: unknown; updates?: Array<{ sessionID?: unknown }> }
+        if (m.sessionID === "s1") return true
+        if (m.type === "partsUpdated" && Array.isArray(m.updates)) return m.updates.some((u) => u.sessionID === "s1")
+        return m.type === "partUpdated" || m.type === "partsUpdated"
+      }),
+    )
     expect(flatAfter).toHaveLength(1)
     expect(updates(sent).filter((u) => u.sessionID === "s1")).toHaveLength(1)
+    internal.streams.dispose?.()
+  })
+
+  it("(flushed full) post-token full flushed before snapshot replays after messagesLoaded", async () => {
+    const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const client = createClient({ messagesDeferred: pending })
+    const { internal, sent } = makeProvider(client)
+    const flushable = internal.streams as unknown as { flush: (sid: string) => void }
+
+    const load = internal.handleLoadMessages("s1", { mode: "replace" })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello world" },
+    })
+    flushable.flush("s1")
+    const preCount = updates(sent).filter((u) => u.sessionID === "s1").length
+    expect(preCount).toBe(1)
+    pending.resolve(
+      mkResult([
+        mkMessage("m2", "assistant", 2, [{ id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello" }]),
+      ]),
+    )
+    await load
+    const t = types(sent)
+    const snapshot = t.indexOf("messagesLoaded")
+    expect(snapshot).toBeGreaterThanOrEqual(0)
+    const after = updates(sent.slice(snapshot + 1)).filter((u) => u.sessionID === "s1")
+    expect(after).toHaveLength(1)
+    expect((after[0]!.part as { text?: string }).text).toBe("hello world")
+    internal.streams.dispose?.()
+  })
+
+  it("(flushed delta) post-token present-part delta flushed before snapshot is not replayed", async () => {
+    const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const client = createClient({ messagesDeferred: pending })
+    const { internal, sent } = makeProvider(client)
+    const flushable = internal.streams as unknown as { flush: (sid: string) => void }
+
+    const load = internal.handleLoadMessages("s1", { mode: "replace" })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: " world" },
+      delta: { type: "text-delta", textDelta: " world" },
+    })
+    flushable.flush("s1")
+    expect(updates(sent).filter((u) => u.sessionID === "s1")).toHaveLength(1)
+    pending.resolve(
+      mkResult([
+        mkMessage("m2", "assistant", 2, [{ id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello" }]),
+      ]),
+    )
+    await load
+    const t = types(sent)
+    const snapshot = t.indexOf("messagesLoaded")
+    expect(snapshot).toBeGreaterThanOrEqual(0)
+    expect(updates(sent.slice(snapshot + 1)).filter((u) => u.sessionID === "s1")).toEqual([])
+    internal.streams.dispose?.()
+  })
+
+  it("(accumulate) early flush then same-key second delta replays only pending when absent", async () => {
+    const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const client = createClient({ messagesDeferred: pending })
+    const { internal, sent } = makeProvider(client)
+    const flushable = internal.streams as unknown as { flush: (sid: string) => void }
+
+    const load = internal.handleLoadMessages("s1", { mode: "replace" })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello" },
+      delta: { type: "text-delta", textDelta: "hello" },
+    })
+    flushable.flush("s1")
+    expect(updates(sent).filter((u) => u.sessionID === "s1")).toHaveLength(1)
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: " world" },
+      delta: { type: "text-delta", textDelta: " world" },
+    })
+    pending.resolve(mkResult([mkMessage("m1", "user", 1)]))
+    await load
+    const t = types(sent)
+    const snapshot = t.indexOf("messagesLoaded")
+    expect(snapshot).toBeGreaterThanOrEqual(0)
+    const after = updates(sent.slice(snapshot + 1)).filter((u) => u.sessionID === "s1")
+    expect(after).toHaveLength(1)
+    expect((after[0]!.part as { text?: string }).text).toBe(" world")
+    expect(after[0]!.delta).toEqual({ type: "text-delta", textDelta: " world" })
+    internal.streams.dispose?.()
+  })
+
+  it("(accumulate) early flush then same-key second delta drops when present (no duplication)", async () => {
+    const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const client = createClient({ messagesDeferred: pending })
+    const { internal, sent } = makeProvider(client)
+    const flushable = internal.streams as unknown as { flush: (sid: string) => void }
+
+    const load = internal.handleLoadMessages("s1", { mode: "replace" })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello" },
+      delta: { type: "text-delta", textDelta: "hello" },
+    })
+    flushable.flush("s1")
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: " world" },
+      delta: { type: "text-delta", textDelta: " world" },
+    })
+    pending.resolve(
+      mkResult([
+        mkMessage("m2", "assistant", 2, [{ id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello" }]),
+      ]),
+    )
+    await load
+    const t = types(sent)
+    const snapshot = t.indexOf("messagesLoaded")
+    expect(snapshot).toBeGreaterThanOrEqual(0)
+    expect(updates(sent.slice(snapshot + 1)).filter((u) => u.sessionID === "s1")).toEqual([])
+    expect(updates(sent.slice(0, snapshot)).filter((u) => u.sessionID === "s1")).toHaveLength(1)
+    internal.streams.dispose?.()
+  })
+
+  it("(accumulate) early flush full then delta then real full replays authoritative full", async () => {
+    const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const client = createClient({ messagesDeferred: pending })
+    const { internal, sent } = makeProvider(client)
+    const flushable = internal.streams as unknown as { flush: (sid: string) => void }
+
+    const load = internal.handleLoadMessages("s1", { mode: "replace" })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello" },
+    })
+    flushable.flush("s1")
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: " world" },
+      delta: { type: "text-delta", textDelta: " world" },
+    })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "done" },
+    })
+    pending.resolve(
+      mkResult([
+        mkMessage("m2", "assistant", 2, [{ id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello" }]),
+      ]),
+    )
+    await load
+    const t = types(sent)
+    const snapshot = t.indexOf("messagesLoaded")
+    expect(snapshot).toBeGreaterThanOrEqual(0)
+    const after = updates(sent.slice(snapshot + 1)).filter((u) => u.sessionID === "s1")
+    expect(after).toHaveLength(1)
+    expect((after[0]!.part as { text?: string }).text).toBe("done")
+    expect(after[0]!.delta).toBeUndefined()
+    internal.streams.dispose?.()
+  })
+
+  it("(lineage) full-before-token plus delta-after-token drops when snapshot contains key", async () => {
+    const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const client = createClient({ messagesDeferred: pending })
+    const { internal, sent } = makeProvider(client)
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello" },
+    })
+    const load = internal.handleLoadMessages("s1", { mode: "replace" })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello world" },
+      delta: { type: "text-delta", textDelta: " world" },
+    })
+    pending.resolve(
+      mkResult([
+        mkMessage("m2", "assistant", 2, [{ id: "p1", sessionID: "s1", messageID: "m2", type: "text", text: "hello" }]),
+      ]),
+    )
+    await load
+    const t = types(sent)
+    expect(t.indexOf("messagesLoaded")).toBeGreaterThanOrEqual(0)
+    expect(updates(sent.slice(t.indexOf("messagesLoaded") + 1)).filter((u) => u.sessionID === "s1")).toEqual([])
+    internal.streams.dispose?.()
+  })
+
+  it("(stale) aborted replace discards its capture without replay", async () => {
+    const first = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const second = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    let calls = 0
+    const client = createClient({})
+    client.session.messages = async () => {
+      calls += 1
+      if (calls === 1) return first.promise
+      return second.promise
+    }
+    const { internal, sent } = makeProvider(client)
+    const loadA = internal.handleLoadMessages("s1", { mode: "replace" })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "pa", sessionID: "s1", messageID: "m2", type: "text", text: "stale" },
+    })
+    const loadB = internal.handleLoadMessages("s1", { mode: "replace" })
+    first.resolve(mkResult([mkMessage("m1", "user", 1)]))
+    second.resolve(mkResult([mkMessage("m1", "user", 1)]))
+    await loadA
+    await loadB
+    const loads = sent.filter((m) => typeof m === "object" && m && (m as { type?: string }).type === "messagesLoaded")
+    expect(loads).toHaveLength(1)
+    // Capture flushes pre-token state: pa was queued before B's token, so it
+    // was delivered live before B's snapshot and never replayed after it.
+    const t = types(sent)
+    const snapshot = t.indexOf("messagesLoaded")
+    expect(snapshot).toBeGreaterThanOrEqual(0)
+    const before = updates(sent.slice(0, snapshot)).filter((u) => (u.part as { id?: string }).id === "pa")
+    expect(before).toHaveLength(1)
+    expect(updates(sent.slice(snapshot + 1)).filter((u) => (u.part as { id?: string }).id === "pa")).toEqual([])
+    internal.streams.dispose?.()
+  })
+
+  it("(latest-wins) overlapping same-session reconcile: old fetch posts nothing, delta emits once", async () => {
+    const first = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const second = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    let calls = 0
+    const client = createClient({})
+    client.session.messages = async () => {
+      calls += 1
+      if (calls === 1) return first.promise
+      return second.promise
+    }
+    const { internal, sent } = makeProvider(client)
+    // Reconcile exercises the token-currency check without the replace abort
+    // controller masking it; pre-track so the tracked guard passes.
+    const tracked = (internal as unknown as { trackedSessionIds: Set<string> }).trackedSessionIds
+    tracked.add("s1")
+    const loadA = internal.handleLoadMessages("s1", { mode: "reconcile" })
+    const loadB = internal.handleLoadMessages("s1", { mode: "reconcile" })
+    // Post-token absent-part delta under the current (B) capture.
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m2",
+      part: { id: "p-post", sessionID: "s1", messageID: "m2", type: "text", text: "fresh" },
+      delta: { type: "text-delta", textDelta: "fresh" },
+    })
+    first.resolve(mkResult([mkMessage("m1", "user", 1)]))
+    second.resolve(mkResult([mkMessage("m1", "user", 1)]))
+    await loadA
+    await loadB
+    const loads = sent.filter((m) => typeof m === "object" && m && (m as { type?: string }).type === "messagesLoaded")
+    // Old fetch posted no snapshot; winner posted once and replayed once.
+    expect(loads).toHaveLength(1)
+    expect(updates(sent).filter((u) => (u.part as { id?: string }).id === "p-post")).toHaveLength(1)
+    internal.streams.dispose?.()
+  })
+
+  it("(sessions) overlapping reconciles for different sessions stay independent", async () => {
+    const client = createClient({ messagesData: [mkMessage("m1", "user", 1)] })
+    const { internal, sent } = makeProvider(client)
+    const tracked = (internal as unknown as { trackedSessionIds: Set<string> }).trackedSessionIds
+    tracked.add("s1")
+    tracked.add("s2")
+    const loadA = internal.handleLoadMessages("s1", { mode: "reconcile" })
+    const loadB = internal.handleLoadMessages("s2", { mode: "reconcile" })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s1",
+      messageID: "m1",
+      part: { id: "pa", sessionID: "s1", messageID: "m1", type: "text", text: "a" },
+      delta: { type: "text-delta", textDelta: "a" },
+    })
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "s2",
+      messageID: "m1",
+      part: { id: "pb", sessionID: "s2", messageID: "m1", type: "text", text: "b" },
+      delta: { type: "text-delta", textDelta: "b" },
+    })
+    await loadA
+    await loadB
+    const loads = sent.filter((m) => typeof m === "object" && m && (m as { type?: string }).type === "messagesLoaded")
+    expect(loads).toHaveLength(2)
+    expect(updates(sent).filter((u) => (u.part as { id?: string }).id === "pa")).toHaveLength(1)
+    expect(updates(sent).filter((u) => (u.part as { id?: string }).id === "pb")).toHaveLength(1)
+    internal.streams.dispose?.()
+  })
+
+  it("(invalid) strict load with a superseded capture throws without posting a snapshot", async () => {
+    const pending = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const client = createClient({ messagesDeferred: pending, getData: mkSession("ses_strict") })
+    const { provider, internal, sent } = makeProvider(client)
+    const strict = provider as unknown as { loadMessagesStrict: (sid: string) => Promise<boolean> }
+    const load = strict.loadMessagesStrict("ses_strict")
+    // Let the strict prelude + capture run until the fetch parks, then a newer
+    // same-session capture supersedes the load's token mid-flight.
+    await new Promise((r) => setTimeout(r, 5))
+    ;(internal.streams as unknown as { capture: (sid: string) => number }).capture("ses_strict")
+    pending.resolve(mkResult([mkMessage("m1", "user", 1)]))
+    await expect(load).rejects.toThrow("expired before replay")
+    expect(types(sent).filter((t) => t === "messagesLoaded")).toEqual([])
+    internal.streams.dispose?.()
+  })
+
+  it("(child sync) A-delete-B-A-resolves: stale fetch posts nothing after retry re-tracks", async () => {
+    const getPending = defer<{ data: unknown }>()
+    const msgPending = defer<{ data: unknown[]; response: { headers: Headers } }>()
+    const client = createClient({ getDeferred: getPending, messagesDeferred: msgPending })
+    const { internal, sent, anyInternal } = makeProvider(client)
+
+    const syncA = anyInternal.handleSyncSession("ses_child", "s1")
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "ses_child",
+      messageID: "m1",
+      part: { id: "p-old", sessionID: "ses_child", messageID: "m1", type: "text", text: "stale" },
+      delta: { type: "text-delta", textDelta: "stale" },
+    })
+    // Delete racing the fetch wins: prune drops A's capture and queue.
+    anyInternal.pruneDeletedSession("ses_child")
+    // Retry re-tracks with a new token; A can never post after this.
+    const syncB = anyInternal.handleSyncSession("ses_child", "s1")
+    internal.streams.push({
+      type: "partUpdated",
+      sessionID: "ses_child",
+      messageID: "m2",
+      part: { id: "p-new", sessionID: "ses_child", messageID: "m2", type: "text", text: "live" },
+      delta: { type: "text-delta", textDelta: "live" },
+    })
+    getPending.resolve({ data: mkSession("ses_child") })
+    msgPending.resolve(
+      mkResult([
+        {
+          info: { id: "m1", sessionID: "ses_child", role: "assistant", time: { created: 2 } },
+          parts: [{ id: "p1", sessionID: "ses_child", messageID: "m1", type: "text", text: "snap" }],
+        },
+      ]),
+    )
+    await syncA
+    await syncB
+
+    const childLoads = sent.filter(
+      (msg) =>
+        typeof msg === "object" &&
+        msg &&
+        (msg as { sessionID?: string }).sessionID === "ses_child" &&
+        (msg as { type: string }).type === "messagesLoaded",
+    )
+    // Exactly one snapshot (B); A posted nothing after B re-tracked.
+    expect(childLoads).toHaveLength(1)
+    const childUpdates = updates(sent).filter((u) => u.sessionID === "ses_child")
+    expect(childUpdates.filter((u) => (u.part as { id?: string }).id === "p-new")).toHaveLength(1)
+    expect(childUpdates.filter((u) => (u.part as { id?: string }).id === "p-old")).toEqual([])
+    expect(anyInternal.syncedChildSessions.has("ses_child")).toBe(true)
+    expect(anyInternal.trackedSessionIds.has("ses_child")).toBe(true)
     internal.streams.dispose?.()
   })
 })

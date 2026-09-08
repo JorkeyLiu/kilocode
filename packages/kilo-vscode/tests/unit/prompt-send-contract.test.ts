@@ -192,6 +192,16 @@ describe("KiloProvider pruneDeletedSession contract", () => {
     )
   })
 
+  it("clears the model usage marker in the natural prune boundary", () => {
+    // Latest child terminals reuse pruneDeletedSession; the usage marker must
+    // clear there, not only in the terminal session.deleted catch, so
+    // not_found/scope_mismatch child cleanup drops the child's marker while
+    // the parent stays billable.
+    const match = source.match(/pruneDeletedSession\(sessionID: string\): void \{([\s\S]*?)\n  \}/)
+    expect(match).not.toBeNull()
+    expect(match![1]).toContain("this.modelUsageSessionIds.delete(sessionID)")
+  })
+
   it("unfocuses the streams when the deleted id matches the focused session", () => {
     // Without this, connectionService still reports the deleted id to the
     // backend as visible, and focusSession() never clears the visible

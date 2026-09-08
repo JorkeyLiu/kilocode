@@ -97,18 +97,23 @@ describe("SessionStreamScheduler / coalescing", () => {
     queue.dispose()
   })
 
-  it("delta→full updates the receipt stamp so post-boundary drain keeps the full", () => {
+  it("delta→full capture replays the authoritative full after the token", () => {
     const sent: Sent[] = []
     const queue = new SessionStreamScheduler((msg) => sent.push(msg))
     queue.push(update("a", "a", "s1", "p1"))
-    const boundary = Date.now()
+    // Capture flushes pre-token state synchronously.
+    const token = queue.capture("s1")
+    expect(items(sent)).toHaveLength(1)
     queue.push(update("full-a", undefined, "s1", "p1"))
-    expect(sent).toHaveLength(0)
-    queue.drainSince("s1", boundary)
+    const committed = queue.commit("s1", token, new Set(), () => {})
+    expect(committed).toBe(true)
     const flat = items(sent)
-    expect(flat).toHaveLength(1)
-    expect(partText(flat[0]!)).toBe("full-a")
-    expect(flat[0]!.delta).toBeUndefined()
+    expect(flat).toHaveLength(2)
+    expect(partText(flat[1]!)).toBe("full-a")
+    expect(flat[1]!.delta).toBeUndefined()
+    // Live queue was consumed: a later lane flush emits nothing.
+    queue.flush("s1")
+    expect(items(sent)).toHaveLength(2)
     queue.dispose()
   })
 
