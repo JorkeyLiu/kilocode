@@ -3002,6 +3002,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           signal: abort?.signal,
         },
         this.connectionService,
+        this.privateSessionReader,
       )
     } catch (e) {
       if (abort?.signal.aborted) return false

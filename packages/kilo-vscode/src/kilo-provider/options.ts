@@ -5,6 +5,7 @@ export interface PrivateSessionReader {
   isStarted(): boolean
   list(input: { directory: string; archived?: boolean; cursor?: string; limit?: number }): Promise<unknown>
   get(input: { directory: string; sessionId: string }): Promise<unknown>
+  messages?(input: { directory: string; sessionId: string; limit: number; cursor?: string }): Promise<unknown>
 }
 
 /** Legacy alias — prefer PrivateSessionReader. */

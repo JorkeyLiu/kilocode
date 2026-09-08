@@ -9,7 +9,8 @@ import * as vscode from "vscode"
 import type { Host, PanelContext, OutputHandle, SessionProvider, Disposable, Store } from "./host"
 import type { KiloConnectionService } from "../services/cli-backend"
 import { KiloProvider } from "../KiloProvider"
-import { PLATFORM, SNAPSHOT_INITIALIZATION } from "./constants"
+import { agentOptions } from "./agent-options"
+import type { KiloProviderOptions } from "../kilo-provider/options"
 import { buildWebviewHtml } from "../utils"
 import { isP0PerfEnabled } from "../perf/perf-instrument"
 import { openFileInEditor, getWorkspaceRoot } from "../review-utils"
@@ -41,6 +42,11 @@ export class VscodeHost implements Host {
 
   setAutoApproveController(ctrl: AutoApproveController): void {
     this.autoApprove = ctrl
+  }
+
+  /** Test-observable handoff: exact options wirePanel passes to KiloProvider. */
+  providerOpts(): KiloProviderOptions {
+    return agentOptions(this.canonicalConfig, this.privateSessionReader ?? null)
   }
 
   openPanel(opts: {
@@ -243,14 +249,7 @@ export class VscodeHost implements Host {
     },
   ): PanelContext {
     this.assignAgentManagerHtml(panel)
-    const provider = new KiloProvider(this.extensionUri, this.connectionService, this.context, {
-      platform: PLATFORM,
-      snapshotInitialization: SNAPSHOT_INITIALIZATION,
-      slimEditMetadata: true,
-      disableViewedRegistration: true,
-      canonicalConfig: this.canonicalConfig,
-      ...(this.privateSessionReader ? { privateSessionReader: this.privateSessionReader } : {}),
-    })
+    const provider = new KiloProvider(this.extensionUri, this.connectionService, this.context, this.providerOpts())
     provider.setRemoteService(this.remoteService)
     provider.attachToWebview(panel.webview, {
       onBeforeMessage: opts.onBeforeMessage,

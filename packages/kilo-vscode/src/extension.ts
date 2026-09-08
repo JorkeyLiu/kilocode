@@ -245,6 +245,8 @@ export function activate(context: vscode.ExtensionContext) {
     isStarted: () => privateObservation.isStarted(),
     list: (input: { directory: string; archived?: boolean; cursor?: string; limit?: number }) => privateObservation.list(input) as Promise<unknown>,
     get: (input: { directory: string; sessionId: string }) => privateObservation.get(input) as Promise<unknown>,
+    messages: (input: { directory: string; sessionId: string; limit: number; cursor?: string }) =>
+      privateObservation.messages(input) as Promise<unknown>,
   }
   const agentManagerHost = new VscodeHost(
     context.extensionUri,

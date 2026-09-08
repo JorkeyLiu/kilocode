@@ -1,6 +1,8 @@
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { retry } from "../services/cli-backend/retry"
 import { observeSessionMessagesParityDetached, type MessagesParityConnection } from "./session-messages-parity"
+import { tryPrivateMessagesPage } from "./session-messages-private"
+import type { PrivateSessionReader } from "./options"
 
 export const MESSAGE_PAGE_LIMIT = 80
 
@@ -27,6 +29,7 @@ export async function fetchMessagePage(
     signal?: AbortSignal
   },
   parityConnection?: MessagesParityConnection | null,
+  privateReader?: PrivateSessionReader | null,
 ) {
   // limit: 0 is the server contract for "return every message".
   const full = input.limit === 0
@@ -45,6 +48,21 @@ export async function fetchMessagePage(
   const read = async (before?: string) => {
     const query: { limit?: number; before?: string } =
       before === undefined ? { limit: input.limit } : { limit: input.limit, before }
+    // Paged private-first, per bounded page read: at most one private attempt
+    // and on failure/unavailability exactly one SDK request for that page.
+    // The outer assistant-boundary fill may legitimately read multiple pages;
+    // parity observation stays intentionally bounded to once per outer
+    // fetchMessagePage operation. limit=0 full reads stay SDK-only. Non-owning.
+    if (!full) {
+      const attempt = await tryPrivateMessagesPage(privateReader ?? null, {
+        directory: input.workspaceDir,
+        sessionId: input.sessionID,
+        limit: input.limit,
+        ...(before !== undefined ? { cursor: before } : {}),
+      })
+      if (attempt.kind === "found") return { items: attempt.items, cursor: attempt.cursor }
+      if (attempt.kind === "terminal") throw attempt.error
+    }
     const result = await retry(() =>
       client.session.messages(
         { sessionID: input.sessionID, directory: input.workspaceDir, limit: input.limit, before },
