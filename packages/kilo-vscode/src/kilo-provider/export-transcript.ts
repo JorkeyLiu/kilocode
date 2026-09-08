@@ -1,8 +1,10 @@
 import * as path from "path"
 import * as vscode from "vscode"
-import type { KiloClient, Message, Part, Session } from "@kilocode/sdk/v2/client"
+import type { KiloClient, Message, Part } from "@kilocode/sdk/v2/client"
 import { fetchMessagePage } from "./message-page"
+import { sdkSessionToDetail } from "./session-detail"
 import type { MessagesParityConnection } from "./session-messages-parity"
+import type { SessionDetail } from "./session-detail"
 
 type Item = {
   info: Message
@@ -14,11 +16,20 @@ export async function exportTranscript(
   input: {
     sessionID: string
     dir: string
+    getSessionDetail?: (sessionID: string, directory: string) => Promise<SessionDetail>
   },
   parityConnection?: MessagesParityConnection | null,
 ) {
-  const [{ data: session }, page] = await Promise.all([
-    client.session.get({ sessionID: input.sessionID, directory: input.dir }, { throwOnError: true }),
+  const detailPromise = input.getSessionDetail
+    ? input.getSessionDetail(input.sessionID, input.dir)
+    : client.session
+        .get({ sessionID: input.sessionID, directory: input.dir }, { throwOnError: true })
+        .then((r) => {
+          if (!r.data) throw new Error("Session metadata not found")
+          return sdkSessionToDetail(r.data)
+        })
+  const [session, page] = await Promise.all([
+    detailPromise,
     fetchMessagePage(client, { sessionID: input.sessionID, workspaceDir: input.dir, limit: 0 }, parityConnection ?? null),
   ])
   const text = formatTranscript(session, page.items)
@@ -32,13 +43,15 @@ export async function exportTranscript(
   return true
 }
 
-export function formatTranscript(session: Session, items: Item[]): string {
+export type TranscriptSession = Pick<SessionDetail, "id" | "title" | "createdAt" | "updatedAt">
+
+export function formatTranscript(session: TranscriptSession, items: Item[]): string {
   const head = [
     `# ${session.title}`,
     "",
     `**Session ID:** ${session.id}`,
-    `**Created:** ${new Date(session.time.created).toLocaleString()}`,
-    `**Updated:** ${new Date(session.time.updated).toLocaleString()}`,
+    `**Created:** ${new Date(session.createdAt).toLocaleString()}`,
+    `**Updated:** ${new Date(session.updatedAt).toLocaleString()}`,
     "",
     "---",
     "",

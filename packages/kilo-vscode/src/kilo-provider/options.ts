@@ -1,10 +1,14 @@
 import type { CanonicalConfigService } from "../config/service"
 
-export type PrivateSessionList = {
+export interface PrivateSessionReader {
   isEnabled(): boolean
   isStarted(): boolean
   list(input: { directory: string; archived?: boolean; cursor?: string; limit?: number }): Promise<unknown>
+  get(input: { directory: string; sessionId: string }): Promise<unknown>
 }
+
+/** Legacy alias — prefer PrivateSessionReader. */
+export type PrivateSessionList = PrivateSessionReader
 
 export type KiloProviderOptions = {
   projectDirectory?: string | null
@@ -14,8 +18,10 @@ export type KiloProviderOptions = {
   tabTitle?: (title: string) => void
   /** Composite hosts (Agent Manager) own viewed/presence registration themselves. */
   disableViewedRegistration?: boolean
-  /** Non-owning private session-list projection; KiloProvider never owns lifecycle. */
-  privateSessionList?: PrivateSessionList
+  /** Non-owning private session projection; KiloProvider never owns lifecycle. */
+  privateSessionList?: PrivateSessionReader
+  /** Preferred alias for privateSessionList — same non-owning projection. */
+  privateSessionReader?: PrivateSessionReader
   /**
    * Test-only identity hook: inject a scheduler for the reconciliation retry
    * backoff. Returns a cancel function; defaults to setTimeout/clearTimeout.

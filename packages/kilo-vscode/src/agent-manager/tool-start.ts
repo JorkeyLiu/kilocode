@@ -1,4 +1,5 @@
 import type { KiloClient, Session } from "@kilocode/sdk/v2/client"
+import type { SessionDetail } from "../kilo-provider/session-detail"
 import { PLATFORM, SNAPSHOT_INITIALIZATION } from "./constants"
 
 const LABEL_MAX = 28
@@ -25,7 +26,7 @@ export interface ToolSource {
 export interface ToolDeps {
   getClient: () => KiloClient
   getRoot: () => string | undefined
-  getPanel: () => { sessions: { registerSession(session: Session): void } } | undefined
+  getPanel: () => { sessions: { registerSession(session: Session | SessionDetail): void } } | undefined
   openPanel: (preserveFocus?: boolean) => void
   waitReady: (context: string) => Promise<void>
   claimRequest?: (requestID: string) => boolean

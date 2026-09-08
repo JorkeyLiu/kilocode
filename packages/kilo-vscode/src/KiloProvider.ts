@@ -26,7 +26,6 @@ import {
   watchTelemetryState,
 } from "./services/telemetry"
 import {
-  sessionToWebview,
   indexProvidersById,
   filterVisibleAgents,
   resolveServedDefaultAgent,
@@ -47,6 +46,16 @@ import {
   buildSettingPath,
   type SessionRefreshContext,
 } from "./kilo-provider-utils"
+import {
+  sdkSessionToDetail,
+  observationSessionToDetail,
+  detailToWebview,
+  validatePrivateGetResult,
+  SessionNotFoundError,
+  SessionScopeMismatchError,
+  type SessionDetail,
+} from "./kilo-provider/session-detail"
+import { ErrorCode } from "./private-worker/json-rpc"
 import { createMarketplaceRemover, removeMcp } from "./kilo-provider/remove-config-item"
 import { AgentRequirementsController } from "./kilo-provider/agent-requirements-controller"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
@@ -367,7 +376,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private readonly instanceId = crypto.randomUUID()
 
   private webview: vscode.Webview | null = null
-  private currentSession: Session | null = null
+  private currentSession: SessionDetail | null = null
   /** Remembers the last selected session so /new stays in the same session context after clearSession. */
   private contextSessionID: string | undefined
   private connectionState: "connecting" | "connected" | "disconnected" | "error" = "connecting"
@@ -431,6 +440,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private readonly aborts = new SessionAbort()
   private projectID: string | undefined // Current workspace project ID used to filter sessions.
   private loadMessagesAbort: AbortController | null = null // Current load request cancellation.
+  private detailGeneration = 0 // Monotonic detail/load generation; superseding transitions bump to invalidate pending detail/message loads.
   private lastReconciledAt = new Map<string, number>() // Per-session focus-mode reconcile timestamp.
   private pendingSessionRefresh = false // Refresh requested before the client is ready.
   private sessionCursor: string | null = null // Next-page opaque composite cursor for session list pagination.
@@ -465,7 +475,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private slimEditMetadata = true
 
   private pendingFollowup: Followup | null = null
-  private followupListeners: Array<(session: Session, directory: string) => void> = []
+  private followupListeners: Array<(session: SessionDetail | Session, directory: string) => void> = []
   private cachedGitRepo = false
 
   private onBeforeMessage: ((msg: Record<string, unknown>) => Promise<Record<string, unknown> | null>) | null = null
@@ -474,7 +484,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private unsubscribeRemote: (() => void) | null = null
   private readonly requirements: AgentRequirementsController
   private canonicalConfig: CanonicalConfigService | null
-  private readonly privateSessionList: import("./kilo-provider/options").PrivateSessionList | null
+  private readonly privateSessionReader: import("./kilo-provider/options").PrivateSessionReader | null
+  /** Legacy alias for tests — returns same reader. */
+  private get privateSessionList(): import("./kilo-provider/options").PrivateSessionReader | null {
+    return this.privateSessionReader
+  }
   /**
    * Host-owned cleanup retry records keyed by opaque retryID.
    * Namespaced as "provider:<scope>:<id>" and "mcp:<scope>:<id>" so provider
@@ -500,7 +514,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   ) {
     this.projectDirectory = opts.projectDirectory
     this.canonicalConfig = opts.canonicalConfig ?? null
-    this.privateSessionList = opts.privateSessionList ?? null
+    this.privateSessionReader = opts.privateSessionReader ?? opts.privateSessionList ?? null
     this.slimEditMetadata = opts.slimEditMetadata ?? true
     this.unsubscribeSandboxPreference = this.connectionService.sandboxPreference?.onChange(() => {
       if (this.connectionState === "connected") void this.fetchAndSendSandboxDefault()
@@ -1318,7 +1332,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.onBeforeMessage = (msg) => this.autoApproveBridge!.handle(msg)
   }
 
-  private setCurrentSession(session: Session | null): void {
+  private setCurrentSession(session: SessionDetail | null): void {
     const ids = new Set([this.currentSession?.id, session?.id])
     for (const id of ids) {
       if (id) this.refreshes.set(id, (this.refreshes.get(id) ?? 0) + 1)
@@ -1354,6 +1368,31 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private focusSession(id?: string): void {
     this.streams.focus(id)
     this.registerPresence()
+  }
+
+  private nextDetailLoad(): number {
+    this.detailGeneration += 1
+    return this.detailGeneration
+  }
+
+  private isCurrentDetailLoad(generation: number, target: string, signal?: AbortSignal): boolean {
+    if (signal?.aborted) return false
+    if (generation !== this.detailGeneration) return false
+    if (this.contextSessionID !== target) return false
+    return true
+  }
+
+  private invalidateDetailLoads(): void {
+    this.detailGeneration += 1
+  }
+
+  private clearSessionState(): void {
+    this.invalidateDetailLoads()
+    this.loadMessagesAbort?.abort()
+    this.stopCurrentSessionProcesses()
+    this.contextSessionID = undefined
+    this.setCurrentSession(null)
+    this.focusSession()
   }
 
   /**
@@ -1558,14 +1597,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /** Register a session created externally and notify the webview. */
-  public registerSession(session: Session): void {
-    this.stopCurrentSessionProcesses(session.id)
-    this.setCurrentSession(session)
-    this.contextSessionID = session.id
-    this.trackedSessionIds.add(session.id)
+  public registerSession(session: SessionDetail | Session): void {
+    const detail = (session as SessionDetail).createdAt !== undefined ? (session as SessionDetail) : sdkSessionToDetail(session as Session)
+    this.stopCurrentSessionProcesses(detail.id)
+    this.setCurrentSession(detail)
+    this.contextSessionID = detail.id
+    this.trackedSessionIds.add(detail.id)
     this.postMessage({
       type: "sessionCreated",
-      session: this.sessionToWebview(session),
+      session: this.sessionToWebview(detail),
     })
   }
 
@@ -1580,8 +1620,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     return this.handleLoadMessages(sessionID, { preserveStream: true })
   }
 
-  public async loadMessagesStrict(sessionID: string, info?: Session): Promise<boolean> {
-    return this.doLoadMessages(sessionID, { preserveStream: true }, true, info)
+  public async loadMessagesStrict(sessionID: string, info?: SessionDetail | Session): Promise<boolean> {
+    const detail = info ? ((info as SessionDetail).createdAt !== undefined ? (info as SessionDetail) : sdkSessionToDetail(info as Session)) : undefined
+    return this.doLoadMessages(sessionID, { preserveStream: true }, true, detail)
   }
 
   /** Exposes the session→directory map so callers outside the webview can resolve session directories. */
@@ -1609,31 +1650,17 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
   }
 
-  public async getSessionInfo(sessionId: string): Promise<Session | undefined> {
+  /** Optional session detail lookup (private-first, narrow detail). */
+  public async getSessionInfo(sessionId: string): Promise<SessionDetail | undefined> {
     await this.initializeConnection()
-    const client = this.client
-    if (!client) return
     const directory = this.getWorkspaceDirectory(sessionId)
-    return retry(() => client.session.get({ sessionID: sessionId, directory }, { throwOnError: true }))
-      .then((result) => {
-        // SDK-first detached parity: SDK data stays authoritative; the private
-        // `session/get` snapshot observes without mutating state or errors.
-        try {
-          observeSessionGetParityDetached(
-            this.connectionService,
-            result as unknown as { data?: unknown },
-            sessionId,
-            directory,
-          )
-        } catch (e) {
-          console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
-        }
-        return result.data
-      })
-      .catch((error: unknown) => {
-        console.warn("[Kilo New] KiloProvider: Failed to resolve managed session:", error)
-        return undefined
-      })
+    try {
+      return await this.getSessionDetail(sessionId, directory)
+    } catch (e) {
+      if (e instanceof SessionNotFoundError || e instanceof SessionScopeMismatchError) return undefined
+      console.warn("[Kilo New] KiloProvider: Failed to resolve managed session:", e)
+      return undefined
+    }
   }
 
   /** Return the currently active session ID, if any. */
@@ -1665,8 +1692,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /** Register a listener invoked when a plan follow-up session is adopted. */
-  public onFollowupAdopted(cb: (session: Session, directory: string) => void): void {
-    this.followupListeners.push(cb)
+  public onFollowupAdopted(cb: (session: SessionDetail | Session, directory: string) => void): void {
+    this.followupListeners.push(cb as unknown as (session: SessionDetail | Session, directory: string) => void)
   }
 
   /** Recover permission/question prompts after sessions and directories are tracked. */
@@ -1839,10 +1866,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           await this.handleCreateSession()
           break
         case "clearSession":
-          this.stopCurrentSessionProcesses()
-          this.contextSessionID = undefined
-          this.setCurrentSession(null)
-          this.focusSession()
+          this.clearSessionState()
           break
         case "loadMessages":
           // Don't await: allow parallel loads so rapid session switching
@@ -2493,8 +2517,80 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
   }
 
-  private sessionToWebview(session: Session) {
-    return sessionToWebview(session)
+  private sessionToWebview(session: SessionDetail) {
+    return detailToWebview(session)
+  }
+
+  /**
+   * Centralized private-first single-session detail authority.
+   * - Private valid `found` => authoritative detail, no SDK and no parity observer.
+   * - Private `not_found`/`scope_mismatch` => authoritative terminal (bounded domain error), no SDK.
+   * - Gate off/not started, malformed revalidation, JSON-RPC InternalError/MethodNotFound/transport/host-closed => bounded warning then SDK exactly once if client available.
+   * - Never retry private, never init/reconnect, never cache private errors, never post private-specific error.
+   * - Strict callers receive domain error for missing metadata so message load aborts; optional callers catch and return undefined / fail-closed.
+   * - Signal is forwarded to SDK fallback only; private lacks signal but generation checks prevent stale writes.
+   */
+  private async getSessionDetail(sessionID: string, directory: string, signal?: AbortSignal): Promise<SessionDetail> {
+    const reader = this.privateSessionReader
+    const canUsePrivate = !!(reader && reader.isEnabled() && reader.isStarted())
+    if (canUsePrivate) {
+      try {
+        const raw = await reader!.get({ directory, sessionId: sessionID })
+        let result: import("./private-worker/observation").ObservationGetResult
+        try {
+          result = validatePrivateGetResult(raw, directory, sessionID)
+        } catch (e) {
+          console.warn("[Kilo Detail] private get malformed, falling back to SDK", { fallback: true })
+          throw e
+        }
+        if (result.status === "found") {
+          return observationSessionToDetail(result.session)
+        }
+        if (result.status === "not_found") throw new SessionNotFoundError()
+        if (result.status === "scope_mismatch") throw new SessionScopeMismatchError()
+        throw new Error("get returned invalid status")
+      } catch (e) {
+        if (e instanceof SessionNotFoundError || e instanceof SessionScopeMismatchError) throw e
+        console.warn("[Kilo Detail] private get failed, falling back to SDK", { fallback: true })
+        // fall through to SDK exactly once if client available
+      }
+    }
+    // SDK exactly once (gate off/not started/malformed/transport path)
+    if (!this.client) throw new Error("Not connected to CLI backend")
+    let res: { data?: unknown; error?: unknown; response?: unknown }
+    try {
+      const raw = await this.client.session.get({ sessionID, directory }, { throwOnError: true, ...(signal ? { signal } : {}) } as unknown as { throwOnError: true })
+      res = raw as unknown as { data?: unknown; error?: unknown; response?: unknown }
+      if (!res.data) throw new Error("Session metadata not found")
+      try {
+        const { observeSessionGetParityDetached } = await import("./kilo-provider/session-get-parity")
+        observeSessionGetParityDetached(
+          this.connectionService as unknown as Parameters<typeof observeSessionGetParityDetached>[0],
+          res as unknown as { data?: unknown },
+          sessionID,
+          directory,
+        )
+      } catch (err) {
+        console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(err).slice(0, 200))
+      }
+      return sdkSessionToDetail(res.data as Session)
+    } catch (sdkErr) {
+      try {
+        const { observeSessionGetParityDetached } = await import("./kilo-provider/session-get-parity")
+        observeSessionGetParityDetached(
+          this.connectionService as unknown as Parameters<typeof observeSessionGetParityDetached>[0],
+          sdkErr as { data?: unknown; error?: unknown; response?: unknown },
+          sessionID,
+          directory,
+        )
+      } catch {
+        console.warn("[Kilo Get] private parity observation failed (fail-closed):", {
+          op: "session/get",
+          observationFailed: true,
+        })
+      }
+      throw sdkErr
+    }
   }
 
   private async handleCreateSession(): Promise<void> {
@@ -2538,12 +2634,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         this.postMessage({ type: "error", message: getErrorMessage(res.error) || "Failed to create session" })
       } else if (res.data) {
         sdkData = res.data as Session
-        this.stopCurrentSessionProcesses(sdkData.id)
-        this.setCurrentSession(sdkData)
-        this.contextSessionID = sdkData.id
-        this.focusSession(sdkData.id)
-        this.trackDirectory(sdkData.id, workspaceDir)
-        this.trackedSessionIds.add(sdkData.id)
+        const detail = sdkSessionToDetail(sdkData)
+        this.stopCurrentSessionProcesses(detail.id)
+        this.setCurrentSession(detail)
+        this.contextSessionID = detail.id
+        this.focusSession(detail.id)
+        this.trackDirectory(detail.id, workspaceDir)
+        this.trackedSessionIds.add(detail.id)
         this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(this.currentSession!) })
       }
     } catch (error) {
@@ -2736,14 +2833,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
   /** Non-blocking: refresh session metadata + status for the webview after switching. */
   private refreshSessionDetails(sessionID: string, dir: string, signal?: AbortSignal): void {
-    if (!this.client) return
     const revision = this.revisions.get(sessionID)
     const refresh = (this.refreshes.get(sessionID) ?? 0) + 1
     this.refreshes.set(sessionID, refresh)
-    this.client.session
-      .get({ sessionID, directory: dir })
-      .then((r) => {
-        if (!r.data || signal?.aborted || this.contextSessionID !== sessionID) return
+    const generation = this.detailGeneration
+    const target = sessionID
+    void (async () => {
+      try {
+        const detail = await this.getSessionDetail(sessionID, dir, signal)
+        if (signal?.aborted || generation !== this.detailGeneration || this.contextSessionID !== target) return
         if (this.refreshes.get(sessionID) !== refresh) {
           if (this.revisions.get(sessionID) !== revision) this.refreshSessionDetails(sessionID, dir, signal)
           return
@@ -2752,20 +2850,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.refreshSessionDetails(sessionID, dir, signal)
           return
         }
-        // SDK-first detached parity: applied SDK snapshot stays authoritative;
-        // the private `session/get` snapshot observes without mutating state.
-        try {
-          observeSessionGetParityDetached(this.connectionService, r as unknown as { data?: unknown }, sessionID, dir)
-        } catch (e) {
-          console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
-        }
-        this.setCurrentSession(r.data)
-        this.contextSessionID = r.data.id
-        this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(r.data) })
-      })
-      .catch((e: unknown) => console.warn("[Kilo New] KiloProvider: getSession failed (non-critical):", e))
+        this.setCurrentSession(detail)
+        this.contextSessionID = detail.id
+        this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
+      } catch (e: unknown) {
+        console.warn("[Kilo New] KiloProvider: getSession failed (non-critical):", e)
+      }
+    })()
     this.postMessage({ type: "workspaceDirectoryChanged", directory: this.getWorkspaceDirectory(sessionID) })
     this.requirements.clear()
+    if (!this.client) return
     this.client.session
       .status({ directory: dir })
       .then((r) => {
@@ -2815,11 +2909,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     sessionID: string,
     options: { mode?: MessageLoadMode; before?: string; limit?: number; preserveStream?: boolean } = {},
     strict: boolean,
-    info?: Session,
+    info?: SessionDetail,
   ): Promise<boolean> {
     const mode = options.mode ?? "replace"
     const wasTracked = this.trackedSessionIds.has(sessionID)
-    if (mode === "replace" || mode === "focus") {
+    const isSwitch = mode === "replace" || mode === "focus"
+    const generation = isSwitch ? this.nextDetailLoad() : this.detailGeneration
+    const target = sessionID
+    if (isSwitch) {
       this.stopCurrentSessionProcesses(sessionID)
       this.trackedSessionIds.add(sessionID)
       this.focusSession(sessionID)
@@ -2835,28 +2932,26 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           if (!wasTracked) this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(info) })
           this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(info) })
         } else {
-          const meta = await this.client.session.get({ sessionID, directory: dir }, { throwOnError: true })
-          if (!meta.data) throw new Error("Session metadata not found")
+          let detail: SessionDetail
           try {
-            observeSessionGetParityDetached(
-              this.connectionService,
-              meta as unknown as { data?: unknown },
-              sessionID,
-              dir,
-            )
+            detail = await this.getSessionDetail(sessionID, dir)
           } catch (e) {
-            console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+            if (!this.isCurrentDetailLoad(generation, target)) return false
+            throw e
           }
-          this.setCurrentSession(meta.data as Session)
-          this.contextSessionID = (meta.data as Session).id
-          if (!wasTracked)
-            this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(meta.data as Session) })
-          this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(meta.data as Session) })
+          if (!this.isCurrentDetailLoad(generation, target)) return false
+          this.setCurrentSession(detail)
+          this.contextSessionID = detail.id
+          if (!wasTracked) this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(detail) })
+          this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
         }
       } else {
         this.refreshSessionDetails(sessionID, dir)
       }
-      if (Date.now() - (this.lastReconciledAt.get(sessionID) ?? 0) < 1000) return true
+      if (Date.now() - (this.lastReconciledAt.get(sessionID) ?? 0) < 1000) {
+        if (generation !== this.detailGeneration) return false
+        return true
+      }
       return this.doLoadMessages(sessionID, { mode: "reconcile", limit: options.limit ?? MESSAGE_PAGE_LIMIT }, strict)
     }
     const abort = mode === "replace" ? new AbortController() : undefined
@@ -2871,45 +2966,46 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           if (!wasTracked) this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(info) })
           this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(info) })
         } else {
-          const meta = await this.client.session.get({ sessionID, directory: dir }, {
-            throwOnError: true,
-            signal: abort.signal,
-          } as unknown as { throwOnError: true })
-          if (abort.signal.aborted) return false
-          if (!meta.data) throw new Error("Session metadata not found")
+          let detail: SessionDetail
           try {
-            observeSessionGetParityDetached(
-              this.connectionService,
-              meta as unknown as { data?: unknown },
-              sessionID,
-              dir,
-            )
+            detail = await this.getSessionDetail(sessionID, dir, abort.signal)
           } catch (e) {
-            console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
+            if (!this.isCurrentDetailLoad(generation, target, abort.signal)) return false
+            throw e
           }
-          this.setCurrentSession(meta.data as Session)
-          this.contextSessionID = (meta.data as Session).id
-          if (!wasTracked)
-            this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(meta.data as Session) })
-          this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(meta.data as Session) })
+          if (!this.isCurrentDetailLoad(generation, target, abort.signal)) return false
+          this.setCurrentSession(detail)
+          this.contextSessionID = detail.id
+          if (!wasTracked) this.postMessage({ type: "sessionCreated", session: this.sessionToWebview(detail) })
+          this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
         }
       } else {
         this.refreshSessionDetails(sessionID, dir, abort.signal)
       }
     }
     const since = mode === "reconcile" ? Date.now() : undefined
-    const page = await fetchMessagePage(
-      this.client,
-      {
-        sessionID,
-        workspaceDir: dir,
-        limit: options.limit ?? MESSAGE_PAGE_LIMIT,
-        before: options.before,
-        signal: abort?.signal,
-      },
-      this.connectionService,
-    )
+    let page: Awaited<ReturnType<typeof fetchMessagePage>>
+    try {
+      page = await fetchMessagePage(
+        this.client,
+        {
+          sessionID,
+          workspaceDir: dir,
+          limit: options.limit ?? MESSAGE_PAGE_LIMIT,
+          before: options.before,
+          signal: abort?.signal,
+        },
+        this.connectionService,
+      )
+    } catch (e) {
+      if (abort?.signal.aborted) return false
+      if (generation !== this.detailGeneration) return false
+      if (mode === "replace" && this.contextSessionID !== target) return false
+      throw e
+    }
     if (abort?.signal.aborted) return false
+    if (generation !== this.detailGeneration) return false
+    if (mode === "replace" && this.contextSessionID !== target) return false
     if (!this.trackedSessionIds.has(sessionID)) return false
     const messages = page.items.map((m) => ({
       ...this.slimInfo(m.info),
@@ -2981,24 +3077,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           throw err
         },
       )
-      const [info, history] = await Promise.all([
-        retry(() => this.client!.session.get({ sessionID, directory: workspaceDir }, { throwOnError: true })),
+      const [detail, history] = await Promise.all([
+        this.getSessionDetail(sessionID, workspaceDir),
         historyWithObserve,
       ])
-      // SDK-first detached parity for the metadata read only; messages stay
-      // SDK-authoritative and the observer never mutates state or errors.
-      if (info.data) {
-        try {
-          observeSessionGetParityDetached(
-            this.connectionService,
-            info as unknown as { data?: unknown },
-            sessionID,
-            workspaceDir,
-          )
-        } catch (e) {
-          console.warn("[Kilo Get] private parity observation failed (fail-closed):", String(e).slice(0, 200))
-        }
-      }
       // SDK-first detached parity for the direct full messages read; the
       // private `session/messages` snapshot observes without mutating state.
       // Full load binds the exact empty query (no limit/before).
@@ -3018,7 +3100,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           })
         }
       }
-      this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(info.data) })
+      this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
 
       const messages = history.data.map((m) => ({
         ...this.slimInfo(m.info),
@@ -3437,7 +3519,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // Preserve Session.Info success and SDK terminal status (authoritative)
     if (!sdkThrew) {
       if (sdkRes!.data && !sdkRes!.error) {
-        const updated = sdkRes!.data as Session
+        const updated = sdkSessionToDetail(sdkRes!.data as Session)
         if (this.currentSession?.id === sessionID) this.setCurrentSession(updated)
         this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(updated) })
       } else if (sdkRes!.error) {
@@ -3700,11 +3782,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
 
     try {
+      const dir = this.getWorkspaceDirectory(sessionID)
       const saved = await exportTranscript(
         this.client,
         {
           sessionID,
-          dir: this.getWorkspaceDirectory(sessionID),
+          dir,
+          getSessionDetail: (sid, d) => this.getSessionDetail(sid, d),
         },
         this.connectionService,
       )
@@ -5222,15 +5306,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           await this.client!.session.delete({ sessionID: session.id, directory: dir }, { throwOnError: true })
           return undefined
         }
-        this.stopCurrentSessionProcesses(session.id)
-        this.setCurrentSession(session)
-        this.contextSessionID = session.id
-        this.focusSession(session.id)
-        this.trackDirectory(session.id, dir)
-        this.trackedSessionIds.add(session.id)
+        const detail = sdkSessionToDetail(session as Session)
+        this.stopCurrentSessionProcesses(detail.id)
+        this.setCurrentSession(detail)
+        this.contextSessionID = detail.id
+        this.focusSession(detail.id)
+        this.trackDirectory(detail.id, dir)
+        this.trackedSessionIds.add(detail.id)
         this.postMessage({
           type: "sessionCreated",
-          session: this.sessionToWebview(session),
+          session: this.sessionToWebview(detail),
           draftID,
         })
         const resolved = { sid: session.id, dir }
@@ -5643,8 +5728,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     if (!data) throw new Error("Revert returned no session")
     this.refreshes.set(sessionID, (this.refreshes.get(sessionID) ?? 0) + 1)
-    if (this.currentSession?.id === sessionID) this.setCurrentSession(data)
-    this.postMessage({ type: "sessionUpdated", session: sessionToWebview(data) })
+    const detail = sdkSessionToDetail(data as Session)
+    if (this.currentSession?.id === sessionID) this.setCurrentSession(detail)
+    this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
   }
 
   private async handleUnrevertSession(sessionID: string): Promise<void> {
@@ -5658,8 +5744,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
     if (!data) throw new Error("Redo returned no session")
     this.refreshes.set(sessionID, (this.refreshes.get(sessionID) ?? 0) + 1)
-    if (this.currentSession?.id === sessionID) this.setCurrentSession(data)
-    this.postMessage({ type: "sessionUpdated", session: sessionToWebview(data) })
+    const detail = sdkSessionToDetail(data as Session)
+    if (this.currentSession?.id === sessionID) this.setCurrentSession(detail)
+    this.postMessage({ type: "sessionUpdated", session: this.sessionToWebview(detail) })
   }
 
   /**
@@ -6190,12 +6277,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       case "session.created":
         return {
           type: "sessionCreated" as const,
-          session: this.sessionToWebview(event.properties.info),
+          session: this.sessionToWebview(sdkSessionToDetail(event.properties.info as Session)),
         }
       case "session.updated":
         return {
           type: "sessionUpdated" as const,
-          session: this.sessionToWebview(event.properties.info),
+          session: this.sessionToWebview(sdkSessionToDetail(event.properties.info as Session)),
         }
       case "session.deleted":
         return {
@@ -6378,12 +6465,14 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.removeMessageCost(event.properties.messageID)
     }
     if (event.type === "session.created" && !this.currentSession) {
-      this.setCurrentSession(event.properties.info)
-      this.contextSessionID = event.properties.info.id
-      this.trackedSessionIds.add(event.properties.info.id)
+      const detail = sdkSessionToDetail(event.properties.info as Session)
+      this.setCurrentSession(detail)
+      this.contextSessionID = detail.id
+      this.trackedSessionIds.add(detail.id)
     }
     if (event.type === "session.updated" && this.currentSession?.id === event.properties.sessionID) {
-      this.setCurrentSession(event.properties.info)
+      const detail = sdkSessionToDetail(event.properties.info as Session)
+      this.setCurrentSession(detail)
       this.contextSessionID = event.properties.sessionID
     }
     if (event.type === "session.deleted") {
@@ -6663,7 +6752,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     })
   }
 
-  private getSessionDirectory(sessionId: string, session?: Session): string {
+  private getSessionDirectory(sessionId: string, session?: SessionDetail | Session): string {
     return this.sessionDirectories.get(sessionId) ?? session?.directory ?? this.getRootDirectory()
   }
 
@@ -6697,15 +6786,16 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.pendingFollowup = recordFollowup({ answers, dir, now: Date.now() }) ?? null
   }
 
-  private matchesPendingFollowup(session: Session) {
+  private matchesPendingFollowup(session: SessionDetail | Session) {
+    const dir = (session as SessionDetail).directory ?? (session as Session).directory
     return matchFollowup({
       pending: this.pendingFollowup,
-      dir: session.directory,
+      dir,
       now: Date.now(),
     })
   }
 
-  private adoptPendingFollowup(session: Session) {
+  private adoptPendingFollowup(session: SessionDetail | Session) {
     const now = Date.now()
     const match = this.matchesPendingFollowup(session)
     if (!match) {
@@ -6719,10 +6809,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
 
     this.pendingFollowup = null
-    this.trackDirectory(session.id, session.directory)
-    for (const cb of this.followupListeners) cb(session, session.directory)
-    this.registerSession(session)
-    void this.handleLoadMessages(session.id)
+    const dir = (session as SessionDetail).directory ?? (session as Session).directory
+    const id = (session as SessionDetail).id ?? (session as Session).id
+    this.trackDirectory(id, dir)
+    const detailForCb = (session as SessionDetail).createdAt !== undefined ? (session as SessionDetail) : sdkSessionToDetail(session as Session)
+    for (const cb of this.followupListeners) cb(detailForCb, dir)
+    this.registerSession(detailForCb as unknown as SessionDetail)
+    void this.handleLoadMessages(id)
     return true
   }
 

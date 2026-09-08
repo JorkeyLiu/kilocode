@@ -9,6 +9,7 @@ function makeSessionData(id: string, dir = "/tmp") {
     id,
     directory: dir,
     title: "hello",
+    projectID: "proj_test",
     time: { created: 1, updated: 2 },
   }
 }

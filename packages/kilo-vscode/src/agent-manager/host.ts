@@ -8,7 +8,7 @@
  * files listed in the architecture test allowlist.
  */
 
-import type { Session } from "@kilocode/sdk/v2/client"
+import type { SessionDetail } from "../kilo-provider/session-detail"
 
 // ---------------------------------------------------------------------------
 // Primitives
@@ -49,17 +49,16 @@ export interface CatalogUpdate {
 
 export interface SessionProvider {
   getSessionDirectories(): ReadonlyMap<string, string>
-  getSessionInfo?(id: string): Promise<Session | undefined>
   trackSession(id: string): void
   /** Re-fetch and send the full session list; resolves once the load has been applied. */
   refreshSessions(): Promise<void>
-  registerSession(session: Session): void
+  registerSession(session: import("@kilocode/sdk/v2/client").Session | SessionDetail): void
   /** Recover any pending permission/question prompts for tracked sessions. */
   recoverPendingPrompts(): void
   /** Register a callback invoked when a plan follow-up session is adopted.
    *  The callback receives the new session and its directory so the Agent Manager
    *  can route it correctly instead of LOCAL. */
-  onFollowupAdopted(cb: (session: Session, directory: string) => void): void
+  onFollowupAdopted(cb: (session: import("@kilocode/sdk/v2/client").Session | SessionDetail, directory: string) => void): void
   acknowledgeDraft(draftID: string, sessionID: string): void
   abortSessions(ids: readonly string[]): Promise<void>
   dispose(): void
