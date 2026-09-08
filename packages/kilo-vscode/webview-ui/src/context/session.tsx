@@ -748,20 +748,28 @@ export const SessionProvider: ParentComponent = (props) => {
   /**
    * Configured new-session default (VS Code `kilo-code.new.model.*` via
    * provider.defaultSelection): customizes the fallback tier below config and
-   * memory, validated against the catalog so stale values fall to KILO_AUTO.
+   * memory, validated against the catalog so stale values fall through.
    *
    * LOCK-3 / P4.1: Before first successful canonical materialization the
-   * webview is not-ready and must never expose KILO_AUTO / provider "kilo"
-   * as a fallback — the selection is null (empty/not-ready). After canonical
-   * readiness, empty provider state also returns null rather than KILO_AUTO.
+   * webview is not-ready and must never expose an invalid/stale KILO_AUTO /
+   * provider "kilo" fallback — that selection stays null (empty/not-ready).
+   * A valid concrete non-Kilo provider default under the current catalog is
+   * allowed so a fresh no-draft session resolves the provider default instead
+   * of inheriting recentModels/pending composer choices. After canonical
+   * readiness, empty provider state also returns null rather than a fallback.
    */
   function configuredFallback(): ModelSelection | null {
-    // P4.1 gate: before canonical readiness the webview is not-ready;
-    // no KILO_AUTO / kilo fallback is permitted.
-    if (!canonical?.()) return null
     const sel = provider.defaultSelection()
     if (Object.keys(provider.providers()).length === 0) return null
-    return provider.isModelValid(sel) ? sel : null
+    if (!provider.isModelValid(sel)) return null
+    // P4.1 gate: before canonical readiness only a valid concrete non-Kilo
+    // default is permitted; KILO_AUTO / kilo stays hidden.
+    if (!canonical?.()) {
+      if (sel.providerID === KILO_PROVIDER_ID) return null
+      if (!sel.providerID || !sel.modelID) return null
+      return sel
+    }
+    return sel
   }
 
   function resolveModel(
@@ -795,9 +803,29 @@ export const SessionProvider: ParentComponent = (props) => {
    *   explicit override > explicit agent normal chain > recovered continuity
    *   > recovered/default agent normal chain.
    *
+   * A known-but-unrecovered no-draft session (present via sessionCreated with
+   * no draft correlation, history not yet recovered) resolves configured tiers
+   * plus the fallback only — never per-agent memory, recentModels, or pending
+   * composer choices. This mirrors the variant recovery gate.
+   *
    * LOCK-001/LOCK-002: delegates to the single canonical helper.
    */
   function resolveSessionModel(sessionID: string): ModelSelection | null {
+    const known = !!store.sessions[sessionID]
+    const ready = recoveryReadySessions().has(sessionID)
+    const hasState =
+      !!store.sessionOverrides[sessionID] ||
+      !!store.sessionRecoveredModels[sessionID] ||
+      !!store.agentSelections[sessionID]
+    if (known && !ready && !hasState) {
+      return resolveModelSelection({
+        providers: provider.providers(),
+        connected: provider.connected(),
+        mode: getModeModel(defaultAgent()),
+        global: getGlobalModel(),
+        fallback: configuredFallback(),
+      })
+    }
     return canonicalGetSessionModel(
       {
         modelSelections: store.modelSelections,

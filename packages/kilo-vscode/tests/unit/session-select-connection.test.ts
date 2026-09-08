@@ -24,8 +24,9 @@ const source = fs.readFileSync(SESSION_FILE, "utf-8")
 
 describe("selectSession keeps the chat in sync with the selection while offline", () => {
   const start = source.indexOf("function selectSession(")
-  const setCurrent = source.indexOf("setCurrentSessionID(id)", start)
+  const applyState = source.indexOf("applySessionSelectionState(id, ready)", start)
   const offlineDefer = source.indexOf("if (!server.isConnected()) {", start)
+  const helperStart = source.indexOf("function applySessionSelectionState(")
 
   it("selectSession exists", () => {
     expect(start).toBeGreaterThan(-1)
@@ -37,11 +38,15 @@ describe("selectSession keeps the chat in sync with the selection while offline"
   })
 
   it("sets currentSessionID before checking the connection (chat follows selection offline)", () => {
-    expect(setCurrent).toBeGreaterThan(-1)
+    expect(applyState).toBeGreaterThan(-1)
     expect(offlineDefer).toBeGreaterThan(-1)
+    expect(helperStart).toBeGreaterThan(-1)
     // The whole point of the fix: the local selection update must precede the
     // connection guard, so a disconnected switch no longer freezes the chat.
-    expect(setCurrent).toBeLessThan(offlineDefer)
+    // Selection state is applied through the helper, which owns setCurrentSessionID.
+    expect(applyState).toBeLessThan(offlineDefer)
+    const helper = source.slice(helperStart, source.indexOf("function selectSession("))
+    expect(helper).toContain("setCurrentSessionID(id)")
   })
 
   it("defers the fetch for any session while offline, including cached ones", () => {
