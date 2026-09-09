@@ -2057,33 +2057,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.fetchAndSendMcpStatus().catch((e) => console.error("[Kilo New] fetchAndSendMcpStatus failed:", e))
           break
         case "connectMcp": {
-          if (this.canonicalConfig) break
-          const c1 = this.client
-          if (c1) {
-            void McpOAuth.connectMcpServer(c1, message.name, this.getWorkspaceDirectory(), () =>
-              this.refreshMcpStatus(),
-            ).catch((e) => console.error("[Kilo New] connectMcpServer failed:", e))
-          }
           break
         }
         case "disconnectMcp": {
-          if (this.canonicalConfig) break
-          const c2 = this.client
-          if (c2) {
-            void McpOAuth.disconnectMcpServer(c2, message.name, this.getWorkspaceDirectory(), () =>
-              this.refreshMcpStatus(),
-            ).catch((e) => console.error("[Kilo New] disconnectMcpServer failed:", e))
-          }
           break
         }
         case "authenticateMcp": {
-          if (this.canonicalConfig) break
-          const c = this.client
-          if (c) {
-            void McpOAuth.authenticateMcpServer(c, message.name, this.getWorkspaceDirectory(), () =>
-              this.refreshMcpStatus(),
-            ).catch((e) => console.error("[Kilo New] authenticateMcpServer failed:", e))
-          }
           break
         }
 
