@@ -5339,16 +5339,18 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.cancelRetry(sid)
     const client = this.client
     if (!client) return Promise.resolve(false)
-    return this.aborts.stop(client, sid, this.getWorkspaceDirectory(sid))
+    return this.aborts.stop(client, sid, this.getWorkspaceDirectory(sid), this.connectionService)
   }
 
   private async handleAbort(sessionID?: string): Promise<void> {
     const sid = sessionID || this.currentSession?.id
-    if (!sid || !(await this.stopSession(sid))) return
-    this.sessionStatusMap.set(sid, "idle")
-    this.streams.flush(sid)
-    this.postMessage({ type: "sessionTurnClosed", sessionID: sid, reason: "interrupted" })
-    this.postMessage({ type: "sessionStatus", sessionID: sid, status: "idle" })
+    if (!sid) return
+    try {
+      await this.stopSession(sid)
+    } catch (e) {
+      console.error("[Kilo New] KiloProvider: Failed to abort session:", e)
+      this.postMessage({ type: "error", message: "Failed to abort session", sessionID: sid })
+    }
   }
 
   private async handleRevertSession(sessionID: string, messageID: string, partID?: string): Promise<void> {

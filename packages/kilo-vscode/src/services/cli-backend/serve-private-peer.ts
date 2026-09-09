@@ -81,6 +81,20 @@ import {
 } from "./serve-private-path-contract"
 import type { PathContractRequest, PathResult, PathWireOutcome } from "./serve-private-path-contract"
 import { failedPathResult, pathObserverTimeoutBranch, requestPathOutcome } from "./serve-private-path"
+import {
+  assertGenerationNotRequestIdentity,
+  makeAbortAmbiguous,
+  validateAbortContractRequest,
+  validateAbortDispositionEntry,
+  validateAbortDispositionTerminal,
+  validateAbortTerminalFailure,
+} from "./serve-private-abort-contract"
+import type {
+  AbortAmbiguous,
+  AbortContractRequest,
+  AbortDispositionTerminal,
+  AbortTerminalFailure,
+} from "./serve-private-abort-contract"
 
 export {
   canonicalGetOpId,
@@ -995,6 +1009,32 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v)
 }
 
+export type ServePrivateAbortRequest = AbortContractRequest
+export type ServePrivateAbortResult = AbortDispositionTerminal | AbortTerminalFailure | AbortAmbiguous
+
+export function validateAbortRequest(raw: unknown): ServePrivateAbortRequest {
+  return validateAbortContractRequest(raw)
+}
+
+export function validateAbortResult(raw: unknown, req: ServePrivateAbortRequest): ServePrivateAbortResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  const kind = raw.kind
+  if (kind === "terminal") {
+    const out = validateAbortDispositionTerminal(raw)
+    if (out.requestId !== req.requestId) throw new Error("requestId mismatch")
+    if (out.opId !== req.opId) throw new Error("opId mismatch")
+    if (out.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+    const refs = out.affected.map((e) => {
+      validateAbortDispositionEntry(e)
+      return { kind: "generation" as const, generationId: e.generationId, sessionId: e.sessionId }
+    })
+    assertGenerationNotRequestIdentity(req, refs)
+    return out
+  }
+  if (kind === "terminal-failure") return validateAbortTerminalFailure(raw, req)
+  throw new Error(`abort result kind must be terminal or terminal-failure, got ${String(kind)}`)
+}
+
 function isNonEmptyString(v: unknown): boolean {
   return typeof v === "string" && v.length > 0
 }
@@ -1796,6 +1836,7 @@ export class ServePrivatePeer {
         "session/fork",
         "session/create",
         "session/delete",
+        "session/abort",
         "session/status",
         "session/get",
         "session/messages",
@@ -2441,6 +2482,13 @@ export class ServePrivatePeer {
         const sess = c.session as Record<string, unknown>
         if (sess.delete) return true
       }
+      if (cap === "session/abort" && c["session/abort"] === true) return true
+      if (cap === "session/abort" && Array.isArray(c.session) && (c.session as unknown[]).includes("abort"))
+        return true
+      if (cap === "session/abort" && typeof c.session === "object" && c.session !== null) {
+        const sess = c.session as Record<string, unknown>
+        if (sess.abort) return true
+      }
       if (cap === "session/status" && c["session/status"] === true) return true
       if (cap === "session/status" && Array.isArray(c.session) && (c.session as unknown[]).includes("status"))
         return true
@@ -2635,6 +2683,45 @@ export class ServePrivatePeer {
       } catch (e: unknown) {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeDeleteAmbiguous(req, true)
         return makeDeleteAmbiguous(req, true)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateAbort(req: ServePrivateAbortRequest): Promise<ServePrivateAbortResult> {
+    const handle = this.privateAbortWithHandle(req)
+    return handle.promise
+  }
+
+  privateAbortWithHandle(req: ServePrivateAbortRequest): {
+    id: number
+    promise: Promise<ServePrivateAbortResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateAbortRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/abort")) {
+      throw new Error("Private peer missing session/abort capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/abort", req)
+    const promise = (async (): Promise<ServePrivateAbortResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeAbortAmbiguous(req)
+        try {
+          return validateAbortResult(raw, req)
+        } catch {
+          return makeAbortAmbiguous(req)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeAbortAmbiguous(req)
+        return makeAbortAmbiguous(req)
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
@@ -3203,6 +3290,8 @@ export class ServePrivatePeer {
           k === "session/update" ||
           k === "session/fork" ||
           k === "session/create" ||
+          k === "session/delete" ||
+          k === "session/abort" ||
           k === "session/status" ||
           k === "session/get" ||
           k === "session/messages" ||
@@ -3227,6 +3316,8 @@ export class ServePrivatePeer {
       else if (v === "update") out.push("session/update")
       else if (v === "fork") out.push("session/fork")
       else if (v === "create") out.push("session/create")
+      else if (v === "delete") out.push("session/delete")
+      else if (v === "abort") out.push("session/abort")
       else if (v === "status") out.push("session/status")
       else if (v === "get") out.push("session/get")
       else if (v === "messages") out.push("session/messages")
@@ -3241,6 +3332,8 @@ export class ServePrivatePeer {
     if (sess.update) out.push("session/update")
     if (sess.fork) out.push("session/fork")
     if (sess.create) out.push("session/create")
+    if (sess.delete) out.push("session/delete")
+    if (sess.abort) out.push("session/abort")
     if (sess.status) out.push("session/status")
     if (sess.get) out.push("session/get")
     if (sess.messages) out.push("session/messages")

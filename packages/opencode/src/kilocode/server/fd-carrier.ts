@@ -7,6 +7,7 @@ import { SessionUpdateDispatchService, validatePrivateRequest } from "@/kilocode
 import { SessionForkDispatchService } from "@/kilocode/session/session-fork-dispatch"
 import { SessionCreateDispatchService } from "@/kilocode/session/session-create-dispatch"
 import { SessionDeleteDispatchService } from "@/kilocode/session/session-delete-dispatch"
+import { abortSession as abortSessionPrivate, validateAbortRequest as validateAbortEnvelope } from "@/kilocode/session/session-abort"
 import { SessionStatus } from "@/session/status"
 import { Session } from "@/session/session"
 import { MessageV2 } from "@/session/message-v2"
@@ -1381,6 +1382,47 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
               throw err
             }
             return yield* (fn as (p: unknown) => Effect.Effect<unknown>)(params)
+          }),
+        )
+        return result
+      }
+      if (method === "session/abort") {
+        // Production abort: validates the abort tuple, awaits the existing
+        // cancellation owner (cancelTree over SessionRunState) until terminal
+        // convergence, then returns. No durable operation row, no revision.
+        // Envelope validation runs before drain acquisition so malformed
+        // requests fail as InvalidParams without touching runtime state.
+        try {
+          validateAbortEnvelope(params)
+        } catch (e) {
+          const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+          err.code = ErrorCode.InvalidParams
+          throw err
+        }
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const dir = (() => {
+              try {
+                const p = params as Record<string, unknown>
+                const ctx = p.context as Record<string, unknown> | undefined
+                if (typeof ctx?.directory !== "string") throw new Error("context.directory must be non-empty string")
+                return canonicalDirectory(ctx.directory)
+              } catch (e) {
+                const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+                err.code = ErrorCode.InvalidParams
+                throw err
+              }
+            })()
+            const acquired = yield* acquireDrainControl(dir).pipe(
+              Effect.map((v) => ({ tag: "ok" as const, value: v })),
+              Effect.catch((err: unknown) => Effect.succeed({ tag: "fail" as const, err })),
+              Effect.catchDefect((defect: unknown) => Effect.succeed({ tag: "fail" as const, err: defect })),
+            )
+            if (acquired.tag !== "ok") throw acquired.err
+            const inner = Effect.gen(function* () {
+              return yield* abortSessionPrivate(params)
+            }).pipe(Effect.provideService(InstanceRef, acquired.value.ctx), Effect.ensuring(acquired.value.release))
+            return yield* inner
           }),
         )
         return result

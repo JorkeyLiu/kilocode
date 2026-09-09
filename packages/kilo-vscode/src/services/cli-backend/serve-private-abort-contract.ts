@@ -1,11 +1,8 @@
-// B9 cancellation-request identity envelope contract evidence only.
-// Pure contract helpers with no transport, no private capability, no dispatch,
-// no abort execution, no durable outcome, no timeout/late-SSE/partial handling.
-// `op:"session/abort"` below is a contract-evidence label only; it is never
-// registered as a private capability and never sent over any peer. Production
-// abort stays SDK-only (`kilo-provider/abort.ts` + `KiloProvider.handleAbort`).
-// Investigation-only: receipt is not cancellation proof; terminal convergence
-// is a separate contract shape confirmed only via runtime/SSE/persistence.
+// Production abort request/terminal contract over the private fd carrier.
+// `op:"session/abort"` is a registered private capability (`session/abort`).
+// Terminal success returns only after the runtime cancellation owner has
+// converged (cancelTree over SessionRunState awaited); receipt is never
+// cancellation proof. No durable session_operation row, no revision.
 
 import { isAbsolute, normalize, resolve } from "path"
 
@@ -322,7 +319,7 @@ export function validateAbortDispositionTerminal(raw: unknown): AbortDisposition
   if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
   if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
   if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
-  if (typeof raw.accepted !== "boolean") throw new Error("accepted must be boolean")
+  if (raw.accepted !== true) throw new Error("terminal accepted must be true")
   if (raw.terminal !== true) throw new Error("terminal must be true")
   if (!Array.isArray(raw.affected)) throw new Error("affected must be array")
   for (const entry of raw.affected as unknown[]) validateAbortDispositionEntry(entry)
@@ -476,6 +473,90 @@ export function validateAbortNotFoundTerminal(raw: unknown): AbortNotFoundTermin
 
 export function isAbortNotFoundTerminal(v: unknown): v is AbortNotFoundTerminal {
   return isRecord(v) && v.kind === "terminal-failure" && (v as { terminal?: unknown }).terminal === true
+}
+
+// Production terminal failure for explicit scope mismatch plus not_found.
+// Same redacted side-effect-free shape; only the code differs.
+export type AbortTerminalFailureCode = "session.not_found" | "scope_mismatch"
+
+export interface AbortTerminalFailure {
+  kind: "terminal-failure"
+  v: 1
+  requestId: string
+  opId: string
+  idempotencyKey: string
+  accepted: false
+  terminal: true
+  failure: AbortDiagnostic
+  sideEffect: false
+}
+
+export function makeAbortTerminalFailure(
+  req: AbortContractRequest,
+  code: AbortTerminalFailureCode,
+  time: number = Date.now(),
+): AbortTerminalFailure {
+  return {
+    kind: "terminal-failure",
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    idempotencyKey: req.idempotencyKey,
+    accepted: false,
+    terminal: true,
+    failure: { code, retryable: false, time },
+    sideEffect: false,
+  }
+}
+
+export function validateAbortTerminalFailure(raw: unknown, req?: AbortContractRequest): AbortTerminalFailure {
+  if (!isRecord(raw)) throw new Error("terminal-failure must be object")
+  if (raw.kind !== "terminal-failure") throw new Error("terminal-failure kind must be terminal-failure")
+  if (raw.v !== 1) throw new Error("v must be 1")
+  if (!isNonEmpty(raw.requestId)) throw new Error("requestId must be non-empty string")
+  if (!isNonEmpty(raw.opId)) throw new Error("opId must be non-empty string")
+  if (!isNonEmpty(raw.idempotencyKey)) throw new Error("idempotencyKey must be non-empty string")
+  if (raw.accepted !== false) throw new Error("terminal-failure accepted must be false")
+  if (raw.terminal !== true) throw new Error("terminal must be true")
+  if (raw.sideEffect !== false) throw new Error("terminal-failure sideEffect must be false")
+  const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "failure", "sideEffect"])
+  for (const k of Object.keys(raw)) if (!allowed.has(k)) throw new Error(`unexpected terminal-failure field ${k}`)
+  const failure = validateAbortDiagnostic(raw.failure)
+  if (failure.code !== "session.not_found" && failure.code !== "scope_mismatch")
+    throw new Error("terminal-failure code must be session.not_found or scope_mismatch")
+  if (failure.retryable !== false) throw new Error("terminal-failure retryable must be false")
+  if (req) {
+    if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+    if (raw.opId !== req.opId) throw new Error("opId mismatch")
+    if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+  }
+  return raw as unknown as AbortTerminalFailure
+}
+
+// Local ambiguous outcome: transport/closed/stale/timeout/invalid wire.
+// Never a runtime fact; the provider takes exactly one legacy SDK fallback.
+export interface AbortAmbiguous {
+  kind: "ambiguous"
+  v: 1
+  requestId: string
+  opId: string
+  idempotencyKey: string
+  accepted: false
+  terminal: false
+  transportUnknown: true
+}
+
+export function makeAbortAmbiguous(req: AbortContractRequest): AbortAmbiguous {
+  return {
+    kind: "ambiguous",
+    v: 1,
+    requestId: req.requestId,
+    opId: req.opId,
+    idempotencyKey: req.idempotencyKey,
+    accepted: false,
+    terminal: false,
+    transportUnknown: true,
+  }
 }
 
 // Stateless terminal re-observation: matches the same opId + idempotencyKey

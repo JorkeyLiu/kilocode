@@ -1,6 +1,11 @@
 import type { KiloClient, SessionStatus } from "@kilocode/sdk/v2/client"
+import * as crypto from "crypto"
 import { sameDirectory } from "../kilo-provider-utils"
 import { isE2EFixtureEnabled } from "../util/e2e-fixture"
+import { canonicalAbortOpId, validateAbortContractRequest } from "../services/cli-backend/serve-private-abort-contract"
+import type { AbortContractRequest } from "../services/cli-backend/serve-private-abort-contract"
+import { validateAbortResult } from "../services/cli-backend/serve-private-peer"
+import type { KiloConnectionService } from "../services/cli-backend"
 
 export type AbortAttemptRecord = {
   sessionID: string
@@ -202,20 +207,14 @@ export class SessionAbort {
     if (![...dirs].some((entry) => sameDirectory(entry, dir))) dirs.add(dir)
   }
 
-  async stop(client: KiloClient, sessionID: string, fallback: string) {
-    const known = this.active.has(sessionID)
-    const dirs = [...(this.active.get(sessionID) ?? [])]
-    if (!dirs.some((dir) => sameDirectory(dir, fallback))) dirs.push(fallback)
-    const results = await Promise.allSettled(dirs.map((dir) => abortSession({ client, sessionID, dir })))
-    const failures = results.flatMap((result, index) =>
-      result.status === "rejected" ? [{ dir: dirs[index], error: result.reason }] : [],
-    )
-    if (failures.length > 0) {
-      console.error("[Kilo New] KiloProvider: Failed to abort session in one or more directories:", failures)
-      return false
+  async stop(client: KiloClient, sessionID: string, dir: string, connection?: KiloConnectionService) {
+    if (connection) {
+      const ok = await abortSessionPrivateFirst({ client, connection, sessionID, directory: dir })
+      if (ok) this.active.delete(sessionID)
+      return ok
     }
-    if (known) this.active.delete(sessionID)
-    return known
+    await abortSession({ client, sessionID, dir })
+    return false
   }
 
   dispose(dir: string) {
@@ -283,4 +282,136 @@ export async function abortSession(input: { client: KiloClient; sessionID: strin
     }
     throw err
   }
+}
+
+export function buildAbortIdentity(sessionId: string): { opId: string; idempotencyKey: string; requestId: string } {
+  const token = crypto.randomUUID()
+  const opId = canonicalAbortOpId(sessionId, token)
+  return { opId, idempotencyKey: opId, requestId: crypto.randomUUID() }
+}
+
+function withPrivateTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`private parity timeout after ${ms}ms`)), ms)
+    ;(timer as unknown as { unref?: () => void })?.unref?.()
+  })
+  return Promise.race([promise, timeout]).finally(() => {
+    if (timer) clearTimeout(timer)
+  }) as Promise<T>
+}
+
+function abortTerminal(code: string, message: string): Error {
+  const err = new Error(message) as Error & { code: string; terminal: boolean }
+  err.code = code
+  err.terminal = true
+  return err
+}
+
+type Handle = { id: number; promise: Promise<unknown>; cancel?: (msg?: string) => boolean }
+
+type FallbackInput = { client: KiloClient; sessionID: string; directory: string }
+
+async function fallback(input: FallbackInput): Promise<boolean> {
+  await abortSession({ client: input.client, sessionID: input.sessionID, dir: input.directory })
+  return true
+}
+
+function buildReq(sessionID: string, directory: string): AbortContractRequest {
+  const { opId, idempotencyKey, requestId } = buildAbortIdentity(sessionID)
+  return {
+    v: 1 as const,
+    requestId,
+    opId,
+    op: "session/abort" as const,
+    idempotencyKey,
+    context: { directory, sessionId: sessionID },
+    payload: {} as Record<string, never>,
+  }
+}
+
+function valid(req: AbortContractRequest): boolean {
+  try {
+    validateAbortContractRequest(req)
+    return true
+  } catch {
+    return false
+  }
+}
+
+type Acquired = { ok: true; handle: Handle | null; promise: Promise<unknown> } | { ok: false }
+
+function acquire(connection: KiloConnectionService, req: AbortContractRequest): Acquired {
+  try {
+    const factory = (
+      connection as unknown as {
+        privateAbortWithHandle?: (r: AbortContractRequest) => Handle
+      }
+    ).privateAbortWithHandle?.bind(connection) ?? null
+    if (!factory) {
+      const promise = (connection as unknown as { privateAbort: (r: unknown) => Promise<unknown> }).privateAbort(req)
+      return { ok: true, handle: null, promise }
+    }
+    const got = factory(req)
+    return { ok: true, handle: got, promise: got.promise }
+  } catch {
+    return { ok: false }
+  }
+}
+
+function expired(handle: Handle | null, opId: string): void {
+  if (!handle?.cancel) return
+  try {
+    handle.cancel(`private parity timeout opId=${opId}`)
+  } catch (err) {
+    console.warn("[Kilo Abort] private timeout cancel failed:", String(err).slice(0, 200), { opId })
+  }
+}
+
+function failureOf(result: unknown): { code: string; message: string } {
+  const failure = (result as { failure?: { code?: unknown; message?: unknown } }).failure
+  const code = typeof failure?.code === "string" && failure.code ? failure.code : "failed"
+  const message = typeof failure?.message === "string" && failure.message ? failure.message : code
+  return { code, message }
+}
+
+async function settle(input: FallbackInput & { req: AbortContractRequest; result: unknown }): Promise<boolean> {
+  const kind = (input.result as { kind?: unknown }).kind
+  if (kind !== "terminal" && kind !== "terminal-failure") return fallback(input)
+  try {
+    validateAbortResult(input.result, input.req)
+  } catch {
+    return fallback(input)
+  }
+  if (kind === "terminal") return true
+  const { code, message } = failureOf(input.result)
+  throw abortTerminal(code, message)
+}
+
+// Private-first abort: single-directory `session/abort` returning only after
+// runtime terminal convergence. Valid `terminal` returns with zero SDK;
+// `terminal-failure` with retryable false (session.not_found/scope_mismatch)
+// closes terminally with zero SDK; unavailable/invalid/ambiguous/transport/
+// timeout takes exactly one legacy SDK `session.abort` fallback, never retried.
+export async function abortSessionPrivateFirst(opts: {
+  client: KiloClient
+  connection: KiloConnectionService
+  sessionID: string
+  directory: string
+}): Promise<boolean> {
+  const { client, connection, sessionID, directory } = opts
+  const req = buildReq(sessionID, directory)
+  const input: FallbackInput = { client, sessionID, directory }
+  if (!valid(req)) return fallback(input)
+  if (!connection.isPrivateAvailable()) return fallback(input)
+  const acq = acquire(connection, req)
+  if (!acq.ok) return fallback(input)
+  let result: unknown
+  try {
+    result = await withPrivateTimeout(acq.promise, 3000)
+  } catch {
+    expired(acq.handle, req.opId)
+    return fallback(input)
+  }
+  return settle({ ...input, req, result })
 }

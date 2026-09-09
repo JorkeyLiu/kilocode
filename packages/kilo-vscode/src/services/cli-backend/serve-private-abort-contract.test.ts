@@ -14,6 +14,7 @@ import {
   makeAbortNotFoundFixture,
   makeAbortReceipt,
   makeAbortTerminalFixture,
+  makeAbortTerminalFailure,
   parseAbortOpId,
   reobserveAbortTerminal,
   validateAbortContractRequest,
@@ -21,6 +22,7 @@ import {
   validateAbortDispositionEntry,
   validateAbortDispositionTerminal,
   validateAbortNotFoundTerminal,
+  validateAbortTerminalFailure,
   validateAffectedGeneration,
 } from "./serve-private-abort-contract"
 
@@ -219,6 +221,32 @@ describe("B9-P2.3 outcome disposition and terminal idempotency fixtures", () => 
     expect(() => makeAbortNotFoundFixture(req, { code: "stale", retryable: false, time: 1 })).toThrow()
     expect("sessionId" in fixture).toBeFalse()
     expect("prompt" in fixture).toBeFalse()
+  })
+
+  test("terminal success requires accepted true", () => {
+    const req = validateAbortContractRequest(makeReq())
+    const terminal = makeAbortDispositionTerminal(req, [
+      { kind: "root", disposition: "cancelled", generationId: "gen_001", sessionId: SID },
+    ])
+    expect(() => validateAbortDispositionTerminal(terminal)).not.toThrow()
+    expect(() => validateAbortDispositionTerminal({ ...terminal, accepted: false })).toThrow(
+      "terminal accepted must be true",
+    )
+  })
+
+  test("scope_mismatch terminal failure shares the redacted side-effect-free shape", () => {
+    const req = validateAbortContractRequest(makeReq())
+    const failure = makeAbortTerminalFailure(req, "scope_mismatch", 2)
+    expect(failure.accepted).toBeFalse()
+    expect(failure.terminal).toBeTrue()
+    expect(failure.sideEffect).toBeFalse()
+    expect(failure.failure.code).toBe("scope_mismatch")
+    expect(failure.failure.retryable).toBeFalse()
+    expect(() => validateAbortTerminalFailure(failure, req)).not.toThrow()
+    expect(() => validateAbortTerminalFailure({ ...failure, failure: { code: "stale", retryable: false, time: 1 } }, req)).toThrow()
+    expect(() =>
+      validateAbortTerminalFailure({ ...failure, failure: { code: "scope_mismatch", retryable: true, time: 1 } }, req),
+    ).toThrow()
   })
 
   test("terminal re-observation returns deep-equal facts and rejects mismatched identity", () => {

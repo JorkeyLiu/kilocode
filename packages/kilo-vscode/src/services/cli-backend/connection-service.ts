@@ -19,6 +19,8 @@ import {
   type ServePrivateCreateResult,
   type ServePrivateDeleteRequest,
   type ServePrivateDeleteResult,
+  type ServePrivateAbortRequest,
+  type ServePrivateAbortResult,
   type PrivateStatusWireOutcome,
   type PrivateGetWireOutcome,
   type PrivateMessagesWireOutcome,
@@ -56,6 +58,8 @@ import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-c
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
 import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-provider/rename-session"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
+import { makeAbortAmbiguous } from "./serve-private-abort-contract"
+import { wrapEpochHandle } from "./serve-private-epoch"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
 /**
@@ -1995,6 +1999,30 @@ export class KiloConnectionService {
 
   async privateDelete(req: ServePrivateDeleteRequest): Promise<ServePrivateDeleteResult> {
     const handle = this.privateDeleteWithHandle(req)
+    return handle.promise
+  }
+
+  privateAbortWithHandle(req: ServePrivateAbortRequest): {
+    id: number
+    promise: Promise<ServePrivateAbortResult>
+    cancel: (msg?: string) => boolean
+  } {
+    return wrapEpochHandle({
+      conn: {
+        peer: this.privatePeer,
+        live: this.privateAvailable,
+        epoch: this.privateEpoch,
+        invalidate: (reason) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+      },
+      cap: "session/abort",
+      req,
+      call: (peer) => peer.privateAbortWithHandle(req),
+      vague: (r) => makeAbortAmbiguous(r) as unknown as ServePrivateAbortResult,
+    })
+  }
+
+  async privateAbort(req: ServePrivateAbortRequest): Promise<ServePrivateAbortResult> {
+    const handle = this.privateAbortWithHandle(req)
     return handle.promise
   }
 
