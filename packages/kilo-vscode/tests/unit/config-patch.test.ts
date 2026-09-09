@@ -1,5 +1,11 @@
 import { describe, expect, it } from "bun:test"
-import { deepMergePatch, isRecord, stripNullPatch, unsetPathValues } from "../../src/util/config-patch"
+import {
+  composeScopePatch,
+  deepMergePatch,
+  isRecord,
+  stripNullPatch,
+  unsetPathValues,
+} from "../../src/util/config-patch"
 
 describe("deepMergePatch (LOCK-003)", () => {
   it("merges nested objects recursively so siblings survive", () => {
@@ -75,5 +81,81 @@ describe("isRecord", () => {
     expect(isRecord([])).toBe(false)
     expect(isRecord(null)).toBe(false)
     expect(isRecord("x")).toBe(false)
+  })
+})
+
+describe("composeScopePatch", () => {
+  const gui = (key: string) => key !== "$schema"
+
+  it("merges nested patch leaves so siblings survive", () => {
+    const base = { permission: { read: "allow", bash: "ask" }, model: "custom/model" }
+    expect(composeScopePatch(base, { permission: { bash: "deny" } }, [], gui)).toEqual({
+      permission: { read: "allow", bash: "deny" },
+    })
+  })
+
+  it("replaces arrays and scalars wholesale", () => {
+    expect(composeScopePatch({ instructions: ["a"] }, { instructions: ["b", "c"] }, [], gui)).toEqual({
+      instructions: ["b", "c"],
+    })
+    expect(composeScopePatch({ permission: { read: "allow" } }, { permission: "deny" }, [], gui)).toEqual({
+      permission: "deny",
+    })
+  })
+
+  it("deletes only the targeted nested leaf", () => {
+    const base = { permission: { read: "allow", bash: "ask" } }
+    expect(composeScopePatch(base, {}, [["permission", "bash"]], gui)).toEqual({
+      permission: { read: "allow" },
+    })
+  })
+
+  it("prunes the top-level key when its last leaf is unset", () => {
+    expect(composeScopePatch({ permission: { bash: "ask" } }, {}, [["permission", "bash"]], gui)).toEqual({
+      permission: undefined,
+    })
+  })
+
+  it("omits untouched keys so the service keeps file content", () => {
+    const base = { permission: { read: "allow" }, model: "custom/model" }
+    expect(composeScopePatch(base, { model: "custom/next" }, [], gui)).toEqual({ model: "custom/next" })
+  })
+
+  it("combines nested set and unset in one scope", () => {
+    const base = {
+      model_variant_overrides: { "openai/gpt-4": "thinking", "anthropic/claude": "default" },
+    }
+    expect(
+      composeScopePatch(
+        base,
+        { model_variant_overrides: { "openai/gpt-4": "fast" } },
+        [["model_variant_overrides", "anthropic/claude"]],
+        gui,
+      ),
+    ).toEqual({ model_variant_overrides: { "openai/gpt-4": "fast" } })
+  })
+
+  it("drops prototype-pollution keys in patch and unsets without polluting", () => {
+    const base = { permission: { read: "allow" } }
+    const out = composeScopePatch(
+      base,
+      { permission: { bash: "deny", __proto__: { polluted: true } } } as Record<string, unknown>,
+      [["__proto__", "polluted"], ["permission", "__proto__"], ["permission", "constructor"]],
+      gui,
+    )
+    expect(out).toEqual({ permission: { read: "allow", bash: "deny" } })
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+  })
+
+  it("ignores non-field top-level keys and malformed paths", () => {
+    const base = { model: "custom/model" }
+    expect(
+      composeScopePatch(
+        base,
+        { $schema: "https://example.com/schema", model: "custom/next" } as Record<string, unknown>,
+        [[], ["$schema"], ["model", ""], "model" as unknown as string[]],
+        gui,
+      ),
+    ).toEqual({ model: "custom/next" })
   })
 })

@@ -23,13 +23,6 @@ export type KiloProviderOptions = {
   privateSessionList?: PrivateSessionReader
   /** Preferred alias for privateSessionList — same non-owning projection. */
   privateSessionReader?: PrivateSessionReader
-  /**
-   * Test-only identity hook: inject a scheduler for the reconciliation retry
-   * backoff. Returns a cancel function; defaults to setTimeout/clearTimeout.
-   * Tests pass a fake clock so bounded backoff (LOCK-003) is deterministic
-   * without real-time sleeps.
-   */
-  scheduleRetry?: (delayMs: number, fn: () => void) => () => void
   /** Canonical GUI authority for config, custom providers, and agents. */
   canonicalConfig?: CanonicalConfigService
 }

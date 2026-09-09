@@ -633,6 +633,8 @@ Runtime loading is separate from editor-facing JSON Schema publication. A cloud-
 
 Every config save is classified hot or cold. Schema shape lives in `Config.Info` in `packages/opencode/src/config/config.ts`; runtime hot classification lives in `packages/opencode/src/kilocode/config/hot-keys.ts`, and a field absent from the hot-key set is cold. Hot saves converge without a runtime rebuild; cold saves converge through a background pass that swaps the runtime for affected directories. Merge order for the sources is in [Config precedence](#config-precedence). The editor-facing schema surface is separate and non-authoritative — see [CLI Config Schema](/docs/contributing/architecture/config-schema).
 
+VS Code Settings does not use this CLI PATCH path. Its writes are file-authoritative through the extension `CanonicalConfigService` only; the extension-side `client.config.transaction` caller and its reconcile coordination are removed (the CLI transaction endpoint itself is unchanged).
+
 | Component | Responsibility |
 |---|---|
 | `ConfigConvergence` | Coordinator that raises the admission fence before a cold mutation persists, assigns a monotonic sequence to each committed cold obligation, and runs serialized convergence passes |

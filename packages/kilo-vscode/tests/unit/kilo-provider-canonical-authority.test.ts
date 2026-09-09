@@ -135,7 +135,7 @@ describe("KiloProvider canonical GUI authority", () => {
       fetchAndSendConfig: () => Promise<void>
       fetchAndSendProviders: () => Promise<void>
       fetchAndSendAgents: () => Promise<void>
-      handleUpdateConfig: (global: Record<string, unknown>) => Promise<void>
+      handleUpdateConfigMessage: (message: Record<string, unknown>) => Promise<void>
       postMessage: (message: unknown) => void
     }
     const messages: unknown[] = []
@@ -144,11 +144,29 @@ describe("KiloProvider canonical GUI authority", () => {
     await internal.fetchAndSendConfig()
     await internal.fetchAndSendProviders()
     await internal.fetchAndSendAgents()
-    await internal.handleUpdateConfig({ model: "custom/next" }, {}, [], [], undefined, canonical.stamp)
+    await internal.handleUpdateConfigMessage({
+      type: "updateConfig",
+      canonical: true,
+      config: { model: "custom/next" },
+      projectConfig: {},
+      globalUnset: [],
+      projectUnset: [],
+      stamp: canonical.stamp,
+    })
 
     expect(calls).toEqual([])
     expect(fs.readFileSync(path.join(global, "kilo.jsonc"), "utf8")).toContain("custom/next")
     expect(messages).toContainEqual(expect.objectContaining({ type: "configUpdated", canonical: true }))
+
+    // A legacy non-canonical message is rejected structurally and never
+    // reaches the removed SDK transaction path.
+    messages.length = 0
+    await internal.handleUpdateConfigMessage({ type: "updateConfig", config: { model: "custom/other" } })
+    expect(calls).toEqual([])
+    expect(messages).toContainEqual(
+      expect.objectContaining({ type: "configUpdateFailed", canonical: true, kind: "invalid" }),
+    )
+    expect(fs.readFileSync(path.join(global, "kilo.jsonc"), "utf8")).not.toContain("custom/other")
     provider.dispose()
     canonical.dispose()
   })

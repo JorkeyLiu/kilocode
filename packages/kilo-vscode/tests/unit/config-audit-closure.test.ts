@@ -69,6 +69,7 @@ type ProviderInternals = {
   handleRemoveMcp: (name: string, msg?: Record<string, unknown>) => Promise<void>
   handleGetProviderCredential: (msg: Record<string, unknown>) => Promise<void>
   handleFetchCustomProviderModels: (msg: Record<string, unknown>) => Promise<void>
+  handleUpdateConfigMessage: (msg: Record<string, unknown>) => Promise<void>
   fetchAndSendConfig: () => Promise<void>
   fetchAndSendProviders: () => Promise<void>
   fetchAndSendAgents: () => Promise<void>
@@ -1525,15 +1526,27 @@ describe("P4.1 readiness boundary: explicit ready field", () => {
 // ── P4.1 legacy mutation rejection when canonical attached but not ready ─
 
 describe("P4.1 legacy mutation rejection when canonical attached but not ready", () => {
-  it("handleUpdateConfig rejects when canonicalConfig set but not ready", async () => {
+  it("handleUpdateConfigMessage rejects when canonicalConfig set but not ready", async () => {
     const { canonical, init } = setup(false)
     const { provider, messages } = makeProvider(canonical)
-    // Legacy config update should be rejected — canonicalConfig is set but not ready
-    await provider.handleUpdateConfig({ model: "test/model" }, {}, [], [], "save1")
+    // Canonical save before readiness is rejected — no legacy mutation window.
+    await provider.handleUpdateConfigMessage({
+      type: "updateConfig",
+      canonical: true,
+      config: { model: "test/model" },
+      saveID: "save1",
+      stamp: { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null },
+    })
     const err = messages.find((m) => (m as Record<string, unknown>).type === "configUpdateFailed") as Record<string, unknown> | undefined
     expect(err).toBeDefined()
     expect(err!.kind).toBe("not-ready")
     expect(err!.saveID).toBe("save1")
+
+    // Legacy non-canonical messages are rejected structurally even before readiness.
+    messages.length = 0
+    await provider.handleUpdateConfigMessage({ type: "updateConfig", config: { model: "test/model" }, saveID: "legacy" })
+    const legacy = messages.find((m) => (m as Record<string, unknown>).type === "configUpdateFailed") as Record<string, unknown> | undefined
+    expect(legacy).toMatchObject({ canonical: true, kind: "invalid", saveID: "legacy" })
     await init()
     provider.cleanupRetries.clear()
     canonical.dispose()

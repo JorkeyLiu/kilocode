@@ -15,10 +15,19 @@ this note; when they disagree, the code is right.
   local `session/create` is now private-first with authoritative `SessionCreateDispatch.dispatch` commit (same `create:<token>` durable tuple for `opId`/`idempotencyKey` + `requestId` + `directory`/`parentSessionId:null`, 3 s timeout/epoch, valid `succeeded` authoritative without SDK else exactly one SDK `POST /session` fallback with same tuple; `sandboxInheritanceToken` bypasses private with exactly one SDK `create`).
 - Durable session operations with an atomic commit plus a bounded derived
   changefeed exist as an incremental foundation. `session/create` private path now commits `SessionTable`/`session_operation`/`changefeed`/`Event` atomically via `fd-carrier.ts` → `SessionCreateDispatch.dispatch` (not replay-only `dispatchPrivate`); idempotent replay returns same session without duplicate. Title-only `session/update` (rename) is private-first the same way via `fd-carrier.ts` → `SessionUpdateDispatch.dispatch` with the same durable tuple (`opId`/`idempotencyKey` + `requestId` + `context`) across private and the exactly-one SDK `session.update` fallback; a valid private `succeeded`+`accepted` session/title result returns with zero SDK mutation, otherwise exactly one SDK fallback with the identical tuple. `session/fork` is private-first the same way via `fd-carrier.ts` → `SessionForkDispatch.dispatch` (authoritative commit with `data.session` wire wrap) and `forkSessionPrivateFirst` (same `fork:<sessionId>:<token>` durable tuple for `opId`/`idempotencyKey` + `requestId` + `context`, 3 s timeout/epoch; valid `succeeded`+`accepted` returns with zero SDK mutation, validated `failed` with `failure.retryable === false` such as `session.not_found`/`conflict` closes terminally with zero SDK, validated `failed` with `retryable === true` plus unavailable/invalid/ambiguous/transport/closed/timeout takes exactly one SDK `session.fork` fallback with the identical tuple, never retried). `session/delete` is private-first the same way via `fd-carrier.ts` → `SessionDeleteDispatch.dispatch` (authoritative full-family delete) and `deleteSessionPrivateFirst` (same `delete:<sessionId>:<token>` durable tuple for `opId`/`idempotencyKey` + `requestId` + `context {directory, sessionId, parentSessionId:null}`, 3 s timeout/epoch; valid `succeeded`+`accepted` returns with zero legacy `DELETE /session/:sessionID` mutation, validated terminal `failed` with `retryable === false` closes with zero SDK, known-safe unavailable plus validated `retryable === true` takes exactly one durable `DELETE /session/:sessionID` fallback with the identical tuple, unknown outcome runs one private reconciliation with the same tuple then closes terminally without destructive SDK fallback). The `dispatchPrivate` replay-only paths remain for diagnostics but are not used by `fd-carrier.ts` for `session/create`, `session/update`, `session/fork`, or `session/delete`.
-- A canonical file-authoritative configuration service and a private
-  observation service exist in the extension, but the target ownership and
-  cutover are unfinished. Effective configuration still comes from the CLI
-  loader with its multi-source merge and convergence pass.
+- VS Code Settings writes are canonical-only and file-authoritative:
+  `KiloProvider` accepts only stamped `canonical: true` `updateConfig`
+  messages through `CanonicalConfigService.writeConfigScopes`; non-canonical,
+  missing-canonical, and missing/stale-stamp messages fail fast with a
+  structured `configUpdateFailed`. The legacy `client.config.transaction`
+  caller and its pending/reconcile/retry coordination are removed from the
+  extension (the CLI transaction endpoint itself is unchanged). Canonical
+  reads publish the service snapshot; providers without canonical authority
+  return explicit empty/unsupported payloads instead of racing the SDK.
+- A private observation service exists in the extension, but the remaining
+  target ownership and cutover are unfinished. Effective runtime
+  configuration still comes from the CLI loader with its multi-source merge
+  and convergence pass.
 - Production permission decisions come only from
   `packages/opencode/src/permission/evaluator.ts`. Across
   global/project/agent/session-restriction layers, deny wins first,

@@ -3,7 +3,6 @@ import type { FileAttachment } from "./parts"
 import type { MessageLoadMode } from "./sessions"
 import type { ModelSelection, ProviderConfig, LegacyProviderConfig } from "./providers"
 import type { CanonicalConfigPayload, CanonicalProviderPayload, CanonicalStamp } from "../../../../src/config/types"
-import type { Config } from "./config"
 import type { ReviewMessageData } from "../../../../src/shared/review-comments"
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
 import type { AnacondaDesktopWebviewMessage } from "../../../../src/shared/anaconda-desktop-messages"
@@ -462,23 +461,6 @@ export interface RequestImageModelsMessage {
   type: "requestImageModels"
 }
 
-export interface LegacyUpdateConfigMessage {
-  type: "updateConfig"
-  /** Global config patch written to ~/.config/kilo/kilo.json. */
-  config: Partial<Config>
-  globalUnset?: string[][]
-  /** Project config patch written to the workspace's .kilo/kilo.jsonc or existing project config. */
-  projectConfig?: Partial<Config>
-  projectUnset?: string[][]
-  /**
-   * Identity of this save attempt. The extension echoes it on the matching
-   * configUpdated/configUpdateFailed so the webview can ignore stale echoes
-   * from older saves (LOCK-005).
-   */
-  saveID?: string
-  canonical?: false
-}
-
 export interface CanonicalUpdateConfigMessage {
   type: "updateConfig"
   canonical: true
@@ -490,7 +472,12 @@ export interface CanonicalUpdateConfigMessage {
   stamp: CanonicalStamp
 }
 
-export type UpdateConfigMessage = LegacyUpdateConfigMessage | CanonicalUpdateConfigMessage
+/**
+ * VS Code Settings writes are canonical-only. The legacy SDK-transaction
+ * updateConfig shape was removed with the reconcile path; the extension
+ * rejects any non-canonical message with a structured configUpdateFailed.
+ */
+export type UpdateConfigMessage = CanonicalUpdateConfigMessage
 
 export interface RequestNotificationSettingsMessage {
   type: "requestNotificationSettings"

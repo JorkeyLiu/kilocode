@@ -7,7 +7,6 @@ import type {
   Event,
   TextPartInput,
   FilePartInput,
-  Config,
 } from "@kilocode/sdk/v2/client"
 import { MaxCostNudge, type MaxCostChoice } from "@opencode-ai/core/kilocode/cost/max-cost-nudge"
 import { type KiloConnectionService, ServerStartupError } from "./services/cli-backend"
@@ -31,7 +30,6 @@ import {
   resolveServedDefaultAgent,
   mapSSEEventToWebviewMessage,
   getErrorMessage,
-  getConfigErrorDetails,
   isEventFromForeignProject,
   MessageConfirmation,
   runWithMessageConfirmation,
@@ -164,6 +162,7 @@ import {
 } from "./config/types"
 import { parseSecretKey } from "./config/secret-adapter"
 import { CLOSED_JSONC_FIELDS, isGuiField } from "./config/registry"
+import { composeScopePatch } from "./util/config-patch"
 import { mapProviderIndexToWebviewProviders } from "./config/selectors"
 
 let maxCost = 0
@@ -408,15 +407,8 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private cachedImageModelsMessage: unknown = null
   /** Cached mcpStatusLoaded payload so requestMcpStatus can be served before client is ready */
   private cachedMcpStatusMessage: unknown = null
-  /** Ref-count of in-flight handleUpdateConfig mutations; prevents fetchAndSendConfig from sending stale data */
-  private pending = 0
-  /** Newest reconciliation attempt; supersedes older in-flight reconciliation fetches (LOCK-003/004/005). */
-  private reconcileSeq = 0
-  private reconcileInFlight: { seq: number } | null = null
-  /** True once dispose() runs; queueReconcile becomes a no-op (LOCK-004). */
+  /** True once dispose() runs. */
   private disposed = false
-  /** Revision the last successful reconciliation covered — the dedupe key that prevents a local save from double-fetching its own canonical echo (LOCK-001/002). */
-  private lastReconcileRevision = -1
   private configWarningsShown = false
   private pendingKiloModel: { modelID?: string; agent?: string } | null = null
   private readyResolvers: (() => void)[] = []
@@ -456,7 +448,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private unsubscribeFavoritesChange: (() => void) | null = null
   private unsubscribeModelSelectorExpanded: (() => void) | null = null
   private unsubscribeDirectoryProvider: (() => void) | null = null
-  private unsubscribeConfigRevision: (() => void) | null = null
   private unsubscribeSandboxPreference: (() => void) | null = null
   private unsubscribeCanonicalChange: { dispose(): void } | null = null
   private unsubscribeCanonicalError: { dispose(): void } | null = null
@@ -536,10 +527,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
     TelemetryProxy.getInstance().setProvider(this)
 
-    // LOCK-001/002: seed the reconciliation dedupe with the current shared
-    // revision so the first local save does not double-fetch when its canonical
-    // SSE echo advances the revision.
-    this.lastReconcileRevision = this.connectionService.getConfigRevision()
     this.subscribeCanonical()
   }
 
@@ -1238,6 +1225,48 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
   }
 
+  /**
+   * Canonical-only updateConfig entry point. Legacy (non-canonical) messages
+   * are rejected with an immediate structured failure — never silently dropped
+   * and never routed to the removed SDK transaction path.
+   */
+  private handleUpdateConfigMessage(message: Record<string, unknown>): Promise<void> {
+    const saveID = typeof message.saveID === "string" ? message.saveID : undefined
+    if (message.canonical !== true) {
+      this.postMessage({
+        type: "configUpdateFailed",
+        message: "Legacy updateConfig is not supported: VS Code Settings writes require a canonical message",
+        kind: "invalid",
+        saveID,
+        canonical: true,
+        stamp: this.canonicalStampForFailure(),
+      })
+      return Promise.resolve()
+    }
+    if (!isCanonicalStamp(message.stamp)) {
+      this.postMessage({
+        type: "configUpdateFailed",
+        message: "Canonical config stamp is required",
+        kind: "stale",
+        saveID,
+        canonical: true,
+        stamp: this.canonicalStampForFailure(),
+      })
+      return Promise.resolve()
+    }
+    const partial = (message.config ?? {}) as CanonicalConfigPayload
+    const project = (message.projectConfig ?? {}) as CanonicalConfigPayload
+    const globalUnset = Array.isArray(message.globalUnset) ? (message.globalUnset as string[][]) : []
+    const projectUnset = Array.isArray(message.projectUnset) ? (message.projectUnset as string[][]) : []
+    return this.handleCanonicalConfigUpdate(partial, project, globalUnset, projectUnset, saveID, message.stamp)
+  }
+
+  private canonicalStampForFailure(): CanonicalStamp {
+    const service = this.canonicalConfig
+    if (service) return { ...service.stamp, assetHash: null }
+    return { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null }
+  }
+
   private async handleCanonicalConfigUpdate(
     partial: CanonicalConfigPayload,
     project: CanonicalConfigPayload,
@@ -1273,15 +1302,23 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       return
     }
     // Meta keys ($schema) are backend-owned validation metadata: excluded
-    // from GUI write patches and never unsettable from the webview.
-    const clean = (value: Record<string, unknown>) =>
-      Object.fromEntries(Object.entries(value).filter(([key]) => isGuiField(key)))
-    const unset = (value: Record<string, unknown>, paths: string[][]) => {
-      for (const path of paths) if (path.length === 1 && isGuiField(path[0])) value[path[0]!] = undefined
-      return value
-    }
-    const global = unset(clean({ ...partial }), globalUnset)
-    const projectPatch = unset(clean({ ...project }), projectUnset)
+    // from GUI write patches and never unsettable from the webview. Nested
+    // deltas compose recursively onto the current authored scope document so
+    // siblings (e.g. permission.read beside permission.bash) survive; the
+    // stamp check above guarantees the base is current, so no old webview
+    // snapshot can blind-overwrite external file content.
+    const global = composeScopePatch(
+      service.getScopeConfig("global"),
+      partial as Record<string, unknown>,
+      globalUnset,
+      isGuiField,
+    )
+    const projectPatch = composeScopePatch(
+      service.getScopeConfig("project"),
+      project as Record<string, unknown>,
+      projectUnset,
+      isGuiField,
+    )
     const scopes = {
       ...(Object.keys(global).length ? { global: { patch: global, expectedHash: stamp.globalHash ?? "absent" } } : {}),
       ...(Object.keys(projectPatch).length
@@ -1312,9 +1349,11 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       settings: { maxCost: this.maxCostSetting() },
       features: configFeatures(),
       canonical: true,
+      ready: true,
       saveID,
       contentHash: result.snapshot.contentHash,
       materializationVersion: result.materializationVersion,
+      diagnostics: [],
       stamp: result.stamp,
     })
   }
@@ -2101,25 +2140,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           this.fetchAndSendImageModels().catch((e) => console.error("[Kilo New] fetchAndSendImageModels failed:", e))
           break
         case "updateConfig":
-          if (message.canonical === true) {
-            if (!message.stamp) break
-            await this.handleCanonicalConfigUpdate(
-              message.config,
-              message.projectConfig ?? {},
-              message.globalUnset ?? [],
-              message.projectUnset ?? [],
-              message.saveID,
-              message.stamp,
-            )
-          } else {
-            await this.handleUpdateConfig(
-              message.config,
-              message.projectConfig,
-              message.globalUnset,
-              message.projectUnset,
-              message.saveID,
-            )
-          }
+          await this.handleUpdateConfigMessage(message as unknown as Record<string, unknown>)
           break
         case "setLanguage":
           await vscode.workspace
@@ -2311,7 +2332,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.unsubscribeFavoritesChange?.()
     this.unsubscribeModelSelectorExpanded?.()
     this.unsubscribeDirectoryProvider?.()
-    this.unsubscribeConfigRevision?.()
 
     try {
       const workspaceDir = this.getWorkspaceDirectory()
@@ -2416,10 +2436,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.unsubscribeDirectoryProvider = this.connectionService.registerDirectoryProvider(() => {
         return [this.getWorkspaceDirectory(), ...this.sessionDirectories.values()]
       })
-
-      // Subscribe to shared config revision advances — any local save or
-      // foreign-window config change triggers a reconciliation (LOCK-005).
-      this.unsubscribeConfigRevision = this.connectionService.onConfigRevision(() => this.queueReconcile())
 
       // Get current state and push to webview
       const serverInfo = this.connectionService.getServerInfo()
@@ -4125,66 +4141,26 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Fetch backend config and send to webview.
-   *
-   * LOCK-002: captures the client identity, connection generation, and shared
-   * config revision BEFORE any reads. Every cache mutation/post verifies the
-   * provider is not disposed, still on the same client/generation, and the
-   * revision has not advanced; a stale result is dropped silently — the
-   * current reconcile/connect path owns the refetch. The `pending > 0` guard
-   * keeps this fetch out of an in-flight handleUpdateConfig write so it never
-   * races with a pending save/draft.
+   * Canonical config read. Production Settings always has a
+   * CanonicalConfigService; the legacy SDK config competition path is removed.
+   * Without canonical authority an explicit empty/unsupported payload is sent
+   * so callers fail visibly instead of racing the backend.
    */
   private async fetchAndSendConfig(): Promise<void> {
     if (this.canonicalConfig) {
       this.sendCanonicalConfig("configLoaded")
       return
     }
-    const client = this.client
-    if (!client || this.connectionState !== "connected") {
-      if (this.cachedConfigMessage) {
-        this.postMessage(this.cachedConfigMessage)
-      }
-      return
-    }
-
-    // Skip if handleUpdateConfig is in flight — sending a configLoaded now
-    // would race with the write and potentially overwrite optimistic webview state.
-    if (this.pending > 0) {
-      return
-    }
-
-    // LOCK-002: lifecycle snapshot captured before the reads. A reconnect
-    // (new client/generation) or a config revision advance while the fetch is
-    // held makes the result stale — it must never mutate the cache or post.
-    const generation = this.connectionGeneration
-    const revision = this.connectionService.getConfigRevision()
-
-    try {
-      const workspaceDir = this.getWorkspaceDirectory()
-      const [{ data: config }, { data: global }, { data: overlay }] = await Promise.all([
-        retry(() => client.config.get({ directory: workspaceDir }, { throwOnError: true })),
-        client.global.config.get({ throwOnError: true }),
-        client.config.overlay({ directory: workspaceDir, scope: "project" }, { throwOnError: true }),
-      ])
-      // LOCK-002: drop stale results immediately before every cache mutation/post.
-      if (!this.configGuard(client, generation, revision)) {
-        return
-      }
-
-      const message = {
-        type: "configLoaded",
-        config,
-        globalConfig: global,
-        projectConfig: overlay?.project,
-        settings: { maxCost: this.maxCostSetting() },
-        features: configFeatures(),
-      }
-      this.cachedConfigMessage = message
-      this.postMessage(message)
-    } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to fetch config:", error)
-    }
+    this.postMessage({
+      type: "configLoaded",
+      config: {},
+      globalConfig: {},
+      projectConfig: {},
+      settings: { maxCost: this.maxCostSetting() },
+      features: configFeatures(),
+      canonical: false,
+      diagnostics: [{ path: [], message: "Canonical config authority is unavailable" }],
+    })
   }
 
   /** Fetch global-only config (no project/managed layers) for settings export. */
@@ -4193,13 +4169,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.sendCanonicalConfig("configLoaded")
       return
     }
-    if (!this.client || this.connectionState !== "connected") return
-    try {
-      const { data: config } = await this.client.global.config.get({ throwOnError: true })
-      this.postMessage({ type: "globalConfigLoaded", config })
-    } catch (error) {
-      console.error("[Kilo New] KiloProvider: Failed to fetch global config:", error)
-    }
+    this.postMessage({ type: "globalConfigLoaded", config: {} })
   }
 
   private async fetchAndSendImageModels(): Promise<void> {
@@ -4543,336 +4513,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
   }
 
-  private async handleUpdateConfig(
-    partial: Partial<Config>,
-    project: Partial<Config> = {},
-    globalUnset: string[][] = [],
-    projectUnset: string[][] = [],
-    saveID?: string,
-    stamp?: CanonicalStamp,
-  ): Promise<void> {
-    if (this.canonicalConfig) {
-      // P4.1: legacy config mutations are rejected when canonical authority is
-      // attached but not ready — no legacy mutation window is permitted.
-      if (!this.canonicalReady) {
-        this.postMessage({
-          type: "configUpdateFailed",
-          message: "Canonical config authority is not ready",
-          kind: "not-ready",
-          saveID,
-          canonical: true,
-          stamp: {
-            ...(this.canonicalConfig?.stamp ?? {
-              globalHash: null,
-              projectHash: null,
-              materializationVersion: 0,
-              assetHash: null,
-            }),
-            assetHash: null,
-          },
-        })
-        return
-      }
-      if (!stamp) return
-      const canonicalPartial = toCanonicalPayload(partial) ?? {}
-      const canonicalProject = toCanonicalPayload(project) ?? {}
-      await this.handleCanonicalConfigUpdate(
-        canonicalPartial,
-        canonicalProject,
-        globalUnset,
-        projectUnset,
-        saveID,
-        stamp,
-      )
-      return
-    }
-    if (!this.client || this.connectionState !== "connected") {
-      this.postMessage({
-        type: "configUpdateFailed",
-        message: "Not connected to CLI backend",
-        ...(saveID && { saveID }),
-      })
-      return
-    }
-
-    const refreshProviders =
-      partial.provider !== undefined ||
-      partial.disabled_providers !== undefined ||
-      partial.enabled_providers !== undefined ||
-      partial.hide_prompt_training_models !== undefined
-    const refreshAgents =
-      partial.default_agent !== undefined ||
-      partial.agent !== undefined ||
-      project.default_agent !== undefined ||
-      project.agent !== undefined
-    const hasGlobal = Object.keys(partial).length > 0 || globalUnset.length > 0
-    const hasProject = Object.keys(project).length > 0 || projectUnset.length > 0
-
-    // LOCK-006: no drainPendingPrompts — settings save must not reject
-    // permissions, questions, suggestions, or network waits.
-    const dir = this.getWorkspaceDirectory()
-
-    // LOCK-001: send exactly one transaction request for all requested scopes.
-    // Do not send empty scopes; all requested scopes succeed/fail as one request.
-    const txGlobal = hasGlobal ? { set: partial, unset: globalUnset } : undefined
-    const txProject = hasProject ? { set: project, unset: projectUnset } : undefined
-
-    // LOCK-004: pending guards only the mutation/ack lifecycle and decrements
-    // exactly once in finally, so a synchronous post/ack error can never leak
-    // it; detached refresh/reconcile runs after the guard is released.
-    this.pending++
-    let txResult: { global: Config; project: Config; effective: Config } | undefined
-    try {
-      const res = await this.client.config.transaction(
-        { directory: dir, global: txGlobal, project: txProject },
-        { throwOnError: true },
-      )
-      txResult = res.data
-
-      // LOCK-002: build immediate configUpdated directly from authoritative
-      // transaction response {global, project, effective}. No local
-      // reconstruction needed.
-      this.postMessage({
-        type: "configUpdated",
-        config: txResult.effective,
-        globalConfig: txResult.global,
-        projectConfig: txResult.project,
-        settings: { maxCost: this.maxCostSetting() },
-        features: configFeatures(),
-        ...(saveID && { saveID }),
-      })
-      this.requirements.clear()
-
-      // LOCK-001: the immediate ack above is the authoritative save response,
-      // but the revision is NOT advanced here — the connection service's SSE
-      // dispatch owns revision advancement via the canonical
-      // global.config.updated echo (one logical revision per transaction,
-      // keyed by its transaction id, LOCK-004). queueReconcile below is the
-      // deduplicated revision path for the rare case the echo is absent; it is
-      // a no-op when the echo's advance already triggered a reconcile.
-      void this.queueReconcile()
-    } catch (error) {
-      // LOCK-003: real backend detail; the webview keeps its draft/optimistic
-      // state per the current failure contract — never claim success.
-      this.postConfigFailure(error, saveID)
-      return
-    } finally {
-      this.pending--
-    }
-
-    // Provider/agent pickers refresh independently; never blocks the ack.
-    const refresh = async () => {
-      if (refreshProviders) {
-        await this.fetchAndSendProviders().catch((error) =>
-          console.error("[Kilo New] KiloProvider: provider refresh after config save failed:", error),
-        )
-      }
-      if (refreshAgents) {
-        await this.fetchAndSendAgents().catch((error) =>
-          console.error("[Kilo New] KiloProvider: agent refresh after config save failed:", error),
-        )
-      }
-    }
-    void refresh()
-  }
-
-  /** Bounded backoff for reconciliation retries: 1s, 2s, 5s, 10s, 30s (LOCK-003). */
-  private static readonly RECONCILE_BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000]
-  private reconcileRetryTimer: (() => void) | null = null
-  private reconcileRetryAttempt = 0
-
-  /** Outcome of one reconciliation fetch; drives the retry state machine (LOCK-003/004/005). */
-  private static readonly defaultScheduleRetry: (delayMs: number, fn: () => void) => () => void = (delay, fn) => {
-    const timer = setTimeout(fn, delay)
-    return () => clearTimeout(timer)
-  }
-
-  /**
-   * Schedule a detached config reconciliation (LOCK-003/004/005):
-   * - One fetch is in flight per provider at a time; further requests coalesce
-   *   into it (they will re-run stale for the latest revision if needed).
-   * - The dedupe key is the shared revision: a revision the last successful
-   *   reconcile already covered is never re-fetched, so a local save whose
-   *   canonical SSE echo advances the revision produces exactly one fetch.
-   * - Real fetch failures enter the single bounded backoff path
-   *   (1/2/5/10/30s) — never an immediate resolved-false loop.
-   * - Starting, succeeding, or being superseded cancels obsolete retry timers
-   *   and resets attempts appropriately.
-   * - No-op after provider disposal (LOCK-004).
-   */
-  private queueReconcile(): void {
-    if (this.canonicalConfig) return
-    if (this.disposed) return
-    if (this.reconcileInFlight) return
-    const client = this.client
-    if (!client || this.connectionState !== "connected") return
-    const revision = this.connectionService.getConfigRevision()
-    // LOCK-001/002: never re-fetch a revision the last successful reconcile
-    // already covered — the canonical echo of a local save advances exactly
-    // once, and this dedupe makes that advance the single fetch trigger.
-    if (revision === this.lastReconcileRevision) return
-    // LOCK-003: starting or being superseded by a newer revision cancels any
-    // obsolete retry timer and restarts the attempt sequence.
-    this.cancelReconcileRetry()
-    this.reconcileRetryAttempt = 0
-    this.startReconcile(revision, client)
-  }
-
-  /** Begin one reconciliation fetch for the given revision/lifecycle snapshot. */
-  private startReconcile(revision: number, client: KiloClient): void {
-    const seq = ++this.reconcileSeq
-    this.reconcileInFlight = { seq }
-    void this.reconcileConfig(seq, revision, this.connectionGeneration, client).then(
-      (result) => {
-        if (this.reconcileInFlight?.seq !== seq) return
-        this.reconcileInFlight = null
-        if (result === "ok") {
-          // Success — cancel any obsolete retry timer and record the covered revision.
-          this.cancelReconcileRetry()
-          this.reconcileRetryAttempt = 0
-          this.lastReconcileRevision = revision
-        } else if (result === "failed") {
-          // LOCK-003: real failure — exactly one bounded backoff path.
-          this.scheduleReconcileRetry()
-        } else {
-          // Stale — a newer revision/lifecycle superseded this fetch. Schedule
-          // only the latest needed attempt, never an immediate failure loop.
-          this.queueReconcile()
-        }
-      },
-      () => {
-        // Defensive: reconcileConfig catches its own failures, but an
-        // unexpected rejection must not leave the machine stuck.
-        if (this.reconcileInFlight?.seq !== seq) return
-        this.reconcileInFlight = null
-        this.scheduleReconcileRetry()
-      },
-    )
-  }
-
-  /**
-   * Schedule a bounded backoff retry for a failed reconciliation (LOCK-003).
-   * The timer is created through the injectable scheduler (tests use a fake
-   * clock; production defaults to setTimeout/clearTimeout) and is canceled by
-   * cancelReconcileRetry on success, supersession, or disposal (LOCK-004).
-   * The retry callback continues the SAME revision's attempt sequence — it
-   * must not reset the backoff counter, or the 1/2/5/10/30s schedule would
-   * never escalate.
-   */
-  private scheduleReconcileRetry(): void {
-    this.cancelReconcileRetry()
-    const attempt = this.reconcileRetryAttempt
-    const delay = KiloProvider.RECONCILE_BACKOFF_MS[Math.min(attempt, KiloProvider.RECONCILE_BACKOFF_MS.length - 1)]
-    this.reconcileRetryAttempt = attempt + 1
-    const schedule = this.opts.scheduleRetry ?? KiloProvider.defaultScheduleRetry
-    this.reconcileRetryTimer = schedule(delay, () => {
-      this.reconcileRetryTimer = null
-      const client = this.client
-      if (this.disposed || !client || this.connectionState !== "connected") return
-      // Defensive dedupe: if a successful reconcile covered this revision in
-      // the meantime, there is nothing left to fetch.
-      if (this.connectionService.getConfigRevision() === this.lastReconcileRevision) return
-      this.startReconcile(this.connectionService.getConfigRevision(), client)
-    })
-  }
-
-  /** Cancel any pending reconciliation retry timer (LOCK-003/004). */
-  private cancelReconcileRetry(): void {
-    this.reconcileRetryTimer?.()
-    this.reconcileRetryTimer = null
-  }
-
-  /**
-   * Fetch fresh config and push it as configUpdated once it is safe to do so
-   * (LOCK-005): the sequence, shared revision, provider lifecycle epoch, and
-   * connection generation are rechecked immediately before every cache
-   * mutation and postMessage. Stale results return "stale" (never post), real
-   * failures return "failed" (bounded backoff), success returns "ok".
-   */
-  private async reconcileConfig(
-    seq: number,
-    revision: number,
-    generation: number,
-    client: KiloClient,
-  ): Promise<"ok" | "stale" | "failed"> {
-    if (this.canonicalConfig) return "stale"
-    try {
-      const dir = this.getWorkspaceDirectory()
-      const [{ data: merged }, { data: global }, { data: overlay }] = await Promise.all([
-        retry(() => client.config.get({ directory: dir }, { throwOnError: true })),
-        client.global.config.get({ throwOnError: true }),
-        client.config.overlay({ directory: dir, scope: "project" }, { throwOnError: true }),
-      ])
-      // LOCK-005: drop stale results immediately before every cache mutation/post.
-      if (!this.reconcileGuard(seq, revision, generation, client)) return "stale"
-      this.cachedConfigMessage = {
-        type: "configLoaded",
-        config: merged,
-        globalConfig: global,
-        projectConfig: overlay?.project,
-        settings: { maxCost: this.maxCostSetting() },
-        features: configFeatures(),
-      }
-      this.postMessage({
-        type: "configUpdated",
-        config: merged,
-        globalConfig: global,
-        projectConfig: overlay?.project,
-        settings: { maxCost: this.maxCostSetting() },
-        features: configFeatures(),
-      })
-      return "ok"
-    } catch (error) {
-      // LOCK-004: a fetch that was superseded while in flight is not an error
-      // and must not enter the backoff path; only real failures do.
-      if (!this.reconcileGuard(seq, revision, generation, client)) return "stale"
-      console.error("[Kilo New] KiloProvider: Config persisted but post-write reconciliation failed:", error)
-      return "failed"
-    }
-  }
-
-  /**
-   * LOCK-004/005: true while this reconciliation attempt may still mutate the
-   * cache and post — not disposed, still the newest attempt, same shared
-   * revision, same provider lifecycle epoch, and same live client (a backend
-   * reconnect replaces the client, so a held fetch across a reconnect goes
-   * stale and never posts).
-   */
-  private reconcileGuard(seq: number, revision: number, generation: number, client: KiloClient): boolean {
-    return (
-      !this.disposed &&
-      seq === this.reconcileSeq &&
-      revision === this.connectionService.getConfigRevision() &&
-      generation === this.connectionGeneration &&
-      this.client === client
-    )
-  }
-
-  /**
-   * LOCK-002: true while an ordinary fetchAndSendConfig result may still
-   * mutate the cache and post — not disposed, same live client (a backend
-   * reconnect replaces it, so a held fetch across a reconnect goes stale),
-   * same lifecycle epoch, and the shared config revision has not advanced.
-   * A stale result is dropped; the reconcile/connect path owns the refetch.
-   */
-  private configGuard(client: KiloClient, generation: number, revision: number): boolean {
-    return (
-      !this.disposed &&
-      this.client === client &&
-      this.connectionGeneration === generation &&
-      this.connectionService.getConfigRevision() === revision
-    )
-  }
-
-  private postConfigFailure(error: unknown, saveID?: string): void {
-    console.error("[Kilo New] KiloProvider: Failed to update config:", error)
-    this.postMessage({
-      type: "configUpdateFailed",
-      message: getErrorMessage(error) || "Failed to update config",
-      details: getConfigErrorDetails(error),
-      ...(saveID && { saveID }),
-    })
-  }
   private async resolveSession(sessionID?: string, draftID?: string, context?: string, contextDirectory?: string) {
     if (!this.client) return undefined
 
@@ -6060,9 +5700,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     }
 
     // Config was updated without a full dispose (e.g. permission-only save).
-    // The connection service already advanced the shared revision and the
-    // onConfigRevision subscription already queued reconciliation. Refresh
-    // agents/providers so the UI reflects new capability state (LOCK-003/LOCK-005).
+    // Refresh agents/providers so the UI reflects new capability state.
+    // Canonical config itself converges via CanonicalConfigService file
+    // watchers, not the removed SDK reconcile path.
     if (event.type === "global.config.updated") {
       this.requirements.clear()
       void Promise.all([this.fetchAndSendAgents(), this.fetchAndSendProviders()])
@@ -6473,7 +6113,6 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.unsubscribeFavoritesChange?.()
     this.unsubscribeModelSelectorExpanded?.()
     this.unsubscribeDirectoryProvider?.()
-    this.unsubscribeConfigRevision?.()
     this.unsubscribeSandboxPreference?.()
     this.unsubscribeCanonicalChange?.dispose()
     this.unsubscribeCanonicalError?.dispose()
@@ -6482,14 +6121,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.canonicalReady = false
     this.cleanupRetries.clear()
     this.cleanupTargets.clear()
-    // LOCK-004: terminal disposal — cancel any pending reconciliation retry
-    // timer, invalidate the attempt sequence and the lifecycle epoch so a held
-    // reconciliation result can neither post nor schedule a retry, and make
-    // queueReconcile a no-op.
     this.disposed = true
-    this.cancelReconcileRetry()
-    this.reconcileInFlight = null
-    this.reconcileSeq += 1
     this.connectionGeneration += 1
     this.viewStateDisposable?.dispose()
     this.webviewMessageDisposable?.dispose()

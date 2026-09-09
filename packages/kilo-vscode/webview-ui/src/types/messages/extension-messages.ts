@@ -598,8 +598,8 @@ export interface ConfigUpdateFailedMessage {
   details?: string
   /** Save identity echoed from the webview, when the failure maps to one. */
   saveID?: string
-  /** P4.1: structured conflict/invalid/stale kind. */
-  kind?: "stale" | "invalid" | "conflict" | "backend"
+  /** P4.1: structured conflict/invalid/stale/not-ready kind. */
+  kind?: "stale" | "invalid" | "conflict" | "backend" | "not-ready"
   /** P4.1: content hash of the last-known valid config for stale detection. */
   contentHash?: string
   /** P4.1: materialization version for stamp tracking. */
