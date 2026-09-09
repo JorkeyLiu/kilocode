@@ -479,38 +479,18 @@ export const SessionProvider: ParentComponent = (props) => {
 
   const removeAgent = (name: string) => {
     const item = allAgents().find((agent) => agent.name === name)
-    // P4.1: agent mutations are rejected before canonical readiness — no legacy
-    // mutation window is permitted.
-    if (canonical?.() && !agentStamp()) return
-    if (item?.scope) {
-      const stamp = agentStamp()
-      if (!stamp) return
-      vscode.postMessage({
-        type: "removeAgent",
-        canonical: true,
-        name,
-        scope: item.scope,
-        expectedHash: item.assetHash ?? "absent",
-        stamp: { ...stamp, assetHash: item.assetHash ?? "absent" },
-      })
-      return
-    }
-    setAgents((prev) => prev.filter((a) => a.name !== name))
-
-    // Clear stale selections so selectedAgentName() falls back to the default
-    if (pendingAgentSelection() === name) {
-      setPendingAgentSelection(null)
-    }
-    setStore(
-      "agentSelections",
-      produce((selections) => {
-        for (const sid of Object.keys(selections)) {
-          if (selections[sid] === name) delete selections[sid]
-        }
-      }),
-    )
-
-    vscode.postMessage({ type: "removeAgent", name })
+    // Agent removes are canonical-only: no legacy mutation window is permitted.
+    if (!canonical?.()) return
+    const stamp = agentStamp()
+    if (!stamp || !item?.scope) return
+    vscode.postMessage({
+      type: "removeAgent",
+      canonical: true,
+      name,
+      scope: item.scope,
+      expectedHash: item.assetHash ?? "absent",
+      stamp: { ...stamp, assetHash: item.assetHash ?? "absent" },
+    })
   }
 
   // Single ownership for canonical agent writes: the coordinator serializes
@@ -562,20 +542,19 @@ export const SessionProvider: ParentComponent = (props) => {
     frontmatter: Record<string, unknown>
     body: string
   }): Promise<AgentMutationResult> => {
-    // Legacy (non-canonical) path preserves prior fire-and-forget behaviour;
-    // there is no canonical stamp ownership outside canonical mode.
+    // Agent writes are canonical-only: without canonical readiness there is
+    // no legacy fire-and-forget path; report not-ready without sending.
     if (!canonical?.()) {
-      const item = allAgents().find((agent) => agent.name === input.name)
-      const requestId = crypto.randomUUID()
-      vscode.postMessage({
-        type: "mutateAgent",
-        ...input,
-        scope: item?.scope ?? "project",
-        expectedHash: item?.assetHash ?? "absent",
-        ...(agentStamp() ? { stamp: { ...agentStamp()!, assetHash: item?.assetHash ?? "absent" } } : {}),
-        requestId,
-      })
-      return Promise.resolve({ ok: true, requestId, name: input.name, action: input.action, contentHash: "" })
+      return Promise.resolve(
+        reportMutation({
+          ok: false,
+          requestId: undefined,
+          name: input.name,
+          action: input.action,
+          kind: "not-ready",
+          message: "Canonical agent authority is not ready",
+        }),
+      )
     }
     return coordinator.submit(input).then(reportMutation)
   }
@@ -1105,7 +1084,16 @@ export const SessionProvider: ParentComponent = (props) => {
       // requestId (which reports its own diagnostic via the awaiting call).
       // Unknown/stale request events are ignored and never clear others.
       if (message.type === "agentMutationApplied" || message.type === "agentMutationError") {
-        coordinator.handleMessage(message as { type: string; requestId?: unknown; name?: unknown; contentHash?: unknown; message?: unknown; kind?: unknown })
+        coordinator.handleMessage(
+          message as {
+            type: string
+            requestId?: unknown
+            name?: unknown
+            contentHash?: unknown
+            message?: unknown
+            kind?: unknown
+          },
+        )
       }
       return
     }

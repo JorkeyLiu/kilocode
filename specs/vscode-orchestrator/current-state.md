@@ -32,9 +32,12 @@ this note; when they disagree, the code is right.
   OAuth `authorize`/`complete` keeps its legacy path with canonical
   `unsupported`; credential reads and custom model discovery keep their
   legacy read paths.
-- Canonical file-backed custom-agent create/edit/import is production:
-  stamped `canonical: true` `mutateAgent` through `CanonicalConfigService.writeAsset`
-  CAS (project-absent on create/import, scope-plus-asset-hash on edit);
+- Canonical file-backed custom-agent create/edit/import/remove is production:
+  stamped `canonical: true` `mutateAgent`/`removeAgent` through
+  `CanonicalConfigService.writeAsset`/`deleteAsset` CAS (project-absent on
+  create/import, scope-plus-asset-hash on edit/remove); non-canonical agent
+  messages fail fast with exactly one structured `agentMutationError` and never
+  reach the SDK (the legacy `client.kilocode.removeAgent` write is removed);
   failures/exceptions post exactly one structured `agentMutationError` with a
   freshly re-read stamp. The webview serializes per-agent edits through one
   coordinator (debounced coalescing, full-snapshot reconciliation, inflight

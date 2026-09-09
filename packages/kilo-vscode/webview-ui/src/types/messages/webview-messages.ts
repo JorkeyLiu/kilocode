@@ -222,14 +222,11 @@ export interface RemoveSkillMessage {
   location: string
 }
 
-export interface LegacyRemoveModeMessage {
-  type: "removeAgent"
-  name: string
-  canonical?: false
-  scope?: "global" | "project"
-  expectedHash?: string
-}
-
+/**
+ * Agent removes are canonical-only. The legacy non-canonical removeAgent
+ * shape was removed with the SDK write path; the host rejects any
+ * non-canonical message with a structured agentMutationError.
+ */
 export interface CanonicalRemoveModeMessage {
   type: "removeAgent"
   name: string
@@ -239,20 +236,13 @@ export interface CanonicalRemoveModeMessage {
   stamp: CanonicalStamp
 }
 
-export type RemoveModeMessage = LegacyRemoveModeMessage | CanonicalRemoveModeMessage
+export type RemoveModeMessage = CanonicalRemoveModeMessage
 
-export interface LegacyMutateAgentMessage {
-  type: "mutateAgent"
-  action: "create" | "edit" | "import"
-  name: string
-  frontmatter: Record<string, unknown>
-  body: string
-  scope?: "global" | "project"
-  expectedHash: string
-  canonical?: false
-  requestId: string
-}
-
+/**
+ * Agent create/edit/import writes are canonical-only. The legacy
+ * non-canonical mutateAgent shape was removed; the host rejects any
+ * non-canonical message with a structured agentMutationError.
+ */
 export interface CanonicalMutateAgentMessage {
   type: "mutateAgent"
   canonical: true
@@ -266,7 +256,7 @@ export interface CanonicalMutateAgentMessage {
   requestId: string
 }
 
-export type MutateAgentMessage = LegacyMutateAgentMessage | CanonicalMutateAgentMessage
+export type MutateAgentMessage = CanonicalMutateAgentMessage
 
 export interface LegacyRemoveMcpMessage {
   type: "removeMcp"

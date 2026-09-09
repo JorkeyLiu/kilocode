@@ -1578,10 +1578,13 @@ describe("P4.1 legacy mutation rejection when canonical attached but not ready",
 
   it("webview removeAgent rejects when canonical but no agentStamp", async () => {
     const source = await Bun.file(new URL("../../webview-ui/src/context/session.tsx", import.meta.url)).text()
-    const removeAgentBlock = source.match(/const removeAgent = \(name: string\) => \{[\s\S]*?const item = allAgents\(\)[\s\S]*?vscode\.postMessage\(\{ type: "removeAgent"/)?.[0] ?? ""
+    const removeAgentBlock = source.match(/const removeAgent = \(name: string\) => \{[\s\S]*?vscode\.postMessage\(\{[\s\S]*?type: "removeAgent"/)?.[0] ?? ""
     // Must check canonical?.() && !agentStamp() before sending canonical message
     expect(removeAgentBlock).toContain("canonical?.()")
     expect(removeAgentBlock).toContain("agentStamp()")
+    // Agent mutations are canonical-only: no legacy non-canonical sender remains.
+    expect(source).not.toContain('vscode.postMessage({ type: "removeAgent", name })')
+    expect(source).not.toContain("Legacy (non-canonical) path preserves prior fire-and-forget")
   })
 })
 

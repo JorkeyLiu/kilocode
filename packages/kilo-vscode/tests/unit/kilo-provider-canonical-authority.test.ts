@@ -872,19 +872,19 @@ describe("P4.1 behavior: canonical:false/missing mutation rejection", () => {
     internal.postMessage = (msg) => messages.push(msg)
     internal.canonicalReady = true
 
-    // removeAgent without canonical:true — the message handler gate rejects it
-    // Simulate the handler gate check that was added in the message handler:
-    // When canonicalConfig is set and canonical !== true, the handler should reject.
-    // Since handleRemoveAgent itself doesn't check canonical (the gate is in the message handler),
-    // we test the message-handler gate by verifying the rejection logic exists in source.
+    // removeAgent without canonical:true — the message handler gate rejects it.
+    // Agent mutations are canonical-only with no legacy authority: the gate
+    // is unconditional (no canonicalConfig precondition).
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
     const removeAgentBlock = source.match(/case "removeAgent":\s*\{[\s\S]*?case "mutateAgent"/)?.[0] ?? ""
-    expect(removeAgentBlock).toContain("this.canonicalConfig && message.canonical !== true")
+    expect(removeAgentBlock).toContain("message.canonical !== true")
+    expect(removeAgentBlock).not.toContain("this.canonicalConfig && message.canonical !== true")
     expect(removeAgentBlock).toContain("agentMutationError")
     expect(removeAgentBlock).toContain("missing the canonical discriminator")
 
     const mutateAgentBlock = source.match(/case "mutateAgent":\s*\{[\s\S]*?case "removeMcp"/)?.[0] ?? ""
-    expect(mutateAgentBlock).toContain("this.canonicalConfig && message.canonical !== true")
+    expect(mutateAgentBlock).toContain("message.canonical !== true")
+    expect(mutateAgentBlock).not.toContain("this.canonicalConfig && message.canonical !== true")
     expect(mutateAgentBlock).toContain("agentMutationError")
     expect(mutateAgentBlock).toContain("missing the canonical discriminator")
 

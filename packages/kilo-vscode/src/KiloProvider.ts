@@ -2039,8 +2039,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           )
           break
         case "removeAgent": {
-          // P4.1: canonical agent mutations require the canonical discriminator
-          if (this.canonicalConfig && message.canonical !== true) {
+          // Agent mutations are canonical-only: any non-canonical message
+          // fails fast with a structured error, never a silent SDK fallback.
+          if (message.canonical !== true) {
             this.postMessage({
               type: "agentMutationError",
               requestId: typeof message.requestId === "string" ? message.requestId : crypto.randomUUID(),
@@ -2048,7 +2049,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               message: "Canonical agent mutation is missing the canonical discriminator",
               kind: "invalid",
               canonical: true,
-              stamp: this.canonicalConfig.stamp,
+              stamp: this.canonicalConfig?.stamp ?? {
+                globalHash: null,
+                projectHash: null,
+                materializationVersion: 0,
+                assetHash: null,
+              },
             })
             break
           }
@@ -2056,13 +2062,15 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             message.name,
             message.scope,
             message.expectedHash,
-            message.canonical ? message.stamp : undefined,
+            message.stamp,
+            typeof message.requestId === "string" ? message.requestId : undefined,
           ).catch((e) => console.error("[Kilo New] handleRemoveAgent failed:", e))
           break
         }
         case "mutateAgent": {
-          // P4.1: canonical agent mutations require the canonical discriminator
-          if (this.canonicalConfig && message.canonical !== true) {
+          // Agent mutations are canonical-only: any non-canonical message
+          // fails fast with a structured error, never a silent legacy path.
+          if (message.canonical !== true) {
             this.postMessage({
               type: "agentMutationError",
               requestId: typeof message.requestId === "string" ? message.requestId : crypto.randomUUID(),
@@ -2070,7 +2078,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
               message: "Canonical agent mutation is missing the canonical discriminator",
               kind: "invalid",
               canonical: true,
-              stamp: this.canonicalConfig.stamp,
+              stamp: this.canonicalConfig?.stamp ?? {
+                globalHash: null,
+                projectHash: null,
+                materializationVersion: 0,
+                assetHash: null,
+              },
             })
             break
           }
@@ -3793,72 +3806,71 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     return true
   }
 
-  /** Remove an agent via the CLI backend, then refresh. */
+  /** Remove a file-backed custom agent via the canonical authority, then refresh. */
   private async handleRemoveAgent(
     name: string,
     scope: "global" | "project" = "project",
     expectedHash?: string,
     stamp?: CanonicalStamp,
+    requestId?: string,
   ): Promise<void> {
-    if (this.canonicalConfig) {
-      if (!this.canonicalReady) {
-        // Canonical authority exists but has not materialized yet — never fall
-        // through to the legacy backend path.
-        this.postMessage({
-          type: "agentMutationError",
-          requestId: crypto.randomUUID(),
-          name,
-          message: "Canonical agent authority is not ready",
-          kind: "not-ready",
-          canonical: true,
-          stamp: this.canonicalConfig.stamp,
-        })
-        return
-      }
-      if (
-        !stamp ||
-        !sameStamp(stamp, {
-          ...this.canonicalConfig.stamp,
-          assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope),
-        })
-      ) {
-        this.postMessage({
-          type: "agentMutationError",
-          requestId: crypto.randomUUID(),
-          name,
-          message: "Agent composite stamp is required",
-          kind: "stale",
-          canonical: true,
-          stamp: { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope) },
-        })
-        return
-      }
-      const result = await this.canonicalConfig.deleteAsset("agent", name, scope, stamp.assetHash ?? "absent")
-      if (!result.ok)
-        this.postMessage({
-          type: "agentMutationError",
-          requestId: crypto.randomUUID(),
-          name,
-          message: result.message,
-          kind: result.kind,
-          canonical: true,
-          stamp: { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope) },
-        })
-      else void this.sendCanonicalAgents()
+    const id = requestId ?? crypto.randomUUID()
+    if (!this.canonicalConfig) {
+      // Agent mutations have no legacy authority: without the canonical
+      // service there is no SDK fallback, only a structured error.
+      this.postMessage({
+        type: "agentMutationError",
+        requestId: id,
+        name,
+        message: "Canonical agent authority is not ready",
+        kind: "not-ready",
+        canonical: true,
+        stamp: { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null },
+      })
       return
     }
-    if (!this.client) return
-    try {
-      const result = await this.client.kilocode.removeAgent({ name, directory: this.getWorkspaceDirectory() })
-      if (result.error) {
-        console.error("[Kilo New] removeAgent returned error:", result.error)
-      }
-    } catch (err) {
-      console.error("[Kilo New] Failed to remove agent:", err)
+    if (!this.canonicalReady) {
+      this.postMessage({
+        type: "agentMutationError",
+        requestId: id,
+        name,
+        message: "Canonical agent authority is not ready",
+        kind: "not-ready",
+        canonical: true,
+        stamp: this.canonicalConfig.stamp,
+      })
+      return
     }
-    this.cachedAgentsMessage = null
-    await this.fetchAndSendAgents()
-    this.requirements.clear()
+    if (
+      !stamp ||
+      !sameStamp(stamp, {
+        ...this.canonicalConfig.stamp,
+        assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope),
+      })
+    ) {
+      this.postMessage({
+        type: "agentMutationError",
+        requestId: id,
+        name,
+        message: "Agent composite stamp is required",
+        kind: "stale",
+        canonical: true,
+        stamp: { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope) },
+      })
+      return
+    }
+    const result = await this.canonicalConfig.deleteAsset("agent", name, scope, stamp.assetHash ?? "absent")
+    if (!result.ok)
+      this.postMessage({
+        type: "agentMutationError",
+        requestId: id,
+        name,
+        message: result.message,
+        kind: result.kind,
+        canonical: true,
+        stamp: { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", name, scope) },
+      })
+    else void this.sendCanonicalAgents()
   }
 
   /** Dispatch entry with structured catch: every exception path posts an
