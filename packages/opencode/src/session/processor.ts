@@ -936,7 +936,8 @@ export const layer = Layer.effect(
                 sessionID: ctx.assistantMessage.sessionID,
                 error: providerError,
               })
-              yield* status.set(ctx.sessionID, { type: "idle" })
+              // kilocode_change - single idle owner is the Runner epoch finalizer;
+              // processor must not project idle mid-epoch.
             }
             // kilocode_change end
             yield* session.updateMessage(ctx.assistantMessage)
@@ -1209,7 +1210,8 @@ export const layer = Layer.effect(
           sessionID: ctx.assistantMessage.sessionID,
           error: ctx.assistantMessage.error,
         })
-        yield* status.set(ctx.sessionID, { type: "idle" })
+        // kilocode_change - single idle owner is the Runner epoch finalizer;
+        // halt runs inside the epoch and must not project idle.
       })
 
       // kilocode_change start
@@ -1270,7 +1272,12 @@ export const layer = Layer.effect(
               ctx.currentText = undefined
               ctx.currentTextID = undefined
               ctx.reasoningMap = {}
-              yield* status.set(ctx.sessionID, { type: "busy" })
+              // kilocode_change - conditional busy recovery: the Runner epoch
+              // owns the normal busy projection, so an initial request inside a
+              // busy epoch must not republish busy; after retry/offline/direct
+              // idle status, recover to busy.
+              const seen = yield* status.get(ctx.sessionID)
+              if (seen.type !== "busy") yield* status.set(ctx.sessionID, { type: "busy" })
               ctx.step = { reasoning: false, text: false, tool: false }
               const attemptIdx = retries.provider
               const opId = SessionOperation.providerId(ctx.assistantMessage.id, attemptIdx)

@@ -496,6 +496,74 @@ Slow initial tracking has guarded behavior:
 | Disable choice | Writes `"snapshot": false` to project config without disposing active turn |
 | Dismissed or untargeted timeout | Interrupts or skips track and suppresses repeat prompt for active service scope |
 
+## Active runner epoch — single owner
+
+One persistent `Runner` per session for the lifetime of the directory `InstanceState`. `Runner` alone owns epoch identity, admission, cancellation state, start barrier, completion, and busy/idle ordering. No private abort transport and no terminal convergence are claimed; abort remains SDK-owned.
+
+### State model
+
+| State | Meaning |
+|---|---|
+| Idle | No epoch, admissible, `busy` false, no generation |
+| Starting | Epoch admitted with minted generation, worker suspended on latch then uninterruptible prelude, `busy` true, generation visible |
+| Running | Prelude completed and `onBusy` projected, interruptible body, `busy` true, same generation |
+| Stopping | Cancel linearized, still `busy` true, same generation, joins old `done`, no replacement until `Idle` |
+| Shell | Shell fiber exclusive, `busy` true, no generation |
+| ShellThenRun | One queued run descriptor behind shell, joiners share it, generation minted only at promotion |
+| ShellStopping | Shell cancel linearized, `busy` true, replacement blocked until shell finalizer |
+| ShellStoppingThenRun | New pending admitted after shell cancel, starts only after shell quiesces; repeated cancel fails pending back to `ShellStopping` |
+
+`busy` is true for every non-`Idle` state. `generationID` is visible for `Starting`/`Running`/`Stopping` and undefined otherwise.
+
+### Work input
+
+| Shape | Behavior |
+|---|---|
+| Epoch descriptor | `{ prelude: (generationID) => Effect<void>, body: (generationID) => Effect<A> }`; prelude runs uninterruptibly and completes before `Running`/`busy` projection; `SessionPrompt` uses prelude for `TurnOpen` and body exit wrapper for `TurnClose` with the same lexically bound generation |
+| Plain effect | Wrapped with empty prelude for compatibility |
+| Factory | `(generationID) => Effect` wrapped with empty prelude; invoked once per epoch, joiners never invoke their factory |
+
+### Admission
+
+From `Idle`: fork the worker suspended on a latch, atomically install `Starting` with the real fiber and minted generation, then open the latch outside the state lock. Worker runs prelude uninterruptibly, signals entry, `Runner` projects `onBusy` and moves `Starting`→`Running`, then runs the body. Joiners during `Starting`/`Running`/`Stopping` share the same `done`. `ShellThenRun` stores the descriptor and mints/binds generation only at promotion.
+
+### Cancellation
+
+Two-level API. `requestCancel` atomically `Starting`|`Running`→`Stopping` or `Shell*`→`ShellStopping` (failing the exact canceled pending) and returns the honest `{ generationID, wasBusy, interruptRequested }` plus the targeted convergence handle. It schedules the interrupt outside the state lock in the `Runner`/`Instance` scope (open start latch, wait prelude entry if required, then interrupt) and never blocks at the request point; repeated `Stopping` calls are idempotent and admission while `Stopping` joins old `done`. `cancel` calls `requestCancel` then awaits the captured epoch/shell finalizer until body exit (`TurnClose`), `onIdle`/status projection, and `Idle` or promotion of the explicit post-cancel pending; it never awaits a later unrelated generation and never completes `done` from cancel. Same-target internal callers stay on `requestCancel` (wait carries a self-await guard).
+
+### Finalization
+
+Sole owner of completion and `Idle`. Body exit first publishes `TurnClose` via the `SessionPrompt`-owned wrapper, then `Runner` marks non-admissible finishing state before `onIdle`, runs `onIdle`/idle projection while still `Stopping`, then atomically moves the matching epoch to `Idle` and completes `done`. On an interrupts-only run exit with a captured `onInterrupt`, the finalizer evaluates that fallback exactly once while the matching epoch remains non-`Idle` (after `TurnClose`, before `onIdle`/`Idle`/`done`) and completes `done` with the single resulting `Exit`/value; all originator/joiners share it. Without a fallback the `RunnerCancelled` failure is retained; non-interrupt success/failure is unchanged. Natural ordering is `TurnOpen` → `busy` → `TurnClose` → fallback (only on interrupts-only cancel) → `idle` → `Idle`; never idle while generation is active. No stale callback affects another epoch. Replacement admission is permitted only after idle projection and `Idle`.
+
+### SessionRunState — thin owner
+
+Creation-only gate prevents duplicate `Runner` creation. Map entries are permanent during normal operation and cleared only at `InstanceState` scope disposal. No admission/cancel gate, no runner deletion, no duplicated identity checks. Delegates `ensureRunning`/`startShell`/`cancel` directly to `Runner` and keeps the ownership lease around the joined operation. Scope finalizer requests cancellation for all persistent runners. `activeGeneration`/`assertNotBusy` read `Runner` state. Status projection uses ordinary `set(busy/idle)` sequenced by `Runner`; `runLoop` iterations never project busy, so one multi-step epoch emits one `busy` transition. Processor provider requests use conditional recovery (`get` then `set(busy)` only when current status is not `busy`): the initial request inside a busy epoch does not republish `busy`, while retry/offline/direct-idle requests recover to `busy`.
+
+### Shell preserved
+
+`startShell` only from `Idle` behind a suspended-start barrier; `ensureRunning` while `Shell` queues one pending run with shared joiners; promotion mints once behind a latch with exact shellID+pendingID CAS (loser interrupted with no observable side effects). One bounded owner drain keyed by shell id owns all shell finalizers: stale id done, pending promotion with CAS-loss re-evaluation, single idle projection while non-Idle with conditional Idle CAS re-evaluation, or `Starting`/`Idle` done. Canceled pendings resolve one shared fallback value/error for all joiners sharing the pending `Deferred` (no per-waiter side effects) and never resurrect; newer pendings promote or are explicitly failed. Shell cancellation blocks replacement until quiesce. `BusyError` mapping and shell interrupt fallback preserved.
+
+### Turn event with optional generation
+
+| Aspect | Behavior |
+|---|---|
+| Fields | `TurnOpen` `{sessionID, generationID?: string}` and `TurnClose` `{sessionID, parentID?, reason, generationID?: string}` |
+| Publish | `TurnOpen` is the `Runner` prelude; `TurnClose` wraps body exit with the same generation |
+| Wire | Optional SSE/Bus field; additive, absent when no epoch |
+| Not persisted | Generation is runtime-owned, never client-supplied, never stored in `SessionTable` |
+
+### Cancellation result — convergent locally, void remotely
+
+`SessionPrompt.cancelTree` → `SessionRunState.cancel` + `Runner.cancel` (convergent) + queue/intake/plan signals, preserving the honest snapshot and awaiting targeted convergence before returning. `CancelTreeResult` is `{ targetSessionIDs, generations({ sessionID, generationID?, wasBusy, interruptRequested }), queue({ cancelSignalledCount, waitingCount, perTarget }) , intake({ interruptRequestedCount, perTarget }), planFollowup({ abortSignalledCount, perTarget }) }` with no background collection; background cancellation still runs as a side effect. `SessionPrompt.cancel` stays a void adapter; `CancelTreeResult` remains internal. Not transported via remote sender (`Promise<void>`). HTTP `POST /session/:sessionID/abort` keeps boolean `true`.
+
+### Wire additive
+
+`TurnOpen`/`TurnClose` optional `generationID` over Bus/SSE; OpenAPI and v2 SDK regenerated additively. HTTP `POST /session/:sessionID/abort` keeps boolean `true`.
+
+### Non-goals
+
+Private `session/abort` transport, EventV2 listener isolation change, and FIFO status publication remain out of scope and are not claimed.
+
 ## SDK contract
 
 CLI server contract flows through generated and handwritten layers. This describes the current pipeline; the SDK and generated-client boundary is an implementation choice that may be refactored or removed, so compatibility with generated clients is present state, not a future invariant:

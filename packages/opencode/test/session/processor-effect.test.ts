@@ -423,13 +423,17 @@ it.live("session.processor effect tests stop after token overflow requests compa
         const database = yield* Database.Service
         const { processors, session, provider } = yield* boot()
 
-        yield* llm.text("after", { usage: { input: 100, output: 0 } })
+        // kilocode_change - preflight estimate (~3.2k with full tool schemas)
+        // must pass while the mocked provider usage triggers the step-finish
+        // overflow path. Production preflight stays enabled; usable 3390 sits
+        // between the measured estimate and the mocked usage 4000.
+        yield* llm.text("after", { usage: { input: 4000, output: 0 } })
 
         const chat = yield* session.create({})
         const parent = yield* user(chat.id, "compact")
         const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
         const base = yield* provider.getModel(ref.providerID, ref.modelID)
-        const mdl = { ...base, limit: { context: 20, output: 10 } }
+        const mdl = { ...base, limit: { context: 3400, output: 10 } }
         const handle = yield* processors.create({
           assistantMessage: msg,
           sessionID: chat.id,
@@ -456,6 +460,7 @@ it.live("session.processor effect tests stop after token overflow requests compa
         const parts = yield* MessageV2.parts(msg.id)
 
         expect(value).toBe("compact")
+        expect(yield* llm.calls).toBe(1)
         expect(parts.some((part) => part.type === "text" && part.text === "after")).toBe(true)
         expect(parts.some((part) => part.type === "step-finish")).toBe(true)
       }),
@@ -712,10 +717,15 @@ it.live("session.processor effect tests publish retry status updates", () =>
         const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
         const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
         const states: number[] = []
+        // kilocode_change - conditional busy recovery: initial idle->busy,
+        // then retry, then retry->busy recovery on the next attempt.
+        const order: string[] = []
         const off = yield* events.listen((evt) => {
           if (evt.type !== SessionStatus.Event.Status.type) return Effect.void
           const data = evt.data as typeof SessionStatus.Event.Status.data.Type
-          if (data.sessionID === chat.id && data.status.type === "retry") states.push(data.status.attempt)
+          if (data.sessionID !== chat.id) return Effect.void
+          if (data.status.type === "retry") states.push(data.status.attempt)
+          if (data.status.type === "busy" || data.status.type === "retry") order.push(data.status.type)
           return Effect.void
         })
         const handle = yield* processors.create({
@@ -746,6 +756,9 @@ it.live("session.processor effect tests publish retry status updates", () =>
         expect(value).toBe("continue")
         expect(yield* llm.calls).toBe(2)
         expect(states).toStrictEqual([1])
+        // Recovery write: after retry the next provider request republishes busy.
+        // Offline shares the same recovery path (any non-busy status -> busy).
+        expect(order).toEqual(["busy", "retry", "busy"])
       }),
     { config: (url) => providerCfg(url) },
   ),
@@ -994,7 +1007,9 @@ it.live("session.processor effect tests record aborted errors and idle state", (
         if (stored.info.role === "assistant") {
           expect(stored.info.error?.name).toBe("MessageAbortedError")
         }
-        expect(state).toMatchObject({ type: "idle" })
+        // kilocode_change - single idle owner is the Runner epoch finalizer;
+        // direct processor use stays busy until the epoch projects idle.
+        expect(state).toMatchObject({ type: "busy" })
         expect(errs).toContain("MessageAbortedError")
       }),
     { config: (url) => providerCfg(url) },
@@ -1052,7 +1067,9 @@ it.live("session.processor effect tests mark interruptions aborted without manua
         if (stored.info.role === "assistant") {
           expect(stored.info.error?.name).toBe("MessageAbortedError")
         }
-        expect(state).toMatchObject({ type: "idle" })
+        // kilocode_change - single idle owner is the Runner epoch finalizer;
+        // direct processor use stays busy until the epoch projects idle.
+        expect(state).toMatchObject({ type: "busy" })
       }),
     { config: (url) => providerCfg(url) },
   ),

@@ -75,16 +75,25 @@ export namespace KiloSessionPromptQueue {
       () => undefined,
     )
 
+  export function waitingCount(sessionID: SessionID): number {
+    let count = 0
+    for (const item of pending.values()) if (item.session === sessionID) count++
+    return count
+  }
+
   export function cancel(sessionID: SessionID) {
     return Effect.sync(() => {
-      if (!tails.has(sessionID)) {
+      const waiting = waitingCount(sessionID)
+      const signalled = tails.has(sessionID)
+      if (!signalled) {
         versions.delete(sessionID)
         targets.delete(sessionID)
         latest.delete(sessionID)
         activeSince.delete(sessionID)
-        return
+        return { signalled, waitingCount: waiting, cancelRequested: true as const }
       }
       versions.set(sessionID, version(sessionID) + 1)
+      return { signalled, waitingCount: waiting, cancelRequested: true as const }
     })
   }
 

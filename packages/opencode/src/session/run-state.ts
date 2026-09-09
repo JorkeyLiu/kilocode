@@ -2,19 +2,27 @@ import { InstanceState } from "@/effect/instance-state"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { Runner } from "@/effect/runner"
 import { BackgroundJob } from "@/background/job"
-import { Effect, Latch, Layer, Scope, Context } from "effect"
+import { Effect, Latch, Layer, Scope, Context, SynchronizedRef } from "effect"
 import { BusyError } from "./schema"
 import { SessionID } from "./schema"
 import { SessionStatus } from "./status"
 import * as Ownership from "@/retention/ownership"
 
+export type RunCancelResult = {
+  readonly sessionID: SessionID
+  readonly generationID?: string
+  readonly wasBusy: boolean
+  readonly interruptRequested: boolean
+}
+
 export interface Interface {
+  readonly activeGeneration: (sessionID: SessionID) => Effect.Effect<string | undefined>
   readonly assertNotBusy: (sessionID: SessionID) => Effect.Effect<void, BusyError>
-  readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
+  readonly cancel: (sessionID: SessionID) => Effect.Effect<RunCancelResult>
   readonly ensureRunning: (
     sessionID: SessionID,
     onInterrupt: Effect.Effect<SessionV1.WithParts>,
-    work: Effect.Effect<SessionV1.WithParts>,
+    work: Runner.WorkInput<SessionV1.WithParts, never>,
   ) => Effect.Effect<SessionV1.WithParts>
   readonly startShell: (
     sessionID: SessionID,
@@ -50,64 +58,75 @@ export const layer = Layer.effect(
       }),
     )
 
-    const runner = Effect.fn("SessionRunState.runner")(function* (
+    const createGate = yield* SynchronizedRef.make(0)
+
+    const runnerFor = Effect.fn("SessionRunState.runnerFor")(function* (
       sessionID: SessionID,
       onInterrupt: Effect.Effect<SessionV1.WithParts>,
     ) {
-      const data = yield* InstanceState.get(state)
-      const existing = data.runners.get(sessionID)
-      if (existing) return existing
-      const next = Runner.make<SessionV1.WithParts>(data.scope, {
-        onIdle: Effect.gen(function* () {
-          data.runners.delete(sessionID)
-          yield* status.set(sessionID, { type: "idle" })
+      return yield* SynchronizedRef.modifyEffect(createGate, () =>
+        Effect.gen(function* () {
+          const data = yield* InstanceState.get(state)
+          const existing = data.runners.get(sessionID)
+          if (existing) return [existing, 0] as const
+          const next = Runner.make<SessionV1.WithParts>(data.scope, {
+            onIdle: status.set(sessionID, { type: "idle" }),
+            onBusy: status.set(sessionID, { type: "busy" }),
+            onInterrupt,
+          })
+          data.runners.set(sessionID, next)
+          return [next, 0] as const
         }),
-        onBusy: status.set(sessionID, { type: "busy" }),
-        onInterrupt,
+      )
+    })
+
+    const activeGeneration: Interface["activeGeneration"] = (sessionID) =>
+      Effect.gen(function* () {
+        const data = yield* InstanceState.get(state)
+        return data.runners.get(sessionID)?.generationID
       })
-      data.runners.set(sessionID, next)
-      return next
-    })
 
-    const assertNotBusy = Effect.fn("SessionRunState.assertNotBusy")(function* (sessionID: SessionID) {
-      const data = yield* InstanceState.get(state)
-      const existing = data.runners.get(sessionID)
-      if (existing?.busy) yield* busyError(sessionID)
-    })
+    const assertNotBusy: Interface["assertNotBusy"] = (sessionID) =>
+      Effect.gen(function* () {
+        const data = yield* InstanceState.get(state)
+        if (data.runners.get(sessionID)?.busy) yield* busyError(sessionID)
+      })
 
-    const cancel = Effect.fn("SessionRunState.cancel")(function* (sessionID: SessionID) {
-      yield* cancelBackgroundJobs(background, sessionID)
-      const data = yield* InstanceState.get(state)
-      const existing = data.runners.get(sessionID)
-      if (!existing) {
-        yield* status.set(sessionID, { type: "idle" })
-        return
-      }
-      yield* existing.cancel
-    })
+    const cancel: Interface["cancel"] = (sessionID) =>
+      Effect.gen(function* () {
+        const data = yield* InstanceState.get(state)
+        const current = data.runners.get(sessionID)
+        let generationID: string | undefined
+        let wasBusy = false
+        let interruptRequested = false
+        if (current) {
+          const snap = yield* current.cancel
+          generationID = snap.generationID
+          wasBusy = snap.wasBusy
+          interruptRequested = snap.interruptRequested
+        }
+        yield* cancelBackgroundJobs(background, sessionID)
+        return { sessionID, generationID, wasBusy, interruptRequested } as RunCancelResult
+      })
 
-    const ensureRunning = Effect.fn("SessionRunState.ensureRunning")(function* (
-      sessionID: SessionID,
-      onInterrupt: Effect.Effect<SessionV1.WithParts>,
-      work: Effect.Effect<SessionV1.WithParts>,
-    ) {
-      const release = yield* ownership.acquireActive(sessionID)
-      return yield* (yield* runner(sessionID, onInterrupt)).ensureRunning(work).pipe(Effect.ensuring(release))
-    })
+    const ensureRunning: Interface["ensureRunning"] = (sessionID, onInterrupt, work) =>
+      Effect.gen(function* () {
+        const release = yield* ownership.acquireActive(sessionID)
+        const runner = yield* runnerFor(sessionID, onInterrupt)
+        return yield* runner.ensureRunning(work).pipe(Effect.ensuring(release))
+      })
 
-    const startShell = Effect.fn("SessionRunState.startShell")(function* (
-      sessionID: SessionID,
-      onInterrupt: Effect.Effect<SessionV1.WithParts>,
-      work: Effect.Effect<SessionV1.WithParts>,
-      ready?: Latch.Latch,
-    ) {
-      const release = yield* ownership.acquireActive(sessionID)
-      return yield* (yield* runner(sessionID, onInterrupt))
-        .startShell(work, ready)
-        .pipe(Effect.ensuring(release), Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))))
-    })
+    const startShell: Interface["startShell"] = (sessionID, onInterrupt, work, ready) =>
+      Effect.gen(function* () {
+        const release = yield* ownership.acquireActive(sessionID)
+        const runner = yield* runnerFor(sessionID, onInterrupt)
+        return yield* runner.startShell(work, ready).pipe(
+          Effect.catchTag("RunnerBusy", () => Effect.fail(busyError(sessionID))),
+          Effect.ensuring(release),
+        )
+      })
 
-    return Service.of({ assertNotBusy, cancel, ensureRunning, startShell })
+    return Service.of({ activeGeneration, assertNotBusy, cancel, ensureRunning, startShell })
   }),
 )
 

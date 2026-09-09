@@ -328,6 +328,10 @@ One bounded private path covers `find/files` (read-only bounded search parity) o
 
  Transport cancel does not abort the underlying FileSystem/ripgrep scan or the server drain lease; freshness, ordering, `.gitignore/.ignore` convergence, `.kilocodeignore` (unsupported, not claimed), cross-directory behavior beyond routing scope, and live platform/Host composition remain explicit unknowns.
 
+## Session abort — still SDK-only, no private carrier
+
+`session/abort` has no private `kilo serve` fd3/fd4 carrier; abort uses the generated SDK `client.session.abort` HTTP. A runtime-owned optional `generationID` now travels on `session.turn.open`/`session.turn.close` (see CLI Runtime) and the backend `CancelTreeResult` is internal honest signal/registry facts only — not a private transport and not process-termination proof — so private abort transport and local terminal invention remain pending and `abort` stays SDK-owned.
+
 ## Chat surfaces
 
 The ordinary single-chat **Activity Bar sidebar** (`kilo-code.SidebarProvider` webview view under the `kilo-code-ActivityBar` views container) is **permanently removed**. It is not deferred, gated, or re-registered: no `viewsContainers`/`views` contribution, no `registerWebviewViewProvider`, no `kilo-code.new.sidebarVisible` context, and no `sidebarTitle.*` commands or view-title menus remain. The one-time deprecation step shipped with the release note; there is no temporary feature flag and no retained old surface.

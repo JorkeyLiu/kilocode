@@ -31477,6 +31477,9 @@
               "sessionID": {
                 "type": "string",
                 "pattern": "^ses"
+              },
+              "generationID": {
+                "type": "string"
               }
             },
             "required": [
@@ -31522,6 +31525,9 @@
                   "error",
                   "interrupted"
                 ]
+              },
+              "generationID": {
+                "type": "string"
               }
             },
             "required": [

@@ -73,6 +73,7 @@ export namespace KiloSessionPrompt {
       },
       { concurrency: "unbounded", discard: true },
     )
+    return entries.length
   })
 
   export function titleID(sessionID: SessionID) {
@@ -139,31 +140,112 @@ export namespace KiloSessionPrompt {
     return action === "continue" ? "continue" : "break"
   }
 
+  export type CancelTreeGeneration = {
+    readonly sessionID: SessionID
+    readonly generationID?: string
+    readonly wasBusy: boolean
+    readonly interruptRequested: boolean
+  }
+
+  export type CancelTreeResult = {
+    readonly targetSessionIDs: readonly SessionID[]
+    readonly generations: readonly CancelTreeGeneration[]
+    readonly queue: {
+      readonly cancelSignalledCount: number
+      readonly waitingCount: number
+      readonly perTarget: readonly { sessionID: SessionID; signalled: boolean; waitingCount: number }[]
+    }
+    readonly intake: {
+      readonly interruptRequestedCount: number
+      readonly perTarget: readonly { sessionID: SessionID; interruptRequestedCount: number }[]
+    }
+    readonly planFollowup: {
+      readonly abortSignalledCount: number
+      readonly perTarget: readonly { sessionID: SessionID; abortSignalled: boolean }[]
+    }
+  }
+
   export const cancelTree = Effect.fn("KiloSessionPrompt.cancelTree")(function* (input: {
     sessionID: SessionID
     sessions: Pick<Session.Interface, "children">
-    cancel: (sessionID: SessionID) => Effect.Effect<void>
+    cancel: (sessionID: SessionID) => Effect.Effect<{ generationID?: string; wasBusy: boolean; interruptRequested: boolean }>
   }) {
     function descendants(sessionID: SessionID): Effect.Effect<SessionID[]> {
       return Effect.gen(function* () {
         const children = yield* input.sessions.children(sessionID)
-        const nested = yield* Effect.forEach(children, (child) => descendants(child.id), { concurrency: "unbounded" })
-        return [...children.map((child) => child.id), ...nested.flat()]
+        const sorted = [...children].sort((a, b) => a.id.localeCompare(b.id))
+        const nested = yield* Effect.forEach(sorted, (child) => descendants(child.id), { concurrency: "unbounded" })
+        return [...sorted.map((child) => child.id), ...nested.flat()]
       })
     }
 
     const children = yield* descendants(input.sessionID)
-    yield* Effect.forEach(
-      [input.sessionID, ...children],
+    const targetSessionIDs = [input.sessionID, ...children] as const
+
+    const perTarget = yield* Effect.forEach(
+      targetSessionIDs,
       (sessionID) =>
         Effect.gen(function* () {
-          yield* KiloSessionPromptQueue.cancel(sessionID)
-          PlanFollowup.abort(sessionID)
-          yield* abortIntakes(sessionID)
-          yield* input.cancel(sessionID)
+          const q = yield* KiloSessionPromptQueue.cancel(sessionID)
+          const aborted = PlanFollowup.abort(sessionID)
+          const intakeCount: number = yield* abortIntakes(sessionID)
+          const run = yield* input.cancel(sessionID)
+          return {
+            sessionID,
+            queue: q,
+            aborted,
+            intakeCount,
+            run,
+          }
         }),
-      { concurrency: "unbounded", discard: true },
+      { concurrency: "unbounded" },
     )
+
+    const queuePerTarget: { sessionID: SessionID; signalled: boolean; waitingCount: number }[] = []
+    const intakePerTarget: { sessionID: SessionID; interruptRequestedCount: number }[] = []
+    const planPerTarget: { sessionID: SessionID; abortSignalled: boolean }[] = []
+    const generations: CancelTreeGeneration[] = []
+    let queueWaitingTotal = 0
+    let queueSignalledTotal = 0
+    let intakeTotal = 0
+    let planTotal = 0
+
+    for (const item of perTarget) {
+      queuePerTarget.push({ sessionID: item.sessionID, signalled: item.queue.signalled, waitingCount: item.queue.waitingCount })
+      queueWaitingTotal += item.queue.waitingCount
+      if (item.queue.signalled) queueSignalledTotal += 1
+
+      planPerTarget.push({ sessionID: item.sessionID, abortSignalled: item.aborted })
+      if (item.aborted) planTotal += 1
+
+      intakePerTarget.push({ sessionID: item.sessionID, interruptRequestedCount: item.intakeCount })
+      intakeTotal += item.intakeCount
+
+      generations.push({
+        sessionID: item.sessionID,
+        generationID: item.run.generationID,
+        wasBusy: item.run.wasBusy,
+        interruptRequested: item.run.interruptRequested,
+      })
+    }
+
+    return {
+      targetSessionIDs,
+      generations,
+      queue: {
+        cancelSignalledCount: queueSignalledTotal,
+        waitingCount: queueWaitingTotal,
+        perTarget: queuePerTarget,
+      },
+      intake: {
+        interruptRequestedCount: intakeTotal,
+        perTarget: intakePerTarget,
+      },
+      planFollowup: {
+        abortSignalledCount: planTotal,
+        perTarget: planPerTarget,
+      },
+    }
   })
 
   export const recoverDanglingAssistant = Effect.fn("KiloSessionPrompt.recoverDanglingAssistant")(function* (input: {

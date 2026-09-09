@@ -3298,6 +3298,7 @@ export type EventSessionTurnOpen = {
   type: "session.turn.open"
   properties: {
     sessionID: string
+    generationID?: string
   }
 }
 
@@ -3308,6 +3309,7 @@ export type EventSessionTurnClose = {
     sessionID: string
     parentID?: string
     reason: "completed" | "error" | "interrupted"
+    generationID?: string
   }
 }
 

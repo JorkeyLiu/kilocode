@@ -234,7 +234,10 @@ it.live(
 
         const session = yield* sessions.create({
           title: "snapshot race test",
-          permission: [{ permission: "*", pattern: "*", action: "allow" }],
+          permission: [
+            { permission: "*", pattern: "*", action: "allow" },
+            { permission: "bash", pattern: "*", action: "allow" },
+          ],
         })
 
         // Use bash tool (always registered) to create a file
@@ -315,7 +318,10 @@ it.live("summarize persists cumulative session_diff and the no-messageID read pa
 
       const session = yield* sessions.create({
         title: "session diff write test",
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "bash", pattern: "*", action: "allow" },
+        ],
       })
 
       // Turn 1 creates a/t1.txt
@@ -368,7 +374,10 @@ it.live("per-message session diff is turn-scoped across multiple turns", () =>
 
       const session = yield* sessions.create({
         title: "turn-scoped diff test",
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
+        permission: [
+          { permission: "*", pattern: "*", action: "allow" },
+          { permission: "bash", pattern: "*", action: "allow" },
+        ],
       })
 
       yield* llm.toolMatch((hit) => JSON.stringify(hit.body).includes("first file"), "bash", {

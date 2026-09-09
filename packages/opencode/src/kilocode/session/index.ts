@@ -31,10 +31,10 @@ export namespace KiloSession {
 
   // Turn events stay on the legacy Bus (memory/turn.ts subscribes there), but the publish
   // lives here so the upstream-shaped session/prompt.ts does not take a legacy Bus dependency.
-  export const publishTurnOpen = (input: { sessionID: SessionID }) =>
+  export const publishTurnOpen = (input: { sessionID: SessionID; generationID?: string }) =>
     Effect.promise(() => Bus.publish(Instance.current, Event.TurnOpen, input))
 
-  export const publishTurnClose = (input: { sessionID: SessionID; parentID?: SessionID; reason: CloseReason }) =>
+  export const publishTurnClose = (input: { sessionID: SessionID; parentID?: SessionID; reason: CloseReason; generationID?: string }) =>
     Effect.promise(() => Bus.publish(Instance.current, Event.TurnClose, input))
 
   // ---------------------------------------------------------------------------

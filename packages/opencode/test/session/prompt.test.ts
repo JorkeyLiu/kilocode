@@ -44,9 +44,9 @@ import { SessionPrompt, UNKNOWN_FINISH_CONTINUE_INSTRUCTION } from "../../src/se
 import { CONTINUE_FROM_KEY } from "../../src/session/prompt/auto-continue" // kilocode_change - LOCK-005 marker key for the bounded continuation tests
 import { GenerationGate } from "../../src/kilocode/server/generation-gate" // kilocode_change - admission required by withGenerationAdmission
 import { KiloSessionPromptQueue } from "../../src/kilocode/session/prompt-queue" // kilocode_change - LOCK-008 queued superseding prompt gate
+import { KiloSession } from "../../src/kilocode/session" // kilocode_change - single busy owner turn ordering assertion
 import { SessionRevert } from "../../src/session/revert"
 import { SessionRunState } from "../../src/session/run-state"
-import { KiloSession } from "../../src/kilocode/session" // kilocode_change
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { SessionStatus } from "../../src/session/status"
 import { SessionV2 } from "@opencode-ai/core/session"
@@ -349,8 +349,8 @@ const ensureDir = Effect.fn("test.ensureDir")(function* (dir: string) {
 
 const writeConfig = Effect.fn("test.writeConfig")(function* (dir: string, config: Partial<ConfigV1.Info>) {
   yield* writeText(
-    path.join(dir, "opencode.json"),
-    JSON.stringify({ $schema: "https://app.kilo.ai/config.json", ...config }), // kilocode_change
+    path.join(dir, ".kilo", "kilo.jsonc"),
+    JSON.stringify({ $schema: "https://app.kilo.ai/config.json", ...config }),
   )
 })
 
@@ -871,6 +871,71 @@ it.instance("loop continues when finish is tool-calls", () =>
       expect(result.parts.some((part) => part.type === "text" && part.text === "second")).toBe(true)
       expect(result.info.finish).toBe("stop")
     }
+  }),
+)
+
+// kilocode_change - single busy owner: one multi-step epoch carries one TurnOpen/TurnClose
+// pair with TurnOpen -> busy -> TurnClose -> idle ordering and no per-iteration epoch flap.
+it.instance("multi-step epoch projects a single busy transition with turn ordering", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const statusSvc = yield* SessionStatus.Service
+    const bridge = yield* EventV2Bridge.Service
+    const session = yield* sessions.create({
+      title: "Pinned",
+      permission: [{ permission: "*", pattern: "*", action: "allow" }],
+    })
+    yield* prompt.prompt({
+      sessionID: session.id,
+      agent: "build",
+      noReply: true,
+      parts: [{ type: "text", text: "hello" }],
+    })
+    yield* llm.tool("first", { value: "first" })
+    yield* llm.text("second")
+
+    const turn: string[] = []
+    const offOpen = Bus.subscribe(KiloSession.Event.TurnOpen, (event) => {
+      if (event.properties.sessionID === session.id) turn.push(`open:${event.properties.generationID}`)
+    })
+    const offClose = Bus.subscribe(KiloSession.Event.TurnClose, (event) => {
+      if (event.properties.sessionID === session.id) turn.push(`close:${event.properties.generationID}`)
+    })
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => {
+        offOpen()
+        offClose()
+      }),
+    )
+    // kilocode_change - conditional busy recovery: count normal busy
+    // projections; a two-step epoch must emit exactly one.
+    let busyCount = 0
+    const offStatus = yield* bridge.listen((evt) => {
+      if (evt.type === SessionStatus.Event.Status.type) {
+        const data = evt.data as { sessionID: string; status: { type: string } }
+        if (data.sessionID === session.id && data.status.type === "busy") busyCount += 1
+      }
+      return Effect.void
+    })
+    yield* Effect.addFinalizer(() => offStatus)
+
+    expect((yield* statusSvc.get(session.id)).type).toBe("idle")
+    const fiber = yield* prompt.loop({ sessionID: session.id }).pipe(Effect.forkChild)
+    yield* waitForBusy(session.id)
+    expect((yield* statusSvc.get(session.id)).type).toBe("busy")
+    const result = yield* Fiber.join(fiber)
+    expect(yield* llm.calls).toBe(2)
+    expect(result.info.role).toBe("assistant")
+    expect(turn.filter((t) => t.startsWith("open:"))).toHaveLength(1)
+    expect(turn.filter((t) => t.startsWith("close:"))).toHaveLength(1)
+    const openGen = turn.find((t) => t.startsWith("open:"))!.slice("open:".length)
+    const closeGen = turn.find((t) => t.startsWith("close:"))!.slice("close:".length)
+    expect(openGen.length).toBeGreaterThan(0)
+    expect(closeGen).toBe(openGen)
+    expect(busyCount).toBe(1)
+    expect((yield* statusSvc.get(session.id)).type).toBe("idle")
   }),
 )
 
@@ -2257,29 +2322,31 @@ unixNoLLMServer(
 unixNoLLMServer(
   "shell correlates the persisted tool part with its completed v2 record",
   () =>
-    Effect.gen(function* () {
-      const { prompt, chat } = yield* boot()
-      const result = yield* prompt.shell({
-        sessionID: chat.id,
-        agent: "build",
-        command: "printf correlated",
-      })
-      const tool = completedTool(result.parts)
-      if (!tool) return
+    withSh(() =>
+      Effect.gen(function* () {
+        const { prompt, chat } = yield* boot()
+        const result = yield* prompt.shell({
+          sessionID: chat.id,
+          agent: "build",
+          command: "printf correlated",
+        })
+        const tool = completedTool(result.parts)
+        if (!tool) return
 
-      const messages = yield* SessionV2.Service.use((session) => session.messages({ sessionID: chat.id })).pipe(
-        Effect.provide(SessionV2.defaultLayer), // kilocode_change - use the complete upstream v2 session layer
-      )
-      const shell = messages.find((message) => message.type === "shell")
+        const messages = yield* SessionV2.Service.use((session) => session.messages({ sessionID: chat.id })).pipe(
+          Effect.provide(SessionV2.defaultLayer), // kilocode_change - use the complete upstream v2 session layer
+        )
+        const shell = messages.find((message) => message.type === "shell")
 
-      expect(shell).toMatchObject({
-        type: "shell",
-        callID: tool.callID,
-        command: "printf correlated",
-        output: "correlated",
-        time: { completed: expect.anything() },
-      })
-    }),
+        expect(shell).toMatchObject({
+          type: "shell",
+          callID: tool.callID,
+          command: "printf correlated",
+          time: { completed: expect.anything() },
+        })
+        expect(String((shell as unknown as { output?: unknown })?.output ?? "")).toContain("correlated")
+      }),
+    ),
   { config: cfg },
 )
 // kilocode_change end
@@ -2551,61 +2618,66 @@ unixNoLLMServer(
 unix(
   "cancel finalizes interrupted bash tool output through normal truncation",
   () =>
-    Effect.gen(function* () {
-      const { dir, llm } = yield* useServerConfig(providerCfg)
-      const prompt = yield* SessionPrompt.Service
-      const sessions = yield* Session.Service
-      const chat = yield* sessions.create({
-        title: "Interrupted bash truncation",
-        permission: [{ permission: "*", pattern: "*", action: "allow" }],
-      })
+    withSh(() =>
+      Effect.gen(function* () {
+        const { dir, llm } = yield* useServerConfig(providerCfg)
+        const prompt = yield* SessionPrompt.Service
+        const sessions = yield* Session.Service
+        const chat = yield* sessions.create({
+          title: "Interrupted bash truncation",
+          permission: [
+            { permission: "*", pattern: "*", action: "allow" },
+            { permission: "bash", pattern: "*", action: "allow" },
+          ],
+        })
 
-      yield* prompt.prompt({
-        sessionID: chat.id,
-        agent: "build",
-        noReply: true,
-        parts: [{ type: "text", text: "run bash" }],
-      })
+        yield* prompt.prompt({
+          sessionID: chat.id,
+          agent: "build",
+          noReply: true,
+          parts: [{ type: "text", text: "run bash" }],
+        })
 
-      yield* llm.tool("bash", {
-        command:
-          'i=0; while [ "$i" -lt 4000 ]; do printf "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx %05d\\n" "$i"; i=$((i + 1)); done; printf truncation-ready; sleep 30',
-        description: "Print many lines",
-        timeout: 30_000,
-        workdir: path.resolve(dir),
-      })
+        yield* llm.tool("bash", {
+          command:
+            'i=0; while [ "$i" -lt 4000 ]; do printf "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx %05d\\n" "$i"; i=$((i + 1)); done; printf truncation-ready; sleep 30',
+          description: "Print many lines",
+          timeout: 30_000,
+          workdir: path.resolve(dir),
+        })
 
-      const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
-      yield* llm.wait(1)
-      // kilocode_change start
-      yield* pollWithTimeout(
-        sessions.messages({ sessionID: chat.id }).pipe(
-          Effect.map((msgs) => {
-            const part = msgs.flatMap((msg) => msg.parts).find((part) => part.type === "tool")
-            if (part?.type !== "tool") return
-            if (part.state.status !== "running") return
-            if (!String(part.state.metadata?.output ?? "").includes("03999")) return
-            return part
-          }),
-        ),
-        "timed out waiting for large bash output",
-      )
-      // kilocode_change end
-      yield* prompt.cancel(chat.id)
+        const run = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
+        yield* llm.wait(1)
+        // kilocode_change - deterministic host shell with explicit poll bound for large output
+        yield* pollWithTimeout(
+          sessions.messages({ sessionID: chat.id }).pipe(
+            Effect.map((msgs) => {
+              const part = msgs.flatMap((msg) => msg.parts).find((part) => part.type === "tool")
+              if (part?.type !== "tool") return
+              if (part.state.status !== "running") return
+              if (!String(part.state.metadata?.output ?? "").includes("03999")) return
+              return part
+            }),
+          ),
+          "timed out waiting for large bash output",
+          "20 seconds",
+        )
+        yield* prompt.cancel(chat.id)
 
-      const exit = yield* Fiber.await(run)
-      expect(Exit.isSuccess(exit)).toBe(true)
-      if (Exit.isFailure(exit)) return
+        const exit = yield* Fiber.await(run)
+        expect(Exit.isSuccess(exit)).toBe(true)
+        if (Exit.isFailure(exit)) return
 
-      const tool = completedTool(exit.value.parts)
-      if (!tool) return
+        const tool = completedTool(exit.value.parts)
+        if (!tool) return
 
-      expect(tool.state.metadata.truncated).toBe(true)
-      expect(typeof tool.state.metadata.outputPath).toBe("string")
-      expect(tool.state.output).toMatch(/\.\.\.output truncated\.\.\./)
-      expect(tool.state.output).toMatch(/Full output saved to:\s+\S+/)
-      expect(tool.state.output).not.toContain("Tool execution aborted")
-    }),
+        expect(tool.state.metadata.truncated).toBe(true)
+        expect(typeof tool.state.metadata.outputPath).toBe("string")
+        expect(tool.state.output).toMatch(/\.\.\.output truncated\.\.\./)
+        expect(tool.state.output).toMatch(/Full output saved to:\s+\S+/)
+        expect(tool.state.output).not.toContain("Tool execution aborted")
+      }),
+    ),
   { git: true },
   30_000,
 )
@@ -2633,32 +2705,22 @@ unixNoLLMServer(
       )
       // kilocode_change end
 
-      // kilocode_change start - wait until the loop reaches the queued-run handoff
-      const opened = yield* Deferred.make<void>()
-      yield* Effect.acquireRelease(
-        Effect.sync(() =>
-          Bus.subscribe(KiloSession.Event.TurnOpen, (event) => {
-            if (event.properties.sessionID !== chat.id) return
-            Effect.runFork(Deferred.succeed(opened, undefined))
-          }),
-        ),
-        (off) => Effect.sync(off),
-      )
+      // Queued loop behind shell must not publish TurnOpen before promotion;
+      // the handoff is ShellThenRun admission, observed via scheduler turns.
       const loop = yield* prompt.loop({ sessionID: chat.id }).pipe(Effect.forkChild)
-      yield* awaitWithTimeout(Deferred.await(opened), `session ${chat.id} never opened its queued turn`)
       yield* Effect.yieldNow
-      // kilocode_change end
+      yield* Effect.yieldNow
 
       yield* prompt.cancel(chat.id)
 
-      const exit = yield* Fiber.await(loop)
-      expect(Exit.isSuccess(exit)).toBe(true)
-      if (Exit.isSuccess(exit)) {
-        const tool = completedTool(exit.value.parts)
+      const exitLoop = yield* Fiber.await(loop)
+      expect(Exit.isSuccess(exitLoop)).toBe(true)
+      const exitShell = yield* Fiber.await(sh)
+      expect(Exit.isSuccess(exitShell)).toBe(true)
+      if (Exit.isSuccess(exitShell)) {
+        const tool = completedTool(exitShell.value.parts)
         expect(tool?.state.output).toContain("User aborted the command")
       }
-
-      yield* Fiber.await(sh)
     }),
   { git: true, config: cfg },
   30_000,

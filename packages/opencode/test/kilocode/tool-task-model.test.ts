@@ -907,4 +907,113 @@ describe("tool.task model resolution", () => {
     ),
     15000,
   )
+
+  it.live("unavailable explicit agent model remains pinned instead of falling back", () =>
+    provideTmpdirInstance(
+      () =>
+        Effect.gen(function* () {
+          process.env.KILO_CLIENT = "cli"
+          yield* writeState({
+            model: { ghost: saved },
+            variant: { "saved-provider/saved-model": savedVariant },
+          })
+
+          const { chat, assistant } = yield* seed("Ghost", inherited)
+          const tool = yield* TaskTool
+          const def = yield* tool.init()
+          let seen: SessionPrompt.PromptInput | undefined
+          const promptOps = stubOps({ onPrompt: (value) => (seen = value) })
+
+          const result = yield* def.execute(
+            {
+              description: "run ghost",
+              prompt: "inspect resolution",
+              subagent_type: "ghost",
+            },
+            {
+              sessionID: chat.id,
+              messageID: assistant.id,
+              agent: "build",
+              abort: new AbortController().signal,
+              extra: { promptOps, bypassAgentCheck: true },
+              messages: [],
+              metadata: () => Effect.void,
+              ask: () => Effect.void,
+            },
+          )
+
+          const missing = {
+            providerID: ProviderV2.ID.make("missing-provider"),
+            modelID: ModelV2.ID.make("missing-model"),
+          }
+          // Explicit pin is preserved even though a configured default, a
+          // saved model, and the parent are all available. The variant cannot
+          // be validated without provider metadata, so it stays undefined.
+          // The stub prompt does not validate, so the pinned identity flows
+          // through to the child prompt while real child prompts fail visibly.
+          expect(seen?.model).toEqual(missing)
+          expect(seen?.variant).toBeUndefined()
+          expect(result.metadata.model).toEqual(missing)
+          expect(result.metadata.variant).toBeUndefined()
+        }),
+      {
+        config: {
+          ...catalog,
+          subagent_model: "sub-provider/sub-model",
+          subagent_variant: subVariant,
+          agent: {
+            worker: { mode: "subagent" },
+            pinned: { mode: "subagent", model: "config-provider/config-model", variant: cfgVariant },
+            bare: { mode: "subagent", model: "bare-provider/bare-model", variant: bare },
+            ghost: { mode: "subagent", model: "missing-provider/missing-model", variant: subVariant },
+          },
+        },
+      },
+    ),
+    15000,
+  )
+
+  it.live("unavailable configured subagent model falls back to saved memory", () =>
+    run({
+      agent: "worker",
+      variant: inherited,
+      state: { model: { worker: saved }, variant: { "saved-provider/saved-model": savedVariant } },
+      config: { subagent_model: "missing-provider/missing-model", subagent_variant: subVariant },
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(result.prompt).toEqual(saved)
+          expect(result.variant).toEqual(savedVariant)
+          expect(result.model).toMatchObject({ ...saved, variant: savedVariant })
+          expect(result.metadataVariant).toEqual(savedVariant)
+        }),
+      ),
+    ),
+    15000,
+  )
+
+  it.live("available explicit agent model beats configured default, saved memory, and parent", () =>
+    run({
+      agent: "pinned",
+      variant: inherited,
+      state: {
+        model: { pinned: saved },
+        variant: {
+          "saved-provider/saved-model": savedVariant,
+          "config-provider/config-model": savedVariant,
+        },
+      },
+      config: { subagent_model: "sub-provider/sub-model", subagent_variant: subVariant },
+    }).pipe(
+      Effect.tap((result) =>
+        Effect.sync(() => {
+          expect(result.prompt).toEqual(cfg)
+          expect(result.variant).toEqual(cfgVariant)
+          expect(result.model).toEqual(cfg)
+          expect(result.metadataVariant).toEqual(cfgVariant)
+        }),
+      ),
+    ),
+    15000,
+  )
 })

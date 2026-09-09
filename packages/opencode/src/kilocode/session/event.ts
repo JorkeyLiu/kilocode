@@ -9,6 +9,7 @@ export const KiloSessionEvent = {
     "session.turn.open",
     Schema.Struct({
       sessionID: SessionID,
+      generationID: Schema.optional(Schema.String),
     }),
   ),
   TurnClose: BusEvent.define(
@@ -17,6 +18,7 @@ export const KiloSessionEvent = {
       sessionID: SessionID,
       parentID: Schema.optional(SessionID),
       reason: CloseReason,
+      generationID: Schema.optional(Schema.String),
     }),
   ),
 }

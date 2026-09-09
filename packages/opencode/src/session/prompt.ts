@@ -191,9 +191,19 @@ export const layer = Layer.effect(
       } satisfies TaskPromptOps
     })
 
-    const cancel = Effect.fn("SessionPrompt.cancel")(function* (sessionID: SessionID) {
+    const cancelTree = Effect.fn("SessionPrompt.cancelTree")(function* (sessionID: SessionID) {
+      yield* elog.info("cancelTree", { sessionID })
+      return yield* KiloSessionPrompt.cancelTree({ sessionID, sessions, cancel: state.cancel }) // kilocode_change - stop queued work and subagents
+    })
+
+    // Remote/public cancel boundary: discard internal CancelTreeResult before it crosses the
+    // control-plane/remote-sender/HTTP transport. Explicit typed adapter preserves Promise<void>
+    // remote semantics while local callers use cancelTree for honest signal facts.
+    const cancel: (sessionID: SessionID) => Effect.Effect<void> = Effect.fn("SessionPrompt.cancel")(function* (
+      sessionID: SessionID,
+    ) {
       yield* elog.info("cancel", { sessionID })
-      yield* KiloSessionPrompt.cancelTree({ sessionID, sessions, cancel: state.cancel }) // kilocode_change - stop queued work and subagents
+      yield* cancelTree(sessionID).pipe(Effect.asVoid)
     })
 
     const resolveReferenceParts = Effect.fnUntraced(function* (template: string) {
@@ -1497,16 +1507,52 @@ export const layer = Layer.effect(
     )
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
-      // kilocode_change start - retry when cancel races before shellImpl writes messages
-      for (let attempt = 0; attempt < 10; attempt++) {
-        const match = yield* sessions.findMessage(sessionID, (m) => m.info.role !== "user")
-        if (Option.isSome(match)) return match.value
-        const msgs = yield* sessions.messages({ sessionID, limit: 1 })
-        if (msgs.length > 0) return msgs[0]
-        yield* Effect.sleep("50 millis")
+      // kilocode_change start - cancellation-safe fallback: identify the
+      // newest user first and only reuse a current-turn assistant/non-user
+      // whose parentID matches that user. A prior turn's assistant must never
+      // satisfy the fallback for a newer user. When no current-turn assistant
+      // exists, record the normal interrupted outcome (Aborted error,
+      // completed time, no finish, empty parts) parented to the newest user
+      // via the existing updateMessage API instead of throwing a defect.
+      const userMatch = yield* sessions.findMessage(sessionID, (m) => m.info.role === "user")
+      if (Option.isNone(userMatch) || userMatch.value.info.role !== "user") throw new Error("Impossible")
+      const lastUser = userMatch.value.info
+      const current = yield* sessions.findMessage(
+        sessionID,
+        (m) => m.info.role !== "user" && (m.info as { parentID?: string }).parentID === lastUser.id,
+      )
+      if (Option.isSome(current)) return current.value
+      const now = Date.now()
+      const path = yield* InstanceState.context.pipe(
+        Effect.map((ctx) => ({ cwd: ctx.directory, root: ctx.worktree }) as const),
+        Effect.catchCause(() =>
+          sessions.get(sessionID).pipe(
+            Effect.map((session) => ({ cwd: session.directory, root: session.directory }) as const),
+            Effect.catchCause(() => Effect.succeed(undefined)),
+          ),
+        ),
+      )
+      const info: SessionV1.Assistant = {
+        id: MessageID.ascending(),
+        parentID: lastUser.id,
+        role: "assistant",
+        mode: lastUser.agent,
+        agent: lastUser.agent,
+        ...(lastUser.model.variant ? { variant: lastUser.model.variant } : {}),
+        path: { cwd: path?.cwd ?? "", root: path?.root ?? "" },
+        cost: 0,
+        tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+        modelID: lastUser.model.modelID,
+        providerID: lastUser.model.providerID,
+        time: { created: now, completed: now },
+        sessionID,
+        error: MessageV2.fromError(new DOMException("Aborted", "AbortError"), {
+          providerID: lastUser.model.providerID,
+        }),
       }
+      const created = yield* sessions.updateMessage(info)
+      return { info: created, parts: [] } as SessionV1.WithParts
       // kilocode_change end
-      throw new Error("Impossible")
     })
 
     // kilocode_change — mutable close-reason per session, set by runLoop and read by loop
@@ -1535,7 +1581,8 @@ export const layer = Layer.effect(
       const session = yield* sessions.get(sessionID).pipe(Effect.orDie)
 
       while (true) {
-        yield* status.set(sessionID, { type: "busy" })
+        // kilocode_change - single busy owner is the Runner epoch (onBusy on Starting->Running);
+        // runLoop iterations must not re-project busy per step.
         yield* slog.info("loop", { step })
 
         // kilocode_change start - provide the upstream Effect database to Kilo's retained prompt loop
@@ -2009,29 +2056,27 @@ export const layer = Layer.effect(
     const loop: (input: LoopInput) => Effect.Effect<MessageV2.WithParts, NotFoundError> = Effect.fn(
       "SessionPrompt.loop",
     )(function* (input: LoopInput) {
-      // kilocode_change start
+      // kilocode_change start - single-owner epoch: TurnOpen is the Runner prelude, TurnClose wraps body exit with same generation
       const session = yield* sessions.get(input.sessionID)
       yield* KiloSessionPrompt.recoverDanglingAssistant({ sessionID: input.sessionID, status, sessions })
       yield* KiloSessionPrompt.recoverProviderFinishError({ sessionID: input.sessionID, status, sessions })
-      yield* KiloSession.publishTurnOpen({ sessionID: input.sessionID })
-      return yield* Effect.onExit(
-        state.ensureRunning(
-          input.sessionID,
-          lastAssistant(input.sessionID).pipe(Effect.orDie),
-          withGenerationAdmission(config, runLoop(input).pipe(Effect.orDie)),
-        ), // kilocode_change
-        Effect.fnUntraced(function* (exit) {
-          yield* KiloSession.publishTurnClose({
-            sessionID: input.sessionID,
-            parentID: session.parentID,
-            reason: KiloSessionPrompt.resolveCloseReason({
-              sessionID: input.sessionID,
-              closeReasons,
-              exit,
-            }),
-          })
-        }),
-      )
+      const onInterrupt = lastAssistant(input.sessionID).pipe(Effect.orDie)
+      return yield* state.ensureRunning(input.sessionID, onInterrupt, {
+        prelude: (generationID: string) => KiloSession.publishTurnOpen({ sessionID: input.sessionID, generationID }),
+        body: (generationID: string) =>
+          withGenerationAdmission(config, runLoop(input).pipe(Effect.orDie)).pipe(
+            Effect.onExit(
+              Effect.fnUntraced(function* (exit) {
+                yield* KiloSession.publishTurnClose({
+                  sessionID: input.sessionID,
+                  parentID: session.parentID,
+                  reason: KiloSessionPrompt.resolveCloseReason({ sessionID: input.sessionID, closeReasons, exit }),
+                  generationID,
+                })
+              }),
+            ),
+          ),
+      })
       // kilocode_change end
     })
 

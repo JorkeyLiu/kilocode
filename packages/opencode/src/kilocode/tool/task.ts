@@ -151,18 +151,42 @@ export namespace KiloTask {
     const state = yield* saved(input.name)
     const cfg = parse(input.config.subagent_model)
     const override = (model: Model) => input.config.subagent_variant_overrides?.[key(model)] ?? undefined
-    // Model candidates in precedence order: exact agent configured model →
-    // configured subagent default → saved usage-memory model → parent.
+    // Explicit agent model is a pin, not a fallible candidate: when available
+    // it wins and its variant validates as usual; when unavailable it is
+    // preserved so the child prompt fails visibly instead of silently
+    // inheriting the parent. Configured subagent default and saved
+    // usage-memory models remain fallible and fall back to the parent.
+    const explicit: Choice | undefined = input.agent.model
+      ? { model: input.agent.model, explicit: input.agent.variant }
+      : undefined
+    if (explicit) {
+      const available = yield* input.provider.getModel(explicit.model.providerID, explicit.model.modelID).pipe(
+        Effect.catchTag("ProviderModelNotFoundError", (err) =>
+          Effect.sync(() => {
+            log.debug("preserving unavailable explicit task subagent model", {
+              providerID: explicit.model.providerID,
+              modelID: explicit.model.modelID,
+              err,
+            })
+            return undefined
+          }),
+        ),
+      )
+      // Without provider metadata the variant cannot be safely validated.
+      if (!available) return { model: explicit.model, variant: undefined }
+    }
+    // Fallible candidates in precedence order: configured subagent default →
+    // saved usage-memory model → parent.
     const candidates: Array<Choice | undefined> = [
-      input.agent.model ? { model: input.agent.model, explicit: input.agent.variant } : undefined,
       cfg ? { model: cfg, explicit: input.config.subagent_variant ?? undefined } : undefined,
       state?.model ? { model: state.model, sticky: true } : undefined,
     ]
 
     // Resolve the final model first; the variant is resolved for that exact
     // agent+model afterwards (see below).
-    let winner: Choice | undefined
+    let winner: Choice | undefined = explicit
     for (const choice of candidates) {
+      if (winner) break
       if (!choice) continue
       const full = yield* input.provider.getModel(choice.model.providerID, choice.model.modelID).pipe(
         Effect.catchTag("ProviderModelNotFoundError", (err) =>
