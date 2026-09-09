@@ -10,8 +10,9 @@ interface EpochConn {
 type OwnedHandle<TRes> = { id: number; promise: Promise<TRes>; cancel: (msg?: string) => boolean }
 
 // Epoch-guarded private handle shared by private-first carriers. Allocates the
-// exact request id synchronously, maps epoch drift or peer replacement to the
-// caller-supplied `vague` outcome, and cancels the exact pending on timeout.
+// exact request id synchronously, preserves a validated authoritative terminal
+// across post-response drift, maps only unresolved drift to the caller-supplied
+// `vague` outcome, and cancels the exact pending on timeout.
 // A stale captured handle cleans only its captured peer; only a current-epoch
 // exact-cancel miss invalidates the owner connection.
 export function wrapEpochHandle<TReq extends { opId: string }, TRes>(input: {
@@ -20,6 +21,7 @@ export function wrapEpochHandle<TReq extends { opId: string }, TRes>(input: {
   req: TReq
   call: (peer: ServePrivatePeer) => OwnedHandle<TRes>
   vague: (req: TReq) => TRes
+  settled?: (result: TRes, req: TReq) => boolean
 }): OwnedHandle<TRes> {
   const at = input.conn.epoch
   const peer = input.conn.peer
@@ -27,6 +29,7 @@ export function wrapEpochHandle<TReq extends { opId: string }, TRes>(input: {
   if (!peer.hasCapability(input.cap)) throw new Error(`Private peer missing ${input.cap} capability`)
   const handle = input.call(peer)
   const promise = handle.promise.then((result) => {
+    if (input.settled?.(result, input.req)) return result
     if (at !== null && input.conn.epoch !== at) return input.vague(input.req)
     if (input.conn.peer !== peer) return input.vague(input.req)
     return result

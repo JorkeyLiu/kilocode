@@ -579,3 +579,19 @@ export function reobserveAbortTerminal<T extends { opId: string; idempotencyKey:
   if (probe.idempotencyKey !== stored.idempotencyKey) throw new Error("re-observation idempotencyKey mismatch")
   return JSON.parse(JSON.stringify(stored)) as T
 }
+
+export function isSettledAbortResult(
+  result: unknown,
+  req: { requestId: string; opId: string; idempotencyKey: string },
+): boolean {
+  if (!isRecord(result)) return false
+  const kind = (result as { kind?: unknown }).kind
+  if (kind !== "terminal" && kind !== "terminal-failure") return false
+  const raw = result as Record<string, unknown>
+  if (raw.v !== 1) return false
+  if (raw.requestId !== req.requestId || raw.opId !== req.opId || raw.idempotencyKey !== req.idempotencyKey)
+    return false
+  if (raw.terminal !== true) return false
+  if (kind === "terminal") return raw.accepted === true
+  return raw.accepted === false && raw.sideEffect === false
+}

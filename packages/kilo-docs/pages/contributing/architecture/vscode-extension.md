@@ -110,7 +110,7 @@ B5 adds a fourth bounded private path for `session/delete` (durable lane) over t
 
 ## Private `session/abort` carrier — private-first terminal, same AppLayer
 
-Abort is private-first over the same `kilo serve` fd3/fd4 into the same `AppRuntime` cancellation owner. Valid private `terminal` returns only after runtime terminal convergence with zero SDK; `terminal-failure` (`session.not_found`/`scope_mismatch`, retryable false) closes terminally with zero SDK; otherwise exactly one legacy SDK `POST /session/:sessionID/abort` runs. The HTTP/SDK boolean wire is unchanged and abort stays out of the durable `session_operation`/tombstone model.
+Abort is private-first over the same `kilo serve` fd3/fd4 into the same `AppRuntime` cancellation owner. Validated private `terminal` returns only after runtime terminal convergence with zero SDK and survives post-response drift; `terminal-failure` (`session.not_found`/`scope_mismatch`, retryable false) closes terminally with zero SDK including across drift; only unresolved drift plus invalid/ambiguous/transport/closed/timeout runs exactly one legacy SDK `POST /session/:sessionID/abort`. The HTTP/SDK boolean wire is unchanged and abort stays out of the durable `session_operation`/tombstone model.
 
 | Aspect | Behavior |
 |---|---|
@@ -118,6 +118,17 @@ Abort is private-first over the same `kilo serve` fd3/fd4 into the same `AppRunt
 | Identity | `abort:<sessionId>:<token>` for both `opId` and `idempotencyKey` plus fresh `requestId` and `context {directory, sessionId}` with empty `payload`. Generation IDs come only from the owner `CancelTreeResult`, never the request token. |
 | Ownership | `kilo serve` `fd-carrier.ts` `session/abort` validates scope, checks `Session.Service.get` (`session.not_found`) and canonical directory (`scope_mismatch`), then awaits `KiloSessionPrompt.cancelTree` over `SessionRunState` before returning `terminal`. Extension `abortSessionPrivateFirst` uses the single canonical workspace directory (no multi-directory fan-out) with 3 s exact-cancel/epoch semantics. |
 | Projection | Extension never fabricates `idle` or `sessionTurnClosed` after the request; runtime SSE `session.turn.close(reason interrupted, generationID)` and `session.status idle` remain the projection facts. `handleAbort` keeps only local request/error cleanup. |
+
+## Private `question/reply` + `question/reject` carrier — private-first terminal, same AppLayer
+
+Question reply/reject is private-first over the same `kilo serve` fd3/fd4 into the same `AppRuntime` `Question.Service` pending map. Validated private `terminal` returns only after `pending.delete` + event publish + Deferred settle with zero SDK and survives post-response drift; `terminal-failure` (`question.not_found`/`scope_mismatch`, retryable false, sideEffect false) closes terminally with zero SDK including across drift and existing stale/recover UI; only unresolved drift plus invalid/ambiguous/transport/closed/timeout runs exactly one same-tuple SDK `question.reply`/`question.reject`. The HTTP/SDK wire is unchanged and question stays out of the durable operation/revision/tombstone model. QuestionDock UI is unchanged; helper success keeps optimistic `clearQuestionDirectory` with SSE double-clear idempotent.
+
+| Aspect | Behavior |
+|---|---|
+| Spawn & streams | Reuses the same `ServerManager` 5-stdio carrier. `FD_CAPABILITIES` adds `question/reply`, `question/reject`. |
+| Identity | `question:<requestID>:<token>` for both `opId` and `idempotencyKey` plus fresh `requestId`, `op` `question/reply` or `question/reject`, `context {directory,requestID}`, reply payload reuses `Question.Reply` (`answers: string[][]`, empty allowed), reject payload `{}`. No `sessionID`; carrier backfills terminal `sessionID` from `PendingEntry`. Strict unknown-field reject; `op`/`context`/`opId` binding mismatch returns `scope_mismatch` with no side effect. |
+| Ownership | `fd-carrier.ts` validates, resolves canonical directory, acquires the existing `questionReply`/`questionReject` drain-control snapshot-first lane with lease held through `replyQuestionPrivate`/`rejectQuestionPrivate`. Extension uses single `privateQuestionWithHandle` via `wrapEpochHandle` with 3 s exact-cancel/epoch semantics. |
+| Projection | `handleQuestionReply`/`handleQuestionReject` keep existing interfaces and stale/recover semantics; private `terminal` clears optimistically, private `not_found` follows origin-stale versus recover, `scope_mismatch`/non-404 posts `questionError` without clear, fallback 404 follows the same stale/recover path. |
 
 ## Lifecycle and fork artifact ownership hardening (systemic, B4)
 

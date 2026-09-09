@@ -7,12 +7,16 @@
  */
 
 import type { KiloClient, QuestionRequest } from "@kilocode/sdk/v2/client"
+import { rejectQuestionPrivateFirst, replyQuestionPrivateFirst } from "../question-privatefirst"
+
+type PrivateConn = Parameters<typeof replyQuestionPrivateFirst>[0]["connection"]
 
 export interface QuestionContext {
   readonly client: KiloClient | null
   readonly currentSessionId: string | undefined
   readonly trackedSessionIds: Set<string>
   readonly sessionDirectories: ReadonlyMap<string, string>
+  readonly connection?: PrivateConn
   postMessage(msg: unknown): void
   getWorkspaceDirectory(sessionId?: string): string
   recordQuestionDirectory(requestID: string, directory: string): void
@@ -128,6 +132,31 @@ export async function handleQuestionReply(
   const dir = origin ?? ctx.getWorkspaceDirectory(sid)
 
   try {
+    const priv = await replyQuestionPrivateFirst({ connection: ctx.connection ?? null, directory: dir, requestID, answers })
+    if (priv.outcome.kind === "terminal") {
+      ctx.clearQuestionDirectory(requestID)
+      return true
+    }
+    if (priv.outcome.kind === "terminal-failure") {
+      if (priv.outcome.code === "question.not_found" && origin) {
+        stale(ctx, requestID)
+        return false
+      }
+      if (priv.outcome.code === "question.not_found" && (await recover(ctx, requestID))) return false
+      if (priv.outcome.code === "question.not_found") {
+        console.error("[Kilo New] KiloProvider: Failed to reply to question:", priv.outcome.code)
+        ctx.postMessage({ type: "questionError", requestID })
+        return false
+      }
+      console.error("[Kilo New] KiloProvider: Failed to reply to question:", priv.outcome.code)
+      ctx.postMessage({ type: "questionError", requestID })
+      return false
+    }
+  } catch (error) {
+    console.error("[Kilo New] KiloProvider: Private reply attempt failed, falling back:", error)
+  }
+
+  try {
     await ctx.client.question.reply({ requestID, answers, directory: dir }, { throwOnError: true })
     ctx.clearQuestionDirectory(requestID)
     return true
@@ -157,6 +186,31 @@ export async function handleQuestionReject(
   const sid = sessionID ?? ctx.currentSessionId
   const origin = ctx.getQuestionDirectory(requestID)
   const dir = origin ?? ctx.getWorkspaceDirectory(sid)
+
+  try {
+    const priv = await rejectQuestionPrivateFirst({ connection: ctx.connection ?? null, directory: dir, requestID })
+    if (priv.outcome.kind === "terminal") {
+      ctx.clearQuestionDirectory(requestID)
+      return true
+    }
+    if (priv.outcome.kind === "terminal-failure") {
+      if (priv.outcome.code === "question.not_found" && origin) {
+        stale(ctx, requestID)
+        return false
+      }
+      if (priv.outcome.code === "question.not_found" && (await recover(ctx, requestID))) return false
+      if (priv.outcome.code === "question.not_found") {
+        console.error("[Kilo New] KiloProvider: Failed to reject question:", priv.outcome.code)
+        ctx.postMessage({ type: "questionError", requestID })
+        return false
+      }
+      console.error("[Kilo New] KiloProvider: Failed to reject question:", priv.outcome.code)
+      ctx.postMessage({ type: "questionError", requestID })
+      return false
+    }
+  } catch (error) {
+    console.error("[Kilo New] KiloProvider: Private reject attempt failed, falling back:", error)
+  }
 
   try {
     await ctx.client.question.reject({ requestID, directory: dir }, { throwOnError: true })

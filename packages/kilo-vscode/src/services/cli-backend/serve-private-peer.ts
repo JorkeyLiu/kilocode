@@ -95,6 +95,22 @@ import type {
   AbortDispositionTerminal,
   AbortTerminalFailure,
 } from "./serve-private-abort-contract"
+import {
+  makeQuestionAmbiguous,
+  validateQuestionRejectContractRequest,
+  validateQuestionReplyContractRequest,
+  validateQuestionReplyResult,
+  validateQuestionRejectResult,
+  validateQuestionTerminalFailure,
+} from "./serve-private-question-contract"
+import type {
+  QuestionAmbiguous,
+  QuestionContractRequest,
+  QuestionRejectContractRequest,
+  QuestionReplyContractRequest,
+  QuestionTerminal,
+  QuestionTerminalFailure,
+} from "./serve-private-question-contract"
 
 export {
   canonicalGetOpId,
@@ -1035,6 +1051,66 @@ export function validateAbortResult(raw: unknown, req: ServePrivateAbortRequest)
   throw new Error(`abort result kind must be terminal or terminal-failure, got ${String(kind)}`)
 }
 
+export type ServePrivateQuestionReplyRequest = QuestionReplyContractRequest
+export type ServePrivateQuestionRejectRequest = QuestionRejectContractRequest
+export type ServePrivateQuestionResult = QuestionTerminal | QuestionTerminalFailure | QuestionAmbiguous
+
+export function validateQuestionReplyRequest(raw: unknown): ServePrivateQuestionReplyRequest {
+  return validateQuestionReplyContractRequest(raw)
+}
+
+export function validateQuestionRejectRequest(raw: unknown): ServePrivateQuestionRejectRequest {
+  return validateQuestionRejectContractRequest(raw)
+}
+
+export function validateQuestionReplyOutcome(
+  raw: unknown,
+  req: ServePrivateQuestionReplyRequest,
+): ServePrivateQuestionResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  const kind = raw.kind
+  if (kind === "terminal") return validateQuestionReplyResult(raw, req)
+  if (kind === "terminal-failure") return validateQuestionTerminalFailure(raw, req)
+  if (kind === "ambiguous") {
+    const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "transportUnknown"])
+    for (const k of Object.keys(raw)) {
+      if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
+    }
+    if (raw.v !== 1) throw new Error("v must be 1")
+    if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+    if (raw.opId !== req.opId) throw new Error("opId mismatch")
+    if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+    if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+    if (raw.terminal !== false) throw new Error("ambiguous terminal must be false")
+    return raw as unknown as ServePrivateQuestionResult
+  }
+  throw new Error(`question reply result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
+}
+
+export function validateQuestionRejectOutcome(
+  raw: unknown,
+  req: ServePrivateQuestionRejectRequest,
+): ServePrivateQuestionResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  const kind = raw.kind
+  if (kind === "terminal") return validateQuestionRejectResult(raw, req)
+  if (kind === "terminal-failure") return validateQuestionTerminalFailure(raw, req)
+  if (kind === "ambiguous") {
+    const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "transportUnknown"])
+    for (const k of Object.keys(raw)) {
+      if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
+    }
+    if (raw.v !== 1) throw new Error("v must be 1")
+    if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+    if (raw.opId !== req.opId) throw new Error("opId mismatch")
+    if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+    if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+    if (raw.terminal !== false) throw new Error("ambiguous terminal must be false")
+    return raw as unknown as ServePrivateQuestionResult
+  }
+  throw new Error(`question reject result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
+}
+
 function isNonEmptyString(v: unknown): boolean {
   return typeof v === "string" && v.length > 0
 }
@@ -1845,6 +1921,8 @@ export class ServePrivatePeer {
         "experimental/session/list",
         "path/get",
         "find/files",
+        "question/reply",
+        "question/reject",
       ],
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
@@ -2521,6 +2599,8 @@ export class ServePrivatePeer {
       if (cap === "path/get" && c["path/get"]) return true
       if (cap === "command/list" && c["command/list"]) return true
       if (cap === "find/files" && c["find/files"]) return true
+      if (cap === "question/reply" && c["question/reply"]) return true
+      if (cap === "question/reject" && c["question/reject"]) return true
     }
     return false
   }
@@ -2713,7 +2793,6 @@ export class ServePrivatePeer {
     const promise = (async (): Promise<ServePrivateAbortResult> => {
       try {
         const raw = (await rawPromise) as unknown
-        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeAbortAmbiguous(req)
         try {
           return validateAbortResult(raw, req)
         } catch {
@@ -2722,6 +2801,82 @@ export class ServePrivatePeer {
       } catch (e: unknown) {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeAbortAmbiguous(req)
         return makeAbortAmbiguous(req)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateQuestionReply(req: ServePrivateQuestionReplyRequest): Promise<ServePrivateQuestionResult> {
+    const handle = this.privateQuestionReplyWithHandle(req)
+    return handle.promise
+  }
+
+  privateQuestionReplyWithHandle(req: ServePrivateQuestionReplyRequest): {
+    id: number
+    promise: Promise<ServePrivateQuestionResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateQuestionReplyRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("question/reply")) {
+      throw new Error("Private peer missing question/reply capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("question/reply", req)
+    const promise = (async (): Promise<ServePrivateQuestionResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        try {
+          return validateQuestionReplyOutcome(raw, req)
+        } catch {
+          return makeQuestionAmbiguous(req)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeQuestionAmbiguous(req)
+        return makeQuestionAmbiguous(req)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateQuestionReject(req: ServePrivateQuestionRejectRequest): Promise<ServePrivateQuestionResult> {
+    const handle = this.privateQuestionRejectWithHandle(req)
+    return handle.promise
+  }
+
+  privateQuestionRejectWithHandle(req: ServePrivateQuestionRejectRequest): {
+    id: number
+    promise: Promise<ServePrivateQuestionResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateQuestionRejectRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("question/reject")) {
+      throw new Error("Private peer missing question/reject capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("question/reject", req)
+    const promise = (async (): Promise<ServePrivateQuestionResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        try {
+          return validateQuestionRejectOutcome(raw, req)
+        } catch {
+          return makeQuestionAmbiguous(req)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeQuestionAmbiguous(req)
+        return makeQuestionAmbiguous(req)
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)

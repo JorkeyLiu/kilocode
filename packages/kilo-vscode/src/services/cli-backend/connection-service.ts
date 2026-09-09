@@ -21,6 +21,9 @@ import {
   type ServePrivateDeleteResult,
   type ServePrivateAbortRequest,
   type ServePrivateAbortResult,
+  type ServePrivateQuestionRejectRequest,
+  type ServePrivateQuestionReplyRequest,
+  type ServePrivateQuestionResult,
   type PrivateStatusWireOutcome,
   type PrivateGetWireOutcome,
   type PrivateMessagesWireOutcome,
@@ -58,7 +61,8 @@ import { DeferredChildren, wrapChildrenOutcomeForOwner } from "./serve-private-c
 import { DeferredRemoteStatus, wrapRemoteStatusOutcomeForOwner } from "./serve-private-remote-status"
 import { buildSessionUpdateIdentity, renameSessionWithResult } from "../../kilo-provider/rename-session"
 import { isE2EFixtureEnabled } from "../../util/e2e-fixture"
-import { makeAbortAmbiguous } from "./serve-private-abort-contract"
+import { isSettledAbortResult, makeAbortAmbiguous } from "./serve-private-abort-contract"
+import { questionRejectHandle, questionReplyHandle } from "./serve-private-question-connection"
 import { wrapEpochHandle } from "./serve-private-epoch"
 
 export type ConnectionState = "connecting" | "connected" | "disconnected" | "error"
@@ -2018,12 +2022,25 @@ export class KiloConnectionService {
       req,
       call: (peer) => peer.privateAbortWithHandle(req),
       vague: (r) => makeAbortAmbiguous(r) as unknown as ServePrivateAbortResult,
+      settled: (result, want) => isSettledAbortResult(result, want),
     })
   }
 
   async privateAbort(req: ServePrivateAbortRequest): Promise<ServePrivateAbortResult> {
     const handle = this.privateAbortWithHandle(req)
     return handle.promise
+  }
+
+  privateQuestionWithHandle(req: ServePrivateQuestionReplyRequest | ServePrivateQuestionRejectRequest) {
+    const deps = {
+      peer: this.privatePeer,
+      live: this.privateAvailable,
+      epoch: this.privateEpoch,
+      invalidate: (reason: string) => this.invalidatePrivatePeerOnObserverTimeout(reason),
+    }
+    if ((req as { op: string }).op === "question/reply")
+      return questionReplyHandle(deps, req as ServePrivateQuestionReplyRequest)
+    return questionRejectHandle(deps, req as ServePrivateQuestionRejectRequest)
   }
 
   privateStatusWithHandle(req: ServePrivateStatusRequest): {
