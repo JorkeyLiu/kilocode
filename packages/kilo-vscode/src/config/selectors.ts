@@ -67,8 +67,8 @@ export interface AgentIndexEntry {
   readonly displayName: string
   /** Description from frontmatter. */
   readonly description?: string
-  /** Mode from frontmatter. */
-  readonly mode?: "primary" | "secondary" | "specialized"
+  /** Mode from frontmatter (CLI vocabulary: subagent|primary|all). */
+  readonly mode?: "subagent" | "primary" | "all"
   /** Whether the agent is hidden. */
   readonly hidden: boolean
   /** Color from frontmatter. */
@@ -285,7 +285,7 @@ export function mapProviderIndexToWebviewProviders(index: ProviderIndex): Record
  */
 export function buildAgentIndex(
   snapshot: ConfigSnapshot,
-  agentEntries: Array<{ id: string; displayName: string; description?: string; mode?: "primary" | "secondary" | "specialized"; hidden?: boolean; color?: string; source: "global" | "project"; filePath?: string; frontmatter?: Record<string, unknown>; body?: string; assetHash?: string }>,
+  agentEntries: Array<{ id: string; displayName: string; description?: string; mode?: "subagent" | "primary" | "all"; hidden?: boolean; color?: string; source: "global" | "project"; filePath?: string; frontmatter?: Record<string, unknown>; body?: string; assetHash?: string }>,
   existingSelectedId: string | null,
 ): AgentIndex {
   const config = snapshot.config

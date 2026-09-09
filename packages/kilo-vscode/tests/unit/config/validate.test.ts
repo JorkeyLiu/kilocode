@@ -166,12 +166,13 @@ name: test-agent
 description: A test agent
 model: anthropic/claude-sonnet-4-20250514
 tools:
-  - read
-  - write
+  read: true
+  write: true
 permission:
   read: allow
 requirements:
-  - node
+  skills:
+    - node
 ---
 # Agent prompt content`
       const result = validateMarkdownAsset(text, "agent", "test.md")
@@ -187,13 +188,14 @@ model: anthropic/claude-sonnet-4-20250514
 variant: thinking
 prompt: You are helpful
 tools:
-  - read
+  read: true
 permission:
   read: allow
 requirements:
-  - bun
+  skills:
+    - bun
 hidden: true
-color: blue
+color: accent
 maxSteps: 10
 mode: primary
 ---
@@ -202,13 +204,105 @@ Body`
       expect(result.valid).toBe(true)
     })
 
-    it("rejects agent with invalid model format", () => {
+    it("accepts CLI mode values subagent/primary/all", () => {
+      for (const mode of ["subagent", "primary", "all"] as const) {
+        const text = `---
+name: mode-agent
+mode: ${mode}
+---
+Body`
+        expect(validateMarkdownAsset(text, "agent", "test.md").valid).toBe(true)
+      }
+    })
+
+    it("accepts null delete sentinels for model/variant", () => {
+      const text = `---
+name: null-agent
+model: null
+variant: null
+temperature: null
+top_p: null
+prompt: null
+description: null
+steps: null
+---
+Body`
+      const result = validateMarkdownAsset(text, "agent", "test.md")
+      expect(result.valid).toBe(true)
+    })
+
+    it("rejects string[] tools (CLI uses Record<string,boolean>)", () => {
+      const text = `---
+name: bad-tools
+tools:
+  - read
+---
+Body`
+      expect(validateMarkdownAsset(text, "agent", "test.md").valid).toBe(false)
+    })
+
+    it("accepts record tools", () => {
+      const text = `---
+name: record-tools
+tools:
+  read: true
+  write: false
+---
+Body`
+      expect(validateMarkdownAsset(text, "agent", "test.md").valid).toBe(true)
+    })
+
+    it("rejects bare-array requirements (CLI uses object shape)", () => {
+      const text = `---
+name: bad-req
+requirements:
+  - bun
+---
+Body`
+      expect(validateMarkdownAsset(text, "agent", "test.md").valid).toBe(false)
+    })
+
+    it("accepts object requirements", () => {
+      const text = `---
+name: good-req
+requirements:
+  skills:
+    - bun
+---
+Body`
+      expect(validateMarkdownAsset(text, "agent", "test.md").valid).toBe(true)
+    })
+
+    it("rejects invalid permission values", () => {
+      const text = `---
+name: bad-perm
+permission:
+  read: sometimes
+---
+Body`
+      expect(validateMarkdownAsset(text, "agent", "test.md").valid).toBe(false)
+    })
+
+    it("accepts allow/ask/deny/null permission values", () => {
+      const text = `---
+name: good-perm
+permission:
+  read: allow
+  edit:
+    "*": ask
+  bash: null
+---
+Body`
+      expect(validateMarkdownAsset(text, "agent", "test.md").valid).toBe(true)
+    })
+
+    it("accepts any CLI model string in agent frontmatter (no provider/model gate)", () => {
       const text = `---
 model: invalid-no-slash
 ---
 Body`
       const result = validateMarkdownAsset(text, "agent", "test.md")
-      expect(result.valid).toBe(false)
+      expect(result.valid).toBe(true)
     })
 
     it("rejects agent with empty name", () => {
@@ -319,15 +413,18 @@ describe("validateCrossScope", () => {
 // ── F4: Asset schemas reject unknown keys ────────────────────────────
 
 describe("F4: asset schemas reject unknown keys", () => {
-  it("rejects unknown key in agent frontmatter", () => {
+  it("accepts unknown keys in agent frontmatter (CLI rest/options semantics)", () => {
     const text = `---
 name: test-agent
 unknownField: some-value
+disabled: true
 ---
 Body`
     const result = validateMarkdownAsset(text, "agent", "test.md")
-    expect(result.valid).toBe(false)
-    expect(result.errors.some((e) => e.message.includes("Unrecognized"))).toBe(true)
+    expect(result.valid).toBe(true)
+    // Unknown keys round-trip verbatim so CLI normalize can merge them into options.
+    expect(result.data?.unknownField).toBe("some-value")
+    expect(result.data?.disabled).toBe(true)
   })
 
   it("rejects unknown key in command frontmatter", () => {
@@ -359,13 +456,14 @@ model: anthropic/claude-sonnet-4-20250514
 variant: thinking
 prompt: You are helpful
 tools:
-  - read
+  read: true
 permission:
   read: allow
 requirements:
-  - bun
+  skills:
+    - bun
 hidden: true
-color: blue
+color: accent
 maxSteps: 10
 mode: primary
 ---
@@ -643,19 +741,94 @@ apiKey: sk-1234567890
 Body`
     const result = validateMarkdownAsset(text, "agent", "test.md")
     expect(result.valid).toBe(false)
-    expect(result.errors.some((e) => e.message.includes("Plaintext credential"))).toBe(true)
+    expect(result.errors.some((e) => e.message.includes("must not contain credentials"))).toBe(true)
   })
 
-  it("rejects agent with unknown credential reference field", () => {
-    const text = `---
+  it("rejects credentials AND credential refs in agent fields (no agent credential mechanism)", () => {
+    for (const value of ["hunter2-plaintext-token", "secret:agent-key"]) {
+      const result = validateMarkdownAsset(
+        `---
 name: test-agent
-apiKey: secret:agent-key
+apiKey: ${value}
 ---
-Body`
-    const result = validateMarkdownAsset(text, "agent", "test.md")
-    // apiKey is not a defined agent frontmatter field — rejected as unknown key
-    expect(result.valid).toBe(false)
-    expect(result.errors.some((e) => e.message.includes("Unrecognized"))).toBe(true)
+Body`,
+        "agent",
+        "test.md",
+      )
+      expect(result.valid).toBe(false)
+      expect(result.errors.some((e) => e.message.includes("must not contain credentials"))).toBe(true)
+    }
+  })
+
+  it("rejects agent credential keys across case/separator variants, known and unknown", () => {
+    const keys = [
+      "apiKey",
+      "api_key",
+      "API-KEY",
+      "ApiKey",
+      "token",
+      "TOKEN",
+      "Token",
+      "secret",
+      "SECRET",
+      "password",
+      "Password",
+      "PASSWORD",
+      "credential",
+      "Credential",
+      "cookie",
+      "COOKIES",
+      "authorization",
+      "Authorization",
+      "headers",
+      "Headers",
+      "client_secret",
+      "CLIENT-ID",
+      "access_token",
+      "bearer",
+    ]
+    for (const key of keys) {
+      const result = validateMarkdownAsset(`---\nname: test-agent\n${key}: hunter2\n---\nBody`, "agent", "test.md")
+      expect(result.valid).toBe(false)
+    }
+  })
+
+  it("rejects agent credentials nested in options and unknown objects, accepts null/empty", () => {
+    const nested = validateMarkdownAsset(
+      `---
+name: test-agent
+options:
+  customParam: 1
+  api_key: hunter2
+---
+Body`,
+      "agent",
+      "test.md",
+    )
+    expect(nested.valid).toBe(false)
+    expect(nested.errors.some((e) => e.message.includes("must not contain credentials"))).toBe(true)
+    for (const value of ["null", "~", "''"]) {
+      const result = validateMarkdownAsset(`---\nname: test-agent\napiKey: ${value}\n---\nBody`, "agent", "test.md")
+      expect(result.valid).toBe(true)
+    }
+    const empty = validateMarkdownAsset(`---\nname: test-agent\napiKey: ""\n---\nBody`, "agent", "test.md")
+    expect(empty.valid).toBe(true)
+  })
+
+  it("does not mistake benign agent keys/values for credentials", () => {
+    const result = validateMarkdownAsset(
+      `---
+name: test-agent
+description: Sets the Authorization header for proxied requests when credentialRequested is false
+mode: primary
+disabled: true
+credentialRequested: false
+---
+Body`,
+      "agent",
+      "test.md",
+    )
+    expect(result.valid).toBe(true)
   })
 
   it("rejects plaintext token in command frontmatter", () => {
@@ -676,7 +849,7 @@ password: hunter2
 Body`
     const result = validateMarkdownAsset(text, "agent", "test.md")
     expect(result.valid).toBe(false)
-    expect(result.errors.some((e) => e.message.includes("Plaintext credential"))).toBe(true)
+    expect(result.errors.some((e) => e.message.includes("must not contain credentials"))).toBe(true)
   })
 })
 

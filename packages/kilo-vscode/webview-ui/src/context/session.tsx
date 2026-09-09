@@ -95,6 +95,12 @@ import { isSameSessionTree } from "./model-usage"
 import { createDraftAgentSeed } from "./session-agent"
 import { seedPendingChoices } from "./session-pending"
 import type { CanonicalStamp } from "../../../src/config/types"
+import {
+  agentMutationDiagnostic,
+  createAgentMutationCoordinator,
+  type AgentMutationCoordinator,
+  type AgentMutationResult,
+} from "./agent-mutations"
 
 const RECENT_LIMIT = 5
 const MESSAGE_PAGE_LIMIT = 80
@@ -253,7 +259,14 @@ interface SessionContextValue {
     name: string
     frontmatter: Record<string, unknown>
     body: string
-  }) => void
+  }) => Promise<AgentMutationResult>
+  scheduleAgentEdit: (
+    name: string,
+    patch: { frontmatter?: Record<string, unknown>; body?: string },
+  ) => Promise<AgentMutationResult>
+  flushAgentEdits: (name?: string) => void
+  cancelAgentMutations: () => void
+  isAgentPending: (name: string) => boolean
   agentDiagnostic: Accessor<string | null>
   removeMcp: (name: string) => void
 
@@ -500,23 +513,87 @@ export const SessionProvider: ParentComponent = (props) => {
     vscode.postMessage({ type: "removeAgent", name })
   }
 
+  // Single ownership for canonical agent writes: the coordinator serializes
+  // per-agent edits, coalesces rapid typing, and settles each mutation ONLY
+  // on its own matching Applied/Error (by requestId). Unrelated request
+  // events never clear another mutation's pending state.
+  const [pendingAgents, setPendingAgents] = createSignal<Record<string, { requestId: string; action: string }>>({})
+  const coordinator: AgentMutationCoordinator = createAgentMutationCoordinator({
+    post: (wire) => {
+      vscode.postMessage({ type: "mutateAgent", ...wire, canonical: true })
+    },
+    getStamp: () => agentStamp(),
+    getIdentity: (name) => {
+      const item = allAgents().find((agent) => agent.name === name)
+      if (!item?.scope || !item.assetHash) return undefined
+      return { scope: item.scope, assetHash: item.assetHash, native: item.native, frontmatter: item.frontmatter, body: item.body }
+    },
+    exists: (name) => allAgents().some((agent) => agent.name === name),
+    makeId: () => crypto.randomUUID(),
+    onSend: (info) => {
+      setPendingAgents((prev) => ({ ...prev, [info.name]: { requestId: info.requestId, action: info.action } }))
+    },
+    onSettle: (info) => {
+      setPendingAgents((prev) => {
+        if (prev[info.name]?.requestId !== info.requestId) return prev
+        const next = { ...prev }
+        delete next[info.name]
+        return next
+      })
+    },
+  })
+  onCleanup(() => coordinator.dispose())
+
+  const reportMutation = (result: AgentMutationResult): AgentMutationResult => {
+    // Promise-scoped diagnostics only: a failure reports its own message;
+    // success relies on the following agentsLoaded refresh to clear state.
+    // Never touched by unrelated request events. Owner-independent on
+    // purpose: the provider outlives every view, so a flush triggered by
+    // unmount/agent-switch still surfaces its failure. Views guard only
+    // their own signals (navigation, local error state) with an OwnerGuard.
+    const diagnostic = agentMutationDiagnostic(result)
+    if (diagnostic !== null) setAgentDiagnostic(diagnostic)
+    return result
+  }
+
   const mutateAgent = (input: {
     action: "create" | "edit" | "import"
     name: string
     frontmatter: Record<string, unknown>
     body: string
-  }) => {
-    const item = allAgents().find((agent) => agent.name === input.name)
-    if (canonical?.() && !agentStamp()) return
-    vscode.postMessage({
-      type: "mutateAgent",
-      ...input,
-      scope: item?.scope ?? "project",
-      expectedHash: item?.assetHash ?? "absent",
-      ...(agentStamp() ? { stamp: { ...agentStamp()!, assetHash: item?.assetHash ?? "absent" } } : {}),
-      requestId: crypto.randomUUID(),
-    })
+  }): Promise<AgentMutationResult> => {
+    // Legacy (non-canonical) path preserves prior fire-and-forget behaviour;
+    // there is no canonical stamp ownership outside canonical mode.
+    if (!canonical?.()) {
+      const item = allAgents().find((agent) => agent.name === input.name)
+      const requestId = crypto.randomUUID()
+      vscode.postMessage({
+        type: "mutateAgent",
+        ...input,
+        scope: item?.scope ?? "project",
+        expectedHash: item?.assetHash ?? "absent",
+        ...(agentStamp() ? { stamp: { ...agentStamp()!, assetHash: item?.assetHash ?? "absent" } } : {}),
+        requestId,
+      })
+      return Promise.resolve({ ok: true, requestId, name: input.name, action: input.action, contentHash: "" })
+    }
+    return coordinator.submit(input).then(reportMutation)
   }
+
+  const scheduleAgentEdit = (
+    name: string,
+    patch: { frontmatter?: Record<string, unknown>; body?: string },
+  ): Promise<AgentMutationResult> => coordinator.scheduleEdit(name, patch).then(reportMutation)
+
+  const flushAgentEdits = (name?: string): void => {
+    coordinator.flush(name)
+  }
+
+  const cancelAgentMutations = (): void => {
+    coordinator.cancelAll()
+  }
+
+  const isAgentPending = (name: string): boolean => pendingAgents()[name] !== undefined
 
   const removeMcp = (name: string) => {
     if (canonical?.()) {
@@ -1024,7 +1101,12 @@ export const SessionProvider: ParentComponent = (props) => {
   // pattern used by ProviderProvider for providersLoaded.
   const unsubAgents = vscode.onMessage((message: ExtensionMessage) => {
     if (message.type !== "agentsLoaded") {
-      if (message.type === "agentMutationError") setAgentDiagnostic(message.message)
+      // Owned settlement only: the coordinator resolves the exact waiter by
+      // requestId (which reports its own diagnostic via the awaiting call).
+      // Unknown/stale request events are ignored and never clear others.
+      if (message.type === "agentMutationApplied" || message.type === "agentMutationError") {
+        coordinator.handleMessage(message as { type: string; requestId?: unknown; name?: unknown; contentHash?: unknown; message?: unknown; kind?: unknown })
+      }
       return
     }
     // P4.1: ignore legacy (non-canonical) agentsLoaded when canonical mode is active.
@@ -3151,6 +3233,10 @@ export const SessionProvider: ParentComponent = (props) => {
     removeSkill,
     removeAgent,
     mutateAgent,
+    scheduleAgentEdit,
+    flushAgentEdits,
+    cancelAgentMutations,
+    isAgentPending,
     agentDiagnostic,
     removeMcp,
     mcpStatus,

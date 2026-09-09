@@ -261,16 +261,17 @@ description: Reviews code for quality and security
 model: ${VALID_MODEL}
 variant: thinking
 tools:
-  - read
-  - grep
+  read: true
+  grep: true
 permission:
   read: allow
   write: deny
 requirements:
-  - bun
+  skills:
+    - bun
 hidden: false
 maxSteps: 20
-mode: specialized
+mode: subagent
 ---
 You are a code reviewer. Analyze the code for:
 - Security vulnerabilities
@@ -282,7 +283,7 @@ You are a code reviewer. Analyze the code for:
     expect(result.data).toBeDefined()
     expect(result.data!.name).toBe("code-reviewer")
     expect(result.data!.model).toBe(VALID_MODEL)
-    expect(result.data!.tools).toEqual(["read", "grep"])
+    expect(result.data!.tools).toEqual({ read: true, grep: true })
     expect(result.data!.permission).toEqual({ read: "allow", write: "deny" })
     expect(result.content).toContain("You are a code reviewer")
   })

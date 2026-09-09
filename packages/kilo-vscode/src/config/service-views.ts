@@ -37,7 +37,7 @@ export interface AgentEntryView {
   readonly id: string
   readonly displayName: string
   readonly description?: string
-  readonly mode?: "primary" | "secondary" | "specialized"
+  readonly mode?: "subagent" | "primary" | "all"
   readonly hidden?: boolean
   readonly color?: string
   readonly source: "global" | "project"
@@ -102,7 +102,10 @@ export function assembleAssetMarkdown(frontmatter: Record<string, unknown>, body
   const parts: string[] = ["---\n"]
   const { stringify: yamlStr, parseDocument: yamlParseDoc } = require("yaml")
   const doc = yamlParseDoc("")
-  doc.contents = new Map(Object.entries(frontmatter)) as any
+  // Drop undefined keys (field cleared in UI); preserve null delete sentinels
+  // so CLI ConfigAgentV1 NullOr normalization observes them.
+  const clean = Object.fromEntries(Object.entries(frontmatter).filter(([, v]) => v !== undefined))
+  doc.contents = new Map(Object.entries(clean)) as any
   parts.push(yamlStr(doc))
   parts.push("---\n")
   if (body) {
@@ -165,8 +168,8 @@ export function buildAgentEntriesFromScan(scan: AssetScanResult, paths: Canonica
           (typeof fm.name === "string" ? fm.name : e.id),
         description: typeof fm.description === "string" ? fm.description : undefined,
         mode:
-          fm.mode === "primary" || fm.mode === "secondary" || fm.mode === "specialized"
-            ? (fm.mode as "primary" | "secondary" | "specialized")
+          fm.mode === "primary" || fm.mode === "subagent" || fm.mode === "all"
+            ? (fm.mode as "primary" | "subagent" | "all")
             : undefined,
         hidden: typeof fm.hidden === "boolean" ? fm.hidden : undefined,
         color: typeof fm.color === "string" ? fm.color : undefined,

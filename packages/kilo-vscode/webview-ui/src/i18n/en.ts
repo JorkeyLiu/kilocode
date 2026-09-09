@@ -1466,6 +1466,8 @@ export const dict = {
   "settings.agentBehaviour.importMode.nameTaken": "A mode with this name already exists.",
   "settings.agentBehaviour.importMode.invalidJson": "Invalid JSON file. Please select a valid agent definition file.",
   "settings.agentBehaviour.importMode.tooLarge": "File is too large. Agent definitions must be under 1 MB.",
+  "settings.agentBehaviour.importMode.invalidField":
+    "Invalid field value. The file contains a value the agent loader rejects (for example an unknown mode, a scalar permission, a text tools list, or invalid color/requirements).",
   "settings.agentBehaviour.exportMode": "Export agent definition",
   "settings.agentBehaviour.editMode": "Edit Mode",
   "settings.agentBehaviour.editMode.description": "Description",

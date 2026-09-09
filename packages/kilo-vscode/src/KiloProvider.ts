@@ -127,6 +127,7 @@ import {
 } from "./provider-actions"
 import type { StoredProviderKey } from "./provider-actions"
 import { AnacondaDesktopBridge } from "./anaconda-desktop/bridge"
+import { isUnsafeKey } from "./shared/agent-credentials"
 import { fetchOpenAIModels, FetchModelsError } from "./shared/fetch-models"
 import type { Agent } from "@kilocode/sdk/v2/client"
 import { configFeatures } from "./features"
@@ -747,7 +748,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       displayName: item.displayName,
       description: item.description,
       mode:
-        item.mode === "specialized"
+        item.mode === "subagent"
           ? ("subagent" as const)
           : item.mode === "primary"
             ? ("primary" as const)
@@ -2073,7 +2074,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             })
             break
           }
-          this.handleCanonicalAgentMutation(message).catch((e) => console.error("[Kilo New] mutateAgent failed:", e))
+          this.dispatchCanonicalAgentMutation(message)
           break
         }
         case "removeMcp":
@@ -3860,44 +3861,139 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     this.requirements.clear()
   }
 
+  /** Dispatch entry with structured catch: every exception path posts an
+   * agentMutationError carrying the original requestId/name (safe fallbacks
+   * when illegal) so UI pending always releases. Never only logs. No retry —
+   * the caller owns retry decisions. */
+  private dispatchCanonicalAgentMutation(message: Record<string, unknown>): void {
+    this.handleCanonicalAgentMutation(message).catch((e) => {
+      console.error("[Kilo New] mutateAgent failed:", e)
+      // Exactly one structured error per failure (the handler posts at most
+      // once per path; this catch only fires on throw). Stamp is a fresh
+      // re-read when id/scope are determinable, null-asset otherwise.
+      const id = typeof message.name === "string" ? message.name : ""
+      const scope = message.scope === "global" || message.scope === "project" ? message.scope : undefined
+      const stamp =
+        this.canonicalConfig && id && scope
+          ? { ...this.canonicalConfig.stamp, assetHash: this.canonicalConfig.getAssetStamp("agent", id, scope) }
+          : (this.canonicalConfig?.stamp ?? {
+              globalHash: null,
+              projectHash: null,
+              materializationVersion: 0,
+              assetHash: null,
+            })
+      this.postMessage({
+        type: "agentMutationError",
+        requestId: typeof message.requestId === "string" ? message.requestId : crypto.randomUUID(),
+        name: id,
+        message: e instanceof Error ? e.message : String(e),
+        kind: "io",
+        canonical: true,
+        stamp,
+      })
+    })
+  }
+
   private async handleCanonicalAgentMutation(msg: Record<string, unknown>): Promise<void> {
     const service = this.canonicalConfig
     const id = typeof msg.name === "string" ? msg.name : ""
-    const requestId = typeof msg.requestId === "string" ? msg.requestId : crypto.randomUUID()
-    if (!service || !this.canonicalReady) {
+    const requestId =
+      typeof msg.requestId === "string" && msg.requestId.length > 0 ? msg.requestId : crypto.randomUUID()
+    const fail = (
+      message: string,
+      kind: "invalid" | "stale" | "not-ready" | "conflict" | "io" | "disposed",
+      stamp?: CanonicalStamp,
+    ): void => {
       this.postMessage({
         type: "agentMutationError",
         requestId,
         name: id,
-        message: "Canonical agent authority is not ready",
-        kind: "not-ready",
+        message,
+        kind,
         canonical: true,
-        stamp: {
+        stamp: stamp ?? {
           ...(service?.stamp ?? { globalHash: null, projectHash: null, materializationVersion: 0, assetHash: null }),
           assetHash: null,
         },
       })
+    }
+    if (!service || !this.canonicalReady) {
+      fail("Canonical agent authority is not ready", "not-ready")
       return
     }
-    if (!id || !isRecord(msg.frontmatter) || typeof msg.body !== "string") return
-    const scope = msg.scope === "global" ? "global" : "project"
-    const expectedHash = typeof msg.expectedHash === "string" ? msg.expectedHash : ""
+    const action = msg.action
+    if (action !== "create" && action !== "edit" && action !== "import") {
+      fail(`Invalid agent mutation action "${String(action)}"`, "invalid")
+      return
+    }
+    if (msg.canonical !== true) {
+      fail("Canonical agent mutation is missing the canonical discriminator", "invalid")
+      return
+    }
+    const scope = msg.scope
+    if (scope !== "global" && scope !== "project") {
+      fail(`Invalid agent mutation scope "${String(scope)}"`, "invalid")
+      return
+    }
+    if (!id || typeof id !== "string") {
+      fail("Invalid agent mutation id", "invalid")
+      return
+    }
+    if (!isRecord(msg.frontmatter) || typeof msg.body !== "string") {
+      fail("Invalid agent mutation body", "invalid")
+      return
+    }
+    // Frontmatter name, when present, must match the asset id (existing
+    // markdown convention stores the redundant name). Never silently coerce.
+    if ("name" in msg.frontmatter && msg.frontmatter.name !== undefined) {
+      if (typeof msg.frontmatter.name !== "string" || msg.frontmatter.name !== id) {
+        fail(`Agent frontmatter name "${String(msg.frontmatter.name)}" does not match id "${id}"`, "invalid")
+        return
+      }
+    }
+    const expectedHash = msg.expectedHash
+    if (typeof expectedHash !== "string") {
+      fail("Invalid agent mutation expectedHash", "invalid")
+      return
+    }
+    if ((action === "create" || action === "import") && expectedHash !== "absent") {
+      fail(`Agent ${action} requires expectedHash "absent"`, "stale")
+      return
+    }
+    if (action === "edit" && (expectedHash.length === 0 || expectedHash === "absent")) {
+      fail("Agent edit requires a present expectedHash", "stale")
+      return
+    }
     const stamp = isCanonicalStamp(msg.stamp) ? msg.stamp : undefined
-    const current = { ...service.stamp, assetHash: service.getAssetStamp("agent", id, scope) }
-    if (!stamp || !expectedHash || stamp.assetHash !== expectedHash || !sameStamp(stamp, current)) {
-      this.postMessage({
-        type: "agentMutationError",
-        requestId,
-        name: id,
-        message: "Agent draft is stale",
-        kind: "stale",
-        canonical: true,
-        stamp: current,
-      })
+    if (!stamp) {
+      fail("Invalid agent mutation stamp", "invalid")
       return
     }
-    const result = await service.writeAsset("agent", id, msg.frontmatter, msg.body, scope, expectedHash)
+    // Host never invents a native registry: file-backed identity (scope +
+    // asset hash) is enforced by the writeAsset CAS below. The stamp must
+    // carry the same asset hash the client claimed.
+    if (stamp.assetHash !== expectedHash) {
+      const current = { ...service.stamp, assetHash: service.getAssetStamp("agent", id, scope) }
+      fail("Agent draft is stale", "stale", current)
+      return
+    }
+    const current = { ...service.stamp, assetHash: service.getAssetStamp("agent", id, scope) }
+    if (!sameStamp(stamp, current)) {
+      fail("Agent draft is stale", "stale", current)
+      return
+    }
+    // Strip undefined (cleared UI fields); preserve null delete sentinels for
+    // CLI ConfigAgentV1 NullOr normalization. Never assign prototype-
+    // polluting keys into the fresh object; validation rejects them.
+    const frontmatter: Record<string, unknown> = {}
+    for (const [key, val] of Object.entries(msg.frontmatter)) {
+      if (val === undefined || isUnsafeKey(key)) continue
+      frontmatter[key] = val
+    }
+    const result = await service.writeAsset("agent", id, frontmatter, msg.body, scope, expectedHash)
     if (!result.ok) {
+      // Fresh re-read: id/scope are validated above, and the disk may have
+      // moved between the pre-write stamp check and this failure (CAS race).
       this.postMessage({
         type: "agentMutationError",
         requestId,
@@ -3905,7 +4001,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         message: result.message,
         kind: result.kind,
         canonical: true,
-        stamp: current,
+        stamp: { ...service.stamp, assetHash: service.getAssetStamp("agent", id, scope) },
       })
       return
     }

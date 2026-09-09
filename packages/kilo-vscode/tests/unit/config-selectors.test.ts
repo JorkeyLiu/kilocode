@@ -259,7 +259,7 @@ describe("buildAgentIndex", () => {
     const snap = makeSnapshot(config)
     const idx = buildAgentIndex(snap, [
       { id: "coder", displayName: "Code Assistant", mode: "primary", hidden: false, source: "project" },
-      { id: "reviewer", displayName: "Reviewer", description: "Reviews code", mode: "secondary", hidden: true, source: "global" },
+      { id: "reviewer", displayName: "Reviewer", description: "Reviews code", mode: "subagent", hidden: true, source: "global" },
     ], "coder")
 
     expect(idx.version).toBe(SELECTOR_INDEX_VERSION)

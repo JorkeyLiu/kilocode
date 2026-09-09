@@ -19,6 +19,7 @@ import McpEditView from "./McpEditView"
 import WorkflowsTab from "./agent-behaviour/WorkflowsTab"
 import { selectedDefaultAgentValue } from "./agent-behaviour-patches"
 import { parseImport, MAX_IMPORT_SIZE } from "./mode-io"
+import { createOwnerGuard, type OwnerGuard } from "../../context/agent-mutations"
 import type { ImportError } from "./mode-io"
 
 type SubtabId = "agents" | "mcpServers" | "rules" | "workflows" | "skills"
@@ -245,31 +246,52 @@ const AgentBehaviourTab: Component = () => {
   }
 
   const [importError, setImportError] = createSignal("")
+  const [importPending, setImportPending] = createSignal<string | null>(null)
+
+  // Owner guard for the async FileReader + mutation chain: results arriving
+  // after unmount are ignored and never touch signals.
+  const importOwner: OwnerGuard = createOwnerGuard()
+  onCleanup(importOwner.dispose)
 
   const errorKey = (tag: ImportError) => `settings.agentBehaviour.importMode.${tag}` as const
 
   const importMode = (file: File) => {
-    if (canonical?.()) return
     setImportError("")
     if (file.size > MAX_IMPORT_SIZE) {
       setImportError(language.t(errorKey("tooLarge")))
       return
     }
     const reader = new FileReader()
-    reader.onload = () => {
+    reader.onload = importOwner.guard(() => {
       const result = parseImport(reader.result as string, agentNames())
       if (!result.ok) {
         setImportError(language.t(errorKey(result.error)))
         return
       }
-       session.mutateAgent({
-         action: "import",
-         name: result.name,
-         frontmatter: Object.fromEntries(Object.entries(result.config).filter(([key]) => key !== "prompt")),
-         body: result.config.prompt ?? "",
-       })
+      // Own-request settlement only: the promise resolves on our Applied/Error.
+      // The owner token (import name) plus the alive guard ensure a stale or
+      // post-unmount settlement never clears/shows another import's outcome.
+      setImportPending(result.name)
       setImportError("")
-    }
+      void session
+        .mutateAgent({
+          action: "import",
+          name: result.name,
+          frontmatter: Object.fromEntries(Object.entries(result.config).filter(([key]) => key !== "prompt")),
+          body: result.config.prompt ?? "",
+        })
+        .then(
+          importOwner.guard((mutation) => {
+            // Only the owning import clears/shows its own outcome.
+            setImportPending((current) => (current === result.name ? null : current))
+            if (mutation.ok) {
+              if (mutation.name === result.name) setImportError("")
+            } else if (mutation.name === result.name) {
+              setImportError(`${mutation.message} [${mutation.kind}]`)
+            }
+          }),
+        )
+    })
     reader.readAsText(file)
   }
 
@@ -328,13 +350,13 @@ const AgentBehaviourTab: Component = () => {
         >
           <div data-slot="settings-row-label-title">{language.t("settings.agentBehaviour.availableAgents")}</div>
           <div style={{ display: "flex", gap: "8px" }}>
-             <Button variant="ghost" size="small" onClick={triggerImport} disabled={canonical?.() === true}>
+             <Button variant="ghost" size="small" onClick={triggerImport} disabled={importPending() !== null}>
               {language.t("settings.agentBehaviour.importMode")}
             </Button>
             <Button variant="ghost" size="small" onClick={browse}>
               {language.t("settings.agentBehaviour.mcpBrowseMarketplace")}
             </Button>
-             <Button variant="secondary" size="small" onClick={() => { if (!canonical?.()) setAgentView("create") }} disabled={canonical?.() === true}>
+             <Button variant="secondary" size="small" onClick={() => setAgentView("create")}>
               {language.t("settings.agentBehaviour.createMode")}
             </Button>
           </div>

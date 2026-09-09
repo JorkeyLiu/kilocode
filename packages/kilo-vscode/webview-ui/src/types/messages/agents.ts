@@ -88,6 +88,12 @@ export interface AgentConfig {
   mode?: "subagent" | "primary" | "all"
   hidden?: boolean
   disable?: boolean
+  displayName?: string
+  source?: string
+  color?: string
+  maxSteps?: number
+  options?: Record<string, unknown>
+  tools?: Record<string, boolean>
   temperature?: number | null
   top_p?: number | null
   steps?: number | null

@@ -175,10 +175,11 @@ describe("writeMarkdown", () => {
     expect(content).toContain("# Simple content")
   })
 
-  it("handles array values in frontmatter", () => {
+  it("handles record values in frontmatter", () => {
     const filePath = join(tempDir, "agent.md")
+    // CLI tools shape is Record<string,boolean>; string[] is rejected.
     writeMarkdown(filePath, {
-      tools: ["read", "write", "edit"],
+      tools: { read: true, write: true, edit: true },
     }, "# Body", "agent")
     const content = readFileSync(filePath, "utf-8")
     expect(content).toContain("read")
@@ -475,9 +476,11 @@ Body`)
   it("validates against asset schema", () => {
     const filePath = join(tempDir, "agent.md")
 
+    // CLI agent model accepts any string; mode values outside
+    // subagent|primary|all are rejected by the canonical schema.
     const result = writeMarkdown(filePath, {
       name: "test-agent",
-      model: "invalid-model-format",
+      mode: "bogus",
     }, "Body", "agent")
 
     expect("error" in result).toBe(true)
@@ -512,9 +515,10 @@ Body`)
   it("rejects invalid frontmatter through public API", () => {
     const filePath = join(tempDir, "agent.md")
 
+    // CLI agent model accepts any string; an illegal color is rejected.
     const result = writeMarkdown(filePath, {
       name: "test-agent",
-      model: "not-a-valid-model",
+      color: "blurple",
     }, "Body", "agent")
 
     expect("error" in result).toBe(true)

@@ -117,13 +117,14 @@ const ModelsTab: Component = () => {
 
   function handleModeModelSelect(agentName: string) {
     return (providerID: string, modelID: string) => {
-      if (!providerID || !modelID) {
-        const current = session.allAgents().find((agent) => agent.name === agentName)
-        session.mutateAgent({ action: "edit", name: agentName, frontmatter: { ...(current?.frontmatter ?? {}), model: null }, body: current?.body ?? "" })
-        return
-      }
-      const current = session.allAgents().find((agent) => agent.name === agentName)
-      session.mutateAgent({ action: "edit", name: agentName, frontmatter: { ...(current?.frontmatter ?? {}), model: `${providerID}/${modelID}` }, body: current?.body ?? "" })
+      // Model/variant delta through the shared latest-draft merge: only the
+      // model key is committed, so a pending description/prompt draft from
+      // the edit view is never overwritten. Flushed immediately because a
+      // model pick is discrete (not keystrokes). Failures surface via the
+      // shared agent diagnostic, success via agentsLoaded.
+      const model = !providerID || !modelID ? null : `${providerID}/${modelID}`
+      void session.scheduleAgentEdit(agentName, { frontmatter: { model } })
+      session.flushAgentEdits(agentName)
     }
   }
 
@@ -265,7 +266,13 @@ const ModelsTab: Component = () => {
       <h4 style={{ "margin-top": "24px", "margin-bottom": "8px" }}>{language.t("settings.providers.modeModels")}</h4>
       <Card>
         <For each={allAgents()}>
-          {(agent, index) => (
+          {(agent, index) => {
+            const full = () => session.allAgents().find((a) => a.name === agent.name)
+            const blocked = () => {
+              const item = full()
+              return item?.native === true || !item?.scope || !item?.assetHash || item?.assetHash === "absent"
+            }
+            return (
             <SettingsRow
               title={agent.name.charAt(0).toUpperCase() + agent.name.slice(1)}
               last={index() === allAgents().length - 1}
@@ -273,7 +280,7 @@ const ModelsTab: Component = () => {
               <ModelSelectorBase
                value={parseModelString(agent.frontmatter?.model as string | undefined)}
                onSelect={handleModeModelSelect(agent.name)}
-               disabled={readonly()}
+               disabled={blocked()}
                 placement="bottom-start"
                 allowClear
                 clearLabel={language.t("settings.providers.notSet")}
@@ -281,7 +288,8 @@ const ModelsTab: Component = () => {
                 description={language.t("settings.providers.modeModels.description")}
               />
             </SettingsRow>
-          )}
+            )
+          }}
         </For>
       </Card>
     </div>

@@ -1,10 +1,11 @@
-import { Component, Show, For, createMemo, createSignal } from "solid-js"
+import { Component, Show, For, createEffect, createMemo, createSignal, on, onCleanup } from "solid-js"
 import { TextField } from "@kilocode/kilo-ui/text-field"
 import { Switch } from "@kilocode/kilo-ui/switch"
 import { Card } from "@kilocode/kilo-ui/card"
 import { Button } from "@kilocode/kilo-ui/button"
 import { IconButton } from "@kilocode/kilo-ui/icon-button"
 
+import { createAgentDraft, type AgentDraft } from "./agent-draft"
 import { useConfig } from "../../context/config"
 import { useProvider } from "../../context/provider"
 import { useSession } from "../../context/session"
@@ -25,16 +26,15 @@ interface Props {
   onRemove: (agent: AgentInfo) => void
 }
 
-// eslint-disable-next-line complexity
 const ModeEditView: Component<Props> = (props) => {
   const language = useLanguage()
-  const { config, updateConfig, canonical } = useConfig()
+  const { config, updateConfig } = useConfig()
   const provider = useProvider()
   const session = useSession()
 
   // agent() may be undefined for modes that only exist in the config draft (just
   // created, not yet saved). This is fine — native defaults to false (correct for
-  // custom modes) and all fields read from cfg() which comes from config context.
+  // custom modes) and all fields read from shown() below.
   const agent = () => session.allAgents().find((a) => a.name === props.name)
   const native = () => agent()?.native ?? false
   const [expanded, setExpanded] = createSignal(false)
@@ -43,46 +43,87 @@ const ModeEditView: Component<Props> = (props) => {
     const item = agent()
     return item ? ({ ...(item.frontmatter ?? {}), prompt: item.body ?? "" } as AgentConfig) : {}
   })
-  const model = createMemo(() => parseModelString(cfg().model ?? undefined))
+
+  // Local draft (see agent-draft.ts): typing updates overrides immediately
+  // for stable display and coalesces into the serial coordinator. Server
+  // truth (cfg) wins again once the confirmed asset hash advances while
+  // idle. An agent switch always resets, even with an identical assetHash.
+  const draft: AgentDraft = createAgentDraft((target, patch) => {
+    // Fire-and-forget: this view owns no settlement signals (display reads
+    // the local draft; failures surface via the provider-level diagnostic),
+    // so no owner guard is needed here.
+    void session.scheduleAgentEdit(target, patch)
+  })
+  const shown = (): AgentConfig => draft.shown(cfg())
+  const seenHash = createMemo(() => agent()?.assetHash ?? null)
+  const syncDraft = (pending: boolean): void => {
+    draft.sync({ name: props.name, hash: agent()?.assetHash ?? null, server: cfg() }, pending)
+  }
+  createEffect(
+    on(seenHash, () => {
+      syncDraft(session.isAgentPending(props.name))
+    }),
+  )
+
+  const model = createMemo(() => parseModelString(shown().model ?? undefined))
   const variants = createMemo(() => {
     const sel = model()
     if (!sel) return []
     return Object.keys(provider.findModel(sel)?.variants ?? {})
   })
-  const showVariant = () => variants().length > 0 || !!cfg().variant
+  const showVariant = () => variants().length > 0 || !!shown().variant
 
+  // Flush coalesced keystrokes when leaving the view or switching agents so
+  // field switches never drop updates. Dispose/session switch cancels waits
+  // via the coordinator without resending accepted operations. The flush
+  // result reports to the provider-level diagnostic, never to this
+  // (possibly unmounted) view — it owns no settlement signals.
+  onCleanup(() => {
+    session.flushAgentEdits(props.name)
+  })
+  createEffect(
+    on(
+      () => props.name,
+      (next, prev) => {
+        // Flush the previous agent first, then isolate: the new agent always
+        // starts from its own server snapshot, never the old draft.
+        if (prev !== undefined && prev !== next) session.flushAgentEdits(prev)
+        syncDraft(session.isAgentPending(next))
+      },
+    ),
+  )
+
+  // Native/system agents have no file-backed identity and are never mutated;
+  // missing scope/assetHash is blocked in the coordinator with a diagnostic.
   const update = (partial: Partial<AgentConfig>) => {
-    if (canonical?.()) return
-    const current = agent()
-    const frontmatter = { ...(current?.frontmatter ?? {}), ...partial }
-    delete frontmatter.prompt
-    session.mutateAgent({ action: "edit", name: props.name, frontmatter, body: typeof partial.prompt === "string" ? partial.prompt : current?.body ?? cfg().prompt ?? "" })
+    if (native()) return
+    draft.set(partial)
   }
 
   const selectModel = (providerID: string, modelID: string) => {
-    if (canonical?.()) return
+    if (native()) return
     const sel = { providerID, modelID }
     const list = Object.keys(provider.findModel(sel)?.variants ?? {})
-    update(modelPatch(providerID, modelID, list, cfg().variant))
+    update(modelPatch(providerID, modelID, list, shown().variant))
   }
 
   const selectVariant = (value: string) => {
-    if (canonical?.()) return
+    if (native()) return
     update({ variant: value })
   }
 
   const clearVariant = () => {
-    if (canonical?.()) return
+    if (native()) return
     update({ variant: null })
   }
 
   const updatePermission = (patch: PermissionConfig) => {
-    if (canonical?.()) return
+    if (native()) return
     update({ permission: patch })
   }
 
   const exportMode = () => {
-    const data = buildExport(props.name, cfg())
+    const data = buildExport(props.name, shown())
     const json = JSON.stringify(data, null, 2)
     const blob = new Blob([json], { type: "application/json" })
     const url = URL.createObjectURL(blob)
@@ -117,18 +158,15 @@ const ModeEditView: Component<Props> = (props) => {
               icon="download"
               title={language.t("settings.agentBehaviour.exportMode")}
               onClick={exportMode}
-              disabled={canonical?.() === true}
             />
             <IconButton
               size="small"
               variant="ghost"
               icon="close"
               onClick={() => {
-                if (canonical?.()) return
                 const a = agent()
                 if (a) props.onRemove(a)
               }}
-              disabled={canonical?.() === true}
             />
           </div>
         </Show>
@@ -155,10 +193,9 @@ const ModeEditView: Component<Props> = (props) => {
             {language.t("settings.agentBehaviour.editMode.description")}
           </div>
           <TextField
-            value={cfg().description ?? ""}
+            value={shown().description ?? ""}
             placeholder={language.t("settings.agentBehaviour.createMode.description.placeholder")}
             onChange={(val) => update({ description: val || undefined })}
-            disabled={canonical?.() === true}
           />
         </Card>
       </Show>
@@ -171,11 +208,11 @@ const ModeEditView: Component<Props> = (props) => {
             : language.t("settings.agentBehaviour.editMode.prompt")}
         </div>
         <TextField
-          value={cfg().prompt ?? ""}
+          value={shown().prompt ?? ""}
           placeholder={language.t("settings.agentBehaviour.createMode.prompt.placeholder")}
           multiline
-          onChange={(val) => update({ prompt: val || undefined })}
-          disabled={canonical?.() === true}
+          onChange={(val) => update({ prompt: val })}
+          disabled={native()}
         />
       </Card>
 
@@ -203,7 +240,7 @@ const ModeEditView: Component<Props> = (props) => {
           >
             <ThinkingSelectorBase
               variants={variants()}
-              value={cfg().variant ?? undefined}
+              value={shown().variant ?? undefined}
               onSelect={selectVariant}
               onClear={clearVariant}
               allowClear
@@ -219,13 +256,13 @@ const ModeEditView: Component<Props> = (props) => {
           description={language.t("settings.agentBehaviour.temperature.description")}
         >
           <TextField
-            value={cfg().temperature?.toString() ?? ""}
+            value={draft.text("temperature")}
             placeholder={language.t("common.default")}
               onChange={(val) => {
-                if (canonical?.()) return
-              const parsed = parseFloat(val)
-              update({ temperature: isNaN(parsed) ? undefined : parsed })
+              if (native()) return
+              draft.setNumeric("temperature", val)
             }}
+            disabled={native()}
           />
         </SettingsRow>
 
@@ -234,13 +271,13 @@ const ModeEditView: Component<Props> = (props) => {
           description={language.t("settings.agentBehaviour.topP.description")}
         >
           <TextField
-            value={cfg().top_p?.toString() ?? ""}
+            value={draft.text("top_p")}
             placeholder={language.t("common.default")}
               onChange={(val) => {
-                if (canonical?.()) return
-              const parsed = parseFloat(val)
-              update({ top_p: isNaN(parsed) ? undefined : parsed })
+              if (native()) return
+              draft.setNumeric("top_p", val)
             }}
+            disabled={native()}
           />
         </SettingsRow>
 
@@ -249,14 +286,13 @@ const ModeEditView: Component<Props> = (props) => {
           description={language.t("settings.agentBehaviour.maxSteps.description")}
         >
           <TextField
-            value={cfg().steps?.toString() ?? ""}
+            value={draft.text("steps")}
             placeholder={language.t("common.default")}
             onChange={(val) => {
-              const parsed = parseInt(val, 10)
-              if (canonical?.()) return
-              update({ steps: isNaN(parsed) ? undefined : parsed })
+              if (native()) return
+              draft.setNumeric("steps", val)
             }}
-            disabled={canonical?.() === true}
+            disabled={native()}
           />
         </SettingsRow>
 
@@ -265,9 +301,9 @@ const ModeEditView: Component<Props> = (props) => {
           description={language.t("settings.agentBehaviour.hidden.description")}
         >
           <Switch
-            checked={cfg().hidden ?? false}
+            checked={shown().hidden ?? false}
             onChange={(val) => {
-              if (canonical?.()) return
+              if (native()) return
               // Send explicit `false` (not `undefined`) so deepMerge can overwrite a previously-saved `true`.
               update({ hidden: val })
               // Clear default_agent if hiding the current default (null = delete sentinel).
@@ -275,7 +311,7 @@ const ModeEditView: Component<Props> = (props) => {
                 updateConfig({ default_agent: null })
               }
             }}
-            disabled={canonical?.() === true}
+            disabled={native()}
             hideLabel
           >
             {language.t("settings.agentBehaviour.hidden.title")}
@@ -288,9 +324,9 @@ const ModeEditView: Component<Props> = (props) => {
           last
         >
           <Switch
-            checked={cfg().disable ?? false}
+            checked={shown().disable ?? false}
             onChange={(val) => {
-              if (canonical?.()) return
+              if (native()) return
               // Send explicit `false` (not `undefined`) so deepMerge can overwrite a previously-saved `true`.
               update({ disable: val })
               // Clear default_agent if disabling the current default (null = delete sentinel).
@@ -298,7 +334,7 @@ const ModeEditView: Component<Props> = (props) => {
                 updateConfig({ default_agent: null })
               }
             }}
-            disabled={canonical?.() === true}
+            disabled={native()}
             hideLabel
           >
             {language.t("settings.agentBehaviour.disable.title")}
@@ -338,7 +374,7 @@ const ModeEditView: Component<Props> = (props) => {
           </div>
           <div style={{ padding: "0 16px 4px" }}>
             <PermissionEditor
-              permissions={cfg().permission}
+              permissions={shown().permission}
               rules={agent()?.permission}
               component="agent-permission-settings"
               inherited

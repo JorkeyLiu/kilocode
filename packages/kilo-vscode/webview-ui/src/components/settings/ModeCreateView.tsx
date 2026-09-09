@@ -1,11 +1,11 @@
-import { Component, Show, createSignal } from "solid-js"
+import { Component, Show, createSignal, onCleanup } from "solid-js"
 import { TextField } from "@kilocode/kilo-ui/text-field"
 import { Card } from "@kilocode/kilo-ui/card"
 import { Button } from "@kilocode/kilo-ui/button"
 import { IconButton } from "@kilocode/kilo-ui/icon-button"
 
-import { useConfig } from "../../context/config"
 import { useSession } from "../../context/session"
+import { createOwnerGuard, type OwnerGuard } from "../../context/agent-mutations"
 import { useLanguage } from "../../context/language"
 import type { AgentConfig } from "../../types/messages"
 import SettingsRow from "./SettingsRow"
@@ -19,13 +19,19 @@ interface Props {
 
 const ModeCreateView: Component<Props> = (props) => {
   const language = useLanguage()
-  const { config, canonical } = useConfig()
   const session = useSession()
 
   const [name, setName] = createSignal("")
   const [description, setDescription] = createSignal("")
   const [prompt, setPrompt] = createSignal("")
   const [error, setError] = createSignal("")
+  const [pending, setPending] = createSignal(false)
+
+  // Owner guard: settlements arriving after Cancel/unmount are ignored —
+  // no second onBack, no signal writes. The coordinator owns the mutation;
+  // cancellation there settles as cancelled without resending.
+  const owner: OwnerGuard = createOwnerGuard()
+  onCleanup(owner.dispose)
 
   const validate = (val: string): string => {
     if (!val.trim()) return language.t("settings.agentBehaviour.createMode.nameRequired")
@@ -47,25 +53,37 @@ const ModeCreateView: Component<Props> = (props) => {
   }
 
   const submit = () => {
-    if (canonical?.()) return
     const slug = name().trim()
     const msg = validate(slug)
     if (msg) {
       setError(msg)
       return
     }
-    session.mutateAgent({
-      action: "create",
-      name: slug,
-      frontmatter: {
+    // The coordinator settles this promise ONLY on our own Applied/Error;
+    // success clears the form and goes back, failure retains the form.
+    setPending(true)
+    void session
+      .mutateAgent({
+        action: "create",
         name: slug,
-        mode: "primary",
-        description: description().trim() || undefined,
-      },
-      body: prompt().trim(),
-    })
-    reset()
-    props.onBack()
+        frontmatter: {
+          name: slug,
+          mode: "primary",
+          description: description().trim() || undefined,
+        },
+        body: prompt().trim(),
+      })
+      .then(
+        owner.guard((result) => {
+          setPending(false)
+          if (result.ok) {
+            reset()
+            props.onBack()
+            return
+          }
+          setError(`${result.message} [${result.kind}]`)
+        }),
+      )
   }
 
   return (
@@ -141,7 +159,7 @@ const ModeCreateView: Component<Props> = (props) => {
         <Button variant="ghost" onClick={cancel}>
           {language.t("settings.agentBehaviour.createMode.cancel")}
         </Button>
-         <Button variant="primary" onClick={submit} disabled={canonical?.() === true}>
+         <Button variant="primary" onClick={submit} disabled={pending()}>
           {language.t("settings.agentBehaviour.createMode.button")}
         </Button>
       </div>

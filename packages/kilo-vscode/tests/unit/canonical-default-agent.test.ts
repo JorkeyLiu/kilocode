@@ -46,7 +46,7 @@ describe("resolveServedDefaultAgent", () => {
   it("derives the first non-subagent served agent when config lacks default_agent", () => {
     const idx = index(
       [
-        { id: "alpha", displayName: "Alpha", mode: "specialized", hidden: false, source: "global" },
+        { id: "alpha", displayName: "Alpha", mode: "subagent", hidden: false, source: "global" },
         { id: "zeta", displayName: "Zeta", mode: "primary", hidden: false, source: "global" },
       ],
       null,
@@ -66,7 +66,7 @@ describe("resolveServedDefaultAgent", () => {
   })
 
   it("falls back to the first served entry when every agent is a subagent", () => {
-    const idx = index([{ id: "reviewer", displayName: "Reviewer", mode: "specialized", hidden: false, source: "project" }], null)
+    const idx = index([{ id: "reviewer", displayName: "Reviewer", mode: "subagent", hidden: false, source: "project" }], null)
     expect(resolveServedDefaultAgent(idx)).toBe("reviewer")
   })
 
@@ -102,11 +102,11 @@ async function seededSetup(seedAgents: boolean): Promise<{ provider: ProviderInt
   // Intentionally NO default_agent — the fixture parity contract under test.
   fs.writeFileSync(path.join(global, "kilo.jsonc"), JSON.stringify({}), "utf8")
   if (seedAgents) {
-    // Alphabetical scan order puts the specialized asset FIRST, so a faithful
+    // Alphabetical scan order puts the subagent asset FIRST, so a faithful
     // legacy derivation must skip it for the primary agent.
     const agentDir = path.join(global, "agent")
     fs.mkdirSync(agentDir, { recursive: true })
-    fs.writeFileSync(path.join(agentDir, "alpha.md"), ["---", "displayName: Alpha", "description: Subagent asset", "mode: specialized", "---", "", "You are Alpha.", ""].join("\n"), "utf8")
+    fs.writeFileSync(path.join(agentDir, "alpha.md"), ["---", "displayName: Alpha", "description: Subagent asset", "mode: subagent", "---", "", "You are Alpha.", ""].join("\n"), "utf8")
     fs.writeFileSync(path.join(agentDir, "zeta.md"), ["---", "displayName: Zeta", "description: Primary asset", "mode: primary", "---", "", "You are Zeta.", ""].join("\n"), "utf8")
   }
   const secrets = createMemorySecretAdapter()
@@ -146,7 +146,7 @@ describe("sendCanonicalAgents payload defaultAgent parity", () => {
     // whose absence left the real ModeSwitcher permanently disabled.
     expect(fallback.length).toBeGreaterThan(0)
     expect(names).toContain(fallback)
-    // Faithful legacy ordering: the specialized (subagent) asset is skipped
+    // Faithful legacy ordering: the subagent asset is skipped
     // for the first primary agent, despite scanning first.
     expect(fallback).toBe("zeta")
     provider.cleanupRetries.clear()

@@ -353,37 +353,16 @@ export function isOpaqueCredentialRef(value: unknown): boolean {
 }
 
 /**
- * Case-insensitive credential key patterns. Matches:
- * apiKey, api_key, api-key, API_KEY, ApiKey,
- * token, access_token, accessToken, ACCESS_TOKEN, etc.
+ * Credential key patterns — single-sourced from the shared agent rule so
+ * host (provider/MCP) and agent checks never drift. The shared set covers
+ * the historic patterns plus credential/cookie(s)/header(s).
  */
-const CREDENTIAL_KEY_PATTERNS = [
-  /^api[_-]?key$/i,
-  /^token$/i,
-  /^password$/i,
-  /^secret$/i,
-  /^access[_-]?token$/i,
-  /^refresh[_-]?token$/i,
-  /^secret[_-]?key$/i,
-  /^private[_-]?key$/i,
-  /^auth[_-]?token$/i,
-  /^authorization$/i,
-  /^bearer$/i,
-  /^credentials$/i,
-  /^client[_-]?secret$/i,
-  /^client[_-]?id$/i,
-]
+import { isCredentialKey } from "../shared/agent-credentials"
+export { isCredentialKey }
 
 /** Keys that are structural containers, not credentials themselves.
  *  We still recurse INTO these to check their contents for credentials. */
 const STRUCTURAL_KEYS = new Set(["models"])
-
-/**
- * Test whether a key name matches a credential pattern (case/format-variant aware).
- */
-export function isCredentialKey(key: string): boolean {
-  return CREDENTIAL_KEY_PATTERNS.some((p) => p.test(key))
-}
 
 /**
  * Detect if a value looks like it contains a plaintext credential

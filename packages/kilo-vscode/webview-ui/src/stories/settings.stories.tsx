@@ -794,3 +794,107 @@ function CustomProviderDialogEditInner() {
   })
   return <div style={{ height: "700px" }} />
 }
+
+/**
+ * Canonical custom-agent mutation scenarios (no Playwright code — the
+ * visual-regression runner auto-discovers these stories).
+ *
+ * A file-backed custom agent (scope + assetHash + retained frontmatter/body)
+ * keeps every edit control enabled in canonical mode; writes serialize
+ * through the session coordinator (mutateAgent/scheduleAgentEdit mocks
+ * below stand in for the extension host).
+ */
+const CANONICAL_CUSTOM_AGENT = {
+  name: "reviewer",
+  displayName: "Reviewer",
+  description: "Review code for quality and best practices",
+  mode: "primary" as const,
+  native: false,
+  scope: "project" as const,
+  assetHash: "story-asset-hash-001",
+  frontmatter: {
+    name: "reviewer",
+    mode: "primary",
+    description: "Review code for quality and best practices",
+    model: "kilo/anthropic/claude-sonnet-4-6",
+  },
+  body: "You are a code reviewer. Focus on code quality, best practices, and potential bugs.",
+  stamp: {
+    globalHash: null,
+    projectHash: "story-project-hash-001",
+    materializationVersion: 3,
+    assetHash: "story-asset-hash-001",
+  },
+}
+
+function canonicalAgentSession(sessionID: string, extra?: Record<string, unknown>) {
+  const posted: unknown[] = []
+  const applied = (input: { action: string; name: string }) =>
+    Promise.resolve({
+      ok: true as const,
+      requestId: "story-req-1",
+      name: input.name,
+      action: input.action,
+      contentHash: "story-asset-hash-002",
+    })
+  return {
+    posted,
+    value: {
+      ...mockSessionValue({ id: sessionID, status: "idle" }),
+      agents: () => [CANONICAL_CUSTOM_AGENT],
+      allAgents: () => [CANONICAL_CUSTOM_AGENT],
+      agentDiagnostic: () => null,
+      isAgentPending: () => false,
+      mutateAgent: (input: { action: string; name: string }) => {
+        posted.push({ ...input, canonical: true })
+        return applied(input)
+      },
+      scheduleAgentEdit: (name: string, patch: unknown) => {
+        posted.push({ action: "edit", name, patch, canonical: true })
+        return applied({ action: "edit", name })
+      },
+      flushAgentEdits: noop,
+      cancelAgentMutations: noop,
+      removeAgent: noop,
+      removeMcp: noop,
+      skills: () => [],
+      refreshSkills: noop,
+      removeSkill: noop,
+      ...extra,
+    },
+  }
+}
+
+export const AgentBehaviourCanonicalCustomAgentEdit: Story = {
+  name: "AgentBehaviourTab — canonical custom agent edit available",
+  render: () => {
+    const session = canonicalAgentSession("canonical-agent-edit-story")
+    return (
+      <StoryProviders sessionID="canonical-agent-edit-story" status="idle" canonical>
+        <SessionContext.Provider value={session.value as any}>
+          <div style={{ "max-height": "700px", overflow: "auto" }}>
+            <ModeEditView name="reviewer" onBack={noop} onRemove={noop} />
+          </div>
+        </SessionContext.Provider>
+      </StoryProviders>
+    )
+  },
+}
+
+export const AgentBehaviourCanonicalCustomAgentError: Story = {
+  name: "AgentBehaviourTab — canonical custom agent mutation error",
+  render: () => {
+    const session = canonicalAgentSession("canonical-agent-error-story", {
+      agentDiagnostic: () => 'Agent "reviewer" draft is stale [stale]',
+    })
+    return (
+      <StoryProviders sessionID="canonical-agent-error-story" status="idle" canonical>
+        <SessionContext.Provider value={session.value as any}>
+          <div style={{ "max-height": "700px", overflow: "auto" }}>
+            <AgentBehaviourTab />
+          </div>
+        </SessionContext.Provider>
+      </StoryProviders>
+    )
+  },
+}

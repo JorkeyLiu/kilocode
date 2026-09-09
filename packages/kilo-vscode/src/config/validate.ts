@@ -17,6 +17,7 @@
 import { z } from "zod"
 import type { Scope, ValidationError } from "./types"
 import { parseJsonc, readFile, parseMarkdown, validateNoUnknownKeys, validateNoPlaintextCredentials, isOpaqueCredentialRef, isCredentialKey } from "./parse"
+import { findAgentCredentialViolations } from "../shared/agent-credentials"
 import { getEntry, isKnownKey, CLOSED_JSONC_FIELDS, type CanonicalField } from "./registry"
 import { isValidCanonicalProviderEntry, isValidCanonicalMcpEntry, parseOwnedCredentialRef } from "./types"
 
@@ -82,28 +83,116 @@ const fieldSchemas: Record<CanonicalField, z.ZodTypeAny> = {
 
 // ── Markdown asset frontmatter schemas ───────────────────────────────
 
-/** Agent frontmatter: prompt, model/variant defaults, tool availability, permission narrowing, requirements */
+/** Agent frontmatter strictly aligned with CLI ConfigAgentV1
+ * (packages/core/src/v1/config/agent.ts — the norm; no guessing):
+ * - mode is subagent|primary|all (history secondary/specialized is rejected
+ *   by canonical diagnostics; no compat pseudo-mapping is written)
+ * - null sentinels only where CLI NullOr allows: model/variant/temperature/
+ *   top_p/prompt/description/steps (and permission action values)
+ * - model is any CLI string|null (never forced to provider/model here;
+ *   the JSONC config model format stays strict separately)
+ * - tools is Record<string,boolean>, never string[]
+ * - requirements mirrors core Requirements: at least one group, groups
+ *   1..20 entries, RequirementName 1..128 chars containing non-whitespace,
+ *   RequirementID 1..128 chars matching the core pattern, no duplicates,
+ *   vscode_extensions deduped by id
+ * - permission mirrors the actual CLI loader behavior (probed against
+ *   ConfigParse.schema options): record of rules (action or per-pattern map)
+ *   or top-level null; scalar strings are rejected because the CLI decodes
+ *   them as Records and fails
+ * - color mirrors core Color: #RRGGBB or the fixed literal set
+ * - accepts CLI-legal displayName/source/hidden/disable/options/maxSteps
+ * - rest semantics mirroring CLI StructWithRest + normalize: unknown
+ *   top-level keys are ACCEPTED and preserved verbatim so the CLI can merge
+ *   them into `options` on load. `disabled` is NOT a first-class field here
+ *   (no boolean switch, no UI) — it passes through as an unknown key and the
+ *   CLI folds it into `options`, exactly like any other unknown key.
+ */
+const agentPermissionActionSchema = z.union([z.enum(["allow", "ask", "deny"]), z.null()])
+const agentPermissionRuleSchema = z.union([
+  agentPermissionActionSchema,
+  z.record(z.string(), agentPermissionActionSchema),
+])
+// NOTE: scalar permission (e.g. `permission: allow`) is rejected to match the
+// actual CLI loader: ConfigAgentV1.Info via ConfigParse.schema decodes a
+// scalar string as a Record (indexing its characters) and fails. Top-level
+// null is accepted because the CLI decodes it (to {}).
+const agentPermissionSchema = z.union([z.null(), z.record(z.string(), agentPermissionRuleSchema)])
+const requirementNameSchema = z.string().min(1).max(128).refine((v) => /\S/.test(v), "Must contain a non-whitespace character")
+const requirementIdSchema = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, "Must match the CLI requirement ID pattern")
+const requirementGroupSchema = z.array(requirementNameSchema).min(1).max(20)
+const vscodeExtensionsSchema = z
+  .array(z.object({ name: requirementNameSchema, id: requirementIdSchema }).strict())
+  .min(1)
+  .max(20)
+const agentRequirementsSchema = z
+  .object({
+    skills: requirementGroupSchema.optional(),
+    mcps: requirementGroupSchema.optional(),
+    vscode_extensions: vscodeExtensionsSchema.optional(),
+  })
+  .strict()
+  .superRefine((val, ctx) => {
+    if (!val.skills && !val.mcps && !val.vscode_extensions) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: "At least one requirement group is required" })
+      return
+    }
+    for (const group of ["skills", "mcps"] as const) {
+      const seen = new Set<string>()
+      for (const [index, value] of (val[group] ?? []).entries()) {
+        if (seen.has(value)) {
+          ctx.addIssue({ code: z.ZodIssueCode.custom, message: `Duplicate ${group} requirement`, path: [group, index] })
+        }
+        seen.add(value)
+      }
+    }
+    const seen = new Set<string>()
+    for (const [index, extension] of (val.vscode_extensions ?? []).entries()) {
+      if (seen.has(extension.id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "Duplicate vscode_extensions requirement",
+          path: ["vscode_extensions", index, "id"],
+        })
+      }
+      seen.add(extension.id)
+    }
+  })
+const agentColorSchema = z.union([
+  z.string().regex(/^#[0-9a-fA-F]{6}$/),
+  z.enum(["primary", "secondary", "accent", "success", "warning", "error", "info"]),
+])
 const agentFrontmatterSchema = z
   .object({
     name: z.string().optional(),
     displayName: z.string().optional(),
-    description: z.string().optional(),
-    model: modelSchema.optional(),
-    variant: z.string().optional(),
-    prompt: z.string().optional(),
-    tools: z.array(z.string()).optional(),
-    permission: z.record(z.unknown()).optional(),
-    requirements: z.union([z.array(z.string()), z.record(z.unknown())]).optional(),
+    source: z.string().optional(),
+    description: z.string().nullable().optional(),
+    model: z.string().nullable().optional(),
+    variant: z.string().nullable().optional(),
+    prompt: z.string().nullable().optional(),
+    tools: z.record(z.string(), z.boolean()).optional(),
+    permission: agentPermissionSchema.optional(),
+    requirements: agentRequirementsSchema.optional(),
     hidden: z.boolean().optional(),
     disable: z.boolean().optional(),
-    color: z.string().optional(),
+    color: agentColorSchema.optional(),
+    options: z.record(z.string(), z.unknown()).optional(),
     maxSteps: z.number().int().positive().optional(),
-    temperature: z.number().optional(),
-    top_p: z.number().optional(),
-    steps: z.number().int().positive().optional(),
-    mode: z.enum(["primary", "secondary", "specialized"]).optional(),
+    temperature: z.number().nullable().optional(),
+    top_p: z.number().nullable().optional(),
+    steps: z.number().int().positive().nullable().optional(),
+    mode: z.enum(["subagent", "primary", "all"]).optional(),
   })
-  .strict()
+  // Rest semantics, not strict: unknown top-level keys are accepted and kept
+  // verbatim for CLI normalize (StructWithRest merges them into `options`).
+  // Only the agent schema is rest-open; command/skill/tool/plugin/rules stay
+  // strict because their loaders have no rest/options merging.
+  .catchall(z.unknown())
 
 /** Command frontmatter: description, agent, model, variant */
 const commandFrontmatterSchema = z
@@ -338,23 +427,29 @@ export function validateMarkdownAsset(
     }
   }
 
-  // Agent-specific: reject credentials in frontmatter
-  if (assetType === "agent" && parsed.data.model) {
-    const model = parsed.data.model
-    if (typeof model === "string") {
-      const result = modelSchema.safeParse(model)
-      if (!result.success) {
-        errors.push({
-          path: ["frontmatter", "model"],
-          message: `Agent model: ${result.error.issues[0]?.message ?? "invalid format"}`,
-          file,
-        })
-      }
-    }
-  }
+  // Agent model format is owned by agentFrontmatterSchema (CLI accepts any
+  // string|null there; the provider/model grammar applies only to JSONC
+  // config model fields, never to agent frontmatter).
 
-  // F7: Validate credentials in ALL asset frontmatter (recursive)
-  checkAssetCredentialPatterns(parsed.data, ["frontmatter"], file, errors)
+  if (assetType === "agent") {
+    // Agent markdown has no credential mechanism: any credential-bearing
+    // key with non-empty/non-null content is rejected — plaintext AND
+    // SecretStorage refs alike. The provider/MCP `secret:` allowance must
+    // never be applied here. Shared rule with webview import/export.
+    for (const violation of findAgentCredentialViolations(parsed.data, ["frontmatter"])) {
+      errors.push({
+        path: [...violation.path],
+        message:
+          violation.kind === "unsafe-key"
+            ? `Unsafe frontmatter key "${violation.key}" is rejected`
+            : `Agent credential "${violation.key}" is rejected — agent markdown must not contain credentials`,
+        file,
+      })
+    }
+  } else {
+    // F7: Validate credentials in ALL other asset frontmatter (recursive)
+    checkAssetCredentialPatterns(parsed.data, ["frontmatter"], file, errors)
+  }
 
   return {
     valid: errors.length === 0,

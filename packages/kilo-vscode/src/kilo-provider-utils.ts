@@ -252,14 +252,14 @@ export function filterVisibleAgents(agents: Agent[]): { visible: Agent[]; defaul
  * Legacy parity for the canonical agents payload. When the config declares an
  * explicit `default_agent`, serve it verbatim; otherwise derive the default
  * from the served list with the same ordering semantics as
- * filterVisibleAgents — first non-subagent (`mode !== "specialized"` in the
+ * filterVisibleAgents — first non-subagent (`mode !== "subagent"` in the
  * canonical index vocabulary), non-hidden entry, falling back to the first
  * served entry. Returns "" only when nothing at all is served.
  */
 export function resolveServedDefaultAgent(index: Pick<AgentIndex, "defaultId" | "agents">): string {
   if (index.defaultId) return index.defaultId
   const served = index.agents.filter((item) => !item.hidden)
-  const visible = served.filter((item) => item.mode !== "specialized")
+  const visible = served.filter((item) => item.mode !== "subagent")
   return (visible[0] ?? served[0])?.id ?? ""
 }
 

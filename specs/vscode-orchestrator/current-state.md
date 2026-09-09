@@ -32,6 +32,19 @@ this note; when they disagree, the code is right.
   OAuth `authorize`/`complete` keeps its legacy path with canonical
   `unsupported`; credential reads and custom model discovery keep their
   legacy read paths.
+- Canonical file-backed custom-agent create/edit/import is production:
+  stamped `canonical: true` `mutateAgent` through `CanonicalConfigService.writeAsset`
+  CAS (project-absent on create/import, scope-plus-asset-hash on edit);
+  failures/exceptions post exactly one structured `agentMutationError` with a
+  freshly re-read stamp. The webview serializes per-agent edits through one
+  coordinator (debounced coalescing, full-snapshot reconciliation, inflight
+  error settling the whole queued batch with no replay); unmount/agent-switch
+  flush still reports to the provider-level diagnostic without touching dead
+  view state. Agent markdown is CLI-loader-compatible (unknown keys preserved
+  for rest/options merging; credential-bearing keys rejected in validation,
+  import, export, and host writes; prototype-polluting keys never merged).
+  Native/system agents are read-only; no global-scope picker and no
+  tool-disable/permission-preset implementation exist.
 - A private observation service exists in the extension, but the remaining
   target ownership and cutover are unfinished. Effective runtime
   configuration still comes from the CLI loader with its multi-source merge

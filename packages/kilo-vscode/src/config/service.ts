@@ -1636,7 +1636,7 @@ export class CanonicalConfigService implements Disposable {
       id: string
       displayName: string
       description?: string
-      mode?: "primary" | "secondary" | "specialized"
+      mode?: "subagent" | "primary" | "all"
       hidden?: boolean
       color?: string
       source: "global" | "project"
@@ -2981,7 +2981,7 @@ export class CanonicalConfigService implements Disposable {
     id: string
     displayName: string
     description?: string
-    mode?: "primary" | "secondary" | "specialized"
+    mode?: "subagent" | "primary" | "all"
     hidden?: boolean
     color?: string
     source: "global" | "project"
