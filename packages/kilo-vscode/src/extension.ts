@@ -314,8 +314,12 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   )
 
-  const settingsEditorProvider = new SettingsEditorProvider(context.extensionUri, connectionService, context)
-  settingsEditorProvider.setCanonicalConfig(canonicalConfig)
+  const settingsEditorProvider = new SettingsEditorProvider(
+    context.extensionUri,
+    connectionService,
+    context,
+    canonicalConfig,
+  )
   settingsEditorProvider.setRemoteService(remoteService)
   const marketplacePanelProvider = new MarketplacePanelProvider(context.extensionUri, connectionService, context)
   context.subscriptions.push(settingsEditorProvider, marketplacePanelProvider)

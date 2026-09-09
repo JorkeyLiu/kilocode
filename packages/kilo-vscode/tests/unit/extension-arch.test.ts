@@ -17,6 +17,8 @@ const SRC_DIR = path.join(ROOT, "src")
 const EXTENSION_FILE = path.join(ROOT, "src/extension.ts")
 const KILO_PROVIDER_FILE = path.join(ROOT, "src/KiloProvider.ts")
 const VSCODE_HOST_FILE = path.join(ROOT, "src/agent-manager/vscode-host.ts")
+const SETTINGS_HOST_FILE = path.join(ROOT, "src/SettingsEditorProvider.ts")
+const KILO_PROVIDER_OPTIONS_FILE = path.join(ROOT, "src/kilo-provider/options.ts")
 
 function sliceBlock(source: string, start: number): string {
   const open = source.indexOf("{", start)
@@ -156,6 +158,33 @@ describe("Extension — Agent Manager remote wiring", () => {
     expect(remote).toBeGreaterThan(-1)
     expect(attach).toBeGreaterThan(-1)
     expect(remote).toBeLessThan(attach)
+  })
+})
+
+describe("Extension — Settings host canonical construction", () => {
+  const host = fs.readFileSync(SETTINGS_HOST_FILE, "utf-8")
+  const ext = fs.readFileSync(EXTENSION_FILE, "utf-8")
+  const opts = fs.readFileSync(KILO_PROVIDER_OPTIONS_FILE, "utf-8")
+  const provider = fs.readFileSync(KILO_PROVIDER_FILE, "utf-8")
+
+  it("requires canonical config in the constructor with a readonly non-nullable field", () => {
+    expect(host).toContain("private readonly canonicalConfig: CanonicalConfigService")
+    expect(host).not.toContain("canonicalConfig: CanonicalConfigService | null")
+    expect(host).toMatch(/constructor\([\s\S]*?canonicalConfig: CanonicalConfigService[\s\S]*?\)/)
+    expect(host).not.toContain("canonicalConfig?:")
+  })
+
+  it("passes canonical config directly without a post-construction setter or nullable fallback", () => {
+    expect(host).not.toContain("setCanonicalConfig")
+    expect(host).not.toContain("this.canonicalConfig ?? undefined")
+    expect(host).toContain("canonicalConfig: this.canonicalConfig,")
+    expect(ext).toContain("canonicalConfig,")
+    expect(ext).not.toContain("settingsEditorProvider.setCanonicalConfig")
+  })
+
+  it("keeps the shared provider contract untouched", () => {
+    expect(opts).toContain("canonicalConfig?: CanonicalConfigService")
+    expect(provider).toContain("setCanonicalConfig(service: CanonicalConfigService)")
   })
 })
 

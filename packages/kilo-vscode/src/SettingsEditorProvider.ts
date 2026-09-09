@@ -28,13 +28,16 @@ export class SettingsEditorProvider implements vscode.Disposable {
   private providers = new Map<PanelView, KiloProvider>()
   private tabs = new Map<PanelView, string>()
   private remoteService: RemoteStatusService | null = null
-  private canonicalConfig: CanonicalConfigService | null = null
+  private readonly canonicalConfig: CanonicalConfigService
 
   constructor(
     private readonly extensionUri: vscode.Uri,
     private readonly connectionService: KiloConnectionService,
     private readonly context: vscode.ExtensionContext,
-  ) {}
+    canonicalConfig: CanonicalConfigService,
+  ) {
+    this.canonicalConfig = canonicalConfig
+  }
 
   private getProjectDirectory(): string | null {
     const editor = vscode.window.activeTextEditor
@@ -104,7 +107,7 @@ export class SettingsEditorProvider implements vscode.Disposable {
     // backend connectivity (config, providers, agents, profile, auth).
     const provider = new KiloProvider(this.extensionUri, this.connectionService, this.context, {
       projectDirectory,
-      canonicalConfig: this.canonicalConfig ?? undefined,
+      canonicalConfig: this.canonicalConfig,
     })
     if (this.remoteService) {
       provider.setRemoteService(this.remoteService)
@@ -158,11 +161,6 @@ export class SettingsEditorProvider implements vscode.Disposable {
     for (const [, provider] of this.providers) {
       provider.setRemoteService(service)
     }
-  }
-
-  setCanonicalConfig(service: CanonicalConfigService): void {
-    this.canonicalConfig = service
-    for (const provider of this.providers.values()) provider.setCanonicalConfig(service)
   }
 
   dispose(): void {
