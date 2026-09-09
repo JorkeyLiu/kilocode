@@ -53,6 +53,19 @@ background, and every session stays a full agent with its complete harness.
   which layers and entries produced it. Current project scope is supplied
   by the first workspace root `<workspaceRoot>/.kilo/`; with no folder open
   there is no project layer.
+- Permission configuration presents a small set of preset levels as the main
+  surface; exact count and mapping stay open until implementation evidence.
+- One main permission level applies uniformly to the main agent and child
+  tasks; there is no independent level for child tasks. Whether existing
+  recursion/interaction/primary-only safeguards remain is judged separately
+  by capability/lifecycle and never impersonates another permission level.
+- Each agent may independently disable tool calls. This is runtime capability
+  enforcement, not allow/ask/deny rules; a disabled call is rejected
+  programmatically and cannot be opened by preset or approval. Removal from
+  the model tool list or prompt context is derived presentation, not the
+  enforcement itself.
+- Permission UI placement and controls are not locked; mock images are
+  examples only.
 - Observation converges from runtime truth across panel close/reopen,
   targeted reload, session switch, transport reconnect, and worker restart:
   after any of these boundaries the projection settles onto what the runtime

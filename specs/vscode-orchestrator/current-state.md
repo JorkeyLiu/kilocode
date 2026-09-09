@@ -38,8 +38,9 @@ this note; when they disagree, the code is right.
 
 ## Unknowns that matter next
 
-- FD carriers terminate in the same backend `AppLayer`; `session/create`, title-only `session/update`, `session/fork`, and `session/delete` are now authoritative via `dispatch`, remaining SDK-owned lifecycle (share/archive) still SDK/extension-owned with no transport removal; private `session/abort` is production (terminal only after owner convergence, no invented terminal turn, no durable row); standalone observation remains the ownership path for reads.
+- FD carriers terminate in the same backend `AppLayer`; `session/create`, title-only `session/update`, `session/fork`, and `session/delete` are now authoritative via `dispatch`; VS Code currently issues no share/archive mutations; remaining SDK-owned mutations are checkpoint revert/unrevert, permission/question, MCP, config/auth/instance, plus session prompt/command/cancel and other generation-path calls, with no transport removal; private `session/abort` is production (terminal only after owner convergence, no invented terminal turn, no durable row); standalone observation remains the ownership path for reads.
 - Agent Manager session-list paging, bounded single-session detail, and paged plus full-read (`limit=0`) messages now consume the private `observation/list` + `observation/get` + `observation/messages` projections, and transcript export plus child-sync `handleSyncSession` follow the same full-read boundary; the remaining unresolved boundary is that session lifecycle beyond `session/create` + title-only `session/update` + `session/fork` + `session/delete` + `session/abort` still depends on the SDK path, with no private authority beyond `session/create` + `session/update` (title-only) + `session/fork` + `session/delete` + `session/abort` + list + detail + messages and no transport removal.
+- Permission preset target in `direction.md` is not implemented; the existing complex editor/permission authority (CLI evaluator plus extension composition/projection) remains the reality.
 
 No backlog lives here. Anything that does not change the next judgment is
 omitted.
