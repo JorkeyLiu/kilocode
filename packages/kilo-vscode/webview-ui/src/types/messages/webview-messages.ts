@@ -1,7 +1,7 @@
 import type { InstallMarketplaceItemOptions, MarketplaceFilters, MarketplaceItem } from "../marketplace"
 import type { FileAttachment } from "./parts"
 import type { MessageLoadMode } from "./sessions"
-import type { ModelSelection, ProviderConfig, LegacyProviderConfig } from "./providers"
+import type { ModelSelection, ProviderConfig } from "./providers"
 import type { CanonicalConfigPayload, CanonicalProviderPayload, CanonicalStamp } from "../../../../src/config/types"
 import type { ReviewMessageData } from "../../../../src/shared/review-comments"
 import type { WorkStyle, WorkStyleState } from "../../../../src/shared/work-style-presets"
@@ -725,15 +725,6 @@ export interface RequestRemoteStatusMessage {
   type: "requestRemoteStatus"
 }
 
-export interface LegacyConnectProviderMessage {
-  type: "connectProvider"
-  requestId: string
-  providerID: string
-  apiKey: string
-  metadata?: Record<string, string>
-  canonical?: false
-}
-
 export interface CanonicalConnectProviderMessage {
   type: "connectProvider"
   canonical: true
@@ -744,7 +735,7 @@ export interface CanonicalConnectProviderMessage {
   stamp: CanonicalStamp
 }
 
-export type ConnectProviderMessage = LegacyConnectProviderMessage | CanonicalConnectProviderMessage
+export type ConnectProviderMessage = CanonicalConnectProviderMessage
 
 export interface AuthorizeProviderOAuthMessage {
   type: "authorizeProviderOAuth"
@@ -778,16 +769,6 @@ export interface RetryProviderCleanupMessage {
   retryID: string
 }
 
-export interface LegacySaveCustomProviderMessage {
-  type: "saveCustomProvider"
-  requestId: string
-  providerID: string
-  config: LegacyProviderConfig
-  canonical?: false
-  apiKey?: string
-  apiKeyChanged?: boolean
-}
-
 export interface CanonicalSaveCustomProviderMessage {
   type: "saveCustomProvider"
   canonical: true
@@ -798,14 +779,7 @@ export interface CanonicalSaveCustomProviderMessage {
   stamp: CanonicalStamp
 }
 
-export type SaveCustomProviderMessage = LegacySaveCustomProviderMessage | CanonicalSaveCustomProviderMessage
-
-export interface LegacyDeleteCustomProviderMessage {
-  type: "deleteCustomProvider"
-  requestId: string
-  providerID: string
-  canonical: false
-}
+export type SaveCustomProviderMessage = CanonicalSaveCustomProviderMessage
 
 export interface CanonicalDeleteCustomProviderMessage {
   type: "deleteCustomProvider"
@@ -815,7 +789,7 @@ export interface CanonicalDeleteCustomProviderMessage {
   stamp: CanonicalStamp
 }
 
-export type DeleteCustomProviderMessage = LegacyDeleteCustomProviderMessage | CanonicalDeleteCustomProviderMessage
+export type DeleteCustomProviderMessage = CanonicalDeleteCustomProviderMessage
 
 export interface GetProviderCredentialMessage {
   type: "getProviderCredential"

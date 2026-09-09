@@ -1,13 +1,6 @@
 import * as path from "path"
 import * as vscode from "vscode"
-import type {
-  KiloClient,
-  Session,
-  SessionStatus,
-  Event,
-  TextPartInput,
-  FilePartInput,
-} from "@kilocode/sdk/v2/client"
+import type { KiloClient, Session, SessionStatus, Event, TextPartInput, FilePartInput } from "@kilocode/sdk/v2/client"
 import { MaxCostNudge, type MaxCostChoice } from "@opencode-ai/core/kilocode/cost/max-cost-nudge"
 import { type KiloConnectionService, ServerStartupError } from "./services/cli-backend"
 import { previewSound } from "./services/attention"
@@ -128,12 +121,8 @@ import {
   fetchProviderData,
   validateRecents,
   validateFavorites,
-  connectProvider as connectProviderAction,
   authorizeProviderOAuth as authorizeOAuthAction,
   completeProviderOAuth as completeOAuthAction,
-  disconnectProvider as disconnectProviderAction,
-  deleteCustomProvider as deleteCustomProviderAction,
-  saveCustomProvider as saveCustomProviderAction,
   resolveStoredKey,
 } from "./provider-actions"
 import type { StoredProviderKey } from "./provider-actions"
@@ -3528,15 +3517,27 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     const rid = typeof msg.requestId === "string" ? msg.requestId : ""
     const pid = typeof msg.providerID === "string" ? msg.providerID : ""
     if (!rid || !pid) return
-    if (!this.client) {
+    // Legacy provider API-key/custom mutations are canonical-only. Never fall
+    // back to the SDK bridge — fail fast with a structured error.
+    if (
+      msg.type === "connectProvider" ||
+      msg.type === "disconnectProvider" ||
+      msg.type === "deleteCustomProvider" ||
+      msg.type === "saveCustomProvider"
+    ) {
       const action =
-        msg.type === "disconnectProvider"
-          ? "disconnect"
-          : msg.type === "deleteCustomProvider"
-            ? "delete"
-            : msg.type === "authorizeProviderOAuth"
-              ? "authorize"
-              : "connect"
+        msg.type === "disconnectProvider" ? "disconnect" : msg.type === "deleteCustomProvider" ? "delete" : "connect"
+      this.postMessage({
+        type: "providerActionError",
+        requestId: rid,
+        providerID: pid,
+        action,
+        message: "Provider mutations are canonical-only",
+      })
+      return
+    }
+    if (!this.client) {
+      const action = msg.type === "authorizeProviderOAuth" ? "authorize" : "connect"
       this.postMessage({
         type: "providerActionError",
         requestId: rid,
@@ -3553,24 +3554,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       this.getWorkspaceDirectory(),
       () => this.fetchAndSendProviders(),
     )
-    const set = (m: unknown) => {
-      this.cachedConfigMessage = m
-    }
     const method = typeof msg.method === "number" ? msg.method : 0
-    const key = typeof msg.apiKey === "string" ? msg.apiKey : undefined
-    const keyChanged = msg.apiKeyChanged === true
     const code = typeof msg.code === "string" ? msg.code : undefined
-    const config = msg.config && typeof msg.config === "object" ? (msg.config as Record<string, unknown>) : undefined
-    const metadata =
-      msg.metadata && typeof msg.metadata === "object" ? (msg.metadata as Record<string, unknown>) : undefined
-    if (msg.type === "connectProvider" && key) return connectProviderAction(ctx, rid, pid, key, metadata)
     if (msg.type === "authorizeProviderOAuth") return authorizeOAuthAction(ctx, rid, pid, method)
     if (msg.type === "completeProviderOAuth") return completeOAuthAction(ctx, rid, pid, method, code)
-    if (msg.type === "disconnectProvider") return disconnectProviderAction(ctx, rid, pid, this.cachedConfigMessage, set)
-    if (msg.type === "deleteCustomProvider")
-      return deleteCustomProviderAction(ctx, rid, pid, this.cachedConfigMessage, set)
-    if (msg.type === "saveCustomProvider" && config)
-      return saveCustomProviderAction(ctx, rid, pid, config, key, keyChanged)
   }
 
   private async handleGetProviderCredential(msg: Record<string, unknown>): Promise<void> {
@@ -4553,10 +4540,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           metadata: metadata as unknown as Record<string, unknown> | undefined,
         })
         if (draftID && this.closedDrafts.delete(draftID)) {
-          await this.client!.session.delete(
-            { sessionID: session.id, query_directory: dir },
-            { throwOnError: true },
-          )
+          await this.client!.session.delete({ sessionID: session.id, query_directory: dir }, { throwOnError: true })
           return undefined
         }
         const detail = sdkSessionToDetail(session as Session)

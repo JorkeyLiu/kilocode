@@ -184,12 +184,12 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
         onCredentialLoaded: (message) => {
           if (pendingCredentialID === undefined) return
           pendingCredentialID = undefined
-            if (message.canonical || !message.apiKey) {
-              setCredentialLoading(false)
-              return
-            }
-           setOriginalKey(message.apiKey)
-           if (!apiTouched()) setForm("apiKey", message.apiKey)
+          if (message.canonical || !message.apiKey) {
+            setCredentialLoading(false)
+            return
+          }
+          setOriginalKey(message.apiKey)
+          if (!apiTouched()) setForm("apiKey", message.apiKey)
           setCredentialLoading(false)
         },
         onCredentialError: (message) => {
@@ -283,7 +283,7 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
     const url = fetchURL().trim()
     const raw = fetchKey().trim()
     const env = raw.match(/^\{env:([^}]+)\}$/)?.[1]?.trim()
-     const apiKey = isCanonical() ? undefined : raw && !env ? raw : undefined
+    const apiKey = isCanonical() ? undefined : raw && !env ? raw : undefined
     // When editing an existing provider with the key field untouched, the
     // webview has no key to send — keys are stripped before provider data
     // reaches it. Send the providerID so the extension can authenticate the
@@ -345,21 +345,21 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
       setFetchedModels(fresh)
     })
 
-    vscode.postMessage(({
+    vscode.postMessage({
       type: "fetchCustomProviderModels",
       requestId: rid,
       baseURL: url,
       providerID,
       headers,
-       ...(!isCanonical() ? { apiKey } : {}),
+      ...(!isCanonical() ? { apiKey } : {}),
       ...(isCanonical()
         ? {
             canonical: true as const,
             credentialRequested: !!raw && !env,
-             stamp: currentStamp!,
+            stamp: currentStamp!,
           }
         : {}),
-    }) as Parameters<typeof vscode.postMessage>[0])
+    } as Parameters<typeof vscode.postMessage>[0])
   }
 
   // ── Model picker actions ────────────────────────────────────────────
@@ -530,8 +530,14 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
   function save(e: SubmitEvent) {
     e.preventDefault()
     if (form.saving) return
+    // Custom provider writes are canonical-only. Non-canonical UI must not
+    // send the removed legacy message — surface an explicit unsupported error.
+    if (!isCanonical()) {
+      showToast({ title: language.t("common.requestFailed"), description: "Provider mutations are canonical-only" })
+      return
+    }
     const currentStamp = provider.stamp?.()
-    if (isCanonical() && !currentStamp) return
+    if (!currentStamp) return
 
     const result = validate()
     if (!result) return
@@ -540,8 +546,8 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
 
     // Canonical path: serialize to {name, endpoint, protocol, models} directly.
     // Never invoke legacy serializer shape (npm/options/headers/env).
-    const canonicalConfig = isCanonical() ? serializeCanonicalProvider(form) : undefined
-    if (isCanonical() && !canonicalConfig) {
+    const canonicalConfig = serializeCanonicalProvider(form)
+    if (!canonicalConfig) {
       setForm("saving", false)
       return
     }
@@ -550,14 +556,10 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
       {
         type: "saveCustomProvider",
         providerID: result.providerID,
-        ...(isCanonical()
-          ? {
-              config: canonicalConfig!,
-              canonical: true as const,
-              credentialRequested: apiTouched(),
-              stamp: currentStamp!,
-            }
-          : { config: result.config, apiKey: apiTouched() ? result.key : undefined, apiKeyChanged: apiTouched() }),
+        config: canonicalConfig,
+        canonical: true as const,
+        credentialRequested: apiTouched(),
+        stamp: currentStamp,
       },
       {
         onConnected: () => {
@@ -603,87 +605,96 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
       </div>
 
       <form onSubmit={save} class="cpd-form">
-          <div class="cpd-description">
-            {language.t("provider.custom.description.prefix")}
-            <a
-              href="https://kilo.ai/docs/ai-providers#custom-provider"
-              onClick={(e) => {
-                e.preventDefault()
-                vscode.postMessage({
-                  type: "openExternal",
-                  url: "https://kilo.ai/docs/ai-providers#custom-provider",
-                })
+        <div class="cpd-description">
+          {language.t("provider.custom.description.prefix")}
+          <a
+            href="https://kilo.ai/docs/ai-providers#custom-provider"
+            onClick={(e) => {
+              e.preventDefault()
+              vscode.postMessage({
+                type: "openExternal",
+                url: "https://kilo.ai/docs/ai-providers#custom-provider",
+              })
+            }}
+          >
+            {language.t("provider.custom.description.link")}
+          </a>
+          {language.t("provider.custom.description.suffix")}
+        </div>
+
+        {/* Basic settings: 2-column grid that collapses at narrow widths */}
+        <div class="cpd-basic-grid">
+          <TextField
+            autofocus={!editing()}
+            label={language.t("provider.custom.field.providerID.label")}
+            placeholder={language.t("provider.custom.field.providerID.placeholder")}
+            description={language.t("provider.custom.field.providerID.description")}
+            value={form.providerID}
+            onChange={(v) => setForm("providerID", v)}
+            validationState={errors.providerID ? "invalid" : undefined}
+            error={errors.providerID}
+            disabled={editing() || isCanonical()}
+          />
+          <TextField
+            label={language.t("provider.custom.field.name.label")}
+            placeholder={language.t("provider.custom.field.name.placeholder")}
+            value={form.name}
+            onChange={(v) => setForm("name", v)}
+            disabled={isCanonical()}
+            validationState={errors.name ? "invalid" : undefined}
+            error={errors.name}
+          />
+          <div class="cpd-package-field">
+            <label class="cpd-package-label">{language.t("provider.custom.field.package.label")}</label>
+            <Select
+              options={PACKAGE_OPTIONS}
+              current={PACKAGE_OPTIONS.find((option) => option.value === form.npm)}
+              value={(option) => option.value}
+              label={(option) => option.label}
+              onSelect={(option) => {
+                if (isCanonical()) return
+                if (!option) return
+                setForm("npm", option.value)
+                setFetchPackage(option.value)
               }}
-            >
-              {language.t("provider.custom.description.link")}
-            </a>
-            {language.t("provider.custom.description.suffix")}
+              variant="secondary"
+              triggerVariant="settings"
+            />
           </div>
+          <TextField
+            label={language.t("provider.custom.field.baseURL.label")}
+            placeholder={language.t("provider.custom.field.baseURL.placeholder")}
+            value={form.baseURL}
+            onChange={(v) => {
+              if (isCanonical()) return
+              setForm("baseURL", v)
+              setFetchURL(v)
+            }}
+            validationState={errors.baseURL ? "invalid" : undefined}
+            error={errors.baseURL}
+          />
 
-          {/* Basic settings: 2-column grid that collapses at narrow widths */}
-          <div class="cpd-basic-grid">
-                 <TextField
-              autofocus={!editing()}
-              label={language.t("provider.custom.field.providerID.label")}
-              placeholder={language.t("provider.custom.field.providerID.placeholder")}
-              description={language.t("provider.custom.field.providerID.description")}
-              value={form.providerID}
-              onChange={(v) => setForm("providerID", v)}
-              validationState={errors.providerID ? "invalid" : undefined}
-              error={errors.providerID}
-              disabled={editing() || isCanonical()}
-            />
-            <TextField
-              label={language.t("provider.custom.field.name.label")}
-              placeholder={language.t("provider.custom.field.name.placeholder")}
-              value={form.name}
-               onChange={(v) => setForm("name", v)}
-              disabled={isCanonical()}
-              validationState={errors.name ? "invalid" : undefined}
-              error={errors.name}
-            />
-            <div class="cpd-package-field">
-              <label class="cpd-package-label">
-                {language.t("provider.custom.field.package.label")}
-              </label>
-              <Select
-                options={PACKAGE_OPTIONS}
-                current={PACKAGE_OPTIONS.find((option) => option.value === form.npm)}
-                value={(option) => option.value}
-                label={(option) => option.label}
-                 onSelect={(option) => {
-                   if (isCanonical()) return
-                  if (!option) return
-                  setForm("npm", option.value)
-                  setFetchPackage(option.value)
-                }}
-                variant="secondary"
-                triggerVariant="settings"
-              />
+          <Show when={isCanonical()}>
+            <div
+              class="cpd-api-key-row"
+              aria-disabled="true"
+              title="Credential input is collected by the extension host"
+            >
+              Credential input is collected securely by the extension host when this provider is saved.
             </div>
-            <TextField
-              label={language.t("provider.custom.field.baseURL.label")}
-              placeholder={language.t("provider.custom.field.baseURL.placeholder")}
-              value={form.baseURL}
-               onChange={(v) => {
-                 if (isCanonical()) return
-                setForm("baseURL", v)
-                setFetchURL(v)
-              }}
-              validationState={errors.baseURL ? "invalid" : undefined}
-              error={errors.baseURL}
-            />
-
-            <Show when={isCanonical()}>
-              <div class="cpd-api-key-row" aria-disabled="true" title="Credential input is collected by the extension host">
-                Credential input is collected securely by the extension host when this provider is saved.
-              </div>
-            </Show>
-            <Show when={!isCanonical()}>
+          </Show>
+          <Show when={!isCanonical()}>
             {/* API key: full-width row spanning both columns */}
             <div class="cpd-api-key-row">
               <Show when={credentialLoading()}>
-                <div style={{ display: "flex", gap: "8px", "align-items": "center", "font-size": "var(--kilo-font-size-13)" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "8px",
+                    "align-items": "center",
+                    "font-size": "var(--kilo-font-size-13)",
+                  }}
+                >
                   <Spinner />
                   <span>{language.t("provider.apiKey.manage.loading")}</span>
                 </div>
@@ -703,7 +714,8 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
                     description={language.t("provider.custom.field.apiKey.description")}
                     value={form.apiKey}
                     onChange={(v) => {
-                      const key = !apiTouched() && form.apiKey === MASKED_CUSTOM_PROVIDER_KEY ? v.replace(/^\*+/, "") : v
+                      const key =
+                        !apiTouched() && form.apiKey === MASKED_CUSTOM_PROVIDER_KEY ? v.replace(/^\*+/, "") : v
                       setApiTouched(true)
                       setForm("apiKey", key)
                       setFetchKey(key)
@@ -761,174 +773,177 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
                 </TextFieldRoot>
               </Show>
             </div>
+          </Show>
+        </div>
+
+        {/* Models section */}
+        <div class="cpd-section">
+          <hr class="cpd-divider" />
+          <div class="cpd-section-label">
+            <span>{language.t("provider.custom.models.label")}</span>
+            <Show when={fetching()}>
+              <Spinner style={{ width: "12px", height: "12px" }} />
             </Show>
           </div>
 
-          {/* Models section */}
-          <div class="cpd-section">
-            <hr class="cpd-divider" />
-            <div class="cpd-section-label">
-              <span>{language.t("provider.custom.models.label")}</span>
-              <Show when={fetching()}>
-                <Spinner style={{ width: "12px", height: "12px" }} />
-              </Show>
-            </div>
+          {/* Configured models: user-added cards + add button */}
+          <div class="cpd-configured">
+            <For each={form.models}>
+              {(m, i) => (
+                <ModelCard
+                  m={m}
+                  i={i}
+                  errors={errors.models[i()] ?? {}}
+                  t={language.t}
+                  canRemove={form.models.length > 1}
+                  onChangeId={(v) => setForm("models", i(), "id", v)}
+                  onChangeName={(v) => setForm("models", i(), "name", v)}
+                  onChangeReasoning={(v) => setForm("models", i(), "reasoning", v)}
+                  onChangeSupportsImages={(v) => setForm("models", i(), "supportsImages", v)}
+                  onRemove={() => removeModel(i())}
+                  onAddVariant={() => addVariant(i())}
+                  onRemoveVariant={(vi) => removeVariant(i(), vi)}
+                  onChangeVariantName={(vi, val) => setForm("models", i(), "variants", vi, "name", val)}
+                  onChangeVariantEnableThinking={(vi, val) =>
+                    setForm("models", i(), "variants", vi, "enableThinking", val)
+                  }
+                  onChangeVariantThinking={(vi, val) => setForm("models", i(), "variants", vi, "thinking", val)}
+                  onChangeVariantSplitReasoning={(vi, val) =>
+                    setForm("models", i(), "variants", vi, "splitReasoning", val)
+                  }
+                  onChangeVariantReasoningEffort={(vi, val) =>
+                    setForm("models", i(), "variants", vi, "reasoningEffort", val)
+                  }
+                  onChangeVariantOutputEffort={(vi, val) => setForm("models", i(), "variants", vi, "outputEffort", val)}
+                  onChangeVariantChatTemplateArgs={(vi, val) =>
+                    setForm("models", i(), "variants", vi, "chatTemplateArgs", val)
+                  }
+                />
+              )}
+            </For>
+            <Button
+              type="button"
+              size="small"
+              variant="ghost"
+              icon="plus-small"
+              onClick={addModel}
+              style={{ "align-self": "flex-start" }}
+            >
+              {language.t("provider.custom.models.add")}
+            </Button>
+          </div>
 
-            {/* Configured models: user-added cards + add button */}
-            <div class="cpd-configured">
-              <For each={form.models}>
-                {(m, i) => (
-                  <ModelCard
-                    m={m}
-                    i={i}
-                    errors={errors.models[i()] ?? {}}
-                    t={language.t}
-                    canRemove={form.models.length > 1}
-                    onChangeId={(v) => setForm("models", i(), "id", v)}
-                    onChangeName={(v) => setForm("models", i(), "name", v)}
-                    onChangeReasoning={(v) => setForm("models", i(), "reasoning", v)}
-                    onChangeSupportsImages={(v) => setForm("models", i(), "supportsImages", v)}
-                    onRemove={() => removeModel(i())}
-                    onAddVariant={() => addVariant(i())}
-                    onRemoveVariant={(vi) => removeVariant(i(), vi)}
-                    onChangeVariantName={(vi, val) => setForm("models", i(), "variants", vi, "name", val)}
-                    onChangeVariantEnableThinking={(vi, val) =>
-                      setForm("models", i(), "variants", vi, "enableThinking", val)
-                    }
-                    onChangeVariantThinking={(vi, val) => setForm("models", i(), "variants", vi, "thinking", val)}
-                    onChangeVariantSplitReasoning={(vi, val) =>
-                      setForm("models", i(), "variants", vi, "splitReasoning", val)
-                    }
-                    onChangeVariantReasoningEffort={(vi, val) =>
-                      setForm("models", i(), "variants", vi, "reasoningEffort", val)
-                    }
-                    onChangeVariantOutputEffort={(vi, val) => setForm("models", i(), "variants", vi, "outputEffort", val)}
-                    onChangeVariantChatTemplateArgs={(vi, val) =>
-                      setForm("models", i(), "variants", vi, "chatTemplateArgs", val)
-                    }
-                  />
-                )}
-              </For>
-              <Button type="button" size="small" variant="ghost" icon="plus-small" onClick={addModel} style={{ "align-self": "flex-start" }}>
-                {language.t("provider.custom.models.add")}
-              </Button>
-            </div>
+          {/* Available from API: fetched model picker */}
+          <Show when={fetchedModels()}>
+            {(models) => (
+              <div class="cpd-available">
+                <span class="cpd-available-label">{language.t("provider.custom.models.fetch.available")}</span>
 
-            {/* Available from API: fetched model picker */}
-            <Show when={fetchedModels()}>
-              {(models) => (
-                <div class="cpd-available">
-                  <span class="cpd-available-label">
-                    {language.t("provider.custom.models.fetch.available")}
-                  </span>
-
-                  <div class="cpd-picker">
-                    {/* Header with count + toggle */}
-                    <div class="cpd-picker-toolbar">
-                      <span
-                        style={{
-                          "font-size": "var(--kilo-font-size-12)",
-                          "font-weight": "500",
-                          color: "var(--text-weak-base)",
-                        }}
+                <div class="cpd-picker">
+                  {/* Header with count + toggle */}
+                  <div class="cpd-picker-toolbar">
+                    <span
+                      style={{
+                        "font-size": "var(--kilo-font-size-12)",
+                        "font-weight": "500",
+                        color: "var(--text-weak-base)",
+                      }}
+                    >
+                      <Show
+                        when={debouncedSearch()}
+                        fallback={language.t("provider.custom.models.fetch.found", {
+                          count: String(models().length),
+                        })}
                       >
-                        <Show
-                          when={debouncedSearch()}
-                          fallback={language.t("provider.custom.models.fetch.found", {
-                            count: String(models().length),
-                          })}
-                        >
-                          {language.t("provider.custom.models.fetch.showing", {
-                            shown: String(filtered().length),
-                            total: String(models().length),
-                          })}
-                        </Show>
-                      </span>
-                      <div class="cpd-picker-actions">
-                        <Button type="button" size="small" variant="ghost" onClick={selectAll}>
-                          {language.t("provider.custom.models.fetch.selectAll")}
-                        </Button>
-                        <Button type="button" size="small" variant="ghost" onClick={deselectAll}>
-                          {language.t("provider.custom.models.fetch.deselectAll")}
-                        </Button>
-                      </div>
-                    </div>
-
-                    {/* Search */}
-                    <Show when={models().length > 10}>
-                      <TextField
-                        label={language.t("provider.custom.models.fetch.search")}
-                        hideLabel
-                        placeholder={language.t("provider.custom.models.fetch.search")}
-                        value={search()}
-                        onChange={setSearch}
-                      />
-                    </Show>
-
-                    {/* Model list — multi-column grid */}
-                    <div class="cpd-model-list">
-                      <For each={filtered()}>
-                        {(m) => (
-                          <label class="cpd-model-list-item">
-                            <input
-                              type="checkbox"
-                              checked={selected().has(m.id)}
-                              onChange={() => toggleModel(m.id)}
-                              style={{ cursor: "pointer" }}
-                            />
-                            <span>{m.id}</span>
-                          </label>
-                        )}
-                      </For>
-                    </div>
-
-                    {/* Actions */}
+                        {language.t("provider.custom.models.fetch.showing", {
+                          shown: String(filtered().length),
+                          total: String(models().length),
+                        })}
+                      </Show>
+                    </span>
                     <div class="cpd-picker-actions">
-                      <Button type="button" size="small" variant="primary" onClick={addSelected} disabled={count() === 0}>
-                        {language.t("provider.custom.models.fetch.add", { count: String(count()) })}
+                      <Button type="button" size="small" variant="ghost" onClick={selectAll}>
+                        {language.t("provider.custom.models.fetch.selectAll")}
                       </Button>
-                      <Button type="button" size="small" variant="ghost" onClick={cancelFetch}>
-                        {language.t("common.cancel")}
+                      <Button type="button" size="small" variant="ghost" onClick={deselectAll}>
+                        {language.t("provider.custom.models.fetch.deselectAll")}
                       </Button>
                     </div>
                   </div>
+
+                  {/* Search */}
+                  <Show when={models().length > 10}>
+                    <TextField
+                      label={language.t("provider.custom.models.fetch.search")}
+                      hideLabel
+                      placeholder={language.t("provider.custom.models.fetch.search")}
+                      value={search()}
+                      onChange={setSearch}
+                    />
+                  </Show>
+
+                  {/* Model list — multi-column grid */}
+                  <div class="cpd-model-list">
+                    <For each={filtered()}>
+                      {(m) => (
+                        <label class="cpd-model-list-item">
+                          <input
+                            type="checkbox"
+                            checked={selected().has(m.id)}
+                            onChange={() => toggleModel(m.id)}
+                            style={{ cursor: "pointer" }}
+                          />
+                          <span>{m.id}</span>
+                        </label>
+                      )}
+                    </For>
+                  </div>
+
+                  {/* Actions */}
+                  <div class="cpd-picker-actions">
+                    <Button type="button" size="small" variant="primary" onClick={addSelected} disabled={count() === 0}>
+                      {language.t("provider.custom.models.fetch.add", { count: String(count()) })}
+                    </Button>
+                    <Button type="button" size="small" variant="ghost" onClick={cancelFetch}>
+                      {language.t("common.cancel")}
+                    </Button>
+                  </div>
                 </div>
-              )}
-            </Show>
+              </div>
+            )}
+          </Show>
 
-            {/* Fetch error */}
-            <Show when={fetchError()}>
-              {(err) => (
-                <span
-                  style={{ "font-size": "var(--kilo-font-size-12)", color: "var(--vscode-errorForeground, #f14c4c)" }}
-                >
-                  {err()}
-                </span>
-              )}
-            </Show>
+          {/* Fetch error */}
+          <Show when={fetchError()}>
+            {(err) => (
+              <span
+                style={{ "font-size": "var(--kilo-font-size-12)", color: "var(--vscode-errorForeground, #f14c4c)" }}
+              >
+                {err()}
+              </span>
+            )}
+          </Show>
 
-            {/* Fetch status (success/info messages) */}
-            <Show when={!fetchError() && fetchStatus()}>
-              {(status) => (
-                <span
-                  style={{
-                    "font-size": "var(--kilo-font-size-12)",
-                    color: "var(--text-weak-base, var(--vscode-descriptionForeground))",
-                  }}
-                >
-                  {status()}
-                </span>
-              )}
-            </Show>
-          </div>
+          {/* Fetch status (success/info messages) */}
+          <Show when={!fetchError() && fetchStatus()}>
+            {(status) => (
+              <span
+                style={{
+                  "font-size": "var(--kilo-font-size-12)",
+                  color: "var(--text-weak-base, var(--vscode-descriptionForeground))",
+                }}
+              >
+                {status()}
+              </span>
+            )}
+          </Show>
+        </div>
 
-          {/* Headers section */}
-          <Show when={!isCanonical()}>
+        {/* Headers section */}
+        <Show when={!isCanonical()}>
           <div class="cpd-section">
             <hr class="cpd-divider" />
-            <label class="cpd-section-label">
-              {language.t("provider.custom.headers.label")}
-            </label>
+            <label class="cpd-section-label">{language.t("provider.custom.headers.label")}</label>
             <For each={form.headers}>
               {(h, i) => (
                 <div style={{ display: "flex", gap: "8px", "align-items": "start" }}>
@@ -970,16 +985,16 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
               {language.t("provider.custom.headers.add")}
             </Button>
           </div>
-          </Show>
+        </Show>
 
-          {/* Sticky footer */}
-          <div class="cpd-footer">
-            <Button type="submit" size="large" variant="primary" disabled={form.saving}>
-              {form.saving ? language.t("common.saving") : language.t("common.submit")}
-            </Button>
-          </div>
-        </form>
-      </Dialog>
+        {/* Sticky footer */}
+        <div class="cpd-footer">
+          <Button type="submit" size="large" variant="primary" disabled={form.saving}>
+            {form.saving ? language.t("common.saving") : language.t("common.submit")}
+          </Button>
+        </div>
+      </form>
+    </Dialog>
   )
 }
 

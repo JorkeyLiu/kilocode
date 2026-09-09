@@ -27,7 +27,7 @@ const DIALOG_SRC = read("webview-ui/src/components/settings/CustomProviderDialog
 const DIALOG_CSS = read("webview-ui/src/styles/dialogs.css")
 
 describe("CustomProviderDialog — layout sizing (LOCK-001/LOCK-002)", () => {
-  it("uses size=\"x-large\" on Dialog", () => {
+  it('uses size="x-large" on Dialog', () => {
     expect(DIALOG_SRC).toContain('size="x-large"')
   })
 
@@ -77,7 +77,7 @@ describe("CustomProviderDialog — layout sizing (LOCK-001/LOCK-002)", () => {
   it("CSS defines 2-column grid with container query collapse", () => {
     expect(DIALOG_CSS).toContain("grid-template-columns: 1fr 1fr")
     expect(DIALOG_CSS).toContain("@container (max-width: 500px)")
-    expect(DIALOG_CSS).toContain('.cpd-basic-grid {\n    grid-template-columns: 1fr;')
+    expect(DIALOG_CSS).toContain(".cpd-basic-grid {\n    grid-template-columns: 1fr;")
   })
 
   it("CSS defines sticky footer with right-aligned submit", () => {
@@ -232,12 +232,13 @@ describe("CustomProviderDialog — credential reveal (LOCK-003/005)", () => {
 })
 
 describe("CustomProviderDialog — save semantics (LOCK-004)", () => {
-  it("apiKey is undefined when apiTouched is false (preserves existing key)", () => {
-    expect(DIALOG_SRC).toContain("apiTouched() ? result.key : undefined")
+  it("canonical save requests credentials via credentialRequested flag", () => {
+    expect(DIALOG_SRC).toContain("credentialRequested: apiTouched()")
   })
 
-  it("apiKeyChanged uses apiTouched flag", () => {
-    expect(DIALOG_SRC).toContain("apiKeyChanged: apiTouched()")
+  it("canonical-only save never sends legacy apiKey fields", () => {
+    expect(DIALOG_SRC).not.toContain("apiKeyChanged")
+    expect(DIALOG_SRC).toContain("Provider mutations are canonical-only")
   })
 
   it("apiTouched is set to true only on user input, not on credential load", () => {

@@ -2,9 +2,7 @@ import type {
   AuthorizeProviderOAuthMessage,
   CompleteProviderOAuthMessage,
   ConnectProviderMessage,
-  LegacyConnectProviderMessage,
   CanonicalConnectProviderMessage,
-  LegacyDeleteCustomProviderMessage,
   CanonicalDeleteCustomProviderMessage,
   DeleteCustomProviderMessage,
   DisconnectProviderMessage,
@@ -34,12 +32,10 @@ type ProviderRequest =
   | GetProviderCredentialMessage
 
 type ProviderRequestInput =
-  | Omit<LegacyConnectProviderMessage, "requestId">
   | Omit<CanonicalConnectProviderMessage, "requestId">
   | Omit<AuthorizeProviderOAuthMessage, "requestId">
   | Omit<CompleteProviderOAuthMessage, "requestId">
   | Omit<DisconnectProviderMessage, "requestId">
-  | Omit<LegacyDeleteCustomProviderMessage, "requestId">
   | Omit<CanonicalDeleteCustomProviderMessage, "requestId">
   | Omit<SaveCustomProviderMessage, "requestId">
   | (Omit<GetProviderCredentialMessage, "requestID"> & { requestID?: string })
@@ -54,8 +50,12 @@ type Handlers = {
   onConnected?: (message: ProviderConnectedMessage | CanonicalProviderConnectedMessage) => void
   onDisconnected?: (message: ProviderDisconnectedMessage | CanonicalProviderDisconnectedMessage) => void
   onDeleted?: (message: ProviderDeletedMessage | CanonicalProviderDeletedMessage) => void
-  onError?: (message: ProviderActionErrorMessage | import("../types/messages").CanonicalProviderActionErrorMessage) => void
-  onCredentialLoaded?: (message: ProviderCredentialLoadedMessage | import("../types/messages").CanonicalProviderCredentialLoadedMessage) => void
+  onError?: (
+    message: ProviderActionErrorMessage | import("../types/messages").CanonicalProviderActionErrorMessage,
+  ) => void
+  onCredentialLoaded?: (
+    message: ProviderCredentialLoadedMessage | import("../types/messages").CanonicalProviderCredentialLoadedMessage,
+  ) => void
   onCredentialError?: (message: ProviderCredentialErrorMessage) => void
 }
 
@@ -113,7 +113,7 @@ export function createProviderAction(vscode: Transport) {
     // Credential messages use requestID (uppercase); other provider messages use requestId.
     const useUpper = message.type === "getProviderCredential"
     const payload = useUpper ? { ...message, requestID: id } : { ...message, requestId: id }
-  vscode.postMessage(payload as ProviderRequest)
+    vscode.postMessage(payload as ProviderRequest)
     return id
   }
 

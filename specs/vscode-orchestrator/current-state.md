@@ -24,6 +24,14 @@ this note; when they disagree, the code is right.
   extension (the CLI transaction endpoint itself is unchanged). Canonical
   reads publish the service snapshot; providers without canonical authority
   return explicit empty/unsupported payloads instead of racing the SDK.
+- Provider API-key/custom writes are canonical-only:
+  `connectProvider`/`disconnectProvider`/`saveCustomProvider`/`deleteCustomProvider`
+  go through `CanonicalConfigService` plus `SecretStorage`; non-canonical
+  payloads fail fast with a structured `providerActionError` and never fall
+  back to the SDK bridge. The legacy SDK mutation callers are removed.
+  OAuth `authorize`/`complete` keeps its legacy path with canonical
+  `unsupported`; credential reads and custom model discovery keep their
+  legacy read paths.
 - A private observation service exists in the extension, but the remaining
   target ownership and cutover are unfinished. Effective runtime
   configuration still comes from the CLI loader with its multi-source merge

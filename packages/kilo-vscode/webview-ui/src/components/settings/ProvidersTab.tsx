@@ -48,7 +48,9 @@ const ProvidersTab: Component = () => {
   const disabledProviders = createMemo(() => config().disabled_providers ?? [])
   const disabledIds = createMemo(() => new Set(disabledProviders()))
   const allProviders = createMemo(() => Object.values(provider.providers()))
-  const providerMap = createMemo(() => Object.fromEntries(allProviders().map((item) => [item.id, item])) as Record<string, ProviderView>)
+  const providerMap = createMemo(
+    () => Object.fromEntries(allProviders().map((item) => [item.id, item])) as Record<string, ProviderView>,
+  )
 
   // Configured IDs: connected + disabled + config entries + auth states
   const configuredIds = createMemo(() =>
@@ -109,14 +111,23 @@ const ProvidersTab: Component = () => {
                 const error = (message: { message: string }) => {
                   showToast({ title: language.t("common.requestFailed"), description: message.message })
                 }
+                // Legacy provider mutations are canonical-only. Non-canonical
+                // UI must not send the removed legacy message — surface an
+                // explicit unsupported error instead.
                 if (!canonicalMode()) {
-                  action.send({ type: "deleteCustomProvider", providerID, canonical: false }, { onDeleted: done, onError: error })
+                  showToast({
+                    title: language.t("common.requestFailed"),
+                    description: "Provider mutations are canonical-only",
+                  })
                   dialog.close()
                   return
                 }
                 const stamp = provider.stamp?.()
                 if (!stamp) return
-                action.send({ type: "deleteCustomProvider", providerID, canonical: true, stamp }, { onDeleted: done, onError: error })
+                action.send(
+                  { type: "deleteCustomProvider", providerID, canonical: true, stamp },
+                  { onDeleted: done, onError: error },
+                )
                 dialog.close()
               }}
             >
@@ -198,9 +209,29 @@ const ProvidersTab: Component = () => {
     <div>
       <Show when={provider.diagnostics?.()}>
         {(diagnostics) => {
-          const d = diagnostics() as { action?: string; message?: string; kind?: string; retry?: { type: "retryProviderCleanup"; mode: "delete" | "restore"; scope: "global" | "project"; stamp: import("../../../../src/config/types").CanonicalStamp; retryID: string } }
+          const d = diagnostics() as {
+            action?: string
+            message?: string
+            kind?: string
+            retry?: {
+              type: "retryProviderCleanup"
+              mode: "delete" | "restore"
+              scope: "global" | "project"
+              stamp: import("../../../../src/config/types").CanonicalStamp
+              retryID: string
+            }
+          }
           return (
-            <div role="alert" style={{ color: "var(--vscode-errorForeground)", "margin-bottom": "8px", display: "flex", "align-items": "center", gap: "8px" }}>
+            <div
+              role="alert"
+              style={{
+                color: "var(--vscode-errorForeground)",
+                "margin-bottom": "8px",
+                display: "flex",
+                "align-items": "center",
+                gap: "8px",
+              }}
+            >
               <span>{d.message ?? JSON.stringify(d)}</span>
               <Show when={d.retry}>
                 <Button variant="secondary" size="small" onClick={() => provider.retryProviderCleanup?.(d.retry!)}>
@@ -260,8 +291,10 @@ const ProvidersTab: Component = () => {
                               size="large"
                               variant="ghost"
                               aria-label={language.t("common.edit")}
-                             onClick={() => { if (!canonicalMode()) editProvider(item) }}
-                             disabled={canonicalMode() === true}
+                              onClick={() => {
+                                if (!canonicalMode()) editProvider(item)
+                              }}
+                              disabled={canonicalMode() === true}
                             />
                           </Tooltip>
                         </div>
@@ -283,8 +316,10 @@ const ProvidersTab: Component = () => {
                         <Button
                           size="large"
                           variant="ghost"
-                           onClick={() => { if (!canonicalMode()) connectChatGPT(item) }}
-                           disabled={canonicalMode() === true}
+                          onClick={() => {
+                            if (!canonicalMode()) connectChatGPT(item)
+                          }}
+                          disabled={canonicalMode() === true}
                           class="settings-provider-row-credential-slot"
                         >
                           {language.t("settings.providers.action.signInChatGPT")}
@@ -294,8 +329,10 @@ const ProvidersTab: Component = () => {
                         <Button
                           size="large"
                           variant="ghost"
-                           onClick={() => { if (!canonicalMode()) connectProvider(item) }}
-                           disabled={canonicalMode() === true}
+                          onClick={() => {
+                            if (!canonicalMode()) connectProvider(item)
+                          }}
+                          disabled={canonicalMode() === true}
                           class="settings-provider-row-credential-slot"
                         >
                           {language.t("provider.anaconda.action.manage")}
@@ -308,7 +345,9 @@ const ProvidersTab: Component = () => {
 
                     <Switch
                       checked={!disabledIds().has(item.id)}
-                      onChange={() => { if (!canonicalMode()) toggleProvider(item.id) }}
+                      onChange={() => {
+                        if (!canonicalMode()) toggleProvider(item.id)
+                      }}
                       disabled={canonicalMode() === true}
                       aria-label={language.t("settings.providers.switch.label", { provider: item.name })}
                     />
@@ -326,8 +365,8 @@ const ProvidersTab: Component = () => {
                             size="large"
                             variant="ghost"
                             aria-label={language.t("settings.providers.action.deleteProvider")}
-                             onClick={() => deleteCustom(item.id, item.name)}
-                             disabled={canonicalMode() === true}
+                            onClick={() => deleteCustom(item.id, item.name)}
+                            disabled={canonicalMode() === true}
                           />
                         </Tooltip>
                       </div>
@@ -367,7 +406,13 @@ const ProvidersTab: Component = () => {
                     )}
                   </Show>
                 </div>
-                 <Button size="large" variant="secondary" icon="plus-small" onClick={() => connectProvider(item)} disabled={canonicalMode() === true}>
+                <Button
+                  size="large"
+                  variant="secondary"
+                  icon="plus-small"
+                  onClick={() => connectProvider(item)}
+                  disabled={canonicalMode() === true}
+                >
                   {language.t("settings.providers.action.configure")}
                 </Button>
               </div>
@@ -408,8 +453,10 @@ const ProvidersTab: Component = () => {
             size="large"
             variant="secondary"
             icon="plus-small"
-             onClick={() => { if (!canonicalMode()) dialog.show(() => <CustomProviderDialog />) }}
-             disabled={canonicalMode() === true}
+            onClick={() => {
+              if (!canonicalMode()) dialog.show(() => <CustomProviderDialog />)
+            }}
+            disabled={canonicalMode() === true}
           >
             {language.t("settings.providers.action.configure")}
           </Button>
@@ -418,8 +465,10 @@ const ProvidersTab: Component = () => {
         {/* Show more providers */}
         <button
           type="button"
-           onClick={() => { if (!canonicalMode()) dialog.show(() => <ProviderSelectDialog />) }}
-           disabled={canonicalMode() === true}
+          onClick={() => {
+            if (!canonicalMode()) dialog.show(() => <ProviderSelectDialog />)
+          }}
+          disabled={canonicalMode() === true}
           style={{
             display: "flex",
             "align-items": "center",

@@ -4,9 +4,7 @@
  */
 import type { KiloClient } from "@kilocode/sdk/v2"
 import { validateProviderID as validateProviderIDShared } from "./shared/custom-provider"
-import { resolveCustomProviderAuth, sanitizeCustomProviderConfig } from "./shared/custom-provider"
-import { isCustomProviderPackage, KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
-import { configFeatures } from "./features"
+import { KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
 
 /**
  * Compute the default model selection from CLI config, VS Code settings, or hardcoded fallback.
@@ -20,30 +18,8 @@ export interface StoredProviderKey {
   baseURL: string
 }
 
-function disabledWithout(list: string[] | undefined, id: string) {
-  return (list ?? []).filter((item) => item !== id)
-}
-
 function record(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
-}
-
-function customProvider(config: unknown) {
-  return record(config) && isCustomProviderPackage(config.npm)
-}
-
-function same(a: unknown, b: unknown): boolean {
-  if (a === b) return true
-  if (Array.isArray(a) || Array.isArray(b)) {
-    if (!Array.isArray(a) || !Array.isArray(b)) return false
-    if (a.length !== b.length) return false
-    return a.every((value, index) => same(value, b[index]))
-  }
-  if (!record(a) || !record(b)) return false
-  const akeys = Object.keys(a).sort()
-  const bkeys = Object.keys(b).sort()
-  if (akeys.length !== bkeys.length) return false
-  return akeys.every((key, index) => key === bkeys[index] && same(a[key], b[key]))
 }
 
 /** Fetch provider availability and authentication state without exposing stored credentials. */
@@ -172,8 +148,6 @@ export function computeDefaultSelection(
 
 type PostMessage = (message: unknown) => void
 type GetErrorMessage = (error: unknown) => string
-type SetCachedConfig = (msg: unknown) => void
-type AuthMetadata = Record<string, string>
 
 interface ActionContext {
   client: KiloClient
@@ -187,7 +161,7 @@ function postError(
   ctx: ActionContext,
   requestId: string,
   providerID: string,
-  action: "connect" | "disconnect" | "authorize" | "delete",
+  action: "connect" | "authorize",
   message: string,
 ) {
   ctx.postMessage({ type: "providerActionError", requestId, providerID, action, message })
@@ -197,69 +171,12 @@ function validateID(
   ctx: ActionContext,
   requestId: string,
   providerID: string,
-  action: "connect" | "disconnect" | "authorize" | "delete",
+  action: "connect" | "authorize",
 ): string | null {
   const result = validateProviderIDShared(providerID)
   if ("value" in result) return result.value
   postError(ctx, requestId, providerID, action, result.error)
   return null
-}
-
-function cleanMetadata(input?: Record<string, unknown>): AuthMetadata | undefined {
-  const entries = Object.entries(input ?? {})
-    .map(([key, value]) => [key, typeof value === "string" ? value.trim() : ""] as const)
-    .filter(([key, value]) => key !== "" && value !== "")
-  if (entries.length === 0) return undefined
-  return Object.fromEntries(entries)
-}
-
-async function configs(ctx: ActionContext) {
-  const [{ data: global }, { data: merged }] = await Promise.all([
-    ctx.client.global.config.get({ throwOnError: true }),
-    ctx.client.config.get({ directory: ctx.workspaceDir }, { throwOnError: true }),
-  ])
-  return { global: global ?? {}, merged: merged ?? {} }
-}
-
-async function refreshConfig(ctx: ActionContext, setCachedConfig: SetCachedConfig) {
-  const [{ data: config }, { data: global }] = await Promise.all([
-    ctx.client.config.get({ directory: ctx.workspaceDir }, { throwOnError: true }),
-    ctx.client.global.config.get({ throwOnError: true }),
-  ])
-  if (!config) return
-  const features = configFeatures()
-  setCachedConfig({ type: "configLoaded", config, globalConfig: global, features })
-  ctx.postMessage({ type: "configUpdated", config, globalConfig: global, features })
-}
-
-export async function connectProvider(
-  ctx: ActionContext,
-  requestId: string,
-  providerID: string,
-  apiKey: string,
-  metadata?: Record<string, unknown>,
-) {
-  const id = validateID(ctx, requestId, providerID, "connect")
-  if (!id) return
-  try {
-    const meta = cleanMetadata(metadata)
-    const auth = meta ? { type: "api" as const, key: apiKey, metadata: meta } : { type: "api" as const, key: apiKey }
-    await ctx.client.auth.set({ providerID: id, auth }, { throwOnError: true })
-    // LOCK-001: backend auth.set coordinates drain/rebuild and emits
-    // global.disposed — the extension must NOT call global.dispose. The
-    // auth.set response IS the mutation acknowledgement, so emit the success
-    // message immediately and refresh without waiting for rebuild.
-    ctx.postMessage({ type: "providerConnected", requestId, providerID: id })
-    try {
-      await ctx.fetchAndSendProviders()
-    } catch (error) {
-      // A refresh failure after a successful mutation must never be reported
-      // as a connect failure.
-      console.warn(`[Kilo New] provider ${id} connected but provider refresh failed:`, error)
-    }
-  } catch (error) {
-    postError(ctx, requestId, providerID, "connect", ctx.getErrorMessage(error) || "Failed to connect provider")
-  }
 }
 
 export async function authorizeProviderOAuth(
@@ -325,153 +242,6 @@ export async function completeProviderOAuth(
       "connect",
       ctx.getErrorMessage(error) || "Failed to complete provider authorization",
     )
-  }
-}
-
-export async function disconnectProvider(
-  ctx: ActionContext,
-  requestId: string,
-  providerID: string,
-  cachedConfigMessage: unknown,
-  setCachedConfig: SetCachedConfig,
-) {
-  const id = validateID(ctx, requestId, providerID, "disconnect")
-  if (!id) return
-  try {
-    // LOCK-002: auth.remove must NEVER swallow backend failure. Backend
-    // compensation preserves credentials on failure, so the extension must
-    // retain the current connected state and surface the real error — success
-    // is claimed only after auth removal succeeds.
-    await ctx.client.auth.remove({ providerID: id }, { throwOnError: true })
-
-    if (id === "kilo") {
-      ctx.postMessage({ type: "profileData", data: null })
-    }
-
-    // LOCK-001: backend auth.remove coordinates drain/rebuild and emits
-    // global.disposed — the extension must NOT call global.dispose. The
-    // auth.remove response IS the mutation acknowledgement, so emit the
-    // success message immediately and refresh without waiting for rebuild.
-    ctx.postMessage({ type: "providerDisconnected", requestId, providerID: id })
-    try {
-      await ctx.fetchAndSendProviders()
-    } catch (error) {
-      // A refresh failure after a successful mutation must never be reported
-      // as a disconnect failure.
-      console.warn(`[Kilo New] provider ${id} disconnected but provider refresh failed:`, error)
-    }
-  } catch (error) {
-    postError(ctx, requestId, providerID, "disconnect", ctx.getErrorMessage(error) || "Failed to disconnect provider")
-  }
-}
-
-export async function deleteCustomProvider(
-  ctx: ActionContext,
-  requestId: string,
-  providerID: string,
-  cachedConfigMessage: unknown,
-  setCachedConfig: SetCachedConfig,
-) {
-  const id = validateID(ctx, requestId, providerID, "delete")
-  if (!id) return
-  try {
-    const config = await configs(ctx)
-    const cfg = config.global.provider?.[id]
-    const effective = config.merged.provider?.[id]
-    const custom = customProvider(cfg) || customProvider(effective)
-
-    if (!custom) {
-      postError(ctx, requestId, providerID, "delete", "Provider is not a custom provider")
-      return
-    }
-
-    // Atomic backend-coordinated deletion (LOCK-001/002/003/005).
-    // The backend endpoint handles ALL config deletion atomically: auth removal,
-    // global config patch, project config patch, and instance
-    // rebuild through a single convergence pass.
-    // The extension must NOT issue a second project PATCH (LOCK-001).
-    const response = await ctx.client.customProvider.delete(
-      { providerID: id, directory: ctx.workspaceDir },
-      { throwOnError: true },
-    )
-
-    // Check the structured result — the endpoint returns 400 for validation
-    // failures (non-custom provider, config persistence errors).
-    if (!response.data?.success) {
-      postError(ctx, requestId, providerID, "delete", "Failed to delete custom provider")
-      return
-    }
-
-    // LOCK-004: a successful backend response IS the mutation acknowledgement.
-    // Emit providerDeleted immediately after the mutation, then refresh. A
-    // refresh/config-read failure must never be reported as a deletion failure
-    // and deletion is never retried automatically — the failure is logged
-    // truthfully instead.
-    ctx.postMessage({ type: "providerDeleted", requestId, providerID: id })
-    try {
-      await refreshConfig(ctx, setCachedConfig)
-      await ctx.fetchAndSendProviders()
-    } catch (error) {
-      console.warn(
-        `[Kilo New] custom provider ${id} deleted but config/provider refresh failed:`,
-        error,
-      )
-    }
-  } catch (error) {
-    postError(ctx, requestId, providerID, "delete", ctx.getErrorMessage(error) || "Failed to delete custom provider")
-  }
-}
-
-export async function saveCustomProvider(
-  ctx: ActionContext,
-  requestId: string,
-  providerID: string,
-  provider: Record<string, unknown>,
-  apiKey: string | undefined,
-  apiKeyChanged: boolean,
-) {
-  const id = validateID(ctx, requestId, providerID, "connect")
-  if (!id) return
-
-  const sanitized = sanitizeCustomProviderConfig(provider)
-  if ("error" in sanitized) {
-    postError(ctx, requestId, providerID, "connect", sanitized.error)
-    return
-  }
-
-  const auth = resolveCustomProviderAuth(apiKey, apiKeyChanged)
-
-  try {
-    // LOCK-001/005: exactly ONE generated backend mutation. The backend
-    // persists the config (computing null deletions from the old global entry
-    // itself) and the auth union atomically, registers exactly one rebuild,
-    // and emits the transaction ConfigUpdated event at the response
-    // acknowledgement boundary — the extension must NOT issue separate
-    // global.config/auth calls and must NOT dispose.
-    const response = await ctx.client.customProvider.save(
-      { providerID: id, config: sanitized.value, auth, directory: ctx.workspaceDir },
-      { throwOnError: true },
-    )
-
-    // Check the structured result — the endpoint returns 400 for validation
-    // failures (non-custom provider, config schema errors).
-    if (!response.data?.success) {
-      postError(ctx, requestId, providerID, "connect", "Failed to save custom provider")
-      return
-    }
-
-    // LOCK-005: the backend response IS the mutation acknowledgement. The
-    // backend SSE transaction event reconciles config; post providerConnected
-    // only after success, then refresh. A refresh failure must never be
-    // reported as a save failure and save is never retried automatically.
-    ctx.postMessage({ type: "providerConnected", requestId, providerID: id })
-    try {
-      await ctx.fetchAndSendProviders()
-    } catch (error) {
-      console.warn(`[Kilo New] custom provider ${id} saved but provider refresh failed:`, error)
-    }
-  } catch (error) {
-    postError(ctx, requestId, providerID, "connect", ctx.getErrorMessage(error) || "Failed to save custom provider")
   }
 }
 

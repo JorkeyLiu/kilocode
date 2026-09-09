@@ -19,32 +19,56 @@ afterEach(() => {
 })
 
 /** Create an emitter factory that stores emitters for test access. */
-function createTestEmitterFactory(): { factory: EmitterFactory; changeEmitter: TypedEmitter<CanonicalConfigEvent>; errorEmitter: TypedEmitter<CanonicalConfigError> } {
+function createTestEmitterFactory(): {
+  factory: EmitterFactory
+  changeEmitter: TypedEmitter<CanonicalConfigEvent>
+  errorEmitter: TypedEmitter<CanonicalConfigError>
+} {
   const changeListeners: Array<(e: CanonicalConfigEvent) => void> = []
   const errorListeners: Array<(e: CanonicalConfigError) => void> = []
   let createCount = 0
   const changeEmitter: TypedEmitter<CanonicalConfigEvent> = {
     event: (listener) => {
       changeListeners.push(listener)
-      return { dispose() { const idx = changeListeners.indexOf(listener); if (idx >= 0) changeListeners.splice(idx, 1) } }
+      return {
+        dispose() {
+          const idx = changeListeners.indexOf(listener)
+          if (idx >= 0) changeListeners.splice(idx, 1)
+        },
+      }
     },
-    fire: (e) => { for (const l of changeListeners) l(e) },
-    dispose: () => { changeListeners.length = 0 },
+    fire: (e) => {
+      for (const l of changeListeners) l(e)
+    },
+    dispose: () => {
+      changeListeners.length = 0
+    },
   }
   const errorEmitter: TypedEmitter<CanonicalConfigError> = {
     event: (listener) => {
       errorListeners.push(listener)
-      return { dispose() { const idx = errorListeners.indexOf(listener); if (idx >= 0) errorListeners.splice(idx, 1) } }
+      return {
+        dispose() {
+          const idx = errorListeners.indexOf(listener)
+          if (idx >= 0) errorListeners.splice(idx, 1)
+        },
+      }
     },
-    fire: (e) => { for (const l of errorListeners) l(e) },
-    dispose: () => { errorListeners.length = 0 },
+    fire: (e) => {
+      for (const l of errorListeners) l(e)
+    },
+    dispose: () => {
+      errorListeners.length = 0
+    },
   }
   return {
-    factory: { create: <T>() => {
-      // CanonicalConfigService creates two emitters in order: onChangeEmitter, onErrorEmitter
-      createCount++
-      return (createCount === 1 ? changeEmitter : errorEmitter) as unknown as TypedEmitter<T>
-    } },
+    factory: {
+      create: <T>() => {
+        // CanonicalConfigService creates two emitters in order: onChangeEmitter, onErrorEmitter
+        createCount++
+        return (createCount === 1 ? changeEmitter : errorEmitter) as unknown as TypedEmitter<T>
+      },
+    },
     changeEmitter,
     errorEmitter,
   }
@@ -52,7 +76,9 @@ function createTestEmitterFactory(): { factory: EmitterFactory; changeEmitter: T
 
 describe("KiloProvider canonical GUI authority", () => {
   it("strictly validates canonical MCP transport values", () => {
-    expect(toCanonicalPayload({ mcp: { local: { type: "local", command: "node", args: ["server.js"], enabled: true } } })).toBeDefined()
+    expect(
+      toCanonicalPayload({ mcp: { local: { type: "local", command: "node", args: ["server.js"], enabled: true } } }),
+    ).toBeDefined()
     expect(toCanonicalPayload({ mcp: { local: { type: "local", command: ["node", "server.js"] } } })).toBeUndefined()
     expect(toCanonicalPayload({ mcp: { local: { type: "local", args: ["node", 1] } } })).toBeUndefined()
     expect(toCanonicalPayload({ mcp: { remote: { type: "remote", url: 42 } } })).toBeUndefined()
@@ -61,7 +87,9 @@ describe("KiloProvider canonical GUI authority", () => {
   })
 
   it("keeps canonical provider view contracts free of legacy fields", async () => {
-    const source = await Bun.file(new URL("../../webview-ui/src/types/messages/extension-messages.ts", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../webview-ui/src/types/messages/extension-messages.ts", import.meta.url),
+    ).text()
     const block = source.match(/export interface CanonicalProvidersLoadedMessage[\s\S]*?\n}\n/)?.[0] ?? ""
     expect(block).not.toContain("Provider>")
     expect(block).not.toContain("env")
@@ -71,15 +99,21 @@ describe("KiloProvider canonical GUI authority", () => {
   })
 
   it("requires OAuth messages to declare the noncanonical discriminator", async () => {
-    const source = await Bun.file(new URL("../../webview-ui/src/types/messages/webview-messages.ts", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../webview-ui/src/types/messages/webview-messages.ts", import.meta.url),
+    ).text()
     for (const name of ["AuthorizeProviderOAuthMessage", "CompleteProviderOAuthMessage"]) {
       const block = source.match(new RegExp(`export interface ${name}[\\s\\S]*?\\n}\\n`))?.[0] ?? ""
       expect(block).toContain("canonical: false")
     }
   })
   it("keeps canonical provider and credential message contracts plaintext-free", async () => {
-    const messages = await Bun.file(new URL("../../webview-ui/src/types/messages/webview-messages.ts", import.meta.url)).text()
-    const providers = await Bun.file(new URL("../../webview-ui/src/types/messages/providers.ts", import.meta.url)).text()
+    const messages = await Bun.file(
+      new URL("../../webview-ui/src/types/messages/webview-messages.ts", import.meta.url),
+    ).text()
+    const providers = await Bun.file(
+      new URL("../../webview-ui/src/types/messages/providers.ts", import.meta.url),
+    ).text()
     expect(messages).toContain("export interface CanonicalConnectProviderMessage")
     expect(messages).toContain("credentialRequested: boolean")
     const canonicalConfig = providers.match(/export interface ProviderConfig[\s\S]*?\n}\n/)?.[0] ?? ""
@@ -89,13 +123,20 @@ describe("KiloProvider canonical GUI authority", () => {
       expect(block).not.toMatch(/apiKey\??\s*:/)
     }
     expect(providers).not.toContain("CanonicalProviderConfig")
-    const canonicalFetch = messages.match(/export interface CanonicalFetchCustomProviderModelsMessage[\s\S]*?\n}\n/)?.[0] ?? ""
+    const canonicalFetch =
+      messages.match(/export interface CanonicalFetchCustomProviderModelsMessage[\s\S]*?\n}\n/)?.[0] ?? ""
     expect(canonicalFetch).not.toContain("headers?: Record<string, string>")
   })
 
   it("requires canonical success acknowledgements to carry a committed stamp", async () => {
-    const messages = await Bun.file(new URL("../../webview-ui/src/types/messages/extension-messages.ts", import.meta.url)).text()
-    for (const name of ["CanonicalProviderConnectedMessage", "CanonicalProviderDisconnectedMessage", "CanonicalProviderDeletedMessage"]) {
+    const messages = await Bun.file(
+      new URL("../../webview-ui/src/types/messages/extension-messages.ts", import.meta.url),
+    ).text()
+    for (const name of [
+      "CanonicalProviderConnectedMessage",
+      "CanonicalProviderDisconnectedMessage",
+      "CanonicalProviderDeletedMessage",
+    ]) {
       const block = messages.match(new RegExp(`export interface ${name}[\\s\\S]*?\\n}\\n`))?.[0] ?? ""
       expect(block).toContain("canonical: true")
       expect(block).toContain("stamp: CanonicalStamp")
@@ -123,12 +164,35 @@ describe("KiloProvider canonical GUI authority", () => {
     const calls: string[] = []
     ;(connection as unknown as { client: unknown }).client = {
       config: {
-        get: async () => { calls.push("config.get"); throw new Error("backend config read") },
-        transaction: async () => { calls.push("config.transaction"); throw new Error("backend config write") },
+        get: async () => {
+          calls.push("config.get")
+          throw new Error("backend config read")
+        },
+        transaction: async () => {
+          calls.push("config.transaction")
+          throw new Error("backend config write")
+        },
       },
-      global: { config: { get: async () => { calls.push("global.config.get"); throw new Error("backend global read") } } },
-      provider: { list: async () => { calls.push("provider.list"); throw new Error("backend provider read") } },
-      app: { agents: async () => { calls.push("app.agents"); throw new Error("backend agent read") } },
+      global: {
+        config: {
+          get: async () => {
+            calls.push("global.config.get")
+            throw new Error("backend global read")
+          },
+        },
+      },
+      provider: {
+        list: async () => {
+          calls.push("provider.list")
+          throw new Error("backend provider read")
+        },
+      },
+      app: {
+        agents: async () => {
+          calls.push("app.agents")
+          throw new Error("backend agent read")
+        },
+      },
     }
     const provider = new KiloProvider({} as never, connection, undefined, { canonicalConfig: canonical })
     const internal = provider as unknown as {
@@ -183,8 +247,12 @@ describe("KiloProvider canonical GUI authority", () => {
   })
 
   it("keeps canonical config/provider payloads narrow and credential-free", async () => {
-    const extension = await Bun.file(new URL("../../webview-ui/src/types/messages/extension-messages.ts", import.meta.url)).text()
-    const webview = await Bun.file(new URL("../../webview-ui/src/types/messages/webview-messages.ts", import.meta.url)).text()
+    const extension = await Bun.file(
+      new URL("../../webview-ui/src/types/messages/extension-messages.ts", import.meta.url),
+    ).text()
+    const webview = await Bun.file(
+      new URL("../../webview-ui/src/types/messages/webview-messages.ts", import.meta.url),
+    ).text()
     const types = await Bun.file(new URL("../../src/config/types.ts", import.meta.url)).text()
     expect(extension.match(/CanonicalConfigLoadedMessage[\s\S]*?\n}/)?.[0]).toContain("CanonicalConfigPayload")
     expect(webview.match(/CanonicalUpdateConfigMessage[\s\S]*?\n}/)?.[0]).toContain("CanonicalConfigPayload")
@@ -197,8 +265,12 @@ describe("KiloProvider canonical GUI authority", () => {
   })
 
   it("leaves UI-local settings editable in canonical mode", async () => {
-    const source = await Bun.file(new URL("../../webview-ui/src/components/settings/BrowserTab.tsx", import.meta.url)).text()
-    const display = await Bun.file(new URL("../../webview-ui/src/components/settings/DisplayTab.tsx", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../webview-ui/src/components/settings/BrowserTab.tsx", import.meta.url),
+    ).text()
+    const display = await Bun.file(
+      new URL("../../webview-ui/src/components/settings/DisplayTab.tsx", import.meta.url),
+    ).text()
     expect(source).toContain('type: "updateSetting"')
     expect(display).toContain("display.setFontSize")
     expect(display).toContain("fontSize")
@@ -217,7 +289,9 @@ describe("LOCK-1: Canonical provider recursive validation", () => {
   })
 
   it("rejects provider with legacy options/baseURL field", () => {
-    expect(toCanonicalPayload({ provider: { openai: { options: { baseURL: "https://api.openai.com" } } } })).toBeUndefined()
+    expect(
+      toCanonicalPayload({ provider: { openai: { options: { baseURL: "https://api.openai.com" } } } }),
+    ).toBeUndefined()
   })
 
   it("rejects provider with legacy apiKey field", () => {
@@ -229,19 +303,36 @@ describe("LOCK-1: Canonical provider recursive validation", () => {
   })
 
   it("rejects model with unknown nested key", () => {
-    expect(toCanonicalPayload({ provider: { openai: { models: { "gpt-4": { name: "GPT-4", headers: { "x-key": "val" } } } } } })).toBeUndefined()
+    expect(
+      toCanonicalPayload({
+        provider: { openai: { models: { "gpt-4": { name: "GPT-4", headers: { "x-key": "val" } } } } },
+      }),
+    ).toBeUndefined()
   })
 
   it("rejects model with npm key", () => {
-    expect(toCanonicalPayload({ provider: { openai: { models: { "gpt-4": { name: "GPT-4", npm: "malicious" } } } } })).toBeUndefined()
+    expect(
+      toCanonicalPayload({ provider: { openai: { models: { "gpt-4": { name: "GPT-4", npm: "malicious" } } } } }),
+    ).toBeUndefined()
   })
 
   it("rejects model with credentials key", () => {
-    expect(toCanonicalPayload({ provider: { openai: { models: { "gpt-4": { name: "GPT-4", credential: "secret:x" } } } } })).toBeUndefined()
+    expect(
+      toCanonicalPayload({ provider: { openai: { models: { "gpt-4": { name: "GPT-4", credential: "secret:x" } } } } }),
+    ).toBeUndefined()
   })
 
   it("accepts provider with exact canonical fields", () => {
-    const result = toCanonicalPayload({ provider: { openai: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai", models: { "gpt-4": { name: "GPT-4" } } } } })
+    const result = toCanonicalPayload({
+      provider: {
+        openai: {
+          name: "OpenAI",
+          endpoint: "https://api.openai.com/v1",
+          protocol: "openai",
+          models: { "gpt-4": { name: "GPT-4" } },
+        },
+      },
+    })
     expect(result).toBeDefined()
     expect(result!.provider!.openai!.name).toBe("OpenAI")
     expect(result!.provider!.openai!.endpoint).toBe("https://api.openai.com/v1")
@@ -253,7 +344,7 @@ describe("LOCK-1: Canonical provider recursive validation", () => {
       provider: {
         openai: {
           models: {
-            "o3": {
+            o3: {
               name: "O3",
               reasoning: true,
               modalities: { input: ["text"], output: ["text"] },
@@ -298,7 +389,9 @@ describe("LOCK-3: No Kilo fallback selection", () => {
     internal.postMessage = (message) => messages.push(message)
     await internal.fetchAndSendProviders()
 
-    const providersMsg = messages.find((m) => (m as Record<string, unknown>).type === "providersLoaded") as Record<string, unknown> | undefined
+    const providersMsg = messages.find((m) => (m as Record<string, unknown>).type === "providersLoaded") as
+      | Record<string, unknown>
+      | undefined
     expect(providersMsg).toBeDefined()
     const defaultSelection = providersMsg!.defaultSelection as Record<string, unknown>
     // Never "kilo" — always empty string when no provider matches
@@ -342,11 +435,15 @@ describe("LOCK-4: Narrow canonical state", () => {
   })
 
   it("toCanonicalPayload returns undefined for MCP with environment field", () => {
-    expect(toCanonicalPayload({ mcp: { local: { type: "local", command: "node", environment: { TOKEN: "val" } } } })).toBeUndefined()
+    expect(
+      toCanonicalPayload({ mcp: { local: { type: "local", command: "node", environment: { TOKEN: "val" } } } }),
+    ).toBeUndefined()
   })
 
   it("toCanonicalPayload returns undefined for MCP with oauth field", () => {
-    expect(toCanonicalPayload({ mcp: { remote: { type: "remote", url: "https://example.com", oauth: true } } })).toBeUndefined()
+    expect(
+      toCanonicalPayload({ mcp: { remote: { type: "remote", url: "https://example.com", oauth: true } } }),
+    ).toBeUndefined()
   })
 })
 
@@ -376,7 +473,8 @@ describe("LOCK-5: MCP cleanup retry contract", () => {
 
   it("retryCanonicalMcpCleanup validates ref format before cleaning", async () => {
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
-    const block = source.match(/private async retryCanonicalMcpCleanup[\s\S]*?private async refreshMcpStatus/)?.[0] ?? ""
+    const block =
+      source.match(/private async retryCanonicalMcpCleanup[\s\S]*?private async refreshMcpStatus/)?.[0] ?? ""
     // Must parse the secret key to validate scope and kind
     expect(block).toContain("parseSecretKey")
     expect(block).toContain('parsed.kind !== "mcp"')
@@ -391,7 +489,7 @@ describe("LOCK-5: MCP cleanup retry contract", () => {
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
     // Provider records are keyed by a true operation-unique opaque ID — never a
     // deterministic scope/id-derived key that overlapping failures could share.
-    expect(source).toContain("const retryID = retry ? crypto.randomUUID() : \"\"")
+    expect(source).toContain('const retryID = retry ? crypto.randomUUID() : ""')
     expect(source).toContain("this.cleanupRetries.set(retryID, record)")
     // MCP records use the same operation-unique ID at store time.
     expect(source).toContain("const retryID = crypto.randomUUID()")
@@ -401,13 +499,17 @@ describe("LOCK-5: MCP cleanup retry contract", () => {
     expect(source).toContain('kind: "mcp"')
     // Retry handlers look up by the opaque retryID only (never reconstruct keys
     // from webview-provided scope/name), and require the stored kind to match.
-    const providerBlock = source.match(/private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/)?.[0] ?? ""
+    const providerBlock =
+      source.match(
+        /private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/,
+      )?.[0] ?? ""
     expect(providerBlock).toContain("cleanupRetries.get(retryID)")
-    expect(providerBlock).toContain("retry.kind !== \"provider\"")
+    expect(providerBlock).toContain('retry.kind !== "provider"')
     expect(providerBlock).toContain("cleanupRetries.delete(retryID)")
-    const mcpBlock = source.match(/private async retryCanonicalMcpCleanup[\s\S]*?private async refreshMcpStatus/)?.[0] ?? ""
+    const mcpBlock =
+      source.match(/private async retryCanonicalMcpCleanup[\s\S]*?private async refreshMcpStatus/)?.[0] ?? ""
     expect(mcpBlock).toContain("cleanupRetries.get(retryID)")
-    expect(mcpBlock).toContain("stored.kind !== \"mcp\"")
+    expect(mcpBlock).toContain('stored.kind !== "mcp"')
     expect(mcpBlock).toContain("cleanupRetries.delete(retryID)")
   })
 
@@ -415,15 +517,21 @@ describe("LOCK-5: MCP cleanup retry contract", () => {
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
     // Provider retry: reserve (set inFlight) before any await of the side effect,
     // delete on success, restore available on failure.
-    const providerBlock = source.match(/private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/)?.[0] ?? ""
-    expect(providerBlock).toContain("state: \"inFlight\"")
-    expect(providerBlock).toContain("state: \"available\"")
-    expect(providerBlock.indexOf("cleanupRetries.set")).toBeLessThan(providerBlock.indexOf("await service.removeSecretRef"))
+    const providerBlock =
+      source.match(
+        /private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/,
+      )?.[0] ?? ""
+    expect(providerBlock).toContain('state: "inFlight"')
+    expect(providerBlock).toContain('state: "available"')
+    expect(providerBlock.indexOf("cleanupRetries.set")).toBeLessThan(
+      providerBlock.indexOf("await service.removeSecretRef"),
+    )
     expect(providerBlock.indexOf("cleanupRetries.get")).toBeLessThan(providerBlock.indexOf("cleanupRetries.delete"))
     // MCP retry: reserve (set inFlight) before the side effect, consume on success.
-    const mcpBlock = source.match(/private async retryCanonicalMcpCleanup[\s\S]*?private async refreshMcpStatus/)?.[0] ?? ""
-    expect(mcpBlock).toContain("state: \"inFlight\"")
-    expect(mcpBlock).toContain("state: \"available\"")
+    const mcpBlock =
+      source.match(/private async retryCanonicalMcpCleanup[\s\S]*?private async refreshMcpStatus/)?.[0] ?? ""
+    expect(mcpBlock).toContain('state: "inFlight"')
+    expect(mcpBlock).toContain('state: "available"')
     expect(mcpBlock.indexOf("cleanupRetries.set")).toBeLessThan(mcpBlock.indexOf("await service.removeSecretRef"))
     expect(mcpBlock.indexOf("cleanupRetries.get")).toBeLessThan(mcpBlock.indexOf("cleanupRetries.delete"))
   })
@@ -433,15 +541,21 @@ describe("LOCK-5: MCP cleanup retry contract", () => {
 
 describe("LOCK-6: Strict MCP UI/schema", () => {
   it("CanonicalMcpPayload rejects environment field", () => {
-    expect(toCanonicalPayload({ mcp: { local: { type: "local", command: "node", environment: { TOKEN: "x" } } } })).toBeUndefined()
+    expect(
+      toCanonicalPayload({ mcp: { local: { type: "local", command: "node", environment: { TOKEN: "x" } } } }),
+    ).toBeUndefined()
   })
 
   it("CanonicalMcpPayload rejects oauth field", () => {
-    expect(toCanonicalPayload({ mcp: { remote: { type: "remote", url: "https://x.com", oauth: true } } })).toBeUndefined()
+    expect(
+      toCanonicalPayload({ mcp: { remote: { type: "remote", url: "https://x.com", oauth: true } } }),
+    ).toBeUndefined()
   })
 
   it("CanonicalMcpPayload rejects args with non-string items", () => {
-    expect(toCanonicalPayload({ mcp: { local: { type: "local", command: "node", args: ["--port", 3000] } } })).toBeUndefined()
+    expect(
+      toCanonicalPayload({ mcp: { local: { type: "local", command: "node", args: ["--port", 3000] } } }),
+    ).toBeUndefined()
   })
 
   it("CanonicalMcpPayload rejects url with non-string value", () => {
@@ -453,24 +567,30 @@ describe("LOCK-6: Strict MCP UI/schema", () => {
   })
 
   it("CanonicalMcpPayload accepts exact canonical fields", () => {
-    const local = toCanonicalPayload({ mcp: { local: { type: "local", command: "node", args: ["server.js"], enabled: true } } })
+    const local = toCanonicalPayload({
+      mcp: { local: { type: "local", command: "node", args: ["server.js"], enabled: true } },
+    })
     expect(local).toBeDefined()
     expect(local!.mcp!.local!.command).toBe("node")
     expect(local!.mcp!.local!.args).toEqual(["server.js"])
 
-    const remote = toCanonicalPayload({ mcp: { remote: { type: "remote", url: "https://example.com/sse", enabled: true } } })
+    const remote = toCanonicalPayload({
+      mcp: { remote: { type: "remote", url: "https://example.com/sse", enabled: true } },
+    })
     expect(remote).toBeDefined()
     expect(remote!.mcp!.remote!.url).toBe("https://example.com/sse")
   })
 
   it("McpEditView disables remove button and edit controls in canonical mode", async () => {
-    const source = await Bun.file(new URL("../../webview-ui/src/components/settings/McpEditView.tsx", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../webview-ui/src/components/settings/McpEditView.tsx", import.meta.url),
+    ).text()
     // Remove button must be wrapped in Show when={!canonical?.()}
     expect(source).toContain("<Show when={!canonical?.()}>")
     // Command/url fields must be disabled in canonical mode
     expect(source).toContain("disabled={canonical?.() === true}")
     // Environment section must be hidden in canonical mode
-    expect(source).toContain("Show when={transport() === \"local\" && !canonical?.()}")
+    expect(source).toContain('Show when={transport() === "local" && !canonical?.()}')
   })
 })
 
@@ -478,7 +598,9 @@ describe("LOCK-6: Strict MCP UI/schema", () => {
 
 describe("LOCK-2: Canonical custom-provider save/discovery boundary", () => {
   it("serializeCanonicalProvider produces only {name, endpoint, protocol, models}", async () => {
-    const source = await Bun.file(new URL("../../webview-ui/src/components/settings/CustomProviderValidation.ts", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../webview-ui/src/components/settings/CustomProviderValidation.ts", import.meta.url),
+    ).text()
     expect(source).toContain("export function serializeCanonicalProvider")
     // Must return CanonicalProviderPayload
     expect(source).toContain("CanonicalProviderPayload")
@@ -491,21 +613,27 @@ describe("LOCK-2: Canonical custom-provider save/discovery boundary", () => {
   })
 
   it("CustomProviderDialog canonical save uses serializeCanonicalProvider", async () => {
-    const source = await Bun.file(new URL("../../webview-ui/src/components/settings/CustomProviderDialog.tsx", import.meta.url)).text()
+    const source = await Bun.file(
+      new URL("../../webview-ui/src/components/settings/CustomProviderDialog.tsx", import.meta.url),
+    ).text()
     expect(source).toContain("serializeCanonicalProvider")
-    // Must NOT pass legacy result.config in canonical path
-    // The save function must branch: canonical uses serializeCanonicalProvider, legacy uses validateCustomProvider
+    // Canonical-only save: non-canonical UI surfaces an explicit
+    // unsupported error and never sends the removed legacy message.
     expect(source).toContain("isCanonical()")
     expect(source).toContain("canonicalConfig")
-    expect(source).toContain("if (isCanonical() && !canonicalConfig)")
+    expect(source).toContain("Provider mutations are canonical-only")
+    expect(source).not.toContain("apiKeyChanged")
   })
 
   it("CustomProviderDialog does not invoke legacy serializer for canonical save", async () => {
-    const source = await Bun.file(new URL("../../webview-ui/src/components/settings/CustomProviderDialog.tsx", import.meta.url)).text()
-    // The save function must branch: canonical uses serializeCanonicalProvider, legacy uses validateCustomProvider
+    const source = await Bun.file(
+      new URL("../../webview-ui/src/components/settings/CustomProviderDialog.tsx", import.meta.url),
+    ).text()
+    // Canonical-only save: serializeCanonicalProvider is the sole config path.
     const saveBlock = source.match(/function save[\s\S]*?action\.send/)?.[0] ?? ""
-    expect(saveBlock).toContain("isCanonical()")
+    expect(saveBlock).toContain("serializeCanonicalProvider")
     expect(saveBlock).toContain("canonicalConfig")
+    expect(saveBlock).not.toContain("apiKeyChanged")
   })
 })
 
@@ -560,7 +688,10 @@ describe("LOCK-7: Canonical Kilo selection isolation", () => {
 describe("LOCK-8: Canonical handler typed provider record", () => {
   it("handleCanonicalProviderAction uses parseCanonicalProviderRecord for provider access", async () => {
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
-    const block = source.match(/private async handleCanonicalProviderAction[\s\S]*?private async retryCanonicalProviderCleanup/)?.[0] ?? ""
+    const block =
+      source.match(
+        /private async handleCanonicalProviderAction[\s\S]*?private async retryCanonicalProviderCleanup/,
+      )?.[0] ?? ""
     // Must use the typed accessor, not bare Record<string, unknown> spread
     expect(block).toContain("parseCanonicalProviderRecord")
     expect(block).toContain("narrowProviderEntry")
@@ -568,7 +699,10 @@ describe("LOCK-8: Canonical handler typed provider record", () => {
 
   it("retryCanonicalProviderCleanup uses parseCanonicalProviderRecord for scope config", async () => {
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
-    const block = source.match(/private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/)?.[0] ?? ""
+    const block =
+      source.match(
+        /private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/,
+      )?.[0] ?? ""
     expect(block).toContain("parseCanonicalProviderRecord")
   })
 
@@ -584,11 +718,14 @@ describe("LOCK-8: Canonical handler typed provider record", () => {
 describe("LOCK-9: Retry-record identity validation", () => {
   it("retryCanonicalProviderCleanup rejects mismatched or in-flight stored records", async () => {
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
-    const block = source.match(/private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/)?.[0] ?? ""
+    const block =
+      source.match(
+        /private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/,
+      )?.[0] ?? ""
     // Must reject stored records of the wrong kind
-    expect(block).toContain("retry.kind !== \"provider\"")
+    expect(block).toContain('retry.kind !== "provider"')
     // Must reject already-reserved (inFlight) records — one-shot concurrency
-    expect(block).toContain("retry.state !== \"available\"")
+    expect(block).toContain('retry.state !== "available"')
     // Must require the stored stamp to equal the current service stamp
     expect(block).toContain("sameStamp(retry.stamp, service.stamp)")
     // Must reject stale records
@@ -598,7 +735,7 @@ describe("LOCK-9: Retry-record identity validation", () => {
   it("provider and MCP retry records are keyed by opaque operation-unique IDs", async () => {
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
     // Provider records use an operation-unique opaque ID at store time.
-    expect(source).toContain("const retryID = retry ? crypto.randomUUID() : \"\"")
+    expect(source).toContain('const retryID = retry ? crypto.randomUUID() : ""')
     expect(source).toContain("this.cleanupRetries.set(retryID, record)")
     // MCP records use the same operation-unique opaque ID at store time.
     expect(source).toContain("const retryID = crypto.randomUUID()")
@@ -610,10 +747,14 @@ describe("LOCK-9: Retry-record identity validation", () => {
 
   it("retry reserves inFlight before the side effect and consumes on success", async () => {
     const source = await Bun.file(new URL("../../src/KiloProvider.ts", import.meta.url)).text()
-    const providerBlock = source.match(/private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/)?.[0] ?? ""
+    const providerBlock =
+      source.match(
+        /private async retryCanonicalProviderCleanup[\s\S]*?private async handleCanonicalConfigUpdate/,
+      )?.[0] ?? ""
     expect(providerBlock.indexOf("cleanupRetries.get")).toBeLessThan(providerBlock.indexOf("cleanupRetries.set"))
     expect(providerBlock.indexOf("cleanupRetries.set")).toBeLessThan(providerBlock.indexOf("cleanupRetries.delete"))
-    const mcpBlock = source.match(/private async retryCanonicalMcpCleanup[\s\S]*?private async refreshMcpStatus/)?.[0] ?? ""
+    const mcpBlock =
+      source.match(/private async retryCanonicalMcpCleanup[\s\S]*?private async refreshMcpStatus/)?.[0] ?? ""
     expect(mcpBlock.indexOf("cleanupRetries.get")).toBeLessThan(mcpBlock.indexOf("cleanupRetries.set"))
     expect(mcpBlock.indexOf("cleanupRetries.set")).toBeLessThan(mcpBlock.indexOf("cleanupRetries.delete"))
   })
@@ -653,31 +794,42 @@ describe("P4.1 behavior: canonical:false/missing mutation rejection", () => {
     internal.canonicalReady = true
 
     // connectProvider without canonical:true must be rejected
-    await internal.handleProviderAction({ type: "connectProvider", providerID: "openai", requestId: "r1", credentialRequested: false })
-    expect(messages).toContainEqual(expect.objectContaining({
-      type: "providerActionError",
+    await internal.handleProviderAction({
+      type: "connectProvider",
       providerID: "openai",
-      kind: "invalid",
-      message: expect.stringContaining("missing the canonical discriminator"),
-    }))
+      requestId: "r1",
+      credentialRequested: false,
+    })
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: "providerActionError",
+        providerID: "openai",
+        kind: "invalid",
+        message: expect.stringContaining("missing the canonical discriminator"),
+      }),
+    )
 
     // disconnectProvider without canonical:true must be rejected
     messages.length = 0
     await internal.handleProviderAction({ type: "disconnectProvider", providerID: "openai", requestId: "r2" })
-    expect(messages).toContainEqual(expect.objectContaining({
-      type: "providerActionError",
-      providerID: "openai",
-      kind: "invalid",
-    }))
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: "providerActionError",
+        providerID: "openai",
+        kind: "invalid",
+      }),
+    )
 
     // deleteCustomProvider without canonical:true must be rejected
     messages.length = 0
     await internal.handleProviderAction({ type: "deleteCustomProvider", providerID: "openai", requestId: "r3" })
-    expect(messages).toContainEqual(expect.objectContaining({
-      type: "providerActionError",
-      providerID: "openai",
-      kind: "invalid",
-    }))
+    expect(messages).toContainEqual(
+      expect.objectContaining({
+        type: "providerActionError",
+        providerID: "openai",
+        kind: "invalid",
+      }),
+    )
 
     provider.dispose()
     canonical.dispose()
@@ -706,7 +858,12 @@ describe("P4.1 behavior: canonical:false/missing mutation rejection", () => {
     const provider = new KiloProvider({} as never, connection, undefined, { canonicalConfig: canonical })
     const messages: unknown[] = []
     const internal = provider as unknown as {
-      handleRemoveAgent: (name: string, scope?: "global" | "project", expectedHash?: string, stamp?: import("../../src/config/types").CanonicalStamp) => Promise<void>
+      handleRemoveAgent: (
+        name: string,
+        scope?: "global" | "project",
+        expectedHash?: string,
+        stamp?: import("../../src/config/types").CanonicalStamp,
+      ) => Promise<void>
       handleCanonicalAgentMutation: (msg: Record<string, unknown>) => Promise<void>
       postMessage: (message: unknown) => void
       canonicalReady: boolean
@@ -772,7 +929,11 @@ describe("P4.1 behavior: sticky canonicalMode ignores legacy payloads", () => {
     emitters.changeEmitter.fire({ source: "file", hasErrors: false, errors: [] })
 
     // All messages must carry canonical:true
-    const configMsg = messages.find((m) => (m as Record<string, unknown>).type === "configLoaded" || (m as Record<string, unknown>).type === "configUpdated")
+    const configMsg = messages.find(
+      (m) =>
+        (m as Record<string, unknown>).type === "configLoaded" ||
+        (m as Record<string, unknown>).type === "configUpdated",
+    )
     expect(configMsg).toBeDefined()
     expect((configMsg as Record<string, unknown>).canonical).toBe(true)
 
