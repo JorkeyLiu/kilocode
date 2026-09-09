@@ -2,7 +2,7 @@
  * Provider action handlers extracted from KiloProvider to stay under max-lines.
  * These are pure async functions that operate on the SDK client — no vscode dependency.
  */
-import type { Config, KiloClient } from "@kilocode/sdk/v2"
+import type { KiloClient } from "@kilocode/sdk/v2"
 import { validateProviderID as validateProviderIDShared } from "./shared/custom-provider"
 import { resolveCustomProviderAuth, sanitizeCustomProviderConfig } from "./shared/custom-provider"
 import { isCustomProviderPackage, KILO_AUTO, KILO_PROVIDER_ID, parseModelString } from "./shared/provider-model"
@@ -230,41 +230,6 @@ async function refreshConfig(ctx: ActionContext, setCachedConfig: SetCachedConfi
   const features = configFeatures()
   setCachedConfig({ type: "configLoaded", config, globalConfig: global, features })
   ctx.postMessage({ type: "configUpdated", config, globalConfig: global, features })
-}
-
-async function saveGlobal(ctx: ActionContext, config: Config) {
-  await ctx.client.global.config.update({ config }, { throwOnError: true })
-}
-
-async function saveProject(ctx: ActionContext, config: Config) {
-  await ctx.client.config.update({ config, directory: ctx.workspaceDir }, { throwOnError: true })
-}
-
-async function removeCustom(ctx: ActionContext, id: string, global: Config, merged: Config) {
-  const cfg = global.provider?.[id]
-  const effective = merged.provider?.[id]
-  const hasDisabled = (global.disabled_providers ?? []).includes(id)
-  const tasks = []
-  if (customProvider(cfg)) {
-    tasks.push(
-      saveGlobal(ctx, {
-        provider: { [id]: null },
-        disabled_providers: disabledWithout(global.disabled_providers, id),
-      }),
-    )
-  } else if (hasDisabled) {
-    // Project-only custom provider — clean stale disabled ID from global config
-    // without touching the global provider key.
-    tasks.push(
-      saveGlobal(ctx, {
-        disabled_providers: disabledWithout(global.disabled_providers, id),
-      }),
-    )
-  }
-  if (customProvider(effective)) {
-    tasks.push(saveProject(ctx, { provider: { [id]: null } }))
-  }
-  await Promise.all(tasks)
 }
 
 export async function connectProvider(
