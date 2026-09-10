@@ -765,6 +765,7 @@
     "@kilocode/plugin": "workspace:*",
     "@kilocode/sdk": "workspace:*",
     "@opencode-ai/core": "workspace:*",
+    "@opencode-ai/llm": "workspace:*",
     "effect": "catalog:",
     "@opencode-ai/ui": "workspace:*",
     "@pierre/diffs": "catalog:",

@@ -39,8 +39,18 @@ this note; when they disagree, the code is right.
   `openai/responses`, or `anthropic/messages`; legacy protocol tokens are
   rejected with no mapping or migration, the webview serializer and canonical
   edit init use the protocol state directly, and headers are not part of the
-  authored contract. CLI runtime materialization and the SecretStorage
-  credential bridge for these authored providers remain unfinished.
+  authored contract. A standalone extension-host execution seam
+  (`packages/kilo-vscode/src/canonical-provider/canonical-executor.ts`) exists
+  but is not wired to session/private runtime: it resolves the exact authored
+  credential ref lazily through SecretStorage on every execution and calls the
+  shared native LLM routes directly by protocol, with no npm field, no
+  authored headers, and no preset catalog. The focused localhost fixture
+  (`packages/kilo-vscode/tests/unit/canonical-provider-host-execution.test.ts`)
+  proves three-protocol request materialization, built-in auth, normalized
+  output, and rotation/fail-closed/redaction; it is not full runtime E2E and
+  proves no Agent Manager generation path. CLI runtime materialization and
+  generation runtime/session ownership remain unfinished; plaintext secrets
+  never leave the extension host.
 - Canonical file-backed custom-agent create/edit/import/remove is production:
   stamped `canonical: true` `mutateAgent`/`removeAgent` through
   `CanonicalConfigService.writeAsset`/`deleteAsset` CAS (project-absent on
@@ -82,7 +92,7 @@ this note; when they disagree, the code is right.
 
 ## Unknowns that matter next
 
-- FD carriers terminate in the same backend `AppLayer`; `session/create`, title-only `session/update`, `session/fork`, `session/delete`, and `session/cancelQueued` are now authoritative via `dispatch`; VS Code currently issues no share/archive mutations; remaining SDK-owned mutations are checkpoint revert/unrevert, permission, MCP, auth/instance, plus session prompt/command and other generation-path calls, with no transport removal; `CanonicalConfigService`-controlled GUI config/asset writes are private-fenced (not SDK-owned) while external watcher edits and `MarketplaceInstaller` direct writes stay unfenced; private `session/abort` is production (terminal only after owner convergence, no invented terminal turn, no durable row); private `question/reply`/`question/reject` is production (pending-map authority, terminal only after delete+publish+settle, no durable row); standalone observation remains the ownership path for reads.
+- FD carriers terminate in the same backend `AppLayer`; `session/create`, title-only `session/update`, `session/fork`, `session/delete`, and `session/cancelQueued` are now authoritative via `dispatch`; VS Code currently issues no share/archive mutations; remaining SDK-owned mutations are checkpoint revert/unrevert, permission, MCP, auth/instance, plus session prompt/command and other generation-path calls, with no transport removal; generation runtime/session ownership stays open and the private-peer reverse broker/stream/cancel/lifecycle contract for generation is unfinished; `CanonicalConfigService`-controlled GUI config/asset writes are private-fenced (not SDK-owned) while external watcher edits and `MarketplaceInstaller` direct writes stay unfenced; private `session/abort` is production (terminal only after owner convergence, no invented terminal turn, no durable row); private `question/reply`/`question/reject` is production (pending-map authority, terminal only after delete+publish+settle, no durable row); standalone observation remains the ownership path for reads.
 - Agent Manager session-list paging, bounded single-session detail, and paged plus full-read (`limit=0`) messages now consume the private `observation/list` + `observation/get` + `observation/messages` projections, and transcript export plus child-sync `handleSyncSession` follow the same full-read boundary; the remaining unresolved boundary is that session lifecycle beyond `session/create` + title-only `session/update` + `session/fork` + `session/delete` + `session/cancelQueued` + `session/abort` + `question/reply` + `question/reject` still depends on the SDK path, with no private authority beyond `session/create` + `session/update` (title-only) + `session/fork` + `session/delete` + `session/cancelQueued` + `session/abort` + `question/reply` + `question/reject` + list + detail + messages and no transport removal.
 - Permission preset target in `direction.md` is not implemented; the existing complex editor/permission authority (CLI evaluator plus extension composition/projection) remains the reality.
 
