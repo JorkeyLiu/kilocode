@@ -66,6 +66,7 @@ import { ControlLease } from "@/kilocode/server/control-lease" // kilocode_chang
 import { ConfigConvergence } from "@/kilocode/server/config-convergence" // kilocode_change - canonical cold-mutation coordinator
 import { ConfigRebuild } from "@/kilocode/server/config-rebuild" // kilocode_change - explicit-dispose rebuild owner
 import { ConfigFileConvergence } from "@/kilocode/server/config-file-convergence" // kilocode_change - GUI disk-write convergence leases
+import * as PrivatePeerRegistry from "@/kilocode/server/private-peer-registry" // kilocode_change - process-owned private peer registry
 import * as CancelQueuedDispatch from "@/kilocode/session/cancel-queued-dispatch" // kilocode_change - P4.4-G3-B0 backend dispatch
 import * as SessionUpdateDispatch from "@/kilocode/session/session-update-dispatch" // kilocode_change - P4.4-G3-B2 durable title
 import * as SessionForkDispatch from "@/kilocode/session/session-fork-dispatch" // kilocode_change - P4.4-G3-B3 fork
@@ -83,6 +84,7 @@ const buildCoreLayer = (provider: ProviderLayer = Provider.defaultLayer) =>
     Npm.defaultLayer,
     GenerationGate.defaultLayer, // kilocode_change - one process-wide writer gate
     ControlLease.defaultLayer, // kilocode_change - one process-wide control lifetime lease coordinator
+    PrivatePeerRegistry.defaultLayer, // kilocode_change - one process-owned private peer identity
     FSUtil.defaultLayer,
     Database.defaultLayer,
     Auth.defaultLayer,

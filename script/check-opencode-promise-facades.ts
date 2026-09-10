@@ -66,11 +66,13 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   "kilocode/server/listener-runtime.test.ts": { count: 1, reason: "listener and AppRuntime integration test" },
   "kilocode/server/config-rebuild-stream.test.ts": {
     count: 3,
-    reason: "in-process server and AppRuntime integration test (global writer vs unseen-directory PATCH intake regression)",
+    reason:
+      "in-process server and AppRuntime integration test (global writer vs unseen-directory PATCH intake regression)",
   },
   "kilocode/server/config-transaction.test.ts": {
     count: 29,
-    reason: "production AppRuntime integration test (transaction, lock interruption, first-file creation race, held stream + real Server.listen)",
+    reason:
+      "production AppRuntime integration test (transaction, lock interruption, first-file creation race, held stream + real Server.listen)",
   },
   "kilocode/server/config-overlay-lifecycle.test.ts": {
     count: 4,
@@ -82,37 +84,48 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   },
   "kilocode/server/custom-provider-delete.test.ts": {
     count: 10,
-    reason: "production AppRuntime integration test (shared memoized seeding/assertion, ticket interruption, deferred final events boundary)",
+    reason:
+      "production AppRuntime integration test (shared memoized seeding/assertion, ticket interruption, deferred final events boundary)",
   },
   "kilocode/server/custom-provider-save.test.ts": {
     count: 11,
-    reason: "production AppRuntime integration test (shared memoized seeding/assertion, deferred final events boundary, gate ticket interruption)",
+    reason:
+      "production AppRuntime integration test (shared memoized seeding/assertion, deferred final events boundary, gate ticket interruption)",
   },
   "preload.ts": {
     count: 4,
-    reason: "test preload harness: dispose the process-wide AppRuntime Config service before per-process data-dir cleanup",
+    reason:
+      "test preload harness: dispose the process-wide AppRuntime Config service before per-process data-dir cleanup",
   },
-  "kilocode/config/config-snapshot.test.ts": { count: 3, reason: "production AppRuntime config snapshot integration test" },
+  "kilocode/config/config-snapshot.test.ts": {
+    count: 3,
+    reason: "production AppRuntime config snapshot integration test",
+  },
   "tool/recall.test.ts": { count: 11, reason: "existing runtime integration test" },
   "kilocode/session/cancel-queued-b0.test.ts": {
     count: 55,
-    reason: "B0 durable cancelQueued integration test via AppRuntime and InstanceRef (LOCK-301..307 bounded corrections)",
+    reason:
+      "B0 durable cancelQueued integration test via AppRuntime and InstanceRef (LOCK-301..307 bounded corrections)",
   },
   "kilocode/server/fd-carrier.test.ts": {
     count: 10,
-    reason: "B1 fd-carrier integration test via AppRuntime for real B0 dispatch and B2 sessionUpdate replay via carrier (carrier + HTTP fallback, positive persisted replay via createFdCarrier)",
+    reason:
+      "B1 fd-carrier integration test via AppRuntime for real B0 dispatch and B2 sessionUpdate replay via carrier (carrier + HTTP fallback, positive persisted replay via createFdCarrier)",
   },
   "kilocode/session/session-update-b2.test.ts": {
     count: 131,
-    reason: "B2 durable sessionUpdate integration test via AppRuntime and InstanceRef (title-only, replay, stale, scope, validation, rollback, legacy, HTTP, successive distinct, replay after mutation, private read-only, context mismatch, malformed, not-found, fd-carrier, HTTP unknown fields, partial identity, private explicit null, private opId collision, reader-failure replay, barrier, migration snapshot, concurrency, malformed object snapshot, single lease, rollback, omitted-context durable HTTP 400, HTTP concurrent distinct via Server.listen)",
+    reason:
+      "B2 durable sessionUpdate integration test via AppRuntime and InstanceRef (title-only, replay, stale, scope, validation, rollback, legacy, HTTP, successive distinct, replay after mutation, private read-only, context mismatch, malformed, not-found, fd-carrier, HTTP unknown fields, partial identity, private explicit null, private opId collision, reader-failure replay, barrier, migration snapshot, concurrency, malformed object snapshot, single lease, rollback, omitted-context durable HTTP 400, HTTP concurrent distinct via Server.listen)",
   },
   "kilocode/session/session-update-b2-event.test.ts": {
     count: 146,
-    reason: "B2 EventV2 atomic propagation integration test via AppRuntime and InstanceRef (concurrent distinct, fault-injection rollback, aggregateEvents propagation, prior/future generation, same-key replay, seq monotonic, location regressions, notify isolation, deterministic aggregate rollback, present invalid resultSnapshot fail-closed, empty-string present invalid, JSON null text present invalid)",
+    reason:
+      "B2 EventV2 atomic propagation integration test via AppRuntime and InstanceRef (concurrent distinct, fault-injection rollback, aggregateEvents propagation, prior/future generation, same-key replay, seq monotonic, location regressions, notify isolation, deterministic aggregate rollback, present invalid resultSnapshot fail-closed, empty-string present invalid, JSON null text present invalid)",
   },
   "kilocode/session/session-fork-b3.test.ts": {
     count: 34,
-    reason: "B3 durable fork integration test via AppRuntime and InstanceRef (success, replay, conflict, validation, private replay, HTTP, fd-carrier, canonical identity mismatch/colon)",
+    reason:
+      "B3 durable fork integration test via AppRuntime and InstanceRef (success, replay, conflict, validation, private replay, HTTP, fd-carrier, canonical identity mismatch/colon)",
   },
   "kilocode/session/session-fork-regression.test.ts": {
     count: 21,
@@ -124,47 +137,58 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   },
   "kilocode/session/session-fork-http-mapping.test.ts": {
     count: 14,
-    reason: "B3 fork HTTP mapping integration test via AppRuntime and InstanceRef (error mapping matrix 400/404/409/500, directory/sessionId/idempotencyKey/opId/barrier cases)",
+    reason:
+      "B3 fork HTTP mapping integration test via AppRuntime and InstanceRef (error mapping matrix 400/404/409/500, directory/sessionId/idempotencyKey/opId/barrier cases)",
   },
   "kilocode/session/session-create-b4.test.ts": {
     count: 54,
-    reason: "B4 durable create integration test via AppRuntime and InstanceRef (success, replay, opId collision, private replay, validation, fd-carrier, HTTP via Server.listen, directory mismatch, parent conflict + private parent conflict, rollback ghost, payload preserve, default route mismatch, token rejection, snapshot consistency, durable no-mutation assertions for private dispatch and fd-carrier replay/no-record, canonical identity mismatch/colon)",
+    reason:
+      "B4 durable create integration test via AppRuntime and InstanceRef (success, replay, opId collision, private replay, validation, fd-carrier, HTTP via Server.listen, directory mismatch, parent conflict + private parent conflict, rollback ghost, payload preserve, default route mismatch, token rejection, snapshot consistency, durable no-mutation assertions for private dispatch and fd-carrier replay/no-record, canonical identity mismatch/colon)",
   },
   "kilocode/session/session-fork-persistence.test.ts": {
     count: 65,
-    reason: "B3 fork persistence boundary integration test via AppRuntime and InstanceRef (success diff carry and replay, diff read failure ghost check, write cleanup, failure ghost)",
+    reason:
+      "B3 fork persistence boundary integration test via AppRuntime and InstanceRef (success diff carry and replay, diff read failure ghost check, write cleanup, failure ghost)",
   },
   "kilocode/session/session-fork-ownership.test.ts": {
     count: 88,
-    reason: "B3 fork ownership claim integration test via AppRuntime and InstanceRef (probe fail closed, first/second diff, sandbox, Tx cleanup, preexisting, ID collision, legacy ghost, late failure event aggregate + retry, deterministic cleanup fs failure with warning and retained file)",
+    reason:
+      "B3 fork ownership claim integration test via AppRuntime and InstanceRef (probe fail closed, first/second diff, sandbox, Tx cleanup, preexisting, ID collision, legacy ghost, late failure event aggregate + retry, deterministic cleanup fs failure with warning and retained file)",
   },
   "kilocode/session/session-fork-event-preflight.test.ts": {
     count: 29,
-    reason: "B3 fork durable event aggregate preflight integration test via AppRuntime and InstanceRef (orphaned EventSequence/EventTable without SessionTable conflict, no FS/DB mutation, preserved event, full no-mutation assertions for both orphaned aggregate and sequence-only cases)",
+    reason:
+      "B3 fork durable event aggregate preflight integration test via AppRuntime and InstanceRef (orphaned EventSequence/EventTable without SessionTable conflict, no FS/DB mutation, preserved event, full no-mutation assertions for both orphaned aggregate and sequence-only cases)",
   },
   "kilocode/session/changefeed-creation.test.ts": {
     count: 50,
-    reason: "creation changefeed integration test via AppRuntime and InstanceRef (ordinary projector + durable create/fork + fresh import service + CLI aggregate success/rollback/replay)",
+    reason:
+      "creation changefeed integration test via AppRuntime and InstanceRef (ordinary projector + durable create/fork + fresh import service + CLI aggregate success/rollback/replay)",
   },
   "kilocode/server/fd-carrier-delete.test.ts": {
     count: 7,
-    reason: "B5 durable delete fd-carrier integration test via AppRuntime (carrier authoritative delete, replay, strict validation without mutation, instance cleanup)",
+    reason:
+      "B5 durable delete fd-carrier integration test via AppRuntime (carrier authoritative delete, replay, strict validation without mutation, instance cleanup)",
   },
   "kilocode/session/session-delete-fd-private-first.test.ts": {
     count: 14,
-    reason: "B5 durable delete FD private-first integration test via AppRuntime and InstanceRef (commit, missing, strict parentSessionId, scope mismatch)",
+    reason:
+      "B5 durable delete FD private-first integration test via AppRuntime and InstanceRef (commit, missing, strict parentSessionId, scope mismatch)",
   },
   "kilocode/session/session-delete-regression.test.ts": {
     count: 15,
-    reason: "B5 durable delete regression integration test via AppRuntime and InstanceRef (atomic tombstone, conflict, instance cleanup)",
+    reason:
+      "B5 durable delete regression integration test via AppRuntime and InstanceRef (atomic tombstone, conflict, instance cleanup)",
   },
   "kilocode/session/session-delete-concurrent.test.ts": {
     count: 12,
-    reason: "B5 durable delete concurrent disappearance integration test via AppRuntime and InstanceRef (empty family die, dispatch not-found, no fabricate)",
+    reason:
+      "B5 durable delete concurrent disappearance integration test via AppRuntime and InstanceRef (empty family die, dispatch not-found, no fabricate)",
   },
   "kilocode/session/session-create-fd-private-first.test.ts": {
     count: 15,
-    reason: "B4 durable create FD private-first integration test via AppRuntime and InstanceRef (atomic create, replay, concurrent)",
+    reason:
+      "B4 durable create FD private-first integration test via AppRuntime and InstanceRef (atomic create, replay, concurrent)",
   },
   "kilocode/session/session-fork-fd-private-first.test.ts": {
     count: 7,
@@ -172,11 +196,28 @@ const testAllow: Record<string, { count: number; reason: string }> = {
   },
   "server/experimental-session-list-cursor.test.ts": {
     count: 4,
-    reason: "session list cursor pagination integration test via AppRuntime (equal-updated tie handling, cursor grammar)",
+    reason:
+      "session list cursor pagination integration test via AppRuntime (equal-updated tie handling, cursor grammar)",
   },
   "server/probe-concurrent-mutation-pagination.test.ts": {
     count: 8,
-    reason: "probe inter-page mutation pagination observations via AppRuntime (insert/update/delete/archive between pages)",
+    reason:
+      "probe inter-page mutation pagination observations via AppRuntime (insert/update/delete/archive between pages)",
+  },
+  "kilocode/server/fd-carrier-private-peer.test.ts": {
+    count: 7,
+    reason:
+      "private peer registry integration test via AppRuntime (same-identity carrier install, CLI->extension request, drop abort, dispose unavailable, conflict keeps old)",
+  },
+  "kilocode/server/fd-carrier-abort.test.ts": {
+    count: 13,
+    reason:
+      "fd-carrier abort integration test via AppRuntime and InstanceRef (real session create/snapshot/dispatch over the production runtime identity with live carriers)",
+  },
+  "kilocode/server/fd-carrier-question.test.ts": {
+    count: 15,
+    reason:
+      "fd-carrier question integration test via AppRuntime and InstanceRef (real session create/snapshot/dispatch over the production runtime identity with live carriers)",
   },
 }
 
@@ -212,7 +253,9 @@ const bridgeInvalid = bridgeHits.filter((hit) => !bridgeAllow[hit.file])
 const bridgeDrift = Object.entries(bridgeAllow).flatMap(([file, entry]) => {
   const count = bridgeHits.filter((hit) => hit.file === file).length
   if (count === entry.count) return []
-  return [`  packages/opencode/src/${file}: expected ${entry.count} classified ALS bridge site(s), found ${count} (${entry.reason})`]
+  return [
+    `  packages/opencode/src/${file}: expected ${entry.count} classified ALS bridge site(s), found ${count} (${entry.reason})`,
+  ]
 })
 
 const testHits: Array<{ file: string; line: number }> = []
@@ -233,7 +276,14 @@ const testDrift = Object.entries(testAllow).flatMap(([file, entry]) => {
   ]
 })
 
-if (invalid.length > 0 || drift.length > 0 || testInvalid.length > 0 || testDrift.length > 0 || bridgeInvalid.length > 0 || bridgeDrift.length > 0) {
+if (
+  invalid.length > 0 ||
+  drift.length > 0 ||
+  testInvalid.length > 0 ||
+  testDrift.length > 0 ||
+  bridgeInvalid.length > 0 ||
+  bridgeDrift.length > 0
+) {
   if (invalid.length > 0) {
     console.error("Found unclassified service-local Effect runtimes in shared opencode modules:")
     for (const hit of invalid) console.error(`  packages/opencode/src/${hit.file}:${hit.line}`)
@@ -267,7 +317,9 @@ if (invalid.length > 0 || drift.length > 0 || testInvalid.length > 0 || testDrif
   console.error("Do not add Promise facades to shared Effect services or global AppRuntime dependencies to tests.")
   console.error("Yield services directly in scoped layers, or classify intentional integration boundaries explicitly.")
   console.error("Remove migrated exceptions, or classify intentional runtime changes with an explicit reason.")
-  console.error("Do not add ad hoc instanceContext.provide + Effect.runPromise nesting; use runInInstance (als-bridge).")
+  console.error(
+    "Do not add ad hoc instanceContext.provide + Effect.runPromise nesting; use runInInstance (als-bridge).",
+  )
   process.exit(1)
 }
 

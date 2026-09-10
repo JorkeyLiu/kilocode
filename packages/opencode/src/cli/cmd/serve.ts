@@ -26,8 +26,19 @@ export const ServeCommand = effectCmd({
     // kilocode_change start - fd3/fd4 private carrier (no stdout framing)
     let fdCarrier: { dispose: () => void } | null = null
     try {
-      const mod = yield* Effect.promise(() => import("../../kilocode/server/fd-carrier") as Promise<typeof import("../../kilocode/server/fd-carrier")>)
-      fdCarrier = mod.tryStartFdCarrier()
+      const mod = yield* Effect.promise(
+        () => import("../../kilocode/server/fd-carrier") as Promise<typeof import("../../kilocode/server/fd-carrier")>,
+      )
+      const started = mod.tryStartFdCarrier()
+      if (started) {
+        // Bounded registry readiness: `awaitCarrierReady` warns and disposes
+        // the started carrier on install failure or timeout, then serve
+        // continues carrier-less and still publishes the HTTP port below. A
+        // late install completion reconciles through the carrier state
+        // machine (exact release + notify).
+        const result = yield* Effect.promise(() => mod.awaitCarrierReady(started))
+        if (result.status === "ready") fdCarrier = started
+      }
     } catch (err) {
       console.warn("[kilo serve] fd carrier start failed:", String(err))
       fdCarrier = null
@@ -66,9 +77,10 @@ export const ServeCommand = effectCmd({
               try {
                 const mod = await import("../../kilocode/server/fd-carrier")
                 await mod.awaitPeerClosedHandoffs()
-              } catch {
-                // Registration handoff is best-effort; service shutdown
-                // still releases fences without rebooting.
+              } catch (err) {
+                // Handoff join is best-effort; service shutdown still
+                // releases fences without rebooting.
+                console.warn("[kilo serve] lifecycle handoff join failed:", String(err))
               }
               try {
                 const mod = await import("../../kilocode/server/fd-carrier")

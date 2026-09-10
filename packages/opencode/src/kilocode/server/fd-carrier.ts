@@ -7,7 +7,10 @@ import { SessionUpdateDispatchService, validatePrivateRequest } from "@/kilocode
 import { SessionForkDispatchService } from "@/kilocode/session/session-fork-dispatch"
 import { SessionCreateDispatchService } from "@/kilocode/session/session-create-dispatch"
 import { SessionDeleteDispatchService } from "@/kilocode/session/session-delete-dispatch"
-import { abortSession as abortSessionPrivate, validateAbortRequest as validateAbortEnvelope } from "@/kilocode/session/session-abort"
+import {
+  abortSession as abortSessionPrivate,
+  validateAbortRequest as validateAbortEnvelope,
+} from "@/kilocode/session/session-abort"
 import {
   OP_REJECT as QUESTION_REJECT_OP,
   OP_REPLY as QUESTION_REPLY_OP,
@@ -38,6 +41,7 @@ import { Command } from "@/command"
 import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
 import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
+import { Service as PrivatePeerService } from "./private-peer-registry"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
 import {
   CONVERGENCE_ACQUIRE_OP,
@@ -52,26 +56,180 @@ export interface FdCarrierHandle {
   reader: NodeJS.ReadableStream
   writer: NodeJS.WritableStream
   dispose: () => void
+  /**
+   * Resolves once the peer is installed in the process-owned registry.
+   * Without a registry option it resolves immediately. With a registry it
+   * rejects (Conflict/Closed) after disposing the new peer/streams; only a
+   * resolved carrier is usable for registry requests. Callers that pass a
+   * registry must observe this promise.
+   */
+  ready: Promise<void>
 }
 
 /**
- * Owned peer-close handoff (F12). onClosed cannot await, so the registration
- * promise is tracked here; serve shutdown awaits it after carrier dispose
- * instead of swallowing an untracked `void runPromise`.
+ * Exact-identity registry adapter for the fd carrier. `install` claims the
+ * single-owner registry for the peer; `release` clears only that same peer
+ * and never disposes it or touches streams. `release` must return the
+ * in-flight promise (implementations observe it themselves, e.g. by
+ * tracking it in the lifecycle handoffs) so callers never leak an
+ * unhandled rejection.
+ */
+export interface FdCarrierRegistry {
+  readonly install: (peer: Peer) => Promise<void>
+  /**
+   * Clears only the same peer; never disposes or touches streams. Returns
+   * the in-flight promise. Tracking and failure warnings are owned by the
+   * carrier: every call is wrapped (warn operation+err) and joined by the
+   * lifecycle handoff barrier, so implementations must not track or warn
+   * themselves (no double tracking).
+   */
+  readonly release: (peer: Peer) => Promise<void>
+}
+
+export interface FdCarrierOptions {
+  /**
+   * When absent the carrier is a raw transport with no global registry
+   * side effects. Production `tryStartFdCarrier` and explicit integration
+   * fixtures pass the real registry; all other callers stay side-effect
+   * free.
+   */
+  readonly registry?: FdCarrierRegistry
+}
+
+/** Production registry adapter: the global AppRuntime identity. */
+export const carrierRegistry: FdCarrierRegistry = {
+  install: (target) =>
+    AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* PrivatePeerService
+        yield* svc.install(target)
+      }),
+    ).then(() => undefined),
+  // Returns the raw in-flight promise: tracking and failure warnings are
+  // owned by the carrier (`trackRelease`), never duplicated here.
+  release: (target) =>
+    AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* PrivatePeerService
+        yield* svc.release(target)
+      }),
+    ),
+}
+
+/** Bound for carrier registry install during serve startup. */
+export const FD_REGISTRY_READY_TIMEOUT_MS = 5_000
+
+export type CarrierReadyStatus = "ready" | "failed" | "timeout"
+
+export interface CarrierReadyResult {
+  readonly status: CarrierReadyStatus
+  readonly err?: unknown
+}
+
+/**
+ * Injectable one-shot timer for `awaitCarrierReady`. Returns a cancel
+ * function; tests drive `fire` manually for deterministic timeouts.
+ */
+export type CarrierReadySleep = (ms: number, fire: () => void) => () => void
+
+const defaultCarrierReadySleep: CarrierReadySleep = (ms, fire) => {
+  const timer = setTimeout(fire, ms)
+  return () => clearTimeout(timer)
+}
+
+/**
+ * Bounded wait for carrier registry install. Success resolves `ready`;
+ * install rejection warns, disposes the started carrier, and resolves
+ * `failed`; expiry warns, disposes the started carrier, and resolves
+ * `timeout`. A late install completion still reconciles through the
+ * carrier state machine (exact release + notify), and `ready` is consumed
+ * here so no path leaks an unhandled rejection.
+ */
+export function awaitCarrierReady(
+  started: FdCarrierHandle,
+  timeoutMs: number = FD_REGISTRY_READY_TIMEOUT_MS,
+  sleep: CarrierReadySleep = defaultCarrierReadySleep,
+): Promise<CarrierReadyResult> {
+  return new Promise<CarrierReadyResult>((resolve) => {
+    let finished = false
+    let cancel: () => void = () => {}
+    const disposeStarted = (op: string) => {
+      try {
+        started.dispose()
+      } catch (err) {
+        console.warn(`[kilo fd-carrier] ${op} failed:`, String(err))
+      }
+    }
+    const finish = (result: CarrierReadyResult) => {
+      if (finished) return
+      finished = true
+      try {
+        cancel()
+      } catch (err) {
+        console.warn("[kilo fd-carrier] ready timer cancel failed:", String(err))
+      }
+      resolve(result)
+    }
+    cancel = sleep(timeoutMs, () => {
+      console.warn(`[kilo fd-carrier] registry install timed out after ${timeoutMs}ms, carrier disposed`)
+      disposeStarted("install timeout dispose")
+      finish({ status: "timeout" })
+    })
+    started.ready.then(
+      () => finish({ status: "ready" }),
+      (err: unknown) => {
+        console.warn("[kilo fd-carrier] registry install failed:", String(err))
+        disposeStarted("install failure dispose")
+        finish({ status: "failed", err })
+      },
+    )
+  })
+}
+
+/**
+ * Owned lifecycle handoffs (F12): convergence peer-close registration plus
+ * registry exact-identity releases. Close/dispose paths cannot await, so
+ * each handoff promise is tracked here; serve shutdown awaits the set after
+ * carrier dispose instead of swallowing untracked `void runPromise` work.
+ * `awaitPeerClosedHandoffs` therefore settles both the registry release
+ * and the convergence notify.
  */
 const peerClosedHandoffs = new Set<Promise<void>>()
 
 export const awaitPeerClosedHandoffs = async (): Promise<void> => {
-  const pending = [...peerClosedHandoffs]
-  if (pending.length === 0) return
-  await Promise.allSettled(pending)
+  // Drain until stable. Handoffs are only ever enqueued synchronously from
+  // settled work (install completion callbacks, close handlers), so each
+  // round either makes progress or proves quiescence:
+  // - non-empty: join the round; anything enqueued meanwhile appears next.
+  // - empty: yield one microtask so a just-settled install completion can
+  //   enqueue its release/notify handoffs, then recheck; return only on
+  //   stable empty.
+  // Atomic-install assumption: an install effect that has not executed when
+  // its peer closes fails Closed with no claim; a committed claim settles
+  // its completion callback as a microtask, which this drain observes
+  // (install completion itself is tracked, so the drain also spans it).
+  // No busy loop (every iteration awaits) and no self-reference (only
+  // tracked work is ever awaited).
+  for (;;) {
+    const pending = [...peerClosedHandoffs]
+    if (pending.length === 0) {
+      await Promise.resolve()
+      if (peerClosedHandoffs.size === 0) return
+      continue
+    }
+    await Promise.allSettled(pending)
+  }
 }
 
 const trackPeerClosedHandoff = (work: Promise<void>): void => {
   peerClosedHandoffs.add(work)
-  void work.catch(() => {}).finally(() => {
-    peerClosedHandoffs.delete(work)
-  })
+  void work
+    .catch((err: unknown) => {
+      console.warn("[kilo fd-carrier] lifecycle handoff failed:", String(err))
+    })
+    .finally(() => {
+      peerClosedHandoffs.delete(work)
+    })
 }
 
 export const notifyPeerClosedConvergence = (): Promise<void> => {
@@ -1324,15 +1482,64 @@ function validateFindFilesRequest(raw: unknown): FdFindFilesRequest {
   return raw as unknown as FdFindFilesRequest
 }
 
-export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.WritableStream): FdCarrierHandle {
+export function createFdCarrier(
+  reader: NodeJS.ReadableStream,
+  writer: NodeJS.WritableStream,
+  opts?: FdCarrierOptions,
+): FdCarrierHandle {
   // Ensure streams are flowing
   try {
     ;(reader as unknown as { resume?: () => void }).resume?.()
   } catch (err) {
     console.warn("[kilo fd-carrier] reader resume failed:", String(err))
   }
+  const reg = opts?.registry
   let peer: Peer | null = null
+  // Explicit registry state machine. `outcome` tracks the async install
+  // completion, `observedClosed` tracks sync close/dispose, `released` and
+  // `notified` make release/notify exactly-once. Every transition — async
+  // install completion, `onClosed`, `dispose` — funnels through `sync()`,
+  // so correctness never depends on promise ordering: flags decide, and a
+  // stale release can only clear its own exact identity.
+  let outcome: "pending" | "ok" | "fail" = "pending"
+  let observedClosed = false
+  let released = false
+  let notified = false
+  // Carrier-owned release tracking: every `reg.release` call is wrapped
+  // (warn operation+err on failure) and joined by the lifecycle handoff
+  // barrier. The tracked promise always settles, so no path leaks an
+  // unhandled rejection and production behavior never throws.
+  const trackRelease = (registry: FdCarrierRegistry, target: Peer): void => {
+    let pending: Promise<void>
+    try {
+      pending = registry.release(target)
+    } catch (err) {
+      console.warn("[kilo fd-carrier] registry release failed:", String(err))
+      return
+    }
+    trackPeerClosedHandoff(
+      pending.then(
+        () => undefined,
+        (err: unknown) => {
+          console.warn("[kilo fd-carrier] registry release failed:", String(err))
+        },
+      ),
+    )
+  }
+  const sync = (): void => {
+    const target = peer
+    if (!reg || !target) return
+    if (outcome === "ok" && observedClosed && !released) {
+      released = true
+      trackRelease(reg, target)
+    }
+    if (outcome === "ok" && observedClosed && !notified) {
+      notified = true
+      void notifyPeerClosedConvergence()
+    }
+  }
   const dispose = () => {
+    observedClosed = true
     try {
       peer?.dispose()
     } catch (err) {
@@ -1340,17 +1547,32 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
     }
     bestEffortClose(reader, "reader")
     bestEffortClose(writer, "writer")
+    // `peer.dispose()` fires `onClosed` synchronously, which already ran
+    // `sync()`; this second pass only covers a registry installed between
+    // the two, and the guards keep it a no-op otherwise.
+    sync()
   }
   peer = new Peer({
     reader,
     writer,
     onClosed: () => {
+      observedClosed = true
       // EOF closes peer and destroys streams idempotently; peer already closed
       bestEffortClose(reader, "reader-onClosed")
       bestEffortClose(writer, "writer-onClosed")
-      // Single parent peer: owned handoff (tracked; serve shutdown awaits
-      // registration). The service settles unresolved leases after its
-      // bounded grace via the same disk-based resolve (never plain abort).
+      if (reg) {
+        // Registry carrier: release the exact identity and notify
+        // convergence exactly once, and only for an installed peer. A peer
+        // whose install never committed must not settle another peer's
+        // leases. When install is still pending, the completion callback
+        // reconciles via the same `sync()`.
+        sync()
+        return
+      }
+      // Raw carrier (no registry): baseline handoff. Single parent peer,
+      // tracked; serve shutdown awaits registration. The service settles
+      // unresolved leases after its bounded grace via the same disk-based
+      // resolve (never plain abort).
       notifyPeerClosedConvergence()
     },
     onRequest: async (method: string, params: unknown) => {
@@ -1424,7 +1646,12 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
         )) as Record<string, unknown>
         if (result && (result as { status?: string }).status === "succeeded" && (result as { data?: unknown }).data) {
           const data = (result as { data: unknown }).data
-          if (data && typeof data === "object" && !Array.isArray(data) && (data as Record<string, unknown>).session === undefined) {
+          if (
+            data &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            (data as Record<string, unknown>).session === undefined
+          ) {
             return { ...(result as object), data: { session: data } }
           }
         }
@@ -1439,7 +1666,12 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
         )) as Record<string, unknown>
         if (result && (result as { status?: string }).status === "succeeded" && (result as { data?: unknown }).data) {
           const data = (result as { data: unknown }).data
-          if (data && typeof data === "object" && !Array.isArray(data) && (data as Record<string, unknown>).session === undefined) {
+          if (
+            data &&
+            typeof data === "object" &&
+            !Array.isArray(data) &&
+            (data as Record<string, unknown>).session === undefined
+          ) {
             return { ...(result as object), data: { session: data } }
           }
         }
@@ -2739,11 +2971,12 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
           const err = new Error(message) as Error & { code: number }
           // Fail-closed validation mapping: shape/digest/authorization
           // problems are InvalidParams; exhaustion/shutdown is internal.
-          err.code = /descriptor conflict|not authorized|not loadable|leaseId invalid|leaseId too long|must be|must bind|must match|rejected|unexpected|empty|closed set/i.test(
-            message,
-          )
-            ? ErrorCode.InvalidParams
-            : ErrorCode.InternalError
+          err.code =
+            /descriptor conflict|not authorized|not loadable|leaseId invalid|leaseId too long|must be|must bind|must match|rejected|unexpected|empty|closed set/i.test(
+              message,
+            )
+              ? ErrorCode.InvalidParams
+              : ErrorCode.InternalError
           throw err
         }
         // Resolved-lease replay is strictly distinguished: the extension
@@ -2760,7 +2993,11 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
             scope: result.terminal.scope,
           }
           if (result.terminal.outcome === "failed")
-            return { ...base, reason: result.terminal.reason ?? "converged failed", retryable: result.terminal.retryable ?? true }
+            return {
+              ...base,
+              reason: result.terminal.reason ?? "converged failed",
+              retryable: result.terminal.retryable ?? true,
+            }
           return base
         }
         return { v: 1, leaseId: parsed.leaseId, acquired: true }
@@ -2794,7 +3031,46 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
       throw err
     },
   })
-  return { peer, reader, writer, dispose }
+  // Registry install is async (the ManagedRuntime builds layers
+  // asynchronously, so a synchronous install would fail closed on a cold
+  // runtime). `ready` defines availability: only an installed peer is
+  // usable, and production serve awaits `ready` before publishing the port.
+  // Raw carriers (no registry) resolve immediately with zero side effects.
+  // Install failure disposes only the new peer/streams and keeps the old
+  // current. A racing dispose can only fail the install closed, and the
+  // completion callback reconciles through the same `sync()`.
+  const target: Peer = peer
+  const ready: Promise<void> = reg
+    ? reg.install(target).then(
+        () => {
+          outcome = "ok"
+          sync()
+        },
+        (err: unknown) => {
+          outcome = "fail"
+          try {
+            target.dispose()
+          } catch (disposeErr) {
+            console.warn("[kilo fd-carrier] install cleanup dispose failed:", String(disposeErr))
+          }
+          bestEffortClose(reader, "reader-install-cleanup")
+          bestEffortClose(writer, "writer-install-cleanup")
+          throw err
+        },
+      )
+    : Promise.resolve()
+  // Join install completion in the lifecycle barrier: a committed claim
+  // enqueues its release/notify handoffs synchronously from the callback
+  // above, so the barrier drain necessarily observes them instead of
+  // snapshotting an empty set early. The derived promise always settles
+  // and never warns; `ready` itself stays caller-observed.
+  trackPeerClosedHandoff(
+    ready.then(
+      () => undefined,
+      () => undefined,
+    ),
+  )
+  return { peer, reader, writer, dispose, ready }
 }
 
 export interface FdCarrierDeps {
@@ -2802,6 +3078,12 @@ export interface FdCarrierDeps {
   createReadStream: (path: unknown, opts: unknown) => NodeJS.ReadableStream
   createWriteStream: (path: unknown, opts: unknown) => NodeJS.WritableStream
   platform?: string
+  /**
+   * Registry adapter for the created carrier. When absent the carrier is
+   * raw with no registry side effects (all injectable test paths). Only
+   * production startup passes the real registry.
+   */
+  registry?: FdCarrierRegistry
 }
 
 export function tryStartFdCarrierWithDeps(deps: FdCarrierDeps): FdCarrierHandle | null {
@@ -2829,7 +3111,7 @@ export function tryStartFdCarrierWithDeps(deps: FdCarrierDeps): FdCarrierHandle 
     } catch (err) {
       console.warn("[kilo fd-carrier] reader resume in tryStart failed:", String(err))
     }
-    return createFdCarrier(reader, writer)
+    return createFdCarrier(reader, writer, deps.registry ? { registry: deps.registry } : undefined)
   } catch (err) {
     console.warn("[kilo fd-carrier] tryStart failed:", String(err))
     if (reader) bestEffortClose(reader, "reader-startup-cleanup")
@@ -2880,5 +3162,6 @@ export function tryStartFdCarrier(): FdCarrierHandle | null {
     fstatSync: fs.fstatSync.bind(fs),
     createReadStream: (p, o) => fs.createReadStream(p as string, o as never) as unknown as NodeJS.ReadableStream,
     createWriteStream: (p, o) => fs.createWriteStream(p as string, o as never) as unknown as NodeJS.WritableStream,
+    registry: carrierRegistry,
   })
 }
