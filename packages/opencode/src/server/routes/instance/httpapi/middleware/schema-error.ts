@@ -25,8 +25,18 @@ export class SchemaErrorMiddleware extends HttpApiMiddleware.Service<SchemaError
   },
 ) {}
 
+function isCredentialIssue(error: { cause: { message: string } }): boolean {
+  const msg = error.cause.message
+  // Structured path-based check: credential path segment appears in formatted issue
+  // e.g. at ["provider"]["acme"]["credential"] or at ["credential"]
+  return msg.includes('["credential"]')
+}
+
 export const schemaErrorLayer = HttpApiMiddleware.layerSchemaErrorTransform(SchemaErrorMiddleware, (error, context) => {
-  const reason = truncateReason(error.cause.message)
+  const raw = error.cause.message
+  const credential = isCredentialIssue(error)
+  const reason = credential ? "Invalid credential reference" : truncateReason(raw)
+  // Never log raw credential errors with token; use sanitized reason
   log.warn("schema rejection", { kind: error.kind, reason })
   if (context.endpoint.path.startsWith("/api/")) {
     return Effect.fail(

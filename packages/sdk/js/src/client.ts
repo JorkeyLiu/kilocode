@@ -1,10 +1,42 @@
-export * from "./gen/types.gen.js"
+export type * from "./gen/types.gen.js"
 
 import { createClient } from "./gen/client/client.gen.js"
 import { type Config } from "./gen/client/types.gen.js"
-import { KiloClient } from "./gen/sdk.gen.js"
+import { KiloClient as BaseKiloClient } from "./gen/sdk.gen.js"
 import { wrapClientError } from "./error-interceptor.js"
-export { type Config as KiloClientConfig, KiloClient }
+export type { Config as KiloClientConfig } from "./gen/client/types.gen.js"
+export { KiloClient as BaseKiloClient } from "./gen/sdk.gen.js"
+export type { Config as V2Config, ProviderConfig as V2ProviderConfig } from "./v2/gen/types.gen.js"
+import type { Config as V2ConfigImport } from "./v2/gen/types.gen.js"
+import type { Client, Options, RequestResult, ResponseStyle } from "./gen/client/types.gen.js"
+import type { ConfigGetData, ConfigUpdateData, ConfigUpdateErrors } from "./gen/types.gen.js"
+
+type RefinedConfigGetResponses = {
+  200: V2ConfigImport
+}
+
+type RefinedConfigUpdateResponses = {
+  200: V2ConfigImport
+}
+
+type RefinedConfigUpdateData = Omit<ConfigUpdateData, "body"> & {
+  body?: V2ConfigImport
+}
+
+export interface KiloClient extends Omit<BaseKiloClient, "config"> {
+  config: Omit<BaseKiloClient["config"], "get" | "update"> & {
+    get<ThrowOnError extends boolean = false, TResponseStyle extends ResponseStyle = "fields">(
+      options?: Options<ConfigGetData, ThrowOnError, RefinedConfigGetResponses, TResponseStyle>,
+    ): RequestResult<RefinedConfigGetResponses, unknown, ThrowOnError, TResponseStyle>
+    update<ThrowOnError extends boolean = false, TResponseStyle extends ResponseStyle = "fields">(
+      options?: Options<RefinedConfigUpdateData, ThrowOnError, RefinedConfigUpdateResponses, TResponseStyle>,
+    ): RequestResult<RefinedConfigUpdateResponses, ConfigUpdateErrors, ThrowOnError, TResponseStyle>
+  }
+}
+
+export const KiloClient = BaseKiloClient as unknown as {
+  new (args?: { client?: Client }): KiloClient
+} & typeof BaseKiloClient
 
 function pick(value: string | null, fallback?: string) {
   if (!value) return
@@ -30,15 +62,9 @@ function rewrite(request: Request, directory?: string) {
   return next
 }
 
-export function createKiloClient(config?: Config & { directory?: string }) {
+export function createKiloClient(config?: Config & { directory?: string }): KiloClient {
   if (!config?.fetch) {
     const customFetch: any = (req: any) => {
-      // Pass duplex in the init arg so it survives VS Code's proxy-agent
-      // fetch wrapper, which calls originalFetch(request, { ...init, dispatcher })
-      // and would otherwise drop duplex from the cloned Request.
-      // timeout: false disables Bun's default request timeout for long-running
-      // streaming calls (replaces the old req.timeout = false assignment which
-      // wouldn't survive the clone triggered by passing an init object).
       return fetch(req, { duplex: "half", timeout: false } as any)
     }
     config = {
@@ -54,13 +80,10 @@ export function createKiloClient(config?: Config & { directory?: string }) {
     }
   }
 
-  // Node.js/Electron require duplex: "half" when creating Request objects
-  // with a body. The option propagates through config → opts → requestInit
-  // and is harmless in environments that don't need it (Bun, browsers).
   ;(config as any).duplex = "half"
 
   const client = createClient(config)
   client.interceptors.request.use((request) => rewrite(request, config?.directory))
   client.interceptors.error.use(wrapClientError)
-  return new KiloClient({ client })
+  return new BaseKiloClient({ client }) as unknown as KiloClient
 }

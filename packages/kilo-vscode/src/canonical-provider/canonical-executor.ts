@@ -38,14 +38,12 @@ import {
   type CanonicalProviderProtocol,
 } from "../config/types"
 import type { CanonicalFailureCode as SharedFailureCode } from "@opencode-ai/core/kilocode/provider-execute"
-import { CANONICAL_FAILURE_CODES as SHARED_CODES } from "@opencode-ai/core/kilocode/provider-execute"
+import {
+  isProviderExecuteProtocol,
+  PROVIDER_EXECUTE_PATH_BY_PROTOCOL,
+} from "@opencode-ai/core/kilocode/provider-execute"
 
-// Re-export the shared canonical failure codes; `aborted` lives only in the
-// cross-process wire (host maps AbortError to `aborted`) and is not a
-// host-side materialization code, so it is omitted from this host-specific
-// surface.
 export type CanonicalFailureCode = Exclude<SharedFailureCode, "aborted">
-export const CANONICAL_FAILURE_CODES = SHARED_CODES.filter((c) => c !== "aborted") as unknown as readonly CanonicalFailureCode[]
 
 export class CanonicalExecuteError extends Error {
   readonly code: CanonicalFailureCode
@@ -78,11 +76,7 @@ export interface CanonicalSuccess {
   readonly events: readonly LLMEvent[]
 }
 
-const PATH_BY_PROTOCOL: Record<CanonicalProviderProtocol, string> = {
-  "openai/completions": "/chat/completions",
-  "openai/responses": "/responses",
-  "anthropic/messages": "/messages",
-}
+const PATH_BY_PROTOCOL: Record<CanonicalProviderProtocol, string> = PROVIDER_EXECUTE_PATH_BY_PROTOCOL as unknown as Record<CanonicalProviderProtocol, string>
 
 const REDACTED = "[REDACTED]"
 
@@ -168,7 +162,7 @@ const materialize = (input: CanonicalExecuteInput): Materialized => {
   }
 
   const protocol = rec.protocol
-  if (protocol !== "openai/completions" && protocol !== "openai/responses" && protocol !== "anthropic/messages")
+  if (!isProviderExecuteProtocol(protocol))
     throw new CanonicalExecuteError("unknown-protocol", "Unsupported canonical provider protocol")
 
   // Full model AST validation via shared helper: any closed-shape violation or

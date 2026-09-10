@@ -1,3 +1,9 @@
+import { PROVIDER_EXECUTE_PROTOCOLS, isProviderExecuteProtocol, type ProviderExecuteProtocol } from "@opencode-ai/core/kilocode/provider-execute"
+import {
+  parseOwnedCredentialRef as parseOwnedCredentialRefCore,
+  isOwnedCredentialRef as isOwnedCredentialRefCore,
+} from "@opencode-ai/core/kilocode/credential-ref"
+
 /**
  * P4.1 Canonical config foundation — core types.
  *
@@ -368,12 +374,11 @@ function hasOnlyKeys(obj: Record<string, unknown>, allowed: Set<string>): boolea
 // must derive their rules from these functions.
 
 /** Approved protocol values for canonical provider entries. */
-export const CANONICAL_PROVIDER_PROTOCOLS = ["openai/completions", "openai/responses", "anthropic/messages"] as const
-export type CanonicalProviderProtocol = (typeof CANONICAL_PROVIDER_PROTOCOLS)[number]
-const CANONICAL_PROTOCOLS = new Set<string>(CANONICAL_PROVIDER_PROTOCOLS)
+export const CANONICAL_PROVIDER_PROTOCOLS = PROVIDER_EXECUTE_PROTOCOLS
+export type CanonicalProviderProtocol = ProviderExecuteProtocol
 
 export function isCanonicalProviderProtocol(v: unknown): v is CanonicalProviderProtocol {
-  return typeof v === "string" && (CANONICAL_PROTOCOLS as Set<string>).has(v)
+  return isProviderExecuteProtocol(v)
 }
 
 /** Approved variant keys — must match CanonicalProviderVariantPayload exactly. */
@@ -388,41 +393,12 @@ const APPROVED_PROVIDER_KEYS = new Set(["name", "endpoint", "protocol", "models"
 /** Approved MCP-level keys — must match CanonicalMcpPayload exactly. */
 const APPROVED_MCP_KEYS = new Set(["type", "command", "args", "url", "enabled", "credential"])
 
-/**
- * Validate that a credential ref is an exact extension-owned SecretStorage reference.
- * Format: secret:kilo.credentials.<scope>.<kind>.<id>
- * where scope is "global"|"project", kind is "provider"|"mcp", id is non-empty.
- */
 export function isOwnedCredentialRef(ref: string): boolean {
-  return parseOwnedCredentialRef(ref) !== null
+  return isOwnedCredentialRefCore(ref)
 }
 
-/**
- * Parse an exact extension-owned SecretStorage ref into its components.
- * This is the single strict owned-ref parser: every SecretStorage
- * read/has/restore/delete/cleanup path validates through it.
- * Returns null for any ref that is not the exact owned format.
- *
- * Rules enforced:
- * - exact prefix `secret:kilo.credentials.`
- * - legal scope ("global" | "project") and kind ("provider" | "mcp")
- * - a non-empty stable id whose dot segments are all non-empty
- *   (rejects empty ids, delimiter-only ids, and leading/trailing/
- *   consecutive empty dot segments such as "..", ".id", "id.")
- */
 export function parseOwnedCredentialRef(ref: string): { scope: "global" | "project"; kind: "provider" | "mcp"; id: string } | null {
-  if (!ref.startsWith("secret:kilo.credentials.")) return null
-  const rest = ref.slice("secret:kilo.credentials.".length)
-  const parts = rest.split(".")
-  if (parts.length < 3) return null
-  const [scope, kind, ...idParts] = parts
-  if (scope !== "global" && scope !== "project") return null
-  if (kind !== "provider" && kind !== "mcp") return null
-  if (idParts.length === 0) return null
-  for (const part of idParts) {
-    if (part.length === 0) return null
-  }
-  return { scope, kind, id: idParts.join(".") }
+  return parseOwnedCredentialRefCore(ref)
 }
 
 const THINKING_TYPES = new Set(["enabled", "disabled", "adaptive"])

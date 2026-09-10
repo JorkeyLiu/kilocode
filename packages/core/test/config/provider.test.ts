@@ -8,7 +8,10 @@ import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ConfigProviderV1 } from "@opencode-ai/core/v1/config/provider"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
+import { isCanonicalOnlyProviderV1 } from "@opencode-ai/core/kilocode/canonical-provider"
+import { isOwnedProviderCredentialRef } from "@opencode-ai/core/kilocode/credential-ref"
 import { it } from "../plugin/provider-helper"
+import { FastCheck } from "effect/testing"
 
 function request(headers: Record<string, string>, variant?: string) {
   return {
@@ -161,5 +164,202 @@ describe("ConfigProviderV1.Info provider options", () => {
         },
       }),
     ).toThrow()
+  })
+})
+
+describe("ConfigProviderV1.Info canonical provider preservation", () => {
+  const decodeProvider = Schema.decodeUnknownSync(ConfigProviderV1.Info)
+  const decodeConfig = Schema.decodeUnknownSync(ConfigV1.Info)
+
+  test("preserves endpoint/protocol/credential", () => {
+    const info = decodeProvider({
+      endpoint: "https://api.example.com/v1",
+      protocol: "openai/completions",
+      credential: "secret:kilo.credentials.global.provider.acme",
+    })
+    expect(info.endpoint).toBe("https://api.example.com/v1")
+    expect(info.protocol).toBe("openai/completions")
+    expect(String(info.credential)).toBe("secret:kilo.credentials.global.provider.acme")
+  })
+
+  test("omitting canonical fields remains valid", () => {
+    const info = decodeProvider({ name: "legacy", npm: "@ai-sdk/openai" })
+    expect(info.endpoint).toBeUndefined()
+    expect(info.protocol).toBeUndefined()
+    expect(info.credential).toBeUndefined()
+  })
+
+  test("rejects invalid protocol", () => {
+    expect(() => decodeProvider({ protocol: "openai/chat" as unknown as string })).toThrow()
+  })
+
+  test("accepts each canonical protocol", () => {
+    for (const protocol of ["openai/completions", "openai/responses", "anthropic/messages"] as const) {
+      const info = decodeProvider({ protocol })
+      expect(info.protocol).toBe(protocol)
+    }
+  })
+
+  test("ConfigV1 parse retains canonical fields with models", () => {
+    const cfg = decodeConfig({
+      provider: {
+        acme: {
+          endpoint: "https://api.acme.test/v1",
+          protocol: "anthropic/messages",
+          credential: "secret:kilo.credentials.project.provider.acme",
+          models: { m1: { name: "M1" } },
+        },
+      },
+    })
+    expect(cfg.provider?.acme?.endpoint).toBe("https://api.acme.test/v1")
+    expect(String(cfg.provider?.acme?.credential)).toBe("secret:kilo.credentials.project.provider.acme")
+  })
+
+  test("Schema.toArbitrary completes for ConfigV1.Info", () => {
+    expect(() => Schema.toArbitrary(ConfigV1.Info)).not.toThrow()
+    const arb = Schema.toArbitrary(ConfigV1.Info)
+    expect(() => FastCheck.sample(arb, 1)).not.toThrow()
+  })
+})
+
+describe("ConfigProvider credential safety", () => {
+  const decodeV1 = Schema.decodeUnknownSync(ConfigProviderV1.Info)
+
+  test("rejects plaintext credential", () => {
+    expect(() => decodeV1({ credential: "sk-1234567890abcdef" })).toThrow()
+    expect(() => decodeV1({ credential: "" })).toThrow()
+  })
+
+  test("rejects malformed owned refs", () => {
+    const bad = [
+      "secret:kilo.credentials.global.mcp.acme",
+      "secret:kilo.credentials.global.provider.",
+      "secret:kilo.credentials.global.provider..bad",
+      "secret:kilo.credentials.bad.provider.acme",
+      "secret:kilo.credentials.global.provider",
+      "secret:kilo.credentials:",
+    ]
+    for (const cred of bad) expect(() => decodeV1({ credential: cred })).toThrow()
+  })
+
+  test("accepts valid owned refs and shares parser", () => {
+    const cred = "secret:kilo.credentials.global.provider.acme"
+    const info = decodeV1({ credential: cred })
+    expect(String(info.credential)).toBe(cred)
+    expect(isOwnedProviderCredentialRef(cred)).toBe(true)
+    expect(isOwnedProviderCredentialRef("sk-123")).toBe(false)
+  })
+
+  test("plaintext error is redacted with distinctive token and does not leak", () => {
+    const token = "sk-DISTINCTIVE-LEAK-TOKEN-ABC123-XYZ-999"
+    let msg = ""
+    try {
+      decodeV1({ credential: token })
+    } catch (e) {
+      msg = (e as Error).message ?? String(e)
+    }
+    expect(msg).not.toContain(token)
+    expect(msg).toContain("Invalid credential reference")
+    expect(msg).toContain('["credential"]')
+    // nested provider path via ConfigV1
+    const decodeConfig = Schema.decodeUnknownSync(ConfigV1.Info)
+    let msg2 = ""
+    try {
+      decodeConfig({ provider: { acme: { credential: token } } } as unknown as Record<string, unknown>)
+    } catch (e) {
+      msg2 = (e as Error).message ?? String(e)
+    }
+    expect(msg2).not.toContain(token)
+    expect(msg2).toContain("Invalid credential reference")
+    expect(msg2).toContain('["credential"]')
+  })
+})
+
+describe("Canonical-only V1 predicate", () => {
+  test("definitive signals are canonical-only", () => {
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test" })).toBe(true)
+    expect(isCanonicalOnlyProviderV1({ protocol: "openai/completions" })).toBe(true)
+    expect(isCanonicalOnlyProviderV1({ credential: "secret:kilo.credentials.global.provider.acme" })).toBe(true)
+  })
+
+  test("name/models alone are not canonical-only", () => {
+    expect(isCanonicalOnlyProviderV1({ name: "x", models: { m1: { name: "M1" } } })).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ name: "x" })).toBe(false)
+    expect(isCanonicalOnlyProviderV1({})).toBe(false)
+  })
+
+  test("hybrid with legacy provider keys is not canonical-only", () => {
+    expect(isCanonicalOnlyProviderV1({ npm: "@ai-sdk/openai", endpoint: "https://a.test" } as unknown as Record<string, unknown>)).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ api: "https://api.test", endpoint: "https://a.test" })).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ env: ["FOO"], credential: "secret:kilo.credentials.global.provider.acme" })).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ id: "x", protocol: "openai/completions" })).toBe(false)
+  })
+
+  test("model legacy fields make hybrid", () => {
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", id: "custom-id" } } })).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", cost: { input: 1, output: 2 } } } })).toBe(false)
+  })
+
+  test("canonical models remain canonical-only", () => {
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", reasoning: true } } })).toBe(true)
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { enable_thinking: true } } } } })).toBe(true)
+  })
+
+  test("each canonical signal + prompt/isFree/ai_sdk_provider hybrid is not canonical-only", () => {
+    // prompt
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", prompt: "codex" } } } as unknown as Record<string, unknown>)).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ protocol: "openai/completions", models: { m1: { prompt: "gemini" } } } as unknown as Record<string, unknown>)).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ credential: "secret:kilo.credentials.global.provider.acme", models: { m1: { prompt: "beast" } } } as unknown as Record<string, unknown>)).toBe(false)
+    // isFree
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", isFree: true } } } as unknown as Record<string, unknown>)).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ protocol: "anthropic/messages", models: { m1: { isFree: false } } } as unknown as Record<string, unknown>)).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ credential: "secret:kilo.credentials.global.provider.acme", models: { m1: { isFree: true } } } as unknown as Record<string, unknown>)).toBe(false)
+    // ai_sdk_provider
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", ai_sdk_provider: "openai" } } } as unknown as Record<string, unknown>)).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ protocol: "openai/responses", models: { m1: { ai_sdk_provider: "anthropic" } } } as unknown as Record<string, unknown>)).toBe(false)
+    expect(isCanonicalOnlyProviderV1({ credential: "secret:kilo.credentials.global.provider.acme", models: { m1: { ai_sdk_provider: "mistral" } } } as unknown as Record<string, unknown>)).toBe(false)
+  })
+
+  test("canonical signal + variants.<id>.disabled:true is hybrid/non-canonical-only, canonical-approved variants remain canonical-only", () => {
+    // disabled is an accepted operational variant field — any presence makes it hybrid
+    expect(
+      isCanonicalOnlyProviderV1({
+        endpoint: "https://a.test",
+        models: { m1: { name: "M1", variants: { v1: { disabled: true } } } },
+      } as unknown as Record<string, unknown>),
+    ).toBe(false)
+    expect(
+      isCanonicalOnlyProviderV1({
+        protocol: "openai/completions",
+        models: { m1: { name: "M1", variants: { v1: { disabled: true } } } },
+      } as unknown as Record<string, unknown>),
+    ).toBe(false)
+    expect(
+      isCanonicalOnlyProviderV1({
+        credential: "secret:kilo.credentials.global.provider.acme",
+        models: { m1: { name: "M1", variants: { v1: { disabled: true } } } },
+      } as unknown as Record<string, unknown>),
+    ).toBe(false)
+    // presence matters even when false
+    expect(
+      isCanonicalOnlyProviderV1({
+        endpoint: "https://a.test",
+        models: { m1: { name: "M1", variants: { v1: { disabled: false } } } },
+      } as unknown as Record<string, unknown>),
+    ).toBe(false)
+    // combined with approved keys remains hybrid
+    expect(
+      isCanonicalOnlyProviderV1({
+        endpoint: "https://a.test",
+        models: { m1: { name: "M1", variants: { v1: { disabled: true, enable_thinking: true } } } },
+      } as unknown as Record<string, unknown>),
+    ).toBe(false)
+    // canonical-approved variants remain canonical-only (ConfigV1 variant schema has only disabled as operational key)
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { enable_thinking: true } } } } })).toBe(true)
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { reasoningEffort: "high" } } } } })).toBe(true)
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { effort: "medium" } } } } })).toBe(true)
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { thinking: { type: "enabled" } } } } } })).toBe(true)
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { reasoning_split: true } } } } })).toBe(true)
+    expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { chat_template_args: { enable_thinking: false } } } } } })).toBe(true)
   })
 })

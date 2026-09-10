@@ -5,7 +5,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "typecheck": "tsgo --noEmit",
+    "typecheck": "tsgo --noEmit && tsgo --noEmit -p tsconfig.typecheck.json",
     "build": "bun ./script/build.ts"
   },
   "exports": {

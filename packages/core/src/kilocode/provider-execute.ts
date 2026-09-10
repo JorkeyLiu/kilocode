@@ -65,11 +65,13 @@ export interface ProviderExecuteSuccess {
 const ALLOWED_REQUEST_KEYS = new Set(["providerId", "modelId", "record", "prompt"])
 const ALLOWED_SUCCESS_KEYS = new Set(["providerId", "modelId", "protocol", "endpoint", "path", "text", "events"])
 
-const PATH_BY_PROTOCOL: Record<ProviderExecuteProtocol, string> = {
+export const PROVIDER_EXECUTE_PATH_BY_PROTOCOL: Record<ProviderExecuteProtocol, string> = {
   "openai/completions": "/chat/completions",
   "openai/responses": "/responses",
   "anthropic/messages": "/messages",
 }
+
+const PATH_BY_PROTOCOL = PROVIDER_EXECUTE_PATH_BY_PROTOCOL
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return !!v && typeof v === "object" && !Array.isArray(v)

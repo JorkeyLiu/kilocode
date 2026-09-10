@@ -23870,6 +23870,21 @@
           "name": {
             "type": "string"
           },
+          "endpoint": {
+            "type": "string"
+          },
+          "protocol": {
+            "type": "string",
+            "enum": [
+              "openai/completions",
+              "openai/responses",
+              "anthropic/messages"
+            ]
+          },
+          "credential": {
+            "type": "string",
+            "pattern": "^secret:kilo\\.credentials\\.(global|project)\\.provider\\.[^.]+(\\.[^.]+)*$"
+          },
           "env": {
             "type": "array",
             "items": {

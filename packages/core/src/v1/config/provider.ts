@@ -2,6 +2,8 @@ export * as ConfigProviderV1 from "./provider"
 
 import { Schema } from "effect"
 import { PROMPTS, AI_SDK_PROVIDERS } from "@kilocode/kilo-gateway" // kilocode_change
+import { PROVIDER_EXECUTE_PROTOCOLS } from "../../kilocode/provider-execute"
+import { ProviderCredentialRef } from "../../kilocode/credential-ref"
 import { PositiveInt } from "../../schema"
 
 export const ModelStatus = Schema.Literals(["alpha", "beta", "deprecated", "active"])
@@ -83,6 +85,13 @@ export const Model = Schema.Struct({
 export const Info = Schema.Struct({
   api: Schema.optional(Schema.String),
   name: Schema.optional(Schema.String),
+  endpoint: Schema.optional(Schema.String).annotate({ description: "Canonical endpoint URL for extension-authored provider" }),
+  protocol: Schema.optional(Schema.Literals(PROVIDER_EXECUTE_PROTOCOLS)).annotate({
+    description: "Canonical protocol for extension-authored provider",
+  }),
+  credential: Schema.optional(ProviderCredentialRef).annotate({
+    description: "Opaque credential reference for extension-authored provider",
+  }),
   env: Schema.optional(Schema.mutable(Schema.Array(Schema.String))),
   id: Schema.optional(Schema.String),
   npm: Schema.optional(Schema.String),

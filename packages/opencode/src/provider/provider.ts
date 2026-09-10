@@ -44,6 +44,7 @@ import {
 import { ProviderError } from "./error"
 import * as P0Perf from "@/kilocode/perf/instrument" // kilocode_change - P0 instrumentation
 import { Admission } from "../../../llm/src/route/admission"
+import { isCanonicalOnlyProviderV1 } from "@opencode-ai/core/kilocode/canonical-provider"
 
 const log = Log.create({ service: "provider" })
 const OPENAI_HEADER_TIMEOUT_DEFAULT = 10_000
@@ -1344,6 +1345,7 @@ export const layer = Layer.effect(
         // extend database from config
         for (const [providerID, provider] of configProviders) {
           if (!provider) continue // kilocode_change - null entries are transient delete sentinels
+          if (isCanonicalOnlyProviderV1(provider)) continue // kilocode_change - canonical-only remains inert, excluded from Provider DB
           const existing = database[providerID]
           const parsed: Info = {
             id: ProviderV2.ID.make(providerID),

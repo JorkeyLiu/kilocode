@@ -1242,6 +1242,9 @@ export type AgentConfig = {
 export type ProviderConfig = {
   api?: string
   name?: string
+  endpoint?: string
+  protocol?: "openai/completions" | "openai/responses" | "anthropic/messages"
+  credential?: string
   env?: Array<string>
   id?: string
   npm?: string
