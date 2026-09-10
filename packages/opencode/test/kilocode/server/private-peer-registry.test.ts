@@ -86,6 +86,7 @@ describe("private-peer-registry", () => {
         Effect.gen(function* () {
           const svc = yield* PrivatePeerService
           const lease = yield* svc.install(a)
+          yield* lease.negotiate(["test/echo"])
           const seen = yield* svc.current
           expect(Option.isSome(seen)).toBeTrue()
           const call = yield* svc.request("test/echo", { n: 7 })
@@ -232,6 +233,7 @@ describe("private-peer-registry", () => {
         Effect.gen(function* () {
           const svc = yield* PrivatePeerService
           const lease = yield* svc.install(aHang)
+          yield* lease.negotiate(["test/hang"])
           const call = yield* svc.request("test/hang", {})
           expect(aHang.getPendingIds()).toEqual([call.id])
           yield* lease.release

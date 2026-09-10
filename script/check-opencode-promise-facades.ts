@@ -219,6 +219,11 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason:
       "fd-carrier question integration test via AppRuntime and InstanceRef (real session create/snapshot/dispatch over the production runtime identity with live carriers)",
   },
+  "kilocode/server/fd-carrier-initialize-offer.test.ts": {
+    count: 3,
+    reason:
+      "single production AppRuntime integration test for initialize reverse-capability negotiation via the global registry identity (reverse offer binds supports, close clears); all other capability tests use an isolated PrivatePeer layer",
+  },
 }
 
 const owned = (file: string) => file.startsWith("kilocode/") || file.startsWith("kilo-sessions/")

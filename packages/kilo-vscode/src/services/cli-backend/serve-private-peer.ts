@@ -1072,7 +1072,16 @@ export function validateQuestionReplyOutcome(
   if (kind === "terminal") return validateQuestionReplyResult(raw, req)
   if (kind === "terminal-failure") return validateQuestionTerminalFailure(raw, req)
   if (kind === "ambiguous") {
-    const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "transportUnknown"])
+    const allowed = new Set([
+      "kind",
+      "v",
+      "requestId",
+      "opId",
+      "idempotencyKey",
+      "accepted",
+      "terminal",
+      "transportUnknown",
+    ])
     for (const k of Object.keys(raw)) {
       if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
     }
@@ -1096,7 +1105,16 @@ export function validateQuestionRejectOutcome(
   if (kind === "terminal") return validateQuestionRejectResult(raw, req)
   if (kind === "terminal-failure") return validateQuestionTerminalFailure(raw, req)
   if (kind === "ambiguous") {
-    const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "transportUnknown"])
+    const allowed = new Set([
+      "kind",
+      "v",
+      "requestId",
+      "opId",
+      "idempotencyKey",
+      "accepted",
+      "terminal",
+      "transportUnknown",
+    ])
     for (const k of Object.keys(raw)) {
       if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
     }
@@ -1223,8 +1241,7 @@ function validateCancelQueuedRevision(v: unknown): void {
   if (!isRecord(v)) throw new Error("revision must be {session,config} integers")
   assertAllowedKeys(v as Record<string, unknown>, CANCELQUEUED_REVISION_FIELDS, "revision")
   const rec = v as Record<string, unknown>
-  if (!isSafeInt(rec.session) || !isSafeInt(rec.config))
-    throw new Error("revision must be {session,config} integers")
+  if (!isSafeInt(rec.session) || !isSafeInt(rec.config)) throw new Error("revision must be {session,config} integers")
 }
 
 // eslint-disable-next-line complexity
@@ -1685,16 +1702,25 @@ export function validateCreateResult(raw: unknown, req: ServePrivateCreateReques
     if (!isRecord(data)) throw new Error("succeeded data must be object")
     const sess = (data as Record<string, unknown>).session
     if (!isRecord(sess)) throw new Error("succeeded data.session must be object")
-    if (typeof (sess as Record<string, unknown>).id !== "string" || !((sess as Record<string, unknown>).id as string).startsWith("ses"))
+    if (
+      typeof (sess as Record<string, unknown>).id !== "string" ||
+      !((sess as Record<string, unknown>).id as string).startsWith("ses")
+    )
       throw new Error("succeeded data.session.id must be SessionID")
-    if (typeof (sess as Record<string, unknown>).directory !== "string" || !isAbsolute((sess as Record<string, unknown>).directory as string))
+    if (
+      typeof (sess as Record<string, unknown>).directory !== "string" ||
+      !isAbsolute((sess as Record<string, unknown>).directory as string)
+    )
       throw new Error("succeeded data.session.directory must be absolute")
-    if (typeof (sess as Record<string, unknown>).title !== "string") throw new Error("succeeded data.session.title must be string")
-    if ((sess as Record<string, unknown>).title === "") throw new Error("succeeded data.session.title must be non-empty")
+    if (typeof (sess as Record<string, unknown>).title !== "string")
+      throw new Error("succeeded data.session.title must be string")
+    if ((sess as Record<string, unknown>).title === "")
+      throw new Error("succeeded data.session.title must be non-empty")
     if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
     if ((outcome as Record<string, unknown>).failure !== undefined)
       throw new Error("succeeded outcome must not have failure")
-    if ((raw as Record<string, unknown>).transportUnknown !== undefined) throw new Error("succeeded must not have transportUnknown")
+    if ((raw as Record<string, unknown>).transportUnknown !== undefined)
+      throw new Error("succeeded must not have transportUnknown")
     return raw as unknown as ServePrivateCreateResult
   }
   if (status === "failed") {
@@ -1760,14 +1786,16 @@ export function validateDeleteRequest(raw: unknown): ServePrivateDeleteRequest {
   )
     throw new Error("context.directory must be absolute path")
   if (!isSessionId(ctx.sessionId)) throw new Error("context.sessionId must be SessionID")
-  if (!("parentSessionId" in ctx) || ctx.parentSessionId !== null) throw new Error("context.parentSessionId must be null")
+  if (!("parentSessionId" in ctx) || ctx.parentSessionId !== null)
+    throw new Error("context.parentSessionId must be null")
   if ("configVersion" in ctx && ctx.configVersion !== undefined && !isSafeInt(ctx.configVersion))
     throw new Error("context.configVersion must be integer >=0")
   if ("sessionRevision" in ctx && ctx.sessionRevision !== undefined && !isSafeInt(ctx.sessionRevision))
     throw new Error("context.sessionRevision must be integer >=0")
   const payload = raw.payload
   if (!isRecord(payload)) throw new Error("payload must be object")
-  if (Object.keys(payload as Record<string, unknown>).length !== 0) throw new Error("payload must be empty object for delete")
+  if (Object.keys(payload as Record<string, unknown>).length !== 0)
+    throw new Error("payload must be empty object for delete")
   const allowedRoot = new Set(["v", "requestId", "opId", "op", "idempotencyKey", "context", "payload"])
   for (const k of Object.keys(raw as Record<string, unknown>))
     if (!allowedRoot.has(k)) throw new Error(`unexpected field ${k}`)
@@ -1778,7 +1806,8 @@ export function validateDeleteRequest(raw: unknown): ServePrivateDeleteRequest {
   const parsed = parseDeleteOpId(opId)
   if (parsed.parts[0] !== ctx.sessionId) throw new Error(`opId session binding mismatch: ${opId} vs ${ctx.sessionId}`)
   const idemParsed = parseDeleteOpId(raw.idempotencyKey as string)
-  if (idemParsed.parts[0] !== ctx.sessionId) throw new Error(`idempotencyKey session binding mismatch: ${raw.idempotencyKey} vs ${ctx.sessionId}`)
+  if (idemParsed.parts[0] !== ctx.sessionId)
+    throw new Error(`idempotencyKey session binding mismatch: ${raw.idempotencyKey} vs ${ctx.sessionId}`)
   return raw as unknown as ServePrivateDeleteRequest
 }
 
@@ -1816,16 +1845,19 @@ export function validateDeleteResult(raw: unknown, req: ServePrivateDeleteReques
     if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
     const data = (raw as Record<string, unknown>).data
     if (!isRecord(data)) throw new Error("succeeded data must be object")
-    if (Object.keys(data as Record<string, unknown>).length !== 0) throw new Error("succeeded data must be empty object")
+    if (Object.keys(data as Record<string, unknown>).length !== 0)
+      throw new Error("succeeded data must be empty object")
     if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
     if ((outcome as Record<string, unknown>).failure !== undefined)
       throw new Error("succeeded outcome must not have failure")
-    if ((raw as Record<string, unknown>).transportUnknown !== undefined) throw new Error("succeeded must not have transportUnknown")
+    if ((raw as Record<string, unknown>).transportUnknown !== undefined)
+      throw new Error("succeeded must not have transportUnknown")
     return raw as unknown as ServePrivateDeleteResult
   }
   if (status === "failed") {
     if (raw.accepted !== false) throw new Error("failed accepted must be false")
-    if ((raw as Record<string, unknown>).transportUnknown !== undefined) throw new Error("failed must not have transportUnknown")
+    if ((raw as Record<string, unknown>).transportUnknown !== undefined)
+      throw new Error("failed must not have transportUnknown")
     const failure = (raw as Record<string, unknown>).failure
     const outFailure = (outcome as Record<string, unknown>).failure
     if (
@@ -1865,6 +1897,62 @@ export interface ServePrivatePeerOptions {
   epoch: number
   process?: ChildProcess | null
   initializeTimeoutMs?: number
+  /**
+   * Reverse capabilities: CLI->host methods this extension can receive.
+   * Optional additive field, defaults to empty. Distinct from the legacy
+   * `capabilities` request field (server-method list, ignored by the CLI)
+   * and from the server capabilities awaited in the initialize response.
+   */
+  reverseCapabilities?: readonly string[]
+}
+
+/** Legacy request `capabilities` list: server-method expectations, ignored by the CLI. */
+export const LEGACY_INITIALIZE_CAPABILITIES: readonly string[] = [
+  "session/cancelQueued",
+  "session/update",
+  "session/fork",
+  "session/create",
+  "session/delete",
+  "session/abort",
+  "session/status",
+  "session/get",
+  "session/messages",
+  "session/children",
+  "remote/status",
+  "experimental/session/list",
+  "path/get",
+  "find/files",
+  "question/reply",
+  "question/reject",
+]
+
+export const SERVE_REVERSE_CAPABILITY_MAX_LENGTH = 128
+export const SERVE_REVERSE_CAPABILITIES_MAX_COUNT = 64
+
+function isReservedReverseCapability(name: string): boolean {
+  if (name === "initialize") return true
+  if (name === "$/cancelRequest") return true
+  if (name.startsWith("$/")) return true
+  return false
+}
+
+export function normalizeReverseCapabilities(raw: unknown): string[] {
+  if (raw === undefined) return []
+  if (!Array.isArray(raw)) throw new TypeError("reverseCapabilities must be array when present")
+  if (raw.length > SERVE_REVERSE_CAPABILITIES_MAX_COUNT) throw new TypeError("reverseCapabilities too many entries")
+  const out: string[] = []
+  const set = new Set<string>()
+  for (const entry of raw) {
+    if (typeof entry !== "string" || entry.length === 0)
+      throw new TypeError("reverseCapabilities entries must be non-empty strings")
+    if (entry.length > SERVE_REVERSE_CAPABILITY_MAX_LENGTH) throw new TypeError("reverseCapabilities entry too long")
+    if (entry.includes("\0")) throw new TypeError("reverseCapabilities entry invalid")
+    if (isReservedReverseCapability(entry)) throw new TypeError("reverseCapabilities entry reserved")
+    if (set.has(entry)) throw new TypeError("reverseCapabilities entries must be unique")
+    set.add(entry)
+    out.push(entry)
+  }
+  return [...out]
 }
 
 const invalidatedTransports = new WeakSet<object>()
@@ -1945,27 +2033,22 @@ export class ServePrivatePeer {
     })
     this.peer = peerAtStart
 
+    let reverseOffer: string[]
+    try {
+      reverseOffer = normalizeReverseCapabilities(this.opts.reverseCapabilities)
+    } catch (err) {
+      console.warn("[Kilo PrivatePeer] invalid reverseCapabilities:", String(err))
+      bestEffortDispose(peerAtStart, "invalid-reverse-offer")
+      if (this.peer === peerAtStart) this.peer = null
+      this.available = false
+      this.markTransportInvalidated()
+      return false
+    }
     const initPromise = peerAtStart.request("initialize", {
       protocol: { name: "kilo-private", major: 1, minor: 0 },
       clientInfo: { name: "kilo-vscode", version: "7.4.11" },
-      capabilities: [
-        "session/cancelQueued",
-        "session/update",
-        "session/fork",
-        "session/create",
-        "session/delete",
-        "session/abort",
-        "session/status",
-        "session/get",
-        "session/messages",
-        "session/children",
-        "remote/status",
-        "experimental/session/list",
-        "path/get",
-        "find/files",
-        "question/reply",
-        "question/reject",
-      ],
+      capabilities: [...LEGACY_INITIALIZE_CAPABILITIES],
+      reverseCapabilities: reverseOffer,
     })
     void initPromise.catch((err) => console.warn("[Kilo PrivatePeer] initialize request error:", String(err)))
 
@@ -2603,8 +2686,7 @@ export class ServePrivatePeer {
         if (sess.delete) return true
       }
       if (cap === "session/abort" && c["session/abort"] === true) return true
-      if (cap === "session/abort" && Array.isArray(c.session) && (c.session as unknown[]).includes("abort"))
-        return true
+      if (cap === "session/abort" && Array.isArray(c.session) && (c.session as unknown[]).includes("abort")) return true
       if (cap === "session/abort" && typeof c.session === "object" && c.session !== null) {
         const sess = c.session as Record<string, unknown>
         if (sess.abort) return true
@@ -3405,7 +3487,10 @@ export class ServePrivatePeer {
    * the caller maps acquire=>blocked and resolve=>pending (never fallback,
    * never rewrite). Exact cancel via tryCancelPending by the owner.
    */
-  async requestConvergence(method: "config/convergence/acquire" | "config/convergence/resolve", params: unknown): Promise<unknown> {
+  async requestConvergence(
+    method: "config/convergence/acquire" | "config/convergence/resolve",
+    params: unknown,
+  ): Promise<unknown> {
     if (this.disposed) throw new Error("Peer disposed")
     if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
     if (!this.hasCapability(method)) throw new Error(`Private peer missing ${method} capability`)
@@ -3413,7 +3498,8 @@ export class ServePrivatePeer {
     const peer = this.peer
     const { promise } = peer.requestWithId(method, params)
     const raw = await promise
-    if (this.peer !== peer || this.opts.epoch !== epoch || peer.getState() !== "open") throw new Error("convergence epoch changed")
+    if (this.peer !== peer || this.opts.epoch !== epoch || peer.getState() !== "open")
+      throw new Error("convergence epoch changed")
     return raw
   }
 

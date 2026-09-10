@@ -41,6 +41,7 @@ function tracked() {
   const releases: JsonRpcPeer[] = []
   const stub: FdCarrierRegistry = {
     install: () => Promise.resolve(),
+    negotiate: () => Promise.resolve(),
     release: (target) => {
       releases.push(target)
       return Promise.resolve()
@@ -78,6 +79,7 @@ describe("awaitCarrierReady", () => {
   test("install rejection warns, disposes, and resolves failed", async () => {
     const stub: FdCarrierRegistry = {
       install: () => Promise.reject(new Error("boom")),
+      negotiate: () => Promise.resolve(),
       release: () => Promise.resolve(),
     }
     const { carrier, ext } = linked(stub)

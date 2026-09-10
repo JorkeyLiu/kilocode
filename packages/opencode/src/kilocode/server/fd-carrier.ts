@@ -40,7 +40,7 @@ import { AbsolutePath } from "@opencode-ai/core/schema"
 import { Command } from "@/command"
 import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
-import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
+import { buildInitializeResult, validateInitialize } from "./fd-carrier-protocol"
 import { Service as PrivatePeerService } from "./private-peer-registry"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
 import {
@@ -77,6 +77,15 @@ export interface FdCarrierHandle {
 export interface FdCarrierRegistry {
   readonly install: (peer: Peer) => Promise<void>
   /**
+   * Single-use exact-peer reverse capability publication (wire
+   * `reverseCapabilities`). Called by the initialize handler after
+   * install commits and before handler success (which marks the peer
+   * initialized). Stale, duplicate, or closed publication fails closed.
+   * No bare setter: only this path may bind capabilities, and only to
+   * the exact installed peer.
+   */
+  readonly negotiate: (peer: Peer, caps: readonly string[]) => Promise<void>
+  /**
    * Clears only the same peer; never disposes or touches streams. Returns
    * the in-flight promise. Tracking and failure warnings are owned by the
    * carrier: every call is wrapped (warn operation+err) and joined by the
@@ -103,6 +112,13 @@ export const carrierRegistry: FdCarrierRegistry = {
       Effect.gen(function* () {
         const svc = yield* PrivatePeerService
         yield* svc.install(target)
+      }),
+    ).then(() => undefined),
+  negotiate: (target, caps) =>
+    AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* PrivatePeerService
+        yield* svc.negotiate(target, caps)
       }),
     ).then(() => undefined),
   // Returns the raw in-flight promise: tracking and failure warnings are
@@ -1552,6 +1568,11 @@ export function createFdCarrier(
     // the two, and the guards keep it a no-op otherwise.
     sync()
   }
+  // Install commitment for the initialize handler. Assigned synchronously
+  // after peer creation, before any frame can arrive. The handler awaits it
+  // so capability publication binds the exact installed peer; install
+  // failure disposes the carrier, so the handler path is fail-closed.
+  let installed: Promise<void> | null = null
   peer = new Peer({
     reader,
     writer,
@@ -1577,14 +1598,45 @@ export function createFdCarrier(
     },
     onRequest: async (method: string, params: unknown) => {
       if (method === "initialize") {
-        // validate major fail-closed
+        // One-shot protocol + reverse-offer validation fail-closed. The
+        // legacy `capabilities` request field is ignored. A validation
+        // failure never marks the peer initialized, so the client may
+        // retry with a corrected offer.
+        let offered: readonly string[]
         try {
-          validateProtocolVersion(params)
+          offered = validateInitialize(params).reverseCapabilities
         } catch (e) {
           const code = (e as { code?: number })?.code ?? ErrorCode.InvalidParams
           const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
           err.code = code
           throw err
+        }
+        if (reg) {
+          const target: Peer = peer!
+          // Bind install ordering: wait for the identity claim before
+          // single-use publication, so the offer cannot misbind.
+          if (installed) {
+            try {
+              await installed
+            } catch (e) {
+              const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+              err.code = ErrorCode.InternalError
+              throw err
+            }
+          }
+          try {
+            await reg.negotiate(target, offered)
+          } catch (e) {
+            const tag = (e as { _tag?: string })?._tag ?? ""
+            const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+            err.code = tag.includes("Conflict") ? ErrorCode.InvalidRequest : ErrorCode.InternalError
+            throw err
+          }
+          if (target.getState() !== "open") {
+            const err = new Error("Peer closed during initialize") as Error & { code: number }
+            err.code = ErrorCode.InternalError
+            throw err
+          }
         }
         return buildInitializeResult()
       }
@@ -3059,6 +3111,7 @@ export function createFdCarrier(
         },
       )
     : Promise.resolve()
+  installed = ready
   // Join install completion in the lifecycle barrier: a committed claim
   // enqueues its release/notify handoffs synchronously from the callback
   // above, so the barrier drain necessarily observes them instead of

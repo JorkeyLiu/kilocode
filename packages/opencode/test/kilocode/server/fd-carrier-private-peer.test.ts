@@ -34,6 +34,7 @@ const initExt = (ext: JsonRpcPeer) =>
     protocol: { name: FD_PROTOCOL_NAME, major: 1, minor: 0 },
     clientInfo: { name: "kilo-vscode", version: "7.4.11" },
     capabilities: ["session/cancelQueued"],
+    reverseCapabilities: ["test/echo", "test/hang"],
   })
 
 describe("fd-carrier private peer registry", () => {
@@ -269,6 +270,7 @@ describe("fd-carrier registry state machine", () => {
     const releases: JsonRpcPeer[] = []
     const stub: FdCarrierRegistry = {
       install: () => gate,
+      negotiate: () => Promise.resolve(),
       release: (target) => {
         releases.push(target)
         return Promise.resolve()
@@ -312,6 +314,7 @@ describe("fd-carrier registry state machine", () => {
         gate.then(() => {
           if (target.getState() !== "open") throw new Closed()
         }),
+      negotiate: () => Promise.resolve(),
       release: (target) => {
         releases.push(target)
         return Promise.resolve()
@@ -351,6 +354,7 @@ describe("fd-carrier registry state machine", () => {
     const releases: JsonRpcPeer[] = []
     const stub: FdCarrierRegistry = {
       install: () => gate,
+      negotiate: () => Promise.resolve(),
       release: (target) => {
         releases.push(target)
         return Promise.resolve()
@@ -390,6 +394,7 @@ describe("fd-carrier registry state machine", () => {
     const attempts: JsonRpcPeer[] = []
     const stub: FdCarrierRegistry = {
       install: () => Promise.resolve(),
+      negotiate: () => Promise.resolve(),
       release: (target) => {
         attempts.push(target)
         return Promise.reject(new Error("release-boom"))
@@ -436,6 +441,7 @@ describe("fd-carrier registry state machine", () => {
     const releases: JsonRpcPeer[] = []
     const stub: FdCarrierRegistry = {
       install: () => Promise.resolve(),
+      negotiate: () => Promise.resolve(),
       release: (target) => {
         releases.push(target)
         return Promise.resolve()

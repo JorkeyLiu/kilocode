@@ -267,6 +267,26 @@ B1 adds one private transport narrowly for `session/cancelQueued` over the exist
 | Lifecycle | Close/dispose plus late install completion reconcile via `sync()` exact release/notify; install completion joined in handoff barrier drained by `awaitPeerClosedHandoffs` before shutdown; no registry epoch |
 | Scope | CLI ownership foundation for future raw provider transport broker only; broker/identity/executor/generation wiring explicitly out of scope |
 
+### Reverse client capability negotiation (`reverseCapabilities`)
+
+| Field | Meaning |
+|---|---|
+| Request `capabilities` | Legacy server-method list, ignored for reverse semantics |
+| Request `reverseCapabilities` | Optional additive offer of CLI-to-host methods the extension can receive; missing means empty |
+| Result `capabilities` | CLI server-provided methods the client may call |
+
+| Rule | Behavior |
+|---|---|
+| Shape | Strict bounded unique non-empty strings, max 64 entries, max 128 chars, no NUL |
+| Reserved | `initialize`, `$/cancelRequest`, any `$/` prefix rejected as `InvalidParams` |
+| Version | Protocol stays 1.0; old CLI ignores unknown field, old extension omits it as empty; mixed versions fail closed with no reverse call |
+
+| Binding | Behavior |
+|---|---|
+| Publish | Successful `initialize` binds the normalized offer to the exact installed peer via one-time registry `negotiate` before handler success |
+| Request gate | Registry `request` needs open plus initialized plus negotiated plus method-in-offer; otherwise `Unavailable` or `Unsupported` without frame or id |
+| Lifecycle | Replacement and close clear the offer; stale, duplicate, or closed publication fails closed |
+
 ### Durable title-only — `session/update`
 
 B2 is a title-only durable lane for `PATCH /session/:sessionID`. Legacy `metadata`/`permission`/`time.archived` PATCH remains compatible non-durable. Title-only rename is private-first: private fd3/fd4 commits via `dispatch` authoritatively with exactly-one SDK fallback on the identical tuple; legacy `metadata`/`permission`/`time.archived` PATCH stays SDK-only. No new TCP listener, no Unix socket, no second runtime, no SDK hand-edit.

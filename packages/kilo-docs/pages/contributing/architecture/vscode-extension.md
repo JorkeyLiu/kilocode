@@ -49,6 +49,14 @@ flowchart LR
 | Private fd carrier (B1) | `ServerManager` spawns with 5 stdio entries; `stdio[3]`/`stdio[4]` are exposed as `privateWriter`/`privateReader` with `pid`/`epoch` when the OS supports extra fds, otherwise fail-closed with explicit failure and zero SDK mutation. `KiloConnectionService` owns `ServePrivatePeer` negotiation (`kilo-private/1` + `session/cancelQueued` capability) and clears it on exit/dispose/reset. Unavailable peer surfaces explicit failure with zero SDK and never runs a second heterogeneous cancel; |
 | Private fd carrier (B2) | Same 5-stdio carrier now negotiates `kilo-private/1` + `session/update` capability as well (`FD_CAPABILITIES = ["session/cancelQueued","session/update"]`). `ServePrivatePeer.validateSessionUpdateRequest` mirrors `SessionUpdateDispatch.validateRequest` (absolute directory, `SessionID`, `parentSessionId` must be `null`, title trim/200/control, strict fields, `opId` `sessionUpdate:<id>(:<token>)?` binding). `KiloProvider.buildSessionUpdateIdentity` creates one `token` (`crypto.randomUUID()`) shared by `opId` (`sessionUpdate:<id>:<token>`) and `idempotencyKey` (`sessionUpdate:<id>:<token>`). `renameSessionPrivateFirst` attempts private `session/update` first with the same durable tuple (`opId`/`idempotencyKey` + `requestId` + `context`) and 3 s timeout/epoch cancellation; a valid private `succeeded` + `accepted` session/title returns with zero SDK mutation, otherwise exactly one SDK `session.update` with the identical tuple. `fd-carrier.ts` `session/update` routes to `dispatch` authoritatively. |
 
+### Reverse capability offer — default empty, no provider reverse path
+
+| Area | Behavior |
+|---|---|
+| Offer | `ServePrivatePeer` sends legacy `capabilities` unchanged plus additive optional `reverseCapabilities`; default offer is empty |
+| Validation | Same strict shape as CLI: bounded unique strings, reserved `initialize` and `$/` rejected; invalid offer fails `initialize` closed without resurrecting transport |
+| Status | No provider reverse method or handler exists yet; provider identity bridge remains unfinished |
+
 ## Private `session/cancelQueued` carrier — private-first, same AppLayer
 
 B1 adds one bounded private path for `session/cancelQueued` over the existing `kilo serve` fd3/fd4 into the same `AppRuntime` dispatch. The private path commits via `dispatch` authoritatively; the generated SDK HTTP remains only as the single same-identity fallback for validated retryable failure. No Unix socket, no second TCP listener, and no SDK regeneration.
