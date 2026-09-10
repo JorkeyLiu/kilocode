@@ -436,7 +436,10 @@ export class JsonRpcPeer {
 
   private sendHandlerError(id: JsonRpcId, e: unknown): void {
     const msg = e instanceof Error ? e.message : String(e)
-    this.sendRaw(makeError(id, responseCode(e), msg))
+    const code = responseCode(e)
+    const data = (e as { data?: unknown })?.data
+    if (data !== undefined) this.sendRaw(makeError(id, code, msg, data))
+    else this.sendRaw(makeError(id, code, msg))
   }
 
   private claimIncoming(id: JsonRpcId): AbortController | null {

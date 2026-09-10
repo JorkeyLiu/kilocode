@@ -145,6 +145,8 @@ export function activate(context: vscode.ExtensionContext) {
     }),
   })
   context.subscriptions.push(canonicalConfig)
+  connectionService.setCanonicalConfigService(canonicalConfig)
+  context.subscriptions.push({ dispose: () => connectionService.setCanonicalConfigService(null) })
   canonicalConfig.initialize().catch((err) => {
     console.error("[Kilo New] CanonicalConfigService initialization failed:", err)
   })

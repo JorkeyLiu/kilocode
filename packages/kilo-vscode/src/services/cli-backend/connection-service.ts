@@ -106,6 +106,7 @@ export class KiloConnectionService {
   private connectGeneration = 0
   private isDisposed = false
   private remoteService: import("../RemoteStatusService").RemoteStatusService | null = null
+  private canonicalConfigService: import("../../config/service").CanonicalConfigService | null = null
 
   private readonly eventListeners: Set<SSEEventListener> = new Set()
   private readonly stateListeners: Set<StateListener> = new Set()
@@ -372,6 +373,14 @@ export class KiloConnectionService {
 
   private isRemoteEnabled(): boolean {
     return this.remoteService?.getState().enabled ?? false
+  }
+
+  setCanonicalConfigService(service: import("../../config/service").CanonicalConfigService | null): void {
+    this.canonicalConfigService = service
+  }
+
+  getCanonicalConfigService(): import("../../config/service").CanonicalConfigService | null {
+    return this.canonicalConfigService
   }
 
   /**
@@ -1424,6 +1433,12 @@ export class KiloConnectionService {
   }
 
   private makePrivatePeer(server: import("./server-manager").ServerInstance): ServePrivatePeer {
+    const deps = (() => {
+      const svc = this.canonicalConfigService
+      if (!svc) return undefined
+      // Single owner: reuse activation-owned CanonicalConfigService SecretStorage via its resolver.
+      return { resolveSecret: (ref: string) => svc.resolveSecret(ref) }
+    })()
     return new ServePrivatePeer({
       reader: server.privateReader!,
       writer: server.privateWriter!,
@@ -1431,6 +1446,7 @@ export class KiloConnectionService {
       epoch: server.epoch,
       process: server.process,
       initializeTimeoutMs: 5000,
+      ...(deps ? { providerExecuteDeps: deps } : {}),
     })
   }
 

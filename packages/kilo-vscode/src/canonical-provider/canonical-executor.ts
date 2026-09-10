@@ -32,7 +32,6 @@ import { route as chat } from "@opencode-ai/llm/protocols/openai-chat"
 import { route as responses } from "@opencode-ai/llm/protocols/openai-responses"
 import { route as messages } from "@opencode-ai/llm/protocols/anthropic-messages"
 import {
-  isValidCanonicalProviderEntry,
   parseCanonicalProviderRecord,
   parseOwnedCredentialRef,
   type CanonicalProviderPayload,
@@ -134,11 +133,27 @@ interface Materialized {
 }
 
 /** Validate static authored fields and the exact credential-ref binding. No secret I/O. */
+// eslint-disable-next-line complexity
 const materialize = (input: CanonicalExecuteInput): Materialized => {
   if (input.providerId.length === 0 || input.modelId.length === 0)
     throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-  if (!isValidCanonicalProviderEntry(input.record, input.providerId))
+  // Strict closed-shape check for invalid-record (extra keys, bad name/models) without collapsing endpoint/protocol/credential.
+  const rec = input.record as Record<string, unknown>
+  const allowed = new Set(["name", "endpoint", "protocol", "models", "credential"])
+  for (const key of Object.keys(rec)) if (!allowed.has(key)) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  if (rec.name !== undefined && (typeof rec.name !== "string" || (rec.name as string).length === 0))
     throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  if (rec.models !== undefined) {
+    const models = rec.models as unknown
+    if (typeof models !== "object" || models === null || Array.isArray(models)) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+    const entries = Object.entries(models as Record<string, unknown>)
+    if (entries.length === 0) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+    for (const [, value] of entries) {
+      if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+      const v = value as Record<string, unknown>
+      if (typeof v.name !== "string" || (v.name as string).length === 0) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+    }
+  }
   const endpoint = input.record.endpoint
   if (typeof endpoint !== "string" || endpoint.length === 0)
     throw new CanonicalExecuteError("invalid-endpoint", "Invalid canonical provider endpoint")
@@ -170,6 +185,7 @@ const run = (
   secret: string,
   endpoint: string,
   protocol: CanonicalProviderProtocol,
+  signal?: AbortSignal,
 ): Promise<CanonicalSuccess> => {
   const base = endpoint.replace(/\/+$/, "")
   const route =
@@ -193,7 +209,15 @@ const run = (
       events: redactDeep(secret, [...response.events]) as readonly LLMEvent[],
     } satisfies CanonicalSuccess
   }).pipe(Effect.provide(layer))
-  return Effect.runPromise(program)
+  if (!signal) return Effect.runPromise(program)
+  if (signal.aborted) return Promise.reject(new DOMException("Aborted", "AbortError"))
+  return Effect.runPromise(program, { signal }).catch((err) => {
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError")
+    if (err instanceof Error && (err.name === "InterruptError" || err.message.includes("interrupted") || err.message.includes("Interrupted"))) {
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError")
+    }
+    throw err
+  })
 }
 
 /**
@@ -201,7 +225,12 @@ const run = (
  * Resolves the exact authored credential ref on every call; rotated secrets
  * take effect on the next execution with no caching here.
  */
-export const execute = async (input: CanonicalExecuteInput, deps: CanonicalHostDeps): Promise<CanonicalSuccess> => {
+export const execute = async (
+  input: CanonicalExecuteInput,
+  deps: CanonicalHostDeps,
+  signal?: AbortSignal,
+): Promise<CanonicalSuccess> => {
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError")
   const built = materialize(input)
   let secret: string | undefined
   try {
@@ -211,9 +240,13 @@ export const execute = async (input: CanonicalExecuteInput, deps: CanonicalHostD
   }
   if (typeof secret !== "string" || secret.length === 0)
     throw new CanonicalExecuteError("missing-secret", "Canonical provider credential is unavailable")
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError")
   try {
-    return await run(input, secret, built.endpoint, built.protocol)
+    return await run(input, secret, built.endpoint, built.protocol, signal)
   } catch (err) {
+    if (err instanceof DOMException && err.name === "AbortError") throw err
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError")
+    if (err instanceof Error && err.name === "InterruptError" && signal) throw new DOMException("Aborted", "AbortError")
     // Only the scrubbed message is surfaced: no cause, no diagnostics, no
     // public properties carry the secret. String(err) derives from this
     // same message plus the fixed class name.

@@ -21,6 +21,7 @@ import type {
   ServePrivateMessagesResult,
 } from "./serve-private-messages"
 import { makeChildrenCancel, requestChildrenOutcome, validateChildrenRequest } from "./serve-private-children"
+import { handleProviderExecute, isProviderExecuteAvailable, PROVIDER_EXECUTE_METHOD } from "./serve-private-provider-execute"
 import type { PrivateChildrenWireOutcome, ServePrivateChildrenRequest } from "./serve-private-children"
 import {
   makeRemoteStatusCancel,
@@ -1904,6 +1905,12 @@ export interface ServePrivatePeerOptions {
    * and from the server capabilities awaited in the initialize response.
    */
   reverseCapabilities?: readonly string[]
+  /**
+   * Host-owned provider execution dependencies. When provided and
+   * execution deps are installed, `provider/execute` is advertised and
+   * handled. The service instance is not owned; no duplicate SecretStorage.
+   */
+  providerExecuteDeps?: import("./serve-private-provider-execute").ProviderExecuteDeps
 }
 
 /** Legacy request `capabilities` list: server-method expectations, ignored by the CLI. */
@@ -2019,6 +2026,20 @@ export class ServePrivatePeer {
     }
     const epochAtStart = this.opts.epoch
     this.initEpoch = epochAtStart
+    const providerDeps = this.opts.providerExecuteDeps
+    // Advertise provider/execute only when host can handle it; fail closed otherwise.
+    // If the caller explicitly offered provider/execute without deps or without installed handler, fail closed.
+    const canExecute = !!providerDeps && isProviderExecuteAvailable()
+    const onRequest = providerDeps && canExecute
+      ? async (method: string, params: unknown, ctx: import("../../private-worker/peer").RequestContext) => {
+          if (method === PROVIDER_EXECUTE_METHOD) {
+            return handleProviderExecute(params, providerDeps, ctx.signal)
+          }
+          const err = new Error(`Method not found: ${method}`) as Error & { code?: number }
+          err.code = -32601
+          throw err
+        }
+      : undefined
     const peerAtStart = new JsonRpcPeer({
       reader: this.opts.reader,
       writer: this.opts.writer,
@@ -2030,12 +2051,19 @@ export class ServePrivatePeer {
         if (this.opts.epoch !== epochAtStart) return
         this.available = false
       },
+      ...(onRequest ? { onRequest } : {}),
     })
     this.peer = peerAtStart
 
     let reverseOffer: string[]
     try {
-      reverseOffer = normalizeReverseCapabilities(this.opts.reverseCapabilities)
+      const base = normalizeReverseCapabilities(this.opts.reverseCapabilities)
+      const hasOfferedExecute = base.includes("provider/execute")
+      if (hasOfferedExecute && !canExecute) {
+        throw new TypeError("provider/execute reverse capability requires execution dependencies")
+      }
+      if (canExecute && !hasOfferedExecute) base.push("provider/execute")
+      reverseOffer = base
     } catch (err) {
       console.warn("[Kilo PrivatePeer] invalid reverseCapabilities:", String(err))
       bestEffortDispose(peerAtStart, "invalid-reverse-offer")
