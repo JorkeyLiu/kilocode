@@ -29,6 +29,15 @@ import type { ChildProcess } from "child_process"
 
 export type PeerState = "open" | "closed"
 
+/** Reserved wire-level notification for best-effort incoming request cancellation. */
+export const CANCEL_REQUEST_METHOD = "$/cancelRequest"
+
+/** Minimal context passed to incoming request handlers. */
+export interface RequestContext {
+  id: JsonRpcId
+  signal: AbortSignal
+}
+
 export interface PeerOptions {
   reader: NodeJS.ReadableStream
   writer: NodeJS.WritableStream
@@ -38,7 +47,8 @@ export interface PeerOptions {
   // Optional method handler for incoming requests. Return value becomes result;
   // throw becomes -32603 InternalError. If no handler or handler returns
   // undefined for unknown method, peer replies -32601 MethodNotFound.
-  onRequest?: (method: string, params: unknown) => unknown | Promise<unknown>
+  // Third argument is cancellation context; existing 0/1/2-arg handlers keep working.
+  onRequest?: (method: string, params: unknown, ctx: RequestContext) => unknown | Promise<unknown>
   onNotification?: (method: string, params: unknown) => void
   // Optional close hook — invoked exactly once when peer transitions to closed
   // (EOF, stream closed, child exit, or explicit dispose). No polling.
@@ -48,6 +58,7 @@ export interface PeerOptions {
 export class JsonRpcPeer {
   private readonly decoder = new FrameDecoder()
   private readonly pending = new Map<JsonRpcId, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>()
+  private readonly incoming = new Map<JsonRpcId, AbortController>()
   private nextId = 1
   private state: PeerState = "open"
   private readonly writer: NodeJS.WritableStream
@@ -117,6 +128,10 @@ export class JsonRpcPeer {
     return [...this.pending.keys()]
   }
 
+  getIncomingCount(): number {
+    return this.incoming.size
+  }
+
   peekNextId(): number {
     return this.nextId
   }
@@ -136,6 +151,33 @@ export class JsonRpcPeer {
     return true
   }
 
+  /**
+   * Best-effort remote cancellation for an exact outgoing pending request.
+   * Only succeeds when `id` is an exact pending outgoing request. On success
+   * it sends the `$/cancelRequest` wire notification with params `{ id }` and
+   * rejects the local promise with the existing InternalError cancellation
+   * error. Unknown or already-completed ids return false and send nothing.
+   * The remote side may ignore the notification; cancellation never forces
+   * termination. If the notification write fails synchronously (or the peer
+   * is closed), the local pending is still removed/rejected to avoid leaks
+   * but the call returns false so failure is not misreported as success.
+   */
+  cancel(id: JsonRpcId, message = "private parity timeout"): boolean {
+    const entry = this.pending.get(id)
+    if (!entry) return false
+    if (this.state !== "open") {
+      this.pending.delete(id)
+      entry.reject(makePeerError(ErrorCode.InternalError, message))
+      return false
+    }
+    this.pending.delete(id)
+    const payload: Record<string, unknown> = { jsonrpc: JSONRPC_VERSION, method: CANCEL_REQUEST_METHOD, params: { id } }
+    const frame = encodeFrame(payload)
+    const sent = this.write(frame, null, null)
+    entry.reject(makePeerError(ErrorCode.InternalError, message))
+    return sent && this.state === "open"
+  }
+
   /** Send a JSON-RPC notification (event envelope, no id). */
   notify(method: string, params?: unknown): void {
     if (this.state !== "open") return
@@ -149,16 +191,19 @@ export class JsonRpcPeer {
     if (this.state === "closed") return
     this.state = "closed"
     this.unbind()
+    this.abortAllIncoming()
     this.rejectAllPending("Peer disposed")
     this.notifyClosed()
   }
 
-  private write(frame: Buffer, id: JsonRpcId | null, _reject: ((e: unknown) => void) | null): void {
+  private write(frame: Buffer, _id: JsonRpcId | null, _reject: ((e: unknown) => void) | null): boolean {
     try {
       const ok = (this.writer as unknown as { write: (b: Buffer) => boolean }).write(frame)
       void ok
+      return true
     } catch (e) {
       this.transitionClosed(`writer sync throw: ${String(e)}`)
+      return false
     }
   }
 
@@ -261,6 +306,7 @@ export class JsonRpcPeer {
     if (this.state === "closed") return
     this.state = "closed"
     this.unbind()
+    this.abortAllIncoming()
     this.rejectAllPending("Peer closed")
     this.notifyClosed()
   }
@@ -308,6 +354,10 @@ export class JsonRpcPeer {
       return
     }
     if (validated.kind === "notification") {
+      if (validated.method === CANCEL_REQUEST_METHOD) {
+        this.handleCancelNotification(validated.params)
+        return
+      }
       this.onNotification?.(validated.method, validated.params)
       return
     }
@@ -316,6 +366,10 @@ export class JsonRpcPeer {
   }
 
   private async handleRequest(id: JsonRpcId, method: string, params: unknown): Promise<void> {
+    const ctrl = this.claimIncoming(id)
+    if (!ctrl) return
+    const ctx: RequestContext = { id, signal: ctrl.signal }
+    try {
     // Special-case initialize exactly-once when peer is in worker role.
     // If onRequest is not provided, we still enforce the once rule synthetically.
     if (method === "initialize") {
@@ -326,20 +380,11 @@ export class JsonRpcPeer {
       // Let custom handler run if present; otherwise produce default identity.
       if (this.onRequest) {
         try {
-          const result = await this.onRequest(method, params)
+          const result = await this.onRequest(method, params, ctx)
           this.initialized = true
           this.sendRaw(makeSuccess(id, result))
         } catch (e) {
-          const code = (e as { code?: number })?.code
-          const msg = e instanceof Error ? e.message : String(e)
-          const outCode =
-            code === ErrorCode.MethodNotFound ||
-            code === ErrorCode.InvalidParams ||
-            code === ErrorCode.InvalidRequest ||
-            code === ErrorCode.ParseError
-              ? code
-              : ErrorCode.InternalError
-          this.sendRaw(makeError(id, outCode, msg))
+          this.sendHandlerError(id, e)
         }
         return
       }
@@ -358,19 +403,13 @@ export class JsonRpcPeer {
       return
     }
     try {
-      const result = await this.onRequest(method, params)
+      const result = await this.onRequest(method, params, ctx)
       this.sendRaw(makeSuccess(id, result))
     } catch (e) {
-      const code = (e as { code?: number })?.code
-      const msg = e instanceof Error ? e.message : String(e)
-      const outCode =
-        code === ErrorCode.MethodNotFound ||
-        code === ErrorCode.InvalidParams ||
-        code === ErrorCode.InvalidRequest ||
-        code === ErrorCode.ParseError
-          ? code
-          : ErrorCode.InternalError
-      this.sendRaw(makeError(id, outCode, msg))
+      this.sendHandlerError(id, e)
+    }
+    } finally {
+      if (this.incoming.get(id) === ctrl) this.incoming.delete(id)
     }
   }
 
@@ -394,6 +433,49 @@ export class JsonRpcPeer {
     const frame = encodeFrame(obj)
     this.write(frame, null, null)
   }
+
+  private sendHandlerError(id: JsonRpcId, e: unknown): void {
+    const msg = e instanceof Error ? e.message : String(e)
+    this.sendRaw(makeError(id, responseCode(e), msg))
+  }
+
+  private claimIncoming(id: JsonRpcId): AbortController | null {
+    // Active duplicate ownership: the first active handler owns the id. A
+    // second active request with the same id is rejected without invoking
+    // the domain handler and without touching the first controller. After
+    // the first completes, the id may be reused legally. This runs before
+    // initialize semantics so a same-id duplicate initialize also reports
+    // duplicate ownership; different-id repeat initialize still follows
+    // the Already initialized rule in handleRequest.
+    if (this.incoming.has(id)) {
+      this.sendRaw(makeError(id, ErrorCode.InvalidRequest, "Duplicate active request id"))
+      return null
+    }
+    const ctrl = new AbortController()
+    this.incoming.set(id, ctrl)
+    return ctrl
+  }
+
+  private handleCancelNotification(params: unknown): void {
+    const target = parseCancelId(params)
+    if (target === undefined) return
+    const ctrl = this.incoming.get(target)
+    if (!ctrl) return
+    if (ctrl.signal.aborted) return
+    ctrl.abort()
+  }
+
+  private abortAllIncoming(): void {
+    if (this.incoming.size === 0) return
+    for (const [, ctrl] of this.incoming) {
+      try {
+        ctrl.abort()
+      } catch {
+        // Abort must never break close path
+      }
+    }
+    this.incoming.clear()
+  }
 }
 
 function isResponse(obj: unknown): boolean {
@@ -409,4 +491,25 @@ function makePeerError(code: number, message: string, data?: unknown): Error & {
   err.code = code
   if (data !== undefined) err.data = data
   return err
+}
+
+function parseCancelId(params: unknown): JsonRpcId | undefined {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) return undefined
+  const keys = Object.keys(params)
+  if (keys.length !== 1 || keys[0] !== "id") return undefined
+  const raw = (params as Record<string, unknown>).id
+  if (typeof raw !== "string" && typeof raw !== "number") return undefined
+  return raw
+}
+
+function responseCode(e: unknown): number {
+  const code = (e as { code?: number })?.code
+  if (
+    code === ErrorCode.MethodNotFound ||
+    code === ErrorCode.InvalidParams ||
+    code === ErrorCode.InvalidRequest ||
+    code === ErrorCode.ParseError
+  )
+    return code
+  return ErrorCode.InternalError
 }
