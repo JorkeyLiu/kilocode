@@ -1165,6 +1165,68 @@ export function validateCancelQueuedRequest(raw: unknown): ServePrivateCancelQue
   return raw as unknown as ServePrivateCancelQueuedRequest
 }
 
+const CANCELQUEUED_RESULT_ROOT_SUCCEEDED = new Set([
+  "v",
+  "requestId",
+  "opId",
+  "op",
+  "idempotencyKey",
+  "status",
+  "outcome",
+  "accepted",
+  "data",
+  "revision",
+])
+const CANCELQUEUED_RESULT_ROOT_FAILED = new Set([
+  "v",
+  "requestId",
+  "opId",
+  "op",
+  "idempotencyKey",
+  "status",
+  "outcome",
+  "accepted",
+  "failure",
+  "revision",
+])
+const CANCELQUEUED_RESULT_ROOT_AMBIGUOUS = new Set([
+  "v",
+  "requestId",
+  "opId",
+  "op",
+  "idempotencyKey",
+  "status",
+  "outcome",
+  "accepted",
+  "revision",
+])
+const CANCELQUEUED_OUTCOME_SUCCEEDED_FIELDS = new Set(["type", "time"])
+const CANCELQUEUED_OUTCOME_FAILED_FIELDS = new Set(["type", "time", "failure"])
+const CANCELQUEUED_OUTCOME_AMBIGUOUS_FIELDS = new Set(["type", "time"])
+const CANCELQUEUED_FAILURE_FIELDS = new Set(["code", "message", "retryable", "detail"])
+const CANCELQUEUED_DATA_FIELDS = new Set(["cancelled"])
+const CANCELQUEUED_REVISION_FIELDS = new Set(["session", "config"])
+
+function validateCancelQueuedFailureShape(v: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(v)) throw new Error(`${label} invalid`)
+  assertAllowedKeys(v as Record<string, unknown>, CANCELQUEUED_FAILURE_FIELDS, label)
+  const rec = v as Record<string, unknown>
+  if (typeof rec.code !== "string" || typeof rec.message !== "string" || typeof rec.retryable !== "boolean")
+    throw new Error(`${label} invalid`)
+  if (rec.detail !== undefined && typeof rec.detail !== "string")
+    throw new Error(`${label}.detail must be string if present`)
+  return rec
+}
+
+function validateCancelQueuedRevision(v: unknown): void {
+  if (v === undefined) return
+  if (!isRecord(v)) throw new Error("revision must be {session,config} integers")
+  assertAllowedKeys(v as Record<string, unknown>, CANCELQUEUED_REVISION_FIELDS, "revision")
+  const rec = v as Record<string, unknown>
+  if (!isSafeInt(rec.session) || !isSafeInt(rec.config))
+    throw new Error("revision must be {session,config} integers")
+}
+
 // eslint-disable-next-line complexity
 export function validateCancelQueuedResult(
   raw: unknown,
@@ -1185,67 +1247,47 @@ export function validateCancelQueuedResult(
     throw new Error("outcome invalid")
   if (outcome.type !== status) throw new Error("outcome.type must match status")
   if (!Number.isFinite(outcome.time) || outcome.time < 0) throw new Error("outcome.time invalid")
-  if ("revision" in raw && raw.revision !== undefined) {
-    const rev = raw.revision as unknown
-    if (
-      !isRecord(rev) ||
-      typeof rev.session !== "number" ||
-      typeof rev.config !== "number" ||
-      !isSafeInt(rev.session) ||
-      !isSafeInt(rev.config)
-    )
-      throw new Error("revision must be {session,config} integers")
-  }
-  if ("transportUnknown" in raw && raw.transportUnknown !== undefined && typeof raw.transportUnknown !== "boolean")
-    throw new Error("transportUnknown must be boolean")
+  const rec = raw as Record<string, unknown>
+  const outRec = outcome as Record<string, unknown>
   if (status === "succeeded") {
+    assertAllowedKeys(rec, CANCELQUEUED_RESULT_ROOT_SUCCEEDED, "result")
+    assertAllowedKeys(outRec, CANCELQUEUED_OUTCOME_SUCCEEDED_FIELDS, "outcome")
     if (raw.accepted !== true) throw new Error("succeeded accepted must be true")
-    const data = (raw as Record<string, unknown>).data
-    if (!isRecord(data) || typeof data.cancelled !== "boolean")
+    validateCancelQueuedRevision(rec.revision)
+    const data = rec.data
+    if (!isRecord(data)) throw new Error("succeeded data.cancelled must be boolean")
+    assertAllowedKeys(data as Record<string, unknown>, CANCELQUEUED_DATA_FIELDS, "data")
+    if (typeof (data as Record<string, unknown>).cancelled !== "boolean")
       throw new Error("succeeded data.cancelled must be boolean")
-    if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("succeeded must not have failure")
-    if ((outcome as Record<string, unknown>).failure !== undefined)
-      throw new Error("succeeded outcome must not have failure")
+    if (rec.failure !== undefined) throw new Error("succeeded must not have failure")
+    if (outRec.failure !== undefined) throw new Error("succeeded outcome must not have failure")
+    if (outRec.data !== undefined) throw new Error("succeeded outcome must not have data")
     return raw as unknown as ServePrivateCancelQueuedResult
   }
   if (status === "failed") {
-    const failure = (raw as Record<string, unknown>).failure
-    const outFailure = (outcome as Record<string, unknown>).failure
-    if (
-      !isRecord(failure) ||
-      typeof failure.code !== "string" ||
-      typeof failure.message !== "string" ||
-      typeof failure.retryable !== "boolean"
-    )
-      throw new Error("failed failure invalid")
-    if (
-      !isRecord(outFailure) ||
-      typeof outFailure.code !== "string" ||
-      typeof outFailure.message !== "string" ||
-      typeof outFailure.retryable !== "boolean"
-    )
-      throw new Error("failed outcome.failure invalid")
-    if (failure.code !== (outFailure as Record<string, unknown>).code) throw new Error("failure code mismatch")
-    if (failure.message !== (outFailure as Record<string, unknown>).message) throw new Error("failure message mismatch")
-    if (failure.retryable !== (outFailure as Record<string, unknown>).retryable)
-      throw new Error("failure retryable mismatch")
-    const failureDetail = (failure as Record<string, unknown>).detail
-    const outDetail = (outFailure as Record<string, unknown>).detail
-    if (failureDetail !== undefined && typeof failureDetail !== "string")
-      throw new Error("failed failure.detail must be string if present")
-    if (outDetail !== undefined && typeof outDetail !== "string")
-      throw new Error("failed outcome.failure.detail must be string if present")
-    if (String(failureDetail ?? "") !== String(outDetail ?? "")) throw new Error("failure detail mismatch")
-    if ((raw as Record<string, unknown>).data !== undefined) throw new Error("failed must not have data")
+    assertAllowedKeys(rec, CANCELQUEUED_RESULT_ROOT_FAILED, "result")
+    assertAllowedKeys(outRec, CANCELQUEUED_OUTCOME_FAILED_FIELDS, "outcome")
+    if (raw.accepted !== false) throw new Error("failed accepted must be false")
+    validateCancelQueuedRevision(rec.revision)
+    const failure = validateCancelQueuedFailureShape(rec.failure, "failed failure")
+    const outFailure = validateCancelQueuedFailureShape(outRec.failure, "failed outcome.failure")
+    if (failure.code !== outFailure.code) throw new Error("failure code mismatch")
+    if (failure.message !== outFailure.message) throw new Error("failure message mismatch")
+    if (failure.retryable !== outFailure.retryable) throw new Error("failure retryable mismatch")
+    assertFailureDetailMirror(failure, outFailure)
+    if (rec.data !== undefined) throw new Error("failed must not have data")
+    if (outRec.data !== undefined) throw new Error("failed outcome must not have data")
     return raw as unknown as ServePrivateCancelQueuedResult
   }
   // ambiguous
+  assertAllowedKeys(rec, CANCELQUEUED_RESULT_ROOT_AMBIGUOUS, "result")
+  assertAllowedKeys(outRec, CANCELQUEUED_OUTCOME_AMBIGUOUS_FIELDS, "outcome")
   if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
-  if ((raw as Record<string, unknown>).data !== undefined) throw new Error("ambiguous must not have data")
-  if ((raw as Record<string, unknown>).failure !== undefined) throw new Error("ambiguous must not have failure")
-  if ((outcome as Record<string, unknown>).failure !== undefined)
-    throw new Error("ambiguous outcome must not have failure")
-  if ((outcome as Record<string, unknown>).data !== undefined) throw new Error("ambiguous outcome must not have data")
+  validateCancelQueuedRevision(rec.revision)
+  if (rec.data !== undefined) throw new Error("ambiguous must not have data")
+  if (rec.failure !== undefined) throw new Error("ambiguous must not have failure")
+  if (outRec.failure !== undefined) throw new Error("ambiguous outcome must not have failure")
+  if (outRec.data !== undefined) throw new Error("ambiguous outcome must not have data")
   return raw as unknown as ServePrivateCancelQueuedResult
 }
 
