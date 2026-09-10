@@ -32,21 +32,20 @@ import { route as chat } from "@opencode-ai/llm/protocols/openai-chat"
 import { route as responses } from "@opencode-ai/llm/protocols/openai-responses"
 import { route as messages } from "@opencode-ai/llm/protocols/anthropic-messages"
 import {
+  isValidModelEntry,
   parseCanonicalProviderRecord,
   parseOwnedCredentialRef,
-  type CanonicalProviderPayload,
   type CanonicalProviderProtocol,
 } from "../config/types"
+import type { CanonicalFailureCode as SharedFailureCode } from "@opencode-ai/core/kilocode/provider-execute"
+import { CANONICAL_FAILURE_CODES as SHARED_CODES } from "@opencode-ai/core/kilocode/provider-execute"
 
-export type CanonicalFailureCode =
-  | "invalid-record"
-  | "invalid-endpoint"
-  | "unknown-protocol"
-  | "unknown-model"
-  | "missing-credential-ref"
-  | "invalid-credential-ref"
-  | "missing-secret"
-  | "provider"
+// Re-export the shared canonical failure codes; `aborted` lives only in the
+// cross-process wire (host maps AbortError to `aborted`) and is not a
+// host-side materialization code, so it is omitted from this host-specific
+// surface.
+export type CanonicalFailureCode = Exclude<SharedFailureCode, "aborted">
+export const CANONICAL_FAILURE_CODES = SHARED_CODES.filter((c) => c !== "aborted") as unknown as readonly CanonicalFailureCode[]
 
 export class CanonicalExecuteError extends Error {
   readonly code: CanonicalFailureCode
@@ -60,7 +59,7 @@ export class CanonicalExecuteError extends Error {
 export interface CanonicalExecuteInput {
   readonly providerId: string
   readonly modelId: string
-  readonly record: CanonicalProviderPayload
+  readonly record: unknown
   readonly prompt: string
 }
 
@@ -133,28 +132,30 @@ interface Materialized {
 }
 
 /** Validate static authored fields and the exact credential-ref binding. No secret I/O. */
+// Ordering preserves granular classifications: endpoint/protocol/credential/model keep exact codes;
+// all other malformed provider/model fields, closed-shape violations, and nested
+// reasoning/modalities/variants errors become `invalid-record`. Reuses
+// `isValidModelEntry` for the full model AST rather than duplicating it.
 // eslint-disable-next-line complexity
 const materialize = (input: CanonicalExecuteInput): Materialized => {
-  if (input.providerId.length === 0 || input.modelId.length === 0)
+  if (typeof input.providerId !== "string" || input.providerId.length === 0 || typeof input.modelId !== "string" || input.modelId.length === 0)
     throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-  // Strict closed-shape check for invalid-record (extra keys, bad name/models) without collapsing endpoint/protocol/credential.
-  const rec = input.record as Record<string, unknown>
+  if (typeof input.prompt !== "string") throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  const raw = input.record
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw))
+    throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  const rec = raw as Record<string, unknown>
+  if (Object.getPrototypeOf(rec) !== Object.prototype) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  if (Object.prototype.hasOwnProperty.call(rec, "__proto__") || Object.prototype.hasOwnProperty.call(rec, "constructor"))
+    throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+
   const allowed = new Set(["name", "endpoint", "protocol", "models", "credential"])
   for (const key of Object.keys(rec)) if (!allowed.has(key)) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-  if (rec.name !== undefined && (typeof rec.name !== "string" || (rec.name as string).length === 0))
+  if (rec.name !== undefined && (typeof rec.name !== "string" || rec.name.length === 0))
     throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-  if (rec.models !== undefined) {
-    const models = rec.models as unknown
-    if (typeof models !== "object" || models === null || Array.isArray(models)) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-    const entries = Object.entries(models as Record<string, unknown>)
-    if (entries.length === 0) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-    for (const [, value] of entries) {
-      if (typeof value !== "object" || value === null || Array.isArray(value)) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-      const v = value as Record<string, unknown>
-      if (typeof v.name !== "string" || (v.name as string).length === 0) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-    }
-  }
-  const endpoint = input.record.endpoint
+
+  // Endpoint/protocol/credential/model keep exact codes before generic invalid-record.
+  const endpoint = rec.endpoint
   if (typeof endpoint !== "string" || endpoint.length === 0)
     throw new CanonicalExecuteError("invalid-endpoint", "Invalid canonical provider endpoint")
   try {
@@ -165,19 +166,36 @@ const materialize = (input: CanonicalExecuteInput): Materialized => {
     if (err instanceof CanonicalExecuteError) throw err
     throw new CanonicalExecuteError("invalid-endpoint", "Invalid canonical provider endpoint")
   }
-  const protocol = input.record.protocol
+
+  const protocol = rec.protocol
   if (protocol !== "openai/completions" && protocol !== "openai/responses" && protocol !== "anthropic/messages")
     throw new CanonicalExecuteError("unknown-protocol", "Unsupported canonical provider protocol")
-  const models = input.record.models
-  if (!models || !(input.modelId in models))
+
+  // Full model AST validation via shared helper: any closed-shape violation or
+  // nested reasoning/modalities/variants error is `invalid-record` before `unknown-model`.
+  const models = rec.models
+  if (models === undefined) throw new CanonicalExecuteError("unknown-model", "Unknown canonical provider model")
+  if (typeof models !== "object" || models === null || Array.isArray(models))
+    throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  if (Object.getPrototypeOf(models as object) !== Object.prototype)
+    throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  const entries = Object.entries(models as Record<string, unknown>)
+  if (entries.length === 0) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  for (const [mid, value] of entries) {
+    if (typeof mid !== "string" || mid.length === 0 || mid.includes("\0"))
+      throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+    if (!isValidModelEntry(value)) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  }
+  if (!Object.prototype.hasOwnProperty.call(models as Record<string, unknown>, input.modelId))
     throw new CanonicalExecuteError("unknown-model", "Unknown canonical provider model")
-  const ref = input.record.credential
+
+  const ref = rec.credential
   if (typeof ref !== "string" || ref.length === 0)
     throw new CanonicalExecuteError("missing-credential-ref", "Canonical provider credential is missing")
   const parsed = parseOwnedCredentialRef(ref)
   if (!parsed || parsed.kind !== "provider" || parsed.id !== input.providerId)
     throw new CanonicalExecuteError("invalid-credential-ref", "Invalid canonical provider credential reference")
-  return { protocol, endpoint, ref }
+  return { protocol: protocol as CanonicalProviderProtocol, endpoint: endpoint as string, ref: ref as string }
 }
 
 const run = (

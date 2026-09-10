@@ -6,24 +6,22 @@ import {
   type CanonicalHostDeps,
   type CanonicalSuccess,
 } from "../../canonical-provider/canonical-executor"
-import { type CanonicalProviderPayload } from "../../config/types"
+import {
+  PROVIDER_EXECUTE_METHOD as SHARED_METHOD,
+  ProviderExecuteWire,
+  type ProviderExecuteRequest,
+} from "@opencode-ai/core/kilocode/provider-execute"
 
-export const PROVIDER_EXECUTE_METHOD = "provider/execute" as const
+export const PROVIDER_EXECUTE_METHOD = SHARED_METHOD
 
 export interface ProviderExecuteParams {
   readonly providerId: string
   readonly modelId: string
-  readonly record: CanonicalProviderPayload
+  readonly record: unknown
   readonly prompt: string
 }
 
 export type ProviderExecuteResult = CanonicalSuccess
-
-const ALLOWED_KEYS = new Set(["providerId", "modelId", "record", "prompt"])
-
-function isRecord(v: unknown): v is Record<string, unknown> {
-  return !!v && typeof v === "object" && !Array.isArray(v)
-}
 
 function throwInvalid(message: string): never {
   const err = new Error(message) as Error & { code?: number }
@@ -39,36 +37,25 @@ function throwWithData(code: number, message: string, data?: unknown): never {
 }
 
 export function validateProviderExecuteParams(raw: unknown): ProviderExecuteParams {
-  if (!isRecord(raw)) throwInvalid("Invalid params: request must be object")
-  for (const key of Object.keys(raw as Record<string, unknown>)) {
-    if (!ALLOWED_KEYS.has(key)) throwInvalid(`Invalid params: unexpected field ${key}`)
+  // Delegate to the shared wire validator so the cross-process request shape
+  // is defined once in `@opencode-ai/core/kilocode/provider-execute`.
+  // The host keeps InvalidParams mapping and does not expand the full
+  // CanonicalProviderPayload AST here; executor handles canonical codes.
+  // No cast to a proven CanonicalProviderPayload — `record` stays opaque
+  // until `canonical-executor` fully validates it.
+  let validated: ProviderExecuteRequest
+  try {
+    validated = ProviderExecuteWire.validateRequest(raw)
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e)
+    throwInvalid(message)
   }
-  const providerId = (raw as Record<string, unknown>).providerId
-  const modelId = (raw as Record<string, unknown>).modelId
-  const record = (raw as Record<string, unknown>).record
-  const prompt = (raw as Record<string, unknown>).prompt
-
-  if (typeof providerId !== "string" || providerId.length === 0) throwInvalid("Invalid params: providerId must be non-empty string")
-  if (providerId.includes("\0")) throwInvalid("Invalid params: providerId invalid")
-  if (typeof modelId !== "string" || modelId.length === 0) throwInvalid("Invalid params: modelId must be non-empty string")
-  if (modelId.includes("\0")) throwInvalid("Invalid params: modelId invalid")
-  if (typeof prompt !== "string") throwInvalid("Invalid params: prompt must be string")
-  if (prompt.includes("\0")) throwInvalid("Invalid params: prompt invalid")
-  if (!isRecord(record)) throwInvalid("Invalid params: record must be object")
-  // Do not deep-validate record here beyond shape presence; let executor handle canonical codes.
-  // But we ensure it is at least an object with no prototype pollution.
-  if (
-    Object.getPrototypeOf(raw as object) !== Object.prototype ||
-    Object.getPrototypeOf(record as object) !== Object.prototype ||
-    Object.prototype.hasOwnProperty.call(raw as Record<string, unknown>, "__proto__") ||
-    Object.prototype.hasOwnProperty.call(record as Record<string, unknown>, "__proto__") ||
-    Object.prototype.hasOwnProperty.call(raw as Record<string, unknown>, "constructor") ||
-    Object.prototype.hasOwnProperty.call(record as Record<string, unknown>, "constructor")
-  ) {
-    // Still treat as invalid params without leaking.
-    throwInvalid("Invalid params: record invalid")
+  return {
+    providerId: validated.providerId,
+    modelId: validated.modelId,
+    record: validated.record,
+    prompt: validated.prompt,
   }
-  return { providerId, modelId, record: record as CanonicalProviderPayload, prompt }
 }
 
 export function isProviderExecuteAvailable(): boolean {

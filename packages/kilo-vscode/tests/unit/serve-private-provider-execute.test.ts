@@ -393,6 +393,99 @@ describe("provider/execute reverse capability", () => {
     }
   })
 
+  test("host validates full CanonicalProviderPayload AST: nested malformed never reaches HTTP fixture", async () => {
+    const seen = { path: "", auth: null as string | null, body: "" }
+    const server = serve(chatBody, seen as { path: string; auth: string | null; body: string })
+    try {
+      const endpoint = `http://127.0.0.1:${server.port}`
+      const ref = "secret:kilo.credentials.global.provider.acme"
+      const base = record(endpoint, "openai/completions", ref)
+      const malformed: ReadonlyArray<{ name: string; rec: unknown }> = [
+        { name: "reasoning not boolean", rec: { ...base, models: { m1: { name: "M1", reasoning: "yes" as unknown } } } },
+        { name: "modalities input not array", rec: { ...base, models: { m1: { name: "M1", modalities: { input: "bad" as unknown } } } } },
+        { name: "modalities extra key", rec: { ...base, models: { m1: { name: "M1", modalities: { input: ["text"], extra: 1 as unknown } } } } },
+        { name: "variants thinking wrong type", rec: { ...base, models: { m1: { name: "M1", variants: { v1: { thinking: { type: "bad" as unknown } } } } } } },
+        {
+          name: "variants chat_template_args wrong shape",
+          rec: { ...base, models: { m1: { name: "M1", variants: { v1: { chat_template_args: { enable_thinking: "yes" as unknown } } } } } },
+        },
+        { name: "variants extra key", rec: { ...base, models: { m1: { name: "M1", variants: { v1: { unknownKey: true as unknown } } } } } },
+        { name: "model extra key", rec: { ...base, models: { m1: { name: "M1", extra: "x" as unknown } } } },
+        { name: "provider extra key", rec: { ...(base as unknown as Record<string, unknown>), extraKey: "x" } },
+        { name: "model name empty", rec: { ...base, models: { m1: { name: "" } } } },
+        { name: "model missing name", rec: { ...base, models: { m1: {} as unknown } } },
+      ]
+      const deps = { resolveSecret: async (r: string) => (r === ref ? "sk-test" : undefined) }
+      for (const item of malformed) {
+        const link = linkedPair(deps)
+        seen.path = ""
+        try {
+          expect(await link.hostPeer.initialize(500)).toBeTrue()
+          let errData: unknown
+          try {
+            await link.clientPeer.request(PROVIDER_EXECUTE_METHOD, { providerId: "acme", modelId: "m1", record: item.rec, prompt: "hi" })
+          } catch (e) {
+            errData = e
+          }
+          expect((errData as { code?: number })?.code, item.name).toBe(ErrorCode.InvalidParams)
+          const code = (() => {
+            const d = (errData as { data?: unknown })?.data as unknown
+            if (d && typeof d === "object") {
+              const o = d as Record<string, unknown>
+              if (typeof o.code === "string") return o.code
+              if (o.data && typeof o.data === "object" && typeof (o.data as Record<string, unknown>).code === "string") return (o.data as Record<string, unknown>).code
+            }
+            return undefined
+          })()
+          expect(code, item.name).toBe("invalid-record")
+          expect(seen.path, item.name).toBe("")
+          expect(link.clientPeer.getPendingCount()).toBe(0)
+          expect(hostIncomingCount(link.hostPeer)).toBe(0)
+          expect(JSON.stringify(errData)).not.toContain("sk-test")
+        } finally {
+          disposeLink(link)
+        }
+      }
+      // granular cases still retain exact codes and also never reach HTTP (validation before network)
+      const granular: ReadonlyArray<{ rec: unknown; code: string; mid: string; name: string }> = [
+        { name: "invalid-endpoint", rec: { ...base, endpoint: "ftp://bad" }, code: "invalid-endpoint", mid: "m1" },
+        { name: "unknown-protocol", rec: { ...base, protocol: "openai/unknown" as unknown }, code: "unknown-protocol", mid: "m1" },
+        { name: "unknown-model", rec: base, code: "unknown-model", mid: "unknown" },
+        { name: "missing-credential-ref", rec: { name: "Acme", endpoint, protocol: "openai/completions", models: { m1: { name: "M1" } } }, code: "missing-credential-ref", mid: "m1" },
+        { name: "invalid-credential-ref", rec: { ...base, credential: "secret:kilo.credentials.global.provider.other" }, code: "invalid-credential-ref", mid: "m1" },
+      ]
+      for (const g of granular) {
+        const link = linkedPair(deps)
+        seen.path = ""
+        try {
+          expect(await link.hostPeer.initialize(500)).toBeTrue()
+          let errData: unknown
+          try {
+            await link.clientPeer.request(PROVIDER_EXECUTE_METHOD, { providerId: "acme", modelId: g.mid, record: g.rec, prompt: "hi" })
+          } catch (e) {
+            errData = e
+          }
+          expect((errData as { code?: number })?.code, g.name).toBe(ErrorCode.InvalidParams)
+          const code = (() => {
+            const d = (errData as { data?: unknown })?.data as unknown
+            if (d && typeof d === "object") {
+              const o = d as Record<string, unknown>
+              if (typeof o.code === "string") return o.code
+              if (o.data && typeof o.data === "object" && typeof (o.data as Record<string, unknown>).code === "string") return (o.data as Record<string, unknown>).code
+            }
+            return undefined
+          })()
+          expect(code, g.name).toBe(g.code)
+          expect(seen.path, g.name).toBe("")
+        } finally {
+          disposeLink(link)
+        }
+      }
+    } finally {
+      server.stop()
+    }
+  })
+
   test("cancellation via $/cancelRequest aborts Effect and HTTP without continued provider work", async () => {
     const tracked = trackedServer(chatBody)
     try {
@@ -518,5 +611,87 @@ describe("provider/execute reverse capability", () => {
   test("validate strict no extra keys and no proto pollution", () => {
     expect(() => validateProviderExecuteParams({ providerId: "a", modelId: "m", record: {}, prompt: "hi", __proto__: {} })).toThrow()
     expect(() => validateProviderExecuteParams({ providerId: "a", modelId: "m", record: {}, prompt: "hi", constructor: {} })).toThrow()
+  })
+
+  test("regression: modalities array and inherited model IDs via production peer preserve family/data, no secret, no HTTP, ownership zero", async () => {
+    const seen = { path: "", auth: null as string | null, body: "" }
+    const server = serve(chatBody, seen as { path: string; auth: string | null; body: string })
+    try {
+      const endpoint = `http://127.0.0.1:${server.port}`
+      const ref = "secret:kilo.credentials.global.provider.acme"
+      const secret = "sk-regression-secret-peer"
+      const base = record(endpoint, "openai/completions", ref)
+      const deps = { resolveSecret: async (r: string) => (r === ref ? secret : undefined) }
+      const extract = (err: unknown): { code?: number; dataCode?: string; message?: string } => {
+        const d = (err as { data?: unknown })?.data as unknown
+        let dataCode: string | undefined
+        if (d && typeof d === "object") {
+          const o = d as Record<string, unknown>
+          if (typeof o.code === "string") dataCode = o.code
+          else if (o.data && typeof o.data === "object" && typeof (o.data as Record<string, unknown>).code === "string") dataCode = (o.data as Record<string, unknown>).code as string
+        }
+        return { code: (err as { code?: number })?.code, dataCode, message: (err as { message?: string })?.message }
+      }
+      // modalities: [] -> invalid-record, InvalidParams, no HTTP, no secret leak, ownership zero
+      for (const mods of [[], ["text"] as unknown]) {
+        const link = linkedPair(deps)
+        seen.path = ""
+        try {
+          expect(await link.hostPeer.initialize(500)).toBeTrue()
+          const rec = { ...base, models: { m1: { name: "M1", modalities: mods as unknown } } }
+          let err: unknown
+          try { await link.clientPeer.request(PROVIDER_EXECUTE_METHOD, { providerId: "acme", modelId: "m1", record: rec, prompt: "hi" }) } catch (e) { err = e }
+          const got = extract(err)
+          expect(got.code, `mods ${JSON.stringify(mods)}`).toBe(ErrorCode.InvalidParams)
+          expect(got.dataCode, `mods ${JSON.stringify(mods)}`).toBe("invalid-record")
+          expect(seen.path, `mods ${JSON.stringify(mods)}`).toBe("")
+          expect(JSON.stringify(err), `mods ${JSON.stringify(mods)}`).not.toContain(secret)
+          expect(String((err as { message?: string })?.message ?? ""), `mods ${JSON.stringify(mods)}`).not.toContain(secret)
+          expect(link.clientPeer.getPendingCount()).toBe(0)
+          expect(link.clientPeer.getPendingIds().length).toBe(0)
+          expect(hostIncomingCount(link.hostPeer)).toBe(0)
+        } finally {
+          disposeLink(link)
+        }
+      }
+      // inherited model IDs -> unknown-model, InvalidParams, no HTTP, no secret, ownership zero
+      for (const inherited of ["toString", "constructor", "__proto__", "hasOwnProperty", "valueOf"]) {
+        const link = linkedPair(deps)
+        seen.path = ""
+        try {
+          expect(await link.hostPeer.initialize(500)).toBeTrue()
+          let err: unknown
+          try { await link.clientPeer.request(PROVIDER_EXECUTE_METHOD, { providerId: "acme", modelId: inherited, record: base, prompt: "hi" }) } catch (e) { err = e }
+          const got = extract(err)
+          expect(got.code, inherited).toBe(ErrorCode.InvalidParams)
+          expect(got.dataCode, inherited).toBe("unknown-model")
+          expect(seen.path, inherited).toBe("")
+          expect(JSON.stringify(err), inherited).not.toContain(secret)
+          expect(String((err as { message?: string })?.message ?? ""), inherited).not.toContain(secret)
+          expect(link.clientPeer.getPendingCount(), inherited).toBe(0)
+          expect(link.clientPeer.getPendingIds().length, inherited).toBe(0)
+          expect(hostIncomingCount(link.hostPeer), inherited).toBe(0)
+        } finally {
+          disposeLink(link)
+        }
+      }
+      // control: valid model still succeeds
+      {
+        const link = linkedPair(deps)
+        seen.path = ""
+        try {
+          expect(await link.hostPeer.initialize(500)).toBeTrue()
+          const result = (await link.clientPeer.request(PROVIDER_EXECUTE_METHOD, { providerId: "acme", modelId: "m1", record: base, prompt: "hi" })) as { text: string }
+          expect(result.text).toBe("Hello")
+          expect(seen.path).toBe("/chat/completions")
+          expect(link.clientPeer.getPendingCount()).toBe(0)
+          expect(hostIncomingCount(link.hostPeer)).toBe(0)
+        } finally {
+          disposeLink(link)
+        }
+      }
+    } finally {
+      server.stop()
+    }
   })
 })

@@ -471,7 +471,7 @@ export function isValidVariantEntry(v: unknown): boolean {
 
 /** Shared: validate a closed modalities record { input?, output? } of string arrays. */
 function isValidModalities(v: unknown): boolean {
-  if (typeof v !== "object" || v === null) return false
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
   const mod = v as Record<string, unknown>
   if (!hasOnlyKeys(mod, new Set(["input", "output"]))) return false
   if (mod.input !== undefined && !isStringArray(mod.input)) return false
@@ -546,7 +546,7 @@ export function isValidModelsMap(v: unknown): boolean {
  * models map must be non-empty if present.
  */
 export function isValidCanonicalProviderEntry(v: unknown, contextId?: string): v is CanonicalProviderPayload {
-  if (typeof v !== "object" || v === null) return false
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
   const r = v as Record<string, unknown>
   if (!hasOnlyKeys(r, APPROVED_PROVIDER_KEYS)) return false
   if (r.name !== undefined && (typeof r.name !== "string" || r.name.length === 0)) return false
@@ -569,7 +569,7 @@ export function isValidCanonicalProviderEntry(v: unknown, contextId?: string): v
  * and an id equal to contextName.
  */
 export function isValidCanonicalMcpEntry(v: unknown, contextName?: string): boolean {
-  if (typeof v !== "object" || v === null) return false
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
   const r = v as Record<string, unknown>
   if (!hasOnlyKeys(r, APPROVED_MCP_KEYS)) return false
   if (r.type !== undefined && r.type !== "local" && r.type !== "remote") return false
