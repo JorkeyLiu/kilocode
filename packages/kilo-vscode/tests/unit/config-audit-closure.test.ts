@@ -1847,35 +1847,32 @@ describe("P4.1 service readiness: late attachment and recovery", () => {
   })
 })
 
-// ── P4.1 credential rollback uses explicit refs ──────────────────────
+// ── P4.1 credential rollback uses explicit refs (shared helper) ──────
 
 describe("P4.1 credential rollback: explicit refs only", () => {
-  it("rollbackCredential uses restoreCredentialRef (exact ref, not scope/kind/id)", async () => {
-    const source = await Bun.file(new URL("../../src/config/service.ts", import.meta.url)).text()
-    // restoreCredentialState must take a ref parameter, not scope/kind/id
-    const restoreBlock = source.match(/private async restoreCredentialState[\s\S]*?Promise<void> \{[\s\S]*?\n  \}/)?.[0] ?? ""
-    expect(restoreBlock).toContain("ref: string")
-    expect(restoreBlock).toContain("priorValue: string | undefined")
-    expect(restoreBlock).not.toContain("scope:")
-    expect(restoreBlock).not.toContain("kind:")
-    expect(restoreBlock).not.toContain("id:")
-    // Must use restoreCredentialRef / removeCredentialRef (ref-based), not storeCredential / removeCredential (scope/kind/id-based)
-    expect(restoreBlock).toContain("restoreCredentialRef")
-    expect(restoreBlock).toContain("removeCredentialRef")
+  it("shared rollback helper restores the exact ref, never a derived key", async () => {
+    const source = await Bun.file(new URL("../../src/config/credential-rollback.ts", import.meta.url)).text()
+    expect(source).toContain("restoreCredentialRef(secrets, ref, priorValue)")
+    expect(source).toContain("removeCredentialRef(secrets, ref)")
+    expect(source).not.toMatch(/storeCredential\(\s*secrets/)
+    expect(source).not.toMatch(/removeCredential\(\s*secrets/)
+    const sig = source.match(/export async function restoreCredentialState\(([\s\S]*?)\)/)?.[1] ?? ""
+    expect(sig).toContain("ref: string")
+    expect(sig).toContain("priorValue: string | undefined")
+    expect(sig).not.toContain("scope")
+    expect(sig).not.toContain("kind")
   })
 
-  it("rollbackCredential passes ref to restoreCredentialState", async () => {
+  it("service delegates rollback to the shared helper with the exact ref", async () => {
     const source = await Bun.file(new URL("../../src/config/service.ts", import.meta.url)).text()
-    // Find only the parameter list of rollbackCredential (not the return type)
+    expect(source).toContain('from "./credential-rollback"')
+    expect(source).toContain("credentialRollbackRestore(this.secrets, ref, priorValue)")
+    expect(source).toContain("credentialRollback(this.secrets, this.disposed, ref, priorValue)")
     const paramMatch = source.match(/private async rollbackCredential\(([\s\S]*?)\)/)?.[1] ?? ""
-    // rollbackCredential must take ref + priorValue (no scope/kind/id params)
     expect(paramMatch).toContain("ref: string")
     expect(paramMatch).toContain("priorValue: string | undefined")
     expect(paramMatch).not.toContain("scope:")
     expect(paramMatch).not.toContain("id:")
-    // Verify restoreCredentialState is called with ref
-    const bodyMatch = source.match(/private async rollbackCredential[\s\S]*?Promise<[\s\S]*?> \{[\s\S]*?\n  \}/)?.[0] ?? ""
-    expect(bodyMatch).toContain("this.restoreCredentialState(ref, priorValue)")
   })
 
   it("processCredentialIntent calls rollbackCredential with newRef only (no scope/kind/id)", async () => {
@@ -1891,18 +1888,22 @@ describe("P4.1 credential rollback: explicit refs only", () => {
     }
   })
 
-  it("no derived SecretStorage key reconstruction in rollback path", async () => {
-    const source = await Bun.file(new URL("../../src/config/service.ts", import.meta.url)).text()
-    // restoreCredentialState must not call storeCredential() or removeCredential()
-    // (those reconstruct keys from scope/kind/id). Must use ref-based
-    // restoreCredentialRef / removeCredentialRef instead.
-    const restoreBlock = source.match(/private async restoreCredentialState[\s\S]*?Promise<void> \{[\s\S]*?\n  \}/)?.[0] ?? ""
-    // Check for bare storeCredential / removeCredential calls (not restoreCredentialRef / removeCredentialRef)
-    // A bare call would look like: await storeCredential( or await removeCredential(
-    expect(restoreBlock).not.toMatch(/await storeCredential\(/)
-    expect(restoreBlock).not.toMatch(/await removeCredential\(/)
-    expect(restoreBlock).toMatch(/await restoreCredentialRef\(/)
-    expect(restoreBlock).toMatch(/await removeCredentialRef\(/)
+  it("rollback behavior touches only the exact ref (no derived key side effect)", async () => {
+    const { restoreCredentialState, rollbackCredential } = await import("../../src/config/credential-rollback")
+    const { createMemorySecretAdapter } = await import("../../src/config/secret-adapter")
+    const secrets = createMemorySecretAdapter()
+    const ref = "secret:kilo.credentials.global.provider.openai"
+    await secrets.store("kilo.credentials.global.provider.openai", "sk-old")
+    await secrets.store("kilo.credentials.global.provider.other", "untouched")
+    await restoreCredentialState(secrets, ref, "sk-restored")
+    expect(await secrets.retrieve("kilo.credentials.global.provider.openai")).toBe("sk-restored")
+    expect(await secrets.retrieve("kilo.credentials.global.provider.other")).toBe("untouched")
+    await restoreCredentialState(secrets, ref, undefined)
+    expect(await secrets.retrieve("kilo.credentials.global.provider.openai")).toBeUndefined()
+    expect(await secrets.retrieve("kilo.credentials.global.provider.other")).toBe("untouched")
+    await secrets.store("kilo.credentials.global.provider.openai", "sk-prior")
+    const failed = await rollbackCredential(secrets, false, ref, "sk-prior")
+    expect(failed).toBeNull()
   })
 })
 

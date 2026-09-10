@@ -16,6 +16,9 @@ export function make(overrides: Partial<Config.Interface> = {}) {
     commit: () => Effect.die(new Error("TestConfig stub does not implement commit")),
     emitUpdated: () => Effect.void,
     invalidateProject: () => Effect.void,
+    invalidateStrict: () => Effect.void,
+    invalidateProjectStrict: () => Effect.void,
+    emitUpdatedStrict: () => Effect.void,
     withLock: (key, body) => Effect.suspend(() => body),
     // kilocode_change end
     invalidate: () => Effect.void,

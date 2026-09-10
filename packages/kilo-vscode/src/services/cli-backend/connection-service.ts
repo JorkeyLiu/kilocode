@@ -1609,13 +1609,15 @@ export class KiloConnectionService {
     return this.privateEpoch
   }
 
-  /**
-   * Authoritative `path/get` routing directory shared by the SDK read and
-   * the private read: the exact active backend spawn identity from the
-   * existing `ServerManager` owner (`getActiveSpawnCwd`). No mutable
-   * `currentDirectory`/`rootDirectory`/workspace-folder/`process.cwd()`
-   * substitute: absent/dead/disposed stays fail-closed (undefined).
-   */
+  async privateConvergenceRequest(method: "config/convergence/acquire" | "config/convergence/resolve", params: unknown): Promise<unknown> {
+    const peer = this.privatePeer, epoch = this.privateEpoch
+    if (!peer || !this.privateAvailable || !peer.isAvailable()) throw new Error("Private peer unavailable")
+    const raw = await peer.requestConvergence(method, params)
+    if (this.privatePeer !== peer || this.privateEpoch !== epoch) throw new Error("convergence epoch changed")
+    return raw
+  }
+
+  /** Active backend spawn identity for path routing; absent/dead stays fail-closed. */
   getPathRoutingDirectory(): string | undefined {
     try {
       const dir = this.serverManager.getActiveSpawnCwd()

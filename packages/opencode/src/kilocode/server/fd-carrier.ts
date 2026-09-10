@@ -39,12 +39,74 @@ import { Config } from "@/config/config"
 import * as InstanceState from "@/effect/instance-state"
 import { buildInitializeResult, validateProtocolVersion } from "./fd-carrier-protocol"
 import { JsonRpcPeer as Peer } from "@/private-worker/peer"
+import {
+  CONVERGENCE_ACQUIRE_OP,
+  CONVERGENCE_RESOLVE_OP,
+  validateAcquireRequest,
+  validateResolveRequest,
+} from "./config-file-convergence"
+import { ConfigFileConvergence } from "./config-file-convergence"
 
 export interface FdCarrierHandle {
   peer: Peer
   reader: NodeJS.ReadableStream
   writer: NodeJS.WritableStream
   dispose: () => void
+}
+
+/**
+ * Owned peer-close handoff (F12). onClosed cannot await, so the registration
+ * promise is tracked here; serve shutdown awaits it after carrier dispose
+ * instead of swallowing an untracked `void runPromise`.
+ */
+const peerClosedHandoffs = new Set<Promise<void>>()
+
+export const awaitPeerClosedHandoffs = async (): Promise<void> => {
+  const pending = [...peerClosedHandoffs]
+  if (pending.length === 0) return
+  await Promise.allSettled(pending)
+}
+
+const trackPeerClosedHandoff = (work: Promise<void>): void => {
+  peerClosedHandoffs.add(work)
+  void work.catch(() => {}).finally(() => {
+    peerClosedHandoffs.delete(work)
+  })
+}
+
+export const notifyPeerClosedConvergence = (): Promise<void> => {
+  const work = AppRuntime.runPromise(
+    Effect.gen(function* () {
+      const svc = yield* Effect.serviceOption(ConfigFileConvergence.Service)
+      // peerClosed registers the service-owned grace fiber and returns
+      // immediately; this handoff only covers the registration.
+      if (svc._tag === "Some") yield* svc.value.peerClosed()
+    }).pipe(Effect.catchCause(() => Effect.void)),
+  )
+  trackPeerClosedHandoff(work)
+  return work
+}
+
+/**
+ * F-01 explicit file-convergence shutdown. Production serve awaits this
+ * after carrier dispose + `awaitPeerClosedHandoffs` (registration join)
+ * and before `InstanceRuntime.disposeAllInstances`. It interrupts/joins
+ * all service-owned TTL/peer-grace fibers and releases every unresolved
+ * obligation without booting; idempotent and safe with no fd carrier or
+ * zero leases. Never throws: failures are swallowed so shutdown proceeds
+ * to instance disposal.
+ */
+export const shutdownFileConvergence = async (): Promise<void> => {
+  try {
+    await AppRuntime.runPromise(
+      Effect.gen(function* () {
+        const svc = yield* Effect.serviceOption(ConfigFileConvergence.Service)
+        if (svc._tag === "Some") yield* svc.value.shutdown
+      }).pipe(Effect.catchCause(() => Effect.void)),
+    )
+  } catch {
+    // Best-effort: shutdown still proceeds to instance disposal.
+  }
 }
 
 export function isSocketStat(stat: unknown): boolean {
@@ -1286,6 +1348,10 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
       // EOF closes peer and destroys streams idempotently; peer already closed
       bestEffortClose(reader, "reader-onClosed")
       bestEffortClose(writer, "writer-onClosed")
+      // Single parent peer: owned handoff (tracked; serve shutdown awaits
+      // registration). The service settles unresolved leases after its
+      // bounded grace via the same disk-based resolve (never plain abort).
+      notifyPeerClosedConvergence()
     },
     onRequest: async (method: string, params: unknown) => {
       if (method === "initialize") {
@@ -2647,6 +2713,81 @@ export function createFdCarrier(reader: NodeJS.ReadableStream, writer: NodeJS.Wr
           }),
         )
         return result
+      }
+      if (method === CONVERGENCE_ACQUIRE_OP) {
+        let parsed: { leaseId: string; descriptors: readonly unknown[] }
+        try {
+          const v = validateAcquireRequest(params)
+          parsed = { leaseId: v.leaseId, descriptors: v.descriptors }
+        } catch (e) {
+          const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+          err.code = ErrorCode.InvalidParams
+          throw err
+        }
+        let result:
+          | { acquired: true; leaseId: string }
+          | { resolved: true; terminal: { outcome: string; scope: unknown; reason?: string; retryable?: boolean } }
+        try {
+          result = (await AppRuntime.runPromise(
+            Effect.gen(function* () {
+              const svc = yield* ConfigFileConvergence.Service
+              return yield* svc.acquire(parsed.leaseId, parsed.descriptors as never)
+            }),
+          )) as typeof result
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e)
+          const err = new Error(message) as Error & { code: number }
+          // Fail-closed validation mapping: shape/digest/authorization
+          // problems are InvalidParams; exhaustion/shutdown is internal.
+          err.code = /descriptor conflict|not authorized|not loadable|leaseId invalid|leaseId too long|must be|must bind|must match|rejected|unexpected|empty|closed set/i.test(
+            message,
+          )
+            ? ErrorCode.InvalidParams
+            : ErrorCode.InternalError
+          throw err
+        }
+        // Resolved-lease replay is strictly distinguished: the extension
+        // must fail closed and never execute a write (F3). The wire contract
+        // is exact: v/leaseId plus either acquired or resolved+outcome+scope
+        // (failed terminals additionally carry reason/retryable) — no extra
+        // fields, so the extension strict validator accepts it (F-05).
+        if ("resolved" in result && result.resolved) {
+          const base = {
+            v: 1,
+            leaseId: parsed.leaseId,
+            resolved: true,
+            outcome: result.terminal.outcome,
+            scope: result.terminal.scope,
+          }
+          if (result.terminal.outcome === "failed")
+            return { ...base, reason: result.terminal.reason ?? "converged failed", retryable: result.terminal.retryable ?? true }
+          return base
+        }
+        return { v: 1, leaseId: parsed.leaseId, acquired: true }
+      }
+      if (method === CONVERGENCE_RESOLVE_OP) {
+        let leaseId: string
+        try {
+          leaseId = validateResolveRequest(params).leaseId
+        } catch (e) {
+          const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+          err.code = ErrorCode.InvalidParams
+          throw err
+        }
+        try {
+          const result = await AppRuntime.runPromise(
+            Effect.gen(function* () {
+              const svc = yield* ConfigFileConvergence.Service
+              return yield* svc.resolve(leaseId)
+            }),
+          )
+          return { v: 1, ...(result as object) }
+        } catch (e) {
+          const message = e instanceof Error ? e.message : String(e)
+          const err = new Error(message) as Error & { code: number }
+          err.code = /unknown convergence lease/i.test(message) ? ErrorCode.InvalidParams : ErrorCode.InternalError
+          throw err
+        }
       }
       const err = new Error(`Method not found: ${method}`) as Error & { code: number }
       err.code = ErrorCode.MethodNotFound

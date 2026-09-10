@@ -1187,6 +1187,10 @@ describe("config transaction - LOCK-005 dynamic", () => {
             Effect.sync(() => emitted.push(`${directory}:${transaction}`)),
           invalidate: () => Effect.sync(() => invalidated.push("global")),
           invalidateProject: () => Effect.sync(() => invalidated.push("project")),
+          invalidateStrict: () => Effect.sync(() => invalidated.push("global-strict")),
+          invalidateProjectStrict: () => Effect.sync(() => invalidated.push("project-strict")),
+          emitUpdatedStrict: (directory: string, transaction?: string) =>
+            Effect.sync(() => emitted.push(`${directory}:${transaction}:strict`)),
           directories: () => Effect.succeed([]),
           waitForDependencies: () => Effect.void,
           warnings: () => Effect.succeed([]),

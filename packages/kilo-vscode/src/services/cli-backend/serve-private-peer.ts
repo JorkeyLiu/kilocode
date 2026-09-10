@@ -3357,6 +3357,24 @@ export class ServePrivatePeer {
     return this.peer?.getPendingCount() ?? 0
   }
 
+  /**
+   * Controlled convergence transport (first unit). Exact epoch pinning with
+   * fail-closed capability check; stale epoch or closed transport throws so
+   * the caller maps acquire=>blocked and resolve=>pending (never fallback,
+   * never rewrite). Exact cancel via tryCancelPending by the owner.
+   */
+  async requestConvergence(method: "config/convergence/acquire" | "config/convergence/resolve", params: unknown): Promise<unknown> {
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") throw new Error("Private peer unavailable")
+    if (!this.hasCapability(method)) throw new Error(`Private peer missing ${method} capability`)
+    const epoch = this.opts.epoch
+    const peer = this.peer
+    const { promise } = peer.requestWithId(method, params)
+    const raw = await promise
+    if (this.peer !== peer || this.opts.epoch !== epoch || peer.getState() !== "open") throw new Error("convergence epoch changed")
+    return raw
+  }
+
   peekNextJsonRpcId(): number | null {
     return this.peer?.peekNextId() ?? null
   }

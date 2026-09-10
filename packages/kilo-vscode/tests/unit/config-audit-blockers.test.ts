@@ -532,11 +532,12 @@ describe("Blocker 8: Credential transaction rollback", () => {
 
     await service.storeSecret("global", "provider", "openai", "sk-old")
 
-    // Force writeConfig to throw by disposing mid-operation
-    // (Simulates exception during commit)
-    const origWrite = (service as any).writeConfig.bind(service)
+    // Force the inner disk commit to throw mid-operation
+    // (Simulates exception during commit; the credential intent holds one
+    // fence and calls persistConfig directly, never the fenced writeConfig)
+    const origWrite = (service as any).persistConfig.bind(service)
     let callCount = 0
-    ;(service as any).writeConfig = async (...args: any[]) => {
+    ;(service as any).persistConfig = async (...args: any[]) => {
       callCount++
       if (callCount === 1) throw new Error("simulated failure")
       return origWrite(...args)
@@ -1839,7 +1840,7 @@ describe("P4.1 final audit closure", () => {
     await rollback.initialize()
     ;(secrets as any).store = async (key: string, value: string) => { secrets.store_.set(key, value) }
     await rollback.storeSecret("global", "provider", "openai", "sk-old")
-    ;(rollback as any).writeConfig = async () => { throw new Error("commit failed") }
+    ;(rollback as any).persistConfig = async () => { throw new Error("commit failed") }
     ;(secrets as any).store = async () => { throw new Error("rollback failed") }
     const rollbackResult = await rollback.processCredentialIntent("global", "provider", "openai", "sk-new", { model: "openai/gpt-4" }, rollback.getConfigHash("global")!, undefined, "secret:kilo.credentials.global.provider.openai")
     expect(rollbackResult.ok).toBe(false)

@@ -163,6 +163,15 @@ export interface Interface {
   readonly emitUpdated: (directory: string, transaction?: string) => Effect.Effect<void>
   readonly invalidateProject: () => Effect.Effect<void>
   /**
+   * Strict fail-preserving variants for convergence hot paths (F-03). The
+   * lenient `invalidate/invalidateProject/emitUpdated` swallow failures for
+   * legacy callers; hot convergence must observe failures to fall back to a
+   * cold commit instead of releasing-then-lying-hot.
+   */
+  readonly invalidateStrict: () => Effect.Effect<void>
+  readonly invalidateProjectStrict: () => Effect.Effect<void>
+  readonly emitUpdatedStrict: (directory: string, transaction?: string) => Effect.Effect<void>
+  /**
    * Acquire the shared cross-process config lock for a target file (LOCK-001).
    * Every global/project write path serializes through this key space. Lock
    * acquisition failures are mapped to defects so the lock never leaks into
@@ -633,6 +642,30 @@ export const layer = Layer.effect(
       yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
     })
 
+    /**
+     * Strict variants (F-03): same operations without failure swallowing.
+     * Used only by config-file convergence hot paths so an invalidation or
+     * event failure is observable and falls back to a cold commit.
+     */
+    const invalidateProjectStrict = Effect.fn("Config.invalidateProjectStrict")(function* () {
+      yield* InstanceState.invalidate(state)
+    })
+    const invalidateStrict = Effect.fn("Config.invalidateStrict")(function* () {
+      yield* invalidateGlobal
+    })
+    const emitUpdatedStrict = Effect.fn("Config.emitUpdatedStrict")(function* (directory: string, transaction?: string) {
+      yield* Effect.sync(() =>
+        GlobalBus.emit("event", {
+          directory,
+          transaction,
+          payload: {
+            type: Event.ConfigUpdated.type,
+            properties: {},
+          },
+        }),
+      )
+    })
+
     /** Prepare a global-scope mutation in memory (LOCK-002) — no writes/events. */
     const prepareGlobal = Effect.fn("Config.prepareGlobal")(function* (config: Info, options?: { file?: string }) {
       const file = options?.file ?? globalConfigFile() // kilocode_change - LOCK-002: resolved target wins
@@ -744,6 +777,9 @@ export const layer = Layer.effect(
       commit, // kilocode_change
       emitUpdated, // kilocode_change
       invalidateProject, // kilocode_change
+      invalidateStrict, // kilocode_change - F-03 strict hot-path variant
+      invalidateProjectStrict, // kilocode_change - F-03 strict hot-path variant
+      emitUpdatedStrict, // kilocode_change - F-03 strict hot-path variant
       withLock: withConfigLock, // kilocode_change
       invalidate,
       directories,

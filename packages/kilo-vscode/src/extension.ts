@@ -27,6 +27,7 @@ import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
 import { resolveReloadDirectory } from "./reload-directory"
 import { CanonicalConfigService } from "./config/service"
+import { PrivateConvergenceAdapter } from "./config/convergence"
 import { createVscodeStateAdapter, createVscodeWatcherAdapter } from "./config/state-adapter"
 import { Roots } from "./config/paths"
 import { PrivateObservationService } from "./private-worker/private-observation-service"
@@ -126,6 +127,22 @@ export function activate(context: vscode.ExtensionContext) {
     globalState: createVscodeStateAdapter(context.globalState),
     workspaceState: createVscodeStateAdapter(context.workspaceState),
     watcherAdapter: createVscodeWatcherAdapter(),
+    convergence: new PrivateConvergenceAdapter(() => {
+      const peer = connectionService.getPrivatePeer()
+      if (!peer || !connectionService.isPrivateAvailable()) return null
+      const epoch = connectionService.getPrivateEpoch()
+      return {
+        request: (method: string, params: unknown) => {
+          if (method !== "config/convergence/acquire" && method !== "config/convergence/resolve")
+            return Promise.reject(new Error(`unsupported convergence method ${method}`))
+          if (connectionService.getPrivatePeer() !== peer || connectionService.getPrivateEpoch() !== epoch)
+            return Promise.reject(new Error("convergence epoch changed"))
+          return connectionService.privateConvergenceRequest(method, params)
+        },
+        hasCapability: (cap: string) => peer.hasCapability(cap),
+        getEpoch: () => epoch ?? 0,
+      }
+    }),
   })
   context.subscriptions.push(canonicalConfig)
   canonicalConfig.initialize().catch((err) => {

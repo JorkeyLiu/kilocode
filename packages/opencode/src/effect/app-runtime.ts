@@ -65,6 +65,7 @@ import { GenerationGate } from "@/kilocode/server/generation-gate" // kilocode_c
 import { ControlLease } from "@/kilocode/server/control-lease" // kilocode_change
 import { ConfigConvergence } from "@/kilocode/server/config-convergence" // kilocode_change - canonical cold-mutation coordinator
 import { ConfigRebuild } from "@/kilocode/server/config-rebuild" // kilocode_change - explicit-dispose rebuild owner
+import { ConfigFileConvergence } from "@/kilocode/server/config-file-convergence" // kilocode_change - GUI disk-write convergence leases
 import * as CancelQueuedDispatch from "@/kilocode/session/cancel-queued-dispatch" // kilocode_change - P4.4-G3-B0 backend dispatch
 import * as SessionUpdateDispatch from "@/kilocode/session/session-update-dispatch" // kilocode_change - P4.4-G3-B2 durable title
 import * as SessionForkDispatch from "@/kilocode/session/session-fork-dispatch" // kilocode_change - P4.4-G3-B3 fork
@@ -175,9 +176,15 @@ const buildAppLayer = (provider: ProviderLayer = Provider.defaultLayer) => {
   // Config lifecycle services depend on the complete application base. This
   // makes their scope a dependent of InstanceLayer, so their finalizers
   // interrupt/join owned rebuild work before InstanceStore is torn down.
-  const lifecycle = Layer.mergeAll(ConfigConvergence.defaultLayer, ConfigRebuild.defaultLayer).pipe(
+  // ConfigFileConvergence requires the real ConfigConvergence sibling: it is
+  // provided explicitly so the production carrier never falls back to noop.
+  const convergence = ConfigConvergence.defaultLayer.pipe(Layer.provideMerge(base))
+  const rebuild = ConfigRebuild.defaultLayer.pipe(Layer.provideMerge(base))
+  const fileConvergence = ConfigFileConvergence.defaultLayer.pipe(
     Layer.provideMerge(base),
+    Layer.provideMerge(convergence),
   )
+  const lifecycle = Layer.mergeAll(convergence, rebuild, fileConvergence)
   const cancelQueued = CancelQueuedDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
   const sessionUpdate = SessionUpdateDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
   const sessionFork = SessionForkDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))

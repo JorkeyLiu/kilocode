@@ -39,6 +39,12 @@ import type {
 import { sameStamp, parseOwnedCredentialRef } from "./types"
 import { ASSET_DIRECTORIES } from "./types"
 import { Roots, resolveCanonicalPaths, sameCanonicalPath } from "./paths"
+import {
+  checkAssetStamp as assetIoCheck,
+  checkAssetFinalCas as assetIoCheckFinal,
+  removeTemp as assetIoRemoveTemp,
+  writeAssetFile as assetIoWrite,
+} from "./asset-io"
 import { materialize, MaterializeVersionCounter, type MaterializeInput } from "./materialize"
 import { validateConfig, validateMarkdownAsset } from "./validate"
 import { validateCrossScope } from "./validate"
@@ -57,6 +63,11 @@ import {
   secretKey,
   parseSecretKey,
 } from "./secret-adapter"
+import {
+  normalizeCredentialFailure as normalizeCredentialFailureView,
+  restoreCredentialState as credentialRollbackRestore,
+  rollbackCredential as credentialRollback,
+} from "./credential-rollback"
 import { type ConfigSnapshot, snapshot as makeSnapshot } from "./snapshot"
 import {
   type ProviderIndex,
@@ -169,6 +180,8 @@ export interface CanonicalConfigServiceOptions {
   beforeAssetFinalCas?: (filePath: string) => void
   /** Test-only seam for mutating JSONC before the atomic final CAS. */
   beforeConfigFinalCas?: (filePath: string) => void
+  /** Runtime convergence adapter for controlled GUI disk writes. Production must provide; tests use an explicit fake. */
+  convergence?: import("./convergence").ConfigConvergenceAdapter
 }
 
 export type ConfigScopePatch = {
@@ -183,6 +196,7 @@ export type CompositeConfigWriteResult =
       readonly hashes: { readonly global: string | null; readonly project: string | null }
       readonly materializationVersion: number
       readonly stamp: CanonicalStamp
+      readonly convergence?: import("./convergence").ConvergenceState
     }
   | {
       readonly ok: false
@@ -214,6 +228,7 @@ export class CanonicalConfigService implements Disposable {
   private readonly onErrorEmitter: TypedEmitter<CanonicalConfigError>
   private readonly beforeAssetFinalCas: ((filePath: string) => void) | undefined
   private readonly beforeConfigFinalCas: ((filePath: string) => void) | undefined
+  private readonly convergence: import("./convergence").ConfigConvergenceAdapter | undefined
 
   /** Current valid materialization. Null before first successful materialization. */
   private current: MaterializedConfig | null = null
@@ -305,6 +320,7 @@ export class CanonicalConfigService implements Disposable {
     this.watcher = opts.watcherAdapter
     this.beforeAssetFinalCas = opts.beforeAssetFinalCas
     this.beforeConfigFinalCas = opts.beforeConfigFinalCas
+    this.convergence = opts.convergence
 
     // Use injected emitter factory or fall back to in-memory implementation
     const ef = opts.emitterFactory ?? createDefaultEmitterFactory()
@@ -385,10 +401,9 @@ export class CanonicalConfigService implements Disposable {
 
   /**
    * Fixture-gated credential seeding for the real-restart E2E scenario.
-   * Uses the existing production `storeSecret("project","provider",...)` API
-   * behind the KILO_E2E_FIXTURE bridge and converges canonical state through
-   * the existing GUI-write materialization scheduler (identity rewrite via
-   * writeConfig). Does not expose the secret value. Returns a small success
+   * Uses the existing production `processCredentialIntent(...)` fenced path
+   * behind the KILO_E2E_FIXTURE bridge (secret + identity rewrite inside one
+   * convergence fence). Does not expose the secret value. Returns a small success
    * payload only after the published selector index reports the provider
    * connected and the config model is visible. Throws when the fixture env is
    * absent.
@@ -410,8 +425,6 @@ export class CanonicalConfigService implements Disposable {
     | { ok: false; reason: string }
   > {
     if (!isE2EFixtureEnabled()) throw new Error("fixture seedFixtureProviderCredential requires KILO_E2E_FIXTURE")
-    // Production path: store the credential in run-owned SecretStorage.
-    await this.storeSecret("project", "provider", id, value)
     // Bounded wait for project hash or initial materialization readiness before
     // the identity rewrite. This covers the cold-start race where extension.ts
     // fires canonicalConfig.initialize() fire-and-forget and the runner seeds
@@ -454,11 +467,12 @@ export class CanonicalConfigService implements Disposable {
         return { ok: false, reason: "no project config hash for convergence write" }
       }
     }
-    // storeSecret ordering is preserved: secret stored, hash/readiness awaited,
-    // then identity rewrite triggers existing materialization/revision machinery.
-    const write = await this.writeConfig("project", {}, hash)
-    if (!write.ok) {
-      return { ok: false, reason: `convergence write failed: ${write.kind}: ${write.message}` }
+    // Fenced credential path: the secret store + identity rewrite run inside
+    // one convergence fence via processCredentialIntent (no bare storeSecret
+    // outside a fence, no nested acquire).
+    const intent = await this.processCredentialIntent("project", "provider", id, value, {}, hash)
+    if (!intent.ok) {
+      return { ok: false, reason: `convergence write failed: ${intent.kind}: ${intent.message}` }
     }
     // The writeConfig path already awaited enqueueAndRunMaterialization("gui"),
     // so the published selector index now reflects the stored credential.
@@ -678,7 +692,13 @@ export class CanonicalConfigService implements Disposable {
       )
     }
 
-    return this.withConfigLocks(paths, run)
+    const { withFence, configDescriptor } = await import("./convergence-guard")
+    return withFence(
+      this.convergence,
+      entries.map((scope) => configDescriptor(this.paths, scope)),
+      () => this.withConfigLocks(paths, run),
+      (message) => ({ ok: false as const, kind: "io" as const, message }),
+    )
   }
 
   private scopePath(scope: "global" | "project"): string {
@@ -827,7 +847,7 @@ export class CanonicalConfigService implements Disposable {
     expectedHash: string,
     filePath: string,
   ): Promise<
-    | { ok: true; snapshot: ConfigSnapshot; contentHash: string }
+    | { ok: true; snapshot: ConfigSnapshot; contentHash: string; convergence?: import("./convergence").ConvergenceState }
     | {
         ok: false
         kind: "stale" | "invalid" | "conflict" | "disposed" | "io"
@@ -836,16 +856,31 @@ export class CanonicalConfigService implements Disposable {
       }
   > {
     if (this.disposed) return { ok: false, kind: "disposed", message: "Service disposed" }
-    const existing = readFile(filePath)
+    const precheck = this.checkStaleForWrite(readFile(filePath), expectedHash)
+    if (precheck) return precheck
+    const { withFence, configDescriptor } = await import("./convergence-guard")
+    return withFence(
+      this.convergence,
+      [configDescriptor(this.paths, scope)],
+      () => this.persistConfig(scope, patch, expectedHash, filePath),
+      (message) => ({ ok: false as const, kind: "io" as const, message }),
+    )
+  }
 
-    // Final CAS before rename (Blocker 10)
+  private async persistConfig(
+    scope: "global" | "project",
+    patch: Record<string, unknown>,
+    expectedHash: string,
+    filePath: string,
+  ): Promise<
+    | { ok: true; snapshot: ConfigSnapshot; contentHash: string }
+    | { ok: false; kind: "stale" | "invalid" | "conflict" | "disposed" | "io"; message: string; errors?: readonly ValidationError[] }
+  > {
+    if (this.disposed) return { ok: false, kind: "disposed", message: "Service disposed" }
+    const existing = readFile(filePath)
     const staleErr = this.checkStaleForWrite(existing, expectedHash)
     if (staleErr) return staleErr
-
-    // Build full document: merge patch onto current scoped document (Blocker 9)
     const fullDoc = this.buildMergedDoc(existing, patch)
-
-    // Validate the scoped candidate (Blocker 9)
     const validation = validateConfig(JSON.stringify(fullDoc), scope, filePath)
     if (!validation.valid) {
       return {
@@ -856,11 +891,8 @@ export class CanonicalConfigService implements Disposable {
       }
     }
 
-    // Validate cross-scope composition (Blocker 9)
     const crossErr = this.checkCrossScopeForWrite(scope, fullDoc)
     if (crossErr) return crossErr
-
-    // Write atomically via the existing write module
     const { writeJsoncWithConflictDetection } = await import("./write")
     const result = writeJsoncWithConflictDetection(filePath, fullDoc, expectedHash, scope, this.beforeConfigFinalCas)
 
@@ -872,23 +904,15 @@ export class CanonicalConfigService implements Disposable {
       }
     }
 
-    // Mark own write with content hash for coalescing (Blocker 5)
     this.markOwnWrite(filePath, result.written.contentHash)
-
-    // Bump revision and re-materialize through convergence scheduler (Finding 6)
     this.revision++
     try {
       await this.enqueueAndRunMaterialization("gui")
       if (this.disposed) throw new ConvergenceError("disposed", "Service disposed during config convergence")
     } catch (err) {
-      // Gap 9: Log the convergence failure
       console.error(`[Kilo Config] Convergence failure during config write: ${String(err)}`)
-      // Convergence failure: structured failure, never swallowed success.
-      // Restore service-owned prior bytes only if the just-written hash still matches
-      // (Finding: convergence failure write rollback).
       const check = readFile(filePath)
       if (check.type === "present" && check.hash === result.written.contentHash) {
-        // Our write is still the latest — restore prior bytes
         if (existing.type === "present") {
           const dir = path.dirname(filePath)
           const tmp = `${filePath}.${process.pid}.restore.tmp`
@@ -949,7 +973,7 @@ export class CanonicalConfigService implements Disposable {
     scope: "global" | "project",
     expectedHash: string,
   ): Promise<
-    | { ok: true; contentHash: string }
+    | { ok: true; contentHash: string; convergence?: import("./convergence").ConvergenceState }
     | { ok: false; kind: "invalid" | "stale" | "io" | "disposed"; message: string; errors?: readonly ValidationError[] }
   > {
     if (this.disposed) return { ok: false, kind: "disposed", message: "Service disposed" }
@@ -961,24 +985,32 @@ export class CanonicalConfigService implements Disposable {
 
     const dir = scope === "global" ? this.paths.globalAssetDirs[assetType] : this.paths.projectAssetDirs![assetType]
     const filePath = path.join(dir, `${id}.md`)
-
-    // Gap 7: Per-path write lock for assets (same as config writes)
-    const prev = this.writeLocks.get(filePath) ?? Promise.resolve()
-    const locked = prev.then(() => this.doWriteAsset(assetType, id, frontmatter, body, scope, filePath, expectedHash))
-    this.writeLocks.set(filePath, locked)
-    try {
-      return await locked
-    } catch (err) {
-      return {
-        ok: false,
-        kind: this.disposed ? "disposed" : "io",
-        message: `Asset write failed: ${String(err)}`,
-      }
-    } finally {
-      if (this.writeLocks.get(filePath) === locked) {
-        this.writeLocks.delete(filePath)
-      }
-    }
+    const early = this.checkAssetStamp(readFile(filePath), filePath, expectedHash)
+    if (early) return early
+    const { withFence, assetDescriptor } = await import("./convergence-guard")
+    return withFence(
+      this.convergence,
+      [assetDescriptor(this.paths, assetType, id, scope)],
+      async () => {
+        const prev = this.writeLocks.get(filePath) ?? Promise.resolve()
+        const locked = prev.then(() =>
+          this.doWriteAsset(assetType, id, frontmatter, body, scope, filePath, expectedHash),
+        )
+        this.writeLocks.set(filePath, locked)
+        try {
+          return await locked
+        } catch (err) {
+          return {
+            ok: false as const,
+            kind: (this.disposed ? "disposed" : "io") as "disposed" | "io",
+            message: `Asset write failed: ${String(err)}`,
+          }
+        } finally {
+          if (this.writeLocks.get(filePath) === locked) this.writeLocks.delete(filePath)
+        }
+      },
+      (message) => ({ ok: false as const, kind: "io" as const, message }),
+    )
   }
 
   private async doWriteAsset(
@@ -1069,69 +1101,26 @@ export class CanonicalConfigService implements Disposable {
     content: string,
     expectedHash: string,
   ): { ok: true } | { ok: false; value: { ok: false; kind: "invalid" | "stale"; message: string } } {
-    const tmp = `${filePath}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2)}.tmp`
-    try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true })
-      fs.writeFileSync(tmp, content, "utf-8")
-      this.beforeAssetFinalCas?.(filePath)
-      const finalStamp = this.checkAssetFinalCas(filePath, expectedHash)
-      if (finalStamp) {
-        this.removeTemp(tmp, "Asset temp cleanup failed")
-        return { ok: false, value: finalStamp }
-      }
-      fs.renameSync(tmp, filePath)
-      return { ok: true }
-    } catch (err) {
-      this.removeTemp(tmp, "Asset temp cleanup failed")
-      throw err
-    }
+    return assetIoWrite(filePath, content, expectedHash, this.beforeAssetFinalCas)
   }
 
   private removeTemp(filePath: string, message: string): void {
-    try {
-      fs.unlinkSync(filePath)
-    } catch (err) {
-      console.error(`[Kilo Config] ${message} for ${filePath}: ${String(err)}`)
-    }
+    assetIoRemoveTemp(filePath, message)
   }
 
-  /**
-   * Check asset stamp validity (Finding 11). Returns a stale/invalid result
-   * or null if the stamp check passes.
-   */
   private checkAssetStamp(
     existing: FileReadResult,
     filePath: string,
     expectedHash: string,
   ): { ok: false; kind: "invalid" | "stale"; message: string } | null {
-    if (existing.type === "absent") {
-      if (expectedHash !== "absent") {
-        return { ok: false, kind: "stale", message: `Asset file was deleted externally: ${filePath}` }
-      }
-      return null
-    }
-    if (existing.type === "failure") {
-      return { ok: false, kind: "stale", message: `Asset file unreadable: ${filePath}: ${existing.message}` }
-    }
-    // existing.type === "present"
-    if (expectedHash === "absent") {
-      return { ok: false, kind: "stale", message: `Asset file already exists: ${filePath}` }
-    }
-    if (existing.hash !== expectedHash) {
-      return {
-        ok: false,
-        kind: "stale",
-        message: `Asset file was modified externally (expected ${expectedHash}, got ${existing.hash})`,
-      }
-    }
-    return null
+    return assetIoCheck(existing, filePath, expectedHash)
   }
 
   private checkAssetFinalCas(
     filePath: string,
     expectedHash: string,
   ): { ok: false; kind: "invalid" | "stale"; message: string } | null {
-    return this.checkAssetStamp(readFile(filePath), filePath, expectedHash)
+    return assetIoCheckFinal(filePath, expectedHash)
   }
 
   /**
@@ -1550,53 +1539,72 @@ export class CanonicalConfigService implements Disposable {
       // an orphaned derived key).
     }
 
-    // Capture prior secret value from the exact validated prior ref (Blocker 8).
-    // If no valid prior ref, there is no verifiable prior secret.
+    // Prior value is captured inside the fence (read-only, no side-effect
+    // before acquire). If no valid prior ref, there is no verifiable prior.
     let priorValue: string | undefined
-    if (validatedPriorRef) {
-      try {
-        priorValue = await retrieveCredential(this.secrets, validatedPriorRef)
-      } catch (err) {
-        console.error(`[Kilo Config] Credential retrieval failed for ${validatedPriorRef}: ${String(err)}`)
-        return {
-          ok: false,
-          kind: this.disposed ? "disposed" : "io",
-          message: `Credential retrieval failed: ${String(err)}`,
+
+    // The outer credential operation holds one fence and executes secret +
+    // disk work inside it (F9): no SecretStorage side-effect before acquire,
+    // no nested acquire (the inner disk path takes the held lease). Acquire
+    // failure yields zero secret/disk effects; disk failure rolls the secret
+    // back inside the fence and the finally-resolve reads the disk. A
+    // disk-noop still resolves (credential-only noop converges, never replays).
+    if (scope === "project" && !this.hasProject) return this.projectAbsent()
+    const filePath = scope === "global" ? this.paths.globalConfigFile : this.paths.projectConfigFile!
+    const { withFence, configDescriptor } = await import("./convergence-guard")
+    return withFence(
+      this.convergence,
+      [configDescriptor(this.paths, scope)],
+      async () => {
+        let attempted = false
+        try {
+          // Secret read + store happen inside the fence (F9).
+          if (validatedPriorRef) {
+            try {
+              priorValue = await retrieveCredential(this.secrets, validatedPriorRef)
+            } catch (err) {
+              console.error(`[Kilo Config] Credential retrieval failed for ${validatedPriorRef}: ${String(err)}`)
+              return {
+                ok: false as const,
+                kind: (this.disposed ? "disposed" : "io") as "disposed" | "io",
+                message: `Credential retrieval failed: ${String(err)}`,
+              }
+            }
+          }
+          attempted = true
+          await storeCredential(this.secrets, scope, kind, id, plaintext)
+
+          if (stamp && (!sameStamp(stamp, this.stamp) || stamp.assetHash !== null)) {
+            const rollback = await this.rollbackCredential(newRef, priorValue)
+            if (rollback) return rollback
+            return { ok: false as const, kind: "stale" as const, message: "Canonical config materialization is stale" }
+          }
+          // Inner disk path: same validation/CAS/atomic write as writeConfig
+          // but without re-acquiring (outer holds the lease).
+          const result = await this.persistConfig(scope, configPatch, expectedHash, filePath)
+
+          if (!result.ok) {
+            const rollback = await this.rollbackCredential(newRef, priorValue)
+            if (rollback) return rollback
+            return this.normalizeCredentialFailure(result)
+          }
+
+          return { ok: true as const, snapshot: result.snapshot, ref: newRef }
+        } catch (err) {
+          console.error(`[Kilo Config] Credential intent failed for ${newRef}: ${String(err)}`)
+          if (attempted) {
+            const rollback = await this.rollbackCredential(newRef, priorValue)
+            if (rollback) return rollback
+          }
+          return {
+            ok: false as const,
+            kind: (this.disposed ? "disposed" : "io") as "disposed" | "io",
+            message: `Credential intent failed: ${String(err)}`,
+          }
         }
-      }
-    }
-
-    let attempted = false
-    try {
-      // Store the secret first
-      attempted = true
-      await storeCredential(this.secrets, scope, kind, id, plaintext)
-
-      // Try to commit config
-      if (stamp && (!sameStamp(stamp, this.stamp) || stamp.assetHash !== null)) {
-        const rollback = await this.rollbackCredential(newRef, priorValue)
-        if (rollback) return rollback
-        return { ok: false, kind: "stale", message: "Canonical config materialization is stale" }
-      }
-      const result = await this.writeConfig(scope, configPatch, expectedHash)
-
-      if (!result.ok) {
-        // Roll back: restore prior value or delete if no prior (Blocker 8)
-        const rollback = await this.rollbackCredential(newRef, priorValue)
-        if (rollback) return rollback
-        return this.normalizeCredentialFailure(result)
-      }
-
-      return { ok: true, snapshot: result.snapshot, ref: newRef }
-    } catch (err) {
-      // Exception: restore prior value or delete if no prior (Blocker 8)
-      console.error(`[Kilo Config] Credential intent failed for ${newRef}: ${String(err)}`)
-      if (attempted) {
-        const rollback = await this.rollbackCredential(newRef, priorValue)
-        if (rollback) return rollback
-      }
-      return { ok: false, kind: this.disposed ? "disposed" : "io", message: `Credential intent failed: ${String(err)}` }
-    }
+      },
+      (message) => ({ ok: false as const, kind: "io" as const, message }),
+    )
   }
 
   /**
@@ -1717,15 +1725,23 @@ export class CanonicalConfigService implements Disposable {
     scope: "global" | "project",
     expectedHash: string,
   ): Promise<
-    { ok: true; contentHash: "absent" } | { ok: false; kind: "invalid" | "stale" | "io" | "disposed"; message: string }
+    | { ok: true; contentHash: "absent"; convergence?: import("./convergence").ConvergenceState }
+    | { ok: false; kind: "invalid" | "stale" | "io" | "disposed"; message: string }
   > {
     if (this.disposed) return { ok: false, kind: "disposed", message: "Service disposed" }
     if (scope === "project" && !this.hasProject) return this.projectAbsent()
     if (!isValidAssetId(id)) return { ok: false, kind: "invalid", message: `Invalid asset ID "${id}"` }
     const dir = scope === "global" ? this.paths.globalAssetDirs[assetType] : this.paths.projectAssetDirs![assetType]
     const filePath = path.join(dir, `${id}.md`)
-    const prev = this.writeLocks.get(filePath) ?? Promise.resolve()
-    const locked = prev.then(async () => {
+    const early = this.checkAssetStamp(readFile(filePath), filePath, expectedHash)
+    if (early) return early
+    const { withFence, assetDescriptor } = await import("./convergence-guard")
+    return withFence(
+      this.convergence,
+      [assetDescriptor(this.paths, assetType, id, scope)],
+      async () => {
+        const prev = this.writeLocks.get(filePath) ?? Promise.resolve()
+        const locked = prev.then(async () => {
       const existing = readFile(filePath)
       const stamp = this.checkAssetStamp(existing, filePath, expectedHash)
       if (stamp) return stamp
@@ -1755,13 +1771,16 @@ export class CanonicalConfigService implements Disposable {
           message: `Asset delete failed: ${String(err)}`,
         }
       }
-    })
-    this.writeLocks.set(filePath, locked)
-    try {
-      return await locked
-    } finally {
-      if (this.writeLocks.get(filePath) === locked) this.writeLocks.delete(filePath)
-    }
+        })
+        this.writeLocks.set(filePath, locked)
+        try {
+          return await locked
+        } finally {
+          if (this.writeLocks.get(filePath) === locked) this.writeLocks.delete(filePath)
+        }
+      },
+      (message) => ({ ok: false as const, kind: "io" as const, message }),
+    )
   }
 
   /** Return the authored canonical document for a GUI draft, never backend config. */
@@ -2804,33 +2823,15 @@ export class CanonicalConfigService implements Disposable {
     })
   }
 
-  /**
-   * Restore a credential to its prior value, or delete if no prior (Blocker 8).
-   * Uses the exact validated ref — never reconstructs from scope/kind/id.
-   */
-  private async restoreCredentialState(ref: string, priorValue: string | undefined): Promise<void> {
-    if (priorValue !== undefined) {
-      await restoreCredentialRef(this.secrets, ref, priorValue)
-    } else {
-      await removeCredentialRef(this.secrets, ref)
-    }
+  private restoreCredentialState(ref: string, priorValue: string | undefined): Promise<void> {
+    return credentialRollbackRestore(this.secrets, ref, priorValue)
   }
 
   private async rollbackCredential(
     ref: string,
     priorValue: string | undefined,
   ): Promise<{ ok: false; kind: "disposed" | "io"; message: string } | null> {
-    try {
-      await this.restoreCredentialState(ref, priorValue)
-      return null
-    } catch (err) {
-      console.error(`[Kilo Config] Credential rollback failed for ${ref}: ${String(err)}`)
-      return {
-        ok: false,
-        kind: this.disposed ? "disposed" : "io",
-        message: `Credential rollback failed: ${String(err)}`,
-      }
-    }
+    return credentialRollback(this.secrets, this.disposed, ref, priorValue)
   }
 
   private normalizeCredentialFailure(
@@ -2841,15 +2842,7 @@ export class CanonicalConfigService implements Disposable {
     message: string
     errors?: readonly ValidationError[]
   } {
-    if (result.kind === "conflict") {
-      return { ...result, kind: "invalid" }
-    }
-    return {
-      ok: false,
-      kind: result.kind,
-      message: result.message,
-      errors: result.errors,
-    }
+    return normalizeCredentialFailureView(result)
   }
 
   /**

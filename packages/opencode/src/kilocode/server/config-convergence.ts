@@ -224,16 +224,29 @@ export const layer = Layer.effect(
             // LOCK-005: the snapshot awaits IN-FLIGHT boots of already-cached
             // directories, so a load that started before the fence is captured
             // here even when its boot completes after the fence raised.
-            const olds: Array<{ directory: string; old: Option.Option<InstanceContext> }> = store
-              ? scope === "global"
-                ? yield* Effect.forEach(yield* store.directories(), (directory) =>
+            // F-01: the fence is already raised — any snapshot failure below
+            // must release the same ticket (never rely on the caller). The
+            // region is uninterruptible, so only failure (not interrupt) can
+            // land here; the release is best-effort and the original cause is
+            // rethrown.
+            const oldsExit = yield* Effect.exit(
+              Effect.gen(function* () {
+                if (!store) return [] as Array<{ directory: string; old: Option.Option<InstanceContext> }>
+                if (scope === "global") {
+                  const dirs = yield* store.directories()
+                  return yield* Effect.forEach(dirs, (directory) =>
                     store!.snapshot(directory).pipe(Effect.map((old) => ({ directory, old }))),
                   )
-                : yield* store
-                    .snapshot(scope.directory)
-                    .pipe(Effect.map((old) => [{ directory: scope.directory, old }]))
-              : []
-            return { scope, fence: ticket, seq: 0, resolved: false, olds }
+                }
+                const old = yield* store.snapshot(scope.directory)
+                return [{ directory: scope.directory, old }]
+              }),
+            )
+            if (oldsExit._tag === "Failure") {
+              yield* ticket.release.pipe(Effect.catchCause(() => Effect.void))
+              return yield* Effect.failCause(oldsExit.cause)
+            }
+            return { scope, fence: ticket, seq: 0, resolved: false, olds: oldsExit.value }
           }),
         )
       })

@@ -586,7 +586,7 @@ flowchart LR
 |---|---|
 | Initialization | Rehydrate persisted indexes → scan asset directories → materialize from disk → start file watchers |
 | External edits | Watcher detects change → re-materialize → emit new snapshot |
-| GUI writes | Atomic file edit with stale-detection → validate scoped candidate + cross-scope composition → commit → re-materialize |
+| GUI writes | Fenced controlled write (CanonicalConfigService only): local stamp precheck → `config/convergence/acquire` → atomic file edit → exactly-once best-effort `config/convergence/resolve`; persisted-but-unresolved acks with `runtime convergence pending` and never claims runtime ready; marketplace installer writes stay unfenced |
 | Invalid edits | Retain exact prior valid materialization; emit diagnostics; never silently fall back to legacy values |
 | Own writes | Per-file timestamp coalescing — never suppress external edits |
 | Readiness | `materializationReady` is true only after an error-free materialization; snapshot existence alone is not readiness |
@@ -594,7 +594,7 @@ flowchart LR
 
 ### WYSIWYG and stale-draft handling
 
-Every GUI write applies a partial set/unset patch to the current stamped document (not replacement). Both scoped candidates and cross-scope composition are validated before any byte is changed. Writes use temp-file + rename for atomicity. Final CAS (content-address stamp) checks immediately before rename detect concurrent external edits and return stale-write conflicts instead of silent overwrites.
+Every GUI write applies a partial set/unset patch to the current stamped document (not replacement). Both scoped candidates and cross-scope composition are validated before any byte is changed. Writes use temp-file + rename for atomicity. Final CAS (content-address stamp) checks immediately before rename detect concurrent external edits and return stale-write conflicts instead of silent overwrites. CanonicalConfigService-controlled GUI writes (`writeConfig`, `writeConfigScopes`, `writeAsset`, `deleteAsset`, plus `processCredentialIntent` holding one fence for its secret + disk work) run through the injected convergence adapter (`src/config/convergence.ts`): the fence wraps run in try/finally with exactly-once best-effort resolve (original failure rethrows, resolve never masks it); acquire failure persists zero bytes and zero secret effects; write/rollback failure still resolves so the runtime decides noop/cold from disk; a resolved-lease acquire replay fails closed with no write; resolve loss never falls back to SDK and never rewrites — the backend auto-resolves. Own-write watcher hashes never re-acquire. External watcher edits (`source="external"`) remain unfenced in this unit. The marketplace installer (`MarketplaceInstaller.writeConfig` + direct agent/skill `.md` writes) is not routed through CanonicalConfigService and stays an unfenced gap for the next decision.
 
 ### Settings writes
 

@@ -63,6 +63,19 @@ export const ServeCommand = effectCmd({
               } catch (err) {
                 console.warn("[kilo serve] fd carrier dispose failed:", String(err))
               }
+              try {
+                const mod = await import("../../kilocode/server/fd-carrier")
+                await mod.awaitPeerClosedHandoffs()
+              } catch {
+                // Registration handoff is best-effort; service shutdown
+                // still releases fences without rebooting.
+              }
+              try {
+                const mod = await import("../../kilocode/server/fd-carrier")
+                await mod.shutdownFileConvergence()
+              } catch (err) {
+                console.warn("[kilo serve] file convergence shutdown failed:", String(err))
+              }
               await InstanceRuntime.disposeAllInstances()
               await server.stop(true)
             },
