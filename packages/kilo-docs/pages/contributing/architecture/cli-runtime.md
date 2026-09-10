@@ -599,6 +599,8 @@ The locked key is always the written path; `prepare`/`prepareGlobal` validate in
 
 Rules contract gap: `rules` is a registered canonical typed-asset class in the extension config, but the current opencode effective snapshot/materialization (`packages/opencode/src/config/config.ts` / `overlay.ts`) does not yet load `rules` assets into its effective `Config.Info`; no `rules` loader or composition operator participates in this path. This is a recorded contract gap, explicitly deferred; no new rules loader/runtime was created for it.
 
+Canonical custom-provider protocol gap: the extension authored contract now accepts exactly `openai/completions`, `openai/responses`, and `anthropic/messages` (`packages/kilo-vscode/src/config/types.ts`); this unit makes no change to the CLI runtime provider mapping, and runtime materialization plus the SecretStorage credential bridge for these authored providers remain unfinished.
+
 Historical sources (retired legacy readers — no retained reader, no dual-read, no migration tool):
 
 | Retired source | Former location / behavior |

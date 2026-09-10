@@ -6,8 +6,8 @@ import type {
   ReasoningEffortValue,
   VariantEntry,
 } from "./CustomProviderModelCard"
-import type { CanonicalProviderPayload, CanonicalProviderVariantPayload } from "../../../../src/config/types"
-import { isValidCanonicalProviderEntry } from "../../../../src/config/types"
+import type { CanonicalProviderPayload, CanonicalProviderProtocol, CanonicalProviderVariantPayload } from "../../../../src/config/types"
+import { CANONICAL_PROVIDER_PROTOCOLS, isCanonicalProviderProtocol, isValidCanonicalProviderEntry } from "../../../../src/config/types"
 
 type Translator = (key: string, params?: Record<string, string>) => string
 
@@ -20,12 +20,53 @@ export type FormState = {
   providerID: string
   name: string
   npm: CustomProviderPackage
+  protocol: CanonicalProviderProtocol
   baseURL: string
   apiKey: string
   models: ModelEntry[]
   headers: HeaderRow[]
   saving: boolean
 }
+
+export const PROTOCOL_OPTIONS: Array<{ value: CanonicalProviderProtocol; label: string }> = [
+  { value: "openai/completions", label: "OpenAI Compatible" },
+  { value: "openai/responses", label: "OpenAI Responses" },
+  { value: "anthropic/messages", label: "Anthropic Messages" },
+]
+
+export const DEFAULT_CANONICAL_PROTOCOL: CanonicalProviderProtocol = "openai/completions"
+
+/** Map a legacy npm package to its canonical protocol. Canonical saves never read npm. */
+export function protocolForPackage(pkg: CustomProviderPackage): CanonicalProviderProtocol {
+  if (pkg === "@ai-sdk/openai") return "openai/responses"
+  if (pkg === "@ai-sdk/anthropic") return "anthropic/messages"
+  return "openai/completions"
+}
+
+/** Map a canonical protocol back to its legacy npm package for non-canonical display/fetch only. */
+export function packageForProtocol(protocol: CanonicalProviderProtocol): CustomProviderPackage {
+  if (protocol === "openai/responses") return "@ai-sdk/openai"
+  if (protocol === "anthropic/messages") return "@ai-sdk/anthropic"
+  return "@ai-sdk/openai-compatible"
+}
+
+/**
+ * Narrow an unknown authored protocol value to a canonical protocol.
+ * Only the three canonical tokens are accepted; legacy tokens
+ * (openai/anthropic/google/azure/ollama/custom) return undefined with no mapping.
+ */
+export function resolveCanonicalProtocol(v: unknown): CanonicalProviderProtocol | undefined {
+  return isCanonicalProviderProtocol(v) ? v : undefined
+}
+
+/** Read a canonical endpoint without falling back to legacy options.baseURL. */
+export function canonicalEndpointFromConfig(cfg: unknown): string {
+  if (!cfg || typeof cfg !== "object") return ""
+  const endpoint = (cfg as { endpoint?: unknown }).endpoint
+  return typeof endpoint === "string" ? endpoint : ""
+}
+
+export { CANONICAL_PROVIDER_PROTOCOLS }
 
 export type FormErrors = {
   providerID: string | undefined
@@ -285,7 +326,7 @@ export function serializeCanonicalProvider(form: FormState): CanonicalProviderPa
   const payload: CanonicalProviderPayload = {
     ...(name ? { name } : {}),
     endpoint,
-    protocol: "openai",
+    protocol: form.protocol,
     ...(Object.keys(models).length > 0 ? { models } : {}),
   }
 

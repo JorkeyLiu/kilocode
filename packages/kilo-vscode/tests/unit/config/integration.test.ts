@@ -64,7 +64,7 @@ describe("full parse → validate → compose → materialize flow", () => {
   "provider": {
     "myprovider": {
       "endpoint": "https://my-api.example.com",
-      "protocol": "openai",
+      "protocol": "openai/completions",
       "models": { "gpt-4": { "name": "GPT-4" }, "gpt-3.5-turbo": { "name": "GPT-3.5 Turbo" } }
     }
   },

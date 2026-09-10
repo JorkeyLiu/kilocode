@@ -124,7 +124,7 @@ describe("canonical provider variant parity", () => {
         "e2e-local": {
           name: "E2E Local",
           endpoint: "http://127.0.0.1:45659/v1",
-          protocol: "openai",
+          protocol: "openai/completions",
           credential: "secret:kilo.credentials.project.provider.e2e-local",
           models: { "e2e-model": { name: "E2E Model" } },
         },

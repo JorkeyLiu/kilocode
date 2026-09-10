@@ -29,7 +29,8 @@ import {
 } from "../../src/config/types"
 import { validateConfig } from "../../src/config/validate"
 import { buildProviderIndex, persistAgentIndex, SELECTOR_INDEX_VERSION, type AgentIndex } from "../../src/config/selectors"
-import { serializeCanonicalProvider, type FormState } from "../../webview-ui/src/components/settings/CustomProviderValidation"
+import { serializeCanonicalProvider, resolveCanonicalProtocol, protocolForPackage, packageForProtocol, canonicalEndpointFromConfig, type FormState } from "../../webview-ui/src/components/settings/CustomProviderValidation"
+import { isCanonicalAuthoredConfig } from "../../webview-ui/src/types/messages/providers"
 
 const { KiloProvider } = await import("../../src/KiloProvider")
 
@@ -119,7 +120,7 @@ describe("P4.1 shared canonical schema equivalence", () => {
         custom: {
           name: "Custom",
           endpoint: "https://api.example.com/v1",
-          protocol: "openai",
+          protocol: "openai/completions",
           models: { "m1": { name: "Model 1" } },
         },
       },
@@ -128,17 +129,17 @@ describe("P4.1 shared canonical schema equivalence", () => {
     expect(toCanonicalPayload(valid)).toBeDefined()
 
     // ftp endpoint rejected by both (identical rule to the form serializer)
-    const ftp = { provider: { custom: { name: "C", endpoint: "ftp://example.com", protocol: "openai", models: { "m1": { name: "M" } } } } }
+    const ftp = { provider: { custom: { name: "C", endpoint: "ftp://example.com", protocol: "openai/completions", models: { "m1": { name: "M" } } } } }
     expect(validateConfig(JSON.stringify(ftp), "global", "test").valid).toBe(false)
     expect(toCanonicalPayload(ftp)).toBeUndefined()
 
     // empty name rejected by both
-    const emptyName = { provider: { custom: { name: "", endpoint: "https://x.com", protocol: "openai", models: { "m1": { name: "M" } } } } }
+    const emptyName = { provider: { custom: { name: "", endpoint: "https://x.com", protocol: "openai/completions", models: { "m1": { name: "M" } } } } }
     expect(validateConfig(JSON.stringify(emptyName), "global", "test").valid).toBe(false)
     expect(toCanonicalPayload(emptyName)).toBeUndefined()
 
     // empty models map rejected by both
-    const emptyModels = { provider: { custom: { name: "C", endpoint: "https://x.com", protocol: "openai", models: {} } } }
+    const emptyModels = { provider: { custom: { name: "C", endpoint: "https://x.com", protocol: "openai/completions", models: {} } } }
     expect(validateConfig(JSON.stringify(emptyModels), "global", "test").valid).toBe(false)
     expect(toCanonicalPayload(emptyModels)).toBeUndefined()
 
@@ -931,6 +932,7 @@ describe("P4.1 canonical custom-provider form", () => {
       providerID: "custom",
       name: "Custom",
       npm: "@ai-sdk/openai-compatible",
+      protocol: "openai/completions",
       baseURL: "https://api.example.com/v1",
       apiKey: "",
       models: [{ id: "m1", name: "Model 1", reasoning: false, supportsImages: false, modalities: { input: [], output: [] }, variants: [] }],
@@ -946,7 +948,7 @@ describe("P4.1 canonical custom-provider form", () => {
     expect(isValidCanonicalProviderEntry(payload)).toBe(true)
     expect(payload!.name).toBe("Custom")
     expect(payload!.endpoint).toBe("https://api.example.com/v1")
-    expect(payload!.protocol).toBe("openai")
+    expect(payload!.protocol).toBe("openai/completions")
     expect(payload!.models).toBeDefined()
     // forbidden legacy fields are absent from the serialized payload
     expect("npm" in payload!).toBe(false)
@@ -973,6 +975,99 @@ describe("P4.1 canonical custom-provider form", () => {
     expect(noName).toBeUndefined()
     const badModel = serializeCanonicalProvider(form({ models: [{ id: "", name: "M", reasoning: false, supportsImages: false, modalities: { input: [], output: [] }, variants: [] }] }))
     if (badModel) expect(isValidCanonicalProviderEntry(badModel)).toBe(true)
+  })
+
+  it("serializer emits each canonical protocol verbatim from form.protocol", () => {
+    for (const protocol of ["openai/completions", "openai/responses", "anthropic/messages"] as const) {
+      const payload = serializeCanonicalProvider(form({ protocol }))
+      expect(payload).toBeDefined()
+      expect(payload!.protocol).toBe(protocol)
+      expect(isValidCanonicalProviderEntry(payload)).toBe(true)
+    }
+  })
+
+  it("serializer rejects a legacy protocol token", () => {
+    const payload = serializeCanonicalProvider(form({ protocol: "openai" as unknown as FormState["protocol"] }))
+    expect(payload).toBeUndefined()
+  })
+
+  it("resolveCanonicalProtocol accepts three tokens and rejects legacy tokens without mapping", () => {
+    expect(resolveCanonicalProtocol("openai/completions")).toBe("openai/completions")
+    expect(resolveCanonicalProtocol("openai/responses")).toBe("openai/responses")
+    expect(resolveCanonicalProtocol("anthropic/messages")).toBe("anthropic/messages")
+    for (const legacy of ["openai", "anthropic", "google", "azure", "ollama", "custom", "bogus"]) {
+      expect(resolveCanonicalProtocol(legacy)).toBeUndefined()
+    }
+  })
+
+  it("package/protocol mapping covers the three interfaces", () => {
+    expect(protocolForPackage("@ai-sdk/openai-compatible")).toBe("openai/completions")
+    expect(protocolForPackage("@ai-sdk/openai")).toBe("openai/responses")
+    expect(protocolForPackage("@ai-sdk/anthropic")).toBe("anthropic/messages")
+    expect(packageForProtocol("openai/completions")).toBe("@ai-sdk/openai-compatible")
+    expect(packageForProtocol("openai/responses")).toBe("@ai-sdk/openai")
+    expect(packageForProtocol("anthropic/messages")).toBe("@ai-sdk/anthropic")
+  })
+
+  it("canonical endpoint reads endpoint only, never legacy options.baseURL", () => {
+    expect(canonicalEndpointFromConfig({ endpoint: "https://api.example.com/v1" })).toBe("https://api.example.com/v1")
+    expect(canonicalEndpointFromConfig({ endpoint: "https://api.example.com/v1", options: { baseURL: "https://legacy.example.com" } })).toBe("https://api.example.com/v1")
+    expect(canonicalEndpointFromConfig({ options: { baseURL: "https://legacy.example.com" } })).toBe("")
+  })
+
+  it("canonical dialog init reads endpoint/protocol and never guesses from legacy npm", async () => {
+    const source = await Bun.file(new URL("../../webview-ui/src/components/settings/CustomProviderDialog.tsx", import.meta.url)).text()
+    expect(source).toContain("canonicalEndpointFromConfig")
+    expect(source).toContain("resolveCanonicalProtocol")
+    expect(source).toContain("PROTOCOL_OPTIONS")
+    expect(source).toContain("form.protocol")
+  })
+})
+
+// ── Canonical dialog init priority: mixed legacy/canonical shapes ────
+
+describe("P4.1 canonical dialog init priority", () => {
+  it("isCanonicalAuthoredConfig treats mixed legacy/canonical records as canonical", () => {
+    expect(isCanonicalAuthoredConfig({ name: "C", endpoint: "https://api.example.com/v1", protocol: "openai/completions", models: {} })).toBe(true)
+    const mixed: Record<string, unknown> = { name: "C", endpoint: "https://canonical.example.com/v1", protocol: "anthropic/messages", npm: "@ai-sdk/openai", options: { baseURL: "https://legacy.example.com" }, env: ["KEY"] }
+    expect(isCanonicalAuthoredConfig(mixed)).toBe(true)
+    expect(isCanonicalAuthoredConfig({ protocol: "openai/responses" })).toBe(true)
+    expect(isCanonicalAuthoredConfig({ npm: "@ai-sdk/openai", options: { baseURL: "https://legacy.example.com" } })).toBe(false)
+    expect(isCanonicalAuthoredConfig({ protocol: "openai" })).toBe(false)
+    expect(isCanonicalAuthoredConfig(undefined)).toBe(false)
+    expect(isCanonicalAuthoredConfig(null)).toBe(false)
+  })
+
+  it("mixed shape keeps canonical endpoint/protocol when legacy fields conflict", () => {
+    const mixed: Record<string, unknown> = { name: "C", endpoint: "https://canonical.example.com/v1", protocol: "anthropic/messages", npm: "@ai-sdk/openai", options: { baseURL: "https://legacy.example.com" } }
+    expect(isCanonicalAuthoredConfig(mixed)).toBe(true)
+    expect(canonicalEndpointFromConfig(mixed)).toBe("https://canonical.example.com/v1")
+    expect(resolveCanonicalProtocol(mixed["protocol"])).toBe("anthropic/messages")
+    expect(canonicalEndpointFromConfig(mixed)).not.toBe("https://legacy.example.com")
+  })
+
+  it("canonical webview config type exposes only name/endpoint/protocol/models", async () => {
+    const source = await Bun.file(new URL("../../webview-ui/src/types/messages/providers.ts", import.meta.url)).text()
+    const block = source.match(/interface CanonicalAuthoredProviderConfig \{[\s\S]*?\n\}/)?.[0] ?? ""
+    for (const key of ["name?", "endpoint?", "protocol?", "models?"]) expect(block).toContain(key)
+    for (const banned of ["credential", "headers", "npm", "env", "options"]) expect(block).not.toContain(banned)
+    expect(source).toContain("config: CanonicalAuthoredProviderConfig | ProviderConfig")
+    expect(source).toContain("isCanonicalAuthoredConfig")
+  })
+
+  it("canonical dialog init narrows via the guard before legacy npm/options reads", async () => {
+    const source = await Bun.file(new URL("../../webview-ui/src/components/settings/CustomProviderDialog.tsx", import.meta.url)).text()
+    expect(source).toContain("isCanonicalAuthoredConfig")
+    expect(source).toContain("ExistingProvider")
+    expect(source).not.toContain("type ExistingProvider =")
+    expect(source).not.toContain("as { protocol")
+    expect(source).not.toContain("options as")
+    const npmBlock = source.match(/function initNpm[\s\S]*?\n\}/)?.[0] ?? ""
+    expect(npmBlock).toContain("isCanonicalAuthoredConfig")
+    expect(npmBlock.indexOf("isCanonicalAuthoredConfig")).toBeLessThan(npmBlock.indexOf("cfg?.npm"))
+    const urlBlock = source.match(/function initBaseURL[\s\S]*?\n\}/)?.[0] ?? ""
+    expect(urlBlock).toContain("isCanonicalAuthoredConfig")
+    expect(urlBlock.indexOf("isCanonicalAuthoredConfig")).toBeLessThan(urlBlock.indexOf('options?.["baseURL"]'))
   })
 })
 
@@ -1006,8 +1101,8 @@ describe("P4.1 credential ref reads reject derived keys", () => {
     fs.mkdirSync(global, { recursive: true })
     fs.mkdirSync(path.join(project, ".kilo"), { recursive: true })
     const cfg: Record<string, unknown> = credentialRef
-      ? { provider: { openai: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai", models: { "gpt-4": { name: "GPT-4" } }, credential: credentialRef } } }
-      : { provider: { openai: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai", models: { "gpt-4": { name: "GPT-4" } } } } }
+      ? { provider: { openai: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai/completions", models: { "gpt-4": { name: "GPT-4" } }, credential: credentialRef } } }
+      : { provider: { openai: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai/completions", models: { "gpt-4": { name: "GPT-4" } } } } }
     fs.writeFileSync(path.join(global, "kilo.jsonc"), JSON.stringify(cfg))
     const secrets = createMemorySecretAdapter()
     const canonical = new CanonicalConfigService({ secrets } as never, {
@@ -1144,7 +1239,7 @@ describe("P4.1 canonical provider save uses shared schema validator", () => {
       requestId: "r1",
       canonical: true,
       stamp: canonical.stamp,
-      config: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai", npm: "@ai-sdk/openai" },
+      config: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai/completions", npm: "@ai-sdk/openai" },
     })
     const err = messages.find((m) => (m as Record<string, unknown>).type === "providerActionError") as Record<string, unknown> | undefined
     expect(err).toBeDefined()
@@ -1178,7 +1273,7 @@ describe("P4.1 canonical provider save uses shared schema validator", () => {
       requestId: "r1",
       canonical: true,
       stamp: canonical.stamp,
-      config: { name: "OpenAI", endpoint: "ftp://invalid", protocol: "openai", models: { "m1": { name: "M1" } } },
+      config: { name: "OpenAI", endpoint: "ftp://invalid", protocol: "openai/completions", models: { "m1": { name: "M1" } } },
     })
     const err = messages.find((m) => (m as Record<string, unknown>).type === "providerActionError") as Record<string, unknown> | undefined
     expect(err).toBeDefined()
@@ -1213,7 +1308,7 @@ describe("P4.1 canonical provider save uses shared schema validator", () => {
       canonical: true,
       stamp: canonical.stamp,
       apiKey: "sk-stolen",
-      config: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai", models: { "m1": { name: "M1" } } },
+      config: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai/completions", models: { "m1": { name: "M1" } } },
     })
     const err = messages.find((m) => (m as Record<string, unknown>).type === "providerActionError") as Record<string, unknown> | undefined
     expect(err).toBeDefined()

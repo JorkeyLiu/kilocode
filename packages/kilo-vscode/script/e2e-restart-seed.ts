@@ -54,7 +54,7 @@ export const RESTART_ARTIFACT_CONTENT = `echo:${"restart"}`
  * The SAME run-owned provider in the closed canonical project-scope shape the
  * extension's CanonicalConfigService validator accepts (types.ts
  * APPROVED_PROVIDER_KEYS: name/endpoint/protocol/models/credential only;
- * protocol from CANONICAL_PROTOCOLS; no plaintext apiKey needed for a local
+ * protocol from CANONICAL_PROVIDER_PROTOCOLS; no plaintext apiKey needed for a local
  * openai-compatible endpoint). The kilo.jsonc project seed is the sole
  * canonical config; the backend's e2e-local npm/options/baseURL and
  * small_model/subagent_model pins are injected via the CLI-side E2E seam
@@ -68,7 +68,7 @@ export function realProjectSeed(port: number): Record<string, unknown> {
       "e2e-local": {
         name: "E2E Local",
         endpoint: `http://127.0.0.1:${port}/v1`,
-        protocol: "openai",
+        protocol: "openai/completions",
         credential: "secret:kilo.credentials.project.provider.e2e-local",
         models: {
           "e2e-model": {

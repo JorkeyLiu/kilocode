@@ -328,7 +328,7 @@ describe("LOCK-1: Canonical provider recursive validation", () => {
         openai: {
           name: "OpenAI",
           endpoint: "https://api.openai.com/v1",
-          protocol: "openai",
+          protocol: "openai/completions",
           models: { "gpt-4": { name: "GPT-4" } },
         },
       },
@@ -336,7 +336,7 @@ describe("LOCK-1: Canonical provider recursive validation", () => {
     expect(result).toBeDefined()
     expect(result!.provider!.openai!.name).toBe("OpenAI")
     expect(result!.provider!.openai!.endpoint).toBe("https://api.openai.com/v1")
-    expect(result!.provider!.openai!.protocol).toBe("openai")
+    expect(result!.provider!.openai!.protocol).toBe("openai/completions")
   })
 
   it("accepts model with approved optional fields (reasoning, modalities, variants)", () => {
@@ -356,6 +356,23 @@ describe("LOCK-1: Canonical provider recursive validation", () => {
     })
     expect(result).toBeDefined()
     expect(result!.provider!.openai!.models!["o3"]!.reasoning).toBe(true)
+  })
+
+  it("accepts the three canonical protocols and rejects legacy tokens", () => {
+    for (const protocol of ["openai/completions", "openai/responses", "anthropic/messages"]) {
+      const result = toCanonicalPayload({
+        provider: { custom: { name: "C", endpoint: "https://api.example.com/v1", protocol, models: { m1: { name: "M1" } } } },
+      })
+      expect(result).toBeDefined()
+      expect(result!.provider!.custom!.protocol).toBe(protocol)
+    }
+    for (const protocol of ["openai", "anthropic", "google", "azure", "ollama", "custom"]) {
+      expect(
+        toCanonicalPayload({
+          provider: { custom: { name: "C", endpoint: "https://api.example.com/v1", protocol, models: { m1: { name: "M1" } } } },
+        }),
+      ).toBeUndefined()
+    }
   })
 })
 

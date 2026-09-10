@@ -976,7 +976,7 @@ describe("Blocker 12: Asset scan ENOENT distinction", () => {
 
 describe("Blocker 13: Selector-only payloads", () => {
   it("provider index does NOT contain endpoint or protocol", async () => {
-    writeGlobalConfig({ provider: { openai: { endpoint: "https://api.openai.com/v1", protocol: "openai" } } })
+    writeGlobalConfig({ provider: { openai: { endpoint: "https://api.openai.com/v1", protocol: "openai/completions" } } })
     const service = createService()
     await service.initialize()
 
@@ -1423,7 +1423,7 @@ describe("Finding 12: Asset scan error handling", () => {
 
 describe("Finding 13: Selector-only payloads", () => {
   it("provider index does NOT contain endpoint or protocol", async () => {
-    writeGlobalConfig({ provider: { openai: { endpoint: "https://api.openai.com/v1", protocol: "openai" } } })
+    writeGlobalConfig({ provider: { openai: { endpoint: "https://api.openai.com/v1", protocol: "openai/completions" } } })
     const service = createService()
     await service.initialize()
     const idx = await service.buildProviderIndexAsync()

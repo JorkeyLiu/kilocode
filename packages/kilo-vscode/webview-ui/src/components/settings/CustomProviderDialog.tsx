@@ -14,7 +14,9 @@ import { useConfig } from "../../context/config"
 import { useLanguage } from "../../context/language"
 import { useProvider } from "../../context/provider"
 import { useVSCode } from "../../context/vscode"
-import type { ExtensionMessage, ProviderAuthState, ProviderConfig } from "../../types/messages"
+import type { ExtensionMessage, ProviderAuthState } from "../../types/messages"
+import type { CanonicalAuthoredProviderConfig, ExistingProvider, ProviderConfig } from "../../types/messages/providers"
+import { isCanonicalAuthoredConfig } from "../../types/messages/providers"
 import { createProviderAction } from "../../utils/provider-action"
 import { MASKED_CUSTOM_PROVIDER_KEY, resolveCustomProviderKey } from "../../../../src/shared/custom-provider"
 import {
@@ -25,6 +27,13 @@ import {
 import { ModelCard } from "./CustomProviderModelCard"
 import type { Modalities, Modality, ModelEntry, VariantEntry } from "./CustomProviderModelCard"
 import { validateCustomProvider, serializeCanonicalProvider, parseVariant } from "./CustomProviderValidation"
+import {
+  DEFAULT_CANONICAL_PROTOCOL,
+  PROTOCOL_OPTIONS,
+  canonicalEndpointFromConfig,
+  packageForProtocol,
+  resolveCanonicalProtocol,
+} from "./CustomProviderValidation"
 import type { FormErrors, FormState, HeaderRow } from "./CustomProviderValidation"
 import type { CanonicalProviderVariantPayload } from "../../../../src/config/types"
 const DEBOUNCE_MS = 500
@@ -78,7 +87,9 @@ function modes(raw: unknown): Modalities {
   }
 }
 
-function initModels(cfg: ProviderConfig | undefined): ModelEntry[] {
+type DialogConfig = CanonicalAuthoredProviderConfig | ProviderConfig
+
+function initModels(cfg: DialogConfig | undefined): ModelEntry[] {
   const empty = { id: "", name: "", reasoning: false, supportsImages: false, modalities: {}, variants: [] }
   if (!cfg?.models || typeof cfg.models !== "object") return [{ ...empty }]
   const entries = Object.entries(cfg.models)
@@ -98,33 +109,49 @@ function initModels(cfg: ProviderConfig | undefined): ModelEntry[] {
   })
 }
 
-function initHeaders(cfg: ProviderConfig | undefined): HeaderRow[] {
-  const opts = cfg?.options as { headers?: Record<string, string> } | undefined
-  const headers = opts?.headers
+function initHeaders(cfg: DialogConfig | undefined): HeaderRow[] {
+  if (!cfg || isCanonicalAuthoredConfig(cfg)) return [{ key: "", value: "" }]
+  const headers = cfg.options?.["headers"]
   if (!headers || typeof headers !== "object") return [{ key: "", value: "" }]
-  const entries = Object.entries(headers)
+  const entries = Object.entries(headers as Record<string, unknown>)
   if (entries.length === 0) return [{ key: "", value: "" }]
-  return entries.map(([key, value]) => ({ key, value }))
-}
-
-type ExistingProvider = {
-  providerID: string
-  name: string
-  config: ProviderConfig
+  return entries.map(([key, value]) => ({ key, value: typeof value === "string" ? value : String(value ?? "") }))
 }
 
 function resolveAuth(existing: ExistingProvider | undefined, states: Record<string, ProviderAuthState>) {
-  if (!existing || existing.config.env?.length) return
+  if (!existing) return
+  const cfg = existing.config
+  if ("env" in cfg && cfg.env?.length) return
   return states[existing.providerID]
 }
 
-function initForm(existing: ExistingProvider | undefined, auth: ProviderAuthState | undefined): FormState {
-  const npm = existing?.config?.npm
+function initProtocol(cfg: DialogConfig | undefined): FormState["protocol"] {
+  if (!cfg || !isCanonicalAuthoredConfig(cfg)) return DEFAULT_CANONICAL_PROTOCOL
+  return resolveCanonicalProtocol(cfg.protocol) ?? DEFAULT_CANONICAL_PROTOCOL
+}
+
+function initBaseURL(cfg: DialogConfig | undefined): string {
+  if (!cfg) return ""
+  if (isCanonicalAuthoredConfig(cfg)) return canonicalEndpointFromConfig(cfg)
+  const base = cfg.options?.["baseURL"]
+  return typeof base === "string" ? base : ""
+}
+
+function initNpm(cfg: DialogConfig | undefined, protocol: FormState["protocol"]): CustomProviderPackage {
+  if (cfg && isCanonicalAuthoredConfig(cfg)) return packageForProtocol(protocol)
+  const npm = cfg?.npm
+  if (isCustomProviderPackage(npm)) return npm
+  return CUSTOM_PROVIDER_PACKAGE
+}
+
+export function initForm(existing: ExistingProvider | undefined, auth: ProviderAuthState | undefined): FormState {
+  const protocol = initProtocol(existing?.config)
   return {
     providerID: existing?.providerID ?? "",
     name: existing?.name ?? "",
-    npm: isCustomProviderPackage(npm) ? npm : CUSTOM_PROVIDER_PACKAGE,
-    baseURL: (existing?.config?.options as { baseURL?: string } | undefined)?.baseURL ?? "",
+    npm: initNpm(existing?.config, protocol),
+    protocol,
+    baseURL: initBaseURL(existing?.config),
     apiKey: resolveCustomProviderKey(auth),
     models: initModels(existing?.config),
     headers: initHeaders(existing?.config),
@@ -515,13 +542,14 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
   }
 
   function validate() {
+    const cfg = props.existing?.config
     const output = validateCustomProvider({
       form,
       t: language.t,
       editing: editing(),
       disabledProviders: config().disabled_providers ?? [],
       existingProviderIDs: new Set(Object.keys(provider.providers())),
-      existingEnv: props.existing?.config?.env,
+      existingEnv: cfg && "env" in cfg ? cfg.env : undefined,
     })
     setErrors(reconcile(output.errors))
     return output.result
@@ -646,20 +674,36 @@ const CustomProviderDialog = (props: CustomProviderDialogProps) => {
           />
           <div class="cpd-package-field">
             <label class="cpd-package-label">{language.t("provider.custom.field.package.label")}</label>
-            <Select
-              options={PACKAGE_OPTIONS}
-              current={PACKAGE_OPTIONS.find((option) => option.value === form.npm)}
-              value={(option) => option.value}
-              label={(option) => option.label}
-              onSelect={(option) => {
-                if (isCanonical()) return
-                if (!option) return
-                setForm("npm", option.value)
-                setFetchPackage(option.value)
-              }}
-              variant="secondary"
-              triggerVariant="settings"
-            />
+            <Show
+              when={isCanonical()}
+              fallback={
+                <Select
+                  options={PACKAGE_OPTIONS}
+                  current={PACKAGE_OPTIONS.find((option) => option.value === form.npm)}
+                  value={(option) => option.value}
+                  label={(option) => option.label}
+                  onSelect={(option) => {
+                    if (!option) return
+                    setForm("npm", option.value)
+                    setFetchPackage(option.value)
+                  }}
+                  variant="secondary"
+                  triggerVariant="settings"
+                />
+              }
+            >
+              <Select
+                options={PROTOCOL_OPTIONS}
+                current={PROTOCOL_OPTIONS.find((option) => option.value === form.protocol)}
+                value={(option) => option.value}
+                label={(option) => option.label}
+                onSelect={() => {
+                  return
+                }}
+                variant="secondary"
+                triggerVariant="settings"
+              />
+            </Show>
           </div>
           <TextField
             label={language.t("provider.custom.field.baseURL.label")}

@@ -33,6 +33,14 @@ this note; when they disagree, the code is right.
   OAuth `authorize`/`complete` keeps its legacy path with canonical
   `unsupported`; credential reads and custom model discovery keep their
   legacy read paths.
+- Authored canonical custom-provider protocol is converged: `CanonicalProviderPayload`
+  persists only `{name, endpoint, protocol, models}` plus the extension-host
+  credential reference, with protocol exactly `openai/completions`,
+  `openai/responses`, or `anthropic/messages`; legacy protocol tokens are
+  rejected with no mapping or migration, the webview serializer and canonical
+  edit init use the protocol state directly, and headers are not part of the
+  authored contract. CLI runtime materialization and the SecretStorage
+  credential bridge for these authored providers remain unfinished.
 - Canonical file-backed custom-agent create/edit/import/remove is production:
   stamped `canonical: true` `mutateAgent`/`removeAgent` through
   `CanonicalConfigService.writeAsset`/`deleteAsset` CAS (project-absent on

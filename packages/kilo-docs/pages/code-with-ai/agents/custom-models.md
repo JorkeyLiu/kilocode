@@ -32,13 +32,14 @@ Add custom models under the `provider.<provider_id>.models` key in your config f
 
 - **Provider ID** — A unique identifier using lowercase letters, numbers, hyphens, or underscores (e.g., `myprovider`). This becomes the `provider_id` in the `provider_id/model_id` format.
 - **Display name** — A human-readable name shown in the UI (e.g., `My AI Provider`).
-- **Provider API** — The protocol used by the provider. Use **OpenAI Responses** for OpenAI and xAI models. Use **Anthropic Messages** for Anthropic and MiniMax models. **OpenAI Compatible** is the default for other OpenAI Chat Completions-compatible endpoints.
+- **Provider API** — The protocol used by the provider. Use **OpenAI Responses** for OpenAI and xAI models. Use **Anthropic Messages** for Anthropic and MiniMax models. **OpenAI Compatible** is the default for other OpenAI Chat Completions-compatible endpoints. The authored canonical surface supports exactly three interfaces: `openai/completions`, `openai/responses`, and `anthropic/messages`.
 - **Base URL** — The provider's API endpoint (e.g., `https://api.myprovider.com/v1`). When a valid URL is entered, Kilo automatically fetches available models from the endpoint if it exposes an OpenAI-compatible models endpoint.
-- **API key** — Your provider's API key. Optional — leave empty if you manage authentication via headers.
+- **API key** — Your provider's API key. Optional — the credential value is owned by the extension host and never written into the authored config file.
 - **Models** — Add models manually by ID and display name, or select from the auto-fetched list that appears after entering a valid base URL.
-- **Headers** (optional) — Add custom HTTP headers as key-value pairs if your provider requires them.
 
-4. Click **Submit** to save. Your custom provider appears in the provider list and its models become available in the model picker.
+The canonical authored payload stores only `name`, `endpoint`, `protocol`, `models`, plus the extension-host credential reference. Custom headers are not part of the canonical authored contract. Runtime provider materialization and the SecretStorage credential bridge for these authored providers remain unfinished, so saving the authored record does not by itself claim a live runtime connection.
+
+4. Click **Submit** to save the authored canonical record (`name`, `endpoint`, `protocol`, `models`, plus the extension-host credential reference). Saving persists authored metadata only — runtime provider materialization and the SecretStorage credential bridge for these authored providers remain unfinished, so the new provider does not yet appear in the provider list or model picker.
 
 To edit an existing custom provider, click the **Edit provider** button next to it in the connected providers section.
 

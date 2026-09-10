@@ -34,7 +34,7 @@ describe("real-session canonical project seed", () => {
     const provider = (seed.provider as Record<string, unknown>)["e2e-local"] as Record<string, unknown>
     expect(provider.name).toBe("E2E Local")
     expect(provider.endpoint).toBe(`http://127.0.0.1:${port}/v1`)
-    expect(provider.protocol).toBe("openai")
+    expect(provider.protocol).toBe("openai/completions")
     expect(provider.credential).toBe("secret:kilo.credentials.project.provider.e2e-local")
     const models = provider.models as Record<string, unknown>
     const m = models["e2e-model"] as Record<string, unknown>

@@ -64,7 +64,7 @@ describe("isolated project seed strict closure", () => {
     expect(seed.model).toBe("e2e-local/e2e-model")
     const prov = (seed.provider as Record<string, unknown>)["e2e-local"] as Record<string, unknown>
     expect(prov.endpoint).toBe("http://127.0.0.1:9999/v1")
-    expect(prov.protocol).toBe("openai")
+    expect(prov.protocol).toBe("openai/completions")
     expect(prov.credential).toBe("secret:kilo.credentials.project.provider.e2e-local")
     expect(prov.npm).toBeUndefined()
     expect(prov.options).toBeUndefined()

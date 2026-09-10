@@ -292,7 +292,7 @@ export type CanonicalConfigPayload = Partial<{
 export interface CanonicalProviderPayload {
   readonly name?: string
   readonly endpoint?: string
-  readonly protocol?: string
+  readonly protocol?: CanonicalProviderProtocol
   readonly models?: { readonly [id: string]: CanonicalProviderModelPayload }
   /** Opaque SecretStorage reference — persisted in JSONC but excluded from webview payload. */
   readonly credential?: string
@@ -368,7 +368,13 @@ function hasOnlyKeys(obj: Record<string, unknown>, allowed: Set<string>): boolea
 // must derive their rules from these functions.
 
 /** Approved protocol values for canonical provider entries. */
-const CANONICAL_PROTOCOLS = new Set(["openai", "anthropic", "google", "azure", "ollama", "custom"])
+export const CANONICAL_PROVIDER_PROTOCOLS = ["openai/completions", "openai/responses", "anthropic/messages"] as const
+export type CanonicalProviderProtocol = (typeof CANONICAL_PROVIDER_PROTOCOLS)[number]
+const CANONICAL_PROTOCOLS = new Set<string>(CANONICAL_PROVIDER_PROTOCOLS)
+
+export function isCanonicalProviderProtocol(v: unknown): v is CanonicalProviderProtocol {
+  return typeof v === "string" && (CANONICAL_PROTOCOLS as Set<string>).has(v)
+}
 
 /** Approved variant keys — must match CanonicalProviderVariantPayload exactly. */
 export const APPROVED_VARIANT_KEYS = new Set(["enable_thinking", "reasoningEffort", "effort", "thinking", "reasoning_split", "chat_template_args"])
@@ -545,7 +551,7 @@ export function isValidCanonicalProviderEntry(v: unknown, contextId?: string): v
   if (!hasOnlyKeys(r, APPROVED_PROVIDER_KEYS)) return false
   if (r.name !== undefined && (typeof r.name !== "string" || r.name.length === 0)) return false
   if (r.endpoint !== undefined && !isValidEndpoint(r.endpoint)) return false
-  if (r.protocol !== undefined && !CANONICAL_PROTOCOLS.has(r.protocol as string)) return false
+  if (r.protocol !== undefined && !isCanonicalProviderProtocol(r.protocol)) return false
   if (r.credential !== undefined && !isValidProviderCredential(r.credential, contextId)) return false
   if (r.models !== undefined) {
     if (!isValidModelsMap(r.models)) return false

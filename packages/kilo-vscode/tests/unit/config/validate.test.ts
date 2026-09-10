@@ -100,7 +100,7 @@ describe("validateConfig", () => {
       provider: {
         myprovider: {
           endpoint: "https://my-api.example.com",
-          protocol: "openai",
+          protocol: "openai/completions",
           models: { "gpt-4": { name: "GPT-4" }, "gpt-3.5-turbo": { name: "GPT-3.5 Turbo" } },
         },
       },
@@ -565,7 +565,7 @@ describe("LOCK-1: Provider model schema exactness", () => {
         openai: {
           name: "OpenAI",
           endpoint: "https://api.openai.com/v1",
-          protocol: "openai",
+          protocol: "openai/completions",
           models: { "gpt-4": { name: "GPT-4" } },
         },
       },
@@ -728,6 +728,38 @@ describe("LOCK-1: Provider model schema exactness", () => {
     const result = validateConfig(config, "global", "test")
     expect(result.valid).toBe(false)
   })
+
+  it("accepts the three canonical protocols", () => {
+    for (const protocol of ["openai/completions", "openai/responses", "anthropic/messages"]) {
+      const config = JSON.stringify({
+        provider: {
+          custom: {
+            name: "Custom",
+            endpoint: "https://api.example.com/v1",
+            protocol,
+            models: { m1: { name: "M1" } },
+          },
+        },
+      })
+      expect(validateConfig(config, "global", "test").valid).toBe(true)
+    }
+  })
+
+  it("rejects legacy protocol tokens without mapping", () => {
+    for (const protocol of ["openai", "anthropic", "google", "azure", "ollama", "custom"]) {
+      const config = JSON.stringify({
+        provider: {
+          custom: {
+            name: "Custom",
+            endpoint: "https://api.example.com/v1",
+            protocol,
+            models: { m1: { name: "M1" } },
+          },
+        },
+      })
+      expect(validateConfig(config, "global", "test").valid).toBe(false)
+    }
+  })
 })
 
 // ── F7: Asset credential validation ──────────────────────────────────
@@ -863,7 +895,7 @@ describe("LOCK-1b: Provider schema equivalence", () => {
     },
     {
       name: "provider with all canonical fields",
-      value: { provider: { openai: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai", models: { "gpt-4": { name: "GPT-4" } } } } },
+      value: { provider: { openai: { name: "OpenAI", endpoint: "https://api.openai.com/v1", protocol: "openai/completions", models: { "gpt-4": { name: "GPT-4" } } } } },
     },
     {
       name: "provider with model variants",

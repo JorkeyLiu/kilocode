@@ -1,4 +1,5 @@
-import type { CanonicalProviderVariantPayload } from "../../../../src/config/types"
+import type { CanonicalProviderProtocol, CanonicalProviderVariantPayload } from "../../../../src/config/types"
+import { isCanonicalProviderProtocol } from "../../../../src/config/types"
 
 // Provider/model types for model selector
 
@@ -86,6 +87,38 @@ export interface ProviderConfig {
   npm?: string
   env?: string[]
   options?: Record<string, unknown>
+}
+
+/**
+ * Authored canonical provider config surfaced to the webview.
+ * Exactly {name?, endpoint?, protocol?, models?} — never a credential
+ * ref, headers, npm, env, or options. The extension host owns credentials.
+ */
+export interface CanonicalAuthoredProviderConfig {
+  name?: string
+  endpoint?: string
+  protocol?: CanonicalProviderProtocol
+  models?: Record<string, unknown>
+}
+
+/** Dialog-facing provider record: canonical shape or legacy shape. */
+export interface ExistingProvider {
+  providerID: string
+  name: string
+  config: CanonicalAuthoredProviderConfig | ProviderConfig
+}
+
+/**
+ * Narrow an authored record to its canonical shape. True when the
+ * canonical endpoint marker is present or a valid canonical protocol
+ * token is present — including mixed legacy/canonical objects, where
+ * the canonical side always wins.
+ */
+export function isCanonicalAuthoredConfig(cfg: unknown): cfg is CanonicalAuthoredProviderConfig {
+  if (!cfg || typeof cfg !== "object") return false
+  const rec = cfg as Record<string, unknown>
+  if ("endpoint" in rec) return true
+  return isCanonicalProviderProtocol(rec.protocol)
 }
 
 /** Legacy backend transport shape. Canonical messages must not use this type. */

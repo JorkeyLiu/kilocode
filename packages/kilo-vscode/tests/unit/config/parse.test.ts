@@ -465,7 +465,7 @@ describe("F6: credential detection edge cases", () => {
   it("accepts non-credential fields with similar names", () => {
     const raw = {
       provider: {
-        openai: { endpoint: "https://api.openai.com", protocol: "openai" },
+        openai: { endpoint: "https://api.openai.com", protocol: "openai/completions" },
       },
     }
     const errors = validateNoPlaintextCredentials(raw, "global", "test")

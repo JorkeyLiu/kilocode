@@ -103,7 +103,7 @@ describe("realProjectSeed (project-scope canonical kilo.jsonc)", () => {
       expect(parsed.model).toBe("e2e-local/e2e-model")
       const provider = parsed.provider["e2e-local"]
       expect(provider.endpoint).toBe(`http://127.0.0.1:${PORT}/v1`)
-      expect(provider.protocol).toBe("openai")
+      expect(provider.protocol).toBe("openai/completions")
       expect(provider.credential).toBe("secret:kilo.credentials.project.provider.e2e-local")
       // Closed shape — no plaintext credential material in canonical JSONC
       expect(provider.apiKey).toBeUndefined()
