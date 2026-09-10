@@ -68,6 +68,7 @@ describe("config-file-convergence F-01 shutdown ownership (isolated)", () => {
         const out = yield* svc.acquire(`shutdown-${Date.now()}`, [
           { kind: "config", scope: "project", directory: dir },
         ])
+        if (!("acquired" in out)) throw new Error(`expected acquired, got resolved: ${JSON.stringify(out)}`)
         expect(out.acquired).toBe(true)
         expect(gate.isBarrierActive(dir)).toBe(true)
         expect(yield* svc.unresolvedCount()).toBe(1)
@@ -83,7 +84,8 @@ describe("config-file-convergence F-01 shutdown ownership (isolated)", () => {
         const snapAfter = yield* store.snapshot(dir)
         expect(snapAfter._tag).toBe("Some")
         if (snapAfter._tag === "Some" && snapBefore._tag === "Some") expect(snapAfter.value).toBe(snapBefore.value)
-        expect(before).toBe((snapAfter as { value: unknown }).value)
+        if (snapAfter._tag !== "Some") throw new Error("expected Some snapshot")
+        expect(before).toBe(snapAfter.value)
         yield* svc.shutdown
         expect(yield* svc.unresolvedCount()).toBe(0)
         expect(gate.isBarrierActive(dir)).toBe(false)
@@ -140,6 +142,7 @@ describe("config-file-convergence F-02 identity-guarded reads (isolated)", () =>
       const retry = yield* svc.acquire(`f02-acq-retry-${Date.now()}`, [
         { kind: "config", scope: "project", directory: dir },
       ])
+      if (!("acquired" in retry)) throw new Error(`expected acquired, got resolved: ${JSON.stringify(retry)}`)
       expect(retry.acquired).toBe(true)
       const term = yield* svc.resolve(retry.leaseId)
       expect(term.outcome).toBe("noop")
@@ -166,6 +169,7 @@ describe("config-file-convergence F-02 identity-guarded reads (isolated)", () =>
         username: "external-evil",
       })
       const out = yield* svc.acquire(`f02-res-${Date.now()}`, [{ kind: "config", scope: "project", directory: dir }])
+      if (!("acquired" in out)) throw new Error(`expected acquired, got resolved: ${JSON.stringify(out)}`)
       expect(out.acquired).toBe(true)
       const backup = `${dir}.${process.pid}.f02res`
       setFileReadHooksForTest({
@@ -214,6 +218,7 @@ describe("config-file-convergence F-02 identity-guarded reads (isolated)", () =>
       const external = yield* Effect.promise(() => tmpdir({ retain: true }))
       const backup = `${dir}.${process.pid}.f02after`
       const out = yield* svc.acquire(`f02-after-${Date.now()}`, [{ kind: "config", scope: "project", directory: dir }])
+      if (!("acquired" in out)) throw new Error(`expected acquired, got resolved: ${JSON.stringify(out)}`)
       expect(out.acquired).toBe(true)
       setFileReadHooksForTest({
         afterRead: () => {
