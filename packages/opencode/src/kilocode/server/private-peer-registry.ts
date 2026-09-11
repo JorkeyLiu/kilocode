@@ -63,6 +63,11 @@ export interface Call {
 
 export interface Scope {
   readonly request: (method: string, params?: unknown) => Effect.Effect<Call, Unavailable | Unsupported>
+  readonly requestWithEvents: (
+    method: string,
+    params: unknown,
+    onEvent: (event: unknown) => void,
+  ) => Effect.Effect<Call, Unavailable | Unsupported>
   readonly drop: (id: JsonRpcId) => boolean
   readonly supports: (capability: string) => boolean
   readonly capabilities: readonly string[]
@@ -81,6 +86,11 @@ export interface PrivatePeer {
   readonly negotiate: (peer: JsonRpcPeer, caps: readonly string[]) => Effect.Effect<void, Conflict | Closed>
   readonly current: Effect.Effect<Option.Option<Scope>>
   readonly request: (method: string, params?: unknown) => Effect.Effect<Call, Unavailable | Unsupported>
+  readonly requestWithEvents: (
+    method: string,
+    params: unknown,
+    onEvent: (event: unknown) => void,
+  ) => Effect.Effect<Call, Unavailable | Unsupported>
   readonly supports: (capability: string) => Effect.Effect<boolean>
 }
 
@@ -173,6 +183,7 @@ export const layer = Layer.effect(
       owner: JsonRpcPeer,
       method: string,
       params?: unknown,
+      onEvent?: (event: unknown) => void,
     ): Effect.Effect<Call, Unavailable | Unsupported> =>
       Effect.suspend((): Effect.Effect<Call, Unavailable | Unsupported> => {
         if (held !== owner || owner.getState() !== "open") return Effect.fail(new Unavailable())
@@ -188,7 +199,7 @@ export const layer = Layer.effect(
         // Offered-but-unknown methods still send; the host answers
         // MethodNotFound. Unoffered methods fail here without an id/frame.
         if (!caps.has(method)) return Effect.fail(new Unsupported({ capability: method }))
-        const handle = owner.requestWithId(method, params)
+        const handle = onEvent ? owner.requestWithEvents(method, params, onEvent) : owner.requestWithId(method, params)
         if (typeof handle.id === "number" && handle.id === -1) {
           sweep()
           return Effect.fail(new Unavailable())
@@ -203,6 +214,8 @@ export const layer = Layer.effect(
 
     const scopeFor = (owner: JsonRpcPeer): Scope => ({
       request: (method: string, params?: unknown) => dial(owner, method, params),
+      requestWithEvents: (method: string, params: unknown, onEvent: (event: unknown) => void) =>
+        dial(owner, method, params, onEvent),
       drop: (id: JsonRpcId) => {
         if (held !== owner || owner.getState() !== "open") return false
         return owner.cancel(id)
@@ -256,6 +269,24 @@ export const layer = Layer.effect(
         return dial(owner, method, params)
       })
 
+    const requestWithEvents = (
+      method: string,
+      params: unknown,
+      onEvent: (event: unknown) => void,
+    ): Effect.Effect<Call, Unavailable | Unsupported> =>
+      Effect.suspend((): Effect.Effect<Call, Unavailable | Unsupported> => {
+        sweep()
+        const owner = held
+        if (!alive(owner)) {
+          held = null
+          caps = null
+          capsList = []
+          negotiated = false
+          return Effect.fail(new Unavailable())
+        }
+        return dial(owner, method, params, onEvent)
+      })
+
     const supports = (capability: string): Effect.Effect<boolean> =>
       Effect.sync(() => {
         sweep()
@@ -264,7 +295,7 @@ export const layer = Layer.effect(
         return supportsFor(owner, capability)
       })
 
-    return Service.of({ install, release, negotiate, current, request, supports })
+    return Service.of({ install, release, negotiate, current, request, requestWithEvents, supports })
   }),
 )
 
