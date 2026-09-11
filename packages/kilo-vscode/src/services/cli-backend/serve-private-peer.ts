@@ -118,6 +118,14 @@ import {
   validatePromptResult,
 } from "./serve-private-prompt-contract"
 import type { PromptContractRequest, PromptResult, PrivatePromptWireOutcome } from "./serve-private-prompt-contract"
+import {
+  makeCommandAmbiguous,
+  normalizePrivateCommandWire,
+  PrivateCommandValidationError,
+  validateCommandContractRequest,
+  validateCommandResult,
+} from "./serve-private-command-contract"
+import type { CommandContractRequest, CommandResult, PrivateCommandWireOutcome } from "./serve-private-command-contract"
 import type {
   QuestionAmbiguous,
   QuestionContractRequest,
@@ -2956,6 +2964,43 @@ export class ServePrivatePeer {
   async privatePrompt(req: PromptContractRequest): Promise<PromptResult> {
     const handle = this.privatePromptWithHandle(req)
     return handle.promise
+  }
+
+  async privateCommand(req: CommandContractRequest): Promise<CommandResult> {
+    const handle = this.privateCommandWithHandle(req)
+    return handle.promise
+  }
+
+  privateCommandWithHandle(req: CommandContractRequest): {
+    id: number
+    promise: Promise<CommandResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateCommandContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/command")) {
+      throw new Error("Private peer missing session/command capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/command", req)
+    const promise = (async (): Promise<CommandResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeCommandAmbiguous(req, true)
+        const out = normalizePrivateCommandWire(raw, req)
+        if (out.kind === "invalid") return makeCommandAmbiguous(req, true)
+        return out.result
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeCommandAmbiguous(req, true)
+        return makeCommandAmbiguous(req, true)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
   }
 
   privatePromptWithHandle(req: PromptContractRequest): {

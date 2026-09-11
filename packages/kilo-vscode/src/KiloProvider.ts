@@ -62,6 +62,7 @@ import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-fil
 import { createSessionPrivateFirst } from "./kilo-provider/session-create"
 import { renameSessionPrivateFirst } from "./kilo-provider/session-update"
 import { ensurePromptMessageId, sendPromptOnce } from "./kilo-provider/session-prompt"
+import { ensureCommandMessageId, sendCommandOnce } from "./kilo-provider/session-command"
 import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
 import { observeSessionListParityDetached } from "./kilo-provider/session-list-parity"
 import { parseSessionTitle } from "./shared/session-title"
@@ -4943,6 +4944,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     context?: string,
     contextDirectory?: string,
   ): Promise<void> {
+    // Command identity is fixed once per logical send so private + SDK fallback
+    // share one durable messageID/opId; the command path never retries.
+    const stableMessageID = ensureCommandMessageId(messageID)
     if (!this.client) {
       this.postMessage({
         type: "sendMessageFailed",
@@ -4950,7 +4954,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         text: `/${command} ${args}`.trim(),
         sessionID,
         draftID,
-        messageID,
+        messageID: stableMessageID,
         files,
       })
       return
@@ -4968,19 +4972,17 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       const dir = resolved.dir
 
       // P0 perf: record the submit after session resolution so new-session
-      // first turns carry the resolved session id; `messageID` (the user
+      // first turns carry the resolved session id; `stableMessageID` (the user
       // message id) is the join key to `model.firstEvent`'s `parentID`.
       p0Stage("prompt.submit", {
         sessionID: sid,
-        messageID,
+        messageID: stableMessageID,
         draftID,
         command,
         ...(dir ? { dir } : {}),
       })
 
-      if (messageID) {
-        this.connectionService.recordMessageSessionId(messageID, sid)
-      }
+      this.connectionService.recordMessageSessionId(stableMessageID, sid)
 
       const parts = files?.map((f) => ({
         type: "file" as const,
@@ -4992,23 +4994,25 @@ export class KiloProvider implements TelemetryPropertiesProvider {
 
       await this.requirements.assertAgentRequirements(agent, dir)
       await this.checkpoints.get(sid)
-      await runWithMessageConfirmation(this.confirmations, messageID, "KiloProvider: Command request", () =>
-        this.withRetry(
-          () =>
-            this.client!.session.command({
-              sessionID: sid,
-              directory: dir,
-              command,
-              arguments: args,
-              messageID,
-              model: providerID && modelID ? `${providerID}/${modelID}` : undefined,
-              agent,
-              variant,
-              parts,
-              snapshotInitialization: this.opts.snapshotInitialization,
-            }),
-          sid,
-          messageID,
+      // Command is single-attempt: at most one private attempt plus at most one
+      // same-identity SDK fallback, never outer withRetry re-entry.
+      await runWithMessageConfirmation(this.confirmations, stableMessageID, "KiloProvider: Command request", () =>
+        sendCommandOnce(
+          {
+            client: this.client!,
+            connection: this.connectionService,
+            sessionId: sid,
+            directory: dir,
+            messageID: stableMessageID,
+            command,
+            args,
+            model: providerID && modelID ? `${providerID}/${modelID}` : undefined,
+            agent,
+            variant,
+            parts: parts as unknown as Array<Record<string, unknown>> | undefined,
+            snapshotInitialization: this.opts.snapshotInitialization,
+          },
+          () => this.postMessage({ type: "sessionStatus", sessionID: sid, status: "idle" }),
         ),
       )
     } catch (error) {
@@ -5019,7 +5023,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         text: `/${command} ${args}`.trim(),
         sessionID: resolved?.sid ?? sessionID,
         draftID,
-        messageID,
+        messageID: stableMessageID,
         files,
       })
     }
