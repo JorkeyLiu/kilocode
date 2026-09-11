@@ -32,10 +32,14 @@ export type PeerState = "open" | "closed"
 /** Reserved wire-level notification for best-effort incoming request cancellation. */
 export const CANCEL_REQUEST_METHOD = "$/cancelRequest"
 
+/** Reserved wire-level notification for per-request correlated events. */
+export const REQUEST_EVENT_METHOD = "$/event"
+
 /** Minimal context passed to incoming request handlers. */
 export interface RequestContext {
   id: JsonRpcId
   signal: AbortSignal
+  emit: (event: unknown) => boolean
 }
 
 export interface PeerOptions {
@@ -57,7 +61,7 @@ export interface PeerOptions {
 
 export class JsonRpcPeer {
   private readonly decoder = new FrameDecoder()
-  private readonly pending = new Map<JsonRpcId, { resolve: (v: unknown) => void; reject: (e: unknown) => void }>()
+  private readonly pending = new Map<JsonRpcId, { resolve: (v: unknown) => void; reject: (e: unknown) => void; onEvent?: (event: unknown) => void }>()
   private readonly incoming = new Map<JsonRpcId, AbortController>()
   private nextId = 1
   private state: PeerState = "open"
@@ -104,7 +108,7 @@ export class JsonRpcPeer {
   }
 
   /** Allocate id and return handle atomically; caller owns exact id for timeout cancellation. */
-  requestWithId(method: string, params?: unknown): { id: JsonRpcId; promise: Promise<unknown> } {
+  requestWithId(method: string, params?: unknown, onEvent?: (event: unknown) => void): { id: JsonRpcId; promise: Promise<unknown> } {
     if (this.state !== "open") {
       const err = makePeerError(ErrorCode.InternalError, "Peer is closed")
       return { id: -1 as JsonRpcId, promise: Promise.reject(err) }
@@ -114,10 +118,23 @@ export class JsonRpcPeer {
     if (params !== undefined) payload.params = params
     const frame = encodeFrame(payload)
     const promise = new Promise<unknown>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject })
-      this.write(frame, id, reject)
+      this.pending.set(id, { resolve, reject, onEvent })
+      const wrote = this.write(frame, id, reject)
+      if (!wrote) {
+        this.pending.delete(id)
+      }
     })
     return { id, promise }
+  }
+
+  /**
+   * Generic per-request correlated event support. Registers `onEvent` atomically
+   * before the request frame is written, so no event can arrive before the handler.
+   * `onEvent` is removed on terminal success/error, local drop/cancel, peer
+   * close/dispose, and send failure. Late events are ignored and cannot recreate state.
+   */
+  requestWithEvents(method: string, params?: unknown, onEvent?: (event: unknown) => void): { id: JsonRpcId; promise: Promise<unknown> } {
+    return this.requestWithId(method, params, onEvent)
   }
 
   getPendingCount(): number {
@@ -358,6 +375,10 @@ export class JsonRpcPeer {
         this.handleCancelNotification(validated.params)
         return
       }
+      if (validated.method === REQUEST_EVENT_METHOD) {
+        this.handleEventNotification(validated.params)
+        return
+      }
       this.onNotification?.(validated.method, validated.params)
       return
     }
@@ -368,7 +389,14 @@ export class JsonRpcPeer {
   private async handleRequest(id: JsonRpcId, method: string, params: unknown): Promise<void> {
     const ctrl = this.claimIncoming(id)
     if (!ctrl) return
-    const ctx: RequestContext = { id, signal: ctrl.signal }
+    const emit = (event: unknown): boolean => {
+      if (this.state !== "open") return false
+      if (this.incoming.get(id) !== ctrl) return false
+      const payload: Record<string, unknown> = { jsonrpc: JSONRPC_VERSION, method: REQUEST_EVENT_METHOD, params: { id, event } }
+      const frame = encodeFrame(payload)
+      return this.write(frame, null, null)
+    }
+    const ctx: RequestContext = { id, signal: ctrl.signal, emit }
     try {
     // Special-case initialize exactly-once when peer is in worker role.
     // If onRequest is not provided, we still enforce the once rule synthetically.
@@ -468,6 +496,18 @@ export class JsonRpcPeer {
     ctrl.abort()
   }
 
+  private handleEventNotification(params: unknown): void {
+    const parsed = parseEventParams(params)
+    if (!parsed) return
+    const entry = this.pending.get(parsed.id)
+    if (!entry?.onEvent) return
+    try {
+      entry.onEvent(parsed.event)
+    } catch {
+      // onEvent failures never propagate to transport
+    }
+  }
+
   private abortAllIncoming(): void {
     if (this.incoming.size === 0) return
     for (const [, ctrl] of this.incoming) {
@@ -503,6 +543,15 @@ function parseCancelId(params: unknown): JsonRpcId | undefined {
   const raw = (params as Record<string, unknown>).id
   if (typeof raw !== "string" && typeof raw !== "number") return undefined
   return raw
+}
+
+function parseEventParams(params: unknown): { id: JsonRpcId; event: unknown } | undefined {
+  if (typeof params !== "object" || params === null || Array.isArray(params)) return undefined
+  const o = params as Record<string, unknown>
+  if (!("id" in o) || !("event" in o)) return undefined
+  const rawId = o.id
+  if (typeof rawId !== "string" && typeof rawId !== "number") return undefined
+  return { id: rawId as JsonRpcId, event: o.event }
 }
 
 function responseCode(e: unknown): number {
