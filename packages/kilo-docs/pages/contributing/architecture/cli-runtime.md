@@ -226,6 +226,7 @@ SQLite is default structured store.
 - GC: one transaction and one SQL over current references; prepared/failed facts are retained.
 - Scope: queryable capture only; SessionRevert and Snapshot restore stay git-backed.
 - Coverage: edit/write/apply_patch only; opaque tools stay on the old Snapshot path.
+- Coverage planner: read-only `SnapshotCoveragePlan` (`packages/opencode/src/snapshot/coverage-plan.ts`) adjudicates a revert target against authoritative messages and the journal, sharing boundary resolution with `SessionRevert` via `SessionRevertBoundary` (`packages/opencode/src/session/revert-boundary.ts`). Verdict `complete` may later enter journal CAS; `incomplete` falls back to the old Snapshot path as a whole, never mixed. The planner executes no restore and makes no performance claim.
 
 Some JSON-backed storage remains. Session diffs still use storage path `session_diff`, and configuration, auth, and selected local state files retain their own owners. Snapshot storage is separate from SQLite and JSON storage.
 

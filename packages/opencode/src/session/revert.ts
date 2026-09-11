@@ -10,6 +10,7 @@ import { MessageV2 } from "./message-v2"
 import { SessionID, MessageID, PartID } from "./schema"
 import { SessionRunState } from "./run-state"
 import { SessionSummary } from "./summary"
+import { SessionRevertBoundary } from "./revert-boundary"
 
 const log = Log.create({ service: "session.revert" })
 
@@ -54,33 +55,21 @@ export const layer = Layer.effect(
         Effect.gen(function* () {
           yield* state.assertNotBusy(input.sessionID)
           const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
-          let lastUser: SessionV1.User | undefined
           const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
 
+          // kilocode_change - boundary resolution is shared with the Snapshot v2
+          // journal coverage planner. Patch collection keeps the old
+          // implementation: strictly after the physical anchor (see
+          // SessionRevertBoundary.patchesAfter), not the planner deletion interval.
+          const boundary = SessionRevertBoundary.resolve(all, input)
           let rev: Session.Info["revert"]
           const patches: Snapshot.Patch[] = []
-          for (const msg of all) {
-            if (msg.info.role === "user") lastUser = msg.info
-            const remaining = []
-            for (const part of msg.parts) {
-              if (rev) {
-                if (part.type === "patch") patches.push(part)
-                continue
-              }
-
-              if (!rev) {
-                if ((msg.info.id === input.messageID && !input.partID) || part.id === input.partID) {
-                  const partID = remaining.some((item) => ["text", "tool"].includes(item.type))
-                    ? input.partID
-                    : undefined
-                  rev = {
-                    messageID: !partID && lastUser ? lastUser.id : msg.info.id,
-                    partID,
-                  }
-                }
-                remaining.push(part)
-              }
+          if (boundary) {
+            rev = {
+              messageID: boundary.messageID,
+              partID: boundary.partID,
             }
+            for (const part of SessionRevertBoundary.patchesAfter(all, boundary)) patches.push(part as Snapshot.Patch)
           }
 
           if (!rev) return session
