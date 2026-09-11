@@ -131,6 +131,19 @@ export namespace KiloSessionPromptQueue {
   }
 
   /**
+   * Production per-ID ownership probe for prompt idempotency reattach.
+   * True when messageID is the running target, folded into the running
+   * extras, waiting to start, or adopted — never session-global counts.
+   */
+  export function isOwned(sessionID: SessionID, messageID: MessageID): boolean {
+    const target = targets.get(sessionID)
+    if (target && (target.base === messageID || target.extras.has(messageID))) return true
+    if (pending.get(messageID)?.session === sessionID) return true
+    if (adopted.get(messageID) === sessionID) return true
+    return false
+  }
+
+  /**
    * True when a newer prompt was enqueued after the currently running slot
    * began. runLoop calls this between LLM steps to break out so the next
    * queued prompt can take over without starting another LLM round-trip for

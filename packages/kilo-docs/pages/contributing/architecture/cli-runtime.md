@@ -624,6 +624,16 @@ Creation-only gate prevents duplicate `Runner` creation. Map entries are permane
 
 EventV2 listener isolation change and FIFO status publication remain out of scope and are not claimed. Abort stays out of the durable `session_operation`/tombstone model.
 
+### Prompt admission — first-writer-wins idempotency
+
+| Aspect | Behavior |
+|---|---|
+| Key | Caller-supplied `(sessionID, messageID)` in `SessionPrompt.prompt`; first accepted durable user message is authoritative |
+| Replay | Later reuse never overwrites parts and never duplicates side effects; no payload comparison is claimed |
+| Concurrency | Process-local singleflight shares one result across concurrent same-ID calls; waiter interruption never interrupts the shared owner, and fork failure or interruption before child ownership fails waiters without leaking the promise or key |
+| Reattach | Durable V1 user with no assistant lineage and no per-ID queue owner reattaches once through per-ID queue ownership; existing lineage or per-ID ownership suppresses duplicate generation |
+| Scope | `command` stays unguarded; cross-process singleflight and payload equivalence are not claimed |
+
 ## SDK contract
 
 CLI server contract flows through generated and handwritten layers. This describes the current pipeline; the SDK and generated-client boundary is an implementation choice that may be refactored or removed, so compatibility with generated clients is present state, not a future invariant:

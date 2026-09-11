@@ -82,7 +82,7 @@ import { AgentAttachment, FileAttachment, Prompt, ReferenceAttachment, Source } 
 import { Reference } from "@/reference/reference"
 import * as DateTime from "effect/DateTime"
 import { eq } from "drizzle-orm"
-import { SessionTable } from "@opencode-ai/core/session/sql"
+import { MessageTable, SessionTable } from "@opencode-ai/core/session/sql"
 import { referencePromptMetadata, referenceTextPart } from "./prompt/reference"
 import { SessionReminders } from "./reminders"
 import { SessionTools } from "./tools"
@@ -1481,7 +1481,13 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    const prompt: Interface["prompt"] = Effect.fn("SessionPrompt.prompt")(
+    // kilocode_change start - prompt-only first-writer-wins idempotency by
+    // caller-supplied messageID. Narrow contract: (sessionID,messageID) is the
+    // key and the first accepted durable message is authoritative. Payload on
+    // later reuse is intentionally not compared; the first operation is
+    // returned/continued and never overwritten. No payload-equivalence or
+    // conflict detection is claimed. Command never uses this guard.
+    const promptUnguarded: Interface["prompt"] = Effect.fn("SessionPrompt.promptUnguarded")(
       function* (input: PromptInput) {
         const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
         yield* revert.cleanup(session)
@@ -1541,6 +1547,101 @@ export const layer = Layer.effect(
       },
       Effect.catchTag("NotFoundError", Effect.die),
     )
+
+    const promptIdempotent = Effect.fn("SessionPrompt.promptIdempotent")(function* (
+      input: PromptInput & { messageID: MessageID },
+    ) {
+      const found = yield* MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID }).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)),
+      )
+      if (!found) {
+        const global = yield* db
+          .select({ session: MessageTable.session_id })
+          .from(MessageTable)
+          .where(eq(MessageTable.id, input.messageID))
+          .get()
+          .pipe(Effect.orDie)
+        if (global && global.session !== input.sessionID)
+          return yield* Effect.die(new Error(`messageID ${input.messageID} belongs to another session`))
+        return yield* promptUnguarded(input)
+      }
+      if (found.info.role !== "user")
+        return yield* Effect.die(new Error(`messageID ${input.messageID} already in use by non-user message`))
+      if (input.noReply === true) return found
+      const lineage = yield* sessions
+        .findMessage(
+          input.sessionID,
+          (m) => m.info.role !== "user" && (m.info as unknown as { parentID?: string }).parentID === input.messageID,
+        )
+        .pipe(Effect.orDie)
+      if (Option.isSome(lineage)) return found
+      if (KiloSessionPromptQueue.isOwned(input.sessionID, input.messageID)) return found
+      const bridge = yield* EffectBridge.make()
+      return yield* KiloSessionPromptQueue.enqueue(
+        input.sessionID,
+        input.messageID,
+        bridge.run(
+          withGenerationAdmission(
+            config,
+            loop({ sessionID: input.sessionID, snapshotInitialization: input.snapshotInitialization }).pipe(
+              Effect.orDie,
+            ),
+          ),
+        ),
+        bridge.run(lastAssistant(input.sessionID)),
+      )
+    })
+
+    // Process-local singleflight keyed by sessionID+messageID. Concurrent calls
+    // share one result with one owner. The owner fiber is forked into the
+    // service scope so interrupting one waiter only interrupts its promise
+    // await, never the shared accepted operation. Registration plus fork
+    // handoff is interruption-safe: fork failure, closed scope, or
+    // interruption before child ownership resolves waiters with the fork
+    // cause and deletes the key only when the same slot is still installed,
+    // so no never-resolved promise or key leak. Owner settle is
+    // identity-guarded exactly once.
+    type PromptExit = Exit.Exit<SessionV1.WithParts, Image.Error | Agent.RequirementBlockedError | NotFoundError>
+    const inflight = new Map<string, PromiseWithResolvers<PromptExit>>()
+    const prompt: Interface["prompt"] = Effect.fn("SessionPrompt.prompt")(function* (input: PromptInput) {
+      if (!input.messageID) return yield* promptUnguarded(input)
+      const key = `${input.sessionID}:${input.messageID}`
+      const slot = yield* Effect.sync(() => {
+        const existing = inflight.get(key)
+        if (existing) return { owner: false as const, entry: existing }
+        const entry = Promise.withResolvers<PromptExit>()
+        inflight.set(key, entry)
+        return { owner: true as const, entry }
+      })
+      if (!slot.owner) return yield* (yield* Effect.promise(() => slot.entry.promise))
+      const flag = { done: false }
+      const settle = (exit: PromptExit) =>
+        Effect.sync(() => {
+          if (flag.done) return
+          flag.done = true
+          slot.entry.resolve(exit)
+          if (inflight.get(key) === slot.entry) inflight.delete(key)
+        }).pipe(Effect.uninterruptible)
+      const work = Effect.gen(function* () {
+        const exit = (yield* promptIdempotent({ ...input, messageID: input.messageID as MessageID }).pipe(
+          Effect.exit,
+        )) as PromptExit
+        yield* settle(exit)
+      }).pipe(
+        Effect.onExit((exit) => {
+          if (Exit.isSuccess(exit)) return Effect.void
+          return settle(Exit.failCause(exit.cause) as unknown as PromptExit)
+        }),
+      )
+      const forked = yield* Effect.forkIn(scope)(work).pipe(Effect.exit)
+      if (Exit.isFailure(forked)) {
+        yield* settle(Exit.failCause(forked.cause) as unknown as PromptExit)
+        return yield* Effect.failCause(forked.cause)
+      }
+      return yield* (yield* Effect.promise(() => slot.entry.promise))
+    }, Effect.catchTag("NotFoundError", Effect.die))
+    // kilocode_change end
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
       // kilocode_change start - cancellation-safe fallback: identify the
@@ -2305,14 +2406,15 @@ export const layer = Layer.effect(
         { parts },
       )
 
-      const result = yield* prompt({
+      // kilocode_change - command keeps current retries/upserts; it never inherits the prompt-only idempotency guard.
+      const result = yield* promptUnguarded({
         sessionID: input.sessionID,
         messageID: input.messageID,
         model: userModel,
         agent: userAgent,
         parts,
         variant: input.variant,
-        snapshotInitialization: input.snapshotInitialization, // kilocode_change
+        snapshotInitialization: input.snapshotInitialization,
       })
       yield* events.publish(Command.Event.Executed, {
         name: input.command,
