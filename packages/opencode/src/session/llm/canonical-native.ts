@@ -6,6 +6,7 @@ import { LLMClient, RequestExecutor } from "@opencode-ai/llm/route"
 import { InvalidRequestReason, LLMError } from "@opencode-ai/llm"
 import { ProviderTransform } from "@/provider/transform"
 import { LLMNativeRuntime } from "./native-runtime"
+import { repaired } from "./repair"
 import * as Native from "./native-request"
 import type { Provider } from "@/provider/provider"
 import * as Broker from "@/kilocode/server/provider-http-execute-broker"
@@ -150,22 +151,22 @@ export function stream(input: {
             const results = yield* Queue.unbounded<LLMEvent, Cause.Done>()
             const client = yield* LLMClient.Service
             const providerStream = client.stream(enriched).pipe(
-              Stream.flatMap((event) =>
-                event.type !== "tool-call" || event.providerExecuted
-                  ? Stream.make(event)
-                  : Stream.make(event).pipe(
-                      Stream.concat(
-                        Stream.fromEffectDrain(
-                          ToolRuntime.dispatch(tools, event).pipe(
-                            Effect.flatMap((dispatched) => Queue.offerAll(results, dispatched.events)),
-                            Effect.catchCause((cause) => Queue.failCause(results, cause)),
-                            Effect.asVoid,
-                            FiberSet.run(settlements, { startImmediately: true }),
-                          ),
-                        ),
+              Stream.flatMap((event) => {
+                if (event.type !== "tool-call" || event.providerExecuted) return Stream.make(event)
+                const call = repaired(event, tools)
+                return Stream.make(call).pipe(
+                  Stream.concat(
+                    Stream.fromEffectDrain(
+                      ToolRuntime.dispatch(tools, call).pipe(
+                        Effect.flatMap((dispatched) => Queue.offerAll(results, dispatched.events)),
+                        Effect.catchCause((cause) => Queue.failCause(results, cause)),
+                        Effect.asVoid,
+                        FiberSet.run(settlements, { startImmediately: true }),
                       ),
                     ),
-              ),
+                  ),
+                )
+              }),
               Stream.concat(Stream.fromEffectDrain(FiberSet.awaitEmpty(settlements).pipe(Effect.andThen(Queue.end(results)), Effect.asVoid))),
             )
             return providerStream.pipe(Stream.concat(Stream.fromQueue(results)))

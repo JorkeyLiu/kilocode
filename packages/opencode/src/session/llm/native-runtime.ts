@@ -18,6 +18,7 @@ import {
 } from "@opencode-ai/llm"
 import type { LLMClientShape } from "@opencode-ai/llm/route"
 import { LLMNative } from "./native-request"
+import { repaired } from "./repair"
 
 export type RuntimeStatus =
   | { readonly type: "supported"; readonly apiKey: string; readonly baseURL?: string }
@@ -111,22 +112,22 @@ export function stream(input: StreamInput): StreamResult {
           }),
         )
           .pipe(
-            Stream.flatMap((event) =>
-              event.type !== "tool-call" || event.providerExecuted
-                ? Stream.make(event)
-                : Stream.make(event).pipe(
-                    Stream.concat(
-                      Stream.fromEffectDrain(
-                        ToolRuntime.dispatch(tools, event).pipe(
-                          Effect.flatMap((dispatched) => Queue.offerAll(results, dispatched.events)),
-                          Effect.catchCause((cause) => Queue.failCause(results, cause)),
-                          Effect.asVoid,
-                          FiberSet.run(settlements, { startImmediately: true }),
-                        ),
-                      ),
+            Stream.flatMap((event) => {
+              if (event.type !== "tool-call" || event.providerExecuted) return Stream.make(event)
+              const call = repaired(event, tools)
+              return Stream.make(call).pipe(
+                Stream.concat(
+                  Stream.fromEffectDrain(
+                    ToolRuntime.dispatch(tools, call).pipe(
+                      Effect.flatMap((dispatched) => Queue.offerAll(results, dispatched.events)),
+                      Effect.catchCause((cause) => Queue.failCause(results, cause)),
+                      Effect.asVoid,
+                      FiberSet.run(settlements, { startImmediately: true }),
                     ),
                   ),
-            ),
+                ),
+              )
+            }),
             Stream.concat(
               Stream.fromEffectDrain(
                 FiberSet.awaitEmpty(settlements).pipe(Effect.andThen(Queue.end(results)), Effect.asVoid),

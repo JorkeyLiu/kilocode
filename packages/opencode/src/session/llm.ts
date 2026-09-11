@@ -41,6 +41,7 @@ import { RuntimeFlags } from "@/effect/runtime-flags"
 import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
+import { repairToolCall } from "./llm/repair"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -511,25 +512,14 @@ const live: Layer.Layer<
           })
         },
         async experimental_repairToolCall(failed) {
-          const lower = failed.toolCall.toolName.trim().toLowerCase() // kilocode_change
-          if (lower !== failed.toolCall.toolName && prepared.tools[lower]) {
+          const out = repairToolCall(failed, prepared.tools)
+          if (out.toolName !== failed.toolCall.toolName && out.toolName !== "invalid") {
             l.info("repairing tool call", {
               tool: failed.toolCall.toolName,
-              repaired: lower,
+              repaired: out.toolName,
             })
-            return {
-              ...failed.toolCall,
-              toolName: lower,
-            }
           }
-          return {
-            ...failed.toolCall,
-            input: JSON.stringify({
-              tool: failed.toolCall.toolName,
-              error: failed.error.message,
-            }),
-            toolName: "invalid",
-          }
+          return out
         },
         temperature: prepared.params.temperature,
         topP: prepared.params.topP,
