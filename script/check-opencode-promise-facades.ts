@@ -224,6 +224,11 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason:
       "single production AppRuntime integration test for initialize reverse-capability negotiation via the global registry identity (reverse offer binds supports, close clears); all other capability tests use an isolated PrivatePeer layer",
   },
+  "kilocode/canonical-provenance-regression.test.ts": {
+    count: 35,
+    reason:
+      "production AppRuntime canonical provenance regression via AppRuntime and InstanceRef (distinct scopes, duplicate suppression, credential/invalid classes, resolver via Config.Service + resolveFromSnapshot, atomic withConfigSnapshot + withGenerationAdmission pinning, recoverable failures, parse secrecy token, no provenance in public JSON)",
+  },
 }
 
 const owned = (file: string) => file.startsWith("kilocode/") || file.startsWith("kilo-sessions/")

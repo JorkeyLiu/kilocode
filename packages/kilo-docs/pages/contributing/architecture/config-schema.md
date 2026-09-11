@@ -82,6 +82,13 @@ These two steps complete the key within this repository. No cross-repository ste
 For the current cloud-served editor schema to keep describing the new key, mirror it into `apps/web/src/app/config.json/extras.ts` in [cloud repo](https://github.com/Kilo-Org/cloud) and extend `merge()` in `apps/web/src/app/config.json/route.ts` when a new nested bucket is required. This is an optional compatibility update for external consumers, not part of this repository's completion criteria.
 {% /callout %}
 
+## Canonical provider provenance (internal)
+
+| Aspect | Behavior |
+|---|---|
+| Owner | `Config.State.canonical` in `packages/opencode/src/config/config.ts`, built from same-read scope capture, validated by shared `@opencode-ai/core/kilocode/canonical-record.ts` |
+| Docs | Full ownership/duplicate/atomic/resolver contract lives in [CLI Runtime](/docs/contributing/architecture/cli-runtime#canonical-provider-provenance-internal) |
+
 ## Source map
 
 Repository column identifies source root for each relative path.

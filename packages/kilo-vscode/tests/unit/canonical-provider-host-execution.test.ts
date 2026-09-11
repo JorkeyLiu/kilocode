@@ -350,16 +350,6 @@ describe("canonical host execution seam over local HTTP fixtures", () => {
         { name: "model missing name", rec: { ...base, models: { m1: {} as unknown } } },
         { name: "models not object", rec: { ...base, models: "bad" as unknown } },
         { name: "models array", rec: { ...base, models: [] as unknown } },
-        {
-          name: "models null prototype",
-          rec: (() => {
-            const r = { ...base } as Record<string, unknown>
-            const m = Object.create(null) as Record<string, unknown>
-            m.m1 = { name: "M1" }
-            r.models = m as unknown as typeof base.models
-            return r
-          })(),
-        },
       ]
       for (const item of malformed) {
         const calls: string[] = []
@@ -415,6 +405,77 @@ describe("canonical host execution seam over local HTTP fixtures", () => {
       expect((err as CanonicalExecuteError).code).toBe("missing-credential-ref")
       expect(calls).toEqual([])
       expect(seen.path).toBe("")
+    } finally {
+      server.stop()
+    }
+  })
+
+  it("prototype parity: null-prototype provider and model maps are accepted igual core, arrays/class instances remain rejected", async () => {
+    const seen = blank()
+    const server = serve(chatBody, seen)
+    try {
+      const endpoint = `http://127.0.0.1:${server.port}`
+      const ref = "secret:kilo.credentials.global.provider.acme"
+      // null-prototype provider record with null-prototype models map and model entry: should succeed (same as core)
+      {
+        const nullModels = Object.create(null) as Record<string, unknown>
+        nullModels["m1"] = (() => {
+          const m = Object.create(null) as Record<string, unknown>
+          m["name"] = "M1"
+          return m
+        })()
+        const nullRec = Object.create(null) as Record<string, unknown>
+        nullRec["name"] = "Acme"
+        nullRec["endpoint"] = endpoint
+        nullRec["protocol"] = "openai/completions"
+        nullRec["credential"] = ref
+        nullRec["models"] = nullModels
+        const calls: string[] = []
+        seen.path = ""
+        const result = await execute({ providerId: "acme", modelId: "m1", record: nullRec as unknown as CanonicalProviderPayload, prompt: "hi" }, store("sk-chat", calls))
+        expect(result.text).toBe("Hello")
+        expect(calls).toEqual([ref])
+        expect(seen.path).toBe("/chat/completions")
+      }
+      // null-prototype variant entry via model: still valid
+      {
+        const nullVariant = Object.create(null) as Record<string, unknown>
+        nullVariant["enable_thinking"] = true
+        const nullVariants = Object.create(null) as Record<string, unknown>
+        nullVariants["v1"] = nullVariant
+        const rec = {
+          name: "Acme",
+          endpoint,
+          protocol: "openai/completions" as const,
+          credential: ref,
+          models: { m1: { name: "M1", variants: nullVariants as unknown as Record<string, { enable_thinking: boolean }> } },
+        }
+        const calls: string[] = []
+        seen.path = ""
+        const result = await execute({ providerId: "acme", modelId: "m1", record: rec as unknown as CanonicalProviderPayload, prompt: "hi" }, store("sk-chat", calls))
+        expect(result.text).toBe("Hello")
+        expect(seen.path).toBe("/chat/completions")
+      }
+      // arrays and class instances remain rejected (matching core)
+      {
+        const calls: string[] = []
+        seen.path = ""
+        const err = await execute({ providerId: "acme", modelId: "m1", record: [] as unknown as CanonicalProviderPayload, prompt: "hi" }, store("sk-chat", calls)).catch((c: unknown) => c)
+        expect(err).toBeInstanceOf(CanonicalExecuteError)
+        expect((err as CanonicalExecuteError).code).toBe("invalid-record")
+        expect(calls).toEqual([])
+        expect(seen.path).toBe("")
+      }
+      {
+        class Foo { endpoint = endpoint; protocol = "openai/completions" as const; credential = ref; models = { m1: { name: "M1" } } }
+        const calls: string[] = []
+        seen.path = ""
+        const err = await execute({ providerId: "acme", modelId: "m1", record: new Foo() as unknown as CanonicalProviderPayload, prompt: "hi" }, store("sk-chat", calls)).catch((c: unknown) => c)
+        expect(err).toBeInstanceOf(CanonicalExecuteError)
+        expect((err as CanonicalExecuteError).code).toBe("invalid-record")
+        expect(calls).toEqual([])
+        expect(seen.path).toBe("")
+      }
     } finally {
       server.stop()
     }

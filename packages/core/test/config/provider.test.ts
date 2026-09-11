@@ -8,7 +8,7 @@ import { PluginV2 } from "@opencode-ai/core/plugin"
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ConfigProviderV1 } from "@opencode-ai/core/v1/config/provider"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
-import { isCanonicalOnlyProviderV1 } from "@opencode-ai/core/kilocode/canonical-provider"
+import { isCanonicalOnlyProviderV1, isCanonicalProviderCandidate } from "@opencode-ai/core/kilocode/canonical-provider"
 import { isOwnedProviderCredentialRef } from "@opencode-ai/core/kilocode/credential-ref"
 import { it } from "../plugin/provider-helper"
 import { FastCheck } from "effect/testing"
@@ -361,5 +361,32 @@ describe("Canonical-only V1 predicate", () => {
     expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { thinking: { type: "enabled" } } } } } })).toBe(true)
     expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { reasoning_split: true } } } } })).toBe(true)
     expect(isCanonicalOnlyProviderV1({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { chat_template_args: { enable_thinking: false } } } } } })).toBe(true)
+  })
+
+  test("canonical candidate preserves decisive duplicate even with malformed nested values", () => {
+    const valid = { endpoint: "https://a.test", protocol: "openai/completions", credential: "secret:kilo.credentials.global.provider.acme", models: { m1: { name: "M1" } } }
+    expect(isCanonicalProviderCandidate(valid)).toBe(true)
+    // malformed models variants still candidate
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", models: [] as unknown })).toBe(true)
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", models: "bad" as unknown })).toBe(true)
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", models: null as unknown })).toBe(true)
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", models: { m1: "bad" as unknown } })).toBe(true)
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", models: { m1: null as unknown } })).toBe(true)
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", models: { m1: { name: "M1", extra: "nope" } as unknown } })).toBe(true)
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", protocol: "openai/completions", credential: "secret:kilo.credentials.global.provider.acme", models: { m1: { name: "M1" } }, unknownTop: "x" as unknown })).toBe(true)
+    // null-prototype still candidate
+    const nullProto = Object.create(null) as Record<string, unknown>
+    nullProto["endpoint"] = "https://a.test"
+    expect(isCanonicalProviderCandidate(nullProto)).toBe(true)
+    // arrays/class instances not candidate
+    expect(isCanonicalProviderCandidate([] as unknown)).toBe(false)
+    expect(isCanonicalProviderCandidate(new (class { endpoint = "https://a.test" })() as unknown)).toBe(false)
+    // legacy keys make non-candidate
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", npm: "@ai-sdk/openai" as unknown })).toBe(false)
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", models: { m1: { name: "M1", prompt: "codex" } as unknown } })).toBe(false)
+    expect(isCanonicalProviderCandidate({ endpoint: "https://a.test", models: { m1: { name: "M1", variants: { v1: { disabled: true } as unknown } } } as unknown })).toBe(false)
+    // name/models alone not candidate
+    expect(isCanonicalProviderCandidate({ name: "x", models: { m1: { name: "M1" } } })).toBe(false)
+    expect(isCanonicalProviderCandidate({})).toBe(false)
   })
 })

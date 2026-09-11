@@ -96,6 +96,60 @@ function hasDefinitiveSignal(info: Record<string, unknown>): boolean {
   return info.endpoint !== undefined || info.protocol !== undefined || info.credential !== undefined
 }
 
+function isPlainRecord(v: unknown): v is Record<string, unknown> {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return false
+  const proto = Object.getPrototypeOf(v)
+  return proto === Object.prototype || proto === null
+}
+
+function hasLegacyProviderKeysCandidate(info: Record<string, unknown>): boolean {
+  for (const key of Object.keys(info)) {
+    if (V1_LEGACY_PROVIDER_KEYS.has(key) && info[key] !== undefined) return true
+  }
+  return false
+}
+
+function hasLegacyModelKeysCandidate(model: Record<string, unknown>): boolean {
+  for (const key of Object.keys(model)) {
+    if (V1_LEGACY_MODEL_KEYS.has(key) && model[key] !== undefined) return true
+  }
+  const variants = (model as Record<string, unknown>).variants
+  if (variants !== undefined && isPlainRecord(variants)) {
+    for (const variant of Object.values(variants)) {
+      if (!isPlainRecord(variant)) continue
+      if (Object.prototype.hasOwnProperty.call(variant, "disabled")) return true
+    }
+  }
+  return false
+}
+
+/**
+ * Decisive duplicate candidate detection (separate from full validation).
+ * A raw provider entry is a canonical candidate for cross-scope duplicate
+ * purposes when it is a plain provider-like record containing any definitive
+ * canonical signal (`endpoint`, `protocol`, or `credential`) and does not
+ * contain explicit legacy operational provider/model/variant fields.
+ * Malformed canonical nested values (`models: []`, `models: "bad"`,
+ * `models: null`, malformed model values, unknown canonical nested keys)
+ * do not remove the ID from duplicate detection; only explicit legacy
+ * operational keys make it non-canonical candidate.
+ */
+export function isCanonicalProviderCandidate(info: unknown): boolean {
+  if (!isPlainRecord(info)) return false
+  if (!hasDefinitiveSignal(info as Record<string, unknown>)) return false
+  if (hasLegacyProviderKeysCandidate(info as Record<string, unknown>)) return false
+  const models = (info as Record<string, unknown>).models
+  if (models !== undefined) {
+    if (isPlainRecord(models)) {
+      for (const model of Object.values(models as Record<string, unknown>)) {
+        if (!isPlainRecord(model)) continue
+        if (hasLegacyModelKeysCandidate(model as Record<string, unknown>)) return false
+      }
+    }
+  }
+  return true
+}
+
 export function isCanonicalOnlyProviderV1(info: unknown): boolean {
   if (!isRecord(info)) return false
   if (!hasDefinitiveSignal(info)) return false

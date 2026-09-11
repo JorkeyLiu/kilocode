@@ -1,5 +1,6 @@
 import { Context, Effect } from "effect"
 import type { Config } from "@/config/config"
+import type { CanonicalProvenance } from "@/kilocode/provider/canonical-provenance"
 
 /**
  * Generation-scoped config snapshot (LOCK-004).
@@ -23,14 +24,28 @@ export const ConfigSnapshotRef = Context.Reference<Config.Info | undefined>("@ki
   defaultValue: () => undefined,
 })
 
+export const CanonicalProviderSnapshotRef = Context.Reference<CanonicalProvenance | undefined>(
+  "@kilocode/CanonicalProviderSnapshot",
+  {
+    defaultValue: () => undefined,
+  },
+)
+
 /**
- * Capture the current effective config and run `effect` with every `Config.get`
- * returning the captured snapshot.
+ * Capture the current effective config and canonical provenance together from
+ * the same loaded State/instance generation and run `effect` with both pinned.
+ * Requires atomic `getWithCanonical` — no fallback to separate reads to avoid
+ * refresh/invalidation race. `Config.get` and `getCanonicalProvenance` still
+ * honor their separate snapshot refs; the atomic pair returns both from one
+ * `InstanceState.use` generation.
  */
 export const withConfigSnapshot = <A, E, R>(config: Config.Interface, effect: Effect.Effect<A, E, R>) =>
   Effect.gen(function* () {
-    const snapshot = yield* config.get()
-    return yield* effect.pipe(Effect.provideService(ConfigSnapshotRef, snapshot))
+    const snap = yield* config.getWithCanonical()
+    return yield* effect.pipe(
+      Effect.provideService(ConfigSnapshotRef, snap.info),
+      Effect.provideService(CanonicalProviderSnapshotRef, snap.canonical),
+    )
   })
 
 export * as KiloConfigSnapshot from "./config-snapshot"

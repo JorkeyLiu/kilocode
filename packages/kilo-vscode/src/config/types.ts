@@ -3,6 +3,16 @@ import {
   parseOwnedCredentialRef as parseOwnedCredentialRefCore,
   isOwnedCredentialRef as isOwnedCredentialRefCore,
 } from "@opencode-ai/core/kilocode/credential-ref"
+import {
+  isValidCanonicalProviderEntry as isValidCanonicalProviderEntryCore,
+  isValidModelEntry as isValidModelEntryCore,
+  isValidModelsMap as isValidModelsMapCore,
+  isValidVariantEntry as isValidVariantEntryCore,
+  APPROVED_VARIANT_KEYS as APPROVED_VARIANT_KEYS_CORE,
+  type CanonicalProviderPayload as CoreCanonicalProviderPayload,
+  type CanonicalProviderModelPayload as CoreCanonicalProviderModelPayload,
+  type CanonicalProviderVariantPayload as CoreCanonicalProviderVariantPayload,
+} from "@opencode-ai/core/kilocode/canonical-record"
 
 /**
  * P4.1 Canonical config foundation — core types.
@@ -295,43 +305,9 @@ export type CanonicalConfigPayload = Partial<{
 }>
 
 /** Provider metadata persisted in canonical JSONC. Credential is extension-host-only (never sent to webview). */
-export interface CanonicalProviderPayload {
-  readonly name?: string
-  readonly endpoint?: string
-  readonly protocol?: CanonicalProviderProtocol
-  readonly models?: { readonly [id: string]: CanonicalProviderModelPayload }
-  /** Opaque SecretStorage reference — persisted in JSONC but excluded from webview payload. */
-  readonly credential?: string
-}
-
-export interface CanonicalProviderModelPayload {
-  readonly name: string
-  readonly reasoning?: boolean
-  readonly modalities?: {
-    readonly input?: readonly string[]
-    readonly output?: readonly string[]
-  }
-  readonly variants?: {
-    readonly [name: string]: CanonicalProviderVariantPayload
-  }
-}
-
-/**
- * Closed canonical provider variant schema (R10). Supported keys are exactly
- * the approved six; nested record fields carry their own closed value shapes:
- * - thinking: exactly { type: "enabled" | "disabled" | "adaptive" }
- * - chat_template_args: exactly { enable_thinking: boolean }
- * This type is the single source of truth for the approved key set, the shared
- * validator, the GUI serializer, and the GUI deserializer.
- */
-export interface CanonicalProviderVariantPayload {
-  readonly enable_thinking?: boolean
-  readonly reasoningEffort?: string
-  readonly effort?: string
-  readonly thinking?: { readonly type: "enabled" | "disabled" | "adaptive" }
-  readonly reasoning_split?: boolean
-  readonly chat_template_args?: { readonly enable_thinking: boolean }
-}
+export type CanonicalProviderPayload = CoreCanonicalProviderPayload
+export type CanonicalProviderModelPayload = CoreCanonicalProviderModelPayload
+export type CanonicalProviderVariantPayload = CoreCanonicalProviderVariantPayload
 
 /** MCP metadata exposed to the webview. Credential-bearing values are host-only. */
 export interface CanonicalMcpPayload {
@@ -369,9 +345,10 @@ function hasOnlyKeys(obj: Record<string, unknown>, allowed: Set<string>): boolea
 }
 
 // ── Shared canonical schema validators ─────────────────────────────
-// These are the single source of truth for canonical provider/MCP/model
-// validation. Both validateConfig (Zod) and toCanonicalPayload (type guards)
-// must derive their rules from these functions.
+// Single source is @opencode-ai/core/kilocode/canonical-record for
+// provider/model/variant validation and payload types. VS Code re-exports
+// the shared validator with context {providerId, scope} support; only MCP
+// validation stays host-local.
 
 /** Approved protocol values for canonical provider entries. */
 export const CANONICAL_PROVIDER_PROTOCOLS = PROVIDER_EXECUTE_PROTOCOLS
@@ -381,13 +358,12 @@ export function isCanonicalProviderProtocol(v: unknown): v is CanonicalProviderP
   return isProviderExecuteProtocol(v)
 }
 
-/** Approved variant keys — must match CanonicalProviderVariantPayload exactly. */
-export const APPROVED_VARIANT_KEYS = new Set(["enable_thinking", "reasoningEffort", "effort", "thinking", "reasoning_split", "chat_template_args"])
+// Re-export shared variant/model/provider validators from core (single source).
+export const APPROVED_VARIANT_KEYS = APPROVED_VARIANT_KEYS_CORE
 
-/** Approved model-level keys — must match CanonicalProviderModelPayload exactly. */
+/** @deprecated use shared core validator — preserved for public export compatibility */
 const APPROVED_MODEL_KEYS = new Set(["name", "reasoning", "modalities", "variants"])
-
-/** Approved provider-level keys — must match CanonicalProviderPayload exactly. */
+/** @deprecated use shared core validator — preserved for public export compatibility */
 const APPROVED_PROVIDER_KEYS = new Set(["name", "endpoint", "protocol", "models", "credential"])
 
 /** Approved MCP-level keys — must match CanonicalMcpPayload exactly. */
@@ -401,77 +377,8 @@ export function parseOwnedCredentialRef(ref: string): { scope: "global" | "proje
   return parseOwnedCredentialRefCore(ref)
 }
 
-const THINKING_TYPES = new Set(["enabled", "disabled", "adaptive"])
-
-/**
- * Closed nested shape for the `thinking` variant field:
- * exactly { type: "enabled" | "disabled" | "adaptive" } — no other keys,
- * no other values.
- */
-function isThinkingRecord(v: unknown): boolean {
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
-  const r = v as Record<string, unknown>
-  return hasOnlyKeys(r, new Set(["type"])) &&
-    typeof r.type === "string" &&
-    THINKING_TYPES.has(r.type)
-}
-
-/**
- * Closed nested shape for the `chat_template_args` variant field:
- * exactly { enable_thinking: boolean } — no other keys, no other values.
- */
-function isChatTemplateArgsRecord(v: unknown): boolean {
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
-  const r = v as Record<string, unknown>
-  return hasOnlyKeys(r, new Set(["enable_thinking"])) &&
-    typeof r.enable_thinking === "boolean"
-}
-
-/**
- * Shared: validate a single variant entry has only approved keys with correct types.
- * enable_thinking/reasoning_split: boolean; reasoningEffort/effort: string;
- * thinking: closed {type} record; chat_template_args: closed {enable_thinking} record.
- */
 export function isValidVariantEntry(v: unknown): boolean {
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
-  const r = v as Record<string, unknown>
-  if (!hasOnlyKeys(r, APPROVED_VARIANT_KEYS)) return false
-  if (r.enable_thinking !== undefined && typeof r.enable_thinking !== "boolean") return false
-  if (r.reasoningEffort !== undefined && typeof r.reasoningEffort !== "string") return false
-  if (r.effort !== undefined && typeof r.effort !== "string") return false
-  if (r.thinking !== undefined && !isThinkingRecord(r.thinking)) return false
-  if (r.reasoning_split !== undefined && typeof r.reasoning_split !== "boolean") return false
-  if (r.chat_template_args !== undefined && !isChatTemplateArgsRecord(r.chat_template_args)) return false
-  return true
-}
-
-/** Shared: validate a closed modalities record { input?, output? } of string arrays. */
-function isValidModalities(v: unknown): boolean {
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
-  const mod = v as Record<string, unknown>
-  if (!hasOnlyKeys(mod, new Set(["input", "output"]))) return false
-  if (mod.input !== undefined && !isStringArray(mod.input)) return false
-  if (mod.output !== undefined && !isStringArray(mod.output)) return false
-  return true
-}
-
-/**
- * Shared: validate a provider endpoint — must be a non-empty http(s) URL.
- * Identical rule to the canonical form serializer.
- */
-function isValidEndpoint(v: unknown): boolean {
-  if (typeof v !== "string") return false
-  if (!/^https?:\/\//.test(v)) return false
-  try { new URL(v) } catch { return false }
-  return true
-}
-
-/** Shared: validate a provider credential ref — owned format plus kind/id context when provided. */
-function isValidProviderCredential(v: unknown, contextId?: string): boolean {
-  if (typeof v !== "string" || !isOwnedCredentialRef(v)) return false
-  if (contextId === undefined) return true
-  const parsed = parseOwnedCredentialRef(v)
-  return parsed !== null && parsed.kind === "provider" && parsed.id === contextId
+  return isValidVariantEntryCore(v)
 }
 
 /** Shared: validate an MCP credential ref — owned format plus kind/id context when provided. */
@@ -482,59 +389,21 @@ function isValidMcpCredential(v: unknown, contextName?: string): boolean {
   return parsed !== null && parsed.kind === "mcp" && parsed.id === contextName
 }
 
-/**
- * Shared: validate a single model entry in a provider's models map.
- * Closed shape: name (required non-empty string), reasoning (optional bool),
- * modalities (optional closed record), variants (optional closed record).
- */
 export function isValidModelEntry(v: unknown): boolean {
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
-  const r = v as Record<string, unknown>
-  if (typeof r.name !== "string" || r.name.length === 0) return false
-  if (!hasOnlyKeys(r, APPROVED_MODEL_KEYS)) return false
-  if (r.reasoning !== undefined && typeof r.reasoning !== "boolean") return false
-  if (r.modalities !== undefined && !isValidModalities(r.modalities)) return false
-  if (r.variants !== undefined) {
-    if (typeof r.variants !== "object" || r.variants === null || Array.isArray(r.variants)) return false
-    for (const variant of Object.values(r.variants as Record<string, unknown>)) {
-      if (!isValidVariantEntry(variant)) return false
-    }
-  }
-  return true
+  return isValidModelEntryCore(v)
 }
 
-/**
- * Shared: validate a models map — record of string keys to model entries.
- */
 export function isValidModelsMap(v: unknown): boolean {
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
-  return Object.values(v as Record<string, unknown>).every(isValidModelEntry)
+  return isValidModelsMapCore(v)
 }
 
-/**
- * Shared: validate a single provider entry against the canonical schema.
- * Exact keys: name?, endpoint?, protocol?, models?, credential?.
- * credential must be an exact extension-owned ref when present.
- * When contextId is provided, the credential ref must carry kind "provider"
- * and an id equal to contextId.
- * endpoint must be a valid URL when present.
- * protocol must be in the approved enum when present.
- * models map must be non-empty if present.
- */
-export function isValidCanonicalProviderEntry(v: unknown, contextId?: string): v is CanonicalProviderPayload {
-  if (typeof v !== "object" || v === null || Array.isArray(v)) return false
-  const r = v as Record<string, unknown>
-  if (!hasOnlyKeys(r, APPROVED_PROVIDER_KEYS)) return false
-  if (r.name !== undefined && (typeof r.name !== "string" || r.name.length === 0)) return false
-  if (r.endpoint !== undefined && !isValidEndpoint(r.endpoint)) return false
-  if (r.protocol !== undefined && !isCanonicalProviderProtocol(r.protocol)) return false
-  if (r.credential !== undefined && !isValidProviderCredential(r.credential, contextId)) return false
-  if (r.models !== undefined) {
-    if (!isValidModelsMap(r.models)) return false
-    // Models map must be non-empty when present
-    if (Object.keys(r.models as Record<string, unknown>).length === 0) return false
-  }
-  return true
+export function isValidCanonicalProviderEntry(
+  v: unknown,
+  context?: string | { providerId?: string; scope?: "global" | "project" },
+): v is CanonicalProviderPayload {
+  if (context === undefined) return isValidCanonicalProviderEntryCore(v)
+  if (typeof context === "string") return isValidCanonicalProviderEntryCore(v, context)
+  return isValidCanonicalProviderEntryCore(v, { providerId: context.providerId, scope: context.scope })
 }
 
 /**

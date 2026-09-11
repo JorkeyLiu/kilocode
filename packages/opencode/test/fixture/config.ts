@@ -1,5 +1,6 @@
 import { Config } from "@/config/config"
 import { emptyConsoleState } from "@opencode-ai/core/v1/config/console-state"
+import { emptyProvenance } from "@/kilocode/provider/canonical-provenance"
 import { Effect, Layer } from "effect"
 
 export function make(overrides: Partial<Config.Interface> = {}) {
@@ -20,6 +21,9 @@ export function make(overrides: Partial<Config.Interface> = {}) {
     invalidateProjectStrict: () => Effect.void,
     emitUpdatedStrict: () => Effect.void,
     withLock: (key, body) => Effect.suspend(() => body),
+    getCanonicalProvenance: () => Effect.succeed(emptyProvenance),
+    getCanonicalProviders: () => Effect.succeed(emptyProvenance),
+    getWithCanonical: () => Effect.succeed({ info: {}, canonical: emptyProvenance }),
     // kilocode_change end
     invalidate: () => Effect.void,
     directories: () => Effect.succeed([]),

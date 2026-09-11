@@ -1196,6 +1196,9 @@ describe("config transaction - LOCK-005 dynamic", () => {
           warnings: () => Effect.succeed([]),
           getConsoleState: () =>
             Effect.succeed({ consoleManagedProviders: [], activeOrgName: undefined, switchableOrgCount: 0 }),
+          getCanonicalProvenance: () => Effect.succeed({ providers: {}, conflicts: [] }),
+          getCanonicalProviders: () => Effect.succeed({ providers: {}, conflicts: [] }),
+          getWithCanonical: () => Effect.succeed({ info: {} as Config.Info, canonical: { providers: {}, conflicts: [] } }),
           update: () => Effect.die("unexpected update"),
           updateGlobal: () => Effect.die("unexpected updateGlobal"),
         })

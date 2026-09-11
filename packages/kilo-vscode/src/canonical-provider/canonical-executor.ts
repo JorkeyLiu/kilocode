@@ -32,6 +32,7 @@ import { route as chat } from "@opencode-ai/llm/protocols/openai-chat"
 import { route as responses } from "@opencode-ai/llm/protocols/openai-responses"
 import { route as messages } from "@opencode-ai/llm/protocols/anthropic-messages"
 import {
+  isValidCanonicalProviderEntry,
   isValidModelEntry,
   parseCanonicalProviderRecord,
   parseOwnedCredentialRef,
@@ -139,14 +140,15 @@ const materialize = (input: CanonicalExecuteInput): Materialized => {
   if (typeof raw !== "object" || raw === null || Array.isArray(raw))
     throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
   const rec = raw as Record<string, unknown>
-  if (Object.getPrototypeOf(rec) !== Object.prototype) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  // Prototype check is owned by shared validator (accepts Object.prototype and null-prototype, rejects class instances)
+  // Retain explicit pollution-key protection before shared validation.
   if (Object.prototype.hasOwnProperty.call(rec, "__proto__") || Object.prototype.hasOwnProperty.call(rec, "constructor"))
     throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
 
-  const allowed = new Set(["name", "endpoint", "protocol", "models", "credential"])
-  for (const key of Object.keys(rec)) if (!allowed.has(key)) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-  if (rec.name !== undefined && (typeof rec.name !== "string" || rec.name.length === 0))
-    throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  // Closed shape beyond granular fields is owned by the shared core validator
+  // (single source via config/types re-export). Granular endpoint/protocol/
+  // credential/model codes below take precedence; any other closed-shape
+  // violation falls through to the shared invalid-record check.
 
   // Endpoint/protocol/credential/model keep exact codes before generic invalid-record.
   const endpoint = rec.endpoint
@@ -171,8 +173,7 @@ const materialize = (input: CanonicalExecuteInput): Materialized => {
   if (models === undefined) throw new CanonicalExecuteError("unknown-model", "Unknown canonical provider model")
   if (typeof models !== "object" || models === null || Array.isArray(models))
     throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
-  if (Object.getPrototypeOf(models as object) !== Object.prototype)
-    throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
+  // Prototype of models map is validated by shared validator (null-prototype accepted)
   const entries = Object.entries(models as Record<string, unknown>)
   if (entries.length === 0) throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
   for (const [mid, value] of entries) {
@@ -189,6 +190,10 @@ const materialize = (input: CanonicalExecuteInput): Materialized => {
   const parsed = parseOwnedCredentialRef(ref)
   if (!parsed || parsed.kind !== "provider" || parsed.id !== input.providerId)
     throw new CanonicalExecuteError("invalid-credential-ref", "Invalid canonical provider credential reference")
+  // Shared closed-shape validation (single source) for name/extra keys and
+  // nested reasoning/modalities/variants rules not covered by granular codes.
+  if (!isValidCanonicalProviderEntry(rec, { providerId: input.providerId }))
+    throw new CanonicalExecuteError("invalid-record", "Invalid canonical provider entry")
   return { protocol: protocol as CanonicalProviderProtocol, endpoint: endpoint as string, ref: ref as string }
 }
 

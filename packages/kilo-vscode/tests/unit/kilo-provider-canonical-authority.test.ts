@@ -256,12 +256,17 @@ describe("KiloProvider canonical GUI authority", () => {
     const types = await Bun.file(new URL("../../src/config/types.ts", import.meta.url)).text()
     expect(extension.match(/CanonicalConfigLoadedMessage[\s\S]*?\n}/)?.[0]).toContain("CanonicalConfigPayload")
     expect(webview.match(/CanonicalUpdateConfigMessage[\s\S]*?\n}/)?.[0]).toContain("CanonicalConfigPayload")
-    expect(types).toContain("interface CanonicalProviderPayload")
+    // Shared core type alias is single source; host re-exports it, not a duplicate local interface
+    expect(types).toMatch(/export type CanonicalProviderPayload\s*=\s*CoreCanonicalProviderPayload/)
+    expect(types).toContain('from "@opencode-ai/core/kilocode/canonical-record"')
+    expect(types).not.toContain("interface CanonicalProviderPayload")
     expect(types).toContain("interface CanonicalMcpPayload")
-    // Check interface body (after the opening brace) for credential field declarations, not comments
-    const providerBody = types.match(/interface CanonicalProviderPayload\s*\{[\s\S]*?\n\}/)?.[0] ?? ""
-    expect(providerBody).not.toMatch(/^\s*(readonly\s+)?credential[\s:]/m)
-    expect(providerBody).not.toMatch(/^\s*(readonly\s+)?headers[\s:]/m)
+    // Narrow webview surface stays credential/header-free (MCP interface body check)
+    const mcpBody = types.match(/interface CanonicalMcpPayload\s*\{[\s\S]*?\n\}/)?.[0] ?? ""
+    expect(mcpBody).not.toMatch(/^\s*(readonly\s+)?environment[\s:]/m)
+    expect(mcpBody).not.toMatch(/^\s*(readonly\s+)?oauth[\s:]/m)
+    const providerBodyLegacy = types.match(/interface CanonicalProviderPayload\s*\{[\s\S]*?\n\}/)?.[0] ?? ""
+    expect(providerBodyLegacy).toBe("")
   })
 
   it("leaves UI-local settings editable in canonical mode", async () => {
@@ -433,11 +438,13 @@ describe("LOCK-3: No Kilo fallback selection", () => {
 describe("LOCK-4: Narrow canonical state", () => {
   it("CanonicalConfigPayload type does not include credential or headers", async () => {
     const types = await Bun.file(new URL("../../src/config/types.ts", import.meta.url)).text()
-    // CanonicalProviderPayload must not have credential or headers field declarations
-    const providerBody = types.match(/interface CanonicalProviderPayload\s*\{[\s\S]*?\n\}/)?.[0] ?? ""
-    expect(providerBody).not.toMatch(/^\s*(readonly\s+)?credential[\s:]/m)
-    expect(providerBody).not.toMatch(/^\s*(readonly\s+)?headers[\s:]/m)
-    // CanonicalMcpPayload must not have environment or oauth field declarations
+    // Provider payload is now a shared core type alias, not a duplicate local interface
+    expect(types).toMatch(/export type CanonicalProviderPayload\s*=\s*CoreCanonicalProviderPayload/)
+    expect(types).toContain('from "@opencode-ai/core/kilocode/canonical-record"')
+    expect(types).not.toContain("interface CanonicalProviderPayload")
+    const providerBodyLegacy = types.match(/interface CanonicalProviderPayload\s*\{[\s\S]*?\n\}/)?.[0] ?? ""
+    expect(providerBodyLegacy).toBe("")
+    // CanonicalMcpPayload stays host-local and must not have environment or oauth field declarations
     const mcpBody = types.match(/interface CanonicalMcpPayload\s*\{[\s\S]*?\n\}/)?.[0] ?? ""
     expect(mcpBody).not.toMatch(/^\s*(readonly\s+)?environment[\s:]/m)
     expect(mcpBody).not.toMatch(/^\s*(readonly\s+)?oauth[\s:]/m)

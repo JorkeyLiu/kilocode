@@ -15,9 +15,14 @@ import { isRecord } from "@/util/record"
 import type { ConsoleState } from "@opencode-ai/core/v1/config/console-state"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { Context, Duration, Effect, Fiber, Layer, Schema } from "effect"
-import { ConfigSnapshotRef } from "@/kilocode/session/config-snapshot" // kilocode_change
+import { Cause, Context, Duration, Effect, Fiber, Layer, Schema } from "effect"
+import { ConfigSnapshotRef, CanonicalProviderSnapshotRef } from "@/kilocode/session/config-snapshot" // kilocode_change
 import { EffectFlock } from "@opencode-ai/core/util/effect-flock"
+import { isCanonicalOnlyProviderV1, isCanonicalProviderCandidate } from "@opencode-ai/core/kilocode/canonical-provider" // kilocode_change - canonical provenance
+import { isValidCanonicalProviderEntry, isValidModelsMap } from "@opencode-ai/core/kilocode/canonical-record" // kilocode_change - shared validation
+import { parseOwnedCredentialRef } from "@opencode-ai/core/kilocode/credential-ref" // kilocode_change - scope/id checks
+import type { CanonicalProvenance, CanonicalConflict, CanonicalProviderEntry } from "@/kilocode/provider/canonical-provenance" // kilocode_change
+import { emptyProvenance } from "@/kilocode/provider/canonical-provenance" // kilocode_change
 import { canonicalRoot, containsPath, type InstanceContext } from "../project/instance-context"
 import { ConfigV1 } from "@opencode-ai/core/v1/config/config"
 import { ConfigPluginV1 } from "@opencode-ai/core/v1/config/plugin"
@@ -125,6 +130,7 @@ export type PreparedConfig = KilocodeConfig.PreparedConfig
 
 type State = {
   config: Info
+  canonical: CanonicalProvenance // kilocode_change - scope-aware canonical provenance
   directories: string[]
   deps: Fiber.Fiber<void>[]
   warnings: Warning[] // kilocode_change
@@ -178,6 +184,10 @@ export interface Interface {
    * an endpoint's declared error channel.
    */
   readonly withLock: <A, E, R>(key: string, body: Effect.Effect<A, E, R>) => Effect.Effect<A, E, R>
+  // kilocode_change start - canonical provenance snapshot
+  readonly getCanonicalProvenance: () => Effect.Effect<CanonicalProvenance>
+  readonly getCanonicalProviders: () => Effect.Effect<CanonicalProvenance>
+  readonly getWithCanonical: () => Effect.Effect<{ info: Info; canonical: CanonicalProvenance }>
   // kilocode_change end
   readonly invalidate: () => Effect.Effect<void>
   readonly directories: () => Effect.Effect<string[]>
@@ -268,6 +278,256 @@ function stable(value: unknown): string {
   throw new TypeError(`Unsupported config value in semantic comparison: ${typeof value}`) // kilocode_change
 }
 
+// kilocode_change start - canonical provenance helpers (scope-aware, closed validation)
+function parseRawProviderMap(text: string | undefined, source: string): Record<string, unknown> {
+  if (!text) return Object.create(null) as Record<string, unknown>
+  try {
+    const data = ConfigParse.jsonc(text, source) as Record<string, unknown>
+    if (!isRecord(data)) return Object.create(null) as Record<string, unknown>
+    const provider = data.provider
+    if (!isRecord(provider)) return Object.create(null) as Record<string, unknown>
+    // Return null-prototype map to avoid prototype pollution via __proto__/constructor keys
+    const out: Record<string, unknown> = Object.create(null)
+    for (const [k, v] of Object.entries(provider as Record<string, unknown>)) {
+      // eslint-disable-next-line no-prototype-builtins
+      if (!Object.prototype.hasOwnProperty.call(provider, k)) continue
+      out[k] = v
+    }
+    return out
+  } catch {
+    return Object.create(null) as Record<string, unknown>
+  }
+}
+
+function buildCanonicalProvenance(
+  globalMap: Record<string, unknown>,
+  projectMap: Record<string, unknown>,
+  globalSource: string,
+  projectSource: string,
+): CanonicalProvenance {
+  const conflicts: CanonicalConflict[] = []
+  const globalEntries: Record<string, CanonicalProviderEntry> = Object.create(null)
+  const projectEntries: Record<string, CanonicalProviderEntry> = Object.create(null)
+
+  // Duplicate semantics: decisive cross-scope conflict for any canonical candidate ID present in both raw maps,
+  // regardless of validity/malformed nested values. Only explicit legacy operational keys remove candidacy.
+  // Uses isCanonicalProviderCandidate (not full validation) so malformed models/unknown keys remain decisive.
+  const globalIds = new Set<string>()
+  const projectIds = new Set<string>()
+  for (const [id, raw] of Object.entries(globalMap)) {
+    if (!isCanonicalProviderCandidate(raw)) continue
+    globalIds.add(id)
+  }
+  for (const [id, raw] of Object.entries(projectMap)) {
+    if (!isCanonicalProviderCandidate(raw)) continue
+    projectIds.add(id)
+  }
+  const duplicateIds = new Set<string>()
+  for (const id of globalIds) if (projectIds.has(id)) duplicateIds.add(id)
+  for (const id of duplicateIds) {
+    conflicts.push({
+      id,
+      reason: "duplicate",
+      message: "duplicate canonical provider across scopes",
+      scopes: ["global", "project"],
+      sources: [globalSource, projectSource],
+    })
+  }
+
+  const processScope = (
+    map: Record<string, unknown>,
+    scope: "global" | "project",
+    source: string,
+    target: Record<string, CanonicalProviderEntry>,
+  ) => {
+    for (const [id, raw] of Object.entries(map)) {
+      if (duplicateIds.has(id)) continue
+      if (raw === null) continue
+      if (!isRecord(raw as unknown)) {
+        conflicts.push({
+          id,
+          reason: "invalid-record",
+          message: "canonical provider record invalid",
+          scopes: [scope],
+          sources: [source],
+        })
+        continue
+      }
+      const rec = raw as Record<string, unknown>
+      if (!isCanonicalOnlyProviderV1(rec)) continue
+      // Shared validator with explicit context for provider-kind + id/scope when supplied
+      const valid = isValidCanonicalProviderEntry(rec, { providerId: id, scope })
+      if (!valid) {
+        const endpoint = rec.endpoint
+        const protocol = rec.protocol
+        const models = rec.models
+        const cred = rec.credential
+        // Credential-specific reasons take precedence over invalid-record; never leak credential value
+        if (cred !== undefined && typeof cred !== "string") {
+          conflicts.push({
+            id,
+            reason: "malformed-credential",
+            message: "canonical credential malformed",
+            scopes: [scope],
+            sources: [source],
+          })
+          continue
+        }
+        if (typeof cred === "string") {
+          const parsed = parseOwnedCredentialRef(cred)
+          if (!parsed || parsed.kind !== "provider") {
+            conflicts.push({
+              id,
+              reason: "malformed-credential",
+              message: "canonical credential malformed",
+              scopes: [scope],
+              sources: [source],
+            })
+            continue
+          }
+          if (parsed.scope !== scope) {
+            conflicts.push({
+              id,
+              reason: "scope-mismatch",
+              message: "canonical credential scope mismatch",
+              scopes: [scope],
+              sources: [source],
+            })
+            continue
+          }
+          if (parsed.id !== id) {
+            conflicts.push({
+              id,
+              reason: "id-mismatch",
+              message: "canonical credential id mismatch",
+              scopes: [scope],
+              sources: [source],
+            })
+            continue
+          }
+        }
+        const endpointInvalid =
+          endpoint !== undefined && (typeof endpoint !== "string" || !/^https?:\/\//.test(endpoint))
+        if (endpointInvalid) {
+          conflicts.push({
+            id,
+            reason: "invalid-endpoint",
+            message: "canonical provider has invalid endpoint",
+            scopes: [scope],
+            sources: [source],
+          })
+        } else if (
+          protocol !== undefined &&
+          (typeof protocol !== "string" || !["openai/completions", "openai/responses", "anthropic/messages"].includes(protocol))
+        ) {
+          conflicts.push({
+            id,
+            reason: "unknown-protocol",
+            message: "canonical provider has unknown protocol",
+            scopes: [scope],
+            sources: [source],
+          })
+        } else if (
+          models !== undefined &&
+          (!isValidModelsMap(models) || Object.keys(models as Record<string, unknown>).length === 0)
+        ) {
+          conflicts.push({
+            id,
+            reason: "invalid-models",
+            message: "canonical provider has invalid models",
+            scopes: [scope],
+            sources: [source],
+          })
+        } else {
+          conflicts.push({
+            id,
+            reason: "invalid-record",
+            message: "canonical provider record invalid",
+            scopes: [scope],
+            sources: [source],
+          })
+        }
+        continue
+      }
+      const cred = rec.credential
+      if (cred === undefined) {
+        conflicts.push({
+          id,
+          reason: "missing-credential",
+          message: "canonical provider missing credential",
+          scopes: [scope],
+          sources: [source],
+        })
+        continue
+      }
+      if (typeof cred !== "string") {
+        conflicts.push({
+          id,
+          reason: "malformed-credential",
+          message: "canonical credential malformed",
+          scopes: [scope],
+          sources: [source],
+        })
+        continue
+      }
+      const parsed = parseOwnedCredentialRef(cred)
+      if (!parsed) {
+        conflicts.push({
+          id,
+          reason: "malformed-credential",
+          message: "canonical credential malformed",
+          scopes: [scope],
+          sources: [source],
+        })
+        continue
+      }
+      if (parsed.kind !== "provider") {
+        conflicts.push({
+          id,
+          reason: "malformed-credential",
+          message: "canonical credential malformed",
+          scopes: [scope],
+          sources: [source],
+        })
+        continue
+      }
+      if (parsed.scope !== scope) {
+        conflicts.push({
+          id,
+          reason: "scope-mismatch",
+          message: "canonical credential scope mismatch",
+          scopes: [scope],
+          sources: [source],
+        })
+        continue
+      }
+      if (parsed.id !== id) {
+        conflicts.push({
+          id,
+          reason: "id-mismatch",
+          message: "canonical credential id mismatch",
+          scopes: [scope],
+          sources: [source],
+        })
+        continue
+      }
+      target[id] = { id, scope, source, record: rec as unknown as CanonicalProviderEntry["record"] }
+    }
+  }
+
+  processScope(globalMap, "global", globalSource, globalEntries)
+  processScope(projectMap, "project", projectSource, projectEntries)
+
+  // Duplicate entries already omitted via duplicateIds; no additional valid-entry duplicate check needed.
+  // Build providers with null prototype to avoid prototype pollution.
+  const providers: Record<string, CanonicalProviderEntry> = Object.create(null)
+  for (const [k, v] of Object.entries(globalEntries)) providers[k] = v
+  for (const [k, v] of Object.entries(projectEntries)) providers[k] = v
+  // Return providers/conflicts with safe prototypes; conflict list already safe.
+  return { providers, conflicts }
+}
+// kilocode_change end
+
 export const layer = Layer.effect(
   Service,
   Effect.gen(function* () {
@@ -309,31 +569,51 @@ export const layer = Layer.effect(
       return data
     })
 
+    // kilocode_change start - single-pass raw+decoded capture for provenance (no second I/O)
+    // Raw map survives decode failure so per-provider provenance conflicts are
+    // preserved even when the whole file fails schema validation (recoverable).
+    const loadFileSinglePass = Effect.fnUntraced(function* (
+      filepath: string,
+      env?: Record<string, string>,
+      trusted?: boolean,
+      fileScope?: ConfigVariable.FileScope,
+    ) {
+      log.info("loading", { path: filepath })
+      const text = yield* readConfigFile(filepath)
+      if (!text) return { info: {} as Info, rawMap: Object.create(null) as Record<string, unknown> }
+      const rawMap = parseRawProviderMap(text, filepath)
+      const exit = yield* Effect.exit(loadConfig(text, { path: filepath }, env, trusted, fileScope))
+      if (exit._tag === "Success") return { info: exit.value as Info, rawMap }
+      // Squash Cause to the original Config Json/Invalid error so existing
+      // recoverable warning behavior (toWarning/caught) recognizes it.
+      const failure = Cause.squash(exit.cause)
+      return { info: {} as Info, rawMap, error: failure }
+    })
+
     const loadFile = Effect.fnUntraced(function* (
       filepath: string,
       env?: Record<string, string>,
       trusted?: boolean, // kilocode_change
       fileScope?: ConfigVariable.FileScope, // kilocode_change
     ) {
-      log.info("loading", { path: filepath })
-      const text = yield* readConfigFile(filepath)
-      if (!text) return {} as Info
-      return yield* loadConfig(text, { path: filepath }, env, trusted, fileScope) // kilocode_change
+      const single = yield* loadFileSinglePass(filepath, env, trusted, fileScope)
+      return single.info
     })
+    // kilocode_change end
 
     let globalStamp = "" // kilocode_change
 
     const loadGlobal = Effect.fnUntraced(function* (env?: Record<string, string>) {
       globalStamp = yield* KilocodeGlobalConfigStamp.read(fs, Global.Path.config)
-      let result: Info = {}
       const file = globalConfigFile()
       // P4.3 canonical-only: no loader-side seeding outside lock+atomic (audit finding 1).
-      // Missing global file is treated as empty config; creation/persistence is owned
-      // exclusively by prepare/commit via KilocodeAtomicWrite under
-      // configDiscoveryGlobalKey. This avoids load/update races and partial JSONC exposure.
-      result = mergeConfig(result, yield* loadFile(file, env, true))
+      // Single-pass: one file read yields both decoded Info and raw provider map for provenance
+      const single = yield* loadFileSinglePass(file, env, true)
+      if (single.error !== undefined) {
+        log.error("failed to load global config, using defaults", { error: String(single.error) })
+      }
       globalStamp = yield* KilocodeGlobalConfigStamp.read(fs, Global.Path.config)
-      return result
+      return { info: single.info, rawMap: single.rawMap, error: single.error }
     })
 
     const [cachedGlobal, invalidateGlobal] = yield* Effect.cachedInvalidateWithTTL(
@@ -341,7 +621,10 @@ export const layer = Layer.effect(
         Effect.tapError((error) =>
           Effect.sync(() => log.error("failed to load global config, using defaults", { error: String(error) })),
         ),
-        Effect.orElseSucceed((): Info => ({})),
+        Effect.orElseSucceed((): { info: Info; rawMap: Record<string, unknown>; error?: unknown } => ({
+          info: {} as Info,
+          rawMap: Object.create(null) as Record<string, unknown>,
+        })),
       ),
       Duration.infinity,
     )
@@ -358,6 +641,12 @@ export const layer = Layer.effect(
 
     const getGlobal = Effect.fn("Config.getGlobal")(function* () {
       yield* refreshGlobal() // kilocode_change
+      const cached = yield* cachedGlobal
+      return cached.info
+    })
+
+    const getGlobalWithRaw = Effect.fn("Config.getGlobalWithRaw")(function* () {
+      yield* refreshGlobal()
       return yield* cachedGlobal
     })
 
@@ -446,27 +735,41 @@ export const layer = Layer.effect(
           yield* merge("e2e-fixture", e2eFragment, "global")
         }
 
-        const global = yield* getGlobal().pipe(
+        const globalWithRaw = yield* getGlobalWithRaw().pipe(
           Effect.catchDefect((err: unknown) => {
             caughtWarning(warnings, "global config", err)
-            return Effect.succeed({} as Info)
+            return Effect.succeed({
+              info: {} as Info,
+              rawMap: Object.create(null) as Record<string, unknown>,
+              error: undefined as unknown,
+            })
           }),
         )
+        if ((globalWithRaw as { error?: unknown }).error !== undefined) {
+          caughtWarning(warnings, "global config", (globalWithRaw as { error?: unknown }).error)
+        }
 
-        yield* merge(Global.Path.config, global, "global")
+        yield* merge(Global.Path.config, globalWithRaw.info, "global")
 
         const projectFile = path.join(projectRoot, ".kilo", "kilo.jsonc")
-        const projectConfig = yield* loadFile(projectFile, undefined, false, {
+        const projectSingle = yield* loadFileSinglePass(projectFile, undefined, false, {
           root: projectRoot,
           source: projectFile,
         }).pipe(
           Effect.catchDefect((err: unknown) => {
             caughtWarning(warnings, projectFile, err)
-            return Effect.succeed({} as Info)
+            return Effect.succeed({
+              info: {} as Info,
+              rawMap: Object.create(null) as Record<string, unknown>,
+              error: undefined as unknown,
+            })
           }),
         )
-        if (Object.keys(projectConfig).length > 0 || existsSync(projectFile)) {
-          yield* merge(projectFile, projectConfig, "local")
+        if ((projectSingle as { error?: unknown }).error !== undefined) {
+          caughtWarning(warnings, projectFile, (projectSingle as { error?: unknown }).error)
+        }
+        if (Object.keys(projectSingle.info).length > 0 || existsSync(projectFile)) {
+          yield* merge(projectFile, projectSingle.info, "local")
         }
 
         result.agent = result.agent || {}
@@ -513,9 +816,18 @@ export const layer = Layer.effect(
         KilocodeDefaultPlugins.apply(result, { disabled: Flag.KILO_DISABLE_DEFAULT_PLUGINS, log })
         // kilocode_change end
 
+        // kilocode_change start - scope-aware canonical provenance (single pass, same-read capture)
+        const globalFilePath = globalConfigFile()
+        const canonical = buildCanonicalProvenance(globalWithRaw.rawMap, projectSingle.rawMap, globalFilePath, projectFile)
+        for (const c of canonical.conflicts) {
+          warnings.push({ path: c.sources?.[0] ?? c.id, message: `canonical provider ${c.id}: ${c.message}` })
+        }
+        // kilocode_change end
+
         timer.end() // kilocode_change - P0 instrumentation
         return {
           config: result,
+          canonical,
           directories,
           deps,
           warnings, // kilocode_change
@@ -547,6 +859,31 @@ export const layer = Layer.effect(
       // kilocode_change end
       return yield* InstanceState.use(state, (s) => s.config)
     })
+
+    // kilocode_change start - canonical provenance (pinned together with Config.Info)
+    const getCanonicalProvenance = Effect.fn("Config.getCanonicalProvenance")(function* () {
+      const snap = yield* CanonicalProviderSnapshotRef
+      if (snap) return snap
+      if (yield* refreshGlobal()) {
+        yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
+      }
+      return yield* InstanceState.use(state, (s) => s.canonical)
+    })
+
+    const getCanonicalProviders = getCanonicalProvenance
+
+    const getWithCanonical = Effect.fn("Config.getWithCanonical")(function* () {
+      const snapInfo = yield* ConfigSnapshotRef
+      const snapProv = yield* CanonicalProviderSnapshotRef
+      if (snapInfo !== undefined && snapProv !== undefined) {
+        return { info: snapInfo, canonical: snapProv }
+      }
+      if (yield* refreshGlobal()) {
+        yield* InstanceState.invalidate(state).pipe(Effect.catchCause(() => Effect.void))
+      }
+      return yield* InstanceState.use(state, (s) => ({ info: s.config, canonical: s.canonical }))
+    })
+    // kilocode_change end
 
     const directories = Effect.fn("Config.directories")(function* () {
       return yield* InstanceState.use(state, (s) => s.directories)
@@ -781,6 +1118,9 @@ export const layer = Layer.effect(
       invalidateProjectStrict, // kilocode_change - F-03 strict hot-path variant
       emitUpdatedStrict, // kilocode_change - F-03 strict hot-path variant
       withLock: withConfigLock, // kilocode_change
+      getCanonicalProvenance, // kilocode_change
+      getCanonicalProviders, // kilocode_change
+      getWithCanonical, // kilocode_change
       invalidate,
       directories,
       waitForDependencies,
