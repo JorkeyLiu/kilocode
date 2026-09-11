@@ -229,6 +229,11 @@ const testAllow: Record<string, { count: number; reason: string }> = {
     reason:
       "production AppRuntime canonical provenance regression via AppRuntime and InstanceRef (distinct scopes, duplicate suppression, credential/invalid classes, resolver via Config.Service + resolveFromSnapshot, atomic withConfigSnapshot + withGenerationAdmission pinning, recoverable failures, parse secrecy token, no provenance in public JSON)",
   },
+  "kilocode/canonical-provider-execute.test.ts": {
+    count: 14,
+    reason:
+      "production AppRuntime canonical provider execution integration test via AppRuntime and InstanceRef (resolver+broker composition, snapshot coherence, error propagation, interruption, environment-free captured Config+Broker with snapshot pinning)",
+  },
 }
 
 const owned = (file: string) => file.startsWith("kilocode/") || file.startsWith("kilo-sessions/")
