@@ -119,6 +119,7 @@ export function stream(input: {
   readonly broker: Broker.Broker
   readonly providerId: string
   readonly modelId: string
+  readonly timeoutMs?: number
 }): Stream.Stream<LLMEvent, unknown> {
   // Safe route/error: selectRoute/build failures become typed InvalidRequest, not defects
   return Stream.unwrap(
@@ -129,7 +130,10 @@ export function stream(input: {
       })
       const { request, nativeTools } = built
       const ctx = { providerId: input.providerId, modelId: input.modelId, record: input.record }
-      const executor = makeExecutor(ctx, input.broker)
+      const executor =
+        typeof input.timeoutMs === "number" && Number.isFinite(input.timeoutMs) && input.timeoutMs > 0
+          ? makeExecutor(ctx, input.broker, { timeoutMs: input.timeoutMs })
+          : makeExecutor(ctx, input.broker)
       const executorLayer = Layer.succeed(RequestExecutor.Service, executor)
       // Fresh build per request: the module-level LLMClient.layer node is
       // already memoized with the ambient (real-HTTP) executor inside a shared

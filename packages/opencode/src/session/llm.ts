@@ -199,6 +199,7 @@ const live: Layer.Layer<
           })
         }
         yield* Effect.logInfo("llm runtime selected").pipe(Effect.annotateLogs({ "llm.runtime": "canonical-native", "llm.provider": input.model.providerID, "llm.model": input.model.id }))
+        const chunkMs = KiloLLM.timeout({ options: prepared.params.options, fallback: syntheticProvider.options }).timeout?.chunkMs
         const canonicalStream: Stream.Stream<LLMEvent, unknown> = CanonicalNative.stream({
           model: input.model,
           record: resolved.record,
@@ -208,6 +209,7 @@ const live: Layer.Layer<
           broker,
           providerId: resolved.providerId,
           modelId: resolved.modelId,
+          ...(typeof chunkMs === "number" ? { timeoutMs: chunkMs } : {}),
         })
         // Map broker/executor LLMError through existing conventions (no second normalization)
         if (!exportable) return { type: "canonical-native" as const, stream: canonicalStream }

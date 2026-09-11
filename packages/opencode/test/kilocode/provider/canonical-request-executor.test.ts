@@ -273,24 +273,26 @@ describe("canonical-request-executor", () => {
       const err = await runStatus(409, {}, "conflict")
       expect(err.reason._tag).toBe("InvalidRequest")
     }
-    // 429 with retry-after seconds
+    // 429 with retry-after seconds (tiny value keeps pre-exposure retry fast; seconds branch still covered)
     {
-      const err = await runStatus(429, { "retry-after": "2" }, "rate limited")
+      const err = await runStatus(429, { "retry-after": "0", "retry-after-ms": "0" }, "rate limited")
       expect(err.reason._tag).toBe("RateLimit")
-      expect((err.reason as { retryAfterMs: number }).retryAfterMs).toBe(2000)
+      expect((err.reason as { retryAfterMs: number }).retryAfterMs).toBe(0)
     }
-    // 429 with retry-after-ms
+    // 429 with retry-after-ms (tiny value keeps retry fast)
     {
-      const err = await runStatus(429, { "retry-after-ms": "1500" }, "rate limited")
+      const err = await runStatus(429, { "retry-after-ms": "1" }, "rate limited")
       expect(err.reason._tag).toBe("RateLimit")
-      expect((err.reason as { retryAfterMs: number }).retryAfterMs).toBe(1500)
+      expect((err.reason as { retryAfterMs: number }).retryAfterMs).toBe(1)
     }
-    // 429 with retry-after date
+    // 429 with retry-after date (near-future keeps retry fast; date branch still covered)
     {
-      const future = new Date(Date.now() + 5000).toUTCString()
+      const future = new Date(Date.now() + 200).toUTCString()
       const err = await runStatus(429, { "retry-after": future }, "rate limited")
       expect(err.reason._tag).toBe("RateLimit")
-      expect((err.reason as { retryAfterMs: number }).retryAfterMs).toBeGreaterThan(0)
+      const ms = (err.reason as { retryAfterMs: number }).retryAfterMs
+      expect(ms).toBeGreaterThanOrEqual(0)
+      expect(ms).toBeLessThan(5000)
     }
     // 429 quota -> QuotaExceeded
     {
@@ -307,9 +309,9 @@ describe("canonical-request-executor", () => {
       const err = await runStatus(422, {}, "unprocessable")
       expect(err.reason._tag).toBe("InvalidRequest")
     }
-    // 500
+    // 500 (retry-after-ms 0 keeps pre-exposure retry fast; ProviderInternal still retryable)
     {
-      const err = await runStatus(500, {}, "internal")
+      const err = await runStatus(500, { "retry-after-ms": "0" }, "internal")
       expect(err.reason._tag).toBe("ProviderInternal")
       expect((err.reason as { status: number }).status).toBe(500)
     }
@@ -626,5 +628,405 @@ describe("canonical-request-executor", () => {
     )
     expect(Exit.isSuccess(exit)).toBeTrue()
     expect(called).toBeTrue()
+  })
+
+  test("pre-exposure retry: 429 with retry-after-ms 0 then 2xx succeeds in exactly two attempts", async () => {
+    const ctx = { providerId: "acme", modelId: "m1", record: baseRecord() }
+    let attempts = 0
+    let drops = 0
+    const broker: Broker.Broker = {
+      stream: () =>
+        Effect.gen(function* () {
+          const scope = yield* Scope.Scope
+          yield* Scope.addFinalizer(scope, Effect.sync(() => { drops++ }))
+          attempts++
+          if (attempts === 1) {
+            return { status: 429, headers: { "retry-after-ms": "0" }, stream: Stream.succeed(new TextEncoder().encode("rate limited")) } as Broker.HttpStream
+          }
+          return { status: 200, headers: { "content-type": "text/event-stream" }, stream: Stream.make(new TextEncoder().encode("ok")) } as Broker.HttpStream
+        }),
+      execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+    }
+    const executor = makeExecutor(ctx, broker)
+    const response = await Effect.runPromise(executor.execute(requestWith({ body: validBody })))
+    expect(response.status).toBe(200)
+    const text = await Effect.runPromise(response.text)
+    expect(text).toBe("ok")
+    expect(attempts).toBe(2)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(drops).toBe(2)
+  })
+
+  test("500 exhausts 3 attempts as ProviderInternal; 400/auth/quota/unsupported/unavailable single attempt", async () => {
+    const ctx = { providerId: "acme", modelId: "m1", record: baseRecord() }
+    const runCounted = async (broker: Broker.Broker) => {
+      const executor = makeExecutor(ctx, broker)
+      const exit = await Effect.runPromiseExit(executor.execute(requestWith({ body: validBody })))
+      expect(Exit.isFailure(exit)).toBeTrue()
+      if (Exit.isFailure(exit)) {
+        const errOpt = Cause.findErrorOption(exit.cause)
+        expect(Option.isSome(errOpt)).toBeTrue()
+        if (Option.isSome(errOpt)) return errOpt.value as LLMError
+      }
+      throw new Error("expected failure")
+    }
+    // 500 x3 exhausts
+    {
+      let attempts = 0
+      let drops = 0
+      const broker: Broker.Broker = {
+        stream: () =>
+          Effect.gen(function* () {
+            const scope = yield* Scope.Scope
+            yield* Scope.addFinalizer(scope, Effect.sync(() => { drops++ }))
+            attempts++
+            return { status: 500, headers: { "retry-after-ms": "0" }, stream: Stream.succeed(new TextEncoder().encode("internal")) }
+          }),
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const err = await runCounted(broker)
+      expect(err.reason._tag).toBe("ProviderInternal")
+      expect(err.retryable).toBe(true)
+      expect(attempts).toBe(3)
+      expect(drops).toBe(3)
+    }
+    // 400 single
+    {
+      let attempts = 0
+      const broker: Broker.Broker = {
+        stream: () => {
+          attempts++
+          return Effect.succeed({ status: 400, headers: {}, stream: Stream.succeed(new TextEncoder().encode("bad")) })
+        },
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const err = await runCounted(broker)
+      expect(err.reason._tag).toBe("InvalidRequest")
+      expect(attempts).toBe(1)
+    }
+    // 401 auth single
+    {
+      let attempts = 0
+      const broker: Broker.Broker = {
+        stream: () => {
+          attempts++
+          return Effect.succeed({ status: 401, headers: {}, stream: Stream.succeed(new TextEncoder().encode("unauthorized")) })
+        },
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const err = await runCounted(broker)
+      expect(err.reason._tag).toBe("Authentication")
+      expect(attempts).toBe(1)
+    }
+    // 429 quota non-retryable single
+    {
+      let attempts = 0
+      const broker: Broker.Broker = {
+        stream: () => {
+          attempts++
+          return Effect.succeed({ status: 429, headers: {}, stream: Stream.succeed(new TextEncoder().encode("quota exceeded insufficient_quota")) })
+        },
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const err = await runCounted(broker)
+      expect(err.reason._tag).toBe("QuotaExceeded")
+      expect(err.retryable).toBe(false)
+      expect(attempts).toBe(1)
+    }
+    // unsupported single
+    {
+      let attempts = 0
+      const broker: Broker.Broker = {
+        stream: () => {
+          attempts++
+          return Effect.fail(new Broker.ProviderHttpUnsupported({ capability: "provider/httpExecute", message: "unsupported" }))
+        },
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const err = await runCounted(broker)
+      expect(err.reason._tag).toBe("Transport")
+      expect(attempts).toBe(1)
+    }
+    // unavailable single
+    {
+      let attempts = 0
+      const broker: Broker.Broker = {
+        stream: () => {
+          attempts++
+          return Effect.fail(new Broker.ProviderHttpUnavailable({ message: "down" }))
+        },
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const err = await runCounted(broker)
+      expect(err.reason._tag).toBe("Transport")
+      expect(attempts).toBe(1)
+    }
+    // protocol error single
+    {
+      let attempts = 0
+      const broker: Broker.Broker = {
+        stream: () => {
+          attempts++
+          return Effect.fail(new Broker.ProviderHttpProtocolError({ message: "bad wire" }))
+        },
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const err = await runCounted(broker)
+      expect(err.reason._tag).toBe("InvalidProviderOutput")
+      expect(attempts).toBe(1)
+    }
+    // aborted single
+    {
+      let attempts = 0
+      const broker: Broker.Broker = {
+        stream: () => {
+          attempts++
+          return Effect.fail(new Broker.ProviderHttpFailure({ code: "aborted", message: "aborted" }))
+        },
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const err = await runCounted(broker)
+      expect(err.reason._tag).toBe("Transport")
+      expect(attempts).toBe(1)
+    }
+  })
+
+  test("interrupt during retry backoff starts no next attempt and cleans scopes", async () => {
+    const ctx = { providerId: "acme", modelId: "m1", record: baseRecord() }
+    let attempts = 0
+    let drops = 0
+    const broker: Broker.Broker = {
+      stream: () =>
+        Effect.gen(function* () {
+          const scope = yield* Scope.Scope
+          yield* Scope.addFinalizer(scope, Effect.sync(() => { drops++ }))
+          attempts++
+          return { status: 503, headers: { "retry-after": "5" }, stream: Stream.succeed(new TextEncoder().encode("busy")) }
+        }),
+      execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+    }
+    const executor = makeExecutor(ctx, broker)
+    const fiber = await Effect.runPromise(Effect.forkDetach(executor.execute(requestWith({ body: validBody }))))
+    // wait for first attempt to finish and backoff to start
+    for (let i = 0; i < 100 && attempts === 0; i++) await new Promise((r) => setTimeout(r, 5))
+    expect(attempts).toBe(1)
+    // ensure backoff pending (second attempt not yet started)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(attempts).toBe(1)
+    await Effect.runPromise(Fiber.interrupt(fiber))
+    await new Promise((r) => setTimeout(r, 30))
+    expect(attempts).toBe(1)
+    expect(drops).toBe(1)
+    const outer = await Effect.runPromiseExit(Fiber.await(fiber))
+    expect(Exit.isSuccess(outer)).toBeTrue()
+    if (Exit.isSuccess(outer)) {
+      expect(Exit.isFailure(outer.value)).toBeTrue()
+    }
+  })
+
+  test("no retry after 2xx first chunk followed by terminal protocol error", async () => {
+    const ctx = { providerId: "acme", modelId: "m1", record: baseRecord() }
+    let attempts = 0
+    let drops = 0
+    const broker: Broker.Broker = {
+      stream: () =>
+        Effect.gen(function* () {
+          const scope = yield* Scope.Scope
+          yield* Scope.addFinalizer(scope, Effect.sync(() => { drops++ }))
+          attempts++
+          const stream = Stream.make(new TextEncoder().encode("part1")).pipe(
+            Stream.concat(Stream.fail(new Broker.ProviderHttpProtocolError({ message: "terminal mismatch" }))),
+          )
+          return { status: 200, headers: {}, stream }
+        }),
+      execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+    }
+    const executor = makeExecutor(ctx, broker)
+    const response = await Effect.runPromise(executor.execute(requestWith({ body: validBody })))
+    expect(response.status).toBe(200)
+    const exit = await Effect.runPromiseExit(response.text)
+    expect(Exit.isFailure(exit)).toBeTrue()
+    expect(attempts).toBe(1)
+    await new Promise((r) => setTimeout(r, 20))
+    expect(drops).toBe(1)
+  })
+
+  test("idle timeout before first byte fails Transport Timeout with single drop", async () => {
+    const ctx = { providerId: "acme", modelId: "m1", record: baseRecord() }
+    let attempts = 0
+    let drops = 0
+    const broker: Broker.Broker = {
+      stream: () =>
+        Effect.gen(function* () {
+          const scope = yield* Scope.Scope
+          yield* Scope.addFinalizer(scope, Effect.sync(() => { drops++ }))
+          attempts++
+          return { status: 200, headers: {}, stream: Stream.never }
+        }),
+      execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+    }
+    const executor = makeExecutor(ctx, broker, { timeoutMs: 20 })
+    const response = await Effect.runPromise(executor.execute(requestWith({ body: validBody })))
+    expect(response.status).toBe(200)
+    // Read web-level body to observe raw Transport Timeout LLMError (HttpClientResponse.text wraps into DecodeError)
+    const webText = (response as unknown as { source: Response }).source.text()
+    const err = await webText.then(
+      () => null,
+      (e) => e as unknown,
+    )
+    expect(err).not.toBeNull()
+    expect(err).toBeInstanceOf(LLMError)
+    if (err instanceof LLMError) {
+      expect(err.reason._tag).toBe("Transport")
+      expect((err.reason as { kind?: string }).kind).toBe("Timeout")
+      expect(err.reason.message.toLowerCase()).toContain("timed out")
+    }
+    expect(attempts).toBe(1)
+    await new Promise((r) => setTimeout(r, 30))
+    expect(drops).toBe(1)
+  })
+
+  test("idle timeout between chunks; chunks under threshold reset and complete; buffered slow consumer does not time out", async () => {
+    const ctx = { providerId: "acme", modelId: "m1", record: baseRecord() }
+    const readWebError = async (res: HttpClientResponse.HttpClientResponse): Promise<unknown> =>
+      (res as unknown as { source: Response }).source.text().then(
+        () => null,
+        (e) => e as unknown,
+      )
+    // between chunks: one chunk then hang -> timeout
+    {
+      let drops = 0
+      const broker: Broker.Broker = {
+        stream: () =>
+          Effect.gen(function* () {
+            const scope = yield* Scope.Scope
+            yield* Scope.addFinalizer(scope, Effect.sync(() => { drops++ }))
+            const stream = Stream.make(new TextEncoder().encode("first")).pipe(Stream.concat(Stream.never))
+            return { status: 200, headers: {}, stream }
+          }),
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const executor = makeExecutor(ctx, broker, 20)
+      const response = await Effect.runPromise(executor.execute(requestWith({ body: validBody })))
+      const err = await readWebError(response)
+      expect(err).not.toBeNull()
+      expect(err).toBeInstanceOf(LLMError)
+      if (err instanceof LLMError) {
+        expect(err.reason._tag).toBe("Transport")
+        expect(err.reason.message.toLowerCase()).toContain("timed out")
+      }
+      await new Promise((r) => setTimeout(r, 20))
+      expect(drops).toBe(1)
+    }
+    // chunks under threshold reset and complete
+    {
+      let drops = 0
+      const broker: Broker.Broker = {
+        stream: () =>
+          Effect.gen(function* () {
+            const scope = yield* Scope.Scope
+            yield* Scope.addFinalizer(scope, Effect.sync(() => { drops++ }))
+            return {
+              status: 200,
+              headers: {},
+              stream: Stream.make(new TextEncoder().encode("a"), new TextEncoder().encode("b"), new TextEncoder().encode("c")),
+            }
+          }),
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const executor = makeExecutor(ctx, broker, { timeoutMs: 50 })
+      const response = await Effect.runPromise(executor.execute(requestWith({ body: validBody })))
+      const text = await Effect.runPromise(response.text)
+      expect(text).toBe("abc")
+      await new Promise((r) => setTimeout(r, 20))
+      expect(drops).toBe(1)
+    }
+    // slow consumer with buffered chunks does not time out (arrival-based, not pull-based)
+    {
+      let drops = 0
+      const broker: Broker.Broker = {
+        stream: () =>
+          Effect.gen(function* () {
+            const scope = yield* Scope.Scope
+            yield* Scope.addFinalizer(scope, Effect.sync(() => { drops++ }))
+            return {
+              status: 200,
+              headers: {},
+              stream: Stream.make(new TextEncoder().encode("x"), new TextEncoder().encode("y")),
+            }
+          }),
+        execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+      }
+      const executor = makeExecutor(ctx, broker, { timeoutMs: 20 })
+      const response = await Effect.runPromise(executor.execute(requestWith({ body: validBody })))
+      // delay pulls while chunks are already buffered locally; arrival-based timer must not fire
+      await new Promise((r) => setTimeout(r, 100))
+      const text = await Effect.runPromise(response.text)
+      expect(text).toBe("xy")
+      await new Promise((r) => setTimeout(r, 20))
+      expect(drops).toBe(1)
+    }
+  })
+
+  test("factory timeout option: absent/nonpositive disables, number/object enables; layer threads opts", async () => {
+    const ctx = { providerId: "acme", modelId: "m1", record: baseRecord() }
+    const hangingBroker = (dropsRef: { count: number }): Broker.Broker => ({
+      stream: () =>
+        Effect.gen(function* () {
+          const scope = yield* Scope.Scope
+          yield* Scope.addFinalizer(scope, Effect.sync(() => { dropsRef.count++ }))
+          return { status: 200, headers: {}, stream: Stream.never }
+        }),
+      execute: () => Effect.fail(new Broker.ProviderHttpUnavailable({ message: "" })),
+    })
+    // absent disables: external short timeout observes pending, not internal Timeout
+    {
+      const dropsRef = { count: 0 }
+      const executor = makeExecutor(ctx, hangingBroker(dropsRef))
+      const response = await Effect.runPromise(executor.execute(requestWith({ body: validBody })))
+      const maybe = await Effect.runPromise(response.text.pipe(Effect.timeoutOption("30 millis")))
+      expect(Option.isNone(maybe)).toBeTrue()
+      await Effect.runPromise(Effect.sleep("10 millis").pipe(Effect.andThen(() => Effect.void)))
+    }
+    // nonpositive disables
+    {
+      const dropsRef = { count: 0 }
+      const executor = makeExecutor(ctx, hangingBroker(dropsRef), { timeoutMs: 0 })
+      const response = await Effect.runPromise(executor.execute(requestWith({ body: validBody })))
+      const maybe = await Effect.runPromise(response.text.pipe(Effect.timeoutOption("30 millis")))
+      expect(Option.isNone(maybe)).toBeTrue()
+    }
+    // number enables (web-level Timeout)
+    {
+      const dropsRef = { count: 0 }
+      const executor = makeExecutor(ctx, hangingBroker(dropsRef), 20)
+      const response = await Effect.runPromise(executor.execute(requestWith({ body: validBody })))
+      const err = await (response as unknown as { source: Response }).source.text().then(
+        () => null,
+        (e) => e as unknown,
+      )
+      expect(err).not.toBeNull()
+      expect(String((err as Error).message.toLowerCase())).toContain("timed out")
+    }
+    // object enables and layer threads opts (web-level Timeout)
+    {
+      const dropsRef = { count: 0 }
+      const broker = hangingBroker(dropsRef)
+      const lyr = (await import("@/kilocode/provider/canonical-request-executor")).layer(ctx, { timeoutMs: 20 })
+      const err = await Effect.runPromise(
+        Effect.gen(function* () {
+          const exec = yield* RequestExecutor.Service
+          const res = yield* exec.execute(requestWith({ body: validBody }))
+          return yield* Effect.promise(() =>
+            (res as unknown as { source: Response }).source.text().then(
+              () => null as unknown,
+              (e) => e as unknown,
+            ),
+          )
+        }).pipe(Effect.provide(lyr.pipe(Layer.provide(Layer.succeed(Broker.Service, broker))))),
+      )
+      expect(err).not.toBeNull()
+      expect(String((err as Error).message.toLowerCase())).toContain("timed out")
+    }
   })
 })

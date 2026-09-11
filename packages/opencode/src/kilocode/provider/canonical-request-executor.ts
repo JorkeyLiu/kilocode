@@ -23,7 +23,7 @@
  * existing `LLMError` taxonomy with retry-after/rate-limit semantics.
  */
 
-import { Cause, Effect, Exit, Fiber, Layer, Scope, Stream } from "effect"
+import { Cause, Effect, Exit, Fiber, Layer, Random, Scope, Stream } from "effect"
 import * as Option from "effect/Option"
 import { HttpBody, HttpClientRequest, HttpClientResponse, UrlParams } from "effect/unstable/http"
 import { RequestExecutor } from "@opencode-ai/llm/route"
@@ -478,10 +478,335 @@ const makeStatusError = (
   })
 }
 
-export const make = (ctx: Context, broker: Broker.Broker): RequestExecutor.Interface => {
+export type Options = {
+  readonly timeoutMs?: number
+}
+
+const normalizeTimeoutMs = (opts?: Options | number): number | undefined => {
+  const raw = typeof opts === "number" ? opts : opts?.timeoutMs
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return undefined
+  return raw
+}
+
+const MAX_RETRIES = 2
+const BASE_DELAY_MS = 500
+const MAX_DELAY_MS = 10_000
+
+const retryDelay = (error: LLMError, attempt: number) => {
+  if (error.retryAfterMs !== undefined) return Effect.succeed(Math.min(error.retryAfterMs, MAX_DELAY_MS))
+  return Random.nextBetween(
+    Math.min(BASE_DELAY_MS * 2 ** attempt * 0.8, MAX_DELAY_MS),
+    Math.min(BASE_DELAY_MS * 2 ** attempt * 1.2, MAX_DELAY_MS),
+  ).pipe(Effect.map((delay) => Math.round(delay)))
+}
+
+const idleTimeoutError = (timeoutMs: number): LLMError =>
+  new LLMError({
+    module: "CanonicalRequestExecutor",
+    method: "execute",
+    reason: new TransportReason({ message: `Provider response timed out after ${timeoutMs}ms without data`, kind: "Timeout" }),
+  })
+
+export const make = (ctx: Context, broker: Broker.Broker, opts?: Options | number): RequestExecutor.Interface => {
   const providerId = ctx.providerId
   const modelId = ctx.modelId
   const record = deepFreeze(deepClone(ctx.record)) as unknown
+  const timeoutMs = normalizeTimeoutMs(opts)
+
+  const singleAttempt = (
+    request: HttpClientRequest.HttpClientRequest,
+    bodyText: string,
+    headers: Record<string, string>,
+  ): Effect.Effect<HttpClientResponse.HttpClientResponse, LLMError> =>
+    Effect.uninterruptibleMask((restore) =>
+      Effect.gen(function* () {
+        const scope = yield* Scope.make()
+        let pump: Fiber.Fiber<void, unknown> | undefined
+        let watch: Fiber.Fiber<void, unknown> | undefined
+        let closed = false
+        let closePromise: Promise<void> | undefined
+
+        const doClose = (): Promise<void> => {
+          if (closed) return closePromise!
+          closed = true
+          closePromise = Effect.runPromise(
+            Effect.gen(function* () {
+              // Closing the child scope interrupts pump/watch fibers when they
+              // are scoped to it (forkIn). Keep manual interrupt as fallback.
+              if (pump) {
+                yield* Fiber.interrupt(pump).pipe(Effect.ignore)
+                yield* Fiber.await(pump).pipe(Effect.ignore)
+              }
+              if (watch) {
+                yield* Fiber.interrupt(watch).pipe(Effect.ignore)
+                yield* Fiber.await(watch).pipe(Effect.ignore)
+              }
+              yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
+            }),
+          )
+          return closePromise
+        }
+
+        // Link child scope lifetime to outer Stream consumption scope so
+        // interruption/closing of outer LLM Stream closes broker scope even
+        // when no further ReadableStream pull/cancel occurs (no pull/cancel
+        // yet). No second Abort protocol — the existing broker Scope owns Call
+        // drop → $/cancelRequest. Only link when an ambient Scope is present
+        // (Stream.scoped execution); direct `execute` calls outside a Stream
+        // have no ambient scope and must not fail.
+        const ambientOpt = yield* Effect.serviceOption(Scope.Scope)
+        if (Option.isSome(ambientOpt)) {
+          yield* Scope.addFinalizer(ambientOpt.value, Scope.close(scope, Exit.void).pipe(Effect.ignore))
+        }
+
+        const acquireExit = yield* Effect.exit(
+          restore(
+            broker
+              .stream({
+                providerId,
+                modelId,
+                record,
+                body: bodyText,
+                ...(Object.keys(headers).length > 0 ? { headers } : {}),
+              })
+              .pipe(Effect.provideService(Scope.Scope, scope)),
+          ),
+        )
+
+        if (Exit.isFailure(acquireExit)) {
+          const cause = (acquireExit as Exit.Failure<unknown, Broker.BrokerError>).cause
+          yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
+          if (Cause.hasInterruptsOnly(cause)) return yield* Effect.failCause(cause as unknown as Cause.Cause<LLMError>)
+          const failureOpt = Cause.findErrorOption(cause)
+          if (Option.isSome(failureOpt)) {
+            return yield* Effect.fail(mapBrokerError(failureOpt.value as Broker.BrokerError))
+          }
+          return yield* Effect.failCause(cause as unknown as Cause.Cause<LLMError>)
+        }
+
+        const httpStream = (acquireExit as Exit.Success<Broker.HttpStream>).value
+
+        if (httpStream.status >= 400) {
+          const bodyExit = yield* Effect.exit(
+            restore(
+              Effect.gen(function* () {
+                const collected = yield* httpStream.stream.pipe(Stream.runCollect)
+                let total = 0
+                for (const c of collected as Iterable<Uint8Array>) total += c.length
+                const out = new Uint8Array(total)
+                let off = 0
+                for (const c of collected as Iterable<Uint8Array>) {
+                  out.set(c, off)
+                  off += c.length
+                }
+                return new TextDecoder().decode(out)
+              }),
+            ),
+          )
+          yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
+          if (Exit.isFailure(bodyExit) && Cause.hasInterruptsOnly((bodyExit as Exit.Failure<unknown, unknown>).cause)) {
+            return yield* Effect.failCause((bodyExit as unknown as Exit.Failure<unknown, LLMError>).cause as Cause.Cause<LLMError>)
+          }
+          const bodyTextVal = Exit.isSuccess(bodyExit) ? (bodyExit as Exit.Success<string>).value : ""
+          const llmErr = makeStatusError(request, httpStream.status, httpStream.headers, bodyTextVal)
+          return yield* Effect.fail(llmErr)
+        }
+
+        // Success path: demand-safe bridge. Idle timer (when configured)
+        // watches broker BYTE arrival into the adapter, not ReadableStream
+        // pull timing, so buffered-but-unconsumed chunks shield a slow
+        // consumer from false timeouts.
+        const buffer: Uint8Array[] = []
+        const pending: Array<() => void> = []
+        let done = false
+        let pumpError: unknown | undefined
+        let cancelled = false
+        const controllerRef: { current?: ReadableStreamDefaultController<Uint8Array> } = {}
+        const arrivals = { count: 0, seen: 0 }
+
+        const tryDeliver = () => {
+          if (cancelled) return
+          while (pending.length > 0 && buffer.length > 0) {
+            const chunk = buffer.shift()!
+            const resolve = pending.shift()!
+            if (controllerRef.current) {
+              try {
+                controllerRef.current.enqueue(chunk)
+              } catch {}
+            }
+            resolve()
+          }
+          if (pending.length > 0) {
+            if (pumpError !== undefined) {
+              if (controllerRef.current) {
+                try {
+                  controllerRef.current.error(pumpError)
+                } catch {}
+              }
+              const toResolve = pending.splice(0)
+              for (const r of toResolve) r()
+              void doClose()
+              return
+            }
+            if (done && buffer.length === 0) {
+              if (controllerRef.current) {
+                try {
+                  controllerRef.current.close()
+                } catch {}
+              }
+              const toResolve = pending.splice(0)
+              for (const r of toResolve) r()
+              void doClose()
+              return
+            }
+          }
+        }
+
+        pump = yield* Effect.forkIn(scope)(
+          Effect.gen(function* () {
+            yield* httpStream.stream.pipe(
+              Stream.runForEach((chunk: Uint8Array) =>
+                Effect.sync(() => {
+                  if (cancelled) return
+                  arrivals.count += 1
+                  buffer.push(chunk)
+                  tryDeliver()
+                }),
+              ),
+            )
+            done = true
+            tryDeliver()
+          }).pipe(
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                if (Cause.hasInterruptsOnly(cause)) {
+                  done = true
+                } else {
+                  pumpError = Cause.squash(cause)
+                }
+                tryDeliver()
+              }),
+            ),
+          ),
+        )
+
+        if (timeoutMs !== undefined) {
+          const activeMs = timeoutMs
+          watch = yield* Effect.forkIn(scope)(
+            Effect.gen(function* () {
+              while (true) {
+                yield* Effect.sleep(activeMs)
+                const action = yield* Effect.sync(() => {
+                  if (cancelled || done || pumpError !== undefined) return "exit" as const
+                  if (buffer.length > 0) {
+                    arrivals.seen = arrivals.count
+                    return "continue" as const
+                  }
+                  if (arrivals.count !== arrivals.seen) {
+                    arrivals.seen = arrivals.count
+                    return "continue" as const
+                  }
+                  return "timeout" as const
+                })
+                if (action === "exit") return
+                if (action === "continue") continue
+                const timedOut = yield* Effect.sync(() => {
+                  if (cancelled || done || pumpError !== undefined) return false
+                  if (buffer.length > 0) {
+                    arrivals.seen = arrivals.count
+                    return false
+                  }
+                  if (arrivals.count !== arrivals.seen) {
+                    arrivals.seen = arrivals.count
+                    return false
+                  }
+                  pumpError = idleTimeoutError(activeMs)
+                  if (controllerRef.current) {
+                    try {
+                      controllerRef.current.error(pumpError)
+                    } catch {}
+                  }
+                  const toResolve = pending.splice(0)
+                  for (const r of toResolve) r()
+                  return true
+                })
+                if (timedOut) {
+                  yield* Effect.sync(() => {
+                    void doClose()
+                  })
+                  return
+                }
+              }
+            }),
+          )
+        }
+
+        const readable = new ReadableStream<Uint8Array>({
+          start(controller) {
+            controllerRef.current = controller
+            // If pump already completed synchronously, deliver
+            tryDeliver()
+          },
+          pull() {
+            if (cancelled) return Promise.resolve()
+            if (buffer.length > 0) {
+              const chunk = buffer.shift()!
+              try {
+                controllerRef.current!.enqueue(chunk)
+              } catch {}
+              if (pumpError !== undefined && buffer.length === 0) {
+                try {
+                  controllerRef.current!.error(pumpError)
+                } catch {}
+                void doClose()
+              } else if (done && buffer.length === 0 && pumpError === undefined) {
+                // Close will be handled on next pull or immediately if no pending; we can close after delivering last chunk
+                // To avoid waiting for extra pull, check if done and empty: close now
+                // But ensure pending empty
+                if (pending.length === 0) {
+                  try {
+                    controllerRef.current!.close()
+                  } catch {}
+                  void doClose()
+                }
+              }
+              return Promise.resolve()
+            }
+            if (pumpError !== undefined) {
+              try {
+                controllerRef.current!.error(pumpError)
+              } catch {}
+              void doClose()
+              return Promise.resolve()
+            }
+            if (done) {
+              try {
+                controllerRef.current!.close()
+              } catch {}
+              void doClose()
+              return Promise.resolve()
+            }
+            return new Promise<void>((resolve) => {
+              pending.push(resolve)
+            })
+          },
+          cancel() {
+            cancelled = true
+            while (pending.length > 0) {
+              const r = pending.shift()!
+              r()
+            }
+            return doClose()
+          },
+        })
+
+        const response = new Response(readable as unknown as ReadableStream, {
+          status: httpStream.status,
+          headers: httpStream.headers as unknown as HeadersInit,
+        })
+        return HttpClientResponse.fromWeb(request, response)
+      }),
+    )
 
   const execute: RequestExecutor.Interface["execute"] = (request) =>
     Effect.gen(function* () {
@@ -501,241 +826,35 @@ export const make = (ctx: Context, broker: Broker.Broker): RequestExecutor.Inter
         return yield* invalid(e instanceof Error ? e.message : String(e))
       }
 
-      return yield* Effect.uninterruptibleMask((restore) =>
-        Effect.gen(function* () {
-          const scope = yield* Scope.make()
-          let fiber: Fiber.Fiber<void, unknown> | undefined
-          let closed = false
-          let closePromise: Promise<void> | undefined
-
-          const doClose = (): Promise<void> => {
-            if (closed) return closePromise!
-            closed = true
-            closePromise = Effect.runPromise(
-              Effect.gen(function* () {
-                // Closing the child scope interrupts the pump fiber when it is
-                // scoped to it (forkIn). Keep manual interrupt as fallback for
-                // detached compatibility during transition.
-                if (fiber) {
-                  yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
-                  yield* Fiber.await(fiber).pipe(Effect.ignore)
-                }
-                yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
-              }),
-            )
-            return closePromise
-          }
-
-          // Link child scope lifetime to outer Stream consumption scope so
-          // interruption/closing of outer LLM Stream closes broker scope even
-          // when no further ReadableStream pull/cancel occurs (no pull/cancel
-          // yet). No second Abort protocol — the existing broker Scope owns Call
-          // drop → $/cancelRequest. Only link when an ambient Scope is present
-          // (Stream.scoped execution); direct `execute` calls outside a Stream
-          // have no ambient scope and must not fail.
-          const ambientOpt = yield* Effect.serviceOption(Scope.Scope)
-          if (Option.isSome(ambientOpt)) {
-            yield* Scope.addFinalizer(ambientOpt.value, Scope.close(scope, Exit.void).pipe(Effect.ignore))
-          }
-
-          const acquireExit = yield* Effect.exit(
-            restore(
-              broker
-                .stream({
-                  providerId,
-                  modelId,
-                  record,
-                  body: bodyText,
-                  ...(Object.keys(headers).length > 0 ? { headers } : {}),
-                })
-                .pipe(Effect.provideService(Scope.Scope, scope)),
-            ),
-          )
-
-          if (Exit.isFailure(acquireExit)) {
-            const cause = (acquireExit as Exit.Failure<unknown, Broker.BrokerError>).cause
-            yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
-            if (Cause.hasInterruptsOnly(cause)) return yield* acquireExit
-            const failureOpt = Cause.findErrorOption(cause)
-            if (Option.isSome(failureOpt)) {
-              return yield* Effect.fail(mapBrokerError(failureOpt.value as Broker.BrokerError))
-            }
-            return yield* acquireExit
-          }
-
-          const httpStream = (acquireExit as Exit.Success<Broker.HttpStream>).value
-
-          if (httpStream.status >= 400) {
-            const bodyExit = yield* Effect.exit(
-              restore(
-                Effect.gen(function* () {
-                  const collected = yield* httpStream.stream.pipe(Stream.runCollect)
-                  let total = 0
-                  for (const c of collected as Iterable<Uint8Array>) total += c.length
-                  const out = new Uint8Array(total)
-                  let off = 0
-                  for (const c of collected as Iterable<Uint8Array>) {
-                    out.set(c, off)
-                    off += c.length
-                  }
-                  return new TextDecoder().decode(out)
-                }),
-              ),
-            )
-            yield* Scope.close(scope, Exit.void).pipe(Effect.ignore)
-            if (Exit.isFailure(bodyExit) && Cause.hasInterruptsOnly((bodyExit as Exit.Failure<unknown, unknown>).cause)) {
-              return yield* bodyExit
-            }
-            const bodyTextVal = Exit.isSuccess(bodyExit) ? (bodyExit as Exit.Success<string>).value : ""
-            const llmErr = makeStatusError(request, httpStream.status, httpStream.headers, bodyTextVal)
-            return yield* Effect.fail(llmErr)
-          }
-
-          // Success path: demand-safe bridge
-          const buffer: Uint8Array[] = []
-          const pending: Array<() => void> = []
-          let done = false
-          let pumpError: unknown | undefined
-          let cancelled = false
-          const controllerRef: { current?: ReadableStreamDefaultController<Uint8Array> } = {}
-
-          const tryDeliver = () => {
-            if (cancelled) return
-            while (pending.length > 0 && buffer.length > 0) {
-              const chunk = buffer.shift()!
-              const resolve = pending.shift()!
-              if (controllerRef.current) {
-                try {
-                  controllerRef.current.enqueue(chunk)
-                } catch {}
-              }
-              resolve()
-            }
-            if (pending.length > 0) {
-              if (pumpError !== undefined) {
-                if (controllerRef.current) {
-                  try {
-                    controllerRef.current.error(pumpError)
-                  } catch {}
-                }
-                const toResolve = pending.splice(0)
-                for (const r of toResolve) r()
-                void doClose()
-                return
-              }
-              if (done && buffer.length === 0) {
-                if (controllerRef.current) {
-                  try {
-                    controllerRef.current.close()
-                  } catch {}
-                }
-                const toResolve = pending.splice(0)
-                for (const r of toResolve) r()
-                void doClose()
-                return
-              }
-            }
-          }
-
-          fiber = yield* Effect.forkIn(scope)(
-            Effect.gen(function* () {
-              yield* httpStream.stream.pipe(
-                Stream.runForEach((chunk: Uint8Array) =>
-                  Effect.sync(() => {
-                    if (cancelled) return
-                    buffer.push(chunk)
-                    tryDeliver()
-                  }),
-                ),
-              )
-              done = true
-              tryDeliver()
-            }).pipe(
-              Effect.catchCause((cause) =>
-                Effect.sync(() => {
-                  if (Cause.hasInterruptsOnly(cause)) {
-                    done = true
-                  } else {
-                    pumpError = Cause.squash(cause)
-                  }
-                  tryDeliver()
-                }),
-              ),
-            ),
-          )
-
-          const readable = new ReadableStream<Uint8Array>({
-            start(controller) {
-              controllerRef.current = controller
-              // If pump already completed synchronously, deliver
-              tryDeliver()
-            },
-            pull() {
-              if (cancelled) return Promise.resolve()
-              if (buffer.length > 0) {
-                const chunk = buffer.shift()!
-                try {
-                  controllerRef.current!.enqueue(chunk)
-                } catch {}
-                if (pumpError !== undefined && buffer.length === 0) {
-                  try {
-                    controllerRef.current!.error(pumpError)
-                  } catch {}
-                  void doClose()
-                } else if (done && buffer.length === 0 && pumpError === undefined) {
-                  // Close will be handled on next pull or immediately if no pending; we can close after delivering last chunk
-                  // To avoid waiting for extra pull, check if done and empty: close now
-                  // But ensure pending empty
-                  if (pending.length === 0) {
-                    try {
-                      controllerRef.current!.close()
-                    } catch {}
-                    void doClose()
-                  }
-                }
-                return Promise.resolve()
-              }
-              if (pumpError !== undefined) {
-                try {
-                  controllerRef.current!.error(pumpError)
-                } catch {}
-                void doClose()
-                return Promise.resolve()
-              }
-              if (done) {
-                try {
-                  controllerRef.current!.close()
-                } catch {}
-                void doClose()
-                return Promise.resolve()
-              }
-              return new Promise<void>((resolve) => {
-                pending.push(resolve)
-              })
-            },
-            cancel() {
-              cancelled = true
-              while (pending.length > 0) {
-                const r = pending.shift()!
-                r()
-              }
-              return doClose()
-            },
-          })
-
-          const response = new Response(readable as unknown as ReadableStream, {
-            status: httpStream.status,
-            headers: httpStream.headers as unknown as HeadersInit,
-          })
-          return HttpClientResponse.fromWeb(request, response)
-        }),
-      )
+      // Pre-exposure retry only: broker start failures mapped to retryable
+      // LLMError and HTTP >=400 status failures. Never retry after a 2xx
+      // response is exposed — success bytes may have been consumed. Each
+      // failed attempt closes its own Scope/call before delay/next attempt.
+      let attempt = 0
+      while (true) {
+        const exit = yield* Effect.exit(singleAttempt(request, bodyText, headers))
+        if (Exit.isSuccess(exit)) return (exit as Exit.Success<HttpClientResponse.HttpClientResponse>).value
+        const cause = (exit as Exit.Failure<unknown, LLMError>).cause
+        if (Cause.hasInterruptsOnly(cause)) return yield* Effect.failCause(cause)
+        const errOpt = Cause.findErrorOption(cause)
+        if (Option.isNone(errOpt) || !(errOpt.value instanceof LLMError)) return yield* Effect.failCause(cause)
+        const err = errOpt.value as LLMError
+        if (!err.retryable || attempt >= MAX_RETRIES) return yield* Effect.fail(err)
+        const delay = yield* retryDelay(err, attempt)
+        if (delay > 0) {
+          const sleepExit = yield* Effect.exit(Effect.sleep(delay))
+          if (Exit.isFailure(sleepExit)) return yield* Effect.failCause((sleepExit as Exit.Failure<unknown, LLMError>).cause)
+        } else {
+          yield* Effect.yieldNow
+        }
+        attempt += 1
+      }
     }) as unknown as Effect.Effect<HttpClientResponse.HttpClientResponse, LLMError>
 
   return { execute }
 }
 
-export const layer = (ctx: Context): Layer.Layer<RequestExecutor.Service, never, Broker.Service> =>
+export const layer = (ctx: Context, opts?: Options | number): Layer.Layer<RequestExecutor.Service, never, Broker.Service> =>
   Layer.effect(
     RequestExecutor.Service,
     Effect.gen(function* () {
@@ -745,6 +864,6 @@ export const layer = (ctx: Context): Layer.Layer<RequestExecutor.Service, never,
         modelId: ctx.modelId,
         record: deepFreeze(deepClone(ctx.record)) as unknown,
       }
-      return RequestExecutor.Service.of(make(frozenCtx, broker))
+      return RequestExecutor.Service.of(make(frozenCtx, broker, opts))
     }),
   )
