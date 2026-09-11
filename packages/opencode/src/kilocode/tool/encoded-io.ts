@@ -17,7 +17,7 @@ export const read = (fs: FSUtil.Interface, path: string) =>
     const bytes = yield* fs.readFile(path).pipe(Effect.mapError(wrap))
     const data = Buffer.from(bytes)
     const encoding = Encoding.detect(data)
-    return { text: Encoding.decode(data, encoding), encoding }
+    return { bytes: data, text: Encoding.decode(data, encoding), encoding }
   })
 
 export const write = (fs: FSUtil.Interface, path: string, text: string, encoding: string = Encoding.DEFAULT) =>

@@ -4,6 +4,7 @@
 // PermissionDock cannot render the inline diff preview.
 
 import { afterAll, afterEach, describe, test, expect } from "bun:test"
+import { JournalMemory, ensureJournalSession } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import path from "path"
 import { Effect, Layer, ManagedRuntime } from "effect"
 import { EditTool } from "../../src/tool/edit"
@@ -19,7 +20,7 @@ import { Truncate } from "../../src/tool/truncate"
 import { SessionID, MessageID } from "../../src/session/schema"
 
 const runtime = ManagedRuntime.make(
-  Layer.mergeAll(
+  Layer.mergeAll(JournalMemory,
     LSP.defaultLayer,
     FSUtil.defaultLayer,
     Format.defaultLayer,

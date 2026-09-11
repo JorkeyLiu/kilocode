@@ -170,7 +170,7 @@ Remote HTTP proxy responses can include sync fence metadata. Router waits for ma
 | Config service | Merges global, project, organization, managed, and runtime inputs |
 | Instance store | Caches normalized directory-scoped runtime contexts |
 | SQLite and storage services | Persist structured records and remaining JSON-owned data |
-| Snapshot service | Tracks git-backed file baselines for diffs and revert flows |
+| Snapshot service | Tracks git-backed file baselines for diffs and revert flows; Snapshot v2 journal adds a queryable durable file-mutation capture for edit/write/apply_patch only (restore transport unchanged, still old Snapshot) |
 | Provider router | Resolves direct providers, Kilo Gateway, custom endpoints, and credentials |
 | HTTP server | Publishes REST, WebSocket, and SSE surfaces |
 
@@ -203,10 +203,29 @@ SQLite is default structured store.
 | Runtime pragmas | WAL journal, normal sync, 5 second busy timeout, foreign keys, passive checkpoint, bounded cache |
 | Fresh DB auto-vacuum | Newly created canonical DBs use `PRAGMA auto_vacuum = INCREMENTAL`; existing legacy DBs keep their current mode |
 | Schema changes | Drizzle migrations load from bundled journal in compiled binary or migration directories in development |
-| Main tables | Projects, sessions, messages, parts, todos, permissions, session messages, session operations (Failure/Outcome), workspaces, sync events, accounts, and account state |
+| Main tables | Projects, sessions, messages, parts, todos, permissions, session messages, session operations (Failure/Outcome), workspaces, sync events, accounts, account state, and Snapshot v2 journal (`snapshot_blob`, `snapshot_mutation`) |
+| Snapshot v2 journal | See Snapshot v2 journal details below |
 | Operation table | `session_operation` (session-scoped `session_id REFERENCES session(id) ON DELETE CASCADE`, `CHECK` for `op_kind`/`outcome`, indexes on `session_id`/kind/time; stores the full already-redacted `select(record,"persist")` nine-field FailureRecord with identity/session/kind/outcome/time/revision inspectable; not a file artifact, not a new DB/store, not a retry ledger) |
 | Retention tables | `session_changefeed` (bounded payload-free deltas: global monotonic `seq`, `session_id`, `revision`, `kind`, `time`, no FK to `session`, `UNIQUE(session_id, revision, kind)`, 50,000 rows / 64 MiB logical caps), `session_changefeed_state` (singleton `latest_seq` / retained counts), and `retention_obligation` (durable artifact-cleanup obligations) |
 | Legacy migration | On first database creation, CLI runs one-time JSON-to-SQLite migration for projects, sessions, messages, parts, todos, permissions, and shares |
+
+### Snapshot v2 journal
+
+- Store: content-addressed `snapshot_blob` (sha256 PK, complete raw bytes, size).
+- Facts: `snapshot_mutation` with session FK cascade and prepared/applied/failed status.
+- Idempotency: session/message/call/tool/item/sub/path/op key with `sub_index`.
+- Ordering: ordinary mutations use sub 0.
+- Move: two facts sharing item, target add/update sub 0 first, source delete sub 1 second.
+- List: stable by created/item/sub; ids metadata order matches list.
+- Prepare: runs after permission ask and before any file write, so DB failure means zero writes.
+- Replay: only on exact before match (existence/hash/size/encoding/BOM), else typed Conflict.
+- Apply: records formatter-final raw bytes with CAS rollback on DB failure.
+- Rollback: add-without-before may delete; update/delete without persisted before never deletes.
+- Legacy: single-row move never repairs the filesystem.
+- Failure: when DB apply and mark-failed are both unavailable, the row stays prepared and queryable.
+- GC: one transaction and one SQL over current references; prepared/failed facts are retained.
+- Scope: queryable capture only; SessionRevert and Snapshot restore stay git-backed.
+- Coverage: edit/write/apply_patch only; opaque tools stay on the old Snapshot path.
 
 Some JSON-backed storage remains. Session diffs still use storage path `session_diff`, and configuration, auth, and selected local state files retain their own owners. Snapshot storage is separate from SQLite and JSON storage.
 
@@ -556,7 +575,7 @@ Slow initial tracking has guarded behavior:
 | Disable choice | Writes `"snapshot": false` to project config without disposing active turn |
 | Dismissed or untargeted timeout | Interrupts or skips track and suppresses repeat prompt for active service scope |
 
-Fail-closed restore/revert correctness base (no journal, no transport, no performance claim):
+Fail-closed restore/revert correctness base (no transport, no performance claim; journal is capture-only):
 
 | Aspect | Behavior |
 |---|---|
@@ -564,7 +583,7 @@ Fail-closed restore/revert correctness base (no journal, no transport, no perfor
 | Typed file revert | Worktree-escape paths fail with `SnapshotPathError`; tracked-file checkout failure fails with `SnapshotRevertError`; snapshot-absent delete uses fail-closed remove (ENOENT is success); batch failures aggregate all failed files into one `SnapshotRevertError` |
 | Untouched surface | `track`/`patch`/`diff`/`diffFull` keep soft-fallback; `diff` stays display-derived and never gates file success |
 | Marker protection | `revert`/`unrevert` set/clear the revert marker only after the related `restore`/`revert` succeeds; rollback hash is captured before FS mutation and best-effort restored on partial failure with the original error preserved; hash-less message-only reverts keep working without filesystem work |
-| Serialization | File rollback window (`track` rollback capture → `restore`/`revert` → optional rollback) is guarded by one worktree-keyed cross-process `Snapshot.exclusive` (`Semaphore` + `EffectFlock(snapshot:<gitdir>)`); per-session mutex guards marker/cleanup atomicity only. Ordinary generation file writes take no exclusive; journal/CAS gaps stay open |
+| Serialization | File rollback window (`track` rollback capture → `restore`/`revert` → optional rollback) is guarded by one worktree-keyed cross-process `Snapshot.exclusive` (`Semaphore` + `EffectFlock(snapshot:<gitdir>)`); per-session mutex guards marker/cleanup atomicity only. Ordinary generation file writes take no exclusive; CAS-restore and perf gaps stay open (journal capture for edit/write/apply_patch already lands) |
 | HTTP mapping | Snapshot git failures map to `InternalServerError` (500, never conflict), path validation to `BadRequest` (400), busy stays `SessionBusyError` (409) |
 
 ## Active runner epoch — single owner

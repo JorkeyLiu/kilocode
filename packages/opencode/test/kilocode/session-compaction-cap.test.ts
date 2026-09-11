@@ -58,6 +58,7 @@ import { Truncate } from "../../src/tool/truncate"
 import * as Log from "@opencode-ai/core/util/log"
 import { provideTmpdirServer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import { TestLLMServer } from "../lib/llm-server"
 import * as Ownership from "@/retention/ownership"
 
@@ -130,7 +131,7 @@ const lsp = Layer.succeed(
   }),
 )
 
-const status = Layer.mergeAll(
+const status = Layer.mergeAll(JournalMemory,
     Ownership.layer,
 SessionStatus.defaultLayer, Bus.layer)
 const runState = SessionRunState.layer.pipe(Layer.provide(status))

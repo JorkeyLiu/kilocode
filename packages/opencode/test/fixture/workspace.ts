@@ -11,13 +11,14 @@ import { Project } from "../../src/project/project"
 import { Vcs } from "../../src/project/vcs"
 import { Session } from "../../src/session/session"
 import { SessionPrompt } from "../../src/session/prompt"
+import { JournalMemory } from "./journal" // kilocode_change - SessionPrompt needs canonical journal
 import { EventV2Bridge } from "../../src/event-v2-bridge"
 
 export const workspaceLayerWithRuntimeFlags = (overrides: Partial<RuntimeFlags.Info>) =>
   Workspace.layer.pipe(
     Layer.provide(Auth.defaultLayer),
     Layer.provide(Session.defaultLayer),
-    Layer.provide(SessionPrompt.defaultLayer),
+    Layer.provide(SessionPrompt.defaultLayer.pipe(Layer.provide(JournalMemory))),
     Layer.provide(Project.defaultLayer),
     Layer.provide(Vcs.defaultLayer),
     Layer.provide(Database.defaultLayer),

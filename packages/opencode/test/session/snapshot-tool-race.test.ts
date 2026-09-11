@@ -26,6 +26,7 @@ import { SessionV1 } from "@opencode-ai/core/v1/session"
 import * as Log from "@opencode-ai/core/util/log"
 import { provideTmpdirServer } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { JournalMemory, ensureJournalSession } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import { TestLLMServer } from "../lib/llm-server"
 
 // Same layer setup as prompt-effect.test.ts
@@ -115,7 +116,7 @@ const lsp = Layer.succeed(
 
 const status = SessionStatus.layer.pipe(Layer.provideMerge(EventV2Bridge.defaultLayer))
 const run = SessionRunState.layer.pipe(Layer.provide(status))
-const infra = Layer.mergeAll(
+const infra = Layer.mergeAll(JournalMemory,
     Ownership.layer,
 NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 

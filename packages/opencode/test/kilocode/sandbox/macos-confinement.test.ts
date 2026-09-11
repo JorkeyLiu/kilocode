@@ -34,6 +34,7 @@ import { Truncate } from "@/tool/truncate"
 import { WriteTool } from "@/tool/write"
 import { disposeAllInstances, provideTmpdirInstance } from "../../fixture/fixture"
 import { testEffect } from "../../lib/effect"
+import { JournalMemory, ensureJournalSession } from "../../fixture/journal" // kilocode_change - file tools require canonical journal
 
 const gate: { run?: (() => Promise<void>) | undefined; requests?: MutationRequest[] | undefined } = {}
 const runner: MutationRunner = (profile, request) =>
@@ -42,8 +43,10 @@ const runner: MutationRunner = (profile, request) =>
     if (gate.run) yield* Effect.promise(gate.run)
     return yield* mutate(profile, request)
   })
+let seq = 0 // kilocode_change - unique call per run keeps journal keys distinct
+
 const it = testEffect(
-  Layer.mergeAll(
+  Layer.mergeAll(JournalMemory,
     Agent.defaultLayer,
     FSUtil.defaultLayer,
     AppProcess.defaultLayer,

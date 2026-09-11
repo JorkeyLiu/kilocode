@@ -23,6 +23,7 @@ import { KiloTaskRetry } from "@/kilocode/tool/task-retry"
 import { NotFoundError } from "@/storage/storage"
 import { disposeAllInstances } from "../../fixture/fixture"
 import { testEffect } from "../../lib/effect"
+import { JournalMemory } from "../../fixture/journal" // kilocode_change - file tools require canonical journal
 
 afterEach(async () => {
   await disposeAllInstances()
@@ -44,7 +45,7 @@ const layer = Layer.mergeAll(
   SessionStatus.defaultLayer,
   Truncate.defaultLayer,
   Provider.defaultLayer,
-  ToolRegistry.defaultLayer,
+  ToolRegistry.defaultLayer.pipe(Layer.provide(JournalMemory)),
   Database.defaultLayer,
   RuntimeFlags.layer({}),
 )

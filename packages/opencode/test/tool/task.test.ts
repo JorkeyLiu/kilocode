@@ -21,6 +21,7 @@ import { ToolRegistry } from "@/tool/registry"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import { ProviderV2 } from "@opencode-ai/core/provider"
 import { ModelV2 } from "@opencode-ai/core/model"
 
@@ -45,7 +46,7 @@ const layer = (flags: Partial<RuntimeFlags.Info> = {}) =>
     SessionStatus.defaultLayer,
     Truncate.defaultLayer,
     Provider.defaultLayer, // kilocode_change
-    ToolRegistry.defaultLayer,
+    ToolRegistry.defaultLayer.pipe(Layer.provide(JournalMemory)),
     Database.defaultLayer,
     RuntimeFlags.layer(flags),
   )

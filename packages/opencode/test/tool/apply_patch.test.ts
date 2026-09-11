@@ -12,6 +12,9 @@ import { Truncate } from "@/tool/truncate"
 import { TestInstance } from "../fixture/fixture"
 import { SessionID, MessageID } from "../../src/session/schema"
 import { testEffect } from "../lib/effect"
+import { JournalMemory, ensureJournalSession } from "../fixture/journal" // kilocode_change - file tools require canonical journal
+
+let seq = 0 // kilocode_change - unique call per run keeps journal idempotency keys distinct
 
 const it = testEffect(
   Layer.mergeAll(
@@ -21,6 +24,7 @@ const it = testEffect(
     EventV2Bridge.defaultLayer,
     Truncate.defaultLayer,
     Agent.defaultLayer,
+    JournalMemory, // kilocode_change - file tools require canonical journal
   ),
 )
 
@@ -58,9 +62,11 @@ type ToolCtx = typeof baseCtx & {
 }
 
 const execute = Effect.fn("ApplyPatchToolTest.execute")(function* (params: { patchText: string }, ctx: ToolCtx) {
+  const freshCtx = { ...ctx, callID: `${ctx.callID || "call"}-${(seq += 1)}` }
+  yield* ensureJournalSession(freshCtx.sessionID as string)
   const info = yield* ApplyPatchTool
   const tool = yield* info.init()
-  return yield* tool.execute(params, ctx)
+  return yield* tool.execute(params, freshCtx)
 })
 
 const makeCtx = () => {

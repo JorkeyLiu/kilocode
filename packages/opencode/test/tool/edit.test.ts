@@ -13,6 +13,7 @@ import { Truncate } from "@/tool/truncate"
 import { SessionID, MessageID } from "../../src/session/schema"
 import * as Tool from "../../src/tool/tool"
 import { testEffect } from "../lib/effect"
+import { JournalMemory, ensureJournalSession } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 
 const ctx = {
@@ -37,7 +38,10 @@ const layer = Layer.mergeAll(
   EventV2Bridge.defaultLayer,
   Truncate.defaultLayer,
   Agent.defaultLayer,
+  JournalMemory, // kilocode_change - file tools require canonical journal
 )
+
+let seq = 0 // kilocode_change - unique call per run keeps journal idempotency keys distinct
 
 const it = testEffect(layer)
 
@@ -50,8 +54,10 @@ const run = Effect.fn("EditToolTest.run")(function* (
   args: Tool.InferParameters<typeof EditTool>,
   next: Tool.Context = ctx,
 ) {
+  const fresh = { ...next, callID: `${next.callID || "call"}-${(seq += 1)}` }
+  yield* ensureJournalSession(fresh.sessionID as string)
   const tool = yield* init()
-  return yield* tool.execute(args, next)
+  return yield* tool.execute(args, fresh)
 })
 
 const fail = Effect.fn("EditToolTest.fail")(function* (args: Tool.InferParameters<typeof EditTool>) {

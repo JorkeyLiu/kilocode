@@ -4,7 +4,7 @@
 // https://github.com/cline/cline/blob/main/evals/diff-edits/diff-apply/diff-06-26-25.ts
 
 import * as path from "path"
-import { Effect, Schema, Semaphore } from "effect"
+import { Cause, Effect, Schema, Semaphore } from "effect"
 import * as Tool from "./tool"
 import { LSP } from "@/lsp/lsp"
 import DESCRIPTION from "./edit.txt"
@@ -22,6 +22,7 @@ import { ConfigValidation } from "../kilocode/config-validation" // kilocode_cha
 import * as EncodedIO from "../kilocode/tool/encoded-io" // kilocode_change
 import * as Encoding from "../kilocode/encoding" // kilocode_change
 import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
+import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
 
 export { trimDiff } from "./filediff" // kilocode_change - compat re-export
 
@@ -74,6 +75,8 @@ export const EditTool = Tool.define(
     const afs = yield* FSUtil.Service
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
+    // kilocode_change - Snapshot v2 journal is required: ToolRegistry provides the canonical instance.
+    const journal = yield* SnapshotJournal.Service
 
     return {
       description: DESCRIPTION,
@@ -101,6 +104,25 @@ export const EditTool = Tool.define(
           // result holds the formatter-final disk truth for completed metadata.
           let ask: { diff: string; filediff: Snapshot.FileDiff } | undefined
           let result: { diff: string; filediff: Snapshot.FileDiff } | undefined
+          let journalIDs: string[] = [] // kilocode_change - Snapshot v2 journal row pointers
+          // kilocode_change end
+          // kilocode_change - Snapshot v2: any post-prepare failure marks the
+          // prepared row failed (coverage failed + ids) before the main cause propagates;
+          // success alone reaches full.
+          const markFailed = (id: string, cause: unknown): Effect.Effect<void> =>
+            Effect.gen(function* () {
+              const message = Cause.pretty(cause as never)
+              yield* journal.fail({ id, error: message }).pipe(Effect.ignore)
+              yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore)
+            })
+          const runGuarded = (id: string, work: Effect.Effect<unknown, unknown, never>): Effect.Effect<void, unknown, never> =>
+            Effect.gen(function* () {
+              const exit = yield* work.pipe(Effect.exit)
+              if (exit._tag === "Failure") {
+                yield* markFailed(id, exit.cause)
+                return yield* Effect.failCause(exit.cause)
+              }
+            })
           // kilocode_change end
           yield* lock(filePath).withPermits(1)(
             Effect.gen(function* () {
@@ -126,10 +148,42 @@ export const EditTool = Tool.define(
                     filediff: ask.filediff, // kilocode_change
                   },
                 })
-                yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), Encoding.DEFAULT) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
-                if (yield* format.file(filePath)) {
-                  contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, Encoding.DEFAULT)
-                }
+                // kilocode_change - Snapshot v2 journal: prepare after ask, before any write (sub 0).
+                const created = yield* journal
+                  .prepare({
+                    sessionID: ctx.sessionID,
+                    messageID: ctx.messageID,
+                    callID: ctx.callID,
+                    tool: "edit",
+                    item: 0,
+                    sub: 0,
+                    directory: instance.directory,
+                    worktree: instance.worktree,
+                    path: filePath,
+                    op: "add",
+                    before: null,
+                    encoding: Encoding.DEFAULT,
+                    bom: desiredBom,
+                  })
+                  .pipe(
+                    Effect.tapCause(() =>
+                      ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore),
+                    ),
+                  )
+                journalIDs = [created.row.id]
+                yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: journalIDs } } })
+                yield* runGuarded(
+                  created.row.id,
+                  Effect.gen(function* () {
+                    yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), Encoding.DEFAULT) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
+                    if (yield* format.file(filePath)) {
+                      contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, Encoding.DEFAULT)
+                    }
+                    // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
+                    const createdAfter = Buffer.from(yield* afs.readFile(filePath))
+                    yield* journal.apply({ id: created.row.id, after: createdAfter, encoding: Encoding.DEFAULT, bom: desiredBom })
+                  }),
+                )
                 result = build(filePath, contentOld, contentNew) // kilocode_change - formatter-final truth
                 diff = result.diff
                 yield* events.publish(FileSystem.Event.Edited, { file: filePath })
@@ -170,10 +224,48 @@ export const EditTool = Tool.define(
                 },
               })
 
-              yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write replaces afs.writeWithDirs
-              if (yield* format.file(filePath)) {
-                contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, source.encoding)
-              }
+              // kilocode_change - Snapshot v2 journal: prepare after ask, before any write (sub 0).
+              const changed = yield* journal
+                .prepare({
+                  sessionID: ctx.sessionID,
+                  messageID: ctx.messageID,
+                  callID: ctx.callID,
+                  tool: "edit",
+                  item: 0,
+                  sub: 0,
+                  directory: instance.directory,
+                  worktree: instance.worktree,
+                  path: filePath,
+                  op: "update",
+                  before: pre.bytes,
+                  encoding: source.encoding,
+                  bom: source.bom,
+                })
+                .pipe(
+                  Effect.tapCause(() =>
+                    ctx.metadata({ metadata: { journal: { coverage: "failed", ids: journalIDs } } }).pipe(Effect.ignore),
+                  ),
+                )
+              journalIDs = [changed.row.id]
+              yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: journalIDs } } })
+              yield* runGuarded(
+                changed.row.id,
+                Effect.gen(function* () {
+                  yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write replaces afs.writeWithDirs
+                  if (yield* format.file(filePath)) {
+                    contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, source.encoding)
+                  }
+                  // kilocode_change - Snapshot v2 journal: apply formatter-final raw bytes
+                  const changedAfter = Buffer.from(yield* afs.readFile(filePath))
+                  yield* journal.apply({
+                    id: changed.row.id,
+                    after: changedAfter,
+                    encoding: source.encoding,
+                    bom: desiredBom,
+                    beforeFallback: pre.bytes,
+                  })
+                }),
+              )
               yield* events.publish(FileSystem.Event.Edited, { file: filePath })
               yield* events.publish(Watcher.Event.Updated, {
                 file: filePath,
@@ -191,6 +283,7 @@ export const EditTool = Tool.define(
               diff,
               filediff, // kilocode_change
               diagnostics: {},
+              journal: { coverage: "full", ids: journalIDs }, // kilocode_change - Snapshot v2 journal pointer (success alone is full)
             },
           })
 
@@ -207,6 +300,7 @@ export const EditTool = Tool.define(
               diagnostics: filterDiagnostics(diagnostics, [normalizedFilePath]), // kilocode_change
               diff,
               filediff, // kilocode_change
+              journal: { coverage: "full", ids: journalIDs }, // kilocode_change - Snapshot v2 journal pointer
             },
             title: `${path.relative(instance.worktree, filePath)}`,
             output,

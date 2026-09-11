@@ -1,5 +1,6 @@
 import { describe, expect, spyOn, test } from "bun:test"
-import { Effect } from "effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
+import { Effect, Layer } from "effect"
 import { Telemetry } from "@kilocode/kilo-telemetry"
 import { Global } from "@opencode-ai/core/global"
 import * as Log from "@opencode-ai/core/util/log"
@@ -1427,7 +1428,7 @@ describe("plan follow-up", () => {
       const { SessionPrompt } = await import("../../src/session/prompt")
       await Effect.runPromise(
         SessionPrompt.Service.use((svc) => svc.cancel(sid)).pipe(
-          Effect.provide(SessionPrompt.defaultLayer),
+          Effect.provide(SessionPrompt.defaultLayer.pipe(Layer.provide(JournalMemory))),
           Effect.scoped,
         ),
       )

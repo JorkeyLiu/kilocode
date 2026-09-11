@@ -1,6 +1,7 @@
 import path from "path"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import { afterAll, beforeAll, describe, expect, test } from "bun:test"
-import { Effect } from "effect"
+import { Effect, Layer } from "effect"
 import fs from "fs/promises"
 import os from "os"
 import { Bus } from "../../src/bus"
@@ -119,7 +120,7 @@ function scoped<T>(
       const prompt = yield* SessionPrompt.Service
       return yield* Effect.promise(() => fn(prompt, run))
     }).pipe(
-      Effect.provide(SessionPrompt.defaultLayer),
+      Effect.provide(SessionPrompt.defaultLayer.pipe(Layer.provide(JournalMemory))),
       Effect.provide(GenerationGate.defaultLayer),
       provideInstance(dir),
       Effect.provide(testInstanceStoreLayer),

@@ -13,6 +13,7 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { EventSequenceTable, EventTable } from "@opencode-ai/core/event/sql"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import * as Log from "@opencode-ai/core/util/log"
+import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - SessionPrompt needs canonical journal
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { ProjectV2 } from "@opencode-ai/core/project"
 import { Slug } from "@opencode-ai/core/util/slug"
@@ -1000,7 +1001,7 @@ export const layer = Layer.effect(
 )
 
 // kilocode_change start - prevent Kilo runtime cycles from erasing layer requirements
-export const defaultLayer: Layer.Layer<Service> = layer.pipe(
+export const defaultLayer: Layer.Layer<Service, never, SnapshotJournal.Service> = layer.pipe(
   // kilocode_change end
   Layer.provide(Auth.defaultLayer),
   Layer.provide(Session.defaultLayer),

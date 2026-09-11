@@ -14,6 +14,7 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@opencode-ai/core/cross-spawn-spawner"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { JournalMemory, ensureJournalSession } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 
 const ctx = {
   sessionID: SessionID.make("ses_test-write-session"),
@@ -30,6 +31,8 @@ afterEach(async () => {
   await disposeAllInstances()
 })
 
+let seq = 0 // kilocode_change - unique call per run keeps journal idempotency keys distinct
+
 const it = testEffect(
   Layer.mergeAll(
     LSP.defaultLayer,
@@ -39,6 +42,7 @@ const it = testEffect(
     CrossSpawnSpawner.defaultLayer,
     Truncate.defaultLayer,
     Agent.defaultLayer,
+    JournalMemory, // kilocode_change - file tools require canonical journal
   ),
 )
 
@@ -51,8 +55,10 @@ const run = Effect.fn("WriteToolTest.run")(function* (
   args: Tool.InferParameters<typeof WriteTool>,
   next: Tool.Context = ctx,
 ) {
+  const fresh = { ...next, callID: `${next.callID || "call"}-${(seq += 1)}` }
+  yield* ensureJournalSession(fresh.sessionID as string)
   const tool = yield* init()
-  return yield* tool.execute(args, next)
+  return yield* tool.execute(args, fresh)
 })
 
 describe("tool.write", () => {

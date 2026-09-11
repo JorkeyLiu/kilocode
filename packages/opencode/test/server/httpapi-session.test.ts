@@ -36,11 +36,12 @@ import { disposeAllInstances, provideInstanceEffect, TestInstance, tmpdirScoped 
 import { TestLLMServer } from "../lib/llm-server"
 import { testProviderConfig } from "../lib/test-provider"
 import { testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 
 void Log.init({ print: false })
 
 const originalWorkspaces = Flag.KILO_EXPERIMENTAL_WORKSPACES
-const workspaceLayer = Workspace.defaultLayer.pipe(
+const workspaceLayer = Workspace.defaultLayer.pipe(Layer.provide(JournalMemory)).pipe(
   Layer.provide(InstanceStore.defaultLayer),
   Layer.provide(InstanceBootstrap.defaultLayer),
 )
@@ -62,7 +63,7 @@ const httpApiLayer = servedRoutes.pipe(
   Layer.provideMerge(NodeServices.layer),
 )
 const it = testEffect(
-  Layer.mergeAll(
+  Layer.mergeAll(JournalMemory,
     instanceStoreLayer,
     Project.defaultLayer,
     Session.defaultLayer,

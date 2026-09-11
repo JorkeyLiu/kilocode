@@ -55,6 +55,7 @@ import { KiloSessionPrompt } from "../../src/kilocode/session/prompt"
 import { KiloReadObject } from "../../src/kilocode/tool/read-object"
 import { provideTmpdirServer } from "../fixture/fixture"
 import { awaitWithTimeout, pollWithTimeout, testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import { reply, TestLLMServer } from "../lib/llm-server"
 import * as Ownership from "@/retention/ownership"
 import { legacyEvaluate, legacyResolve } from "../lib/legacy-permission"
@@ -124,7 +125,7 @@ const lsp = Layer.succeed(
   }),
 )
 
-const status = Layer.mergeAll(
+const status = Layer.mergeAll(JournalMemory,
     Ownership.layer,
 SessionStatus.defaultLayer, Bus.layer)
 const run = SessionRunState.layer.pipe(Layer.provide(status))

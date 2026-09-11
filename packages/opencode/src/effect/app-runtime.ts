@@ -11,6 +11,7 @@ import { Git } from "@/git"
 import { Ripgrep } from "@opencode-ai/core/filesystem/ripgrep"
 import { Storage } from "@/storage/storage"
 import { Snapshot } from "@/snapshot"
+import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
 import { Plugin } from "@/plugin"
 import { Provider } from "@/provider/provider"
 import { ProviderAuth } from "@/provider/auth"
@@ -124,7 +125,7 @@ export function makeCoreLayer(provider: ProviderLayer = Provider.defaultLayer) {
 }
 // kilocode_change end
 
-const SessionLayer = Layer.mergeAll(
+const SessionLayerBase = Layer.mergeAll(
   KiloViewers.defaultLayer, // kilocode_change - canonical presence service
   Question.defaultLayer,
   Notebook.defaultLayer, // kilocode_change
@@ -151,8 +152,19 @@ const SessionLayer = Layer.mergeAll(
   Truncate.defaultLayer,
 ) // kilocode_change
 
+// kilocode_change - Snapshot v2 journal is the single canonical instance shared by
+// ToolRegistry file tools and direct Journal consumers. ToolRegistry.defaultLayer
+// requires SnapshotJournal.Service; it is explicitly provided here with the same
+// JournalLive node that is also merged as a sibling, so memoMap builds one service.
+const JournalLive = SnapshotJournal.defaultLayer // kilocode_change - canonical Snapshot v2 journal
+const ToolRegistryLive = ToolRegistry.defaultLayer.pipe(Layer.provide(JournalLive)) // kilocode_change - same canonical journal
+const SessionLayerLive = SessionLayerBase.pipe(Layer.provide(JournalLive)) // kilocode_change - SessionPrompt consumes the same canonical journal
+
+const WorkspaceLive = Workspace.defaultLayer.pipe(Layer.provide(JournalLive)) // kilocode_change - Workspace consumes the same canonical journal
+
 const FeatureLayer = Layer.mergeAll(
-  ToolRegistry.defaultLayer,
+  ToolRegistryLive,
+  JournalLive,
   Format.defaultLayer,
   Project.defaultLayer,
   ProjectV2.defaultLayer, // kilocode_change - satisfy listener route handlers through AppLayer
@@ -161,7 +173,7 @@ const FeatureLayer = Layer.mergeAll(
   PtyTicket.defaultLayer, // kilocode_change - satisfy listener route handlers through AppLayer
   Vcs.defaultLayer,
   Reference.defaultLayer,
-  Workspace.defaultLayer,
+  WorkspaceLive,
   Installation.defaultLayer, // kilocode_change - canonical AppLayer service
   ShareNext.defaultLayer, // kilocode_change - canonical AppLayer service
   SessionShare.defaultLayer, // kilocode_change - canonical AppLayer service
@@ -172,7 +184,7 @@ const FeatureLayer = Layer.mergeAll(
 const buildAppLayer = (provider: ProviderLayer = Provider.defaultLayer) => {
   const base = Layer.mergeAll(
     buildCoreLayer(provider),
-    SessionLayer,
+    SessionLayerLive,
     FeatureLayer,
     RetentionOwnership.layer,
     RetentionLease.layer,

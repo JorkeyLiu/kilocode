@@ -49,6 +49,7 @@ import { pathToFileURL, fileURLToPath } from "url"
 import { Config } from "@/config/config"
 import { ConfigMarkdown } from "@/config/markdown"
 import { SessionSummary } from "./summary"
+import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - ToolRegistry requires the canonical journal
 import { NamedError } from "@opencode-ai/core/util/error"
 import { SessionProcessor } from "./processor"
 import { Tool } from "@/tool/tool"
@@ -2503,7 +2504,7 @@ export const layer = Layer.effect(
 )
 
 // kilocode_change start - keep prompt runtime requirements type-checked
-export const defaultLayer: Layer.Layer<Service> = Layer.suspend(() =>
+export const defaultLayer: Layer.Layer<Service, never, SnapshotJournal.Service> = Layer.suspend(() =>
   // kilocode_change end
   layer
     .pipe(

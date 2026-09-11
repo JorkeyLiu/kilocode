@@ -30,6 +30,7 @@ import { withFixedWorkspaceID } from "../fixture/flag"
 import { workspaceLayerWithRuntimeFlags } from "../fixture/workspace"
 import { waitGlobalBusEvent } from "./global-bus"
 import { testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 
 const testStateLayer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -46,7 +47,7 @@ const testStateLayer = Layer.effectDiscard(
 const workspaceLayer = workspaceLayerWithRuntimeFlags({ experimentalWorkspaces: true })
 
 const it = testEffect(
-  Layer.mergeAll(
+  Layer.mergeAll(JournalMemory,
     testStateLayer,
     NodeHttpServer.layerTest,
     NodeServices.layer,

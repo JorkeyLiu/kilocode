@@ -34,6 +34,7 @@ import { TestConfig } from "../../fixture/config"
 import { tmpdirScoped } from "../../fixture/fixture"
 import { ProviderTest } from "../../fake/provider"
 import { testEffect } from "../../lib/effect"
+import { JournalMemory, ensureJournalSession } from "../../fixture/journal" // kilocode_change - file tools require canonical journal
 
 const projectID = ProjectV2.ID.make("sandbox-session-tools")
 const sessionID = SessionID.make("ses_sandbox-session-tools")
@@ -122,7 +123,7 @@ const truncate = Layer.mock(Truncate.Service)({
   output: (text: string) => Effect.succeed({ content: text, truncated: false as const }),
   limits: () => Effect.succeed({ maxLines: Truncate.MAX_LINES, maxBytes: Truncate.MAX_BYTES }),
 })
-const base = Layer.mergeAll(
+const base = Layer.mergeAll(JournalMemory,
   config,
   agents,
   sessions,
@@ -153,6 +154,8 @@ const registry = Layer.effect(
     })
   }),
 ).pipe(Layer.provideMerge(base))
+let seq = 0 // kilocode_change - unique call per run keeps journal keys distinct
+
 const it = testEffect(registry)
 const mac = process.platform === "darwin" && existsSync("/usr/bin/sandbox-exec") ? it.live : it.live.skip
 

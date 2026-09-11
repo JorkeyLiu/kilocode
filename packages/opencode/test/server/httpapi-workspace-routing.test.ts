@@ -35,6 +35,7 @@ import { resetDatabase } from "../fixture/db"
 import { workspaceLayerWithRuntimeFlags } from "../fixture/workspace"
 import { tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 
 const testStateLayer = Layer.effectDiscard(
   Effect.gen(function* () {
@@ -50,7 +51,7 @@ const testStateLayer = Layer.effectDiscard(
 const workspaceLayer = workspaceLayerWithRuntimeFlags({ experimentalWorkspaces: true })
 
 const it = testEffect(
-  Layer.mergeAll(
+  Layer.mergeAll(JournalMemory,
     testStateLayer,
     NodeHttpServer.layerTest,
     NodeServices.layer,

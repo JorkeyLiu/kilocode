@@ -1,5 +1,5 @@
 import * as path from "path"
-import { Effect, Schema } from "effect"
+import { Cause, Effect, Schema } from "effect"
 import * as Tool from "./tool"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
@@ -15,6 +15,7 @@ import { filterDiagnostics } from "./diagnostics" // kilocode_change
 import { ConfigValidation } from "../kilocode/config-validation" // kilocode_change
 import * as EncodedIO from "../kilocode/tool/encoded-io" // kilocode_change
 import { Format } from "../format"
+import { SnapshotJournal } from "@/snapshot/journal" // kilocode_change - Snapshot v2 durable mutation journal
 import * as Bom from "@/util/bom"
 
 export const Parameters = Schema.Struct({
@@ -28,6 +29,8 @@ export const ApplyPatchTool = Tool.define(
     const afs = yield* FSUtil.Service
     const format = yield* Format.Service
     const events = yield* EventV2Bridge.Service
+    // kilocode_change - Snapshot v2 journal is required: ToolRegistry provides the canonical instance.
+    const journal = yield* SnapshotJournal.Service
 
     const run = Effect.fn("ApplyPatchTool.execute")(function* (
       params: Schema.Schema.Type<typeof Parameters>,
@@ -69,6 +72,11 @@ export const ApplyPatchTool = Tool.define(
         deletions: number
         bom: boolean
         encoding: string // kilocode_change - preserved per-file encoding
+        beforeBytes: Buffer | null // kilocode_change - Snapshot v2 journal before image, captured pre-write
+        targetBefore?: Buffer | null // kilocode_change - move target prior (accurate overwrite baseline)
+        targetEncoding?: string // kilocode_change - move target prior encoding
+        targetBom?: boolean // kilocode_change - move target prior BOM
+        targetExists?: boolean // kilocode_change - move target existence at validation
       }> = []
 
       let askDiff = ""
@@ -84,6 +92,11 @@ export const ApplyPatchTool = Tool.define(
               hunk.contents.length === 0 || hunk.contents.endsWith("\n") ? hunk.contents : `${hunk.contents}\n`
             const next = Bom.split(newContent)
             const ask = build(filePath, oldContent, next.text) // kilocode_change - unified counts
+            // kilocode_change start - Snapshot v2 journal before image (existing bytes when overwriting)
+            const prior = (yield* afs.existsSafe(filePath))
+              ? ((yield* EncodedIO.read(afs, filePath).pipe(Effect.catch(() => Effect.succeed(undefined)))))?.bytes ?? null
+              : null
+            // kilocode_change end
 
             fileChanges.push({
               filePath,
@@ -96,6 +109,7 @@ export const ApplyPatchTool = Tool.define(
               deletions: ask.filediff.deletions,
               bom: next.bom,
               encoding: "utf-8", // kilocode_change - new files default to utf-8
+              beforeBytes: prior, // kilocode_change
             })
 
             askDiff += ask.diff + "\n"
@@ -150,6 +164,34 @@ export const ApplyPatchTool = Tool.define(
             // single-entry protocol never misreports source state as target state.
             const ask = build(movePath ?? filePath, oldContent, newContent)
 
+            // kilocode_change start - move target prior is captured pre-write so the
+            // target add/update fact preserves an accurate baseline when overwriting.
+            let targetBefore: Buffer | null | undefined
+            let targetEncoding: string | undefined
+            let targetBom: boolean | undefined
+            let targetExists: boolean | undefined
+            if (movePath) {
+              const targetHit = yield* afs.existsSafe(movePath)
+              targetExists = targetHit
+              if (targetHit) {
+                const targetRead = yield* EncodedIO.read(afs, movePath).pipe(
+                  Effect.catch((error) =>
+                    Effect.fail(
+                      new Error(
+                        `apply_patch verification failed: ${error instanceof Error ? error.message : String(error)}`,
+                      ),
+                    ),
+                  ),
+                )
+                targetBefore = targetRead.bytes
+                targetEncoding = targetRead.encoding
+                targetBom = targetRead.encoding === "utf-8-bom"
+              } else {
+                targetBefore = null
+              }
+            }
+            // kilocode_change end
+
             fileChanges.push({
               filePath,
               oldContent,
@@ -162,6 +204,11 @@ export const ApplyPatchTool = Tool.define(
               deletions: ask.filediff.deletions,
               bom,
               encoding, // kilocode_change
+              beforeBytes: read.bytes, // kilocode_change - Snapshot v2 journal before image
+              targetBefore,
+              targetEncoding,
+              targetBom,
+              targetExists,
             })
 
             askDiff += ask.diff + "\n"
@@ -195,6 +242,7 @@ export const ApplyPatchTool = Tool.define(
               deletions: ask.filediff.deletions,
               bom: source.bom,
               encoding: deleteRead.encoding, // kilocode_change
+              beforeBytes: deleteRead.bytes, // kilocode_change - Snapshot v2 journal before image
             })
 
             askDiff += ask.diff + "\n"
@@ -231,96 +279,281 @@ export const ApplyPatchTool = Tool.define(
       // Apply the changes
       const updates: Array<{ file: string; event: "add" | "change" | "unlink" }> = []
 
-      for (const change of fileChanges) {
-        const edited = change.type === "delete" ? undefined : (change.movePath ?? change.filePath)
-        switch (change.type) {
-          case "add":
-            // Create parent directories (recursive: true is safe on existing/root dirs)
-            yield* EncodedIO.write(afs, change.filePath, Bom.join(change.newContent, change.bom), change.encoding) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
-            updates.push({ file: change.filePath, event: "add" })
-            break
-
-          case "update":
-            yield* EncodedIO.write(afs, change.filePath, Bom.join(change.newContent, change.bom), change.encoding) // kilocode_change - encoding-aware write replaces afs.writeWithDirs
-            updates.push({ file: change.filePath, event: "change" })
-            break
-
-          case "move":
-            if (change.movePath) {
-              // Create parent directories (recursive: true is safe on existing/root dirs)
-              yield* EncodedIO.write(afs, change.movePath, Bom.join(change.newContent, change.bom), change.encoding) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
-              yield* afs.remove(change.filePath)
-              updates.push({ file: change.filePath, event: "unlink" })
-              updates.push({ file: change.movePath, event: "add" })
+      // kilocode_change start - Snapshot v2 journal: each file change runs its own
+      // prepare -> write/format/sync -> apply in item order. Move is two prepared
+      // facts (source delete + target add/update) created before any write of that
+      // hunk; target write/format/sync/apply runs before source remove/apply.
+      // A mid-batch failure keeps applied rows, fails current prepared rows, writes
+      // nothing further, publishes the applied prefix (Watcher + LSP), and carries
+      // the prefix formatter-final files/totalDiff plus journal ids in running metadata.
+      // New tools never write a single-row op=move (schema keeps it for compat).
+      const journalIDs: string[] = []
+      const buildResultFiles = (changes: typeof fileChanges) =>
+        changes.map((change) => {
+          if (change.type === "delete") {
+            const done = build(change.filePath, change.oldContent, "")
+            return {
+              filePath: change.filePath,
+              relativePath: path.relative(instance.worktree, change.filePath).replaceAll("\\", "/"),
+              type: change.type,
+              patch: done.diff,
+              additions: done.filediff.additions,
+              deletions: done.filediff.deletions,
+              movePath: change.movePath,
             }
-            break
-
-          case "delete":
+          }
+          if (change.type === "move" && change.movePath) {
+            const done = build(change.movePath, change.oldContent, change.final)
+            return {
+              filePath: change.filePath,
+              relativePath: path.relative(instance.worktree, change.movePath).replaceAll("\\", "/"),
+              type: change.type,
+              patch: done.diff,
+              additions: done.filediff.additions,
+              deletions: done.filediff.deletions,
+              movePath: change.movePath,
+            }
+          }
+          if (change.type === "add") {
+            const done = build(change.filePath, "", change.final)
+            return {
+              filePath: change.filePath,
+              relativePath: path.relative(instance.worktree, change.filePath).replaceAll("\\", "/"),
+              type: change.type,
+              patch: done.diff,
+              additions: done.filediff.additions,
+              deletions: done.filediff.deletions,
+              movePath: change.movePath,
+            }
+          }
+          const done = build(change.filePath, change.oldContent, change.final)
+          return {
+            filePath: change.filePath,
+            relativePath: path.relative(instance.worktree, change.filePath).replaceAll("\\", "/"),
+            type: change.type,
+            patch: done.diff,
+            additions: done.filediff.additions,
+            deletions: done.filediff.deletions,
+            movePath: change.movePath,
+          }
+        })
+      const prefixDiffOf = (prefix: ReturnType<typeof buildResultFiles>) => {
+        let out = ""
+        for (const item of prefix) out += item.patch + "\n"
+        return out
+      }
+      const failRows = (ids: string[], message: string) =>
+        Effect.forEach(ids, (id) => journal.fail({ id, error: message }).pipe(Effect.ignore), {
+          concurrency: 1,
+        }).pipe(Effect.ignore)
+      const emitBatchFailure = (cause: unknown, doneCount: number, includeCurrent: boolean) =>
+        Effect.gen(function* () {
+          const message = Cause.pretty(cause as never)
+          // Caller already failed its prepared rows; publish the honest applied prefix.
+          const end = includeCurrent ? doneCount + 1 : doneCount
+          const prefix = buildResultFiles(fileChanges.slice(0, end))
+          const totalPrefix = prefixDiffOf(prefix)
+          yield* ctx
+            .metadata({ metadata: { journal: { coverage: "failed", ids: [...journalIDs] }, diff: totalPrefix, files: prefix } })
+            .pipe(Effect.ignore)
+          for (const update of updates) yield* events.publish(Watcher.Event.Updated, update).pipe(Effect.ignore)
+          for (const change of fileChanges.slice(0, end)) {
+            if (change.type === "delete") continue
+            yield* lsp.touchFile(change.movePath ?? change.filePath, "document").pipe(Effect.ignore)
+          }
+          return yield* Effect.failCause(cause as never)
+        })
+      let item = 0
+      let done = 0
+      for (const change of fileChanges) {
+        if (change.type === "move" && change.movePath) {
+          // Dual-fact move: both prepares before any write of this hunk.
+          const moveTarget = change.movePath
+          const targetOp = change.targetExists ? "update" : "add"
+          const prepared: string[] = []
+          let srcID: string | undefined
+          let tgtID: string | undefined
+          const exit = yield* Effect.gen(function* () {
+            // Target sub 0 first, source sub 1 second; ids order matches list order.
+            const tgt = yield* journal.prepare({
+              sessionID: ctx.sessionID,
+              messageID: ctx.messageID,
+              callID: ctx.callID,
+              tool: "apply_patch",
+              item,
+              sub: 0,
+              directory: instance.directory,
+              worktree: instance.worktree,
+              path: moveTarget,
+              op: targetOp,
+              before: change.targetBefore ?? null,
+              encoding: change.targetEncoding ?? change.encoding,
+              bom: change.targetBom ?? change.bom,
+            })
+            journalIDs.push(tgt.row.id)
+            prepared.push(tgt.row.id)
+            const src = yield* journal.prepare({
+              sessionID: ctx.sessionID,
+              messageID: ctx.messageID,
+              callID: ctx.callID,
+              tool: "apply_patch",
+              item,
+              sub: 1,
+              directory: instance.directory,
+              worktree: instance.worktree,
+              path: change.filePath,
+              op: "delete",
+              before: change.beforeBytes,
+              encoding: change.encoding,
+              bom: change.bom,
+            })
+            journalIDs.push(src.row.id)
+            prepared.push(src.row.id)
+            return { src, tgt }
+          }).pipe(Effect.exit)
+          if (exit._tag === "Failure") {
+            yield* failRows(prepared, Cause.pretty(exit.cause as never))
+            yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids: [...journalIDs] } } }).pipe(Effect.ignore)
+            // Prefix publish keeps completed work visible even when prepare itself failed.
+            for (const update of updates) yield* events.publish(Watcher.Event.Updated, update).pipe(Effect.ignore)
+            for (const prior of fileChanges.slice(0, done)) {
+              if (prior.type === "delete") continue
+              yield* lsp.touchFile(prior.movePath ?? prior.filePath, "document").pipe(Effect.ignore)
+            }
+            return yield* Effect.failCause(exit.cause)
+          }
+          srcID = exit.value.src.row.id
+          tgtID = exit.value.tgt.row.id
+          yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: [...journalIDs] } } })
+          const settleExit = yield* Effect.gen(function* () {
+            // Target first, then source — matches historic write order.
+            yield* EncodedIO.write(afs, moveTarget, Bom.join(change.newContent, change.bom), change.encoding)
+            if (yield* format.file(moveTarget)) {
+              change.final = yield* EncodedIO.sync(afs, moveTarget, change.bom, change.encoding)
+            }
+            yield* events.publish(FileSystem.Event.Edited, { file: moveTarget })
+            if (tgtID) {
+              const afterTarget = Buffer.from(yield* afs.readFile(moveTarget))
+              yield* journal.apply({
+                id: tgtID,
+                after: afterTarget,
+                encoding: change.encoding,
+                bom: change.bom,
+                beforeFallback: change.targetBefore ?? null,
+              })
+            }
+            updates.push({ file: moveTarget, event: change.targetExists ? "change" : "add" })
             yield* afs.remove(change.filePath)
             updates.push({ file: change.filePath, event: "unlink" })
-            break
-        }
-
-        // kilocode_change start - capture formatter-final disk truth per file
-        if (edited) {
-          if (yield* format.file(edited)) {
-            change.final = yield* EncodedIO.sync(afs, edited, change.bom, change.encoding)
+            if (srcID) {
+              yield* journal.apply({
+                id: srcID,
+                after: null,
+                encoding: change.encoding,
+                bom: change.bom,
+                beforeFallback: change.beforeBytes,
+              })
+            }
+          }).pipe(Effect.exit)
+          if (settleExit._tag === "Failure") {
+            const message = Cause.pretty(settleExit.cause as never)
+            // Target may already be applied while source failed: fail only the
+            // still-prepared rows, keep the applied fact honest, and include the
+            // move file entry when the target write landed.
+            const targetLanded = updates.some((u) => u.file === moveTarget)
+            // Best-effort: failing an already-applied row is a no-op Conflict inside fail().
+            if (!targetLanded && tgtID) yield* journal.fail({ id: tgtID, error: message }).pipe(Effect.ignore)
+              if (srcID) {
+                const srcRow = yield* journal.get(srcID).pipe(Effect.catch(() => Effect.succeed(undefined)), Effect.catchDefect(() => Effect.succeed(undefined)))
+                if (!srcRow || srcRow.status === "prepared") yield* journal.fail({ id: srcID, error: message }).pipe(Effect.ignore)
+              }
+            return yield* emitBatchFailure(settleExit.cause, done, targetLanded)
           }
-          yield* events.publish(FileSystem.Event.Edited, { file: edited })
+          done += 1
+          item += 1
+          continue
         }
+        const prepExit = yield* journal
+          .prepare({
+            sessionID: ctx.sessionID,
+            messageID: ctx.messageID,
+            callID: ctx.callID,
+            tool: "apply_patch",
+            item,
+            sub: 0,
+            directory: instance.directory,
+            worktree: instance.worktree,
+            path: change.filePath,
+            op: change.type as "add" | "update" | "delete",
+            before: change.beforeBytes,
+            encoding: change.encoding,
+            bom: change.bom,
+          })
+          .pipe(Effect.exit)
+        if (prepExit._tag === "Failure") {
+          yield* ctx.metadata({ metadata: { journal: { coverage: "failed", ids: [...journalIDs] } } }).pipe(Effect.ignore)
+          for (const update of updates) yield* events.publish(Watcher.Event.Updated, update).pipe(Effect.ignore)
+          for (const prior of fileChanges.slice(0, done)) {
+            if (prior.type === "delete") continue
+            yield* lsp.touchFile(prior.movePath ?? prior.filePath, "document").pipe(Effect.ignore)
+          }
+          return yield* Effect.failCause(prepExit.cause)
+        }
+        const noted = prepExit.value
+        journalIDs.push(noted.row.id)
+        yield* ctx.metadata({ metadata: { journal: { coverage: "partial", ids: [...journalIDs] } } })
+
+        const settle = Effect.gen(function* () {
+          const edited = change.type === "delete" ? undefined : change.filePath
+          switch (change.type) {
+            case "add":
+              // Create parent directories (recursive: true is safe on existing/root dirs)
+              yield* EncodedIO.write(afs, change.filePath, Bom.join(change.newContent, change.bom), change.encoding) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
+              updates.push({ file: change.filePath, event: "add" })
+              break
+
+            case "update":
+              yield* EncodedIO.write(afs, change.filePath, Bom.join(change.newContent, change.bom), change.encoding) // kilocode_change - encoding-aware write replaces afs.writeWithDirs
+              updates.push({ file: change.filePath, event: "change" })
+              break
+
+            case "delete":
+              yield* afs.remove(change.filePath)
+              updates.push({ file: change.filePath, event: "unlink" })
+              break
+          }
+
+          // kilocode_change start - capture formatter-final disk truth per file
+          if (edited) {
+            if (yield* format.file(edited)) {
+              change.final = yield* EncodedIO.sync(afs, edited, change.bom, change.encoding)
+            }
+            yield* events.publish(FileSystem.Event.Edited, { file: edited })
+          }
+          const after = edited ? Buffer.from(yield* afs.readFile(edited)) : null
+            yield* journal.apply({
+              id: noted.row.id,
+              after,
+              encoding: change.encoding,
+              bom: change.bom,
+              beforeFallback: change.beforeBytes,
+            })
+        })
+        const exit = yield* settle.pipe(Effect.exit)
+        if (exit._tag === "Failure") {
+          const message = Cause.pretty(exit.cause)
+            yield* journal.fail({ id: noted.row.id, error: message }).pipe(Effect.ignore)
+          return yield* emitBatchFailure(exit.cause, done, false)
+        }
+        done += 1
+        item += 1
       }
+      // kilocode_change end
 
       // kilocode_change start - rebuild result metadata from formatter-final truth.
       // Move keeps the single-entry protocol but its patch header points at the
       // final target; source deletion is expressed by filePath + unlink event.
-      const files = fileChanges.map((change) => {
-        if (change.type === "delete") {
-          const done = build(change.filePath, change.oldContent, "")
-          return {
-            filePath: change.filePath,
-            relativePath: path.relative(instance.worktree, change.filePath).replaceAll("\\", "/"),
-            type: change.type,
-            patch: done.diff,
-            additions: done.filediff.additions,
-            deletions: done.filediff.deletions,
-            movePath: change.movePath,
-          }
-        }
-        if (change.type === "move" && change.movePath) {
-          const done = build(change.movePath, change.oldContent, change.final)
-          return {
-            filePath: change.filePath,
-            relativePath: path.relative(instance.worktree, change.movePath).replaceAll("\\", "/"),
-            type: change.type,
-            patch: done.diff,
-            additions: done.filediff.additions,
-            deletions: done.filediff.deletions,
-            movePath: change.movePath,
-          }
-        }
-        if (change.type === "add") {
-          const done = build(change.filePath, "", change.final)
-          return {
-            filePath: change.filePath,
-            relativePath: path.relative(instance.worktree, change.filePath).replaceAll("\\", "/"),
-            type: change.type,
-            patch: done.diff,
-            additions: done.filediff.additions,
-            deletions: done.filediff.deletions,
-            movePath: change.movePath,
-          }
-        }
-        const done = build(change.filePath, change.oldContent, change.final)
-        return {
-          filePath: change.filePath,
-          relativePath: path.relative(instance.worktree, change.filePath).replaceAll("\\", "/"),
-          type: change.type,
-          patch: done.diff,
-          additions: done.filediff.additions,
-          deletions: done.filediff.deletions,
-          movePath: change.movePath,
-        }
-      })
+      const files = buildResultFiles(fileChanges)
       let totalDiff = ""
       for (const item of files) totalDiff += item.patch + "\n"
       // kilocode_change end
@@ -379,6 +612,7 @@ export const ApplyPatchTool = Tool.define(
           diff: totalDiff,
           files,
           diagnostics: filterDiagnostics(diagnostics, changedPaths), // kilocode_change
+          journal: { coverage: "full", ids: journalIDs }, // kilocode_change - success alone is full
         },
         output,
       }

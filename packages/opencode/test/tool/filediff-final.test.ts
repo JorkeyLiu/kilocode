@@ -17,6 +17,7 @@ import { Snapshot } from "../../src/snapshot"
 import { MAX_MESSAGE_PATCH_SIZE } from "@opencode-ai/core/session/message-read"
 import { SessionID, MessageID, PartID } from "../../src/session/schema"
 import { TestInstance, disposeAllInstances } from "../fixture/fixture"
+import { JournalMemory, ensureJournalSession } from "../fixture/journal" // kilocode_change - Snapshot v2 journal
 import { testEffect } from "../lib/effect"
 import { afterEach } from "bun:test"
 
@@ -45,6 +46,7 @@ const layer = Layer.mergeAll(
   EventV2Bridge.defaultLayer,
   Truncate.defaultLayer,
   Agent.defaultLayer,
+  JournalMemory, // kilocode_change - Snapshot v2 journal
 )
 
 const it = testEffect(layer)
@@ -76,25 +78,33 @@ function tally(before: string, after: string) {
   return { additions, deletions }
 }
 
+let seq = 0 // kilocode_change - unique call per run keeps journal idempotency keys distinct
+const fresh = (ctx: any) => ({ ...ctx, callID: `${ctx.callID ?? "call"}-${(seq += 1)}` })
+const ready = (ctx: any) =>
+  Effect.gen(function* () {
+    yield* ensureJournalSession(ctx.sessionID)
+    return fresh(ctx)
+  })
+
 const runEdit = (args: any, ctx: any) =>
   Effect.gen(function* () {
     const info = yield* EditTool
     const tool = yield* info.init()
-    return yield* tool.execute(args, ctx)
+    return yield* tool.execute(args, yield* ready(ctx))
   })
 
 const runWrite = (args: any, ctx: any) =>
   Effect.gen(function* () {
     const info = yield* WriteTool
     const tool = yield* info.init()
-    return yield* tool.execute(args, ctx)
+    return yield* tool.execute(args, yield* ready(ctx))
   })
 
 const runPatch = (args: any, ctx: any) =>
   Effect.gen(function* () {
     const info = yield* ApplyPatchTool
     const tool = yield* info.init()
-    return yield* tool.execute(args, ctx)
+    return yield* tool.execute(args, yield* ready(ctx))
   })
 
 const put = (p: string, content: string) => Effect.promise(() => fs.writeFile(p, content, "utf-8"))
@@ -124,8 +134,12 @@ describe("formatter-final declared diffs", () => {
       expect(asks).toHaveLength(1)
       expect(asks[0].metadata.diff).not.toContain(MARK)
       expect(asks[0].metadata.filediff.patch).not.toContain(MARK)
-      expect(metas).toHaveLength(1)
-      expect(metas[0].metadata.filediff.patch).toContain(MARK)
+      expect(metas).toHaveLength(2)
+      expect(metas[0].metadata.journal.coverage).toBe("partial")
+      expect(metas[0].metadata.journal.ids).toHaveLength(1)
+      expect(metas[1].metadata.filediff.patch).toContain(MARK)
+      expect(metas[1].metadata.journal.coverage).toBe("full")
+      expect(metas[1].metadata.journal.ids).toEqual(metas[0].metadata.journal.ids)
       // patch header points at the edited file
       expect(result.metadata.filediff.file).toBe(file)
     }),

@@ -26,6 +26,7 @@ import { Truncate } from "../../src/tool/truncate"
 import { ToolRegistry } from "../../src/tool/registry"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 
 const state = path.join(Global.Path.state, "model.json")
 
@@ -102,7 +103,7 @@ const catalog = {
 }
 
 const it = testEffect(
-  Layer.mergeAll(
+  Layer.mergeAll(JournalMemory,
     Agent.defaultLayer,
     BackgroundJob.defaultLayer,
     Bus.defaultLayer,
@@ -114,7 +115,7 @@ const it = testEffect(
     Session.defaultLayer,
     Truncate.defaultLayer,
     Provider.defaultLayer,
-    ToolRegistry.defaultLayer,
+    ToolRegistry.defaultLayer.pipe(Layer.provide(JournalMemory)),
     Database.defaultLayer,
   ),
 )

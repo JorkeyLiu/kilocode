@@ -8,9 +8,10 @@ import { ModelV2 } from "@opencode-ai/core/model"
 import { ToolRegistry } from "../../src/tool/registry"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 
 const node = CrossSpawnSpawner.defaultLayer
-const it = testEffect(Layer.mergeAll(Agent.defaultLayer, ToolRegistry.defaultLayer, node))
+const it = testEffect(Layer.mergeAll(Agent.defaultLayer, ToolRegistry.defaultLayer.pipe(Layer.provide(JournalMemory)), node))
 
 afterEach(async () => {
   await disposeAllInstances()

@@ -24,6 +24,7 @@ import { Session } from "../../src/session/session"
 import { SessionPrompt } from "../../src/session/prompt"
 import { disposeAllInstances, TestInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import { AccountTest } from "../fake/account"
 import { AuthTest } from "../fake/auth"
 import { NpmTest } from "../fake/npm"
@@ -47,7 +48,7 @@ const noopBootstrapLayer = Layer.succeed(InstanceBootstrap.Service, InstanceBoot
 const workspaceLayer = Workspace.layer.pipe(
   Layer.provide(Auth.defaultLayer),
   Layer.provide(Session.defaultLayer),
-  Layer.provide(SessionPrompt.defaultLayer),
+  Layer.provide(SessionPrompt.defaultLayer.pipe(Layer.provide(JournalMemory))),
   Layer.provide(Project.defaultLayer),
   Layer.provide(Vcs.defaultLayer),
   Layer.provide(FetchHttpClient.layer),
@@ -57,7 +58,7 @@ const workspaceLayer = Workspace.layer.pipe(
   Layer.provide(InstanceStore.defaultLayer.pipe(Layer.provide(noopBootstrapLayer))),
   Layer.provide(RuntimeFlags.layer({ experimentalWorkspaces: true })),
 )
-const it = testEffect(Layer.mergeAll(pluginLayer, workspaceLayer, CrossSpawnSpawner.defaultLayer))
+const it = testEffect(Layer.mergeAll(JournalMemory, pluginLayer, workspaceLayer, CrossSpawnSpawner.defaultLayer))
 
 afterEach(async () => {
   await disposeAllInstances()

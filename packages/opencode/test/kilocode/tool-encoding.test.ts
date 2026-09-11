@@ -27,6 +27,7 @@ import { WriteTool } from "../../src/tool/write"
 import * as EncodedIO from "../../src/kilocode/tool/encoded-io"
 import { disposeAllInstances, provideTmpdirInstance } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
+import { JournalMemory, ensureJournalSession } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 
 const ctx = {
   sessionID: SessionID.make("ses_test-encoding"),
@@ -43,8 +44,10 @@ afterEach(async () => {
   await disposeAllInstances()
 })
 
+let seq = 0 // kilocode_change - unique call per run keeps journal keys distinct
+
 const it = testEffect(
-  Layer.mergeAll(
+  Layer.mergeAll(JournalMemory,
     Agent.defaultLayer,
     FSUtil.defaultLayer,
     CrossSpawnSpawner.defaultLayer,
@@ -66,23 +69,29 @@ const runRead = (args: Tool.InferParameters<typeof ReadTool>, next: Tool.Context
 
 const runWrite = (args: Tool.InferParameters<typeof WriteTool>) =>
   Effect.gen(function* () {
+    const fresh = { ...ctx, callID: `${ctx.callID || "call"}-${(seq += 1)}` }
+    yield* ensureJournalSession(fresh.sessionID as string)
     const info = yield* WriteTool
     const tool = yield* info.init()
-    return yield* tool.execute(args, ctx)
+    return yield* tool.execute(args, fresh)
   })
 
 const runEdit = (args: Tool.InferParameters<typeof EditTool>) =>
   Effect.gen(function* () {
+    const fresh = { ...ctx, callID: `${ctx.callID || "call"}-${(seq += 1)}` }
+    yield* ensureJournalSession(fresh.sessionID as string)
     const info = yield* EditTool
     const tool = yield* info.init()
-    return yield* tool.execute(args, ctx)
+    return yield* tool.execute(args, fresh)
   })
 
 const runPatch = (args: Tool.InferParameters<typeof ApplyPatchTool>) =>
   Effect.gen(function* () {
+    const fresh = { ...ctx, callID: `${ctx.callID || "call"}-${(seq += 1)}` }
+    yield* ensureJournalSession(fresh.sessionID as string)
     const info = yield* ApplyPatchTool
     const tool = yield* info.init()
-    return yield* tool.execute(args, ctx)
+    return yield* tool.execute(args, fresh)
   })
 
 // FileTime was removed upstream; edit/write no longer require a prior read.

@@ -98,6 +98,7 @@ import type { Provider } from "@/provider/provider"
 import { provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
 import { markProjectConfigReady } from "../fixture/plugin"
 import { pollWithTimeout, testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import { TestLLMServer } from "../lib/llm-server"
 import * as Ownership from "@/retention/ownership"
 
@@ -183,7 +184,7 @@ const lsp = Layer.succeed(
   }),
 )
 
-const status = Layer.mergeAll(
+const status = Layer.mergeAll(JournalMemory,
     Ownership.layer,
 SessionStatus.defaultLayer, Bus.layer)
 const runLayer = SessionRunState.layer.pipe(Layer.provide(status))

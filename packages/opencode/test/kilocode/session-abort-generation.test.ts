@@ -54,6 +54,7 @@ import { Snapshot } from "@/snapshot"
 import { Storage } from "@/storage/storage"
 import { provideTmpdirServer, testInstanceStoreLayer } from "../fixture/fixture"
 import { pollWithTimeout, testEffect } from "../lib/effect"
+import { JournalMemory } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import { reply, TestLLMServer } from "../lib/llm-server"
 import * as Log from "@opencode-ai/core/util/log"
 import { Auth } from "@/auth"
@@ -90,7 +91,7 @@ const lsp = Layer.succeed(
   }),
 )
 
-const status = Layer.mergeAll(Ownership.layer, SessionStatus.defaultLayer, Bus.layer)
+const status = Layer.mergeAll(JournalMemory, Ownership.layer, SessionStatus.defaultLayer, Bus.layer)
 const runLayer = SessionRunState.layer.pipe(Layer.provide(status))
 const infra = Layer.mergeAll(NodeFileSystem.layer, CrossSpawnSpawner.defaultLayer)
 const flags = RuntimeFlags.layer({ experimentalBackgroundSubagents: true })

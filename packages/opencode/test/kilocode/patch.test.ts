@@ -7,6 +7,7 @@
 // exercised with the upstream patch parser.
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test"
+import { JournalMemory, ensureJournalSession } from "../fixture/journal" // kilocode_change - file tools require canonical journal
 import fs from "fs/promises"
 import path from "path"
 import { tmpdir } from "os"
@@ -24,7 +25,9 @@ import { Truncate } from "../../src/tool/truncate"
 import { provideInstance, testInstanceStoreLayer } from "../fixture/fixture"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 
-const layer = Layer.mergeAll(
+let seq = 0 // kilocode_change - unique call per run keeps journal keys distinct
+
+const layer = Layer.mergeAll(JournalMemory,
   Agent.defaultLayer,
   FSUtil.defaultLayer,
   Bus.layer,
@@ -35,9 +38,11 @@ const layer = Layer.mergeAll(
   EventV2Bridge.defaultLayer,
 )
 
+let callSeq = 0
 const apply = (dir: string, patchText: string) =>
   Effect.runPromise(
     Effect.gen(function* () {
+      yield* ensureJournalSession("ses_patch")
       const info = yield* ApplyPatchTool
       const tool = yield* Tool.init(info)
       yield* tool.execute(
@@ -45,7 +50,7 @@ const apply = (dir: string, patchText: string) =>
         {
           sessionID: SessionID.make("ses_patch"),
           messageID: MessageID.make("msg_patch"),
-          callID: "call_patch",
+          callID: `call_patch-${(callSeq += 1)}`,
           agent: "code",
           abort: AbortSignal.any([]),
           messages: [],
