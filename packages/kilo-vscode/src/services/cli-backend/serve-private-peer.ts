@@ -109,6 +109,15 @@ import {
   validateQuestionRejectResult,
   validateQuestionTerminalFailure,
 } from "./serve-private-question-contract"
+import {
+  canonicalPromptOpId,
+  makePromptAmbiguous,
+  normalizePrivatePromptWire,
+  PrivatePromptValidationError,
+  validatePromptContractRequest,
+  validatePromptResult,
+} from "./serve-private-prompt-contract"
+import type { PromptContractRequest, PromptResult, PrivatePromptWireOutcome } from "./serve-private-prompt-contract"
 import type {
   QuestionAmbiguous,
   QuestionContractRequest,
@@ -2730,6 +2739,12 @@ export class ServePrivatePeer {
         const sess = c.session as Record<string, unknown>
         if (sess.delete) return true
       }
+      if (cap === "session/prompt" && c["session/prompt"] === true) return true
+      if (cap === "session/prompt" && Array.isArray(c.session) && (c.session as unknown[]).includes("prompt")) return true
+      if (cap === "session/prompt" && typeof c.session === "object" && c.session !== null) {
+        const sess = c.session as Record<string, unknown>
+        if (sess.prompt) return true
+      }
       if (cap === "session/abort" && c["session/abort"] === true) return true
       if (cap === "session/abort" && Array.isArray(c.session) && (c.session as unknown[]).includes("abort")) return true
       if (cap === "session/abort" && typeof c.session === "object" && c.session !== null) {
@@ -2932,6 +2947,43 @@ export class ServePrivatePeer {
       } catch (e: unknown) {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeDeleteAmbiguous(req, true)
         return makeDeleteAmbiguous(req, true)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privatePrompt(req: PromptContractRequest): Promise<PromptResult> {
+    const handle = this.privatePromptWithHandle(req)
+    return handle.promise
+  }
+
+  privatePromptWithHandle(req: PromptContractRequest): {
+    id: number
+    promise: Promise<PromptResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validatePromptContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("session/prompt")) {
+      throw new Error("Private peer missing session/prompt capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("session/prompt", req)
+    const promise = (async (): Promise<PromptResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        if (this.isStaleHandle(peerAtCall, currentEpoch)) return makePromptAmbiguous(req, true)
+        const out = normalizePrivatePromptWire(raw, req)
+        if (out.kind === "invalid") return makePromptAmbiguous(req, true)
+        return out.result
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makePromptAmbiguous(req, true)
+        return makePromptAmbiguous(req, true)
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)

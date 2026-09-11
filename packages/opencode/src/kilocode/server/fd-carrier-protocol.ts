@@ -26,6 +26,7 @@ export const FD_CAPABILITIES = [
   "config/warnings",
   "project/current",
   "find/files",
+  "session/prompt",
   "config/convergence/acquire",
   "config/convergence/resolve",
 ] as const

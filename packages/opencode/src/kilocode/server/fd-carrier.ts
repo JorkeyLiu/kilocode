@@ -7,6 +7,7 @@ import { SessionUpdateDispatchService, validatePrivateRequest } from "@/kilocode
 import { SessionForkDispatchService } from "@/kilocode/session/session-fork-dispatch"
 import { SessionCreateDispatchService } from "@/kilocode/session/session-create-dispatch"
 import { SessionDeleteDispatchService } from "@/kilocode/session/session-delete-dispatch"
+import { SessionPromptDispatchService, validateRequest as validatePromptRequest } from "@/kilocode/session/session-prompt-dispatch"
 import {
   abortSession as abortSessionPrivate,
   validateAbortRequest as validateAbortEnvelope,
@@ -398,6 +399,8 @@ export const FD_PROJECT_CURRENT_VERSION = 1 as const
 export const FD_PROJECT_CURRENT_OP = "project/current" as const
 export const FD_FIND_FILES_VERSION = 1 as const
 export const FD_FIND_FILES_OP = "find/files" as const
+export const FD_PROMPT_VERSION = 1 as const
+export const FD_PROMPT_OP = "session/prompt" as const
 
 export interface FdPathRequest {
   v: typeof FD_PATH_VERSION
@@ -1736,6 +1739,28 @@ export function createFdCarrier(
             const fn = (svc as unknown as { dispatch?: (p: unknown) => Effect.Effect<unknown> }).dispatch
             if (!fn) {
               const err = new Error("session/delete private authoritative unavailable") as Error & { code: number }
+              err.code = ErrorCode.MethodNotFound
+              throw err
+            }
+            return yield* (fn as (p: unknown) => Effect.Effect<unknown>)(params)
+          }),
+        )
+        return result
+      }
+      if (method === "session/prompt" || method === FD_PROMPT_OP) {
+        try {
+          validatePromptRequest(params)
+        } catch (e) {
+          const err = new Error(e instanceof Error ? e.message : String(e)) as Error & { code: number }
+          err.code = ErrorCode.InvalidParams
+          throw err
+        }
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const svc = yield* SessionPromptDispatchService
+            const fn = (svc as unknown as { dispatch?: (p: unknown) => Effect.Effect<unknown> }).dispatch
+            if (!fn) {
+              const err = new Error("session/prompt private authoritative unavailable") as Error & { code: number }
               err.code = ErrorCode.MethodNotFound
               throw err
             }

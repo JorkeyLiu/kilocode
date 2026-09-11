@@ -1070,16 +1070,17 @@ export class AgentManagerProvider implements Disposable {
           this.panel?.sessions.registerSession(session as unknown as Session)
           const body = task.prompt?.trim()
           if (body) {
-            await client.session.promptAsync(
-              {
-                sessionID: sid,
-                directory: root,
-                parts: [{ type: "text", text: body }],
-                model: task.model,
-                variant: task.variant,
-              },
-              { throwOnError: true },
-            )
+            const { promptSessionPrivateFirst } = await import("../kilo-provider/session-prompt")
+            const res = (await promptSessionPrivateFirst({
+              client,
+              connection: this.connectionService,
+              sessionId: sid,
+              directory: root,
+              parts: [{ type: "text", text: body }],
+              model: task.model,
+              variant: task.variant,
+            })) as unknown as { error?: unknown }
+            if (res?.error) throw res.error
           }
           this.host.capture("Agent Manager Session Started", {
             source: PLATFORM,

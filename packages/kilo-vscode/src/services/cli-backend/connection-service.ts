@@ -40,6 +40,7 @@ import {
   type ServePrivateStatusResult,
   compareUpdateParity,
 } from "./serve-private-peer"
+import type { PromptContractRequest, PromptResult } from "./serve-private-prompt-contract"
 import { DeferredSessionList, wrapSessionListOutcomeForOwner } from "./serve-private-session-list"
 import type {
   PrivateSessionListWireOutcome,
@@ -2021,6 +2022,82 @@ export class KiloConnectionService {
 
   async privateDelete(req: ServePrivateDeleteRequest): Promise<ServePrivateDeleteResult> {
     const handle = this.privateDeleteWithHandle(req)
+    return handle.promise
+  }
+
+  privatePromptWithHandle(req: PromptContractRequest): {
+    id: number
+    promise: Promise<PromptResult>
+    cancel: (msg?: string) => boolean
+  } {
+    if (!this.privatePeer || !this.privateAvailable || !this.privatePeer.isAvailable()) {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.privatePeer.hasCapability("session/prompt")) {
+      throw new Error("Private peer missing session/prompt capability")
+    }
+    const epochAtCall = this.privateEpoch
+    const peerAtCall = this.privatePeer
+    const handle = (peerAtCall as unknown as { privatePromptWithHandle: (r: PromptContractRequest) => { id: number; promise: Promise<PromptResult>; cancel: (msg?: string) => boolean } }).privatePromptWithHandle(req)
+    const promise = handle.promise.then((result) => {
+      if (epochAtCall !== null && this.privateEpoch !== epochAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/prompt",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as PromptResult
+      }
+      if (this.privatePeer !== peerAtCall) {
+        return {
+          v: 1,
+          requestId: req.requestId,
+          opId: req.opId,
+          op: "session/prompt",
+          idempotencyKey: req.idempotencyKey,
+          status: "ambiguous",
+          outcome: { type: "ambiguous", time: Date.now() },
+          accepted: false,
+          transportUnknown: true,
+        } as unknown as PromptResult
+      }
+      return result
+    })
+    const cancel = (msg = "private parity timeout"): boolean => {
+      const isCurrent = this.privatePeer === peerAtCall && this.privateEpoch === epochAtCall
+      if (!isCurrent) {
+        try {
+          peerAtCall.invalidateOnObserverTimeout(`stale observer timeout opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      let ok = false
+      try {
+        ok = peerAtCall.tryCancelPending(handle.id as unknown as number, msg)
+      } catch {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout cancel throw opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      if (!ok) {
+        try {
+          this.invalidatePrivatePeerOnObserverTimeout(`observer timeout exact cancel miss opId=${req.opId}`)
+        } catch {}
+        return false
+      }
+      return true
+    }
+    return { id: handle.id, promise, cancel }
+  }
+
+  async privatePrompt(req: PromptContractRequest): Promise<PromptResult> {
+    const handle = this.privatePromptWithHandle(req)
     return handle.promise
   }
 

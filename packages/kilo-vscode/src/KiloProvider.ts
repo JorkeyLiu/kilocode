@@ -61,6 +61,7 @@ import { slimInfo, slimPart, slimParts } from "./kilo-provider/slim-metadata"
 import { parseMessageFiles, type MessageFile } from "./kilo-provider/message-files"
 import { createSessionPrivateFirst } from "./kilo-provider/session-create"
 import { renameSessionPrivateFirst } from "./kilo-provider/session-update"
+import { ensurePromptMessageId, sendPromptOnce } from "./kilo-provider/session-prompt"
 import { observeSessionGetParityDetached } from "./kilo-provider/session-get-parity"
 import { observeSessionListParityDetached } from "./kilo-provider/session-list-parity"
 import { parseSessionTitle } from "./shared/session-title"
@@ -4838,6 +4839,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     context?: string,
     contextDirectory?: string,
   ): Promise<void> {
+    // Prompt identity is fixed once per logical send so private + SDK fallback
+    // share one durable messageID/opId; the prompt path never retries.
+    const stableMessageID = ensurePromptMessageId(messageID)
     if (!this.client) {
       this.postMessage({
         type: "sendMessageFailed",
@@ -4845,13 +4849,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         text,
         sessionID,
         draftID,
-        messageID,
+        messageID: stableMessageID,
         files,
         review,
       })
       return
     }
-
     let resolved: { sid: string; dir: string } | undefined
     try {
       const sandbox = this.sandboxTransitions.get(
@@ -4879,36 +4882,36 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       }
 
       // P0 perf: record the submit after session resolution so new-session
-      // first turns carry the resolved session id; `messageID` (the user
+      // first turns carry the resolved session id; `stableMessageID` (the user
       // message id) is the join key to `model.firstEvent`'s `parentID`.
       p0Stage("prompt.submit", {
         sessionID: sid,
-        messageID,
+        messageID: stableMessageID,
         draftID,
         ...(dir ? { dir } : {}),
       })
 
-      if (messageID) {
-        this.connectionService.recordMessageSessionId(messageID, sid)
-      }
+      this.connectionService.recordMessageSessionId(stableMessageID, sid)
 
       await this.checkpoints.get(sid)
-      await runWithMessageConfirmation(this.confirmations, messageID, "KiloProvider: Message request", () =>
-        this.withRetry(
-          () =>
-            this.client!.session.promptAsync({
-              sessionID: sid,
-              directory: dir,
-              messageID,
-              parts,
-              model: providerID && modelID ? { providerID, modelID } : undefined,
-              agent,
-              variant,
-              editorContext,
-              snapshotInitialization: this.opts.snapshotInitialization,
-            }),
-          sid,
-          messageID,
+      // Prompt is single-attempt: at most one private attempt plus at most one
+      // same-identity SDK fallback, never outer withRetry re-entry.
+      await runWithMessageConfirmation(this.confirmations, stableMessageID, "KiloProvider: Message request", () =>
+        sendPromptOnce(
+          {
+            client: this.client!,
+            connection: this.connectionService,
+            sessionId: sid,
+            directory: dir,
+            messageID: stableMessageID,
+            parts: parts as unknown as Array<Record<string, unknown>>,
+            model: providerID && modelID ? { providerID, modelID } : undefined,
+            agent,
+            variant,
+            editorContext: editorContext as unknown as Record<string, unknown> | undefined,
+            snapshotInitialization: this.opts.snapshotInitialization,
+          },
+          () => this.postMessage({ type: "sessionStatus", sessionID: sid, status: "idle" }),
         ),
       )
     } catch (error) {
@@ -4919,7 +4922,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         text,
         sessionID: resolved?.sid ?? sessionID,
         draftID,
-        messageID,
+        messageID: stableMessageID,
         files,
         review,
       })

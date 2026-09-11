@@ -72,6 +72,7 @@ import * as SessionUpdateDispatch from "@/kilocode/session/session-update-dispat
 import * as SessionForkDispatch from "@/kilocode/session/session-fork-dispatch" // kilocode_change - P4.4-G3-B3 fork
 import * as SessionCreateDispatch from "@/kilocode/session/session-create-dispatch" // kilocode_change - P4.4-G3-B4 create
 import * as SessionDeleteDispatch from "@/kilocode/session/session-delete-dispatch" // kilocode_change - P4.4-G3-B5 delete
+import * as SessionPromptDispatch from "@/kilocode/session/session-prompt-dispatch" // kilocode_change - private-first prompt accept
 import * as ProviderExecuteBroker from "@/kilocode/server/provider-execute-broker" // kilocode_change - provider execute broker
 import * as ProviderHttpExecuteBroker from "@/kilocode/server/provider-http-execute-broker" // kilocode_change - provider http execute broker
 import * as CanonicalProviderExecute from "@/kilocode/provider/canonical-provider-execute" // kilocode_change - canonical provider execution
@@ -195,6 +196,7 @@ const buildAppLayer = (provider: ProviderLayer = Provider.defaultLayer) => {
   const sessionFork = SessionForkDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
   const sessionCreate = SessionCreateDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
   const sessionDelete = SessionDeleteDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
+  const sessionPrompt = SessionPromptDispatch.layer.pipe(Layer.provideMerge(lifecycle), Layer.provideMerge(base))
   const providerExecute = ProviderExecuteBroker.layer.pipe(Layer.provideMerge(base))
   const providerHttpExecute = ProviderHttpExecuteBroker.layer.pipe(Layer.provideMerge(base))
   const canonicalProviderExecute = CanonicalProviderExecute.layer.pipe(
@@ -209,6 +211,7 @@ const buildAppLayer = (provider: ProviderLayer = Provider.defaultLayer) => {
     sessionFork,
     sessionCreate,
     sessionDelete,
+    sessionPrompt,
     providerExecute,
     providerHttpExecute,
     canonicalProviderExecute,
