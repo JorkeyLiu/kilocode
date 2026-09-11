@@ -9033,6 +9033,10 @@ export type SessionRevertErrors = {
    * SessionBusyError
    */
   409: SessionBusyError
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type SessionRevertError = SessionRevertErrors[keyof SessionRevertErrors]
@@ -9071,6 +9075,10 @@ export type SessionUnrevertErrors = {
    * SessionBusyError
    */
   409: SessionBusyError
+  /**
+   * InternalServerError
+   */
+  500: EffectHttpApiErrorInternalServerError
 }
 
 export type SessionUnrevertError = SessionUnrevertErrors[keyof SessionUnrevertErrors]

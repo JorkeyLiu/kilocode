@@ -51,7 +51,7 @@ function durable(snapshot: Snapshot.Interface) {
 
 const infra = Layer.mergeAll(AppProcess.defaultLayer, FSUtil.defaultLayer)
 
-function run<A>(dir: string, body: (snapshot: Snapshot.Interface) => Effect.Effect<A>) {
+function run<A>(dir: string, body: (snapshot: Snapshot.Interface) => Effect.Effect<A, any, never>) {
   return Effect.runPromise(
     Effect.gen(function* () {
       const snapshot = yield* Snapshot.Service

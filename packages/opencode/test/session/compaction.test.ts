@@ -311,6 +311,12 @@ const snap = Layer.succeed(
     revert: () => Effect.void,
     diff: () => Effect.succeed(""),
     diffFull: () => Effect.succeed([]),
+    exclusive: (fn) =>
+      fn({
+        track: () => Effect.succeed(undefined),
+        restore: () => Effect.void as Effect.Effect<void, never>,
+        revert: () => Effect.void as Effect.Effect<void, never>,
+      }),
   }),
 )
 // kilocode_change end

@@ -1,5 +1,6 @@
-import { Effect, Layer, Context, Schema } from "effect"
+import { Effect, Exit, Layer, Context, Schema } from "effect"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
+import { KeyedMutex } from "@opencode-ai/core/effect/keyed-mutex"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { Snapshot } from "../snapshot"
 import { Storage } from "@/storage/storage"
@@ -19,9 +20,14 @@ export const RevertInput = Schema.Struct({
 })
 export type RevertInput = Schema.Schema.Type<typeof RevertInput>
 
+// kilocode_change start - Snapshot v2 correctness base: typed fail-closed snapshot failures propagate;
+// Busy stays 409, path validation maps to 400, git failures map to 500 at the HTTP boundary.
+export type Failure = Session.BusyError | Snapshot.RestoreError | Snapshot.RevertError | Snapshot.PathError
+// kilocode_change end
+
 export interface Interface {
-  readonly revert: (input: RevertInput) => Effect.Effect<Session.Info, Session.BusyError>
-  readonly unrevert: (input: { sessionID: SessionID }) => Effect.Effect<Session.Info, Session.BusyError>
+  readonly revert: (input: RevertInput) => Effect.Effect<Session.Info, Failure>
+  readonly unrevert: (input: { sessionID: SessionID }) => Effect.Effect<Session.Info, Failure>
   readonly cleanup: (session: Session.Info) => Effect.Effect<void>
 }
 
@@ -36,123 +42,192 @@ export const layer = Layer.effect(
     const events = yield* EventV2Bridge.Service
     const summary = yield* SessionSummary.Service
     const state = yield* SessionRunState.Service
+    // kilocode_change start - per-session serialization owned by this layer; entries drop when idle (no leak).
+    // File rollback window uses Snapshot.exclusive (worktree-keyed Semaphore + EffectFlock);
+    // this layer keeps only the per-session mutex for marker/message atomicity. Cleanup has no
+    // FS mutation and never takes the Snapshot exclusive.
+    const mutex = KeyedMutex.makeUnsafe<string>()
+    // kilocode_change end
 
     const revert = Effect.fn("SessionRevert.revert")(function* (input: RevertInput) {
-      yield* state.assertNotBusy(input.sessionID)
-      const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
-      let lastUser: SessionV1.User | undefined
-      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      return yield* mutex.withLock(input.sessionID)(
+        Effect.gen(function* () {
+          yield* state.assertNotBusy(input.sessionID)
+          const all = yield* sessions.messages({ sessionID: input.sessionID }).pipe(Effect.orDie)
+          let lastUser: SessionV1.User | undefined
+          const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
 
-      let rev: Session.Info["revert"]
-      const patches: Snapshot.Patch[] = []
-      for (const msg of all) {
-        if (msg.info.role === "user") lastUser = msg.info
-        const remaining = []
-        for (const part of msg.parts) {
-          if (rev) {
-            if (part.type === "patch") patches.push(part)
-            continue
-          }
+          let rev: Session.Info["revert"]
+          const patches: Snapshot.Patch[] = []
+          for (const msg of all) {
+            if (msg.info.role === "user") lastUser = msg.info
+            const remaining = []
+            for (const part of msg.parts) {
+              if (rev) {
+                if (part.type === "patch") patches.push(part)
+                continue
+              }
 
-          if (!rev) {
-            if ((msg.info.id === input.messageID && !input.partID) || part.id === input.partID) {
-              const partID = remaining.some((item) => ["text", "tool"].includes(item.type)) ? input.partID : undefined
-              rev = {
-                messageID: !partID && lastUser ? lastUser.id : msg.info.id,
-                partID,
+              if (!rev) {
+                if ((msg.info.id === input.messageID && !input.partID) || part.id === input.partID) {
+                  const partID = remaining.some((item) => ["text", "tool"].includes(item.type))
+                    ? input.partID
+                    : undefined
+                  rev = {
+                    messageID: !partID && lastUser ? lastUser.id : msg.info.id,
+                    partID,
+                  }
+                }
+                remaining.push(part)
               }
             }
-            remaining.push(part)
           }
-        }
-      }
 
-      if (!rev) return session
+          if (!rev) return session
 
-      rev.snapshot = session.revert?.snapshot ?? (yield* snap.track())
-      if (session.revert?.snapshot) yield* snap.restore(session.revert.snapshot)
+          const needsRestore = !!session.revert?.snapshot
+          const needsFiles = patches.length > 0
+          const finish = Effect.fn("SessionRevert.finishRevert")(function* (hash: string | undefined) {
+            rev.snapshot = hash
+            // kilocode_change start - diff is display-derived: best-effort, never gates file success.
+            const range = all.filter((msg) => msg.info.id >= rev.messageID)
+            const diffs = yield* summary.computeDiff({ messages: range }).pipe(Effect.orElseSucceed(() => []))
+            if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot).pipe(Effect.orElseSucceed(() => ""))
+            yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
+            yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs }).pipe(Effect.ignore)
+            // kilocode_change end
+            const summaryDiffs: Snapshot.SummaryFileDiff[] = diffs.map((d) => ({
+              file: d.file,
+              additions: d.additions,
+              deletions: d.deletions,
+              status: d.status,
+            }))
+            yield* sessions.setRevert({
+              sessionID: input.sessionID,
+              revert: rev,
+              summary: {
+                additions: diffs.reduce((sum, x) => sum + x.additions, 0),
+                deletions: diffs.reduce((sum, x) => sum + x.deletions, 0),
+                files: diffs.length,
+                diffs: summaryDiffs,
+              },
+            })
+            return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+          })
 
-      // kilocode_change start - compute diffs BEFORE reverting files so the diff
-      // reflects changes being undone (files on disk still have AI modifications)
-      const range = all.filter((msg) => msg.info.id >= rev.messageID)
-      const diffs = yield* summary.computeDiff({ messages: range })
-      // kilocode_change end
-
-      yield* snap.revert(patches)
-      if (rev.snapshot) rev.diff = yield* snap.diff(rev.snapshot)
-      yield* storage.write(["session_diff", input.sessionID], diffs).pipe(Effect.ignore)
-      yield* events.publish(Session.Event.Diff, { sessionID: input.sessionID, diff: diffs })
-      // kilocode_change start
-      const summaryDiffs: Snapshot.SummaryFileDiff[] = diffs.map((d) => ({
-        file: d.file,
-        additions: d.additions,
-        deletions: d.deletions,
-        status: d.status,
-      }))
-      // kilocode_change end
-      yield* sessions.setRevert({
-        sessionID: input.sessionID,
-        revert: rev,
-        summary: {
-          additions: diffs.reduce((sum, x) => sum + x.additions, 0),
-          deletions: diffs.reduce((sum, x) => sum + x.deletions, 0),
-          files: diffs.length,
-          diffs: summaryDiffs, // kilocode_change
-        },
-      })
-      return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+          if (!needsRestore && !needsFiles) return yield* finish(undefined)
+          // kilocode_change start - file window holds one Snapshot exclusive across
+          // track -> restore/revert -> optional rollback; raw only, never public locked methods.
+          // Marker/display stay outside exclusive but inside per-session lock; FS failure writes no marker.
+          const hash = yield* snap.exclusive((raw) =>
+            Effect.gen(function* () {
+              const rollback = yield* raw.track()
+              const current = session.revert?.snapshot ?? rollback ?? (yield* raw.track())
+              const back = Effect.fn("SessionRevert.back")(function* (id: string | undefined) {
+                if (!id) return
+                const out = yield* Effect.exit(raw.restore(id))
+                if (Exit.isFailure(out)) log.warn("revert rollback restore failed", { hash: id })
+              })
+              if (needsRestore) {
+                const out = yield* Effect.exit(raw.restore(session.revert!.snapshot!))
+                if (Exit.isFailure(out)) {
+                  yield* back(rollback)
+                  return yield* Effect.failCause(out.cause)
+                }
+              }
+              if (needsFiles) {
+                const out = yield* Effect.exit(raw.revert(patches))
+                if (Exit.isFailure(out)) {
+                  yield* back(rollback)
+                  return yield* Effect.failCause(out.cause)
+                }
+              }
+              return current
+            }),
+          )
+          return yield* finish(hash)
+        }),
+      )
     })
 
     const unrevert = Effect.fn("SessionRevert.unrevert")(function* (input: { sessionID: SessionID }) {
-      log.info("unreverting", input)
-      yield* state.assertNotBusy(input.sessionID)
-      const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
-      if (!session.revert) return session
-      if (session.revert.snapshot) yield* snap.restore(session.revert.snapshot)
-      yield* sessions.clearRevert(input.sessionID)
-      return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+      return yield* mutex.withLock(input.sessionID)(
+        Effect.gen(function* () {
+          log.info("unreverting", input)
+          yield* state.assertNotBusy(input.sessionID)
+          const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+          if (!session.revert) return session
+          // kilocode_change start - message-only (no hash) clears marker without FS work.
+          if (!session.revert.snapshot) {
+            yield* sessions.clearRevert(input.sessionID)
+            return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+          }
+          // kilocode_change end
+          // kilocode_change start - unrevert file window is also worktree exclusive; raw only.
+          const target = session.revert.snapshot
+          yield* snap.exclusive((raw) =>
+            Effect.gen(function* () {
+              const rollback = yield* raw.track()
+              const out = yield* Effect.exit(raw.restore(target))
+              if (Exit.isFailure(out)) {
+                if (rollback) {
+                  const back = yield* Effect.exit(raw.restore(rollback))
+                  if (Exit.isFailure(back)) log.warn("revert rollback restore failed", { hash: rollback })
+                }
+                return yield* Effect.failCause(out.cause)
+              }
+            }),
+          )
+          yield* sessions.clearRevert(input.sessionID)
+          return yield* sessions.get(input.sessionID).pipe(Effect.orDie)
+        }),
+      )
     })
 
     const cleanup = Effect.fn("SessionRevert.cleanup")(function* (session: Session.Info) {
-      if (!session.revert) return
-      const sessionID = session.id
-      const msgs = yield* sessions.messages({ sessionID }).pipe(Effect.orDie)
-      const messageID = session.revert.messageID
-      const remove = [] as SessionV1.WithParts[]
-      let target: SessionV1.WithParts | undefined
-      for (const msg of msgs) {
-        if (msg.info.id < messageID) continue
-        if (msg.info.id > messageID) {
-          remove.push(msg)
-          continue
-        }
-        if (session.revert.partID) {
-          target = msg
-          continue
-        }
-        remove.push(msg)
-      }
-      for (const msg of remove) {
-        yield* sessions.removeMessage({ sessionID, messageID: msg.info.id })
-      }
-      if (session.revert.partID && target) {
-        const partID = session.revert.partID
-        const idx = target.parts.findIndex((part) => part.id === partID)
-        if (idx >= 0) {
-          const removeParts = target.parts.slice(idx)
-          target.parts = target.parts.slice(0, idx)
-          for (const part of removeParts) {
-            yield* sessions.removePart({ sessionID, messageID: target.info.id, partID: part.id })
+      return yield* mutex.withLock(session.id)(
+        Effect.gen(function* () {
+          if (!session.revert) return
+          const sessionID = session.id
+          const msgs = yield* sessions.messages({ sessionID }).pipe(Effect.orDie)
+          const messageID = session.revert.messageID
+          const remove = [] as SessionV1.WithParts[]
+          let target: SessionV1.WithParts | undefined
+          for (const msg of msgs) {
+            if (msg.info.id < messageID) continue
+            if (msg.info.id > messageID) {
+              remove.push(msg)
+              continue
+            }
+            if (session.revert.partID) {
+              target = msg
+              continue
+            }
+            remove.push(msg)
           }
-          // kilocode_change start - clear a reverted provider error from the retained assistant message
-          if (target.info.role === "assistant" && target.info.error) {
-            delete target.info.error
-            yield* sessions.updateMessage(target.info)
+          for (const msg of remove) {
+            yield* sessions.removeMessage({ sessionID, messageID: msg.info.id })
           }
-          // kilocode_change end
-        }
-      }
-      yield* sessions.clearRevert(sessionID)
+          if (session.revert.partID && target) {
+            const partID = session.revert.partID
+            const idx = target.parts.findIndex((part) => part.id === partID)
+            if (idx >= 0) {
+              const removeParts = target.parts.slice(idx)
+              target.parts = target.parts.slice(0, idx)
+              for (const part of removeParts) {
+                yield* sessions.removePart({ sessionID, messageID: target.info.id, partID: part.id })
+              }
+              // kilocode_change start - clear a reverted provider error from the retained assistant message
+              if (target.info.role === "assistant" && target.info.error) {
+                delete target.info.error
+                yield* sessions.updateMessage(target.info)
+              }
+              // kilocode_change end
+            }
+          }
+          yield* sessions.clearRevert(sessionID)
+        }),
+      )
     })
 
     return Service.of({ revert, unrevert, cleanup })

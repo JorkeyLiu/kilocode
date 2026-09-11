@@ -556,6 +556,17 @@ Slow initial tracking has guarded behavior:
 | Disable choice | Writes `"snapshot": false` to project config without disposing active turn |
 | Dismissed or untargeted timeout | Interrupts or skips track and suppresses repeat prompt for active service scope |
 
+Fail-closed restore/revert correctness base (no journal, no transport, no performance claim):
+
+| Aspect | Behavior |
+|---|---|
+| Typed restore | `read-tree`/`checkout-index` non-zero fails with `SnapshotRestoreError` carrying snapshot/op/exit/stderr/cwd, never log-and-succeed |
+| Typed file revert | Worktree-escape paths fail with `SnapshotPathError`; tracked-file checkout failure fails with `SnapshotRevertError`; snapshot-absent delete uses fail-closed remove (ENOENT is success); batch failures aggregate all failed files into one `SnapshotRevertError` |
+| Untouched surface | `track`/`patch`/`diff`/`diffFull` keep soft-fallback; `diff` stays display-derived and never gates file success |
+| Marker protection | `revert`/`unrevert` set/clear the revert marker only after the related `restore`/`revert` succeeds; rollback hash is captured before FS mutation and best-effort restored on partial failure with the original error preserved; hash-less message-only reverts keep working without filesystem work |
+| Serialization | File rollback window (`track` rollback capture → `restore`/`revert` → optional rollback) is guarded by one worktree-keyed cross-process `Snapshot.exclusive` (`Semaphore` + `EffectFlock(snapshot:<gitdir>)`); per-session mutex guards marker/cleanup atomicity only. Ordinary generation file writes take no exclusive; journal/CAS gaps stay open |
+| HTTP mapping | Snapshot git failures map to `InternalServerError` (500, never conflict), path validation to `BadRequest` (400), busy stays `SessionBusyError` (409) |
+
 ## Active runner epoch — single owner
 
 One persistent `Runner` per session for the lifetime of the directory `InstanceState`. `Runner` alone owns epoch identity, admission, cancellation state, start barrier, completion, and busy/idle ordering. Private `session/abort` returns only after this owner converges (cancelTree over `SessionRunState` awaited); the HTTP `POST /session/:sessionID/abort` boolean wire is unchanged.

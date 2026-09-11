@@ -411,7 +411,7 @@ export const SessionApi = HttpApi.make("session")
           query: WorkspaceRoutingQuery,
           payload: RevertPayload,
           success: described(Session.Info, "Updated session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError, HttpApiError.InternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.revert",
@@ -424,7 +424,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Updated session"),
-          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError, HttpApiError.InternalServerError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.unrevert",

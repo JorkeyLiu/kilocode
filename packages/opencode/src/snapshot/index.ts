@@ -1,4 +1,4 @@
-import { Cause, Duration, Effect, Layer, Schedule, Schema, Semaphore, Context } from "effect"
+import { Cause, Duration, Effect, Exit, Layer, Schedule, Schema, Semaphore, Context } from "effect"
 import { Struct } from "effect" // kilocode_change
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process"
 import { formatPatch, structuredPatch } from "diff"
@@ -68,7 +68,46 @@ interface GitResult {
 
 export const MAX_DIFF_SIZE = MAX_MESSAGE_PATCH_SIZE // kilocode_change - compatibility alias to shared core owner
 
+// kilocode_change start - Snapshot v2 correctness base: typed fail-closed errors for restore/file revert only.
+// track/patch/diff/diffFull keep existing soft-fallback; diff is display-derived, never a file-restore gate.
+export class RestoreError extends Schema.TaggedErrorClass<RestoreError>()("SnapshotRestoreError", {
+  snapshot: Schema.String,
+  op: Schema.Literals(["read-tree", "checkout-index"]),
+  exit: Schema.Number,
+  stderr: Schema.String,
+  cwd: Schema.String,
+}) {}
+export class RevertError extends Schema.TaggedErrorClass<RevertError>()("SnapshotRevertError", {
+  message: Schema.String,
+  files: Schema.Array(Schema.String),
+  hash: Schema.optional(Schema.String),
+  op: Schema.optional(Schema.String),
+  exit: Schema.optional(Schema.Number),
+  stderr: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+}) {}
+export class PathError extends Schema.TaggedErrorClass<PathError>()("SnapshotPathError", {
+  message: Schema.String,
+  file: Schema.String,
+  worktree: Schema.String,
+}) {}
+// kilocode_change end
+
 type State = Omit<Interface, "init">
+
+// kilocode_change start - narrow raw capability for the worktree-keyed exclusive window.
+// Only file-related track/restore/revert run inside exclusive; marker/summary/storage stay in SessionRevert.
+// Raw capability is valid only in the callback dynamic scope, must not be saved or escape; window allows only Snapshot file effects.
+export interface Exclusive {
+  readonly track: (opts?: {
+    sessionID?: SessionID
+    messageID?: MessageID
+    snapshotInitialization?: KiloSnapshotTrack.SnapshotInitialization
+  }) => Effect.Effect<string | undefined>
+  readonly restore: (snapshot: string) => Effect.Effect<void, RestoreError>
+  readonly revert: (patches: Patch[]) => Effect.Effect<void, RevertError | PathError>
+}
+// kilocode_change end
 
 export interface Interface {
   readonly init: () => Effect.Effect<void>
@@ -81,10 +120,15 @@ export interface Interface {
   }) => Effect.Effect<string | undefined>
   // kilocode_change end
   readonly patch: (hash: string) => Effect.Effect<Patch>
-  readonly restore: (snapshot: string) => Effect.Effect<void>
-  readonly revert: (patches: Patch[]) => Effect.Effect<void>
+  readonly restore: (snapshot: string) => Effect.Effect<void, RestoreError>
+  readonly revert: (patches: Patch[]) => Effect.Effect<void, RevertError | PathError>
   readonly diff: (hash: string) => Effect.Effect<string>
   readonly diffFull: (from: string, to: string) => Effect.Effect<FileDiff[]>
+  // kilocode_change start - single worktree-keyed exclusive critical section reusing
+  // Semaphore + EffectFlock(snapshot:<gitdir>); covers track/restore/revert/rollback as one window.
+  // Raw capability is valid only in the callback dynamic scope, must not be saved or escape; window allows only Snapshot file effects.
+  readonly exclusive: <A, E>(fn: (raw: Exclusive) => Effect.Effect<A, E>) => Effect.Effect<A, E>
+  // kilocode_change end
 }
 
 export class Service extends Context.Service<Service, Interface>()("@opencode/Snapshot") {}
@@ -213,9 +257,30 @@ export const layer: Layer.Layer<Service, never, Requirements> =
           const exists = (file: string) => fs.exists(file).pipe(Effect.orDie)
           const read = (file: string) => fs.readFileString(file).pipe(Effect.catch(() => Effect.succeed("")))
           const remove = (file: string) => fs.remove(file).pipe(Effect.catch(() => Effect.void))
+          // kilocode_change start - fail-closed remove: ENOENT (already gone) is success, other failures are typed.
+          const removeStrict = (file: string, hash: string) =>
+            Effect.gen(function* () {
+              const exit = yield* Effect.exit(fs.remove(file))
+              if (Exit.isSuccess(exit)) return
+              const gone = yield* fs.exists(file).pipe(Effect.orElseSucceed(() => false))
+              if (!gone) return
+              return yield* new RevertError({
+                message: `snapshot revert remove failed for ${file}`,
+                files: [file],
+                hash,
+                op: "remove",
+                cwd: state.worktree,
+              })
+            })
+          // kilocode_change end
           // kilocode_change start - serialize snapshot repositories across CLI and extension processes
-          const locked = <A, R>(fx: Effect.Effect<A, never, R>) =>
-            lock(state.gitdir).withPermits(1)(flock.withLock(fx, `snapshot:${state.gitdir}`).pipe(Effect.orDie))
+          const locked = <A, E, R>(fx: Effect.Effect<A, E, R>) =>
+            lock(state.gitdir).withPermits(1)(
+              flock.withLock(fx, `snapshot:${state.gitdir}`).pipe(
+                Effect.catchTag("LockTimeoutError", (cause) => Effect.die(cause)),
+                Effect.catchTag("LockCompromisedError", (cause) => Effect.die(cause)),
+              ),
+            )
 
           // kilocode_change end
 
@@ -353,10 +418,9 @@ export const layer: Layer.Layer<Service, never, Requirements> =
           })
 
           // kilocode_change start
-          const track = Effect.fnUntraced(function* (opts?: Parameters<Interface["track"]>[0]) {
+          const rawTrack = Effect.fnUntraced(function* (opts?: Parameters<Interface["track"]>[0]) {
             // kilocode_change end
-            return yield* locked(
-              Effect.gen(function* () {
+            return yield* Effect.gen(function* () {
                 if (!(yield* enabled())) return
                 const existed = yield* exists(state.gitdir)
                 const seeded: { value?: KiloSnapshotSeed.Output } = {} // kilocode_change
@@ -418,9 +482,13 @@ export const layer: Layer.Layer<Service, never, Requirements> =
                 // kilocode_change end
                 log.info("tracking", { hash, cwd: state.directory, git: state.gitdir })
                 return hash
-              }),
-            )
+              })
           })
+          // kilocode_change start - public wrappers retake the worktree lock once; exclusive callbacks use raw only.
+          const track = Effect.fnUntraced(function* (opts?: Parameters<Interface["track"]>[0]) {
+            return yield* locked(rawTrack(opts))
+          })
+          // kilocode_change end
 
           const patch = Effect.fnUntraced(function* (hash: string) {
             return yield* locked(
@@ -460,48 +528,72 @@ export const layer: Layer.Layer<Service, never, Requirements> =
             )
           })
 
-          const restore = Effect.fnUntraced(function* (snapshot: string) {
-            return yield* locked(
-              Effect.gen(function* () {
+          const rawRestore = Effect.fnUntraced(function* (snapshot: string) {
+            return yield* Effect.gen(function* () {
                 log.info("restore", { commit: snapshot })
                 const result = yield* git([...core, ...args(["read-tree", snapshot])], { cwd: state.worktree })
-                if (result.code === 0) {
-                  const checkout = yield* git([...core, ...args(["checkout-index", "-a", "-f"])], {
+                if (result.code !== 0) {
+                  log.error("failed to restore snapshot", {
+                    snapshot,
+                    exitCode: result.code,
+                    stderr: result.stderr,
+                  })
+                  return yield* new RestoreError({
+                    snapshot,
+                    op: "read-tree",
+                    exit: result.code,
+                    stderr: result.stderr,
                     cwd: state.worktree,
                   })
-                  if (checkout.code === 0) return
+                }
+                const checkout = yield* git([...core, ...args(["checkout-index", "-a", "-f"])], {
+                  cwd: state.worktree,
+                })
+                if (checkout.code !== 0) {
                   log.error("failed to restore snapshot", {
                     snapshot,
                     exitCode: checkout.code,
                     stderr: checkout.stderr,
                   })
-                  return
+                  return yield* new RestoreError({
+                    snapshot,
+                    op: "checkout-index",
+                    exit: checkout.code,
+                    stderr: checkout.stderr,
+                    cwd: state.worktree,
+                  })
                 }
-                log.error("failed to restore snapshot", {
-                  snapshot,
-                  exitCode: result.code,
-                  stderr: result.stderr,
-                })
-              }),
-            )
+              })
           })
+          // kilocode_change start
+          const restore = Effect.fnUntraced(function* (snapshot: string) {
+            return yield* locked(rawRestore(snapshot))
+          })
+          // kilocode_change end
 
-          const revert = Effect.fnUntraced(function* (patches: Patch[]) {
-            return yield* locked(
-              Effect.gen(function* () {
+          const firstHash = (list: { hash: string }[]) => (list.length ? list[0]!.hash : undefined)
+          const rawRevert = Effect.fnUntraced(function* (patches: Patch[]) {
+            return yield* Effect.gen(function* () {
                 const ops: { hash: string; file: string; rel: string }[] = []
                 const seen = new Set<string>()
                 for (const item of patches) {
                   for (const file of item.files) {
                     if (seen.has(file)) continue
                     seen.add(file)
-                    ops.push({
-                      hash: item.hash,
-                      file,
-                      rel: path.relative(state.worktree, file).replaceAll("\\", "/"),
-                    })
+                    const rel = path.relative(state.worktree, file).replaceAll("\\", "/")
+                    if (!FSUtil.contains(state.worktree, file)) {
+                      return yield* new PathError({
+                        message: `snapshot revert path escapes worktree: ${file}`,
+                        file,
+                        worktree: state.worktree,
+                      })
+                    }
+                    ops.push({ hash: item.hash, file, rel })
                   }
                 }
+                if (!ops.length) return
+                const failed: string[] = []
+                const note: { op?: string; exit?: number; stderr?: string; hash?: string } = {}
 
                 const single = Effect.fnUntraced(function* (op: (typeof ops)[number]) {
                   log.info("reverting", { file: op.file, hash: op.hash })
@@ -512,13 +604,45 @@ export const layer: Layer.Layer<Service, never, Requirements> =
                   const tree = yield* git([...core, ...args(["ls-tree", op.hash, "--", op.rel])], {
                     cwd: state.worktree,
                   })
-                  if (tree.code === 0 && tree.text.trim()) {
-                    log.info("file existed in snapshot but checkout failed, keeping", { file: op.file, hash: op.hash })
-                    return
+                  if (tree.code !== 0) {
+                    return yield* new RevertError({
+                      message: `snapshot revert checkout failed and ls-tree failed for ${op.file}`,
+                      files: [op.file],
+                      hash: op.hash,
+                      op: "checkout+ls-tree",
+                      exit: result.code,
+                      stderr: `${result.stderr}\n${tree.stderr}`.trim(),
+                      cwd: state.worktree,
+                    })
+                  }
+                  if (tree.text.trim()) {
+                    return yield* new RevertError({
+                      message: `snapshot revert checkout failed for tracked file ${op.file}`,
+                      files: [op.file],
+                      hash: op.hash,
+                      op: "checkout",
+                      exit: result.code,
+                      stderr: result.stderr,
+                      cwd: state.worktree,
+                    })
                   }
                   log.info("file did not exist in snapshot, deleting", { file: op.file, hash: op.hash })
-                  yield* remove(op.file)
+                  yield* removeStrict(op.file, op.hash)
                 })
+
+                const collect = (op: (typeof ops)[number], fx: Effect.Effect<void, RevertError | PathError>) =>
+                  fx.pipe(
+                    Effect.catch((err: RevertError | PathError) =>
+                      Effect.gen(function* () {
+                        if (err instanceof PathError) return yield* Effect.fail(err)
+                        for (const file of err.files) if (!failed.includes(file)) failed.push(file)
+                        note.op ??= err.op
+                        note.exit ??= err.exit
+                        note.stderr ??= err.stderr
+                        note.hash ??= err.hash
+                      }),
+                    ),
+                  )
 
                 const clash = (a: string, b: string) => a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`)
 
@@ -536,7 +660,7 @@ export const layer: Layer.Layer<Service, never, Requirements> =
                   }
 
                   if (run.length === 1) {
-                    yield* single(first)
+                    yield* collect(first, single(first))
                     i = j
                     continue
                   }
@@ -554,7 +678,7 @@ export const layer: Layer.Layer<Service, never, Requirements> =
                       files: run.length,
                     })
                     for (const op of run) {
-                      yield* single(op)
+                      yield* collect(op, single(op))
                     }
                     i = j
                     continue
@@ -582,7 +706,7 @@ export const layer: Layer.Layer<Service, never, Requirements> =
                         files: list.length,
                       })
                       for (const op of run) {
-                        yield* single(op)
+                        yield* collect(op, single(op))
                       }
                       i = j
                       continue
@@ -592,14 +716,32 @@ export const layer: Layer.Layer<Service, never, Requirements> =
                   for (const op of run) {
                     if (have.has(op.rel)) continue
                     log.info("file did not exist in snapshot, deleting", { file: op.file, hash: op.hash })
-                    yield* remove(op.file)
+                    yield* collect(op, removeStrict(op.file, op.hash))
                   }
 
                   i = j
                 }
-              }),
-            )
+                if (failed.length) {
+                  return yield* new RevertError({
+                    message: `snapshot revert failed for ${failed.length} file(s)`,
+                    files: [...failed].sort(),
+                    hash: note.hash ?? firstHash(ops),
+                    op: note.op,
+                    exit: note.exit,
+                    stderr: note.stderr,
+                    cwd: state.worktree,
+                  })
+                }
+              })
           })
+          // kilocode_change start - single worktree-keyed window: one Semaphore permit + one
+          // EffectFlock(snapshot:<gitdir>) hold for track -> restore/revert -> optional rollback.
+          const revert = Effect.fnUntraced(function* (patches: Patch[]) {
+            return yield* locked(rawRevert(patches))
+          })
+          const exclusive = <A, E>(fn: (raw: Exclusive) => Effect.Effect<A, E>) =>
+            locked(fn({ track: rawTrack, restore: rawRestore, revert: rawRevert }))
+          // kilocode_change end
 
           const diff = Effect.fnUntraced(function* (hash: string) {
             return yield* locked(
@@ -868,7 +1010,7 @@ export const layer: Layer.Layer<Service, never, Requirements> =
             Effect.forkScoped,
           )
 
-          return { cleanup, track, patch, restore, revert, diff, diffFull }
+          return { cleanup, track, patch, restore, revert, diff, diffFull, exclusive }
         }),
       )
 
@@ -922,6 +1064,10 @@ export const layer: Layer.Layer<Service, never, Requirements> =
         diff: Effect.fn("Snapshot.diff")(function* (hash: string) {
           return yield* InstanceState.useEffect(state, (s) => s.diff(hash))
         }),
+        // kilocode_change start - file rollback window holds one worktree-keyed lock across processes.
+        exclusive: (<A, E>(fn: (raw: Exclusive) => Effect.Effect<A, E>) =>
+          InstanceState.useEffect(state, (s) => s.exclusive(fn))) as Interface["exclusive"],
+        // kilocode_change end
         diffFull: Effect.fn("Snapshot.diffFull")(function* (from: string, to: string) {
           // kilocode_change start - cache full diffs at the service boundary
           if (from === to) return []
