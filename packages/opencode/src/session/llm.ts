@@ -3,9 +3,10 @@ import { Provider } from "@/provider/provider"
 import { SessionV1 } from "@opencode-ai/core/v1/session"
 import { serviceUse } from "@opencode-ai/core/effect/service-use"
 import { Log } from "@opencode-ai/core/util/log"
-import { Context, Effect, Layer } from "effect"
+import { Cause, Context, Effect, Exit, Layer, Option } from "effect"
 import * as Stream from "effect/Stream"
 import { streamText, wrapLanguageModel, type LanguageModelMiddleware, type ModelMessage, type Tool } from "ai"
+import { InvalidRequestReason, LLMError, TransportReason } from "@opencode-ai/llm"
 import type { LLMEvent } from "@opencode-ai/llm"
 import { LLMClient, RequestExecutor, WebSocketExecutor } from "@opencode-ai/llm/route"
 import type { LLMClientService } from "@opencode-ai/llm/route"
@@ -13,6 +14,9 @@ import { GitLabWorkflowLanguageModel } from "gitlab-ai-provider"
 import { ProviderTransform } from "@/provider/transform"
 import { Config } from "@/config/config"
 import type { Agent } from "@/agent/agent"
+import { CanonicalResolver, CanonicalConflictError, CanonicalModelNotFoundError, CanonicalNotFoundError } from "@/kilocode/provider/canonical-resolver"
+import * as Broker from "@/kilocode/server/provider-http-execute-broker"
+import { CanonicalNative } from "./llm/canonical-native"
 import type { MessageV2 } from "./message-v2"
 import { usable } from "./overflow" // kilocode_change
 import { Plugin } from "@/plugin"
@@ -93,6 +97,13 @@ const live: Layer.Layer<
     const llmClient = yield* LLMClient.Service
     const flags = yield* RuntimeFlags.Service
 
+    const toCanonicalLLMError = (message: string) =>
+      new LLMError({
+        module: "LLM",
+        method: "run",
+        reason: new InvalidRequestReason({ message }),
+      })
+
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
       const l = log
         .clone()
@@ -106,6 +117,125 @@ const live: Layer.Layer<
         modelID: input.model.id,
         providerID: input.model.providerID,
       })
+
+      // Canonical-first: exact record from admitted snapshot, reused for whole invocation
+      // Resolve regardless of broker availability so a hit with missing broker fails closed (transport/unavailable)
+      const canonicalExit = yield* CanonicalResolver.resolve(input.model.providerID, input.model.id).pipe(
+        Effect.provideService(Config.Service, config),
+        Effect.exit,
+      )
+      if (Exit.isSuccess(canonicalExit)) {
+        const resolved = canonicalExit.value
+        const brokerOpt = yield* Effect.serviceOption(Broker.Service)
+        const broker = Option.getOrUndefined(brokerOpt)
+        if (!broker) {
+          return yield* Effect.fail(
+            new LLMError({
+              module: "LLM",
+              method: "run",
+              reason: new TransportReason({ message: "canonical provider broker unavailable", kind: "Unavailable" }),
+            }),
+          )
+        }
+        // Canonical path: synthetic provider info with Auth.none, reuse prep
+        const syntheticProvider = {
+          id: resolved.providerId,
+          name: (resolved.record as Record<string, unknown>).name as string | undefined ?? resolved.providerId,
+          source: "config" as const,
+          env: [] as string[],
+          options: {} as Record<string, unknown>,
+          models: {} as Record<string, Provider.Model>,
+        } as unknown as Provider.Info
+        const base = yield* LLMRequestPrep.prepare({
+          ...input,
+          provider: syntheticProvider,
+          auth: undefined,
+          plugin,
+          flags,
+          isWorkflow: false,
+        })
+        const cfg = yield* config.get()
+        const tools = yield* Effect.promise(() => KiloToolSchema.sanitize(base.tools))
+        const estimated: ModelMessage[] = base.messages
+        const preflight = input.preflight === true && KiloSessionOverflow.enabled({ cfg, model: input.model })
+        const cap = KiloLLM.needsEstimate({ model: input.model, configured: base.params.maxOutputTokens })
+        const usage = cap || preflight ? KiloSessionOverflow.measure({ messages: estimated, tools }) : undefined
+        const maxOutputTokens = KiloLLM.capOutputTokens({
+          model: input.model,
+          messages: estimated,
+          tools,
+          configured: base.params.maxOutputTokens,
+          usage,
+          reported: input.reportedContextTokens,
+        })
+        if (
+          preflight &&
+          usage &&
+          KiloSessionOverflow.shouldCompact({
+            cfg,
+            model: input.model,
+            usable: usable({ cfg, model: input.model, outputTokenMax: flags.outputTokenMax }),
+            tokens: usage.normalized,
+            continuation: usage.continuation,
+          })
+        ) {
+          return yield* Effect.fail(new KiloSessionOverflow.PreflightError())
+        }
+        const prepared = { ...base, tools, params: { ...base.params, maxOutputTokens } }
+        const instance = yield* InstanceState.context
+        const isKilo = input.model.api.npm === "@kilocode/kilo-gateway"
+        const exporting = SessionExport.enabled
+        const org = yield* exporting && isKilo && input.model.isFree === true ? Effect.promise(() => getActiveOrg()) : Effect.succeed({ type: "unknown" as const })
+        const started = Date.now()
+        const parent = input.parentSessionID ?? KiloSession.resolveParent(input.sessionID)
+        const found = KiloSession.resolveRoot(input.sessionID)
+        const root = parent ? (found === input.sessionID ? parent : found) : input.sessionID
+        const exportable = exporting && isKilo && input.model.isFree === true && (org as { type: string }).type === "personal" && input.agent.name !== "title"
+        if (exportable) {
+          SessionExport.beforeRequest({
+            input: { model: input.model, org: org as { type: "personal" } },
+            requestMeta: { sessionId: input.sessionID, rootSessionId: root, parentSessionId: parent, requestId: input.user.id, userMessageId: input.user.id, agent: input.agent.name, modeId: input.agent.mode, workspaceKey: instance.directory, agentInfo: SessionExport.agentInfo(input.agent) },
+            assembled: { system: prepared.system, messages: prepared.messages, tools: prepared.tools, permissions: input.permission ?? [], toolChoice: input.toolChoice, params: prepared.params },
+          })
+        }
+        yield* Effect.logInfo("llm runtime selected").pipe(Effect.annotateLogs({ "llm.runtime": "canonical-native", "llm.provider": input.model.providerID, "llm.model": input.model.id }))
+        const canonicalStream: Stream.Stream<LLMEvent, unknown> = CanonicalNative.stream({
+          model: input.model,
+          record: resolved.record,
+          prepared,
+          toolChoice: input.toolChoice,
+          abort: input.abort,
+          broker,
+          providerId: resolved.providerId,
+          modelId: resolved.modelId,
+        })
+        // Map broker/executor LLMError through existing conventions (no second normalization)
+        if (!exportable) return { type: "canonical-native" as const, stream: canonicalStream }
+        return {
+          type: "canonical-native" as const,
+          stream: canonicalStream,
+        }
+      } else {
+        const cause = canonicalExit.cause
+        if (Cause.hasInterruptsOnly(cause)) {
+          return yield* Effect.interrupt
+        }
+        const errOpt = Cause.findErrorOption(cause)
+        if (Option.isSome(errOpt)) {
+          const err = errOpt.value
+          if (err instanceof CanonicalNotFoundError) {
+            // fall through to legacy provider path
+          } else if (err instanceof CanonicalConflictError) {
+            return yield* Effect.fail(toCanonicalLLMError(`canonical provider ${err.providerId} invalid: ${err.reason}`))
+          } else if (err instanceof CanonicalModelNotFoundError) {
+            return yield* Effect.fail(toCanonicalLLMError(`canonical model not found: ${err.providerId}/${err.modelId}`))
+          } else {
+            return yield* Effect.failCause(cause)
+          }
+        } else {
+          return yield* Effect.failCause(cause)
+        }
+      }
 
       const [language, cfg, item, info] = yield* Effect.all(
         [
@@ -448,6 +578,7 @@ const live: Layer.Layer<
             const result = yield* run({ ...input, abort: ctrl.signal })
 
             if (result.type === "native") return result.stream
+            if (result.type === "canonical-native") return result.stream
 
             // Adapter seam: both runtimes expose the same LLMEvent stream. Native
             // already returns one; AI SDK streams are converted here.

@@ -19,6 +19,8 @@ import { Question } from "@/question" // kilocode_change
 import { legacyReviewMessage } from "@/kilocode/review/command" // kilocode_change
 import { zod } from "@opencode-ai/core/effect-zod" // kilocode_change
 import { withStatics } from "@opencode-ai/core/schema" // kilocode_change
+import { CanonicalResolver, CanonicalConflictError, CanonicalModelNotFoundError, CanonicalNotFoundError } from "@/kilocode/provider/canonical-resolver" // kilocode_change
+import { CanonicalModel } from "@/kilocode/provider/canonical-model" // kilocode_change
 import { SessionID, MessageID, PartID } from "./schema"
 import type { NotFoundError } from "@/storage/storage"
 import { MessageV2 } from "./message-v2"
@@ -739,6 +741,40 @@ export const layer = Layer.effect(
       modelID: ModelV2.ID,
       sessionID: SessionID,
     ) {
+      // Canonical-first: synthesize in-memory if canonical-only (NotFound falls through)
+      const canExit = yield* CanonicalResolver.resolve(providerID, modelID).pipe(
+        Effect.provideService(Config.Service, config),
+        Effect.flatMap((resolved) => Effect.succeed(CanonicalModel.synthesize({ providerId: providerID, modelId: modelID, record: resolved.record as never }))),
+        Effect.exit,
+      )
+      if (Exit.isSuccess(canExit)) return canExit.value
+      if (isInterrupted(canExit.cause)) return yield* Effect.interrupt
+      {
+        const errOpt = Cause.findErrorOption(canExit.cause)
+        if (Option.isSome(errOpt)) {
+          const err = errOpt.value
+          if (err instanceof CanonicalConflictError) {
+            const msg = `canonical provider ${err.providerId} invalid: ${err.reason}`
+            yield* events.publish(Session.Event.Error, { sessionID, error: new NamedError.Unknown({ message: msg }).toObject() })
+            // Publish once, then return typed failure to outer defect boundary (no squash, no immediate die with new Error).
+            // Keep local error channel as never for Interface compatibility by converting failure to defect via orDie,
+            // preserving original tagged error as cause.
+            return yield* Effect.fail(err).pipe(Effect.orDie)
+          }
+          if (err instanceof CanonicalModelNotFoundError) {
+            const msg = `canonical model not found: ${err.providerId}/${err.modelId}`
+            yield* events.publish(Session.Event.Error, { sessionID, error: new NamedError.Unknown({ message: msg }).toObject() })
+            return yield* Effect.fail(err).pipe(Effect.orDie)
+          }
+          if (err instanceof CanonicalNotFoundError) {
+            // fall through to legacy provider path
+          } else {
+            return yield* Effect.failCause(canExit.cause).pipe(Effect.orDie)
+          }
+        } else {
+          return yield* Effect.failCause(canExit.cause).pipe(Effect.orDie)
+        }
+      }
       const exit = yield* provider.getModel(providerID, modelID).pipe(Effect.exit)
       if (Exit.isSuccess(exit)) return exit.value
       if (isInterrupted(exit.cause)) return yield* Effect.interrupt // kilocode_change

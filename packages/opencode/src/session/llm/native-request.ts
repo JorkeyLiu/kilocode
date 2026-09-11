@@ -34,7 +34,7 @@ export type RequestInput = {
   readonly headers?: Record<string, string>
 }
 
-const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
+export const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
   if (!isRecord(value)) return undefined
   const result = Object.fromEntries(
     Object.entries(value).filter((entry): entry is [string, Record<string, unknown>] => isRecord(entry[1])),
@@ -44,16 +44,16 @@ const providerMetadata = (value: unknown): ProviderMetadata | undefined => {
 
 // Stored AI SDK parts historically kept provider-owned continuation metadata in
 // `providerOptions`; native parts now use `providerMetadata` directly.
-const partProviderMetadata = (part: Record<string, unknown>) =>
+export const partProviderMetadata = (part: Record<string, unknown>) =>
   providerMetadata(part.providerMetadata) ?? providerMetadata(part.providerOptions)
 
-const textPart = (part: Record<string, unknown>) => ({
+export const textPart = (part: Record<string, unknown>) => ({
   type: "text" as const,
   text: typeof part.text === "string" ? part.text : "",
   providerMetadata: partProviderMetadata(part),
 })
 
-const mediaPart = (part: Record<string, unknown>) => {
+export const mediaPart = (part: Record<string, unknown>) => {
   if (typeof part.data !== "string" && !(part.data instanceof Uint8Array))
     throw new Error("Native LLM request adapter only supports file parts with string or Uint8Array data")
   return {
@@ -64,7 +64,7 @@ const mediaPart = (part: Record<string, unknown>) => {
   }
 }
 
-const toolResult = (part: Record<string, unknown>) => {
+export const toolResult = (part: Record<string, unknown>) => {
   const output = isRecord(part.output) ? part.output : { type: "json", value: part.output }
   const type = output.type === "text" ? "text" : output.type === "error-text" ? "error" : "json"
   return ToolResultPart.make({
@@ -77,7 +77,7 @@ const toolResult = (part: Record<string, unknown>) => {
   })
 }
 
-const contentPart = (part: unknown) => {
+export const contentPart = (part: unknown) => {
   if (!isRecord(part)) throw new Error("Native LLM request adapter only supports object content parts")
   if (part.type === "text") return textPart(part)
   if (part.type === "file") return mediaPart(part)
@@ -99,10 +99,10 @@ const contentPart = (part: unknown) => {
   throw new Error(`Native LLM request adapter does not support ${String(part.type)} content parts`)
 }
 
-const content = (value: ModelMessage["content"]) =>
+export const content = (value: ModelMessage["content"]) =>
   typeof value === "string" ? [{ type: "text" as const, text: value }] : value.map(contentPart)
 
-const messages = (input: readonly ModelMessage[]) => {
+export const messages = (input: readonly ModelMessage[]) => {
   const system = input.flatMap((message) => (message.role === "system" ? [SystemPart.make(message.content)] : []))
   const messages = input.flatMap((message) => {
     if (message.role === "system") return []
@@ -117,13 +117,13 @@ const messages = (input: readonly ModelMessage[]) => {
   return { system, messages }
 }
 
-const schema = (value: unknown): JsonSchema => {
+export const schema = (value: unknown): JsonSchema => {
   if (!isRecord(value)) return { type: "object", properties: {} }
   if (isRecord(value.jsonSchema)) return value.jsonSchema
-  return value
+  return value as JsonSchema
 }
 
-const tools = (input: Record<string, ToolInput> | undefined): ToolDefinition[] =>
+export const tools = (input: Record<string, ToolInput> | undefined): ToolDefinition[] =>
   Object.entries(input ?? {}).map(([name, item]) =>
     ToolDefinition.make({
       name,
@@ -132,7 +132,7 @@ const tools = (input: Record<string, ToolInput> | undefined): ToolDefinition[] =
     }),
   )
 
-const generation = (input: RequestInput) => {
+export const generation = (input: RequestInput) => {
   const result = {
     temperature: input.temperature,
     topP: input.topP,

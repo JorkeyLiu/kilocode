@@ -513,6 +513,9 @@ export const make = (ctx: Context, broker: Broker.Broker): RequestExecutor.Inter
             closed = true
             closePromise = Effect.runPromise(
               Effect.gen(function* () {
+                // Closing the child scope interrupts the pump fiber when it is
+                // scoped to it (forkIn). Keep manual interrupt as fallback for
+                // detached compatibility during transition.
                 if (fiber) {
                   yield* Fiber.interrupt(fiber).pipe(Effect.ignore)
                   yield* Fiber.await(fiber).pipe(Effect.ignore)
@@ -521,6 +524,18 @@ export const make = (ctx: Context, broker: Broker.Broker): RequestExecutor.Inter
               }),
             )
             return closePromise
+          }
+
+          // Link child scope lifetime to outer Stream consumption scope so
+          // interruption/closing of outer LLM Stream closes broker scope even
+          // when no further ReadableStream pull/cancel occurs (no pull/cancel
+          // yet). No second Abort protocol — the existing broker Scope owns Call
+          // drop → $/cancelRequest. Only link when an ambient Scope is present
+          // (Stream.scoped execution); direct `execute` calls outside a Stream
+          // have no ambient scope and must not fail.
+          const ambientOpt = yield* Effect.serviceOption(Scope.Scope)
+          if (Option.isSome(ambientOpt)) {
+            yield* Scope.addFinalizer(ambientOpt.value, Scope.close(scope, Exit.void).pipe(Effect.ignore))
           }
 
           const acquireExit = yield* Effect.exit(
@@ -622,7 +637,7 @@ export const make = (ctx: Context, broker: Broker.Broker): RequestExecutor.Inter
             }
           }
 
-          fiber = yield* Effect.forkDetach(
+          fiber = yield* Effect.forkIn(scope)(
             Effect.gen(function* () {
               yield* httpStream.stream.pipe(
                 Stream.runForEach((chunk: Uint8Array) =>
