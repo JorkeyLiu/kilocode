@@ -3,7 +3,6 @@ import * as path from "path"
 import { Effect } from "effect"
 import * as Tool from "./tool"
 import { LSP } from "@/lsp/lsp"
-import { createTwoFilesPatch } from "diff"
 import DESCRIPTION from "./write.txt"
 import { EventV2Bridge } from "@/event-v2-bridge"
 import { FileSystem } from "@opencode-ai/core/filesystem"
@@ -11,7 +10,7 @@ import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { Format } from "../format"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import { InstanceState } from "@/effect/instance-state"
-import { trimDiff, buildFileDiff } from "./edit" // kilocode_change
+import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
 import { assertExternalDirectoryEffect } from "./external-directory"
 import { filterDiagnostics } from "./diagnostics" // kilocode_change
 import { ConfigValidation } from "../kilocode/config-validation" // kilocode_change
@@ -57,23 +56,28 @@ export const WriteTool = Tool.define(
           const contentOld = source.text
           const contentNew = next.text
 
-          const diff = trimDiff(createTwoFilesPatch(filepath, filepath, contentOld, contentNew))
-          const filediff = buildFileDiff(filepath, contentOld, contentNew) // kilocode_change
+          // kilocode_change start - ask uses the expected write diff; result uses formatter-final truth
+          const ask = build(filepath, contentOld, contentNew)
           yield* ctx.ask({
             permission: "edit",
             patterns: [path.relative(instance.worktree, filepath)],
             always: ["*"],
             metadata: {
               filepath,
-              diff,
-              filediff, // kilocode_change
+              diff: ask.diff,
+              filediff: ask.filediff, // kilocode_change
             },
           })
 
           yield* EncodedIO.write(fs, filepath, Bom.join(contentNew, desiredBom), source.encoding) // kilocode_change - encoding-aware write (mkdirs) replaces fs.writeWithDirs
+          let final = contentNew
           if (yield* format.file(filepath)) {
-            yield* EncodedIO.sync(fs, filepath, desiredBom, source.encoding)
+            final = yield* EncodedIO.sync(fs, filepath, desiredBom, source.encoding)
           }
+          const result = build(filepath, contentOld, final)
+          const diff = result.diff
+          const filediff = result.filediff
+          // kilocode_change end
           yield* events.publish(FileSystem.Event.Edited, { file: filepath })
           yield* events.publish(Watcher.Event.Updated, {
             file: filepath,

@@ -7,7 +7,6 @@ import * as path from "path"
 import { Effect, Schema, Semaphore } from "effect"
 import * as Tool from "./tool"
 import { LSP } from "@/lsp/lsp"
-import { createTwoFilesPatch, diffLines } from "diff"
 import DESCRIPTION from "./edit.txt"
 import { FileSystem } from "@opencode-ai/core/filesystem"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
@@ -22,26 +21,13 @@ import { filterDiagnostics } from "./diagnostics" // kilocode_change
 import { ConfigValidation } from "../kilocode/config-validation" // kilocode_change
 import * as EncodedIO from "../kilocode/tool/encoded-io" // kilocode_change
 import * as Encoding from "../kilocode/encoding" // kilocode_change
+import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
 
-const MAX_DIFF_CONTENT = 500_000 // kilocode_change
+export { trimDiff } from "./filediff" // kilocode_change - compat re-export
 
-// kilocode_change start
+// kilocode_change start - compat wrapper; new code uses filediff.build directly
 export function buildFileDiff(file: string, before: string, after: string): Snapshot.FileDiff {
-  const tooLarge = before.length > MAX_DIFF_CONTENT || after.length > MAX_DIFF_CONTENT
-  let additions = 0
-  let deletions = 0
-  if (!tooLarge) {
-    for (const change of diffLines(before, after)) {
-      if (change.added) additions += change.count || 0
-      if (change.removed) deletions += change.count || 0
-    }
-  }
-  return {
-    file,
-    patch: tooLarge ? "" : createTwoFilesPatch(file, file, before, after),
-    additions,
-    deletions,
-  }
+  return build(file, before, after).filediff
 }
 // kilocode_change end
 
@@ -111,7 +97,11 @@ export const EditTool = Tool.define(
           let diff = ""
           let contentOld = ""
           let contentNew = ""
-          let cachedFilediff: Snapshot.FileDiff | undefined // kilocode_change
+          // kilocode_change start - ask holds the pre-format expected diff for permission;
+          // result holds the formatter-final disk truth for completed metadata.
+          let ask: { diff: string; filediff: Snapshot.FileDiff } | undefined
+          let result: { diff: string; filediff: Snapshot.FileDiff } | undefined
+          // kilocode_change end
           yield* lock(filePath).withPermits(1)(
             Effect.gen(function* () {
               if (params.oldString === "") {
@@ -125,22 +115,23 @@ export const EditTool = Tool.define(
                 const desiredBom = next.bom
                 contentOld = ""
                 contentNew = next.text
-                diff = trimDiff(createTwoFilesPatch(filePath, filePath, contentOld, contentNew))
-                cachedFilediff = buildFileDiff(filePath, contentOld, contentNew) // kilocode_change
+                ask = build(filePath, contentOld, contentNew) // kilocode_change
                 yield* ctx.ask({
                   permission: "edit",
                   patterns: [path.relative(instance.worktree, filePath)],
                   always: ["*"],
                   metadata: {
                     filepath: filePath,
-                    diff,
-                    filediff: cachedFilediff, // kilocode_change
+                    diff: ask.diff,
+                    filediff: ask.filediff, // kilocode_change
                   },
                 })
                 yield* EncodedIO.write(afs, filePath, Bom.join(contentNew, desiredBom), Encoding.DEFAULT) // kilocode_change - encoding-aware write (mkdirs) replaces afs.writeWithDirs
                 if (yield* format.file(filePath)) {
                   contentNew = yield* EncodedIO.sync(afs, filePath, desiredBom, Encoding.DEFAULT)
                 }
+                result = build(filePath, contentOld, contentNew) // kilocode_change - formatter-final truth
+                diff = result.diff
                 yield* events.publish(FileSystem.Event.Edited, { file: filePath })
                 yield* events.publish(Watcher.Event.Updated, {
                   file: filePath,
@@ -167,23 +158,15 @@ export const EditTool = Tool.define(
               const desiredBom = source.bom || next.bom
               contentNew = next.text
 
-              diff = trimDiff(
-                createTwoFilesPatch(
-                  filePath,
-                  filePath,
-                  normalizeLineEndings(contentOld),
-                  normalizeLineEndings(contentNew),
-                ),
-              )
-              cachedFilediff = buildFileDiff(filePath, contentOld, contentNew) // kilocode_change
+              ask = build(filePath, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)) // kilocode_change - expected write diff for permission
               yield* ctx.ask({
                 permission: "edit",
                 patterns: [path.relative(instance.worktree, filePath)],
                 always: ["*"],
                 metadata: {
                   filepath: filePath,
-                  diff,
-                  filediff: cachedFilediff, // kilocode_change
+                  diff: ask.diff,
+                  filediff: ask.filediff, // kilocode_change
                 },
               })
 
@@ -196,18 +179,12 @@ export const EditTool = Tool.define(
                 file: filePath,
                 event: "change",
               })
-              diff = trimDiff(
-                createTwoFilesPatch(
-                  filePath,
-                  filePath,
-                  normalizeLineEndings(contentOld),
-                  normalizeLineEndings(contentNew),
-                ),
-              )
+              result = build(filePath, normalizeLineEndings(contentOld), normalizeLineEndings(contentNew)) // kilocode_change - formatter-final truth
+              diff = result.diff
             }).pipe(Effect.orDie),
           )
 
-          const filediff: Snapshot.FileDiff = cachedFilediff ?? buildFileDiff(filePath, contentOld, contentNew) // kilocode_change
+          const filediff: Snapshot.FileDiff = (result ?? ask)?.filediff ?? build(filePath, contentOld, contentNew).filediff // kilocode_change
 
           yield* ctx.metadata({
             metadata: {
@@ -666,42 +643,6 @@ export const ContextAwareReplacer: Replacer = function* (content, find) {
       }
     }
   }
-}
-
-export function trimDiff(diff: string): string {
-  const lines = diff.split("\n")
-  const contentLines = lines.filter(
-    (line) =>
-      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
-      !line.startsWith("---") &&
-      !line.startsWith("+++"),
-  )
-
-  if (contentLines.length === 0) return diff
-
-  let min = Infinity
-  for (const line of contentLines) {
-    const content = line.slice(1)
-    if (content.trim().length > 0) {
-      const match = content.match(/^(\s*)/)
-      if (match) min = Math.min(min, match[1].length)
-    }
-  }
-  if (min === Infinity || min === 0) return diff
-  const trimmedLines = lines.map((line) => {
-    if (
-      (line.startsWith("+") || line.startsWith("-") || line.startsWith(" ")) &&
-      !line.startsWith("---") &&
-      !line.startsWith("+++")
-    ) {
-      const prefix = line[0]
-      const content = line.slice(1)
-      return prefix + content.slice(min)
-    }
-    return line
-  })
-
-  return trimmedLines.join("\n")
 }
 
 export function replace(content: string, oldString: string, newString: string, replaceAll = false): string {

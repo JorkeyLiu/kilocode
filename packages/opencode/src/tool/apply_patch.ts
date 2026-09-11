@@ -5,9 +5,8 @@ import { EventV2Bridge } from "@/event-v2-bridge"
 import { Watcher } from "@opencode-ai/core/filesystem/watcher"
 import { InstanceState } from "@/effect/instance-state"
 import { Patch } from "../patch"
-import { createTwoFilesPatch, diffLines } from "diff"
 import { assertExternalDirectoryEffect } from "./external-directory"
-import { trimDiff } from "./edit"
+import { build } from "./filediff" // kilocode_change - shared formatter-final diff builder
 import { LSP } from "@/lsp/lsp"
 import { FSUtil } from "@opencode-ai/core/fs-util"
 import DESCRIPTION from "./apply_patch.txt"
@@ -62,6 +61,7 @@ export const ApplyPatchTool = Tool.define(
         filePath: string
         oldContent: string
         newContent: string
+        final: string // kilocode_change - formatter-final disk truth, filled after writes
         type: "add" | "update" | "delete" | "move"
         movePath?: string
         diff: string
@@ -71,7 +71,7 @@ export const ApplyPatchTool = Tool.define(
         encoding: string // kilocode_change - preserved per-file encoding
       }> = []
 
-      let totalDiff = ""
+      let askDiff = ""
 
       for (const hunk of hunks) {
         const filePath = path.resolve(instance.directory, hunk.path)
@@ -83,28 +83,22 @@ export const ApplyPatchTool = Tool.define(
             const newContent =
               hunk.contents.length === 0 || hunk.contents.endsWith("\n") ? hunk.contents : `${hunk.contents}\n`
             const next = Bom.split(newContent)
-            const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, next.text))
-
-            let additions = 0
-            let deletions = 0
-            for (const change of diffLines(oldContent, next.text)) {
-              if (change.added) additions += change.count || 0
-              if (change.removed) deletions += change.count || 0
-            }
+            const ask = build(filePath, oldContent, next.text) // kilocode_change - unified counts
 
             fileChanges.push({
               filePath,
               oldContent,
               newContent: next.text,
+              final: next.text,
               type: "add",
-              diff,
-              additions,
-              deletions,
+              diff: ask.diff,
+              additions: ask.filediff.additions,
+              deletions: ask.filediff.deletions,
               bom: next.bom,
               encoding: "utf-8", // kilocode_change - new files default to utf-8
             })
 
-            totalDiff += diff + "\n"
+            askDiff += ask.diff + "\n"
             break
           }
 
@@ -149,32 +143,28 @@ export const ApplyPatchTool = Tool.define(
               return yield* Effect.fail(new Error(`apply_patch verification failed: ${error}`))
             }
 
-            const diff = trimDiff(createTwoFilesPatch(filePath, filePath, oldContent, newContent))
-
-            let additions = 0
-            let deletions = 0
-            for (const change of diffLines(oldContent, newContent)) {
-              if (change.added) additions += change.count || 0
-              if (change.removed) deletions += change.count || 0
-            }
-
             const movePath = hunk.move_path ? path.resolve(instance.directory, hunk.move_path) : undefined
             yield* assertExternalDirectoryEffect(ctx, movePath)
+
+            // kilocode_change - move patch header points at the final target so the
+            // single-entry protocol never misreports source state as target state.
+            const ask = build(movePath ?? filePath, oldContent, newContent)
 
             fileChanges.push({
               filePath,
               oldContent,
               newContent,
+              final: newContent,
               type: hunk.move_path ? "move" : "update",
               movePath,
-              diff,
-              additions,
-              deletions,
+              diff: ask.diff,
+              additions: ask.filediff.additions,
+              deletions: ask.filediff.deletions,
               bom,
               encoding, // kilocode_change
             })
 
-            totalDiff += diff + "\n"
+            askDiff += ask.diff + "\n"
             break
           }
 
@@ -192,30 +182,30 @@ export const ApplyPatchTool = Tool.define(
             const contentToDelete = deleteRead.text
             const source = Bom.split(contentToDelete)
             // kilocode_change end
-            const deleteDiff = trimDiff(createTwoFilesPatch(filePath, filePath, contentToDelete, ""))
-
-            const deletions = contentToDelete.split("\n").length
+            const ask = build(filePath, contentToDelete, "") // kilocode_change - unified counts
 
             fileChanges.push({
               filePath,
               oldContent: contentToDelete,
               newContent: "",
+              final: "",
               type: "delete",
-              diff: deleteDiff,
-              additions: 0,
-              deletions,
+              diff: ask.diff,
+              additions: ask.filediff.additions,
+              deletions: ask.filediff.deletions,
               bom: source.bom,
               encoding: deleteRead.encoding, // kilocode_change
             })
 
-            totalDiff += deleteDiff + "\n"
+            askDiff += ask.diff + "\n"
             break
           }
         }
       }
 
-      // Build per-file metadata for UI rendering (used for both permission and result)
-      const files = fileChanges.map((change) => ({
+      // kilocode_change - askFiles carries the pre-format expected diff for permission;
+      // result files are rebuilt formatter-final below.
+      const askFiles = fileChanges.map((change) => ({
         filePath: change.filePath,
         relativePath: path.relative(instance.worktree, change.movePath ?? change.filePath).replaceAll("\\", "/"),
         type: change.type,
@@ -233,8 +223,8 @@ export const ApplyPatchTool = Tool.define(
         always: ["*"],
         metadata: {
           filepath: relativePaths.join(", "),
-          diff: totalDiff,
-          files,
+          diff: askDiff,
+          files: askFiles,
         },
       })
 
@@ -271,13 +261,69 @@ export const ApplyPatchTool = Tool.define(
             break
         }
 
+        // kilocode_change start - capture formatter-final disk truth per file
         if (edited) {
           if (yield* format.file(edited)) {
-            yield* EncodedIO.sync(afs, edited, change.bom, change.encoding)
+            change.final = yield* EncodedIO.sync(afs, edited, change.bom, change.encoding)
           }
           yield* events.publish(FileSystem.Event.Edited, { file: edited })
         }
       }
+
+      // kilocode_change start - rebuild result metadata from formatter-final truth.
+      // Move keeps the single-entry protocol but its patch header points at the
+      // final target; source deletion is expressed by filePath + unlink event.
+      const files = fileChanges.map((change) => {
+        if (change.type === "delete") {
+          const done = build(change.filePath, change.oldContent, "")
+          return {
+            filePath: change.filePath,
+            relativePath: path.relative(instance.worktree, change.filePath).replaceAll("\\", "/"),
+            type: change.type,
+            patch: done.diff,
+            additions: done.filediff.additions,
+            deletions: done.filediff.deletions,
+            movePath: change.movePath,
+          }
+        }
+        if (change.type === "move" && change.movePath) {
+          const done = build(change.movePath, change.oldContent, change.final)
+          return {
+            filePath: change.filePath,
+            relativePath: path.relative(instance.worktree, change.movePath).replaceAll("\\", "/"),
+            type: change.type,
+            patch: done.diff,
+            additions: done.filediff.additions,
+            deletions: done.filediff.deletions,
+            movePath: change.movePath,
+          }
+        }
+        if (change.type === "add") {
+          const done = build(change.filePath, "", change.final)
+          return {
+            filePath: change.filePath,
+            relativePath: path.relative(instance.worktree, change.filePath).replaceAll("\\", "/"),
+            type: change.type,
+            patch: done.diff,
+            additions: done.filediff.additions,
+            deletions: done.filediff.deletions,
+            movePath: change.movePath,
+          }
+        }
+        const done = build(change.filePath, change.oldContent, change.final)
+        return {
+          filePath: change.filePath,
+          relativePath: path.relative(instance.worktree, change.filePath).replaceAll("\\", "/"),
+          type: change.type,
+          patch: done.diff,
+          additions: done.filediff.additions,
+          deletions: done.filediff.deletions,
+          movePath: change.movePath,
+        }
+      })
+      let totalDiff = ""
+      for (const item of files) totalDiff += item.patch + "\n"
+      // kilocode_change end
 
       // Publish file change events
       for (const update of updates) {
