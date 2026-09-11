@@ -628,11 +628,11 @@ EventV2 listener isolation change and FIFO status publication remain out of scop
 
 | Aspect | Behavior |
 |---|---|
-| Key | Caller-supplied `(sessionID, messageID)` in `SessionPrompt.prompt`; first accepted durable user message is authoritative |
-| Replay | Later reuse never overwrites parts and never duplicates side effects; no payload comparison is claimed |
-| Concurrency | Process-local singleflight shares one result across concurrent same-ID calls; waiter interruption never interrupts the shared owner, and fork failure or interruption before child ownership fails waiters without leaking the promise or key |
+| Key | Caller-supplied `(sessionID, messageID)` in `SessionPrompt.prompt` and `SessionPrompt.command`; first accepted durable user message is authoritative |
+| Replay | Later reuse never overwrites parts and never duplicates side effects; command replay never repeats lookup/template/shell/plugin/intake/generation; no payload comparison is claimed |
+| Concurrency | Process-local singleflight shared by prompt and command shares one result across concurrent same-ID calls; waiter interruption never interrupts the shared owner, and fork failure or interruption before child ownership fails waiters without leaking the promise or key |
 | Reattach | Durable V1 user with no assistant lineage and no per-ID queue owner reattaches once through per-ID queue ownership; existing lineage or per-ID ownership suppresses duplicate generation |
-| Scope | `command` stays SDK-only and unguarded; no cross-process shared singleflight is claimed — private plus SDK retry with the same durable messageID converge to the same in-process first-writer/singleflight/replay |
+| Scope | `command` stays SDK-only with no private capability; no cross-process shared singleflight is claimed — SDK retry with the same durable messageID converges to the same in-process first-writer/singleflight/replay |
 
 ### Private `session/prompt` carrier over `kilo serve` fd3/fd4 — private-first accept-only, same AppLayer
 
@@ -645,7 +645,7 @@ EventV2 listener isolation change and FIFO status publication remain out of scop
 | Commit | `SessionPromptDispatch.dispatch` validates strict fields, checks session exists and canonical directory matches (`session.not_found`/`scope_mismatch`), reuses existing user message idempotently, then acquires drain control and forks `SessionPrompt.prompt` into the layer-owned `Scope` via `forkIn` (accept-only immediate return; scope close interrupts without detached fiber) with `InstanceRef` plus release ensuring. Inner generation still converges via existing owners; no second authority. |
 | Private-first with single SDK fallback | Valid `succeeded`+`accepted` returns with zero SDK; validated terminal `failed` with `retryable === false` (`session.not_found`/`scope_mismatch`/`validation.failed`) closes with zero SDK; validated `failed` with `retryable === true` plus unavailable/invalid/ambiguous/transport/closed/timeout takes exactly one same-tuple SDK `promptAsync` fallback, never retried on either path. Ambiguous server outcomes normalize to fallback so first-writer/singleflight/replay suppresses duplicate generation. |
 | Timeout and epoch | Private attempt timeout is exactly 3000 ms with exact pending cancel by `id` (`handle.cancel`/`tryCancelPending`); cancel miss/throw epoch-invalidates the peer until the next full backend connection/server reset, while stale handles clean only their captured peer. No retry scheduler. |
-| Scope | Both VS Code prompt call sites (`KiloProvider.handleSendMessage` single-attempt via `sendPromptOnce` with stable `messageID` and one idle post on SDK error, Agent Manager local session start) converge on `promptSessionPrivateFirst`; `command` stays SDK-only. |
+| Scope | Both VS Code prompt call sites (`KiloProvider.handleSendMessage` single-attempt via `sendPromptOnce` with stable `messageID` and one idle post on SDK error, Agent Manager local session start) converge on `promptSessionPrivateFirst`; `command` stays SDK-only with supplied-ID first-writer/singleflight/replay as the retry prerequisite. |
 
 ## SDK contract
 

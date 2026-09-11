@@ -1481,12 +1481,12 @@ export const layer = Layer.effect(
       return { info, parts }
     }, Effect.scoped)
 
-    // kilocode_change start - prompt-only first-writer-wins idempotency by
-    // caller-supplied messageID. Narrow contract: (sessionID,messageID) is the
-    // key and the first accepted durable message is authoritative. Payload on
-    // later reuse is intentionally not compared; the first operation is
-    // returned/continued and never overwritten. No payload-equivalence or
-    // conflict detection is claimed. Command never uses this guard.
+    // kilocode_change start - supplied-message first-writer-wins idempotency by
+    // caller-supplied messageID, shared by prompt and command. Narrow contract:
+    // (sessionID,messageID) is the key and the first accepted durable message
+    // is authoritative. Payload on later reuse is intentionally not compared;
+    // the first operation is returned/continued and never overwritten. No
+    // payload-equivalence or conflict detection is claimed.
     const promptUnguarded: Interface["prompt"] = Effect.fn("SessionPrompt.promptUnguarded")(
       function* (input: PromptInput) {
         const session = yield* sessions.get(input.sessionID).pipe(Effect.orDie)
@@ -1548,99 +1548,6 @@ export const layer = Layer.effect(
       Effect.catchTag("NotFoundError", Effect.die),
     )
 
-    const promptIdempotent = Effect.fn("SessionPrompt.promptIdempotent")(function* (
-      input: PromptInput & { messageID: MessageID },
-    ) {
-      const found = yield* MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID }).pipe(
-        Effect.provideService(Database.Service, database),
-        Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)),
-      )
-      if (!found) {
-        const global = yield* db
-          .select({ session: MessageTable.session_id })
-          .from(MessageTable)
-          .where(eq(MessageTable.id, input.messageID))
-          .get()
-          .pipe(Effect.orDie)
-        if (global && global.session !== input.sessionID)
-          return yield* Effect.die(new Error(`messageID ${input.messageID} belongs to another session`))
-        return yield* promptUnguarded(input)
-      }
-      if (found.info.role !== "user")
-        return yield* Effect.die(new Error(`messageID ${input.messageID} already in use by non-user message`))
-      if (input.noReply === true) return found
-      const lineage = yield* sessions
-        .findMessage(
-          input.sessionID,
-          (m) => m.info.role !== "user" && (m.info as unknown as { parentID?: string }).parentID === input.messageID,
-        )
-        .pipe(Effect.orDie)
-      if (Option.isSome(lineage)) return found
-      if (KiloSessionPromptQueue.isOwned(input.sessionID, input.messageID)) return found
-      const bridge = yield* EffectBridge.make()
-      return yield* KiloSessionPromptQueue.enqueue(
-        input.sessionID,
-        input.messageID,
-        bridge.run(
-          withGenerationAdmission(
-            config,
-            loop({ sessionID: input.sessionID, snapshotInitialization: input.snapshotInitialization }).pipe(
-              Effect.orDie,
-            ),
-          ),
-        ),
-        bridge.run(lastAssistant(input.sessionID)),
-      )
-    })
-
-    // Process-local singleflight keyed by sessionID+messageID. Concurrent calls
-    // share one result with one owner. The owner fiber is forked into the
-    // service scope so interrupting one waiter only interrupts its promise
-    // await, never the shared accepted operation. Registration plus fork
-    // handoff is interruption-safe: fork failure, closed scope, or
-    // interruption before child ownership resolves waiters with the fork
-    // cause and deletes the key only when the same slot is still installed,
-    // so no never-resolved promise or key leak. Owner settle is
-    // identity-guarded exactly once.
-    type PromptExit = Exit.Exit<SessionV1.WithParts, Image.Error | Agent.RequirementBlockedError | NotFoundError>
-    const inflight = new Map<string, PromiseWithResolvers<PromptExit>>()
-    const prompt: Interface["prompt"] = Effect.fn("SessionPrompt.prompt")(function* (input: PromptInput) {
-      if (!input.messageID) return yield* promptUnguarded(input)
-      const key = `${input.sessionID}:${input.messageID}`
-      const slot = yield* Effect.sync(() => {
-        const existing = inflight.get(key)
-        if (existing) return { owner: false as const, entry: existing }
-        const entry = Promise.withResolvers<PromptExit>()
-        inflight.set(key, entry)
-        return { owner: true as const, entry }
-      })
-      if (!slot.owner) return yield* (yield* Effect.promise(() => slot.entry.promise))
-      const flag = { done: false }
-      const settle = (exit: PromptExit) =>
-        Effect.sync(() => {
-          if (flag.done) return
-          flag.done = true
-          slot.entry.resolve(exit)
-          if (inflight.get(key) === slot.entry) inflight.delete(key)
-        }).pipe(Effect.uninterruptible)
-      const work = Effect.gen(function* () {
-        const exit = (yield* promptIdempotent({ ...input, messageID: input.messageID as MessageID }).pipe(
-          Effect.exit,
-        )) as PromptExit
-        yield* settle(exit)
-      }).pipe(
-        Effect.onExit((exit) => {
-          if (Exit.isSuccess(exit)) return Effect.void
-          return settle(Exit.failCause(exit.cause) as unknown as PromptExit)
-        }),
-      )
-      const forked = yield* Effect.forkIn(scope)(work).pipe(Effect.exit)
-      if (Exit.isFailure(forked)) {
-        yield* settle(Exit.failCause(forked.cause) as unknown as PromptExit)
-        return yield* Effect.failCause(forked.cause)
-      }
-      return yield* (yield* Effect.promise(() => slot.entry.promise))
-    }, Effect.catchTag("NotFoundError", Effect.die))
     // kilocode_change end
 
     const lastAssistant = Effect.fnUntraced(function* (sessionID: SessionID) {
@@ -2232,11 +2139,7 @@ export const layer = Layer.effect(
       )
     })
 
-    const command = Effect.fn("SessionPrompt.command")(function* (input: CommandInput) {
-      return yield* withGenerationAdmission(config, commandImpl(input))
-    })
-
-    const commandImpl = Effect.fn("SessionPrompt.commandImpl")(function* (input: CommandInput) {
+    const commandUnguarded = Effect.fn("SessionPrompt.commandImpl")(function* (input: CommandInput) {
       yield* elog.info("command", { sessionID: input.sessionID, command: input.command, agent: input.agent })
       const cmd = yield* commands.get(input.command)
       if (!cmd) {
@@ -2406,7 +2309,8 @@ export const layer = Layer.effect(
         { parts },
       )
 
-      // kilocode_change - command keeps current retries/upserts; it never inherits the prompt-only idempotency guard.
+      // kilocode_change - fresh command owner runs the full expansion/side-effect
+      // chain exactly once; supplied-ID replay never reaches this tail.
       const result = yield* promptUnguarded({
         sessionID: input.sessionID,
         messageID: input.messageID,
@@ -2424,6 +2328,168 @@ export const layer = Layer.effect(
       })
       return result
     })
+
+    // kilocode_change start - shared supplied-message admission for prompt and
+    // command. Only caller-supplied messageID enters this path; missing IDs
+    // keep per-call fresh identities. The first writer owns the full execution
+    // (command lookup/template/shell/plugin/intake/enqueue or legacy static
+    // assistant); durable replay never repeats shell/plugin/intake/generation.
+    // No payload-equivalence contract: the first durable user is authoritative.
+    const reattachSupplied = Effect.fn("SessionPrompt.reattachSupplied")(function* (input: {
+      sessionID: SessionID
+      messageID: MessageID
+      found: SessionV1.WithParts
+      snapshotInitialization?: "wait"
+    }) {
+      const lineage = yield* sessions
+        .findMessage(
+          input.sessionID,
+          (m) => m.info.role !== "user" && (m.info as unknown as { parentID?: string }).parentID === input.messageID,
+        )
+        .pipe(Effect.orDie)
+      if (Option.isSome(lineage)) return input.found
+      if (KiloSessionPromptQueue.isOwned(input.sessionID, input.messageID)) return input.found
+      const bridge = yield* EffectBridge.make()
+      return yield* KiloSessionPromptQueue.enqueue(
+        input.sessionID,
+        input.messageID,
+        bridge.run(
+          withGenerationAdmission(
+            config,
+            loop({ sessionID: input.sessionID, snapshotInitialization: input.snapshotInitialization }).pipe(
+              Effect.orDie,
+            ),
+          ),
+        ),
+        bridge.run(lastAssistant(input.sessionID)),
+      )
+    })
+
+    const loadSuppliedUser = Effect.fn("SessionPrompt.loadSuppliedUser")(function* (input: {
+      sessionID: SessionID
+      messageID: MessageID
+    }) {
+      const found = yield* MessageV2.get({ sessionID: input.sessionID, messageID: input.messageID }).pipe(
+        Effect.provideService(Database.Service, database),
+        Effect.catchTag("NotFoundError", () => Effect.succeed(undefined)),
+      )
+      if (!found) {
+        const global = yield* db
+          .select({ session: MessageTable.session_id })
+          .from(MessageTable)
+          .where(eq(MessageTable.id, input.messageID))
+          .get()
+          .pipe(Effect.orDie)
+        if (global && global.session !== input.sessionID)
+          return yield* Effect.die(new Error(`messageID ${input.messageID} belongs to another session`))
+        return undefined
+      }
+      if (found.info.role !== "user")
+        return yield* Effect.die(new Error(`messageID ${input.messageID} already in use by non-user message`))
+      return found
+    })
+
+    const promptIdempotent = Effect.fn("SessionPrompt.promptIdempotent")(function* (
+      input: PromptInput & { messageID: MessageID },
+    ) {
+      const found = yield* loadSuppliedUser({ sessionID: input.sessionID, messageID: input.messageID })
+      if (!found) return yield* promptUnguarded(input)
+      if (input.noReply === true) return found
+      return yield* reattachSupplied({
+        sessionID: input.sessionID,
+        messageID: input.messageID,
+        found,
+        snapshotInitialization: input.snapshotInitialization,
+      })
+    })
+
+    const commandIdempotent = Effect.fn("SessionPrompt.commandIdempotent")(function* (
+      input: CommandInput & { messageID: MessageID },
+    ) {
+      const found = yield* loadSuppliedUser({ sessionID: input.sessionID, messageID: input.messageID })
+      if (!found) return yield* withGenerationAdmission(config, commandUnguarded(input))
+      return yield* reattachSupplied({
+        sessionID: input.sessionID,
+        messageID: input.messageID,
+        found,
+        snapshotInitialization: input.snapshotInitialization,
+      })
+    })
+
+    // Process-local singleflight keyed by sessionID+messageID, shared by prompt
+    // and command. Concurrent calls share one result with one owner. The owner
+    // fiber is forked into the service scope so interrupting one waiter only
+    // interrupts its promise await, never the shared accepted operation.
+    // Registration plus fork handoff is interruption-safe: fork failure, closed
+    // scope, or interruption before child ownership resolves waiters with the
+    // fork cause and deletes the key only when the same slot is still
+    // installed, so no never-resolved promise or key leak. Owner settle is
+    // identity-guarded exactly once.
+    type SuppliedExit = Exit.Exit<SessionV1.WithParts, Image.Error | Agent.RequirementBlockedError | NotFoundError>
+    const inflight = new Map<string, PromiseWithResolvers<SuppliedExit>>()
+    const withSuppliedSingleflight = Effect.fn("SessionPrompt.withSuppliedSingleflight")(function* (input: {
+      sessionID: SessionID
+      messageID: string
+      work: Effect.Effect<SessionV1.WithParts, Image.Error | Agent.RequirementBlockedError | NotFoundError>
+    }) {
+      const key = `${input.sessionID}:${input.messageID}`
+      const slot = yield* Effect.sync(() => {
+        const existing = inflight.get(key)
+        if (existing) return { owner: false as const, entry: existing }
+        const entry = Promise.withResolvers<SuppliedExit>()
+        inflight.set(key, entry)
+        return { owner: true as const, entry }
+      })
+      if (!slot.owner) return yield* (yield* Effect.promise(() => slot.entry.promise))
+      const flag = { done: false }
+      const settle = (exit: SuppliedExit) =>
+        Effect.sync(() => {
+          if (flag.done) return
+          flag.done = true
+          slot.entry.resolve(exit)
+          if (inflight.get(key) === slot.entry) inflight.delete(key)
+        }).pipe(Effect.uninterruptible)
+      const work = Effect.gen(function* () {
+        const exit = (yield* input.work.pipe(Effect.exit)) as SuppliedExit
+        yield* settle(exit)
+      }).pipe(
+        Effect.onExit((exit) => {
+          if (Exit.isSuccess(exit)) return Effect.void
+          return settle(Exit.failCause(exit.cause) as unknown as SuppliedExit)
+        }),
+      )
+      const forked = yield* Effect.forkIn(scope)(work).pipe(Effect.exit)
+      if (Exit.isFailure(forked)) {
+        yield* settle(Exit.failCause(forked.cause) as unknown as SuppliedExit)
+        return yield* Effect.failCause(forked.cause)
+      }
+      return yield* (yield* Effect.promise(() => slot.entry.promise))
+    })
+
+    const prompt: Interface["prompt"] = Effect.fn("SessionPrompt.prompt")(
+      function* (input: PromptInput) {
+        if (!input.messageID) return yield* promptUnguarded(input)
+        return yield* withSuppliedSingleflight({
+          sessionID: input.sessionID,
+          messageID: input.messageID,
+          work: promptIdempotent({ ...input, messageID: input.messageID as MessageID }),
+        })
+      },
+      Effect.catchTag("NotFoundError", Effect.die),
+    )
+
+    const command: Interface["command"] = Effect.fn("SessionPrompt.command")(
+      function* (input: CommandInput) {
+        if (!input.messageID) return yield* withGenerationAdmission(config, commandUnguarded(input))
+        return yield* withSuppliedSingleflight({
+          sessionID: input.sessionID,
+          messageID: input.messageID,
+          work: commandIdempotent({ ...input, messageID: input.messageID as MessageID }),
+        })
+      },
+      Effect.catchTag("NotFoundError", Effect.die),
+    )
+    // kilocode_change end
 
     return Service.of({
       cancel,

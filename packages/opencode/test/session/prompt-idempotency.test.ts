@@ -510,7 +510,7 @@ it.instance("busy session reattach queues same-ID behind unrelated owner exactly
   30_000,
 )
 
-it.instance("no-messageID prompts stay distinct and command keeps unguarded retries", () =>
+it.instance("no-messageID prompts stay distinct and supplied command reuses first writer", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig((url) => ({
       ...providerCfg(url),
@@ -520,15 +520,16 @@ it.instance("no-messageID prompts stay distinct and command keeps unguarded retr
     const a = yield* prompt.prompt({ sessionID: chat.id, agent: "build", noReply: true, parts: [{ type: "text", text: "a" }] })
     const b = yield* prompt.prompt({ sessionID: chat.id, agent: "build", noReply: true, parts: [{ type: "text", text: "b" }] })
     expect(a.info.id === b.info.id).toBe(false)
-    // Command path with a reused caller ID still runs twice (no prompt guard).
+    // Supplied command messageID is first-writer-wins like prompt: replay
+    // returns the durable user without a second generation.
     yield* llm.text("cmd one")
-    yield* llm.text("cmd two")
     const cmdID = MessageID.ascending()
     const one = yield* prompt.command({ sessionID: chat.id, messageID: cmdID, command: "probe", arguments: "" })
     const two = yield* prompt.command({ sessionID: chat.id, messageID: cmdID, command: "probe", arguments: "" })
     expect(one.info.role).toBe("assistant")
-    expect(two.info.role).toBe("assistant")
-    expect((yield* llm.hits).length).toBeGreaterThanOrEqual(2)
+    expect(two.info.id).toBe(cmdID)
+    expect(two.info.role).toBe("user")
+    expect((yield* llm.hits).length).toBe(1)
     void sessions
     void SessionID
     void Cause
