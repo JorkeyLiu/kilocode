@@ -1,12 +1,11 @@
-// `path/get` Active single-operation private read (SDK-first, diagnostics-only).
+// `path/get` private-first single-operation read.
 // Strict v1 helpers for the private `path/get` capability: routing-only
 // directory/workspace identity, empty payload, safe five-field Path
-// projection, redacted failures, and a detached parity helper comparing only
-// directory-derived `worktree`/`directory`. The private path never mutates SDK
-// or user state and never replaces `GET /path` (`@kilocode/sdk`
-// `client.path.get` remains the sole authority). Gate B open, G3 Active,
-// Gates C/D unchanged; worktree derivation/freshness/transport remain
-// explicit unknowns.
+// projection, redacted failures, and a pure directory-field comparator for
+// test evidence only (never a third request in production). `model-state`
+// consumes only `Path.state`; `home`/`config` stay process-global and
+// `worktree`/`directory` stay shape-only with no new isolation contract.
+// Worktree derivation/freshness/transport remain explicit unknowns.
 //
 // Source facts (read-only evidence, not imported):
 // - Route: `GET /path` with `WorkspaceRoutingQuery` (`directory?`,

@@ -53,9 +53,9 @@ export default [
     // points remain inline.
     // Raised 3150 → 3200 for the `path/get` single-operation batch: the new
     // `path/get` capability/peer/owner surface (outcome handle, epoch/dispose
-    // coherence, deferred observer) must live alongside the existing branches
+    // coherence, private-first read) must live alongside the existing branches
     // per the same convention. New logic lives in serve-private-path.ts and
-    // kilo-provider/path-parity.ts; only the required insertion points remain
+    // kilo-provider/path-privatefirst.ts; only the required insertion points remain
     // inline (plus a shared invalidation-branch helper that lowers peer
     // complexity instead of raising the complexity cap). Both capped files
     // measure 3180/3197 lines, so 3200 is the smallest cap with headroom.

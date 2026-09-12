@@ -58,7 +58,7 @@ import type {
   ServePrivateSessionListRequest,
 } from "./serve-private-session-list-contract"
 import type { DeferredSessionListFilter } from "./serve-private-session-list"
-import { DeferredPath, wrapPathOutcomeForOwner } from "./serve-private-path"
+import { wrapPathOutcomeForOwner } from "./serve-private-path"
 import type { PathContractRequest, PathWireOutcome } from "./serve-private-path-contract"
 import { wrapCommandListOutcomeForOwner } from "./serve-private-command-list"
 import type { CommandListContractRequest, CommandListWireOutcome } from "./serve-private-command-list-contract"
@@ -225,7 +225,6 @@ export class KiloConnectionService {
   private readonly deferredMessagesObservers: Map<string, () => void> = new Map()
   private readonly deferredChildren: DeferredChildren = new DeferredChildren(this.privateAvailableListeners)
   private readonly deferredRemoteStatus: DeferredRemoteStatus = new DeferredRemoteStatus(this.privateAvailableListeners)
-  private readonly deferredPath: DeferredPath = new DeferredPath(this.privateAvailableListeners)
   private readonly deferredConfigWarnings: DeferredConfigWarnings = new DeferredConfigWarnings(
     this.privateAvailableListeners,
   )
@@ -801,7 +800,6 @@ export class KiloConnectionService {
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
-    this.deferredPath.clearAll()
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
     this.deferredFindFiles.clearAll()
@@ -852,7 +850,6 @@ export class KiloConnectionService {
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
-    this.deferredPath.clearAll()
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
     this.deferredFindFiles.clearAll()
@@ -1126,7 +1123,6 @@ export class KiloConnectionService {
     this.clearAllDeferredMessagesObservers()
     this.deferredChildren.clearAll()
     this.deferredRemoteStatus.clearAll()
-    this.deferredPath.clearAll()
     this.deferredConfigWarnings.clearAll()
     this.deferredProjectCurrent.clearAll()
     this.deferredFindFiles.clearAll()
@@ -1341,12 +1337,6 @@ export class KiloConnectionService {
     return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
   }
 
-  /** One-shot deferred path observation; dedupe/lifecycle live in DeferredPath. */
-  addDeferredPathObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
-    const store = this.deferredPath
-    return store.add(this.privateEpoch, this.privateFailedGetEpoch, this.isPrivateAvailable(), dir, workspace, listener)
-  }
-
   /** One-shot deferred config-warnings observation; dedupe/lifecycle live in DeferredConfigWarnings. */
   addDeferredConfigWarningsObserver(dir: string, workspace: string | undefined, listener: () => void): () => void {
     const store = this.deferredConfigWarnings
@@ -1471,7 +1461,6 @@ export class KiloConnectionService {
       this.clearDeferredMessagesObserversForEpoch(staleEpoch)
       this.deferredChildren.clearForEpoch(staleEpoch)
       this.deferredRemoteStatus.clearForEpoch(staleEpoch)
-      this.deferredPath.clearForEpoch(staleEpoch)
       this.deferredConfigWarnings.clearForEpoch(staleEpoch)
       this.deferredProjectCurrent.clearForEpoch(staleEpoch)
       this.deferredFindFiles.clearForEpoch(staleEpoch)
@@ -1498,7 +1487,6 @@ export class KiloConnectionService {
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
-    this.deferredPath.clearForEpoch(epochAtStart)
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     this.deferredProjectCurrent.clearForEpoch(epochAtStart)
     this.deferredFindFiles.clearForEpoch(epochAtStart)
@@ -1544,7 +1532,6 @@ export class KiloConnectionService {
     this.clearDeferredMessagesObserversForEpoch(epochAtStart)
     this.deferredChildren.clearForEpoch(epochAtStart)
     this.deferredRemoteStatus.clearForEpoch(epochAtStart)
-    this.deferredPath.clearForEpoch(epochAtStart)
     this.deferredConfigWarnings.clearForEpoch(epochAtStart)
     this.deferredProjectCurrent.clearForEpoch(epochAtStart)
     this.deferredFindFiles.clearForEpoch(epochAtStart)
@@ -1593,7 +1580,6 @@ export class KiloConnectionService {
       this.clearDeferredMessagesObserversForEpoch(server.epoch)
       this.deferredChildren.clearForEpoch(server.epoch)
       this.deferredRemoteStatus.clearForEpoch(server.epoch)
-      this.deferredPath.clearForEpoch(server.epoch)
       this.deferredConfigWarnings.clearForEpoch(server.epoch)
       this.deferredProjectCurrent.clearForEpoch(server.epoch)
       this.deferredFindFiles.clearForEpoch(server.epoch)
@@ -2816,7 +2802,7 @@ export class KiloConnectionService {
     )
   }
 
-  /** Epoch-aware pass-through for the read-only path parity observer. */
+  /** Epoch-aware pass-through for the private-first path read. */
   privatePathOutcomeWithHandle(req: PathContractRequest): {
     id: number
     promise: Promise<PathWireOutcome>

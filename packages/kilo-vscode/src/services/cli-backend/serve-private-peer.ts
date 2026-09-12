@@ -4317,7 +4317,7 @@ export class ServePrivatePeer {
     return outcome.result
   }
 
-  /** Normalized outcome handle for the read-only path parity observer. */
+  /** Normalized outcome handle for the private-first path read. */
   privatePathOutcomeWithHandle(req: PathContractRequest): {
     id: number
     promise: Promise<PathWireOutcome>

@@ -1,6 +1,5 @@
 import { describe, expect, test } from "bun:test"
 import { KiloConnectionService } from "./connection-service"
-import { DeferredPath } from "./serve-private-path"
 
 function makeService(): KiloConnectionService {
   return new KiloConnectionService({} as never)
@@ -174,70 +173,6 @@ describe("path connection-service owner", () => {
     expect(handle.cancel()).toBe(false)
     expect(invalidated).toBe(1)
     service.dispose()
-  })
-
-  test("deferred path observer respects epoch lifecycle without retention", () => {
-    const service = makeService()
-    // Null epoch: impossible registration, no retention, never fires.
-    ;(service as unknown as Record<string, unknown>).privateEpoch = null
-    ;(service as unknown as Record<string, unknown>).privateFailedGetEpoch = null
-    let fires = 0
-    const noop1 = service.addDeferredPathObserver("/tmp", undefined, () => {
-      fires += 1
-    })
-    expect(typeof noop1).toBe("function")
-    noop1()
-    // Definitively failed epoch: rejected without retention.
-    ;(service as unknown as Record<string, unknown>).privateEpoch = 7
-    ;(service as unknown as Record<string, unknown>).privateFailedGetEpoch = 7
-    const noop2 = service.addDeferredPathObserver("/tmp", undefined, () => {
-      fires += 1
-    })
-    expect(typeof noop2).toBe("function")
-    noop2()
-    expect(fires).toBe(0)
-    service.dispose()
-  })
-
-  test("deferred path observer dedupes per epoch+directory without retention on failure", () => {
-    const service = makeService()
-    ;(service as unknown as Record<string, unknown>).privateEpoch = 7
-    ;(service as unknown as Record<string, unknown>).privateFailedGetEpoch = null
-    let fires = 0
-    const unsub1 = service.addDeferredPathObserver("/tmp", undefined, () => {
-      fires += 1
-    })
-    const unsub2 = service.addDeferredPathObserver("/tmp", undefined, () => {
-      fires += 1
-    })
-    expect(typeof unsub1).toBe("function")
-    expect(typeof unsub2).toBe("function")
-    unsub1()
-    unsub2()
-    expect(fires).toBe(0)
-    service.dispose()
-  })
-
-  test("deferred path owner key is opaque and collision-safe across tuples", () => {
-    const store = new DeferredPath(new Set<() => void>())
-    const a = store.key(7, "/tmp/alpha", undefined)
-    const b = store.key(7, "/tmp/beta", undefined)
-    const c = store.key(7, "/tmp/alpha", "ws-one")
-    const d = store.key(7, "/tmp/alpha", "ws-two")
-    const e = store.key(8, "/tmp/alpha", undefined)
-    expect(new Set([a, b, c, d, e]).size).toBe(5)
-    for (const k of [a, b, c, d, e]) {
-      expect(k.startsWith("path:")).toBeTrue()
-      expect(k).not.toContain("/tmp/alpha")
-      expect(k).not.toContain("/tmp/beta")
-      expect(k).not.toContain("ws-one")
-      expect(k).not.toContain("ws-two")
-    }
-    // Delimiter composition cannot collide: a directory containing a colon
-    // plus empty workspace never equals a nearby tuple.
-    const tricky = store.key(7, "/tmp:alpha", undefined)
-    const nearby = store.key(7, "/tmp", "alpha")
-    expect(tricky).not.toBe(nearby)
   })
 
   test("path routing uses the exact active spawn identity, never mutable directories", () => {

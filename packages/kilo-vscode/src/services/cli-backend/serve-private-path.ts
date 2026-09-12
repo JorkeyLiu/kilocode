@@ -1,5 +1,3 @@
-import { normalize, resolve } from "path"
-import * as crypto from "crypto"
 import { makePathAmbiguous, normalizePrivatePathWire } from "./serve-private-path-contract"
 import type {
   PathContractRequest,
@@ -7,11 +5,12 @@ import type {
   PathWireOutcome,
 } from "./serve-private-path-contract"
 
-// `path/get` read-only parity mechanics (detached, warn-only).
-// Success data is `{path: {home,state,config,worktree,directory}}`; globals
-// stay process-global and are never compared. Diagnostics never expose path
-// material, directories, workspaces, op/request ids, backend codes, or raw
-// error strings: only fixed categories, booleans, and the constant op.
+// `path/get` private-first read mechanics. Success data is
+// `{path: {home,state,config,worktree,directory}}`; only `state` is consumed
+// by `model-state` and globals stay process-global (never compared).
+// Diagnostics never expose path material, directories, workspaces,
+// op/request ids, backend codes, or raw error strings: only fixed
+// categories, booleans, and the constant op.
 
 export const PATH_TRANSPORT_FAILURE_MESSAGE = "private path transport failed"
 
@@ -50,11 +49,11 @@ interface PathRequestHost {
 }
 
 /**
- * Peer-side normalized outcome handle core for the read-only path parity
- * observer. The caller validates the request and checks availability and
- * capability first. Transport/closed maps to ambiguous transportUnknown,
- * thrown errors map to redacted failed results, and malformed wire resolves
- * as `{ kind: "invalid" }` before any comparator. No retries, no replays.
+ * Peer-side normalized outcome handle core for the private-first path read.
+ * The caller validates the request and checks availability and capability
+ * first. Transport/closed maps to ambiguous transportUnknown, thrown errors
+ * map to redacted failed results, and malformed wire resolves as
+ * `{ kind: "invalid" }` before any consumer. No retries, no replays.
  */
 export function requestPathOutcome(
   raw: PathRawTransport,
@@ -106,7 +105,7 @@ export function wrapPathOutcomeForOwner(
     }
     return outcome
   })
-  const cancel = (msg = "private parity timeout"): boolean | "stale" => {
+  const cancel = (msg = "private path timeout"): boolean | "stale" => {
     if (!owner.isCurrent()) {
       try {
         staleCleanup()
@@ -176,83 +175,4 @@ export function pathObserverTimeoutBranch(reason: string): { op: string } | null
   )
     return { op: "path/get" }
   return null
-}
-
-/**
- * Keyed deferred path observers: at most one deferred private path
- * observation per backend epoch + canonical directory + workspace identity.
- * Every component is opaque and domain-separated (`e-`/`d-`/`w-` SHA-256
- * digests with `path/epoch`, `path/dir`, `path/workspace` domains): serialized
- * keys never carry raw directory/workspace material and `:` inside a raw
- * value cannot collide across tuples. Exact `dir`/`workspace` closure values
- * stay with the caller for request construction; only the digest key is
- * stored here. Owner-managed: wrappers live in the owner's one-shot listener
- * set; this store only provides the dedupe key. No timers, no polling, no
- * detached work, no new peer lifecycle.
- */
-export class DeferredPath {
-  private readonly keys = new Map<string, () => void>()
-  constructor(private readonly listeners: Set<() => void>) {}
-
-  key(epoch: number | null, dir: string, workspace: string | undefined): string {
-    let canonical = dir
-    try {
-      canonical = normalize(resolve(dir))
-    } catch {
-      canonical = dir
-    }
-    const epochPart =
-      epoch === null ? "none" : `e-${crypto.createHash("sha256").update(`path/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const dirPart = `d-${crypto.createHash("sha256").update(`path/dir\x00${canonical}`, "utf8").digest("hex")}`
-    const wsPart =
-      workspace === undefined
-        ? "none"
-        : `w-${crypto.createHash("sha256").update(`path/workspace\x00${workspace}`, "utf8").digest("hex")}`
-    return `path:${epochPart}:${dirPart}:${wsPart}`
-  }
-
-  add(
-    epoch: number | null,
-    failedEpoch: number | null,
-    available: boolean,
-    dir: string,
-    workspace: string | undefined,
-    listener: () => void,
-  ): () => void {
-    if (epoch === null) return () => {}
-    if (failedEpoch !== null && epoch === failedEpoch) return () => {}
-    if (available) return () => {}
-    const key = this.key(epoch, dir, workspace)
-    if (this.keys.has(key)) return () => {}
-    let wrapper: () => void = () => {
-      this.remove(key, wrapper)
-      listener()
-    }
-    this.keys.set(key, wrapper)
-    this.listeners.add(wrapper)
-    return () => {
-      this.remove(key, wrapper)
-    }
-  }
-
-  clearForEpoch(epoch: number | null): void {
-    const epochPart =
-      epoch === null ? "none" : `e-${crypto.createHash("sha256").update(`path/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const prefix = `path:${epochPart}:`
-    for (const [key, wrapper] of [...this.keys]) {
-      if (!key.startsWith(prefix)) continue
-      this.keys.delete(key)
-      this.listeners.delete(wrapper)
-    }
-  }
-
-  clearAll(): void {
-    for (const [, wrapper] of [...this.keys]) this.listeners.delete(wrapper)
-    this.keys.clear()
-  }
-
-  private remove(key: string, wrapper: () => void): void {
-    if (this.keys.get(key) === wrapper) this.keys.delete(key)
-    this.listeners.delete(wrapper)
-  }
 }

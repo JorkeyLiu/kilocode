@@ -11,12 +11,7 @@ import {
   validatePathResult,
 } from "./serve-private-peer"
 import { makePathAmbiguous, PATH_FAILED_CODE, PATH_FAILED_MESSAGE, PATH_INVALID_DETAIL } from "./serve-private-path-contract"
-import {
-  buildPathIdentity,
-  observePathParityDetached,
-  sdkPathHasTerminal,
-  type PathParityConnection,
-} from "../../kilo-provider/path-parity"
+import { buildPathIdentity } from "../../kilo-provider/path-privatefirst"
 import { failedPathResult, requestPathOutcome } from "./serve-private-path"
 
 function createLinkedChannel(handler: (method: string, params: unknown) => unknown | Promise<unknown>) {
@@ -346,32 +341,10 @@ describe("path/get private peer", () => {
     clientWriter.destroy()
   })
 
-  test("detached observer is terminal-gated, non-blocking, and SDK-authoritative", async () => {
-    expect(sdkPathHasTerminal({ data: makePayload() } as never)).toBeTrue()
-    expect(sdkPathHasTerminal({ error: { status: 500 }, response: { status: 500 } } as never)).toBeTrue()
-    expect(sdkPathHasTerminal({ error: { message: "boom" } } as never)).toBeFalse()
-    expect(sdkPathHasTerminal({} as never)).toBeFalse()
+  test("private-first identity builds a bound opId tuple", () => {
     const ident = buildPathIdentity()
     expect(ident.opId.startsWith("path:")).toBeTrue()
     expect(ident.idempotencyKey).toBe(ident.opId)
-
-    let calls = 0
-    const conn = {
-      isPrivateAvailable: () => true,
-      privatePathOutcomeWithHandle: () => {
-        calls += 1
-        return { id: 1, promise: Promise.resolve({ kind: "invalid", detail: "bad wire" }), cancel: () => true }
-      },
-    } as unknown as PathParityConnection
-    const sdk = { data: makePayload() }
-    const ret = observePathParityDetached(conn, sdk as never, "/tmp")
-    expect(ret).toBeUndefined()
-    expect(calls).toBe(1)
-    await new Promise((r) => setTimeout(r, 25))
-    // SDK snapshot unchanged by the detached invalid-wire observation.
-    expect((sdk as { data: unknown }).data).toEqual(makePayload())
-    // Non-terminal SDK never observes.
-    const idle = { isPrivateAvailable: () => { throw new Error("must not check") } } as unknown as PathParityConnection
-    expect(() => observePathParityDetached(idle, {} as never, "/tmp")).not.toThrow()
+    expect(typeof ident.requestId).toBe("string")
   })
 })
