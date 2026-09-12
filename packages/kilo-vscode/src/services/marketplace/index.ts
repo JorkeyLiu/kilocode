@@ -20,11 +20,15 @@ export class MarketplaceService {
   private installer: MarketplaceInstaller
   private scans = new Map<string, Promise<MarketplaceRelevanceMetadata>>()
 
-  constructor() {
-    this.paths = new MarketplacePaths()
+  constructor(convergence?: import("../../config/convergence").ConfigConvergenceAdapter, paths?: MarketplacePaths) {
+    this.paths = paths ?? new MarketplacePaths()
     this.api = new MarketplaceApiClient()
     this.detector = new InstallationDetector(this.paths)
-    this.installer = new MarketplaceInstaller(this.paths)
+    this.installer = new MarketplaceInstaller(this.paths, convergence)
+  }
+
+  setConvergence(next: import("../../config/convergence").ConfigConvergenceAdapter | undefined): void {
+    this.installer.setConvergence(next)
   }
 
   async fetchData(workspace: string | undefined, skills: CliSkill[] | undefined, roots: readonly vscode.Uri[]) {

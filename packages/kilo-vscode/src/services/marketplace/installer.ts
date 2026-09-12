@@ -16,9 +16,18 @@ import type {
   RemoveResult,
 } from "./types"
 import { MarketplacePaths } from "./paths"
+import type { ConfigConvergenceAdapter, ConvergenceDescriptor } from "../../config/convergence"
+import { withFence } from "../../config/convergence-guard"
 
 export class MarketplaceInstaller {
-  constructor(private paths: MarketplacePaths) {}
+  constructor(
+    private paths: MarketplacePaths,
+    private convergence?: ConfigConvergenceAdapter,
+  ) {}
+
+  setConvergence(next: ConfigConvergenceAdapter | undefined): void {
+    this.convergence = next
+  }
 
   async install(
     item: MarketplaceItem,
@@ -61,7 +70,8 @@ export class MarketplaceInstaller {
       return { success: false, slug: item.id, error: `Invalid MCP config: ${err}` }
     }
 
-    await this.writeConfig(scope, workspace, config)
+    const fenced = await this.fencedWrite(scope, workspace, config)
+    if (!fenced.ok) return { success: false, slug: item.id, error: fenced.message }
     return { success: true, slug: item.id }
   }
 
@@ -123,7 +133,8 @@ export class MarketplaceInstaller {
     if (config.agent?.[item.id]) {
       delete (config.agent as Record<string, unknown>)[item.id]
       if (Object.keys(config.agent as object).length === 0) delete config.agent
-      await this.writeConfig(scope, workspace, config)
+      const fenced = await this.fencedWrite(scope, workspace, config)
+      if (!fenced.ok) return { success: false, slug: item.id, error: fenced.message }
     }
 
     return { success: true, slug: item.id, filePath: filepath, line: 1 }
@@ -161,7 +172,8 @@ export class MarketplaceInstaller {
     if (config.agent?.[item.id]) {
       delete (config.agent as Record<string, unknown>)[item.id]
       if (Object.keys(config.agent as object).length === 0) delete config.agent
-      await this.writeConfig(scope, workspace, config)
+      const fenced = await this.fencedWrite(scope, workspace, config)
+      if (!fenced.ok) return { success: false, slug: item.id, error: fenced.message }
     }
 
     return { success: true, slug: item.id }
@@ -275,7 +287,8 @@ export class MarketplaceInstaller {
     }
     delete config.mcp[item.id]
     if (Object.keys(config.mcp).length === 0) delete config.mcp
-    await this.writeConfig(scope, workspace, config)
+    const fenced = await this.fencedWrite(scope, workspace, config)
+    if (!fenced.ok) return { success: false, slug: item.id, error: fenced.message }
     return { success: true, slug: item.id }
   }
 
@@ -333,6 +346,32 @@ export class MarketplaceInstaller {
     const filepath = this.paths.configPath(scope, workspace)
     await fs.mkdir(path.dirname(filepath), { recursive: true })
     await fs.writeFile(filepath, JSON.stringify(config, null, 2) + "\n", "utf-8")
+  }
+
+  private async fencedWrite(
+    scope: "project" | "global",
+    workspace: string | undefined,
+    config: Record<string, unknown>,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    if (!this.convergence) {
+      return {
+        ok: false as const,
+        message: "Runtime convergence fence unavailable; write blocked: convergence adapter unavailable",
+      }
+    }
+    const desc: ConvergenceDescriptor =
+      scope === "global"
+        ? { kind: "config", scope: "global" }
+        : { kind: "config", scope: "project", directory: workspace! }
+    return withFence<{ ok: true } | { ok: false; message: string }>(
+      this.convergence,
+      [desc],
+      async () => {
+        await this.writeConfig(scope, workspace, config)
+        return { ok: true as const }
+      },
+      (message) => ({ ok: false as const, message }),
+    )
   }
 }
 

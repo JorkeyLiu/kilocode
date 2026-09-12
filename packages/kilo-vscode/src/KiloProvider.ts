@@ -49,6 +49,7 @@ import {
 } from "./kilo-provider/session-detail"
 import { ErrorCode } from "./private-worker/json-rpc"
 import { createMarketplaceRemover, removeMcp } from "./kilo-provider/remove-config-item"
+import type { MarketplaceRemoveContext } from "./services/marketplace/actions"
 import { AgentRequirementsController } from "./kilo-provider/agent-requirements-controller"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
 import { resolveProjectDirectory } from "./project-directory"
@@ -453,7 +454,9 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   private telemetryStateDisposable: vscode.Disposable | null = null
   private viewStateDisposable: vscode.Disposable | null = null
   private autoApproveBridge: ReturnType<typeof createAutoApproveBridge> | null = null
-  private readonly marketplaceRemove = createMarketplaceRemover()
+  private get marketplaceRemove(): MarketplaceRemoveContext["remove"] {
+    return createMarketplaceRemover(this.canonicalConfig?.convergenceAdapter ?? undefined)
+  }
 
   private ignoreController: FileIgnoreController | null = null
   private ignoreControllerDir: string | null = null

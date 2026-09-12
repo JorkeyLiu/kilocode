@@ -8,8 +8,11 @@
  * blocks the write (zero bytes persisted, zero secret side-effects). Resolve
  * loss never rewrites files and never falls back to SDK: the write stays
  * persisted with a structured `runtime convergence pending` diagnostic and the
- * backend auto-resolves after a bounded grace. Marketplace direct legacy
- * writes are NOT controlled by this adapter (unfenced gap, next decision).
+ * backend auto-resolves after a bounded grace. MarketplaceInstaller canonical
+ * config writes use the same fence through the activation-owned adapter and
+ * fail closed without one (no mutation, no resolve). Intentionally unfenced:
+ * agent/skill markdown/asset file writes, legacy mcp.json/mcp_settings.json
+ * cleanup, and external watcher edits.
  */
 
 export type ConvergenceDescriptor =

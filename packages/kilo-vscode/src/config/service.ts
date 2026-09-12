@@ -538,6 +538,11 @@ export class CanonicalConfigService implements Disposable {
     return this.secrets
   }
 
+  /** Convergence adapter for fenced canonical writes (installer-owned paths reuse it, no new owner). */
+  get convergenceAdapter(): import("./convergence").ConfigConvergenceAdapter | undefined {
+    return this.convergence
+  }
+
   /**
    * Initialize: rehydrate indexes, scan files, materialize, start watchers.
    * Must be called once during activation, before consumers subscribe.

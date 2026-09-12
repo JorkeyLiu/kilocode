@@ -50,6 +50,7 @@ export class MarketplacePanelProvider implements vscode.Disposable {
   ) {}
 
   private get marketplaceCtx(): MarketplaceActionContext {
+    this.marketplace.setConvergence(this.connection.getCanonicalConfigService()?.convergenceAdapter ?? undefined)
     return { connection: this.connection, marketplace: this.marketplace, storage: this.context.globalStorageUri }
   }
 

@@ -5,6 +5,7 @@ import * as path from "path"
 import { MarketplaceInstaller } from "../../src/services/marketplace/installer"
 import { MarketplacePaths } from "../../src/services/marketplace/paths"
 import type { AgentMarketplaceItem } from "../../src/services/marketplace/types"
+import { FakeConvergenceAdapter } from "../../src/config/convergence"
 import { exec } from "../../src/util/process"
 import * as yaml from "yaml"
 
@@ -69,7 +70,7 @@ afterEach(async () => {
 
 describe("MarketplaceInstaller MCP format normalization", () => {
   it("converts local command+args+env format to CLI format", async () => {
-    const installer = new MarketplaceInstaller(new TestPaths())
+    const installer = new MarketplaceInstaller(new TestPaths(), new FakeConvergenceAdapter())
     const item = {
       type: "mcp" as const,
       id: "memory",
@@ -96,7 +97,7 @@ describe("MarketplaceInstaller MCP format normalization", () => {
   })
 
   it("converts sse type to remote type", async () => {
-    const installer = new MarketplaceInstaller(new TestPaths())
+    const installer = new MarketplaceInstaller(new TestPaths(), new FakeConvergenceAdapter())
     const item = {
       type: "mcp" as const,
       id: "myremote",
@@ -121,7 +122,7 @@ describe("MarketplaceInstaller MCP format normalization", () => {
   })
 
   it("keeps already-normalized local format unchanged", async () => {
-    const installer = new MarketplaceInstaller(new TestPaths())
+    const installer = new MarketplaceInstaller(new TestPaths(), new FakeConvergenceAdapter())
     const item = {
       type: "mcp" as const,
       id: "already",

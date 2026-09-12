@@ -14,8 +14,11 @@ export interface RemoveConfigItemContext {
   storage?: vscode.Uri
 }
 
-export function createMarketplaceRemover(): MarketplaceRemoveContext["remove"] {
-  const installer = new MarketplaceInstaller(new MarketplacePaths())
+export function createMarketplaceRemover(
+  convergence?: import("../config/convergence").ConfigConvergenceAdapter,
+  paths?: MarketplacePaths,
+): MarketplaceRemoveContext["remove"] {
+  const installer = new MarketplaceInstaller(paths ?? new MarketplacePaths(), convergence)
   return (item, scope, project) => installer.remove(item, scope, project)
 }
 
