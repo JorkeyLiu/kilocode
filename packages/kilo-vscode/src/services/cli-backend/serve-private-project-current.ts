@@ -1,6 +1,3 @@
-import * as crypto from "crypto"
-import { normalize } from "path"
-import { resolve } from "path"
 import {
   PROJECT_CURRENT_FAILURE_MESSAGES,
   PROJECT_CURRENT_FAILURE_RETRYABLE,
@@ -14,11 +11,11 @@ import type {
   ProjectCurrentWireOutcome,
 } from "./serve-private-project-current-contract"
 
-// `project/current` vcs-only read-only parity mechanics (detached, warn-only).
-// Success data is `{vcs?: "git"}`; path-bearing and out-of-scope project
-// fields never cross the boundary. Diagnostics never expose vcs values,
-// directories, workspaces, op/request ids, backend codes, or raw error
-// strings: only fixed categories, booleans, and the constant op.
+// `project/current` vcs-only narrow projection mechanics (private-first
+// `hasGit` boolean). Success data is `{vcs?: "git"}`; path-bearing and
+// out-of-scope project fields never cross the boundary. Diagnostics never
+// expose vcs values, directories, workspaces, op/request ids, backend codes,
+// or raw error strings: only fixed categories, booleans, and the constant op.
 
 export const PROJECT_CURRENT_TRANSPORT_FAILURE_MESSAGE =
   PROJECT_CURRENT_FAILURE_MESSAGES[PROJECT_CURRENT_TRANSPORT_FAILURE_CODE]
@@ -241,88 +238,4 @@ export function projectCurrentObserverTimeoutBranch(reason: string): { op: strin
   )
     return { op: "project/current" }
   return null
-}
-
-/**
- * Keyed deferred project-current observers: at most one deferred private
- * project-current observation per backend epoch + canonical directory +
- * workspace identity. Every component is opaque and domain-separated
- * (`e-`/`d-`/`w-` SHA-256 digests with `project-current/epoch`,
- * `project-current/dir`, `project-current/workspace` domains): serialized
- * keys never carry raw directory/workspace material and `:` inside a raw
- * value cannot collide across tuples. Exact `dir`/`workspace` closure values
- * stay with the caller for request construction; only the digest key is
- * stored here. Owner-managed: wrappers live in the owner's one-shot listener
- * set; this store only provides the dedupe key. No timers, no polling, no
- * detached work, no new peer lifecycle.
- */
-export class DeferredProjectCurrent {
-  private readonly keys = new Map<string, () => void>()
-  constructor(private readonly listeners: Set<() => void>) {}
-
-  key(epoch: number | null, dir: string, workspace: string | undefined): string {
-    let canonical = dir
-    try {
-      canonical = normalize(resolve(dir))
-    } catch {
-      canonical = dir
-    }
-    const epochPart =
-      epoch === null
-        ? "none"
-        : `e-${crypto.createHash("sha256").update(`project-current/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const dirPart = `d-${crypto.createHash("sha256").update(`project-current/dir\x00${canonical}`, "utf8").digest("hex")}`
-    const wsPart =
-      workspace === undefined
-        ? "none"
-        : `w-${crypto.createHash("sha256").update(`project-current/workspace\x00${workspace}`, "utf8").digest("hex")}`
-    return `project-current:${epochPart}:${dirPart}:${wsPart}`
-  }
-
-  add(
-    epoch: number | null,
-    failedEpoch: number | null,
-    available: boolean,
-    dir: string,
-    workspace: string | undefined,
-    listener: () => void,
-  ): () => void {
-    if (epoch === null) return () => {}
-    if (failedEpoch !== null && epoch === failedEpoch) return () => {}
-    if (available) return () => {}
-    const key = this.key(epoch, dir, workspace)
-    if (this.keys.has(key)) return () => {}
-    let wrapper: () => void = () => {
-      this.remove(key, wrapper)
-      listener()
-    }
-    this.keys.set(key, wrapper)
-    this.listeners.add(wrapper)
-    return () => {
-      this.remove(key, wrapper)
-    }
-  }
-
-  clearForEpoch(epoch: number | null): void {
-    const epochPart =
-      epoch === null
-        ? "none"
-        : `e-${crypto.createHash("sha256").update(`project-current/epoch\x00${epoch}`, "utf8").digest("hex")}`
-    const prefix = `project-current:${epochPart}:`
-    for (const [key, wrapper] of [...this.keys]) {
-      if (!key.startsWith(prefix)) continue
-      this.keys.delete(key)
-      this.listeners.delete(wrapper)
-    }
-  }
-
-  clearAll(): void {
-    for (const [, wrapper] of [...this.keys]) this.listeners.delete(wrapper)
-    this.keys.clear()
-  }
-
-  private remove(key: string, wrapper: () => void): void {
-    if (this.keys.get(key) === wrapper) this.keys.delete(key)
-    this.listeners.delete(wrapper)
-  }
 }

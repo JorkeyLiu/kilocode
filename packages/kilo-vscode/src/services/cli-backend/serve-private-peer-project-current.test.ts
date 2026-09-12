@@ -9,17 +9,11 @@ import {
   validateProjectCurrentContractRequest as validateProjectCurrentRequest,
   validateProjectCurrentResult,
 } from "./serve-private-project-current-contract"
-import {
-  buildProjectCurrentIdentity,
-  observeProjectCurrentParityDetached,
-  sdkProjectCurrentHasTerminal,
-  type ProjectCurrentParityConnection,
-} from "../../kilo-provider/project-current-parity"
+import { buildProjectCurrentIdentity } from "../../kilo-provider/project-current-privatefirst"
 import {
   PROJECT_CURRENT_TRANSPORT_FAILURE_MESSAGE,
   requestProjectCurrentOutcome,
 } from "./serve-private-project-current"
-import { hasGit, setProjectCurrentParityConnection } from "../../kilo-provider/git-status"
 import { KiloConnectionService } from "./connection-service"
 
 function createLinkedChannel(handler: (method: string, params: unknown) => unknown | Promise<unknown>) {
@@ -272,16 +266,6 @@ describe("project-current vcs-only private peer", () => {
     clientWriter.destroy()
   })
 
-  test("sdkProjectCurrentHasTerminal gates record data and terminal failures only", () => {
-    expect(sdkProjectCurrentHasTerminal({ data: { vcs: "git" } } as never)).toBeTrue()
-    expect(sdkProjectCurrentHasTerminal(sdkSuccess({}) as never)).toBeTrue()
-    expect(sdkProjectCurrentHasTerminal({ data: [] } as never)).toBeFalse()
-    expect(sdkProjectCurrentHasTerminal({ error: { status: 500 }, response: { status: 500 } } as never)).toBeTrue()
-    expect(sdkProjectCurrentHasTerminal({ error: { message: "boom" } } as never)).toBeFalse()
-    expect(sdkProjectCurrentHasTerminal({ error: { code: "ECONNRESET" } } as never)).toBeFalse()
-    expect(sdkProjectCurrentHasTerminal({ data: undefined } as never)).toBeFalse()
-    expect(sdkProjectCurrentHasTerminal({} as never)).toBeFalse()
-  })
 
   test("project-current transport failures are redacted to a fixed safe message", async () => {
     const req = makeReq()
@@ -362,208 +346,9 @@ describe("project-current vcs-only private peer", () => {
     }
   })
 
-  test("observer is detached, warn-only, and never mutates SDK state", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const sdk = sdkSuccess({ vcs: "git" })
-      const before = JSON.stringify(sdk)
-      const conn: ProjectCurrentParityConnection = {
-        isPrivateAvailable: () => true,
-        privateProjectCurrentOutcomeWithHandle: (req) => ({
-          id: 1,
-          promise: Promise.resolve({
-            kind: "valid",
-            result: {
-              v: 1,
-              requestId: req.requestId,
-              opId: req.opId,
-              op: "project/current",
-              idempotencyKey: req.idempotencyKey,
-              status: "succeeded",
-              outcome: { type: "succeeded", time: 1 },
-              accepted: true,
-              data: { vcs: "git" },
-            },
-          }),
-        }),
-        getPrivateEpoch: () => 1,
-      }
-      const ret = observeProjectCurrentParityDetached(conn, sdk as never, "/tmp", undefined)
-      expect(ret).toBeUndefined()
-      expect(JSON.stringify(sdk)).toBe(before)
-      await new Promise((r) => setTimeout(r, 50))
-      expect(JSON.stringify(sdk)).toBe(before)
-      expect(warns.filter((w) => String(w[0]).includes("divergence"))).toHaveLength(0)
-    } finally {
-      console.warn = origWarn
-    }
-  })
 
-  test("observer never launches private work for non-terminal SDK input", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const calls: string[] = []
-      const conn: ProjectCurrentParityConnection = {
-        isPrivateAvailable: () => true,
-        privateProjectCurrentOutcomeWithHandle: (req) => {
-          calls.push(req.opId)
-          return { id: 1, promise: Promise.resolve({ kind: "valid", result: {} }) }
-        },
-        getPrivateEpoch: () => 1,
-      }
-      observeProjectCurrentParityDetached(conn, { error: { message: "boom" } } as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 30))
-      expect(calls).toHaveLength(0)
-      expect(warns).toHaveLength(0)
-    } finally {
-      console.warn = origWarn
-    }
-  })
 
-  test("hasGit mismatch logs carry booleans only, never vcs material", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const sdk = sdkSuccess({ vcs: "git" })
-      const conn: ProjectCurrentParityConnection = {
-        isPrivateAvailable: () => true,
-        privateProjectCurrentOutcomeWithHandle: (req) => ({
-          id: 1,
-          promise: Promise.resolve({
-            kind: "valid",
-            result: {
-              v: 1,
-              requestId: req.requestId,
-              opId: req.opId,
-              op: "project/current",
-              idempotencyKey: req.idempotencyKey,
-              status: "succeeded",
-              outcome: { type: "succeeded", time: 1 },
-              accepted: true,
-              data: {},
-            },
-          }),
-        }),
-        getPrivateEpoch: () => 1,
-      }
-      observeProjectCurrentParityDetached(conn, sdk as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 50))
-      expect(warns.length).toBeGreaterThan(0)
-      const wire = JSON.stringify(warns)
-      expect(wire.includes("project-current-hasgit-mismatch")).toBe(true)
-      expect(wire.includes("/tmp")).toBe(false)
-    } finally {
-      console.warn = origWarn
-    }
-  })
 
-  test("elapsed observer timeout cancels the exact pending with epoch isolation and warn-only SDK preservation", async () => {
-    const warns: unknown[][] = []
-    const orig = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    const { clientReader, clientWriter, backendPeer } = createLinkedChannel(() => new Promise<unknown>(() => {}))
-    const peer = new ServePrivatePeer({ reader: clientReader, writer: clientWriter, epoch: 5 })
-    ;(peer as unknown as Record<string, unknown>).available = true
-    ;(peer as unknown as Record<string, unknown>).peer = new JsonRpcPeer({ reader: clientReader, writer: clientWriter })
-    ;(peer as unknown as Record<string, unknown>).capabilities = ["project/current"]
-    const unrelatedReq = makeReq({
-      requestId: "r-unrelated",
-      opId: canonicalProjectCurrentOpId("tok2"),
-      idempotencyKey: canonicalProjectCurrentOpId("tok2"),
-    })
-    const unrelated = peer.privateProjectCurrentOutcomeWithHandle(unrelatedReq as never)
-    const unrelatedId = unrelated.id
-    const seen: number[] = []
-    const ids: number[] = []
-    let at = 0
-    const conn: ProjectCurrentParityConnection = {
-      isPrivateAvailable: () => peer.isAvailable(),
-      privateProjectCurrentOutcomeWithHandle: (req) => {
-        const handle = peer.privateProjectCurrentOutcomeWithHandle(req as never)
-        seen.push(handle.id)
-        const origCancel = handle.cancel
-        return {
-          id: handle.id,
-          promise: handle.promise,
-          cancel: (msg?: string) => {
-            at = performance.now()
-            ids.push(handle.id)
-            return origCancel(msg)
-          },
-        }
-      },
-      getPrivateEpoch: () => peer.getEpoch(),
-    }
-    const sdk = sdkSuccess({ vcs: "git" })
-    const before = JSON.stringify(sdk)
-    const timeout = 60
-    const start = performance.now()
-    try {
-      const ret = observeProjectCurrentParityDetached(conn, sdk as never, "/tmp", undefined, timeout)
-      expect(ret).toBeUndefined()
-      expect(JSON.stringify(sdk)).toBe(before)
-      expect(peer.getPendingCount()).toBe(2)
-      expect(seen).toHaveLength(1)
-      const observedId = seen[0]
-      expect(observedId).not.toBe(unrelatedId)
-      await new Promise((r) => setTimeout(r, 350))
-      const elapsed = at - start
-      expect(ids).toHaveLength(1)
-      expect(ids[0]).toBe(observedId)
-      expect(ids[0]).not.toBe(unrelatedId)
-      expect(elapsed).toBeGreaterThanOrEqual(timeout)
-      expect(elapsed).toBeLessThan(2000)
-      expect(peer.getPendingCount()).toBe(1)
-      expect(peer.isAvailable()).toBeTrue()
-      expect(JSON.stringify(sdk)).toBe(before)
-      const wire = JSON.stringify(warns)
-      expect(wire.includes(`private parity timeout after ${timeout}ms`)).toBeTrue()
-      expect(wire.includes("/tmp")).toBeFalse()
-      expect(wire.includes("vcs")).toBeFalse()
-      setProjectCurrentParityConnection(conn)
-      const git = { project: { current: async () => ({ data: { vcs: "git" } }) } }
-      const gitStart = performance.now()
-      expect(await hasGit(git as never, "/tmp")).toBeTrue()
-      expect(performance.now() - gitStart).toBeLessThan(1000)
-      expect(peer.getPendingCount()).toBe(2)
-      expect(seen).toHaveLength(2)
-      const nogit = { project: { current: async () => ({ data: {} }) } }
-      expect(await hasGit(nogit as never, "/tmp")).toBeFalse()
-      const failing = {
-        project: {
-          current: async () => {
-            throw new Error("boom")
-          },
-        },
-      }
-      expect(await hasGit(failing as never, "/tmp")).toBeFalse()
-      expect(ids).toHaveLength(1)
-      expect(ids[0]).toBe(observedId)
-      expect(peer.isAvailable()).toBeTrue()
-      expect(unrelated.cancel()).toBeTrue()
-      expect(peer.getPendingCount()).toBe(2)
-    } finally {
-      setProjectCurrentParityConnection(null)
-      console.warn = orig
-      peer.dispose()
-      backendPeer.dispose()
-      clientReader.destroy()
-      clientWriter.destroy()
-    }
-  })
 
   test("project-current owner cancel miss/throw and stale isolation run through production owner/peer seam", async () => {
     const warns: unknown[][] = []
@@ -669,35 +454,4 @@ describe("project-current vcs-only private peer", () => {
     }
   })
 
-  test("observer defers without work while the peer negotiates", async () => {
-    const warns: unknown[][] = []
-    const origWarn = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const calls: string[] = []
-      let deferred: (() => void) | null = null
-      const conn: ProjectCurrentParityConnection = {
-        isPrivateAvailable: () => false,
-        privateProjectCurrentOutcomeWithHandle: (req) => {
-          calls.push(req.opId)
-          return { id: 1, promise: Promise.resolve({ kind: "valid", result: {} }) }
-        },
-        getPrivateEpoch: () => 3,
-        addDeferredProjectCurrentObserver: (_d, _w, listener) => {
-          deferred = listener
-          return () => {
-            deferred = null
-          }
-        },
-      }
-      observeProjectCurrentParityDetached(conn, sdkSuccess({}) as never, "/tmp", undefined)
-      await new Promise((r) => setTimeout(r, 20))
-      expect(calls).toHaveLength(0)
-      expect(deferred).not.toBeNull()
-    } finally {
-      console.warn = origWarn
-    }
-  })
 })

@@ -1,10 +1,10 @@
 /* eslint-disable complexity */
 // Project-current vcs-only production evidence: ServerManager → real `kilo
-// serve` child → fd3/fd4 → same AppLayer `project/current` (parity-only,
-// read-only). SDK HTTP (`client.project.current`) remains the sole authority;
-// the private path is non-blocking parity diagnostics only (no state/event/
-// error impact, no mutation/durable operation, no git authority change, no
-// freshness claim). Darwin + Linux run; other platforms skip per B4
+// serve` child → fd3/fd4 → same AppLayer `project/current` narrow projection
+// (read-only `{vcs?: "git"}`). Only the derived `hasGit` boolean is consumed
+// private-first; full `Project.Info` stays SDK-only and is never a private
+// contract (no state/event/error impact, no mutation/durable operation, no
+// git lifecycle change, no freshness claim). Darwin + Linux run; other platforms skip per B4
 // convention. Windows/live Extension Host evidence is not claimed.
 // Process-global VS Code/env mutation is serialized with the B5 tests via
 // server-manager-b5-global-serialization (reuse only, no B5 test edits).
@@ -30,7 +30,6 @@ import {
   normalizePrivateProjectCurrentWire,
   validateProjectCurrentResult,
 } from "./serve-private-project-current-contract"
-import { observeProjectCurrentParityDetached } from "../../kilo-provider/project-current-parity"
 import { createKiloClient } from "@kilocode/sdk/v2/client"
 import { acquireB5GlobalLock } from "./server-manager-b5-global-serialization"
 
@@ -86,9 +85,9 @@ function projectReq(dir: string, token: string, requestId: string) {
   }
 }
 
-describe("ServerManager → real kilo serve → fd3/fd4 → ProjectCurrent vcs-only parity-only production", () => {
+describe("ServerManager → real kilo serve → fd3/fd4 → ProjectCurrent vcs-only narrow projection", () => {
   test.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
-    "covers initialize project/current capability + same-directory vcs vs SDK authoritative + invalid redaction + cross-directory routing isolation + invalid-wire exclusion + fail-closed cleanup",
+    "covers initialize project/current capability + same-directory vcs vs SDK + invalid redaction + cross-directory routing isolation + invalid-wire exclusion + fail-closed cleanup",
     async () => {
       const extensionPath = path.resolve(import.meta.dir, "../../..")
       const binPath = path.join(extensionPath, "bin", process.platform === "win32" ? "kilo.exe" : "kilo")
@@ -219,30 +218,10 @@ describe("ServerManager → real kilo serve → fd3/fd4 → ProjectCurrent vcs-o
           expect(() => validateProjectCurrentResult(fullPriv as unknown, fullReq as unknown as never)).not.toThrow()
         }
 
-        // 6. Parity diagnostics only: same-input hasGit agreement, no authority change.
+        // 6. Same-input hasGit agreement: the narrow projection carries only
+        // the derived boolean, with no authority change beyond hasGit.
         const fullParity = compareProjectCurrentParity(fullPriv, sdkFull as unknown as never)
         expect(fullParity.divergence).toBeNull()
-
-        // 7. SDK authority / non-blocking: SDK snapshot untouched by private
-        // reads; detached observer returns synchronously and leaves SDK data intact.
-        const beforeSdk = JSON.stringify(sdkFullData)
-        const parityConn = {
-          isPrivateAvailable: () => peer!.isAvailable(),
-          privateProjectCurrentOutcomeWithHandle: (r: unknown) =>
-            peer!.privateProjectCurrentOutcomeWithHandle(r as never),
-          getPrivateEpoch: () => peer!.getEpoch(),
-        }
-        const ret = observeProjectCurrentParityDetached(
-          parityConn as unknown as Parameters<typeof observeProjectCurrentParityDetached>[0],
-          sdkFull as unknown as Parameters<typeof observeProjectCurrentParityDetached>[1],
-          workspace,
-          undefined,
-          3000,
-        )
-        expect(ret).toBeUndefined()
-        expect(JSON.stringify((sdkFull as unknown as { data: unknown }).data)).toBe(beforeSdk)
-        await new Promise((r) => setTimeout(r, 300))
-        expect(JSON.stringify((sdkFull as unknown as { data: unknown }).data)).toBe(beforeSdk)
 
         // 8. Invalid request fails closed client-side without touching the
         // transport (fail-closed validation parity with the carrier, whose

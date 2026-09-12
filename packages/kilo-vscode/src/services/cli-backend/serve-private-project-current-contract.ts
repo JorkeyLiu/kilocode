@@ -1,17 +1,17 @@
-// `project/current` vcs-only read-only private carrier contract (Active, parity-only).
-// Strict v1 envelope helpers plus the locked narrow vcs projection. The
-// private path never transmits path-bearing or out-of-scope project fields:
-// success data is `{vcs?: "git"}` only (`vcs === "git"` or absent). Any other
-// `vcs` value or extra field is rejected as invalid wire and maps to redacted
-// `internal` on the carrier. Production `project/current` stays SDK-only
-// (`GET /project/current` via `@kilocode/sdk` `client.project.current`),
-// which remains the sole user-visible authority; the private path is detached
-// warn-only observation of the current directory instance snapshot with no
-// freshness claim. Covers the deferred `project/git-status` `hasGit`
-// consumer (`r.data?.vcs === "git"`, fail-closed `false`). Out of scope are
-// `initGit`/`update`/`directories`/`list`, full `Project.Info` shape,
-// `worktree`/`sandboxes`/`id`/`name`/`icon`/`commands`/`time`, and any
-// transport/wiring/cache.
+// `project/current` vcs-only narrow projection private carrier contract
+// (Active, private-first `hasGit` only). Strict v1 envelope helpers plus the
+// locked narrow vcs projection. The private path never transmits
+// path-bearing or out-of-scope project fields: success data is
+// `{vcs?: "git"}` only (`vcs === "git"` or absent). Any other `vcs` value or
+// extra field is rejected as invalid wire and maps to redacted `internal` on
+// the carrier. Only the derived `hasGit` boolean (`vcs === "git"`,
+// fail-closed `false`) is consumed private-first via
+// `kilo-provider/project-current-privatefirst.ts` with exactly-one
+// same-directory SDK fallback; full `Project.Info` stays SDK-only and is
+// never a private contract. Covers the `project/git-status` `hasGit`
+// consumer only. Out of scope are `initGit`/`update`/`directories`/`list`,
+// full `Project.Info` shape, `worktree`/`sandboxes`/`id`/`name`/`icon`/
+// `commands`/`time`, and any transport/wiring/cache.
 //
 // Source facts (read-only evidence, not imported):
 // - Route: `GET /project/current` with `directory?`, `workspace?` in
@@ -447,8 +447,10 @@ export function validateProjectCurrentResult(raw: unknown, req: ProjectCurrentCo
   return raw as unknown as ProjectCurrentResult
 }
 
-// Detached parity only (never production parity): both sides compare as the
-// derived `hasGit` boolean (`vcs === "git"`). Failed-vs-failed status
+// Pure diagnostic only (never wired to production: private-first issues at
+// most one private result plus at most one SDK result per read, so a
+// comparator would need a third request to add signal): both sides compare
+// as the derived `hasGit` boolean (`vcs === "git"`). Failed-vs-failed status
 // agreement holds with no content comparison. Malformed SDK `vcs` values
 // (neither `git` nor absent) are reported as
 // `project-current-shape-mismatch`, never coerced. The request directory is

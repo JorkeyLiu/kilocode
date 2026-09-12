@@ -1,44 +1,30 @@
 import type { KiloClient } from "@kilocode/sdk/v2/client"
-import { observeProjectCurrentParityDetached, type ProjectCurrentParityConnection } from "./project-current-parity"
+import {
+  fetchHasGitPrivateFirst,
+  type ProjectCurrentPrivateConnection,
+} from "./project-current-privatefirst"
 
 /**
- * Detached SDK-first `project/current` vcs-only parity boundary. SDK stays
- * the sole authority; the observer is non-blocking, warn-only, and never
- * mutates the SDK return, the git cache/UI, or error handling. Null
- * detaches. Set by extension activation to the current
- * `KiloConnectionService` and cleared on deactivation.
+ * Private-first `project/current` narrow projection for the `hasGit`
+ * production boolean consumer (`vcs === "git"`).
+ *
+ * Only the derived boolean is consumed; full `Project.Info` stays SDK-only
+ * and is never a private contract. `directory` is workspace routing
+ * identity only. No new owner, no cache, no lifecycle change: `cachedGitRepo`
+ * and the webview `gitStatus` message keep their existing semantics.
+ * Null detaches to SDK-only. With a private connection edge there is at
+ * most one private attempt plus at most one SDK read — never two SDK reads.
  */
-let parityConn: ProjectCurrentParityConnection | null = null
+let privConn: ProjectCurrentPrivateConnection | null = null
 
-export function setProjectCurrentParityConnection(c: ProjectCurrentParityConnection | null): void {
-  parityConn = c
-}
-
-function observeParity(sdk: { data?: unknown; error?: unknown; response?: unknown }, dir: string): void {
-  const conn = parityConn
-  if (!conn) return
-  if (typeof dir !== "string" || dir.length === 0) return
-  try {
-    observeProjectCurrentParityDetached(conn, sdk, dir)
-  } catch {
-    console.warn("[Kilo ProjectCurrent] private parity observation failed (fail-closed):", {
-      op: "project/current",
-      observationFailed: true,
-    })
-  }
+export function setProjectCurrentPrivateConnection(c: ProjectCurrentPrivateConnection | null): void {
+  privConn = c
 }
 
 export async function hasGit(client: KiloClient, directory: string): Promise<boolean> {
-  try {
-    const result = (await client.project.current({ directory })) as unknown as {
-      data?: unknown
-      error?: unknown
-      response?: unknown
-    }
-    observeParity(result, directory)
-    return (result.data as { vcs?: unknown } | undefined)?.vcs === "git"
-  } catch (err) {
-    observeParity({ error: err }, directory)
-    return false
-  }
+  return fetchHasGitPrivateFirst({
+    connection: privConn,
+    client: client as unknown as never,
+    directory,
+  })
 }

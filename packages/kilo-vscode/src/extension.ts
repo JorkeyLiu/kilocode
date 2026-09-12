@@ -18,7 +18,7 @@ import { registerHeapSnapshot } from "./commands/heap-snapshot"
 import { RemoteStatusService } from "./services/RemoteStatusService"
 import { setPathPrivateConnection } from "./kilo-provider/model-state"
 import { setConfigWarningsParityConnection } from "./kilo-provider/config-warnings"
-import { setProjectCurrentParityConnection } from "./kilo-provider/git-status"
+import { setProjectCurrentPrivateConnection } from "./kilo-provider/git-status"
 import { markWorkspace } from "./util/spotlight"
 import { createNotebookBridge } from "./services/notebook"
 import { p0Begin, p0Stage } from "./perf/perf-instrument"
@@ -202,11 +202,11 @@ export function activate(context: vscode.ExtensionContext) {
   // authority/observer contract: SDK stays the sole user-visible authority
   // and the private path is warn-only observation of safe categories.
   setConfigWarningsParityConnection(connectionService)
-  // Detached SDK-first `project/current` vcs-only parity boundary for the
-  // narrowest existing SDK consumer (`kilo-provider/git-status.ts` hasGit).
-  // Same authority/observer contract: SDK stays the sole user-visible
-  // authority and the private path is warn-only observation of `vcs`.
-  setProjectCurrentParityConnection(connectionService)
+  // Private-first `project/current` narrow projection for the `hasGit`
+  // production boolean consumer (`kilo-provider/git-status.ts` hasGit).
+  // Only the derived `vcs === "git"` boolean is consumed; full
+  // `Project.Info` stays SDK-only and is never a private contract.
+  setProjectCurrentPrivateConnection(connectionService)
 
   const unsubscribeStateChange = connectionService.onStateChange((state) => {
     if (state === "connected") {
@@ -745,7 +745,7 @@ export async function deactivate() {
   shuttingDown = true
   setPathPrivateConnection(null)
   setConfigWarningsParityConnection(null)
-  setProjectCurrentParityConnection(null)
+  setProjectCurrentPrivateConnection(null)
   await agentManager?.shutdown()
   TelemetryProxy.getInstance().shutdown()
 }
