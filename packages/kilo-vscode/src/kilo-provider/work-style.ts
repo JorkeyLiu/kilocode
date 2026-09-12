@@ -2,6 +2,7 @@ import * as vscode from "vscode"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
 import { getInitialWorkStyle, type WorkStyleState } from "../shared/work-style-presets"
 import { handleWorkStyleApplyMessage } from "./work-style-apply-handler"
+import { hasAnySession } from "./session-existence-privatefirst"
 
 export const WORK_STYLE_SETTING_KEYS = ["showTaskTimeline"] as const
 
@@ -34,18 +35,6 @@ export function watchWorkStyleConfig(post: (message: unknown) => void, next?: vs
 
 export async function setWorkStyle(style: WorkStyleState) {
   await getConfig().update("agentWorkStyle", style, vscode.ConfigurationTarget.Global)
-}
-
-async function hasAnySession(connection: KiloConnectionService, directory: string): Promise<boolean> {
-  const client = await connection.getClientAsync(directory)
-  const { data } = await client.experimental.session.list(
-    {
-      limit: 1,
-      archived: true,
-    },
-    { throwOnError: true },
-  )
-  return data.length > 0
 }
 
 async function initializeWorkStyle(connection: KiloConnectionService, directory: string): Promise<void> {

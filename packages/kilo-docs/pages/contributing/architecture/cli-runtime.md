@@ -474,7 +474,7 @@ B8 adds one private transport narrowly for `session/children` over the existing 
 
 ### Session-list stable pagination (`GET /experimental/session`) — committed v2 contract
 
-`GET /experimental/session` lists sessions across projects with stable pagination. SDK `client.experimental.session.list` is the sole authority; the private `experimental/session/list` path is detached warn-only parity observation. No cutover, no G3/Gate closure.
+`GET /experimental/session` lists sessions across projects with stable pagination. General paginated session list stays SDK-authoritative: SDK `client.experimental.session.list` is the sole authority and the private `experimental/session/list` path is detached warn-only parity observation. The only exception is the onboarding existence probe (`kilo-provider/session-existence-privatefirst.ts` `hasAnySession` for work-style init, same v2 `experimental/session/list` capability, `context {directory}` + `filter {limit:1, archived:true}`, 3 s exact-cancel/epoch): a valid private `succeeded`+`accepted` result is authoritative boolean `sessions.length > 0` with zero SDK, every other private outcome takes exactly one same-directory SDK `experimental.session.list({directory, limit:1, archived:true}, {throwOnError:true})` fallback. The directory tuple intentionally corrects the prior omitted-directory global probe so private availability cannot change onboarding. No cutover, no G3/Gate closure.
 
 | Aspect | Behavior |
 |---|---|
