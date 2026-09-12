@@ -2856,25 +2856,53 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     // Occurrence boundary: scheduler-owned monotonic token. Capture
     // synchronously flushes pre-token queued state so the live queue after
     // capture holds only post-token updates; live delivery is never suspended.
-    const token = mode === "replace" || mode === "reconcile" ? this.streams.capture(sessionID) : undefined
-    const dropToken = () => {
-      if (token !== undefined) this.streams.discard(sessionID, token)
-    }
-    let page: Awaited<ReturnType<typeof fetchMessagePage>>
-    try {
-      page = await fetchMessagePage(
-        this.client,
-        {
-          sessionID,
-          workspaceDir: dir,
-          limit: options.limit ?? MESSAGE_PAGE_LIMIT,
-          before: options.before,
-          signal: abort?.signal,
-        },
-        this.connectionService,
-        this.privateSessionReader,
-      )
-    } catch (e) {
+    // Replace tolerates one delete-race invalidation: a latest-but-voided
+    // commit refetches once with a fresh capture. Superseded tokens stay
+    // silent so a newer load wins without competition.
+    const first = mode === "replace" || mode === "reconcile" ? this.streams.capture(sessionID) : undefined
+    const tries = mode === "replace" && first !== undefined ? 2 : 1
+    let token = first
+    for (let n = 0; n < tries; n++) {
+      if (n > 0) {
+        if (abort?.signal.aborted) return false
+        if (generation !== this.detailGeneration) return false
+        if (mode === "replace" && this.contextSessionID !== target) return false
+        if (!this.trackedSessionIds.has(sessionID)) return false
+        token = this.streams.capture(sessionID)
+      }
+      const dropToken = () => {
+        if (token !== undefined) this.streams.discard(sessionID, token)
+      }
+      let page: Awaited<ReturnType<typeof fetchMessagePage>>
+      try {
+        page = await fetchMessagePage(
+          this.client,
+          {
+            sessionID,
+            workspaceDir: dir,
+            limit: options.limit ?? MESSAGE_PAGE_LIMIT,
+            before: options.before,
+            signal: abort?.signal,
+          },
+          this.connectionService,
+          this.privateSessionReader,
+        )
+      } catch (e) {
+        if (abort?.signal.aborted) {
+          dropToken()
+          return false
+        }
+        if (generation !== this.detailGeneration) {
+          dropToken()
+          return false
+        }
+        if (mode === "replace" && this.contextSessionID !== target) {
+          dropToken()
+          return false
+        }
+        dropToken()
+        throw e
+      }
       if (abort?.signal.aborted) {
         dropToken()
         return false
@@ -2887,42 +2915,59 @@ export class KiloProvider implements TelemetryPropertiesProvider {
         dropToken()
         return false
       }
-      dropToken()
-      throw e
-    }
-    if (abort?.signal.aborted) {
-      dropToken()
-      return false
-    }
-    if (generation !== this.detailGeneration) {
-      dropToken()
-      return false
-    }
-    if (mode === "replace" && this.contextSessionID !== target) {
-      dropToken()
-      return false
-    }
-    if (!this.trackedSessionIds.has(sessionID)) {
-      dropToken()
-      return false
-    }
-    const messages = page.items.map((m) => ({
-      ...this.slimInfo(m.info),
-      parts: this.slimParts(m.parts),
-      createdAt: new Date(m.info.time.created).toISOString(),
-    }))
-    if ((mode === "replace" || mode === "reconcile") && token !== undefined) {
-      // Authoritative validation: commit consumes the post-token live queue
-      // (preventing duplicate delta emission), posts the snapshot inside the
-      // synchronous callback, then replays the filtered capture once.
-      // Callback call-order is the guarantee, not delivery acknowledgement.
-      const snapshot = buildSnapshotPartKeys(page.items)
-      const committed = this.streams.commit(sessionID, token, snapshot, () => {
+      if (!this.trackedSessionIds.has(sessionID)) {
+        dropToken()
+        return false
+      }
+      const messages = page.items.map((m) => ({
+        ...this.slimInfo(m.info),
+        parts: this.slimParts(m.parts),
+        createdAt: new Date(m.info.time.created).toISOString(),
+      }))
+      if ((mode === "replace" || mode === "reconcile") && token !== undefined) {
+        // Authoritative validation: commit consumes the post-token live queue
+        // (preventing duplicate delta emission), posts the snapshot inside the
+        // synchronous callback, then replays the filtered capture once.
+        // Callback call-order is the guarantee, not delivery acknowledgement.
+        const snapshot = buildSnapshotPartKeys(page.items)
+        const seen = token
+        const committed = this.streams.commit(sessionID, seen, snapshot, () => {
+          for (const message of messages) {
+            this.connectionService.recordMessageSessionId(message.id, message.sessionID)
+          }
+          this.resetMessageCosts(sessionID, messages)
+          if (mode === "reconcile") this.lastReconciledAt.set(sessionID, Date.now())
+          this.postMessage({
+            type: "messagesLoaded",
+            sessionID,
+            messages,
+            mode,
+            cursor: page.cursor,
+            hasMore: Boolean(page.cursor),
+            since: seen,
+          })
+        })
+        if (!committed) {
+          // Latest-wins/bounded fail-closed: superseded, expired, overflowed,
+          // or delete-voided. No snapshot may be applied without complete
+          // replay. Replace retries once when still latest, then surfaces the
+          // existing bounded load error so the webview clears loading;
+          // superseded attempts stay silent. Background reconcile returns
+          // without posts so a later focus can retry (lastReconciledAt unwritten).
+          if (mode === "replace") {
+            if (!this.streams.isLatestAttempt(sessionID, seen)) return false
+            if (n + 1 < tries) continue
+          }
+          if (strict || mode === "replace") throw new Error("Session messages snapshot expired before replay completed")
+          return false
+        }
+      } else {
         for (const message of messages) {
           this.connectionService.recordMessageSessionId(message.id, message.sessionID)
         }
-        this.resetMessageCosts(sessionID, messages)
+        if (mode === "replace" || mode === "reconcile") this.resetMessageCosts(sessionID, messages)
         if (mode === "reconcile") this.lastReconciledAt.set(sessionID, Date.now())
+        // Modes without a token retain ordinary flush.
         this.postMessage({
           type: "messagesLoaded",
           sessionID,
@@ -2932,36 +2977,13 @@ export class KiloProvider implements TelemetryPropertiesProvider {
           hasMore: Boolean(page.cursor),
           since: token,
         })
-      })
-      if (!committed) {
-        // Latest-wins/bounded fail-closed: superseded, expired, or overflowed.
-        // No snapshot may be applied without complete replay. Strict user loads
-        // surface the existing bounded load error; background reconcile returns
-        // without posts so a later retry can run.
-        if (strict) throw new Error("Session messages snapshot expired before replay completed")
-        return false
+        if (options.preserveStream) this.streams.flush(sessionID)
       }
-    } else {
-      for (const message of messages) {
-        this.connectionService.recordMessageSessionId(message.id, message.sessionID)
-      }
-      if (mode === "replace" || mode === "reconcile") this.resetMessageCosts(sessionID, messages)
-      if (mode === "reconcile") this.lastReconciledAt.set(sessionID, Date.now())
-      // Modes without a token retain ordinary flush.
-      this.postMessage({
-        type: "messagesLoaded",
-        sessionID,
-        messages,
-        mode,
-        cursor: page.cursor,
-        hasMore: Boolean(page.cursor),
-        since: token,
-      })
-      if (options.preserveStream) this.streams.flush(sessionID)
+      this.recoverPendingPrompts()
+      if (strict) this.activateSession(sessionID)
+      return true
     }
-    this.recoverPendingPrompts()
-    if (strict) this.activateSession(sessionID)
-    return true
+    throw new Error("Session messages snapshot expired before replay completed")
   }
 
   /**
@@ -6003,6 +6025,12 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       if (!sameDirectory(next.directory, this.getWorkspaceDirectory(next.sessionID))) return
       this.postMessage({ ...next, revision: ++this.sandboxRevision })
       return
+    }
+    if (next.type === "messageRemoved" || next.type === "partRemoved") {
+      // Delete wins over an in-flight snapshot: void active captures so a
+      // stale fetch cannot post afterwards. Live queue/derived/latest and
+      // lane timers stay intact; queued pre-delete updates still flush first.
+      if (sessionID) this.streams.retire(sessionID)
     }
     this.streams.flush(sessionID)
     this.postMessage(next)

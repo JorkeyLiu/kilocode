@@ -446,6 +446,21 @@ export class SessionStreamScheduler {
   }
 
   /**
+   * Void every active capture for a session without touching live state.
+   * Queued updates, derived lineage, latest attempt identity, lane timers,
+   * and other sessions stay intact; no token advances. A later `commit`
+   * with a voided token returns false. Used when a mapped `messageRemoved`
+   * or `partRemoved` must win over an in-flight snapshot fetch.
+   */
+  retire(sessionID: string): void {
+    const bySid = this.captures.get(sessionID)
+    if (!bySid) return
+    for (const [, cap] of bySid) this.clearCaptureTimer(cap)
+    bySid.clear()
+    this.captures.delete(sessionID)
+  }
+
+  /**
    * Whether `token` is the latest capture attempt for the session, even when
    * its capture already expired/overflowed. Never touches newer state.
    */

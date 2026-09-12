@@ -543,3 +543,35 @@ describe("SessionStreamScheduler / stats", () => {
     expect(stats.active + stats.visible + stats.background).toBe(stats.batches)
   })
 })
+
+describe("SessionStreamScheduler / retire", () => {
+  it("voids active captures but preserves live queue, latest, and other sessions", () => {
+    const sent: Sent[] = []
+    const queue = new SessionStreamScheduler((msg) => sent.push(msg))
+    const first = queue.capture("s1")
+    const other = queue.capture("s2")
+    queue.push(update("live", "live", "s1", "p1"))
+    queue.push(update("other", "other", "s2", "p1"))
+    queue.retire("s1")
+    expect(queue.commit("s1", first, new Set(), () => {})).toBeFalse()
+    expect(queue.isLatestAttempt("s1", first)).toBeTrue()
+    expect(queue.commit("s2", other, new Set(), () => {})).toBeTrue()
+    expect(queue.isLatestAttempt("s2", other)).toBeTrue()
+    queue.flush("s1")
+    const flat = items(sent)
+    expect(flat.some((msg) => msg.sessionID === "s1" && partText(msg) === "live")).toBeTrue()
+    queue.push(update("next", "next", "s1", "p2"))
+    queue.flush("s1")
+    expect(items(sent).some((msg) => msg.sessionID === "s1" && partText(msg) === "next")).toBeTrue()
+    queue.dispose()
+  })
+
+  it("retire on an empty session keeps latest identity", () => {
+    const queue = new SessionStreamScheduler(() => {})
+    const token = queue.capture("s1")
+    queue.retire("s1")
+    expect(queue.isLatestAttempt("s1", token)).toBeTrue()
+    expect(queue.commit("s1", token, new Set(), () => {})).toBeFalse()
+    queue.dispose()
+  })
+})
