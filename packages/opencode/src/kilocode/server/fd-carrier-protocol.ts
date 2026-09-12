@@ -17,6 +17,8 @@ export const FD_CAPABILITIES = [
   "session/abort",
   "question/reply",
   "question/reject",
+  "permission/save-always-rules",
+  "permission/reply",
   "session/status",
   "session/get",
   "session/messages",

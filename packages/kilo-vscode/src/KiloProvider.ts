@@ -5355,6 +5355,7 @@ export class KiloProvider implements TelemetryPropertiesProvider {
       currentSessionId: this.currentSession?.id,
       trackedSessionIds: this.trackedSessionIds,
       sessionDirectories: this.sessionDirectories,
+      connection: this.connectionService,
       postMessage: (msg) => this.postMessage(msg),
       getWorkspaceDirectory: (sid) => this.getWorkspaceDirectory(sid),
       recordPermissionDirectory: (id, dir) => this.connectionService.recordPermissionDirectory(id, dir),

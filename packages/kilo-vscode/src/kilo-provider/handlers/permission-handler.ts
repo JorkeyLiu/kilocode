@@ -6,6 +6,9 @@
  */
 
 import type { KiloClient, PermissionRequest } from "@kilocode/sdk/v2/client"
+import { replyPermissionPrivateFirst, savePermissionPrivateFirst } from "../permission-privatefirst"
+
+type PrivateConn = Parameters<typeof replyPermissionPrivateFirst>[0]["connection"]
 
 export type RecoverablePermission = PermissionRequest
 
@@ -14,6 +17,7 @@ export interface PermissionContext {
   readonly currentSessionId: string | undefined
   readonly trackedSessionIds: Set<string>
   readonly sessionDirectories: ReadonlyMap<string, string>
+  readonly connection?: PrivateConn
   postMessage(msg: unknown): void
   getWorkspaceDirectory(sessionId?: string): string
   recordPermissionDirectory(requestID: string, directory: string): void
@@ -47,9 +51,116 @@ function isNotFoundError(error: unknown): boolean {
   )
 }
 
+async function saveAlwaysRulesSdk(
+  ctx: PermissionContext,
+  permissionId: string,
+  dir: string,
+  approvedAlways: string[],
+  deniedAlways: string[],
+): Promise<"ok" | "stale" | "error"> {
+  return ctx.client!.permission
+    .saveAlwaysRules(
+      {
+        requestID: permissionId,
+        directory: dir,
+        approvedAlways,
+        deniedAlways,
+      },
+      { throwOnError: true },
+    )
+    .then(() => "ok" as const)
+    .catch((error: unknown) => {
+      if (isNotFoundError(error)) return "stale" as const
+      console.error("[Kilo New] KiloProvider: Failed to save always-rules:", error)
+      ctx.postMessage({ type: "permissionError", permissionID: permissionId })
+      return "error" as const
+    })
+}
+
+async function replySdk(
+  ctx: PermissionContext,
+  permissionId: string,
+  dir: string,
+  response: "once" | "always" | "reject",
+): Promise<"ok" | "stale" | "error"> {
+  return ctx.client!.permission
+    .reply({ requestID: permissionId, reply: response, directory: dir }, { throwOnError: true })
+    .then(() => "ok" as const)
+    .catch((error: unknown) => {
+      if (isNotFoundError(error)) return "stale" as const
+      console.error("[Kilo New] KiloProvider: Failed to respond to permission:", error)
+      ctx.postMessage({ type: "permissionError", permissionID: permissionId })
+      return "error" as const
+    })
+}
+
+type SaveStep = { done: true } | { done: false; stop: boolean }
+
+async function saveStep(
+  ctx: PermissionContext,
+  permissionId: string,
+  dir: string,
+  approvedAlways: string[],
+  deniedAlways: string[],
+  staleCleanup: () => void,
+): Promise<SaveStep> {
+  if (approvedAlways.length === 0 && deniedAlways.length === 0) return { done: true }
+  let priv: Awaited<ReturnType<typeof savePermissionPrivateFirst>> | null = null
+  try {
+    priv = await savePermissionPrivateFirst({
+      connection: ctx.connection ?? null,
+      directory: dir,
+      requestID: permissionId,
+      approvedAlways,
+      deniedAlways,
+    })
+  } catch (error) {
+    console.error("[Kilo New] KiloProvider: Private save attempt failed, falling back:", error)
+  }
+  if (priv && priv.outcome.kind === "terminal") return { done: true }
+  if (priv && priv.outcome.kind === "terminal-failure") {
+    if (priv.outcome.code === "permission.not_found") staleCleanup()
+    else {
+      console.error("[Kilo New] KiloProvider: Failed to save always-rules:", priv.outcome.code)
+      ctx.postMessage({ type: "permissionError", permissionID: permissionId })
+    }
+    return { done: false, stop: true }
+  }
+  const saveResult = await saveAlwaysRulesSdk(ctx, permissionId, dir, approvedAlways, deniedAlways)
+  if (saveResult === "stale") staleCleanup()
+  return saveResult === "ok" ? { done: true } : { done: false, stop: true }
+}
+
+async function replyStep(
+  ctx: PermissionContext,
+  permissionId: string,
+  dir: string,
+  response: "once" | "always" | "reject",
+  staleCleanup: () => void,
+): Promise<void> {
+  let rpriv: Awaited<ReturnType<typeof replyPermissionPrivateFirst>> | null = null
+  try {
+    rpriv = await replyPermissionPrivateFirst({ connection: ctx.connection ?? null, directory: dir, requestID: permissionId, reply: response })
+  } catch (error) {
+    console.error("[Kilo New] KiloProvider: Private reply attempt failed, falling back:", error)
+  }
+  if (rpriv && rpriv.outcome.kind === "terminal") return
+  if (rpriv && rpriv.outcome.kind === "terminal-failure") {
+    if (rpriv.outcome.code === "permission.not_found") staleCleanup()
+    else {
+      console.error("[Kilo New] KiloProvider: Failed to respond to permission:", rpriv.outcome.code)
+      ctx.postMessage({ type: "permissionError", permissionID: permissionId })
+    }
+    return
+  }
+  const replyResult = await replySdk(ctx, permissionId, dir, response)
+  if (replyResult === "stale") staleCleanup()
+}
+
 /**
  * Handle permission response from the webview.
  * Calls saveAlwaysRules first (if any), then reply — sequentially to avoid races.
+ * Both steps are private-first with exactly one SDK fallback each.
  */
 export async function handlePermissionResponse(
   ctx: PermissionContext,
@@ -79,43 +190,9 @@ export async function handlePermissionResponse(
     void fetchAndSendPendingPermissions(ctx)
   }
 
-  if (approvedAlways.length > 0 || deniedAlways.length > 0) {
-    const saveResult = await ctx.client.permission
-      .saveAlwaysRules(
-        {
-          requestID: permissionId,
-          directory: dir,
-          approvedAlways,
-          deniedAlways,
-        },
-        { throwOnError: true },
-      )
-      .then(() => "ok" as const)
-      .catch((error: unknown) => {
-        if (isNotFoundError(error)) return "stale" as const
-        console.error("[Kilo New] KiloProvider: Failed to save always-rules:", error)
-        ctx.postMessage({ type: "permissionError", permissionID: permissionId })
-        return "error" as const
-      })
-    if (saveResult === "stale") {
-      staleCleanup()
-      return
-    }
-    if (saveResult === "error") return
-  }
-
-  const replyResult = await ctx.client.permission
-    .reply({ requestID: permissionId, reply: response, directory: dir }, { throwOnError: true })
-    .then(() => "ok" as const)
-    .catch((error: unknown) => {
-      if (isNotFoundError(error)) return "stale" as const
-      console.error("[Kilo New] KiloProvider: Failed to respond to permission:", error)
-      ctx.postMessage({ type: "permissionError", permissionID: permissionId })
-      return "error" as const
-    })
-  if (replyResult === "stale") {
-    staleCleanup()
-  }
+  const saved = await saveStep(ctx, permissionId, dir, approvedAlways, deniedAlways, staleCleanup)
+  if (!saved.done) return
+  await replyStep(ctx, permissionId, dir, response, staleCleanup)
 }
 
 /**

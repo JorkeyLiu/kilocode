@@ -173,6 +173,22 @@ import type {
   QuestionTerminal,
   QuestionTerminalFailure,
 } from "./serve-private-question-contract"
+import {
+  makePermissionAmbiguous,
+  validatePermissionReplyContractRequest,
+  validatePermissionReplyResult,
+  validatePermissionSaveContractRequest,
+  validatePermissionSaveResult,
+  validatePermissionTerminalFailure,
+} from "./serve-private-permission-contract"
+import type {
+  PermissionAmbiguous,
+  PermissionContractRequest,
+  PermissionReplyContractRequest,
+  PermissionSaveContractRequest,
+  PermissionTerminal,
+  PermissionTerminalFailure,
+} from "./serve-private-permission-contract"
 
 export {
   canonicalGetOpId,
@@ -1227,6 +1243,66 @@ export function validateQuestionRejectOutcome(
     return raw as unknown as ServePrivateQuestionResult
   }
   throw new Error(`question reject result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
+}
+
+export type ServePrivatePermissionSaveRequest = PermissionSaveContractRequest
+export type ServePrivatePermissionReplyRequest = PermissionReplyContractRequest
+export type ServePrivatePermissionResult = PermissionTerminal | PermissionTerminalFailure | PermissionAmbiguous
+
+export function validatePermissionSaveRequest(raw: unknown): ServePrivatePermissionSaveRequest {
+  return validatePermissionSaveContractRequest(raw)
+}
+
+export function validatePermissionReplyRequest(raw: unknown): ServePrivatePermissionReplyRequest {
+  return validatePermissionReplyContractRequest(raw)
+}
+
+export function validatePermissionSaveOutcome(
+  raw: unknown,
+  req: ServePrivatePermissionSaveRequest,
+): ServePrivatePermissionResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  const kind = raw.kind
+  if (kind === "terminal") return validatePermissionSaveResult(raw, req)
+  if (kind === "terminal-failure") return validatePermissionTerminalFailure(raw, req)
+  if (kind === "ambiguous") {
+    const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "transportUnknown"])
+    for (const k of Object.keys(raw)) {
+      if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
+    }
+    if (raw.v !== 1) throw new Error("v must be 1")
+    if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+    if (raw.opId !== req.opId) throw new Error("opId mismatch")
+    if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+    if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+    if (raw.terminal !== false) throw new Error("ambiguous terminal must be false")
+    return raw as unknown as ServePrivatePermissionResult
+  }
+  throw new Error(`permission save result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
+}
+
+export function validatePermissionReplyOutcome(
+  raw: unknown,
+  req: ServePrivatePermissionReplyRequest,
+): ServePrivatePermissionResult {
+  if (!isRecord(raw)) throw new Error("result must be object")
+  const kind = raw.kind
+  if (kind === "terminal") return validatePermissionReplyResult(raw, req)
+  if (kind === "terminal-failure") return validatePermissionTerminalFailure(raw, req)
+  if (kind === "ambiguous") {
+    const allowed = new Set(["kind", "v", "requestId", "opId", "idempotencyKey", "accepted", "terminal", "transportUnknown"])
+    for (const k of Object.keys(raw)) {
+      if (!allowed.has(k)) throw new Error(`unexpected ambiguous field ${k}`)
+    }
+    if (raw.v !== 1) throw new Error("v must be 1")
+    if (raw.requestId !== req.requestId) throw new Error("requestId mismatch")
+    if (raw.opId !== req.opId) throw new Error("opId mismatch")
+    if (raw.idempotencyKey !== req.idempotencyKey) throw new Error("idempotencyKey mismatch")
+    if (raw.accepted !== false) throw new Error("ambiguous accepted must be false")
+    if (raw.terminal !== false) throw new Error("ambiguous terminal must be false")
+    return raw as unknown as ServePrivatePermissionResult
+  }
+  throw new Error(`permission reply result kind must be terminal, terminal-failure, or ambiguous, got ${String(kind)}`)
 }
 
 function isNonEmptyString(v: unknown): boolean {
@@ -2872,6 +2948,8 @@ export class ServePrivatePeer {
       if (cap === "find/files" && c["find/files"]) return true
       if (cap === "question/reply" && c["question/reply"]) return true
       if (cap === "question/reject" && c["question/reject"]) return true
+      if (cap === "permission/save-always-rules" && c["permission/save-always-rules"]) return true
+      if (cap === "permission/reply" && c["permission/reply"]) return true
     }
     return false
   }
@@ -3300,6 +3378,82 @@ export class ServePrivatePeer {
       } catch (e: unknown) {
         if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeQuestionAmbiguous(req)
         return makeQuestionAmbiguous(req)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privatePermissionSave(req: ServePrivatePermissionSaveRequest): Promise<ServePrivatePermissionResult> {
+    const handle = this.privatePermissionSaveWithHandle(req)
+    return handle.promise
+  }
+
+  privatePermissionSaveWithHandle(req: ServePrivatePermissionSaveRequest): {
+    id: number
+    promise: Promise<ServePrivatePermissionResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validatePermissionSaveRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("permission/save-always-rules")) {
+      throw new Error("Private peer missing permission/save-always-rules capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("permission/save-always-rules", req)
+    const promise = (async (): Promise<ServePrivatePermissionResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        try {
+          return validatePermissionSaveOutcome(raw, req)
+        } catch {
+          return makePermissionAmbiguous(req)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makePermissionAmbiguous(req)
+        return makePermissionAmbiguous(req)
+      }
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privatePermissionReply(req: ServePrivatePermissionReplyRequest): Promise<ServePrivatePermissionResult> {
+    const handle = this.privatePermissionReplyWithHandle(req)
+    return handle.promise
+  }
+
+  privatePermissionReplyWithHandle(req: ServePrivatePermissionReplyRequest): {
+    id: number
+    promise: Promise<ServePrivatePermissionResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validatePermissionReplyRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("permission/reply")) {
+      throw new Error("Private peer missing permission/reply capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("permission/reply", req)
+    const promise = (async (): Promise<ServePrivatePermissionResult> => {
+      try {
+        const raw = (await rawPromise) as unknown
+        try {
+          return validatePermissionReplyOutcome(raw, req)
+        } catch {
+          return makePermissionAmbiguous(req)
+        }
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makePermissionAmbiguous(req)
+        return makePermissionAmbiguous(req)
       }
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)

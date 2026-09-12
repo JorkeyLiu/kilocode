@@ -1,6 +1,7 @@
 import * as vscode from "vscode"
 import type { Event, KiloClient } from "@kilocode/sdk/v2/client"
 import type { KiloConnectionService } from "../services/cli-backend/connection-service"
+import { replyPermissionPrivateFirst } from "../kilo-provider/permission-privatefirst"
 
 /**
  * Callback that resolves the correct working directory for a session.
@@ -24,6 +25,31 @@ export interface AutoApproveController {
 
 const CONFIG = "kilo-code.new.autoApprove"
 const KEY = "enabled"
+
+type OnceResult = { ok: true } | { ok: false; terminal: boolean; detail: unknown }
+
+async function replyOncePrivateFirst(
+  connection: KiloConnectionService,
+  client: KiloClient,
+  dir: string,
+  requestID: string,
+): Promise<OnceResult> {
+  let priv: Awaited<ReturnType<typeof replyPermissionPrivateFirst>> | null = null
+  try {
+    priv = await replyPermissionPrivateFirst({ connection, directory: dir, requestID, reply: "once" })
+  } catch (error) {
+    console.error("[Kilo New] toggleAutoApprove: private reply attempt failed, falling back:", error)
+  }
+  if (priv && priv.outcome.kind === "terminal") return { ok: true }
+  if (priv && priv.outcome.kind === "terminal-failure") return { ok: false, terminal: true, detail: priv.outcome.code }
+  const sdk = await client.permission
+    .reply({ requestID, directory: dir, reply: "once" }, { throwOnError: true })
+    .then(
+      () => ({ ok: true as const }),
+      (err) => ({ ok: false as const, terminal: false as const, detail: err }),
+    )
+  return sdk
+}
 
 /**
  * Runtime auto-accept toggle for permissions.
@@ -73,11 +99,8 @@ export function registerToggleAutoApprove(
         const { data: pending } = await client.permission.list({ directory: dir }, { throwOnError: true })
         for (const req of pending) {
           if (generation !== snapshot) break
-          await client.permission
-            .reply({ requestID: req.id, directory: dir, reply: "once" }, { throwOnError: true })
-            .catch((err) => {
-              console.error("[Kilo New] toggleAutoApprove: failed to drain pending:", err)
-            })
+          const out = await replyOncePrivateFirst(connectionService, client, dir, req.id)
+          if (!out.ok) console.error("[Kilo New] toggleAutoApprove: failed to drain pending:", out.detail)
         }
       } catch (err) {
         console.error("[Kilo New] toggleAutoApprove: failed to list pending permissions:", err)
@@ -93,15 +116,9 @@ export function registerToggleAutoApprove(
     if (!client) return false
     const dir =
       directory ?? connectionService.getPermissionDirectory(event.properties.id) ?? resolve(event.properties.sessionID)
-    return client.permission
-      .reply({ requestID: event.properties.id, directory: dir, reply: "once" }, { throwOnError: true })
-      .then(
-        () => true,
-        (err) => {
-          console.error("[Kilo New] toggleAutoApprove: failed to auto-reply:", err)
-          return false
-        },
-      )
+    const out = await replyOncePrivateFirst(connectionService, client, dir, event.properties.id)
+    if (!out.ok) console.error("[Kilo New] toggleAutoApprove: failed to auto-reply:", out.detail)
+    return out.ok
   }
 
   context.subscriptions.push(
