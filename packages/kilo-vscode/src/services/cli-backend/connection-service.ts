@@ -42,6 +42,7 @@ import {
 } from "./serve-private-peer"
 import type { PromptContractRequest, PromptResult } from "./serve-private-prompt-contract"
 import type { CommandContractRequest, CommandResult } from "./serve-private-command-contract"
+import { skillRemoveOutcomeForOwner } from "./serve-private-skill-remove-owner"
 import type {
   ServePrivateRevertRequest,
   ServePrivateRevertResult,
@@ -2365,11 +2366,15 @@ export class KiloConnectionService {
     return { id: handle.id, promise, cancel }
   }
 
+  /** Private-only skill/remove mutation: thin owner delegation (see cap convention). */
+  privateSkillRemoveOutcomeWithHandle(req: Parameters<typeof skillRemoveOutcomeForOwner>[1]) {
+    return skillRemoveOutcomeForOwner(this, req)
+  }
+
   async privateGet(req: ServePrivateGetRequest): Promise<ServePrivateGetResult> {
     const handle = this.privateGetWithHandle(req)
     return handle.promise
   }
-
   privateGetWithHandle(req: ServePrivateGetRequest): {
     id: number
     promise: Promise<ServePrivateGetResult>

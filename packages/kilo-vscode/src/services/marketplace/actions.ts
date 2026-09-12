@@ -2,6 +2,8 @@ import * as path from "path"
 import * as vscode from "vscode"
 import type { KiloConnectionService } from "../cli-backend"
 import { retry } from "../cli-backend/retry"
+import { attemptSkillRemovePrivate, buildSkillRemoveReq } from "../../kilo-provider/skill-remove-privatefirst"
+import { isProjectSkillLocation } from "./detection"
 import type { MarketplaceService } from "."
 import type {
   InstallMarketplaceItemOptions,
@@ -66,6 +68,13 @@ export async function removeMarketplaceItem(
     return { success: false, slug: item.id, error: "No workspace directory for project-scope removal" }
   }
 
+  // Skill removal is owned by the CLI runtime: resolve the exact observed
+  // registry location for this scope and invoke the private `skill/remove`
+  // mutation. The location is never reconstructed from the marketplace
+  // item id/name. Backend convergence owns lifecycle, so no ad-hoc
+  // `global.config.update` or `instance.dispose` runs on this path.
+  if (item.type === "skill") return removeMarketplaceSkill(ctx, item, scope, project, dir)
+
   try {
     if (item.type === "mcp") await removeLegacyMcp(ctx, item.id, project, scope)
     const result = await ctx.marketplace.remove(item, scope, project)
@@ -76,12 +85,68 @@ export async function removeMarketplaceItem(
   }
 }
 
+function skillFailureMessage(code: string): string {
+  if (code === "skill.builtin") return "Cannot remove built-in skills."
+  if (code === "skill.url") return "URL-backed skills must be removed from configuration."
+  if (code === "skill.not_found")
+    return "Skill is no longer installed at this scope. Refresh the Marketplace view and try again."
+  return "Skill removal failed. Refresh the Marketplace view and try again."
+}
+
+async function removeMarketplaceSkill(
+  ctx: MarketplaceActionContext,
+  item: MarketplaceItem,
+  scope: "project" | "global",
+  project: string | undefined,
+  dir: string,
+): Promise<RemoveResult> {
+  const skills = await fetchSkills(ctx, dir)
+  if (!skills) {
+    return {
+      success: false,
+      slug: item.id,
+      error: "Could not refresh installed skills. Refresh the Marketplace view and try again.",
+    }
+  }
+  const scoped = skills.filter((s) =>
+    scope === "project"
+      ? !!project && isProjectSkillLocation(s.location, project)
+      : !project || !isProjectSkillLocation(s.location, project),
+  )
+  const matches = scoped.filter((s) => s.name === item.id)
+  if (matches.length === 0) {
+    return {
+      success: false,
+      slug: item.id,
+      error: "Skill is shown installed but no unambiguous location exists. Refresh or reopen the Marketplace view and try again.",
+    }
+  }
+  if (matches.length > 1 || !matches[0]) {
+    return {
+      success: false,
+      slug: item.id,
+      error: "Multiple skills match at this scope. Reopen the Marketplace view and try again.",
+    }
+  }
+  const attempt = await attemptSkillRemovePrivate(ctx.connection, buildSkillRemoveReq(dir, matches[0].location))
+  if (attempt.kind === "ok") return { success: true, slug: item.id }
+  if (attempt.kind === "failed") return { success: false, slug: item.id, error: skillFailureMessage(attempt.code) }
+  return {
+    success: false,
+    slug: item.id,
+    error: "Skill removal is unavailable. Refresh the Marketplace view and try again.",
+  }
+}
+
 export async function removeMarketplaceItemFromAllScopes(
   ctx: MarketplaceRemoveContext,
   item: MarketplaceItemRef,
   project: string | undefined,
   dir: string,
 ): Promise<boolean> {
+  // Skill removal is owned by the CLI runtime and never deletes local files:
+  // this generic helper must not invoke local skill deletion. Fail closed.
+  if (item.type === "skill") return false
   try {
     if (item.type === "mcp") await removeLegacyMcp(ctx, item.id, project, "all")
     const local = project ? await ctx.remove(item, "project", project) : undefined

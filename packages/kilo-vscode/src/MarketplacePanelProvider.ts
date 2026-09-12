@@ -277,6 +277,10 @@ export class MarketplacePanelProvider implements vscode.Disposable {
       this.directory(),
     )
     this.post({ type: "marketplaceRemoveResult", ...result })
+    // Skill success/failure both re-observe authoritative marketplace data;
+    // backend convergence owns skill lifecycle (no ad-hoc config
+    // update/dispose on this path).
+    if (item.type === "skill") await this.fetchData()
   }
 
   private handleStatus(event: Extract<GlobalEvent["payload"], { type: "session.status" }>): void {

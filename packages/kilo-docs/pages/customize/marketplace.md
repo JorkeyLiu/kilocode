@@ -42,7 +42,7 @@ The install dialog shows the destination before it changes anything.
 | Skill | `.kilo/skills/<name>/` | `~/.kilo/skills/<name>/` |
 | MCP server | `.kilo/kilo.json` | `~/.config/kilo/kilo.json` |
 
-Installing an MCP server adds an entry under the `mcp` key without replacing your other Kilo settings. Installing an agent or skill creates its own file or directory. Removing an item deletes its marketplace-managed entry from the selected scope.
+Installing an MCP server adds an entry under the `mcp` key without replacing your other Kilo settings. Installing an agent or skill creates its own file or directory. Removing an item deletes its marketplace-managed entry from the selected scope. Removing a skill deletes only its `SKILL.md` manifest through the CLI runtime; other files in the skill directory are preserved.
 
 {% callout type="warning" title="Keep credentials out of version control" %}
 Some MCP servers require API keys, access tokens, or connection strings. Project configuration may be committed to your repository. Prefer environment-variable references for secrets, and review `.kilo/kilo.json` before committing it.
@@ -62,6 +62,8 @@ Review the item's author, source link, prerequisites, requested parameters, and 
 ## Removing an item
 
 An item can be installed at both project and global scope. Its Marketplace card shows it as installed and offers a separate remove action for each installed scope. Removing the project copy does not remove the global copy, and vice versa.
+
+Skill installs are currently supported at project scope only. Global skill install is temporarily unavailable until runtime-owned install lands; the install dialog fails closed with that message instead of writing files the runtime cannot discover. Skills already discovered in legitimate global roots can still be removed by their observed location.
 
 After an install or removal, Kilo reloads the affected configuration. Running sessions may be interrupted so they do not continue with an outdated set of agents, skills, or tools.
 

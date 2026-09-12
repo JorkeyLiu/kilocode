@@ -69,8 +69,8 @@ export interface InstallMarketplaceItemOptions {
 }
 
 export interface MarketplaceInstalledMetadata {
-  project: Record<string, { type: string }>
-  global: Record<string, { type: string }>
+  project: Record<string, { type: string; locations?: string[] }>
+  global: Record<string, { type: string; locations?: string[] }>
 }
 
 export interface MarketplaceRelevance {

@@ -2,7 +2,7 @@ import { Effect } from "effect"
 import { HttpEffect } from "effect/unstable/http" // kilocode_change - LOCK-003 response-boundary events
 import { HttpApiBuilder, HttpApiError } from "effect/unstable/httpapi"
 import * as KiloAgent from "@/kilocode/agent"
-import * as KiloSkill from "@/kilocode/skill-remove"
+import { execute as executeSkillRemove } from "@/kilocode/skill-remove-execute"
 import { Agent } from "@/agent/agent"
 import { Config } from "@/config/config"
 import { InstanceRef } from "@/effect/instance-ref"
@@ -11,14 +11,9 @@ import { HeapSnapshot } from "@/kilocode/cli/heap-snapshot"
 import type { RequestID as NotebookRequestID } from "@/kilocode/notebook/protocol"
 import { Notebook } from "@/kilocode/notebook/service"
 import { ModelUsage } from "@/kilocode/session/model-usage"
-import { containsPath } from "@/project/instance-context"
 import { InstanceHttpApi } from "@/server/routes/instance/httpapi/api"
-import { Skill } from "@/skill"
 import type { SessionID } from "@/session/schema"
-import {
-  withColdMutation,
-  type ColdScope,
-} from "@/kilocode/server/config-convergence"
+import { withColdMutation } from "@/kilocode/server/config-convergence"
 import {
   execute as executeCustomProviderDelete,
   CustomProviderDeleteError as CustomProviderDeleteFailureDomain,
@@ -41,7 +36,6 @@ import {
 export const kilocodeHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilocode", (handlers) =>
   Effect.gen(function* () {
     const agents = yield* Agent.Service
-    const skills = yield* Skill.Service
     const config = yield* Config.Service
     const notebook = yield* Notebook.Service
 
@@ -62,33 +56,17 @@ export const kilocodeHandlers = HttpApiBuilder.group(InstanceHttpApi, "kilocode"
     // global (all loaded directories). The response returns after the durable
     // unlink and rebuild registration, before any generation drain; the
     // convergence pass owns seal/drain/dispose/boot, so there is no direct
-    // store.dispose and no write-before-dispose window (LOCK-002).
+    // store.dispose and no write-before-dispose window (LOCK-002). The
+    // production mutation is shared with the private `skill/remove` FD op in
+    // `skill-remove-execute` — both entry points invoke the exact same logic.
     const removeSkill = Effect.fn("KilocodeHttpApi.removeSkill")(function* (ctx: {
       payload: typeof RemoveSkillPayload.Type
     }) {
       const instance = yield* InstanceState.context
-      const entries = yield* skills.all()
-      // LOCK-005: resolve the exact SKILL.md target synchronously BEFORE the
-      // fence (KiloSkill.target is pure path resolution) so the mutation scope
-      // is decided from robust path ownership evidence.
-      const file = yield* Effect.try({
-        try: () => KiloSkill.target(ctx.payload.location, entries),
-        catch: () => new HttpApiError.BadRequest({}),
-      })
-      const scope: ColdScope = containsPath(file, instance)
-        ? { directory: instance.directory }
-        : "global"
-      return yield* withColdMutation({
-        scope,
-        run: () =>
-          Effect.gen(function* () {
-            yield* Effect.tryPromise({
-              try: () => KiloSkill.remove(ctx.payload.location, entries),
-              catch: () => new HttpApiError.BadRequest({}),
-            })
-            return { changed: true as const, value: true as const }
-          }),
-      })
+      return yield* executeSkillRemove({
+        location: ctx.payload.location,
+        instance: { directory: instance.directory, worktree: instance.worktree },
+      }).pipe(Effect.mapError(() => new HttpApiError.BadRequest({})))
     })
 
     // LOCK-005/007: durable agent removal routed through withColdMutation. A

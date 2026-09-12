@@ -54,6 +54,17 @@ import type {
 } from "./serve-private-agent-requirements-contract"
 import { AgentRequirementsValidationError } from "./serve-private-agent-requirements-contract"
 import {
+  makeSkillRemoveAmbiguous,
+  normalizePrivateSkillRemoveWire,
+  SkillRemoveValidationError,
+  validateSkillRemoveContractRequest,
+} from "./serve-private-skill-remove-contract"
+import type {
+  SkillRemoveContractRequest,
+  SkillRemoveResult,
+  SkillRemoveWireOutcome,
+} from "./serve-private-skill-remove-contract"
+import {
   makeRemoteStatusCancel,
   PrivateRemoteStatusValidationError,
   requestRemoteStatusOutcome,
@@ -280,6 +291,20 @@ export type {
   AgentRequirementsResult,
   AgentRequirementsWireOutcome,
 } from "./serve-private-agent-requirements-contract"
+export {
+  canonicalSkillRemoveOpId,
+  makeSkillRemoveAmbiguous,
+  normalizePrivateSkillRemoveWire,
+  parseSkillRemoveOpId,
+  SkillRemoveValidationError,
+  validateSkillRemoveContractRequest,
+  validateSkillRemoveResult,
+} from "./serve-private-skill-remove-contract"
+export type {
+  SkillRemoveContractRequest,
+  SkillRemoveResult,
+  SkillRemoveWireOutcome,
+} from "./serve-private-skill-remove-contract"
 export {
   canonicalRemoteStatusOpId,
   compareRemoteStatusParity,
@@ -2961,6 +2986,7 @@ export class ServePrivatePeer {
       if (cap === "question/reject" && c["question/reject"]) return true
       if (cap === "permission/save-always-rules" && c["permission/save-always-rules"]) return true
       if (cap === "permission/reply" && c["permission/reply"]) return true
+      if (cap === "skill/remove" && c["skill/remove"]) return true
     }
     return false
   }
@@ -3971,6 +3997,89 @@ export class ServePrivatePeer {
       if (this.isStaleHandle(peerAtCall, currentEpoch))
         return { kind: "valid", result: makeAgentRequirementsAmbiguous(req, true) }
       return normalizePrivateAgentRequirementsWire(raw, req)
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  async privateSkillRemove(req: SkillRemoveContractRequest): Promise<SkillRemoveResult> {
+    const handle = this.privateSkillRemoveWithHandle(req)
+    return handle.promise
+  }
+
+  /** Atomic handle: allocates id synchronously and returns exact id for timeout cancellation ownership.
+   * Resolved values are always strictly valid results; invalid wire rejects
+   * with SkillRemoveValidationError and never resolves as a normal result.
+   */
+  privateSkillRemoveWithHandle(req: SkillRemoveContractRequest): {
+    id: number
+    promise: Promise<SkillRemoveResult>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSkillRemoveContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("skill/remove")) {
+      throw new Error("Private peer missing skill/remove capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("skill/remove", req)
+    const promise = (async (): Promise<SkillRemoveResult> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e)) return makeSkillRemoveAmbiguous(req, true)
+        return makeSkillRemoveAmbiguous(req, true)
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch)) return makeSkillRemoveAmbiguous(req, true)
+      const out: SkillRemoveWireOutcome = normalizePrivateSkillRemoveWire(raw, req)
+      if (out.kind === "invalid") throw new SkillRemoveValidationError(out.detail)
+      return out.result
+    })()
+    const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
+    return { id: id as unknown as number, promise, cancel }
+  }
+
+  /**
+   * Internal normalized handle for the private-only skill/remove mutation.
+   * Resolves the discriminated wire outcome so invalid wire is an explicit
+   * `{ kind: "invalid" }` value consumed before any refresh decision, never
+   * a normal result. Transport/closed/epoch semantics match the public
+   * handle. There is no SDK fallback: every non-succeeded outcome fails
+   * closed and re-observes authoritative skills.
+   */
+  privateSkillRemoveOutcomeWithHandle(req: SkillRemoveContractRequest): {
+    id: number
+    promise: Promise<SkillRemoveWireOutcome>
+    cancel: (msg?: string) => boolean
+  } {
+    validateSkillRemoveContractRequest(req)
+    if (this.disposed) throw new Error("Peer disposed")
+    if (!this.available || !this.peer || this.peer.getState() !== "open") {
+      throw new Error("Private peer unavailable")
+    }
+    if (!this.hasCapability("skill/remove")) {
+      throw new Error("Private peer missing skill/remove capability")
+    }
+    const currentEpoch = this.opts.epoch
+    const peerAtCall = this.peer
+    const { id, promise: rawPromise } = peerAtCall.requestWithId("skill/remove", req)
+    const promise = (async (): Promise<SkillRemoveWireOutcome> => {
+      let raw: unknown
+      try {
+        raw = (await rawPromise) as unknown
+      } catch (e: unknown) {
+        if (this.isClosedHandle(peerAtCall, currentEpoch, e))
+          return { kind: "valid", result: makeSkillRemoveAmbiguous(req, true) }
+        return { kind: "valid", result: makeSkillRemoveAmbiguous(req, true) }
+      }
+      if (this.isStaleHandle(peerAtCall, currentEpoch))
+        return { kind: "valid", result: makeSkillRemoveAmbiguous(req, true) }
+      return normalizePrivateSkillRemoveWire(raw, req)
     })()
     const cancel = this.makeHandleCancel(id as unknown as number, req.opId, peerAtCall, currentEpoch)
     return { id: id as unknown as number, promise, cancel }

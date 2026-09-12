@@ -70,6 +70,17 @@ export class MarketplaceService {
   }
 
   async remove(item: MarketplaceItem, scope: "project" | "global", workspace?: string): Promise<RemoveResult> {
+    // Skill removal never touches the filesystem from the extension: it is
+    // owned by the CLI runtime via the private `skill/remove` mutation
+    // (see `services/marketplace/actions.removeMarketplaceItem`). Fail closed
+    // here so a skill can never reach the local installer remove path.
+    if (item.type === "skill") {
+      return {
+        success: false,
+        slug: item.id,
+        error: "Skill removal is owned by the CLI runtime and never deletes files from the extension",
+      }
+    }
     const result = await this.installer.remove(item, scope, workspace)
 
     if (result.success) {

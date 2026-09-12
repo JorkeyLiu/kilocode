@@ -3,10 +3,15 @@ import * as path from "path"
 import type { MarketplaceInstalledMetadata } from "./types"
 import { MarketplacePaths } from "./paths"
 
-type Entry = [string, { type: string }]
+type Entry = [string, { type: string; locations?: string[] }]
 
-function entry(id: string, type: "agent" | "mcp" | "skill"): Entry {
-  return [`${type}:${id}`, { type }]
+function entry(id: string, type: "agent" | "mcp" | "skill", locations?: string[]): Entry {
+  return [`${type}:${id}`, locations !== undefined ? { type, locations } : { type }]
+}
+
+export function isProjectSkillLocation(location: string, workspace: string): boolean {
+  const prefix = workspace.endsWith(path.sep) ? workspace : workspace + path.sep
+  return location.startsWith(prefix)
 }
 
 export interface CliSkill {
@@ -44,19 +49,20 @@ export class InstallationDetector {
   }
 
   private isProjectSkill(location: string, workspace: string): boolean {
-    const prefix = workspace.endsWith(path.sep) ? workspace : workspace + path.sep
-    return location.startsWith(prefix)
+    return isProjectSkillLocation(location, workspace)
   }
 
   private skillEntries(skills: CliSkill[] | undefined, workspace: string | undefined, project: boolean): Entry[] {
     if (!skills) return []
-    return skills
-      .filter((s) =>
-        project
-          ? !!workspace && this.isProjectSkill(s.location, workspace)
-          : !workspace || !this.isProjectSkill(s.location, workspace),
-      )
-      .map((skill) => entry(skill.name, "skill"))
+    const groups = new Map<string, string[]>()
+    for (const s of skills) {
+      const isProject = !!workspace && this.isProjectSkill(s.location, workspace)
+      if (project !== isProject) continue
+      const list = groups.get(s.name) ?? []
+      list.push(s.location)
+      groups.set(s.name, list)
+    }
+    return [...groups].map(([name, locations]) => entry(name, "skill", locations))
   }
 
   /** Scan .kilo/agents/*.md files to detect installed marketplace agents. */

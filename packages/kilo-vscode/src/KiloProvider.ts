@@ -49,6 +49,7 @@ import {
 } from "./kilo-provider/session-detail"
 import { ErrorCode } from "./private-worker/json-rpc"
 import { createMarketplaceRemover, removeMcp } from "./kilo-provider/remove-config-item"
+import { attemptSkillRemovePrivate, buildSkillRemoveReq, skillRemoveFailureMessage } from "./kilo-provider/skill-remove-privatefirst"
 import type { MarketplaceRemoveContext } from "./services/marketplace/actions"
 import { AgentRequirementsController } from "./kilo-provider/agent-requirements-controller"
 import type { RemoteStatusService } from "./services/RemoteStatusService"
@@ -3841,34 +3842,32 @@ export class KiloProvider implements TelemetryPropertiesProvider {
   }
 
   /**
-   * Remove a skill via the CLI backend (deletes from disk + clears cache), then refresh.
+   * Remove a skill via the private-only CLI authority (no SDK fallback), then refresh.
    * Returns true on success, false on failure.
-   * On failure, re-fetches skills so the webview reverts to the authoritative state.
+   * Every outcome re-observes authoritative skills+commands so the webview
+   * reverts to the backend state (optimistic UI recovery); success additionally
+   * clears requirements. Actionable builtin/URL/not-found failures keep their
+   * backend message; all other outcomes use a safe generic message and never
+   * inspect or delete the path in the extension.
    */
   private async removeSkillViaCli(location: string): Promise<boolean> {
-    if (!this.client) return false
-    try {
-      const dir = this.getWorkspaceDirectory()
-      const result = await this.client.kilocode.removeSkill({ location, directory: dir })
-      if (result.error) {
-        console.error("[Kilo New] removeSkill returned error:", result.error)
-        this.cachedSkillsMessage = null
-        this.clearCommandsCache()
-        await Promise.all([this.fetchAndSendSkills(), this.fetchAndSendCommands()])
-        return false
-      }
-    } catch (error) {
-      console.error("[Kilo New] Failed to remove skill:", error)
+    const dir = this.getWorkspaceDirectory()
+    const attempt = await attemptSkillRemovePrivate(this.connectionService, buildSkillRemoveReq(dir, location))
+    if (attempt.kind === "ok") {
       this.cachedSkillsMessage = null
-      this.cachedCommandsMessage = null
+      this.clearCommandsCache()
       await Promise.all([this.fetchAndSendSkills(), this.fetchAndSendCommands()])
-      return false
+      this.requirements.clear()
+      return true
     }
+    if (attempt.kind === "closed")
+      console.error("[Kilo New] removeSkill closed without mutation:", attempt.reason)
+    if (attempt.kind === "failed")
+      console.error("[Kilo New] removeSkill failed:", skillRemoveFailureMessage(attempt.code))
     this.cachedSkillsMessage = null
-    this.cachedCommandsMessage = null
+    this.clearCommandsCache()
     await Promise.all([this.fetchAndSendSkills(), this.fetchAndSendCommands()])
-    this.requirements.clear()
-    return true
+    return false
   }
 
   /** Remove a file-backed custom agent via the canonical authority, then refresh. */

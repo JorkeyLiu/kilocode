@@ -70,6 +70,13 @@ import {
   validateObserveRequest,
   validateResolveRequest,
 } from "./config-file-convergence"
+import {
+  INTERNAL_MESSAGE as SKILL_REMOVE_INTERNAL_MESSAGE,
+  OP as SKILL_REMOVE_OP,
+  VERSION as SKILL_REMOVE_VERSION,
+  fallbackSkillRemoveIds,
+  removeSkillPrivate,
+} from "@/kilocode/skill-remove-private"
 import { ConfigFileConvergence } from "./config-file-convergence"
 
 export interface FdCarrierHandle {
@@ -3728,6 +3735,56 @@ export function createFdCarrier(
                 )
               }),
             )
+          }),
+        )
+        return result
+      }
+      if (method === SKILL_REMOVE_OP || method === "skill/remove") {
+        // Authoritative skill removal: descriptor-only location plus routing
+        // directory via the shared `skill-remove-execute` production mutation
+        // (Skill.all → target guards → containsPath scope → cold convergence
+        // → manifest-only unlink). No file bytes cross the boundary; failures
+        // are redacted codes/messages with echo-validated identities. No
+        // session_operation row is written.
+        const result = await AppRuntime.runPromise(
+          Effect.gen(function* () {
+            const out = yield* removeSkillPrivate(params).pipe(
+              Effect.catch(() =>
+                Effect.succeed({
+                  v: SKILL_REMOVE_VERSION,
+                  requestId: fallbackSkillRemoveIds(params).requestId,
+                  opId: fallbackSkillRemoveIds(params).opId,
+                  op: SKILL_REMOVE_OP,
+                  idempotencyKey: fallbackSkillRemoveIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: SKILL_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: SKILL_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+              Effect.catchDefect(() =>
+                Effect.succeed({
+                  v: SKILL_REMOVE_VERSION,
+                  requestId: fallbackSkillRemoveIds(params).requestId,
+                  opId: fallbackSkillRemoveIds(params).opId,
+                  op: SKILL_REMOVE_OP,
+                  idempotencyKey: fallbackSkillRemoveIds(params).idempotencyKey,
+                  status: "failed" as const,
+                  outcome: {
+                    type: "failed" as const,
+                    time: Date.now(),
+                    failure: { code: "internal", message: SKILL_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                  },
+                  accepted: false as const,
+                  failure: { code: "internal", message: SKILL_REMOVE_INTERNAL_MESSAGE, retryable: false },
+                }),
+              ),
+            )
+            return out
           }),
         )
         return result

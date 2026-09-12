@@ -159,7 +159,7 @@ describe("MarketplaceInstaller skills", () => {
 
   it("rejects project removals without a workspace directory", async () => {
     const installer = new MarketplaceInstaller(new TestPaths())
-    const result = await installer.removeSkill(skill("https://example.com/skill.tar.gz"), "project")
+    const result = await installer.remove({ id: "test-skill", type: "skill" }, "project")
 
     expect(result).toEqual({
       success: false,
@@ -202,19 +202,51 @@ describe("MarketplaceInstaller skills", () => {
     ])
   })
 
-  it("rejects skill ids that are unsafe on supported filesystems", async () => {
+  it("has no recursive skill removal path: skill remove fails closed and preserves files", async () => {
     const paths = new TestPaths()
     const dir = path.join(paths.skillsDir("project", tmpDir), "installed")
     await fs.mkdir(dir, { recursive: true })
     await fs.writeFile(path.join(dir, "SKILL.md"), "# Installed\n")
+    await fs.writeFile(path.join(dir, "KEEP.txt"), "keep\n")
     const installer = new MarketplaceInstaller(paths)
 
-    for (const id of [".", "installed.", "CON", "nul.txt"]) {
-      const result = await installer.removeSkill(skill("https://example.com/skill.tar.gz", id), "project", tmpDir)
-      expect(result).toEqual({ success: false, slug: id, error: "Invalid skill id" })
-    }
-
+    expect("removeSkill" in installer).toBe(false)
+    const result = await installer.remove({ id: "installed", type: "skill" }, "project", tmpDir)
+    expect(result.success).toBe(false)
     expect(await fs.readFile(path.join(dir, "SKILL.md"), "utf-8")).toBe("# Installed\n")
+    expect(await fs.readFile(path.join(dir, "KEEP.txt"), "utf-8")).toBe("keep\n")
+  })
+
+  it("fails closed on global skill installs without writing files", async () => {
+    const original = globalThis.fetch
+    let calls = 0
+    globalThis.fetch = async () => {
+      calls += 1
+      throw new Error("global skill install must not fetch")
+    }
+    try {
+      const paths = new TestPaths()
+      const installer = new MarketplaceInstaller(paths)
+      const before = await fs
+        .readdir(paths.skillsDir("global"))
+        .then((names) => names)
+        .catch(() => null)
+      const result = await installer.installSkill(skill("https://example.com/skill.tar.gz"), "global")
+
+      expect(result.success).toBe(false)
+      expect(result.error).toContain("Global skill install is temporarily unavailable")
+      expect(calls).toBe(0)
+      const after = await fs
+        .readdir(paths.skillsDir("global"))
+        .then((names) => names)
+        .catch(() => null)
+      expect(after).toEqual(before)
+      if (after) {
+        expect(after.filter((name) => name.startsWith(".staging-"))).toEqual([])
+      }
+    } finally {
+      globalThis.fetch = original
+    }
   })
 
   it("installs an extracted project skill without leaving staging directories", async () => {

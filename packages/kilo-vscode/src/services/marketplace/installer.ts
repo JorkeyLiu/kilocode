@@ -190,6 +190,20 @@ export class MarketplaceInstaller {
       return { success: false, slug: item.id, error: "No workspace directory for project-scope install" }
     }
 
+    // Global skill installs would land in `~/.kilo/skills`, which the CLI
+    // runtime does not discover (it scans the global config `skills/`
+    // roots, `skills.paths`, and external `.claude/.agents` roots). Writing
+    // there creates undiscoverable files, so fail closed with no files
+    // written until runtime-owned install lands.
+    if (scope === "global") {
+      return {
+        success: false,
+        slug: item.id,
+        error:
+          "Global skill install is temporarily unavailable until runtime-owned install lands. Install to the project scope instead.",
+      }
+    }
+
     if (!item.content) {
       return { success: false, slug: item.id, error: "Skill has no tarball URL" }
     }
@@ -262,12 +276,21 @@ export class MarketplaceInstaller {
   }
 
   // ── Remove ──────────────────────────────────────────────────────────
+  // Skill removal is owned exclusively by the CLI runtime (private
+  // `skill/remove`): the extension never deletes skill files. There is no
+  // recursive skill removal path here by design.
 
   async remove(item: MarketplaceItemRef, scope: "project" | "global", workspace?: string): Promise<RemoveResult> {
     if (scope === "project" && !workspace) {
       return { success: false, slug: item.id, error: "No workspace directory for project-scope removal" }
     }
-    if (item.type === "skill") return this.removeSkill(item, scope, workspace)
+    if (item.type === "skill") {
+      return {
+        success: false,
+        slug: item.id,
+        error: "Skill removal is owned by the CLI runtime and never deletes files from the extension",
+      }
+    }
     if (item.type === "mcp") return this.removeMcp(item, scope, workspace)
     return this.removeAgent(item, scope, workspace)
   }
@@ -290,36 +313,6 @@ export class MarketplaceInstaller {
     const fenced = await this.fencedWrite(scope, workspace, config)
     if (!fenced.ok) return { success: false, slug: item.id, error: fenced.message }
     return { success: true, slug: item.id }
-  }
-
-  async removeSkill(
-    item: Pick<SkillMarketplaceItem, "id">,
-    scope: "project" | "global",
-    workspace?: string,
-  ): Promise<RemoveResult> {
-    if (scope === "project" && !workspace) {
-      return { success: false, slug: item.id, error: "No workspace directory for project-scope removal" }
-    }
-
-    if (!isSafeId(item.id)) {
-      return { success: false, slug: item.id, error: "Invalid skill id" }
-    }
-    const base = this.paths.skillsDir(scope, workspace)
-    const dir = path.join(base, item.id)
-    if (!contains(base, dir)) {
-      return { success: false, slug: item.id, error: "Invalid skill id" }
-    }
-    try {
-      await fs.access(dir)
-      await fs.rm(dir, { recursive: true })
-      return { success: true, slug: item.id }
-    } catch (err) {
-      if ((err as NodeJS.ErrnoException).code === "ENOENT") {
-        return { success: true, slug: item.id }
-      }
-      console.warn(`Failed to remove skill ${item.id}:`, err)
-      return { success: false, slug: item.id, error: String(err) }
-    }
   }
 
   // ── Config helpers ──────────────────────────────────────────────────

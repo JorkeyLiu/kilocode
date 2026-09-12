@@ -35,6 +35,7 @@ export const FD_CAPABILITIES = [
   "session/model-usage",
   "session/prompt",
   "session/command",
+  "skill/remove",
   "config/convergence/acquire",
   "config/convergence/resolve",
   "config/convergence/observe",
