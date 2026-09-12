@@ -61,6 +61,7 @@ import { AgentRequirementsController } from "./kilo-provider/agent-requirements-
 import type { RemoteStatusService } from "./services/RemoteStatusService"
 import { resolveProjectDirectory } from "./project-directory"
 import { seedSessionStatuses } from "./session-status"
+import { fetchSessionStatusesPrivateFirst } from "./kilo-provider/session-status-privatefirst"
 import { normalizeEnhancePromptErrorMessage } from "./enhance-prompt-error"
 import { retry } from "./services/cli-backend/retry"
 import { normalize, type SSEPayload, type SyncPayload, type WirePayload } from "./services/cli-backend/sdk-sse-adapter"
@@ -2662,12 +2663,22 @@ export class KiloProvider implements TelemetryPropertiesProvider {
     })()
     this.postMessage({ type: "workspaceDirectoryChanged", directory: this.getWorkspaceDirectory(sessionID) })
     this.requirements.clear()
-    if (!this.client) return
-    this.client.session
-      .status({ directory: dir })
-      .then((r) => {
-        if (!r.data || signal?.aborted) return
-        for (const [sid, info] of Object.entries(r.data) as [string, SessionStatus][]) {
+    const client = this.client
+    if (!client) return
+    void (async () => {
+      try {
+        const result = await fetchSessionStatusesPrivateFirst({
+          connection: this.connectionService as unknown as Parameters<typeof fetchSessionStatusesPrivateFirst>[0]["connection"],
+          client: client as unknown as Parameters<typeof fetchSessionStatusesPrivateFirst>[0]["client"],
+          directory: dir,
+        })
+        if (signal?.aborted) return
+        if (result.kind !== "ok") {
+          console.error("[Kilo New] KiloProvider: Failed to fetch session statuses:", result.kind)
+          return
+        }
+        if (!result.statuses || signal?.aborted) return
+        for (const [sid, info] of Object.entries(result.statuses) as [string, SessionStatus][]) {
           if (!this.trackedSessionIds.has(sid)) continue
           this.postMessage({
             type: "sessionStatus",
@@ -2676,8 +2687,10 @@ export class KiloProvider implements TelemetryPropertiesProvider {
             ...(info.type === "retry" ? { attempt: info.attempt, message: info.message, next: info.next } : {}),
           })
         }
-      })
-      .catch((e: unknown) => console.error("[Kilo New] KiloProvider: Failed to fetch session statuses:", e))
+      } catch (e: unknown) {
+        console.error("[Kilo New] KiloProvider: Failed to fetch session statuses:", e)
+      }
+    })()
   }
 
   private fetchAndSendSessionModelUsage(sessionID: string, requestID: string): Promise<void> {
