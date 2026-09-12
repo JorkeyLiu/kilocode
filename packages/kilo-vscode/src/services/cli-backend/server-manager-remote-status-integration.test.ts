@@ -1,9 +1,9 @@
 /* eslint-disable complexity */
 // Remote-status first runtime batch: ServerManager → real `kilo serve` child →
-// fd3/fd4 → process-global KiloSessions `remote/status` (parity-only, read-only).
-// SDK HTTP (`client.remote.status`) remains the sole authority; the private
-// path is non-blocking parity diagnostics only (no state/event/error impact,
-// no enable/disable/event-stream change, no mutation/pagination/config).
+// fd3/fd4 → process-global KiloSessions `remote/status` (private-first read).
+// The private path reads the same `KiloSessions.remoteStatus()` authority as
+// SDK HTTP (`client.remote.status` fallback); no state/event/error impact,
+// no enable/disable/event-stream change, no mutation/pagination/config.
 // Darwin + Linux run; other platforms skip per B4 convention. Windows/live
 // Extension Host evidence is not claimed. Process-global VS Code/env mutation
 // is serialized with the B5 tests via server-manager-b5-global-serialization
@@ -23,7 +23,6 @@ import {
   normalizePrivateRemoteStatusWire,
   validateRemoteStatusResult,
 } from "./serve-private-peer"
-import { observeRemoteStatusParityDetached } from "../../kilo-provider/remote-status-parity"
 import { createKiloClient } from "@kilocode/sdk/v2/client"
 import { acquireB5GlobalLock } from "./server-manager-b5-global-serialization"
 
@@ -66,7 +65,7 @@ function makeCtx(storage: string, extensionPath: string): unknown {
   }
 }
 
-describe("ServerManager → real kilo serve → fd3/fd4 → RemoteStatus parity-only production", () => {
+describe("ServerManager → real kilo serve → fd3/fd4 → RemoteStatus private-first production", () => {
   test.skipIf(process.platform !== "darwin" && process.platform !== "linux")(
     "covers initialize remote/status capability + process-global private snapshot vs SDK authoritative + cross-directory equality + invalid boundaries + invalid-wire exclusion + fail-closed cleanup",
     async () => {
@@ -194,25 +193,12 @@ describe("ServerManager → real kilo serve → fd3/fd4 → RemoteStatus parity-
         expect(parity.divergence).toBeNull()
         expect(parity.details.processGlobal).toBeTrue()
 
-        // 6. SDK authority / non-blocking: SDK snapshot untouched by private
-        // read; detached observer returns synchronously and leaves SDK data intact.
-        const beforeSdk = JSON.stringify(sdkData)
-        const parityConn = {
-          isPrivateAvailable: () => peer!.isAvailable(),
-          privateRemoteStatusOutcomeWithHandle: (r: unknown) => peer!.privateRemoteStatusOutcomeWithHandle(r as never),
-          getPrivateEpoch: () => peer!.getEpoch(),
+        // 6. Private-first adaptation: the private `data.status` carries
+        // exactly the two booleans the SDK consumer reads, with no new
+        // owner/cache and no extra request beyond steps 3-4.
+        if (priv.status === "succeeded") {
+          expect(priv.data.status).toEqual({ enabled: sdkData.enabled, connected: sdkData.connected })
         }
-        const ret = observeRemoteStatusParityDetached(
-          parityConn as unknown as Parameters<typeof observeRemoteStatusParityDetached>[0],
-          sdkStatus as unknown as Parameters<typeof observeRemoteStatusParityDetached>[1],
-          workspace,
-          undefined,
-          3000,
-        )
-        expect(ret).toBeUndefined()
-        expect(JSON.stringify(sdkData)).toBe(beforeSdk)
-        await new Promise((r) => setTimeout(r, 300))
-        expect(JSON.stringify(sdkData)).toBe(beforeSdk)
 
         // 7. Cross-directory equality: same process-global booleans under a
         // different routing directory are expected, not scope_mismatch.

@@ -193,7 +193,7 @@ export function activate(context: vscode.ExtensionContext) {
   const remoteService = new RemoteStatusService()
   context.subscriptions.push(remoteService)
   connectionService.setRemoteService(remoteService)
-  remoteService.setParityConnection(connectionService)
+  remoteService.setPrivateConnection(connectionService)
   // Detached SDK-first `path/get` parity boundary for the narrowest existing
   // SDK consumer (`model-state.ts` resolve). SDK stays the sole authority;
   // the observer is non-blocking, warn-only, and never mutates SDK state.

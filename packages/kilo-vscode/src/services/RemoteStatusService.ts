@@ -1,8 +1,8 @@
 import * as vscode from "vscode"
 import type { KiloClient } from "@kilocode/sdk/v2/client"
 import { t } from "./cli-backend/i18n"
-import { observeRemoteStatusParityDetached } from "../kilo-provider/remote-status-parity"
-import type { RemoteStatusParityConnection } from "../kilo-provider/remote-status-parity"
+import { fetchRemoteStatusPrivateFirst } from "../kilo-provider/remote-status-privatefirst"
+import type { RemoteStatusPrivateConnection } from "../kilo-provider/remote-status-privatefirst"
 
 export type RemoteState = { enabled: boolean; connected: boolean }
 
@@ -12,13 +12,19 @@ type Listener = (state: RemoteState) => void
  * Singleton service that owns all remote-control state and the VS Code status bar item.
  * Replaces the per-webview polling in RemoteIndicator.tsx and ExperimentalTab.tsx
  * with a push-based model: one status bar item, zero recurring cost for non-remote users.
+ *
+ * `remote/status` reads are private-first (same `KiloSessions.remoteStatus()`
+ * authority as `GET /remote/status`; directory/workspace are routing-only,
+ * payload booleans stay process-global): one private attempt plus at most one
+ * same-identity SDK fallback per read, never retried. Enable/disable/toggle
+ * mutations stay SDK-only with unchanged semantics.
  */
 export class RemoteStatusService implements vscode.Disposable {
   private state: RemoteState = { enabled: false, connected: false }
   private bar: vscode.StatusBarItem
   private listeners = new Set<Listener>()
   private client: KiloClient | null = null
-  private parityConn: RemoteStatusParityConnection | null = null
+  private privConn: RemoteStatusPrivateConnection | null = null
 
   constructor() {
     this.bar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99)
@@ -31,12 +37,10 @@ export class RemoteStatusService implements vscode.Disposable {
   }
 
   /**
-   * Attach the detached private `remote/status` parity boundary. SDK stays
-   * the sole authority; the observer is non-blocking, warn-only, and never
-   * mutates remote state. Null detaches.
+   * Attach the private `remote/status` read boundary. Null detaches (SDK-only).
    */
-  setParityConnection(c: RemoteStatusParityConnection | null): void {
-    this.parityConn = c
+  setPrivateConnection(c: RemoteStatusPrivateConnection | null): void {
+    this.privConn = c
   }
 
   /** Get current state synchronously. */
@@ -61,22 +65,58 @@ export class RemoteStatusService implements vscode.Disposable {
   /** One-shot status fetch — broadcasts via onChange if state changed. */
   async refresh(): Promise<void> {
     if (!this.client) return
-    const res = await this.client.remote.status().catch((err: unknown) => {
-      console.warn("[Kilo] remote status refresh failed:", err)
-      return undefined
+    const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (!this.privConn || !dir) {
+      const res = await this.client.remote.status().catch((err: unknown) => {
+        console.warn("[Kilo] remote status refresh failed:", err)
+        return undefined
+      })
+      if (!res?.data) return
+      const data = res.data as Partial<RemoteState>
+      if (typeof data.enabled !== "boolean" || typeof data.connected !== "boolean") {
+        console.warn("[Kilo] remote status refresh failed:", { op: "remote/status", invalid: true })
+        return
+      }
+      this.update({ enabled: data.enabled, connected: data.connected })
+      return
+    }
+    const out = await fetchRemoteStatusPrivateFirst({
+      connection: this.privConn,
+      client: this.client as never,
+      directory: dir,
     })
-    if (!res?.data) return
-    const next = { enabled: res.data.enabled, connected: res.data.connected }
-    this.update(next)
-    this.observeParityDetached({ data: { enabled: next.enabled, connected: next.connected } })
+    if (out.kind === "ok") {
+      this.update(out.state)
+      return
+    }
+    if (out.kind === "terminal") {
+      console.warn("[Kilo] remote status refresh failed:", { op: "remote/status", terminal: true, code: out.code })
+      return
+    }
+    console.warn("[Kilo] remote status refresh failed:", out.cause ?? { op: "remote/status" })
   }
 
   /** Toggle remote on/off based on current state. */
   async toggle(): Promise<void> {
     if (!this.client) return
-    const { data } = await this.client.remote.status(undefined, { throwOnError: true })
-    if (!data) return
-    await this.setEnabled(!data.enabled)
+    const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
+    if (!this.privConn || !dir) {
+      const { data } = await this.client.remote.status(undefined, { throwOnError: true })
+      if (!data) return
+      await this.setEnabled(!data.enabled)
+      return
+    }
+    const out = await fetchRemoteStatusPrivateFirst({
+      connection: this.privConn,
+      client: this.client as never,
+      directory: dir,
+    })
+    if (out.kind === "ok") {
+      await this.setEnabled(!out.state.enabled)
+      return
+    }
+    if (out.kind === "terminal") throw new Error(`remote status unavailable: ${out.code ?? "terminal"}`)
+    throw out.cause instanceof Error ? out.cause : new Error("remote status unavailable")
   }
 
   /** Enable or disable remote. State updates are pushed via events. */
@@ -112,7 +152,7 @@ export class RemoteStatusService implements vscode.Disposable {
 
   dispose(): void {
     this.listeners.clear()
-    this.parityConn = null
+    this.privConn = null
     this.bar.dispose()
   }
 
@@ -123,27 +163,6 @@ export class RemoteStatusService implements vscode.Disposable {
     this.state = next
     this.sync()
     for (const cb of this.listeners) cb(next)
-  }
-
-  /**
-   * SDK-first detached parity observation for `remote/status`. Runs only
-   * after the authoritative SDK read settled; failures are warn-only and
-   * never mutate state, enable/disable, events, or UI. Routing directory is
-   * the workspace root; payload booleans stay process-global.
-   */
-  private observeParityDetached(sdk: { data: RemoteState }): void {
-    const conn = this.parityConn
-    if (!conn) return
-    const dir = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath
-    if (!dir) return
-    try {
-      observeRemoteStatusParityDetached(conn, sdk, dir)
-    } catch (err) {
-      console.warn("[Kilo Remote] private parity observation failed (fail-closed):", {
-        op: "remote/status",
-        observationFailed: true,
-      })
-    }
   }
 
   /** Sync status bar appearance to current state. */
@@ -157,7 +176,7 @@ export class RemoteStatusService implements vscode.Disposable {
       this.bar.tooltip = t("remote.connected")
       this.bar.color = new vscode.ThemeColor("testing.iconPassed")
     } else {
-      this.bar.text = "$(radio-tower) Kilo Remote \u2026"
+      this.bar.text = "$(radio-tower) Kilo Remote …"
       this.bar.tooltip = t("remote.connecting")
       this.bar.color = new vscode.ThemeColor("editorWarning.foreground")
     }

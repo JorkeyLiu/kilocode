@@ -9,12 +9,7 @@ import {
   validateRemoteStatusRequest,
   validateRemoteStatusResult,
 } from "./serve-private-peer"
-import {
-  buildRemoteStatusIdentity,
-  observeRemoteStatusParityDetached,
-  sdkRemoteStatusHasTerminal,
-  type RemoteStatusParityConnection,
-} from "../../kilo-provider/remote-status-parity"
+import { buildRemoteStatusIdentity } from "../../kilo-provider/remote-status-privatefirst"
 
 function createLinkedChannel(handler: (method: string, params: unknown) => unknown | Promise<unknown>) {
   const toClient = new PassThrough()
@@ -108,6 +103,9 @@ describe("remote/status private peer (process-global parity)", () => {
     ).toThrow()
   })
 
+  // `compareRemoteStatusParity` stays as pure diagnostic/test evidence only:
+  // production private-first issues at most one private plus at most one
+  // SDK read per user action, never a third comparison request.
   test("compareRemoteStatusParity compares only booleans; cross-directory equality is not a divergence", () => {
     const req = makeReq()
     const ok = validateRemoteStatusResult(makeSuccess(req, true, false), req)
@@ -237,72 +235,6 @@ describe("remote/status private peer (process-global parity)", () => {
     } finally {
       peer?.dispose()
       ch.backendPeer.dispose()
-    }
-  })
-
-  test("detached observer is SDK-first, warn-only, and never mutates SDK state on divergence", async () => {
-    const req = makeReq()
-    const sdk = { data: { enabled: true, connected: false } }
-    const before = JSON.stringify(sdk)
-    const warns: unknown[][] = []
-    const orig = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      const conn: RemoteStatusParityConnection = {
-        isPrivateAvailable: () => true,
-        privateRemoteStatusOutcomeWithHandle: () => ({
-          id: 1,
-          promise: Promise.resolve({
-            kind: "valid",
-            result: validateRemoteStatusResult(makeSuccess(req, false, false), req),
-          }),
-          cancel: () => true,
-        }),
-      }
-      expect(sdkRemoteStatusHasTerminal(sdk)).toBeTrue()
-      observeRemoteStatusParityDetached(conn, sdk, "/tmp")
-      await new Promise((r) => setTimeout(r, 50))
-      expect(JSON.stringify(sdk)).toBe(before)
-      expect(warns.some((w) => String(w[0]).includes("parity divergence"))).toBeTrue()
-      const text = JSON.stringify(warns)
-      expect(text.includes("false")).toBeFalse()
-    } finally {
-      console.warn = orig
-    }
-  })
-
-  test("observer skips non-terminal SDK and invalid-wire stays out of the comparator", async () => {
-    const warns: unknown[][] = []
-    const orig = console.warn
-    console.warn = (...args: unknown[]) => {
-      warns.push(args)
-    }
-    try {
-      let called = false
-      const conn: RemoteStatusParityConnection = {
-        isPrivateAvailable: () => true,
-        privateRemoteStatusOutcomeWithHandle: () => {
-          called = true
-          return { id: 1, promise: Promise.resolve({ kind: "valid", result: undefined as never }), cancel: () => true }
-        },
-      }
-      observeRemoteStatusParityDetached(conn, { data: { enabled: true } }, "/tmp")
-      expect(called).toBeFalse()
-      const bad: RemoteStatusParityConnection = {
-        isPrivateAvailable: () => true,
-        privateRemoteStatusOutcomeWithHandle: () => ({
-          id: 2,
-          promise: Promise.resolve({ kind: "invalid", detail: "bad shape" }),
-          cancel: () => true,
-        }),
-      }
-      observeRemoteStatusParityDetached(bad, { data: { enabled: true, connected: false } }, "/tmp")
-      await new Promise((r) => setTimeout(r, 50))
-      expect(warns.some((w) => String(w[0]).includes("validation divergence"))).toBeTrue()
-    } finally {
-      console.warn = orig
     }
   })
 })
